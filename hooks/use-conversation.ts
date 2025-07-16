@@ -1,190 +1,443 @@
-"use client"
+"use client";
 
-import { useState, useCallback } from "react"
-import type { Message, ConversationContext, ConversationMood } from "@/types"
+import { useState, useCallback, useRef, useEffect } from "react";
+import type { Message, ConversationContext, ConversationMood } from "@/types";
 
-// Sample responses for the AI
-const AI_RESPONSES = {
-  greeting: [
-    "Hello! Welcome to Orbital Nexus. How can I assist you today?",
-    "Welcome to this revolutionary interface. What would you like to explore?",
-    "Greetings! I'm your AI assistant in this 3D space. What can I help you with?",
-  ],
-  about: [
-    "Orbital Nexus is a revolutionary 3D spatial interface for AI interactions. It breaks traditional chat paradigms by using a dynamic, spatial arrangement of messages in 3D space.",
-    "This interface visualizes our conversation as an evolving 3D structure. Each message is a node in space, connected to form a conversation flow. You can interact with nodes by clicking on them.",
-  ],
-  interface: [
-    "This interface works by representing our conversation in 3D space. Messages are displayed as geometric shapes that you can interact with. The space adapts to the emotional tone of our conversation.",
-    "You're experiencing a spatial conversation interface. Each message exists as a 3D object, and the connections between them show the flow of our dialogue. The colors and animations reflect the conversation's mood.",
-  ],
-  revolutionary: [
-    "What makes this UI revolutionary is how it breaks away from traditional linear chat layouts. It uses spatial arrangement, real-time visualization of AI thought processes, and adaptive elements that evolve based on conversation patterns.",
-    "Traditional interfaces show conversations as linear text exchanges. This interface creates a spatial experience where messages exist in 3D space, with visual connections showing relationships between ideas.",
-  ],
-  interesting: [
-    "The space around you is actually responding to our conversation! Notice how the colors and animations change based on the emotional tone of our exchange. Try asking something positive or complex and watch how the environment shifts.",
-    "Did you know this interface visualizes my 'thought process' when I'm formulating responses? When you see the floating spheres appear, those represent different aspects of how I'm processing your message.",
-  ],
-  default: [
-    "That's an interesting point. Let me think about that from multiple perspectives...",
-    "I understand what you're asking. Let me explore that further...",
-    "That's a great question. Based on my knowledge...",
-    "I can help with that. Here's what I know...",
-    "Let me think about this carefully...",
-  ],
+export interface ConversationSettings {
+  provider: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  streamingEnabled: boolean;
+  voiceEnabled: boolean;
 }
 
 export function useConversation() {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [isProcessing, setIsProcessing] = useState(false)
-  const [thoughtProcess, setThoughtProcess] = useState<string[]>([
-    "Analyzing context...",
-    "Retrieving relevant information...",
-    "Formulating response...",
-    "Evaluating tone and style...",
-    "Finalizing output...",
-  ])
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [streamingContent, setStreamingContent] = useState<string>("");
+  const [isStreaming, setIsStreaming] = useState(false);
 
-  const [conversationContext, setConversationContext] = useState<ConversationContext>({
-    creativity: 0.7,
-    depth: 0.5,
-    mood: "Neutral",
-    topics: [],
-  })
+  const [settings, setSettings] = useState<ConversationSettings>({
+    provider: "openai",
+    model: "gpt-4",
+    temperature: 0.7,
+    maxTokens: 2000,
+    streamingEnabled: true,
+    voiceEnabled: false,
+  });
+
+  const [thoughtProcess, setThoughtProcess] = useState<string[]>([]);
+  const [conversationContext, setConversationContext] =
+    useState<ConversationContext>({
+      creativity: 0.7,
+      depth: 0.5,
+      mood: "Neutral",
+      topics: [],
+    });
 
   const [conversationMood, setConversationMood] = useState<ConversationMood>({
     color: "#6366f1",
     energy: 1,
     tempo: 1,
-  })
+  });
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Load settings from localStorage on mount
+  useEffect(() => {
+    const savedSettings = localStorage.getItem("conversation-settings");
+    if (savedSettings) {
+      try {
+        const parsed = JSON.parse(savedSettings);
+        setSettings((prev) => ({ ...prev, ...parsed }));
+      } catch (error) {
+        console.warn("Failed to load conversation settings:", error);
+      }
+    }
+  }, []);
+
+  // Save settings to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem("conversation-settings", JSON.stringify(settings));
+  }, [settings]);
 
   // Clear all messages
   const clearMessages = useCallback(() => {
-    setMessages([])
+    setMessages([]);
+    setError(null);
+    setStreamingContent("");
+    setIsStreaming(false);
     setConversationContext({
       creativity: 0.7,
       depth: 0.5,
       mood: "Neutral",
       topics: [],
-    })
+    });
     setConversationMood({
       color: "#6366f1",
       energy: 1,
       tempo: 1,
-    })
-  }, [])
+    });
+    setThoughtProcess([]);
+  }, []);
 
-  // Add a new message to the conversation
-  const addMessage = useCallback(async (message: Message, shouldRespond = true) => {
-    setMessages((prev) => [...prev, message])
+  // Update conversation settings
+  const updateSettings = useCallback(
+    (newSettings: Partial<ConversationSettings>) => {
+      setSettings((prev) => ({ ...prev, ...newSettings }));
+    },
+    [],
+  );
 
-    // If it's a user message and we should respond, simulate AI response
-    if (message.role === "user" && shouldRespond) {
-      setIsProcessing(true)
+  // Stop current generation
+  const stopGeneration = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsProcessing(false);
+    setIsStreaming(false);
+    setStreamingContent("");
+  }, []);
 
-      // Simulate AI thinking process
+  // Handle streaming response
+  const handleStreamingResponse = useCallback(async (response: Response) => {
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("No response body");
+
+    const decoder = new TextDecoder();
+    let fullContent = "";
+
+    setIsStreaming(true);
+    setStreamingContent("");
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+
+            if (data === "[DONE]") {
+              setIsStreaming(false);
+              return fullContent;
+            }
+
+            try {
+              const parsed = JSON.parse(data);
+
+              if (parsed.error) {
+                throw new Error(parsed.error);
+              }
+
+              if (parsed.content) {
+                fullContent += parsed.content;
+                setStreamingContent(fullContent);
+              }
+
+              if (parsed.isComplete) {
+                setIsStreaming(false);
+                return fullContent;
+              }
+            } catch (parseError) {
+              console.warn("Failed to parse streaming data:", parseError);
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+      setIsStreaming(false);
+    }
+
+    return fullContent;
+  }, []);
+
+  // Generate AI response
+  const generateResponse = useCallback(
+    async (messages: Message[]) => {
+      abortControllerRef.current = new AbortController();
+      setError(null);
+      setIsProcessing(true);
+
+      // Show thinking process
       const thoughts = [
-        "Analyzing user input...",
-        "Identifying key concepts...",
-        "Retrieving relevant knowledge...",
-        "Formulating response strategy...",
-        "Generating natural language...",
-      ]
+        "Connecting to AI provider...",
+        "Analyzing your message...",
+        "Generating thoughtful response...",
+        "Optimizing for clarity...",
+        "Finalizing response...",
+      ];
 
-      // Show thinking process with delays
+      // Display thinking process with delays
       for (let i = 0; i < thoughts.length; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 300))
-        setThoughtProcess((prev) => [...prev.slice(-4), thoughts[i]])
+        if (abortControllerRef.current?.signal.aborted) return;
+
+        setThoughtProcess((prev) => [...prev.slice(-3), thoughts[i]]);
+        await new Promise((resolve) => setTimeout(resolve, 400));
       }
 
-      // Determine response category based on user message
-      const userMessageLower = message.content.toLowerCase()
-      let responseCategory = "default"
+      try {
+        const requestBody = {
+          messages: messages.map((msg) => ({
+            role: msg.role,
+            content: msg.content,
+          })),
+          provider: settings.provider,
+          model: settings.model,
+          temperature: settings.temperature,
+          maxTokens: settings.maxTokens,
+          stream: settings.streamingEnabled,
+        };
 
-      if (userMessageLower.includes("hello") || userMessageLower.includes("hi") || userMessageLower.includes("hey")) {
-        responseCategory = "greeting"
-      } else if (
-        userMessageLower.includes("about") &&
-        (userMessageLower.includes("you") || userMessageLower.includes("this"))
-      ) {
-        responseCategory = "about"
-      } else if (userMessageLower.includes("how") && userMessageLower.includes("work")) {
-        responseCategory = "interface"
-      } else if (userMessageLower.includes("revolutionary") || userMessageLower.includes("different")) {
-        responseCategory = "revolutionary"
-      } else if (userMessageLower.includes("interesting") || userMessageLower.includes("cool")) {
-        responseCategory = "interesting"
-      }
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+          signal: abortControllerRef.current.signal,
+        });
 
-      // Get responses for the category
-      const responses = AI_RESPONSES[responseCategory as keyof typeof AI_RESPONSES]
-      const aiResponse = responses[Math.floor(Math.random() * responses.length)]
-
-      // Simulate AI response after "thinking"
-      setTimeout(() => {
-        const aiMessage: Message = {
-          role: "assistant",
-          content: aiResponse,
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || `HTTP ${response.status}`);
         }
 
-        setMessages((prev) => [...prev, aiMessage])
-        setIsProcessing(false)
+        let aiContent = "";
 
-        // Update conversation mood based on content
-        updateConversationMood(message.content, aiMessage.content)
-      }, 1500)
-    }
-  }, [])
+        if (
+          settings.streamingEnabled &&
+          response.headers.get("content-type")?.includes("text/event-stream")
+        ) {
+          aiContent = await handleStreamingResponse(response);
+        } else {
+          const data = await response.json();
+          if (!data.success) {
+            throw new Error(data.error || "Failed to generate response");
+          }
+          aiContent = data.data.content;
+        }
+
+        // Add AI response to messages
+        const aiMessage: Message = {
+          role: "assistant",
+          content: aiContent,
+        };
+
+        setMessages((prev) => [...prev, aiMessage]);
+        updateConversationMood(
+          messages[messages.length - 1].content,
+          aiContent,
+        );
+
+        // Text-to-speech if enabled
+        if (settings.voiceEnabled && "speechSynthesis" in window) {
+          const utterance = new SpeechSynthesisUtterance(aiContent);
+          utterance.rate = 0.9;
+          utterance.pitch = 1;
+          utterance.volume = 0.8;
+          speechSynthesis.speak(utterance);
+        }
+      } catch (error: any) {
+        if (error.name === "AbortError") {
+          console.log("Request aborted");
+          return;
+        }
+
+        console.error("Error generating response:", error);
+        setError(error.message || "Failed to generate response");
+
+        // Add error message
+        const errorMessage: Message = {
+          role: "assistant",
+          content: `I encountered an error: ${error.message}. Please try again or check your API configuration.`,
+        };
+        setMessages((prev) => [...prev, errorMessage]);
+      } finally {
+        setIsProcessing(false);
+        setStreamingContent("");
+        setThoughtProcess([]);
+        abortControllerRef.current = null;
+      }
+    },
+    [settings, handleStreamingResponse],
+  );
+
+  // Add a new message to the conversation
+  const addMessage = useCallback(
+    async (message: Message, shouldRespond = true) => {
+      setMessages((prev) => [...prev, message]);
+
+      // If it's a user message and we should respond, generate AI response
+      if (message.role === "user" && shouldRespond) {
+        const allMessages = [...messages, message];
+        await generateResponse(allMessages);
+      }
+    },
+    [messages, generateResponse],
+  );
 
   // Update conversation mood based on content analysis
-  const updateConversationMood = (userMessage: string, aiResponse: string) => {
-    // Simple sentiment analysis simulation
-    const isPositive = userMessage.includes("good") || userMessage.includes("great") || userMessage.includes("happy")
+  const updateConversationMood = useCallback(
+    (userMessage: string, aiResponse: string) => {
+      // Simple sentiment analysis
+      const positiveWords = [
+        "good",
+        "great",
+        "happy",
+        "excellent",
+        "wonderful",
+        "amazing",
+        "love",
+        "like",
+        "fantastic",
+      ];
+      const negativeWords = [
+        "bad",
+        "sad",
+        "terrible",
+        "awful",
+        "hate",
+        "dislike",
+        "problem",
+        "issue",
+        "error",
+      ];
+      const complexWords = [
+        "complex",
+        "difficult",
+        "analyze",
+        "explain",
+        "understand",
+        "why",
+        "how",
+        "what",
+      ];
 
-    const isNegative = userMessage.includes("bad") || userMessage.includes("sad") || userMessage.includes("problem")
+      const userLower = userMessage.toLowerCase();
+      const isPositive = positiveWords.some((word) => userLower.includes(word));
+      const isNegative = negativeWords.some((word) => userLower.includes(word));
+      const isComplex =
+        complexWords.some((word) => userLower.includes(word)) ||
+        userMessage.length > 100;
 
-    const isComplex = userMessage.length > 100 || userMessage.includes("why") || userMessage.includes("how")
+      // Update mood color
+      let newColor = "#6366f1"; // Default purple
+      if (isPositive) newColor = "#10b981"; // Green
+      if (isNegative) newColor = "#ef4444"; // Red
+      if (isComplex) newColor = "#f59e0b"; // Amber
 
-    // Update mood color
-    let newColor = "#6366f1" // Default purple
-    if (isPositive) newColor = "#10b981" // Green
-    if (isNegative) newColor = "#ef4444" // Red
-    if (isComplex) newColor = "#f59e0b" // Amber
+      // Update energy and tempo based on message characteristics
+      const newEnergy = isComplex
+        ? 0.5
+        : isPositive
+          ? 1.5
+          : isNegative
+            ? 0.3
+            : 1;
+      const newTempo = isNegative ? 0.7 : isPositive ? 1.3 : 1;
 
-    // Update energy and tempo based on message characteristics
-    const newEnergy = isComplex ? 0.5 : isPositive ? 1.5 : 1
-    const newTempo = isNegative ? 0.7 : isPositive ? 1.3 : 1
+      setConversationMood({
+        color: newColor,
+        energy: newEnergy,
+        tempo: newTempo,
+      });
 
-    setConversationMood({
-      color: newColor,
-      energy: newEnergy,
-      tempo: newTempo,
-    })
-
-    // Update conversation context
-    setConversationContext((prev) => ({
-      ...prev,
-      mood: isPositive ? "Positive" : isNegative ? "Negative" : "Neutral",
-      topics: [...new Set([...prev.topics, ...extractTopics(userMessage)])],
-    }))
-  }
+      // Update conversation context
+      setConversationContext((prev) => ({
+        ...prev,
+        mood: isPositive ? "Positive" : isNegative ? "Negative" : "Neutral",
+        creativity: isComplex
+          ? Math.min(prev.creativity + 0.1, 1)
+          : prev.creativity,
+        depth:
+          userMessage.length > 200 ? Math.min(prev.depth + 0.1, 1) : prev.depth,
+        topics: [...new Set([...prev.topics, ...extractTopics(userMessage)])],
+      }));
+    },
+    [],
+  );
 
   // Extract potential topics from user message
-  const extractTopics = (message: string): string[] => {
-    const words = message.toLowerCase().split(/\W+/)
-    const commonWords = new Set(["the", "and", "is", "in", "to", "of", "a"])
+  const extractTopics = useCallback((message: string): string[] => {
+    const words = message.toLowerCase().split(/\W+/);
+    const commonWords = new Set([
+      "the",
+      "and",
+      "is",
+      "in",
+      "to",
+      "of",
+      "a",
+      "that",
+      "it",
+      "with",
+      "for",
+      "as",
+      "was",
+      "on",
+      "are",
+      "you",
+      "can",
+      "have",
+      "this",
+      "be",
+      "an",
+      "or",
+      "will",
+      "my",
+      "one",
+      "all",
+      "would",
+      "there",
+      "their",
+    ]);
 
-    return words.filter((word) => word.length > 3 && !commonWords.has(word)).slice(0, 3)
-  }
+    return words
+      .filter((word) => word.length > 3 && !commonWords.has(word))
+      .slice(0, 5);
+  }, []);
+
+  // Get current streaming content for display
+  const getCurrentStreamingMessage = useCallback((): Message | null => {
+    if (isStreaming && streamingContent) {
+      return {
+        role: "assistant",
+        content: streamingContent,
+      };
+    }
+    return null;
+  }, [isStreaming, streamingContent]);
 
   return {
     messages,
     addMessage,
     clearMessages,
     isProcessing,
+    isStreaming,
+    error,
     thoughtProcess,
     conversationContext,
     conversationMood,
-  }
+    settings,
+    updateSettings,
+    stopGeneration,
+    getCurrentStreamingMessage,
+
+    // Computed properties
+    hasMessages: messages.length > 0,
+    lastMessage: messages[messages.length - 1] || null,
+    messageCount: messages.length,
+
+    // Provider management
+    availableProviders: [], // Will be populated by the component
+  };
 }

@@ -5,13 +5,10 @@ import dynamic from "next/dynamic"
 import { ThemeProvider } from "@/components/theme-provider"
 import FallbackUI from "@/components/fallback-ui"
 
-// Dynamically import the 3D components with no SSR to avoid hydration issues
-const ConversationInterface = dynamic(() => import("@/components/conversation-interface"), {
-  ssr: false,
-  loading: () => <FallbackUI message="Loading 3D conversation interface..." />,
-})
+// Import the main conversation interface
+import ConversationInterface from "@/components/conversation-interface";
 
-export default function OrbitalNexus() {
+export default function ChatBox() {
   const [mounted, setMounted] = useState(false)
 
   // Only render the 3D interface after component has mounted on the client
@@ -20,7 +17,7 @@ export default function OrbitalNexus() {
   }, [])
 
   if (!mounted) {
-    return <FallbackUI message="Initializing Orbital Nexus..." />
+    return <FallbackUI message="Initializing..." />
   }
 
   return (
@@ -29,3 +26,4 @@ export default function OrbitalNexus() {
     </ThemeProvider>
   )
 }
+  

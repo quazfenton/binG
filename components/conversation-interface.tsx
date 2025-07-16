@@ -1,79 +1,199 @@
-"use client"
+"use client";
 
-import { useState, useRef, Suspense } from "react"
-import { Canvas } from "@react-three/fiber"
-import { OrbitControls, Stars, Environment } from "@react-three/drei"
-import ConversationSpace from "@/components/conversation-space"
-import InteractionPanel from "@/components/interaction-panel"
-import ThoughtVisualization from "@/components/thought-visualization"
-import AccessibilityControls from "@/components/accessibility-controls"
-import ChatHistoryModal from "@/components/chat-history-modal"
-import { useConversation } from "@/hooks/use-conversation"
-import { useChatHistory } from "@/hooks/use-chat-history"
+import { useState, useRef, Suspense, useEffect } from "react";
+import InteractionPanel from "@/components/interaction-panel";
+import AccessibilityControls from "@/components/accessibility-controls";
+import ChatHistoryModal from "@/components/chat-history-modal";
+import ChatPanel from "@/components/chat-panel";
+import { useConversation } from "@/hooks/use-conversation";
+import { useChatHistory } from "@/hooks/use-chat-history";
+import { voiceService } from "@/lib/voice/voice-service";
+import { toast } from "sonner";
+import type { LLMProvider } from "@/lib/api/llm-providers";
 
 export default function ConversationInterface() {
-  const [showAccessibility, setShowAccessibility] = useState(false)
-  const [showHistory, setShowHistory] = useState(false)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [showAccessibility, setShowAccessibility] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showChatPanel, setShowChatPanel] = useState(true);
+  const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
+    [],
+  );
+  const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const { messages, addMessage, isProcessing, thoughtProcess, conversationContext, conversationMood, clearMessages } =
-    useConversation()
+  const {
+    messages,
+    addMessage,
+    isProcessing,
+    isStreaming,
+    error,
+    thoughtProcess,
+    conversationContext,
+    conversationMood,
+    clearMessages,
+    settings,
+    updateSettings,
+    stopGeneration,
+    getCurrentStreamingMessage,
+  } = useConversation();
 
-  const { saveCurrentChat, loadChat, deleteChat, getAllChats, downloadAllHistory } = useChatHistory()
+  const {
+    saveCurrentChat,
+    loadChat,
+    deleteChat,
+    getAllChats,
+    downloadAllHistory,
+  } = useChatHistory();
+
+  // Fetch available providers on mount
+  useEffect(() => {
+    fetch("/api/chat")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setAvailableProviders(data.data.providers);
+          // Set default provider if none selected
+          if (!settings.provider && data.data.providers.length > 0) {
+            const defaultProvider = data.data.providers[0];
+            updateSettings({
+              provider: defaultProvider.id,
+              model: defaultProvider.models[0],
+            });
+          }
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to fetch providers:", error);
+        toast.error(
+          "Failed to load AI providers. Check your API configuration.",
+        );
+      });
+  }, [settings.provider, updateSettings]);
+
+  // Handle voice service events
+  useEffect(() => {
+    const handleVoiceEvent = (event: any) => {
+      switch (event.type) {
+        case "transcription":
+          if (event.data.isFinal && event.data.text.trim()) {
+            addMessage({
+              role: "user",
+              content: event.data.text.trim(),
+            });
+          }
+          break;
+        case "error":
+          toast.error(`Voice error: ${event.data.message}`);
+          break;
+        case "connected":
+          toast.success("Voice service connected");
+          break;
+        case "disconnected":
+          toast.info("Voice service disconnected");
+          break;
+      }
+    };
+
+    voiceService.addEventListener(handleVoiceEvent);
+    return () => voiceService.removeEventListener(handleVoiceEvent);
+  }, [addMessage]);
+
+  // Show error notifications
+  useEffect(() => {
+    if (error) {
+      toast.error(error);
+    }
+  }, [error]);
 
   const handleNewChat = () => {
     if (messages.length > 0) {
-      saveCurrentChat(messages)
+      saveCurrentChat(messages);
     }
-    clearMessages()
-  }
+    stopGeneration();
+    clearMessages();
+    toast.success("New chat started");
+  };
 
   const handleLoadChat = (chatId: string) => {
-    const chat = loadChat(chatId)
+    const chat = loadChat(chatId);
     if (chat) {
-      clearMessages()
+      stopGeneration();
+      clearMessages();
       // Load messages one by one to trigger animations
       chat.messages.forEach((message, index) => {
         setTimeout(() => {
-          addMessage(message, false) // false = don't trigger AI response
-        }, index * 100)
-      })
+          addMessage(message, false); // false = don't trigger AI response
+        }, index * 100);
+      });
+      toast.success("Chat loaded");
     }
-    setShowHistory(false)
+    setShowHistory(false);
+  };
+
+  const handleProviderChange = (provider: string, model: string) => {
+    updateSettings({ provider, model });
+    toast.success(`Switched to ${provider} - ${model}`);
+  };
+
+  const handleVoiceToggle = (enabled: boolean) => {
+    setIsVoiceEnabled(enabled);
+    const voiceSettings = voiceService.getSettings();
+    voiceService.updateSettings({
+      ...voiceSettings,
+      enabled,
+      autoSpeak: enabled,
+      microphoneEnabled: enabled,
+      transcriptionEnabled: enabled,
+    });
+
+    if (enabled) {
+      toast.success("Voice features enabled");
+    } else {
+      toast.info("Voice features disabled");
+      voiceService.stopSpeaking();
+      voiceService.stopListening();
+    }
+  };
+
+  // Get display messages (including streaming)
+  const displayMessages = [...messages];
+  const streamingMessage = getCurrentStreamingMessage();
+  if (streamingMessage) {
+    displayMessages.push(streamingMessage);
   }
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
-      {/* 3D Conversation Space */}
-      <Canvas ref={canvasRef} className="w-full h-full" dpr={[1, 2]}>
-        <Suspense fallback={null}>
-          <ambientLight intensity={0.2} />
-          <pointLight position={[10, 10, 10]} intensity={0.8} />
-          <Stars radius={100} depth={50} count={2000} factor={4} />
-          <Environment preset="night" />
-          <OrbitControls
-            enableZoom={true}
-            enablePan={true}
-            enableRotate={true}
-            zoomSpeed={0.5}
-            maxDistance={20}
-            minDistance={2}
-          />
-          <ConversationSpace messages={messages} isProcessing={isProcessing} conversationMood={conversationMood} />
-          {isProcessing && thoughtProcess.length > 0 && (
-            <ThoughtVisualization thoughts={thoughtProcess} position={[0, -2, 0]} />
-          )}
-        </Suspense>
-      </Canvas>
+
+      {/* 2D Chat Panel */}
+      {showChatPanel && (
+        <ChatPanel
+          messages={displayMessages}
+          isProcessing={isProcessing || isStreaming}
+          onProviderChange={handleProviderChange}
+          onVoiceToggle={handleVoiceToggle}
+          onVisibilityToggle={setShowChatPanel}
+          selectedProvider={settings.provider}
+          selectedModel={settings.model}
+          voiceEnabled={isVoiceEnabled}
+          visible={showChatPanel}
+        />
+      )}
 
       {/* Interaction Controls */}
       <InteractionPanel
         onSubmit={addMessage}
         onNewChat={handleNewChat}
-        isProcessing={isProcessing}
+        isProcessing={isProcessing || isStreaming}
         conversationContext={conversationContext}
         toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
         toggleHistory={() => setShowHistory(!showHistory)}
+        onStopGeneration={stopGeneration}
+        showChatPanel={showChatPanel}
+        onToggleChatPanel={() => setShowChatPanel(!showChatPanel)}
+        currentProvider={settings.provider}
+        currentModel={settings.model}
+        error={error}
       />
 
       {/* Chat History Modal */}
@@ -88,7 +208,15 @@ export default function ConversationInterface() {
       )}
 
       {/* Accessibility Layer */}
-      {showAccessibility && <AccessibilityControls onClose={() => setShowAccessibility(false)} messages={messages} />}
+      {showAccessibility && (
+        <AccessibilityControls
+          onClose={() => setShowAccessibility(false)}
+          messages={displayMessages}
+          isProcessing={isProcessing || isStreaming}
+          voiceEnabled={isVoiceEnabled}
+          onVoiceToggle={handleVoiceToggle}
+        />
+      )}
 
       {/* Ambient Mood Indicator */}
       <div
@@ -99,5 +227,5 @@ export default function ConversationInterface() {
         }}
       />
     </div>
-  )
+  );
 }
