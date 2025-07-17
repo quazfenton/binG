@@ -1,6 +1,11 @@
 "use client";
 
-import { Room, RemoteParticipant, LocalParticipant, AudioTrack } from 'livekit-client';
+import {
+  Room,
+  RemoteParticipant,
+  LocalParticipant,
+  AudioTrack,
+} from "livekit-client";
 
 export interface VoiceSettings {
   enabled: boolean;
@@ -15,7 +20,7 @@ export interface VoiceSettings {
 }
 
 export interface VoiceEvent {
-  type: 'transcription' | 'synthesis' | 'error' | 'connected' | 'disconnected';
+  type: "transcription" | "synthesis" | "error" | "connected" | "disconnected";
   data: any;
   timestamp: number;
 }
@@ -39,19 +44,27 @@ class VoiceService {
     speechPitch: 1.0,
     speechVolume: 0.8,
     voiceIndex: 0,
-    language: 'en-US',
+    language: "en-US",
     microphoneEnabled: false,
     transcriptionEnabled: false,
   };
 
   constructor() {
-    this.initializeBrowserVoice();
-    this.loadSettings();
+    // Only initialize browser features on the client side
+    if (typeof window !== "undefined") {
+      this.initializeBrowserVoice();
+      this.loadSettings();
+    }
   }
 
   private initializeBrowserVoice() {
+    // Only initialize if we're on the client side
+    if (typeof window === "undefined") {
+      return;
+    }
+
     // Initialize Web Speech API
-    if ('speechSynthesis' in window) {
+    if ("speechSynthesis" in window) {
       this.synthesis = window.speechSynthesis;
       this.loadVoices();
 
@@ -62,8 +75,9 @@ class VoiceService {
     }
 
     // Initialize Speech Recognition
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
+      const SpeechRecognition =
+        window.SpeechRecognition || window.webkitSpeechRecognition;
       this.recognition = new SpeechRecognition();
 
       this.recognition.continuous = true;
@@ -71,8 +85,8 @@ class VoiceService {
       this.recognition.lang = this.settings.language;
 
       this.recognition.onresult = (event) => {
-        let finalTranscript = '';
-        let interimTranscript = '';
+        let finalTranscript = "";
+        let interimTranscript = "";
 
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const transcript = event.results[i][0].transcript;
@@ -86,41 +100,44 @@ class VoiceService {
 
         if (finalTranscript) {
           this.emitEvent({
-            type: 'transcription',
+            type: "transcription",
             data: {
               text: finalTranscript,
               isFinal: true,
-              confidence: event.results[event.results.length - 1][0].confidence
+              confidence: event.results[event.results.length - 1][0].confidence,
             },
-            timestamp: Date.now()
+            timestamp: Date.now(),
           });
         }
 
         if (interimTranscript) {
           this.emitEvent({
-            type: 'transcription',
+            type: "transcription",
             data: {
               text: interimTranscript,
               isFinal: false,
-              confidence: 0
+              confidence: 0,
             },
-            timestamp: Date.now()
+            timestamp: Date.now(),
           });
         }
       };
 
       this.recognition.onerror = (event) => {
-        console.error('Speech recognition error:', event.error);
+        console.error("Speech recognition error:", event.error);
         this.emitEvent({
-          type: 'error',
-          data: { error: event.error, message: 'Speech recognition failed' },
-          timestamp: Date.now()
+          type: "error",
+          data: { error: event.error, message: "Speech recognition failed" },
+          timestamp: Date.now(),
         });
       };
 
       this.recognition.onend = () => {
         this.isListening = false;
-        if (this.settings.microphoneEnabled && this.settings.transcriptionEnabled) {
+        if (
+          this.settings.microphoneEnabled &&
+          this.settings.transcriptionEnabled
+        ) {
           // Restart recognition if it should be continuous
           setTimeout(() => this.startListening(), 100);
         }
@@ -133,11 +150,16 @@ class VoiceService {
       this.voices = this.synthesis.getVoices();
 
       // Find a good default voice
-      const preferredVoice = this.voices.find(voice =>
-        voice.lang.startsWith(this.settings.language) && !voice.localService
-      ) || this.voices.find(voice =>
-        voice.lang.startsWith(this.settings.language)
-      ) || this.voices[0];
+      const preferredVoice =
+        this.voices.find(
+          (voice) =>
+            voice.lang.startsWith(this.settings.language) &&
+            !voice.localService,
+        ) ||
+        this.voices.find((voice) =>
+          voice.lang.startsWith(this.settings.language),
+        ) ||
+        this.voices[0];
 
       if (preferredVoice) {
         this.settings.voiceIndex = this.voices.indexOf(preferredVoice);
@@ -146,30 +168,40 @@ class VoiceService {
   }
 
   private loadSettings() {
+    // Only access localStorage on the client side
+    if (typeof window === "undefined") {
+      return;
+    }
+
     try {
-      const saved = localStorage.getItem('voice-settings');
+      const saved = localStorage.getItem("voice-settings");
       if (saved) {
         this.settings = { ...this.settings, ...JSON.parse(saved) };
       }
     } catch (error) {
-      console.warn('Failed to load voice settings:', error);
+      console.warn("Failed to load voice settings:", error);
     }
   }
 
   private saveSettings() {
+    // Only access localStorage on the client side
+    if (typeof window === "undefined") {
+      return;
+    }
+
     try {
-      localStorage.setItem('voice-settings', JSON.stringify(this.settings));
+      localStorage.setItem("voice-settings", JSON.stringify(this.settings));
     } catch (error) {
-      console.warn('Failed to save voice settings:', error);
+      console.warn("Failed to save voice settings:", error);
     }
   }
 
   private emitEvent(event: VoiceEvent) {
-    this.eventHandlers.forEach(handler => {
+    this.eventHandlers.forEach((handler) => {
       try {
         handler(event);
       } catch (error) {
-        console.error('Error in voice event handler:', error);
+        console.error("Error in voice event handler:", error);
       }
     });
   }
@@ -187,17 +219,20 @@ class VoiceService {
   }
 
   // Livekit integration
-  async connectToLivekit(roomName: string, participantName: string): Promise<boolean> {
+  async connectToLivekit(
+    roomName: string,
+    participantName: string,
+  ): Promise<boolean> {
     try {
       if (!process.env.NEXT_PUBLIC_LIVEKIT_URL) {
-        throw new Error('LiveKit URL configuration missing');
+        throw new Error("LiveKit URL configuration missing");
       }
 
       // Get access token from API route
-      const tokenResponse = await fetch('/api/livekit/token', {
-        method: 'POST',
+      const tokenResponse = await fetch("/api/livekit/token", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           roomName,
@@ -207,7 +242,7 @@ class VoiceService {
 
       if (!tokenResponse.ok) {
         const errorData = await tokenResponse.json();
-        throw new Error(errorData.error || 'Failed to get access token');
+        throw new Error(errorData.error || "Failed to get access token");
       }
 
       const { token: jwt } = await tokenResponse.json();
@@ -218,26 +253,26 @@ class VoiceService {
         dynacast: true,
       });
 
-      this.room.on('connected', () => {
+      this.room.on("connected", () => {
         this.isConnected = true;
         this.emitEvent({
-          type: 'connected',
+          type: "connected",
           data: { roomName, participantName },
-          timestamp: Date.now()
+          timestamp: Date.now(),
         });
       });
 
-      this.room.on('disconnected', () => {
+      this.room.on("disconnected", () => {
         this.isConnected = false;
         this.emitEvent({
-          type: 'disconnected',
+          type: "disconnected",
           data: {},
-          timestamp: Date.now()
+          timestamp: Date.now(),
         });
       });
 
-      this.room.on('trackSubscribed', (track, publication, participant) => {
-        if (track.kind === 'audio') {
+      this.room.on("trackSubscribed", (track, publication, participant) => {
+        if (track.kind === "audio") {
           const audioElement = track.attach();
           document.body.appendChild(audioElement);
         }
@@ -245,13 +280,12 @@ class VoiceService {
 
       await this.room.connect(process.env.NEXT_PUBLIC_LIVEKIT_URL, jwt);
       return true;
-
     } catch (error) {
-      console.error('Failed to connect to Livekit:', error);
+      console.error("Failed to connect to Livekit:", error);
       this.emitEvent({
-        type: 'error',
+        type: "error",
         data: { error: error.message },
-        timestamp: Date.now()
+        timestamp: Date.now(),
       });
       return false;
     }
@@ -268,8 +302,13 @@ class VoiceService {
   // Text-to-speech functionality
   async speak(text: string, options?: Partial<VoiceSettings>): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (typeof window === "undefined") {
+        reject(new Error("Speech synthesis not available on server"));
+        return;
+      }
+
       if (!this.synthesis) {
-        reject(new Error('Speech synthesis not supported'));
+        reject(new Error("Speech synthesis not supported"));
         return;
       }
 
@@ -292,9 +331,9 @@ class VoiceService {
       utterance.onend = () => {
         this.currentUtterance = null;
         this.emitEvent({
-          type: 'synthesis',
+          type: "synthesis",
           data: { text, completed: true },
-          timestamp: Date.now()
+          timestamp: Date.now(),
         });
         resolve();
       };
@@ -302,18 +341,18 @@ class VoiceService {
       utterance.onerror = (event) => {
         this.currentUtterance = null;
         this.emitEvent({
-          type: 'error',
-          data: { error: event.error, message: 'Speech synthesis failed' },
-          timestamp: Date.now()
+          type: "error",
+          data: { error: event.error, message: "Speech synthesis failed" },
+          timestamp: Date.now(),
         });
         reject(new Error(`Speech synthesis error: ${event.error}`));
       };
 
       utterance.onstart = () => {
         this.emitEvent({
-          type: 'synthesis',
+          type: "synthesis",
           data: { text, started: true },
-          timestamp: Date.now()
+          timestamp: Date.now(),
         });
       };
 
@@ -335,8 +374,13 @@ class VoiceService {
 
   // Speech-to-text functionality
   startListening(): boolean {
+    if (typeof window === "undefined") {
+      console.warn("Speech recognition not available on server");
+      return false;
+    }
+
     if (!this.recognition) {
-      console.warn('Speech recognition not supported');
+      console.warn("Speech recognition not supported");
       return false;
     }
 
@@ -349,7 +393,7 @@ class VoiceService {
       this.isListening = true;
       return true;
     } catch (error) {
-      console.error('Failed to start speech recognition:', error);
+      console.error("Failed to start speech recognition:", error);
       return false;
     }
   }
@@ -376,8 +420,14 @@ class VoiceService {
     }
 
     // Handle microphone and transcription changes
-    if (newSettings.microphoneEnabled !== undefined || newSettings.transcriptionEnabled !== undefined) {
-      if (this.settings.microphoneEnabled && this.settings.transcriptionEnabled) {
+    if (
+      newSettings.microphoneEnabled !== undefined ||
+      newSettings.transcriptionEnabled !== undefined
+    ) {
+      if (
+        this.settings.microphoneEnabled &&
+        this.settings.transcriptionEnabled
+      ) {
         this.startListening();
       } else {
         this.stopListening();
@@ -395,14 +445,23 @@ class VoiceService {
 
   // Utility methods
   isVoiceSupported(): boolean {
+    if (typeof window === "undefined") {
+      return false;
+    }
     return !!(this.synthesis && this.recognition);
   }
 
   isSpeechSynthesisSupported(): boolean {
+    if (typeof window === "undefined") {
+      return false;
+    }
     return !!this.synthesis;
   }
 
   isSpeechRecognitionSupported(): boolean {
+    if (typeof window === "undefined") {
+      return false;
+    }
     return !!this.recognition;
   }
 
@@ -412,11 +471,15 @@ class VoiceService {
 
   // Auto-speak functionality for chat responses
   async speakIfEnabled(text: string): Promise<void> {
-    if (this.settings.enabled && this.settings.autoSpeak && this.isSpeechSynthesisSupported()) {
+    if (
+      this.settings.enabled &&
+      this.settings.autoSpeak &&
+      this.isSpeechSynthesisSupported()
+    ) {
       try {
         await this.speak(text);
       } catch (error) {
-        console.warn('Auto-speak failed:', error);
+        console.warn("Auto-speak failed:", error);
       }
     }
   }
@@ -481,11 +544,11 @@ declare global {
 
   var SpeechRecognition: {
     prototype: SpeechRecognition;
-    new(): SpeechRecognition;
+    new (): SpeechRecognition;
   };
 
   var webkitSpeechRecognition: {
     prototype: SpeechRecognition;
-    new(): SpeechRecognition;
+    new (): SpeechRecognition;
   };
 }

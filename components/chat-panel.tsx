@@ -37,6 +37,7 @@ interface ChatPanelProps {
   selectedModel?: string
   voiceEnabled?: boolean
   visible?: boolean
+  onToggleCodePreview?: () => void
 }
 
 interface StreamingMessageProps {
@@ -216,7 +217,8 @@ export default function ChatPanel({
   selectedProvider = "openai",
   selectedModel = "gpt-4",
   voiceEnabled = false,
-  visible = true
+  visible = true,
+  onToggleCodePreview
 }: ChatPanelProps) {
   const [providers, setProviders] = useState<LLMProvider[]>([])
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
@@ -321,6 +323,15 @@ export default function ChatPanel({
               ) : (
                 <VolumeX className="w-4 h-4" />
               )}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={onToggleCodePreview}
+              className="h-8 w-8 p-0"
+              title="Toggle Code Preview Panel"
+            >
+              <Code className="w-4 h-4" />
             </Button>
             <Button
               size="sm"

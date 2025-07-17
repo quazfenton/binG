@@ -54,6 +54,7 @@
     "expo-gl": "latest",
     "framer-motion": "^11.18.0",
     "input-otp": "1.4.1",
+    "jszip": "^3.10.1",
     "livekit-client": "^2.8.0",
     "livekit-server-sdk": "^2.9.7",
     "lucide-react": "^0.454.0",

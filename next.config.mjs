@@ -18,6 +18,8 @@ const nextConfig = {
     ENABLE_IMAGE_GENERATION: process.env.ENABLE_IMAGE_GENERATION,
     ENABLE_CHAT_HISTORY: process.env.ENABLE_CHAT_HISTORY,
     ENABLE_CODE_EXECUTION: process.env.ENABLE_CODE_EXECUTION,
+    PORTKEY_API_KEY: process.env.PORTKEY_API_KEY,
+    PORTKEY_VIRTUAL_KEY: process.env.PORTKEY_VIRTUAL_KEY,
   },
   serverExternalPackages: [
       "livekit-server-sdk",
@@ -27,6 +29,7 @@ const nextConfig = {
       "together-ai",
       "replicate",
       "@google/generative-ai",
+      "portkey-ai",
     ],
     webpack: (config, { isServer }) => {
     // Handle ESM modules

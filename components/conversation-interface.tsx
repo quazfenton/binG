@@ -5,6 +5,7 @@ import InteractionPanel from "@/components/interaction-panel";
 import AccessibilityControls from "@/components/accessibility-controls";
 import ChatHistoryModal from "@/components/chat-history-modal";
 import ChatPanel from "@/components/chat-panel";
+import CodePreviewPanel from "@/components/code-preview-panel";
 import { useConversation } from "@/hooks/use-conversation";
 import { useChatHistory } from "@/hooks/use-chat-history";
 import { voiceService } from "@/lib/voice/voice-service";
@@ -15,6 +16,7 @@ export default function ConversationInterface() {
   const [showAccessibility, setShowAccessibility] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showChatPanel, setShowChatPanel] = useState(true);
+  const [showCodePreview, setShowCodePreview] = useState(false);
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
     [],
   );
@@ -155,6 +157,13 @@ export default function ConversationInterface() {
     }
   };
 
+  const handleToggleCodePreview = () => {
+    setShowCodePreview(!showCodePreview);
+    if (!showCodePreview) {
+      toast.success("Code preview panel opened");
+    }
+  };
+
   // Get display messages (including streaming)
   const displayMessages = [...messages];
   const streamingMessage = getCurrentStreamingMessage();
@@ -177,6 +186,7 @@ export default function ConversationInterface() {
           selectedModel={settings.model}
           voiceEnabled={isVoiceEnabled}
           visible={showChatPanel}
+          onToggleCodePreview={handleToggleCodePreview}
         />
       )}
 
@@ -206,6 +216,13 @@ export default function ConversationInterface() {
           chats={getAllChats()}
         />
       )}
+
+      {/* Code Preview Panel */}
+      <CodePreviewPanel
+        messages={displayMessages}
+        isOpen={showCodePreview}
+        onClose={() => setShowCodePreview(false)}
+      />
 
       {/* Accessibility Layer */}
       {showAccessibility && (

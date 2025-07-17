@@ -7,12 +7,13 @@ A revolutionary 3D spatial interface for AI interactions that combines tradition
 ## ✨ Features
 
 ### 🎯 Core Functionality
-- **Multi-Provider LLM Support**: OpenAI, Anthropic, Google, Cohere, Together AI, Replicate
+- **Multi-Provider LLM Support**: OpenAI, Anthropic, Google, Cohere, Together AI, Replicate, Portkey
 - **Real-time Streaming**: Smooth text streaming with fade-in animations
 - **2D + 3D Interface**: Traditional chat panel alongside immersive 3D visualization
 - **Voice Integration**: Text-to-speech and speech-to-text using Livekit
 - **Chat History**: Persistent local storage with export functionality
 - **Provider Selection**: Easy switching between AI models and providers
+- **Free Models**: Access to DeepSeek R1, Gemini, OpenRouter, Grok, and Flux models via Portkey
 
 ### 🎨 Advanced UI/UX
 - **Streaming Animations**: Typewriter effect with smooth character-by-character display
@@ -110,11 +111,19 @@ LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
 NEXT_PUBLIC_LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
 ```
 
-### Optional: Portkey (AI Gateway)
+### Optional: Portkey (AI Gateway with Free Models)
 ```env
 PORTKEY_API_KEY=your_portkey_api_key_here
 PORTKEY_VIRTUAL_KEY=your_portkey_virtual_key_here
 ```
+
+**Available Free Models:**
+- `chutes/deepseek-r1-0528:free` - DeepSeek R1 (Latest reasoning model)
+- `chutes/gemini-1.5-flash:free` - Google Gemini 1.5 Flash
+- `chutes/openrouter-auto:free` - OpenRouter Auto Selection
+- `chutes/grok-beta:free` - Grok Beta
+- `chutes/flux-dev:free` - Flux Dev (Image Generation)
+- `chutes/flux-schnell:free` - Flux Schnell (Fast Image Generation)
 
 ## 🎮 Usage Guide
 

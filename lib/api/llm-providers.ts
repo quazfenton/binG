@@ -4,6 +4,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 import { CohereClient } from 'cohere-ai'
 import Together from 'together-ai'
 import Replicate from 'replicate'
+import { Portkey } from 'portkey-ai'
 
 export interface LLMProvider {
   id: string
@@ -98,6 +99,21 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: false,
     maxTokens: 4096,
     description: 'Run open-source models in the cloud'
+  },
+  portkey: {
+    id: 'portkey',
+    name: 'Portkey',
+    models: [
+      'chutes/deepseek-r1-0528:free',
+      'chutes/gemini-1.5-flash:free',
+      'chutes/openrouter-auto:free',
+      'chutes/grok-beta:free',
+      'chutes/flux-dev:free',
+      'chutes/flux-schnell:free'
+    ],
+    supportsStreaming: true,
+    maxTokens: 4096,
+    description: 'Portkey AI with DeepSeek and multiple free models including image generation'
   }
 }
 
@@ -108,6 +124,7 @@ class LLMService {
   private cohere: CohereClient | null = null
   private together: Together | null = null
   private replicate: Replicate | null = null
+  private portkey: Portkey | null = null
 
   constructor() {
     this.initializeProviders()
@@ -144,16 +161,24 @@ class LLMService {
     // Initialize Together AI
     if (process.env.TOGETHER_API_KEY) {
       this.together = new Together({
-        apiKey: process.env.TOGETHER_API_KEY,
+        auth: process.env.TOGETHER_API_KEY,
       })
     }
 
     // Initialize Replicate
-    if (process.env.REPLICATE_API_TOKEN) {
-      this.replicate = new Replicate({
-        auth: process.env.REPLICATE_API_TOKEN,
-      })
-    }
+if (process.env.REPLICATE_API_TOKEN) {
+  this.replicate = new Replicate({
+    auth: process.env.REPLICATE_API_TOKEN,
+  })
+}
+
+// Initialize Portkey AI
+if (process.env.PORTKEY_API_KEY && process.env.PORTKEY_VIRTUAL_KEY) {
+  this.portkey = new Portkey({
+    apiKey: process.env.PORTKEY_API_KEY,
+    config: process.env.PORTKEY_VIRTUAL_KEY,
+  })
+}
   }
 
   getAvailableProviders(): LLMProvider[] {
@@ -165,11 +190,12 @@ class LLMService {
     if (this.cohere) available.push(PROVIDERS.cohere)
     if (this.together) available.push(PROVIDERS.together)
     if (this.replicate) available.push(PROVIDERS.replicate)
+    if (this.portkey) available.push(PROVIDERS.portkey)
 
     return available
   }
 
-  async generateResponse(request: LLMRequest): Promise<LLMResponse> {
+async generateResponse(request: LLMRequest): Promise<LLMResponse> {
     const { provider, model, messages, temperature = 0.7, maxTokens = 2000 } = request
 
     try {
@@ -186,6 +212,8 @@ class LLMService {
           return await this.callTogether(messages, model, temperature, maxTokens)
         case 'replicate':
           return await this.callReplicate(messages, model, temperature, maxTokens)
+        case 'portkey':
+          return await this.callPortkey(messages, model, temperature, maxTokens)
         default:
           throw new Error(`Provider ${provider} not supported`)
       }
@@ -195,7 +223,7 @@ class LLMService {
     }
   }
 
-  async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingResponse> {
+async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingResponse> {
     const { provider, model, messages, temperature = 0.7, maxTokens = 2000 } = request
 
     try {
@@ -214,6 +242,9 @@ class LLMService {
           break
         case 'together':
           yield* this.streamTogether(messages, model, temperature, maxTokens)
+          break
+        case 'portkey':
+          yield* this.streamPortkey(messages, model, temperature, maxTokens)
           break
         default:
           throw new Error(`Streaming not supported for ${provider}`)
@@ -448,7 +479,7 @@ class LLMService {
   private async callTogether(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): Promise<LLMResponse> {
     if (!this.together) throw new Error('Together AI not initialized')
 
-    const response = await this.together.chat.completions.create({
+    const response = await this.together.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -470,7 +501,7 @@ class LLMService {
   private async *streamTogether(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
     if (!this.together) throw new Error('Together AI not initialized')
 
-    const stream = await this.together.chat.completions.create({
+    const stream = await this.together.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -510,6 +541,55 @@ class LLMService {
       content: Array.isArray(output) ? output.join('') : String(output),
       model,
       provider: 'replicate'
+    }
+  }
+
+  private async callPortkey(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): Promise<LLMResponse> {
+    if (!this.portkey) throw new Error('Portkey not initialized')
+
+    const response = await this.portkey.chatCompletions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: false,
+    })
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      usage: response.usage ? {
+        promptTokens: response.usage.prompt_tokens || 0,
+        completionTokens: response.usage.completion_tokens || 0,
+        totalTokens: response.usage.total_tokens || 0,
+      } : undefined,
+      model,
+      provider: 'portkey'
+    }
+  }
+
+  private async *streamPortkey(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
+    if (!this.portkey) throw new Error('Portkey not initialized')
+
+    const stream = await this.portkey.chatCompletions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content || ''
+
+      yield {
+        content: delta,
+        isComplete: chunk.choices[0]?.finish_reason !== null,
+        usage: chunk.usage ? {
+          promptTokens: chunk.usage.prompt_tokens || 0,
+          completionTokens: chunk.usage.completion_tokens || 0,
+          totalTokens: chunk.usage.total_tokens || 0,
+        } : undefined,
+      }
     }
   }
 }
