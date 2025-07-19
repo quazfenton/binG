@@ -165,8 +165,8 @@ export async function GET() {
       success: true,
       data: {
         providers: availableProviders,
-        defaultProvider: process.env.DEFAULT_LLM_PROVIDER || 'openai',
-        defaultModel: process.env.DEFAULT_MODEL || 'gpt-4',
+        defaultProvider: process.env.DEFAULT_LLM_PROVIDER || 'openrouter',
+        defaultModel: process.env.DEFAULT_MODEL || 'deepseek/deepseek-r1-0528:free',
         defaultTemperature: parseFloat(process.env.DEFAULT_TEMPERATURE || '0.7'),
         defaultMaxTokens: parseInt(process.env.DEFAULT_MAX_TOKENS || '2000'),
         features: {

@@ -1,15 +1,15 @@
 # binG - Advanced LLM Chat Interface
 
-A revolutionary 3D spatial interface for AI interactions that combines traditional chat functionality with immersive 3D visualization, voice integration, and multi-provider LLM support.
+A spatial interface for AI interactions that combines traditional chat functionality with immersive  visualization, voice integration, and multi-provider LLM support.
 
-![binG Interface](https://via.placeholder.com/800x400/1a1a1a/6366f1?text=binG+AI+Chat+Interface)
+![binG Interface](https://via.placeholder.com/)
 
 ## ✨ Features
 
 ### 🎯 Core Functionality
 - **Multi-Provider LLM Support**: OpenAI, Anthropic, Google, Cohere, Together AI, Replicate, Portkey
 - **Real-time Streaming**: Smooth text streaming with fade-in animations
-- **2D + 3D Interface**: Traditional chat panel alongside immersive 3D visualization
+- **Interface**: Traditional chat panel alongside immersive visualization
 - **Voice Integration**: Text-to-speech and speech-to-text using Livekit
 - **Chat History**: Persistent local storage with export functionality
 - **Provider Selection**: Easy switching between AI models and providers
@@ -17,7 +17,7 @@ A revolutionary 3D spatial interface for AI interactions that combines tradition
 
 ### 🎨 Advanced UI/UX
 - **Streaming Animations**: Typewriter effect with smooth character-by-character display
-- **Mood-Responsive Interface**: 3D environment adapts to conversation tone
+- **Mood-Responsive Interface**:  environment adapts to conversation tone
 - **Copy & Download**: Individual message copying and code block extraction
 - **Accessibility Controls**: Screen reader support, voice controls, text sizing
 - **Error Handling**: Comprehensive error management with user-friendly messages
@@ -129,7 +129,7 @@ PORTKEY_VIRTUAL_KEY=your_portkey_virtual_key_here
 
 ### Basic Chat
 1. **Start Conversation**: Type in the input field and press Enter
-2. **View Responses**: Messages appear in both 2D chat panel and 3D space
+2. **View Responses**: Messages appear in both 2D chat panel and  space
 3. **Copy Messages**: Click copy button on any message
 4. **Download Code**: Extract code blocks from AI responses
 
@@ -144,9 +144,9 @@ PORTKEY_VIRTUAL_KEY=your_portkey_virtual_key_here
 3. **Voice Output**: AI responses are automatically spoken
 4. **Voice Settings**: Adjust rate, pitch, volume in accessibility panel
 
-### 3D Interface
+###  Interface
 1. **Navigation**: Click and drag to rotate, scroll to zoom
-2. **Message Nodes**: Click on 3D shapes to expand message content
+2. **Message Nodes**: Click on  shapes to expand message content
 3. **Mood Visualization**: Environment color reflects conversation tone
 4. **Thought Process**: Floating spheres show AI processing stages
 
@@ -170,7 +170,7 @@ binG/
 │   ├── ui/               # Reusable UI components
 │   ├── chat-panel.tsx    # 2D chat interface
 │   ├── conversation-interface.tsx  # Main interface
-│   ├── conversation-space.tsx      # 3D visualization
+│   ├── conversation-space.tsx      #  visualization
 │   └── ...
 ├── hooks/
 │   ├── use-conversation.ts  # Chat logic and API calls
@@ -251,7 +251,7 @@ binG/
 - **Solution**: Use Chrome/Edge, grant microphone permissions
 - **Debug**: Check browser compatibility and permissions
 
-#### 3D interface not loading
+####  interface not loading
 - **Cause**: WebGL not supported or graphics issues
 - **Solution**: Use modern browser, update graphics drivers
 - **Debug**: Check browser WebGL support
@@ -301,7 +301,7 @@ Access via chat panel or accessibility controls:
 
 | Feature | Chrome | Edge | Firefox | Safari |
 |---------|--------|------|---------|--------|
-| 3D Interface | ✅ | ✅ | ✅ | ✅ |
+|  Interface | ✅ | ✅ | ✅ | ✅ |
 | Chat Interface | ✅ | ✅ | ✅ | ✅ |
 | Streaming | ✅ | ✅ | ✅ | ✅ |
 | Text-to-Speech | ✅ | ✅ | ⚠️ | ⚠️ |
@@ -330,7 +330,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 🙏 Acknowledgments
 
 - **Livekit**: Voice integration infrastructure
-- **Three.js**: 3D visualization engine
+- **Three.js**:  visualization engine
 - **Radix UI**: Accessible component library
 - **Framer Motion**: Animation library
 - **OpenAI, Anthropic, Google**: AI model providers
@@ -346,4 +346,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Built with ❤️ by the binG team**
 
-*A revolutionary approach to AI interaction that bridges the gap between traditional chat interfaces and immersive 3D experiences.*
+*A revolutionary approach to AI interaction that bridges the gap between traditional chat interfaces and immersive  experiences.*

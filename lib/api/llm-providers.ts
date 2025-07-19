@@ -52,13 +52,21 @@ export interface StreamingResponse {
 
 // Available LLM Providers Configuration
 export const PROVIDERS: Record<string, LLMProvider> = {
-  openai: {
-    id: 'openai',
-    name: 'OpenAI',
-    models: ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo', 'gpt-4o', 'gpt-4o-mini'],
+  chutes: {
+    id: 'chutes',
+    name: 'Chutes',
+    models: ['deepseek-ai/DeepSeek-R1-0528', 'deepseek-ai/DeepSeek-Chat-V3-0324', 'tngtech/DeepSeek-TNG-R1T2-Chimera', 'gemma-3-27b-it', 'meta-llama/Llama-4-Maverick', 'meta-llama/Llama-3.3-70B-Instruct'],
     supportsStreaming: true,
     maxTokens: 4096,
-    description: 'Most capable and widely used AI models'
+    description: 'Chutes AI with high-performance models'
+  },
+  openrouter: {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    models: ['deepseek/deepseek-r1-0528:free', 'deepseek/deepseek-chat-v3-0324:free', 'meta-llama/llama-4-maverick:free', 'gemma-3-27b-it:free', 'meta-llama/llama-3.3-70b-instruct:free', 'meta-llama/llama-3.2-11b-vision-instruct:free'],
+    supportsStreaming: true,
+    maxTokens: 4096,
+    description: 'Access a variety of models through a single API'
   },
   anthropic: {
     id: 'anthropic',
@@ -71,7 +79,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   google: {
     id: 'google',
     name: 'Google',
-    models: ['gemini-pro', 'gemini-pro-vision', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+    models: ['gemini-2.5-flash-preview-05-20', 'gemini-pro', 'gemini-pro-vision', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-vision'],
     supportsStreaming: true,
     maxTokens: 2048,
     description: 'Google\'s multimodal AI models'
@@ -103,14 +111,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   portkey: {
     id: 'portkey',
     name: 'Portkey',
-    models: [
-      'chutes/deepseek-r1-0528:free',
-      'chutes/gemini-1.5-flash:free',
-      'chutes/openrouter-auto:free',
-      'chutes/grok-beta:free',
-      'chutes/flux-dev:free',
-      'chutes/flux-schnell:free'
-    ],
+    models: [], // Models are dynamically selected via Portkey's virtual keys
     supportsStreaming: true,
     maxTokens: 4096,
     description: 'Portkey AI with DeepSeek and multiple free models including image generation'
@@ -118,7 +119,8 @@ export const PROVIDERS: Record<string, LLMProvider> = {
 }
 
 class LLMService {
-  private openai: OpenAI | null = null
+  private chutes: OpenAI | null = null
+  private openrouter: OpenAI | null = null
   private anthropic: Anthropic | null = null
   private google: GoogleGenerativeAI | null = null
   private cohere: CohereClient | null = null
@@ -131,11 +133,19 @@ class LLMService {
   }
 
   private initializeProviders() {
-    // Initialize OpenAI
+    // Initialize Chutes
+    if (process.env.CHUTES_API_KEY) {
+      this.chutes = new OpenAI({
+        apiKey: process.env.CHUTES_API_KEY,
+        baseURL: 'https://llm.chutes.ai/v1',
+      })
+    }
+
+    // Initialize OpenRouter (using OpenAI SDK)
     if (process.env.OPENAI_API_KEY) {
-      this.openai = new OpenAI({
+      this.openrouter = new OpenAI({
         apiKey: process.env.OPENAI_API_KEY,
-        organization: process.env.OPENAI_ORG_ID,
+        baseURL: process.env.OPENAI_BASE_URL,
       })
     }
 
@@ -184,7 +194,8 @@ if (process.env.PORTKEY_API_KEY && process.env.PORTKEY_VIRTUAL_KEY) {
   getAvailableProviders(): LLMProvider[] {
     const available: LLMProvider[] = []
 
-    if (this.openai) available.push(PROVIDERS.openai)
+    if (this.chutes) available.push(PROVIDERS.chutes)
+    if (this.openrouter) available.push(PROVIDERS.openrouter)
     if (this.anthropic) available.push(PROVIDERS.anthropic)
     if (this.google) available.push(PROVIDERS.google)
     if (this.cohere) available.push(PROVIDERS.cohere)
@@ -200,8 +211,10 @@ async generateResponse(request: LLMRequest): Promise<LLMResponse> {
 
     try {
       switch (provider) {
-        case 'openai':
-          return await this.callOpenAI(messages, model, temperature, maxTokens)
+        case 'chutes':
+          return await this.callChutes(messages, model, temperature, maxTokens)
+        case 'openrouter':
+          return await this.callOpenRouter(messages, model, temperature, maxTokens)
         case 'anthropic':
           return await this.callAnthropic(messages, model, temperature, maxTokens)
         case 'google':
@@ -228,8 +241,11 @@ async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingR
 
     try {
       switch (provider) {
-        case 'openai':
-          yield* this.streamOpenAI(messages, model, temperature, maxTokens)
+        case 'chutes':
+          yield* this.streamChutes(messages, model, temperature, maxTokens)
+          break
+        case 'openrouter':
+          yield* this.streamOpenRouter(messages, model, temperature, maxTokens)
           break
         case 'anthropic':
           yield* this.streamAnthropic(messages, model, temperature, maxTokens)
@@ -255,10 +271,10 @@ async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingR
     }
   }
 
-  private async callOpenAI(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): Promise<LLMResponse> {
-    if (!this.openai) throw new Error('OpenAI not initialized')
+  private async callChutes(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): Promise<LLMResponse> {
+    if (!this.chutes) throw new Error('Chutes not initialized')
 
-    const response = await this.openai.chat.completions.create({
+    const response = await this.chutes.chat.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -273,14 +289,64 @@ async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingR
         totalTokens: response.usage.total_tokens,
       } : undefined,
       model,
-      provider: 'openai'
+      provider: 'chutes'
     }
   }
 
-  private async *streamOpenAI(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
-    if (!this.openai) throw new Error('OpenAI not initialized')
+  private async *streamChutes(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
+    if (!this.chutes) throw new Error('Chutes not initialized')
 
-    const stream = await this.openai.chat.completions.create({
+    const stream = await this.chutes.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    let content = ''
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content || ''
+      content += delta
+
+      yield {
+        content: delta,
+        isComplete: chunk.choices[0]?.finish_reason !== null,
+        usage: chunk.usage ? {
+          promptTokens: chunk.usage.prompt_tokens,
+          completionTokens: chunk.usage.completion_tokens,
+          totalTokens: chunk.usage.total_tokens,
+        } : undefined,
+      }
+    }
+  }
+
+  private async callOpenRouter(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): Promise<LLMResponse> {
+    if (!this.openrouter) throw new Error('OpenRouter not initialized')
+
+    const response = await this.openrouter.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    })
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      usage: response.usage ? {
+        promptTokens: response.usage.prompt_tokens,
+        completionTokens: response.usage.completion_tokens,
+        totalTokens: response.usage.total_tokens,
+      } : undefined,
+      model,
+      provider: 'openrouter'
+    }
+  }
+
+  private async *streamOpenRouter(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
+    if (!this.openrouter) throw new Error('OpenRouter not initialized')
+
+    const stream = await this.openrouter.chat.completions.create({
       model,
       messages: messages as any,
       temperature,

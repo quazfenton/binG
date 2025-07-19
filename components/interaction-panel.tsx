@@ -31,8 +31,6 @@ interface InteractionPanelProps {
   toggleAccessibility: () => void;
   toggleHistory: () => void;
   onStopGeneration?: () => void;
-  showChatPanel?: boolean;
-  onToggleChatPanel?: () => void;
   currentProvider?: string;
   currentModel?: string;
   error?: string | null;
@@ -46,10 +44,8 @@ export default function InteractionPanel({
   toggleAccessibility,
   toggleHistory,
   onStopGeneration,
-  showChatPanel = true,
-  onToggleChatPanel,
-  currentProvider = "openai",
-  currentModel = "gpt-4",
+  currentProvider = "openrouter",
+  currentModel = "deepseek/deepseek-r1-0528:free",
   error,
 }: InteractionPanelProps) {
   const [input, setInput] = useState("");
@@ -59,22 +55,22 @@ export default function InteractionPanel({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (input.trim() && !isProcessing) {
-      onSubmit({ role: "user", content: input });
+      onSubmit({ id: `user-${Date.now()}`, role: "user", content: input });
       setInput("");
     }
   };
 
   const handleSuggestionClick = (suggestion: string) => {
     if (!isProcessing) {
-      onSubmit({ role: "user", content: suggestion });
+      onSubmit({ id: `user-${Date.now()}`, role: "user", content: suggestion });
     }
   };
 
   const suggestions = [
-    "Tell me about yourself",
-    "How does this interface work?",
-    "What makes this UI revolutionary?",
-    "Show me something interesting",
+    "unique app ideas",
+    "code an incredible ux",
+    "make an addicting web game",
+    "show me sum interesting",
   ];
 
   const sampleImages = [
@@ -111,7 +107,7 @@ export default function InteractionPanel({
                   <Sparkles className="h-3 w-3 text-white" />
                 </div>
                 <span className="text-sm font-medium text-white/80">
-                  Orbital Nexus
+                  ayooo chat
                 </span>
               </div>
               <TabsList className="bg-black/40">
@@ -139,18 +135,6 @@ export default function InteractionPanel({
               >
                 <History className="h-4 w-4" />
               </Button>
-              {onToggleChatPanel && (
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={onToggleChatPanel}
-                  title={showChatPanel ? "Hide Chat Panel" : "Show Chat Panel"}
-                >
-                  <MessageSquare
-                    className={`h-4 w-4 ${showChatPanel ? "text-blue-400" : ""}`}
-                  />
-                </Button>
-              )}
               <Button
                 variant="outline"
                 size="icon"
@@ -327,7 +311,7 @@ export default function InteractionPanel({
                   <div className="flex items-start gap-3">
                     <Sparkles className="h-5 w-5 text-yellow-400 mt-0.5" />
                     <div>
-                      <h3 className="font-medium">About Orbital Nexus</h3>
+                      <h3 className="font-medium">About ayooo chat</h3>
                       <p className="text-sm text-white/70">
                         A revolutionary 3D spatial interface for AI interactions
                         that breaks traditional chat paradigms.

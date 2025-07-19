@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { Message, ConversationContext, ConversationMood } from "@/types";
+import { v4 as uuidv4 } from 'uuid';
 
 export interface ConversationSettings {
   provider: string;
@@ -20,8 +21,8 @@ export function useConversation() {
   const [isStreaming, setIsStreaming] = useState(false);
 
   const [settings, setSettings] = useState<ConversationSettings>({
-    provider: "openai",
-    model: "gpt-4",
+    provider: "openrouter",
+    model: "deepseek/deepseek-r1-0528:free",
     temperature: 0.7,
     maxTokens: 2000,
     streamingEnabled: true,
@@ -103,29 +104,30 @@ export function useConversation() {
   }, []);
 
   // Handle streaming response
-  const handleStreamingResponse = useCallback(async (response: Response) => {
+  const handleStreamingResponse = useCallback(async (response: Response, messageId: string) => {
     const reader = response.body?.getReader();
     if (!reader) throw new Error("No response body");
 
     const decoder = new TextDecoder();
     let fullContent = "";
+    let buffer = '';
 
     setIsStreaming(true);
-    setStreamingContent("");
 
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() || '';
 
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6);
-
-            if (data === "[DONE]") {
+        for (const event of events) {
+          if (event.startsWith('data: ')) {
+            const data = event.slice(6).trim();
+            
+            if (data === '[DONE]') {
               setIsStreaming(false);
               return fullContent;
             }
@@ -139,7 +141,9 @@ export function useConversation() {
 
               if (parsed.content) {
                 fullContent += parsed.content;
-                setStreamingContent(fullContent);
+                setMessages(prev => prev.map(msg =>
+                  msg.id === messageId ? { ...msg, content: fullContent } : msg
+                ));
               }
 
               if (parsed.isComplete) {
@@ -147,11 +151,40 @@ export function useConversation() {
                 return fullContent;
               }
             } catch (parseError) {
-              console.warn("Failed to parse streaming data:", parseError);
+              console.warn('Failed to parse streaming data:', parseError, data);
             }
           }
         }
       }
+
+      // Process any remaining buffer
+      if (buffer.startsWith('data: ')) {
+        const data = buffer.slice(6).trim();
+        if (data === '[DONE]') {
+          setIsStreaming(false);
+          return fullContent;
+        }
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.content) {
+            fullContent += parsed.content;
+            setMessages(prev => prev.map(msg =>
+              msg.id === messageId ? { ...msg, content: fullContent } : msg
+            ));
+          }
+        } catch (parseError) {
+          console.warn('Failed to parse final chunk:', parseError, data);
+        }
+      }
+    } catch (error: any) {
+      console.error('Streaming error:', error);
+      const errorData = JSON.stringify({
+        error: error instanceof Error ? error.message : 'Streaming error occurred',
+        isComplete: true
+      });
+      setMessages(prev => prev.map(msg =>
+        msg.id === messageId ? { ...msg, content: `I encountered an error: ${error.message || 'Unknown error'}. Please try again.` } : msg
+      ));
     } finally {
       reader.releaseLock();
       setIsStreaming(false);
@@ -211,40 +244,45 @@ export function useConversation() {
           throw new Error(errorData.error || `HTTP ${response.status}`);
         }
 
-        let aiContent = "";
-
         if (
           settings.streamingEnabled &&
           response.headers.get("content-type")?.includes("text/event-stream")
         ) {
-          aiContent = await handleStreamingResponse(response);
+          const messageId = uuidv4();
+          const initialMessage: Message = {
+            id: messageId,
+            role: "assistant",
+            content: "",
+          };
+          setMessages((prev) => [...prev, initialMessage]);
+          await handleStreamingResponse(response, messageId);
         } else {
           const data = await response.json();
           if (!data.success) {
             throw new Error(data.error || "Failed to generate response");
           }
-          aiContent = data.data.content;
+          const aiMessage: Message = {
+            id: uuidv4(),
+            role: "assistant",
+            content: data.data.content,
+          };
+          setMessages((prev) => [...prev, aiMessage]);
         }
+        // This is now handled in the streaming response
+        // updateConversationMood(
+        //   messages[messages.length - 1].content,
+        //   aiContent,
+        // );
 
-        // Add AI response to messages
-        const aiMessage: Message = {
-          role: "assistant",
-          content: aiContent,
-        };
-
-        setMessages((prev) => [...prev, aiMessage]);
-        updateConversationMood(
-          messages[messages.length - 1].content,
-          aiContent,
-        );
-
-        // Text-to-speech if enabled
         if (settings.voiceEnabled && "speechSynthesis" in window) {
-          const utterance = new SpeechSynthesisUtterance(aiContent);
-          utterance.rate = 0.9;
-          utterance.pitch = 1;
-          utterance.volume = 0.8;
-          speechSynthesis.speak(utterance);
+          const lastMessage = messages[messages.length - 1];
+          if (lastMessage && lastMessage.role === 'assistant') {
+            const utterance = new SpeechSynthesisUtterance(lastMessage.content);
+            utterance.rate = 0.9;
+            utterance.pitch = 1;
+            utterance.volume = 0.8;
+            speechSynthesis.speak(utterance);
+          }
         }
       } catch (error: any) {
         if (error.name === "AbortError") {
@@ -257,8 +295,10 @@ export function useConversation() {
 
         // Add error message
         const errorMessage: Message = {
+          id: uuidv4(),
           role: "assistant",
           content: `I encountered an error: ${error.message}. Please try again or check your API configuration.`,
+          isError: true,
         };
         setMessages((prev) => [...prev, errorMessage]);
       } finally {
@@ -273,17 +313,31 @@ export function useConversation() {
 
   // Add a new message to the conversation
   const addMessage = useCallback(
-    async (message: Message, shouldRespond = true) => {
-      setMessages((prev) => [...prev, message]);
+    async (message: Partial<Message>, shouldRespond = true) => {
+      const newMessage = { ...message, id: message.id || uuidv4() } as Message;
+      setMessages((prev) => [...prev, newMessage]);
 
       // If it's a user message and we should respond, generate AI response
-      if (message.role === "user" && shouldRespond) {
-        const allMessages = [...messages, message];
+      if (newMessage.role === "user" && shouldRespond) {
+        const allMessages = [...messages, newMessage];
         await generateResponse(allMessages);
       }
     },
     [messages, generateResponse],
   );
+
+  const retryRequest = useCallback(async (messageId: string) => {
+    const errorIndex = messages.findIndex(msg => msg.id === messageId && msg.isError);
+    if (errorIndex === -1) return;
+
+    const userMessageIndex = errorIndex -1;
+    if (userMessageIndex < 0 || messages[userMessageIndex].role !== 'user') return;
+
+    const messagesToRetry = messages.slice(0, userMessageIndex + 1);
+    setMessages(messagesToRetry);
+    await generateResponse(messagesToRetry);
+
+  }, [messages, generateResponse]);
 
   // Update conversation mood based on content analysis
   const updateConversationMood = useCallback(
@@ -406,16 +460,9 @@ export function useConversation() {
       .slice(0, 5);
   }, []);
 
-  // Get current streaming content for display
   const getCurrentStreamingMessage = useCallback((): Message | null => {
-    if (isStreaming && streamingContent) {
-      return {
-        role: "assistant",
-        content: streamingContent,
-      };
-    }
     return null;
-  }, [isStreaming, streamingContent]);
+  }, []);
 
   return {
     messages,
@@ -430,7 +477,8 @@ export function useConversation() {
     settings,
     updateSettings,
     stopGeneration,
-    getCurrentStreamingMessage,
+    retryRequest,
+    getCurrentStreamingMessage: () => null,
 
     // Computed properties
     hasMessages: messages.length > 0,
