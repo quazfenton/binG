@@ -3,6 +3,9 @@ export interface Message {
   role: "user" | "assistant" | "system";
   content: string;
   isError?: boolean;
+  timestamp?: string; // ISO format date string
+  isComplete?: boolean; // For streaming messages
+  isStreaming?: boolean; // Currently streaming content
 }
 
 export interface ConversationContext {

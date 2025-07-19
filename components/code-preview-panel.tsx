@@ -1,26 +1,25 @@
 "use client"
 
-import { useState, useEffect, useRef, useMemo } from "react"
-import { motion, AnimatePresence } from "framer-motion"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Badge } from "@/components/ui/badge"
+import * as React from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Button } from '../components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Badge } from '../components/ui/badge';
 import { 
-  Code, 
-  Download, 
-  Play, 
-  Eye, 
+  Code as CodeIcon,
   FileText,
   Package,
   Maximize2,
   Minimize2,
-  RefreshCw
-} from "lucide-react"
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
-import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism"
-import JSZip from 'jszip'
-import type { Message } from "@/types"
+  RefreshCw,
+  AlertCircle
+} from 'lucide-react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
+import JSZip from 'jszip';
+import type { Message } from '../types/index';
 
 interface CodePreviewPanelProps {
   messages: Message[]
@@ -51,17 +50,57 @@ export default function CodePreviewPanel({ messages, isOpen, onClose, onRetry }:
   const [selectedFileIndex, setSelectedFileIndex] = useState<number>(0)
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
+  const getFileExtension = (language: string): string => {
+    const extensions: Record<string, string> = {
+      javascript: 'js',
+      typescript: 'ts',
+      python: 'py',
+      java: 'java',
+      cpp: 'cpp',
+      c: 'c',
+      html: 'html',
+      css: 'css',
+      json: 'json',
+      xml: 'xml',
+      sql: 'sql',
+      jsx: 'jsx',
+      tsx: 'tsx',
+      php: 'php',
+      ruby: 'rb',
+      go: 'go',
+      rust: 'rs',
+      swift: 'swift',
+      kotlin: 'kt',
+      scala: 'scala',
+      r: 'r',
+      matlab: 'm',
+      perl: 'pl',
+      lua: 'lua',
+      dart: 'dart',
+      vue: 'vue',
+      svelte: 'svelte',
+      shell: 'sh',
+      bash: 'sh',
+      yaml: 'yml',
+      yml: 'yml',
+      markdown: 'md',
+      md: 'md',
+      text: 'txt'
+    };
+    return extensions[language.toLowerCase()] || 'txt';
+  };
+
   // Extract code blocks from messages
   const codeBlocks = useMemo(() => {
     console.log("CodePreviewPanel messages:", messages);
-    const blocks: CodeBlock[] = []
+    const blocks: CodeBlock[] = [];
     messages.forEach((message) => {
       if (message.role === "assistant") {
-        const codeMatches = message.content.match(/```(\S*)\s*\n([\s\S]*?)```/g) || []
+        const codeMatches = message.content.match(/```(\S*)\s*\n([\s\S]*?)```/g) || [];
         codeMatches.forEach((match, blockIndex) => {
-          const languageMatch = match.match(/```(\S*)\s*\n/)
-          const language = languageMatch?.[1] || "text"
-          const code = match.replace(/```\S*\s*\n?/, '').replace(/```$/, '').trim()
+          const languageMatch = match.match(/```(\S*)\s*\n/);
+          const language = languageMatch?.[1] || "text";
+          const code = match.replace(/```\S*\s*\n?/, '').replace(/```$/, '').trim();
           
           blocks.push({
             language,
@@ -70,62 +109,24 @@ export default function CodePreviewPanel({ messages, isOpen, onClose, onRetry }:
             index: blocks.length,
             messageId: message.id,
             isError: message.isError
-          })
-        })
+          });
+        });
       }
-    })
-    return blocks
-  }, [messages])
+    });
+    return blocks;
+  }, [messages]);
 
   // Generate project structure for complex projects
   useEffect(() => {
     if (codeBlocks.length > 1) {
-      const structure = analyzeProjectStructure(codeBlocks)
-      setProjectStructure(structure)
+      const structure = analyzeProjectStructure(codeBlocks);
+      setProjectStructure(structure);
     }
-  }, [codeBlocks])
-
-  const getFileExtension = (language: string): string => {
-    const extensions: { [key: string]: string } = {
-      javascript: "js",
-      typescript: "ts",
-      python: "py",
-      java: "java",
-      cpp: "cpp",
-      c: "c",
-      html: "html",
-      css: "css",
-      json: "json",
-      xml: "xml",
-      sql: "sql",
-      bash: "sh",
-      shell: "sh",
-      yaml: "yml",
-      markdown: "md",
-      php: "php",
-      ruby: "rb",
-      go: "go",
-      rust: "rs",
-      swift: "swift",
-      kotlin: "kt",
-      scala: "scala",
-      r: "r",
-      matlab: "m",
-      perl: "pl",
-      lua: "lua",
-      dart: "dart",
-      jsx: "jsx",
-      tsx: "tsx",
-      vue: "vue",
-      svelte: "svelte",
-      text: "txt"
-    }
-    return extensions[language.toLowerCase()] || "txt"
-  }
+  }, [codeBlocks]);
 
   const analyzeProjectStructure = (blocks: CodeBlock[]): ProjectStructure => {
-    const files: { [key: string]: string } = {}
-    const dependencies: string[] = []
+    const files: { [key: string]: string } = {};
+    const dependencies: string[] = [];
     
     blocks.forEach((block) => {
       // Create meaningful filenames based on content
@@ -222,7 +223,7 @@ Generated on: ${new Date().toLocaleString()}
       return (
         <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
           <div className="text-center">
-            <Code className="w-16 h-16 mx-auto mb-4 text-gray-400" />
+            <CodeIcon className="w-16 h-16 mx-auto mb-4 text-gray-400" />
             <p className="text-gray-400">No HTML code found for live preview</p>
             <p className="text-sm text-gray-600 mt-2">Add HTML code to enable live preview</p>
           </div>
@@ -284,7 +285,7 @@ Generated on: ${new Date().toLocaleString()}
           <CardHeader className="border-b border-gray-700">
             <div className="flex items-center justify-between">
               <CardTitle className="text-white flex items-center gap-2">
-                <Code className="w-5 h-5" />
+                <CodeIcon className="w-5 h-5" />
                 Code Preview Panel
                 <Badge variant="secondary">{codeBlocks.length} file(s)</Badge>
               </CardTitle>
@@ -382,7 +383,7 @@ Generated on: ${new Date().toLocaleString()}
                                 navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code)
                               }}
                             >
-                              <Copy className="w-4 h-4 mr-1" />
+                              <CodeIcon className="w-4 h-4 mr-2" />
                               Copy
                             </Button>
                           </div>
