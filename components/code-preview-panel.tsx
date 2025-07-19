@@ -14,7 +14,8 @@ import {
   FileText,
   Package,
   Maximize2,
-  Minimize2
+  Minimize2,
+  RefreshCw
 } from "lucide-react"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism"
@@ -25,6 +26,7 @@ interface CodePreviewPanelProps {
   messages: Message[]
   isOpen: boolean
   onClose: () => void
+  onRetry: (messageId: string) => void
 }
 
 interface CodeBlock {
@@ -32,6 +34,8 @@ interface CodeBlock {
   code: string
   filename?: string
   index: number
+  messageId: string
+  isError?: boolean
 }
 
 interface ProjectStructure {
@@ -40,28 +44,32 @@ interface ProjectStructure {
   dependencies?: string[]
 }
 
-export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePreviewPanelProps) {
+export default function CodePreviewPanel({ messages, isOpen, onClose, onRetry }: CodePreviewPanelProps) {
   const [selectedTab, setSelectedTab] = useState("preview")
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [projectStructure, setProjectStructure] = useState<ProjectStructure | null>(null)
+  const [selectedFileIndex, setSelectedFileIndex] = useState<number>(0)
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
   // Extract code blocks from messages
   const codeBlocks = useMemo(() => {
+    console.log("CodePreviewPanel messages:", messages);
     const blocks: CodeBlock[] = []
-    messages.forEach((message, msgIndex) => {
+    messages.forEach((message) => {
       if (message.role === "assistant") {
-        const codeMatches = message.content.match(/```(\w+)?\n([\s\S]*?)```/g) || []
+        const codeMatches = message.content.match(/```(\S*)\s*\n([\s\S]*?)```/g) || []
         codeMatches.forEach((match, blockIndex) => {
-          const languageMatch = match.match(/```(\w+)?\n/)
+          const languageMatch = match.match(/```(\S*)\s*\n/)
           const language = languageMatch?.[1] || "text"
-          const code = match.replace(/```\w*\n?/, '').replace(/```$/, '')
+          const code = match.replace(/```\S*\s*\n?/, '').replace(/```$/, '').trim()
           
           blocks.push({
             language,
             code,
-            filename: `file-${msgIndex}-${blockIndex}.${getFileExtension(language)}`,
-            index: blocks.length
+            filename: `file-${message.id}-${blockIndex}.${getFileExtension(language)}`,
+            index: blocks.length,
+            messageId: message.id,
+            isError: message.isError
           })
         })
       }
@@ -159,27 +167,42 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
   const downloadAsZip = async () => {
     const zip = new JSZip()
     
-    codeBlocks.forEach((block) => {
-      const filename = block.filename || `snippet-${block.index}.${getFileExtension(block.language)}`
-      zip.file(filename, block.code)
-    })
+    // Use project structure files if available
+    if (projectStructure) {
+      Object.entries(projectStructure.files).forEach(([filename, content]) => {
+        zip.file(filename, content)
+      })
+    } else {
+      // Fallback to code blocks
+      codeBlocks.forEach((block) => {
+        const filename = block.filename || `snippet-${block.index}.${getFileExtension(block.language)}`
+        zip.file(filename, block.code)
+      })
+    }
     
-    // Add README if multiple files
-    if (codeBlocks.length > 1) {
-      const readme = `# Generated Code Project
+    // Always add README
+    const readme = `# Generated Code Project
 
-This project contains ${codeBlocks.length} code files extracted from an AI conversation.
+This project contains ${projectStructure ? Object.keys(projectStructure.files).length : codeBlocks.length} code files extracted from an AI conversation.
 
 ## Files:
-${codeBlocks.map(block => `- ${block.filename} (${block.language})`).join('\n')}
+${projectStructure
+  ? Object.keys(projectStructure.files).map(filename => `- ${filename}`).join('\n')
+  : codeBlocks.map(block => `- ${block.filename} (${block.language})`).join('\n')
+}
+
+## Dependencies:
+${projectStructure?.dependencies?.length
+  ? projectStructure.dependencies.map(dep => `- ${dep}`).join('\n')
+  : 'None'
+}
 
 ## Usage:
 Please review each file and follow the appropriate setup instructions for your programming language.
 
 Generated on: ${new Date().toLocaleString()}
 `
-      zip.file("README.md", readme)
-    }
+    zip.file("README.md", readme)
     
     const content = await zip.generateAsync({ type: "blob" })
     const url = URL.createObjectURL(content)
@@ -306,39 +329,78 @@ Generated on: ${new Date().toLocaleString()}
                 {renderLivePreview()}
               </TabsContent>
               
-              <TabsContent value="files" className="p-4 h-full overflow-y-auto">
-                <div className="space-y-4">
-                  {codeBlocks.map((block, index) => (
-                    <Card key={index} className="bg-gray-800 border-gray-700">
-                      <CardHeader className="pb-2">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline">{block.language}</Badge>
-                            <span className="text-sm text-gray-300">{block.filename}</span>
-                          </div>
+              <TabsContent value="files" className="p-0 h-full">
+                <div className="flex h-full">
+                  <div className="w-64 border-r border-gray-700 bg-gray-800 overflow-y-auto">
+                    <div className="p-4">
+                      <h3 className="text-sm font-medium text-gray-300 mb-2">Files</h3>
+                      <div className="space-y-1">
+                        {codeBlocks.map((block, index) => (
                           <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              navigator.clipboard.writeText(block.code)
-                            }}
+                            key={index}
+                            variant={selectedFileIndex === index ? "secondary" : "ghost"}
+                            className={`w-full justify-start ${selectedFileIndex === index ? 'bg-gray-700' : ''}`}
+                            onClick={() => setSelectedFileIndex(index)}
                           >
-                            <Code className="w-4 h-4" />
+                            <FileText className="w-4 h-4 mr-2" />
+                            <span className="truncate">{block.filename}</span>
+                            {block.isError && (
+                              <span className="ml-auto text-red-500">
+                                <AlertCircle className="w-4 h-4" />
+                              </span>
+                            )}
                           </Button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="flex-1 overflow-y-auto">
+                    {codeBlocks.length > 0 && selectedFileIndex !== null && (
+                      <div className="h-full flex flex-col">
+                        <div className="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">{codeBlocks[selectedFileIndex].language}</Badge>
+                            <span className="text-sm font-mono text-gray-300">{codeBlocks[selectedFileIndex].filename}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {codeBlocks[selectedFileIndex].isError && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => onRetry(codeBlocks[selectedFileIndex].messageId)}
+                                className="text-red-500 hover:text-red-400"
+                              >
+                                <RefreshCw className="w-4 h-4 mr-1" />
+                                Retry
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code)
+                              }}
+                            >
+                              <Copy className="w-4 h-4 mr-1" />
+                              Copy
+                            </Button>
+                          </div>
                         </div>
-                      </CardHeader>
-                      <CardContent className="p-0">
-                        <SyntaxHighlighter
-                          style={oneDark as any}
-                          language={block.language}
-                          PreTag="div"
-                          className="!m-0 !bg-gray-900 text-sm"
-                        >
-                          {block.code}
-                        </SyntaxHighlighter>
-                      </CardContent>
-                    </Card>
-                  ))}
+                        <div className="flex-1 overflow-y-auto bg-gray-900">
+                          <SyntaxHighlighter
+                            style={oneDark as any}
+                            language={codeBlocks[selectedFileIndex].language}
+                            PreTag="div"
+                            className="!m-0 !bg-gray-900 h-full text-sm"
+                            showLineNumbers
+                          >
+                            {codeBlocks[selectedFileIndex].code}
+                          </SyntaxHighlighter>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </TabsContent>
               

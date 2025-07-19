@@ -1,6 +1,11 @@
 "use client";
 
 import { useState, useRef, Suspense, useEffect } from "react";
+import {
+  ResizablePanel,
+  ResizablePanelGroup,
+  ResizableHandle,
+} from "@/components/ui/resizable";
 import InteractionPanel from "@/components/interaction-panel";
 import AccessibilityControls from "@/components/accessibility-controls";
 import ChatHistoryModal from "@/components/chat-history-modal";
@@ -15,7 +20,6 @@ import type { LLMProvider } from "@/lib/api/llm-providers";
 export default function ConversationInterface() {
   const [showAccessibility, setShowAccessibility] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [showChatPanel, setShowChatPanel] = useState(true);
   const [showCodePreview, setShowCodePreview] = useState(false);
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
     [],
@@ -37,6 +41,7 @@ export default function ConversationInterface() {
     updateSettings,
     stopGeneration,
     getCurrentStreamingMessage,
+    retryRequest,
   } = useConversation();
 
   const {
@@ -164,47 +169,46 @@ export default function ConversationInterface() {
     }
   };
 
-  // Get display messages (including streaming)
-  const displayMessages = [...messages];
-  const streamingMessage = getCurrentStreamingMessage();
-  if (streamingMessage) {
-    displayMessages.push(streamingMessage);
-  }
+  const displayMessages = messages;
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
+      <div className="flex flex-col md:flex-row h-full">
+        {/* Main content area */}
+        <div className="flex-1 flex flex-col">
+          <div className="flex-1 relative">
+            {/* Placeholder for the main 3D scene or other content */}
+          </div>
 
-      {/* 2D Chat Panel */}
-      {showChatPanel && (
-        <ChatPanel
-          messages={displayMessages}
-          isProcessing={isProcessing || isStreaming}
-          onProviderChange={handleProviderChange}
-          onVoiceToggle={handleVoiceToggle}
-          onVisibilityToggle={setShowChatPanel}
-          selectedProvider={settings.provider}
-          selectedModel={settings.model}
-          voiceEnabled={isVoiceEnabled}
-          visible={showChatPanel}
-          onToggleCodePreview={handleToggleCodePreview}
-        />
-      )}
+          {/* Interaction Controls */}
+          <InteractionPanel
+            onSubmit={addMessage}
+            onNewChat={handleNewChat}
+            isProcessing={isProcessing || isStreaming}
+            conversationContext={conversationContext}
+            toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
+            toggleHistory={() => setShowHistory(!showHistory)}
+            onStopGeneration={stopGeneration}
+            currentProvider={settings.provider}
+            currentModel={settings.model}
+            error={error}
+          />
+        </div>
 
-      {/* Interaction Controls */}
-      <InteractionPanel
-        onSubmit={addMessage}
-        onNewChat={handleNewChat}
-        isProcessing={isProcessing || isStreaming}
-        conversationContext={conversationContext}
-        toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
-        toggleHistory={() => setShowHistory(!showHistory)}
-        onStopGeneration={stopGeneration}
-        showChatPanel={showChatPanel}
-        onToggleChatPanel={() => setShowChatPanel(!showChatPanel)}
-        currentProvider={settings.provider}
-        currentModel={settings.model}
-        error={error}
-      />
+        {/* Chat Panel */}
+        <div className="md:border-l md:border-white/10">
+          <ChatPanel
+            messages={displayMessages}
+            isProcessing={isProcessing || isStreaming}
+            onProviderChange={handleProviderChange}
+            onVoiceToggle={handleVoiceToggle}
+            selectedProvider={settings.provider}
+            selectedModel={settings.model}
+            voiceEnabled={isVoiceEnabled}
+            onToggleCodePreview={handleToggleCodePreview}
+          />
+        </div>
+      </div>
 
       {/* Chat History Modal */}
       {showHistory && (
@@ -222,6 +226,7 @@ export default function ConversationInterface() {
         messages={displayMessages}
         isOpen={showCodePreview}
         onClose={() => setShowCodePreview(false)}
+        onRetry={retryRequest}
       />
 
       {/* Accessibility Layer */}

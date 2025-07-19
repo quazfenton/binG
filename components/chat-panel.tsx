@@ -32,11 +32,9 @@ interface ChatPanelProps {
   isProcessing: boolean
   onProviderChange: (provider: string, model: string) => void
   onVoiceToggle: (enabled: boolean) => void
-  onVisibilityToggle: (visible: boolean) => void
   selectedProvider?: string
   selectedModel?: string
   voiceEnabled?: boolean
-  visible?: boolean
   onToggleCodePreview?: () => void
 }
 
@@ -47,49 +45,9 @@ interface StreamingMessageProps {
   onCopy: () => void
 }
 
-const TYPING_SPEED = 30 // milliseconds per character
-
 function StreamingMessage({ content, isStreaming, role, onCopy }: StreamingMessageProps) {
-  const [displayedContent, setDisplayedContent] = useState("")
-  const [showCursor, setShowCursor] = useState(false)
-  const contentRef = useRef(content)
-
-  useEffect(() => {
-    contentRef.current = content
-
-    if (!isStreaming) {
-      setDisplayedContent(content)
-      setShowCursor(false)
-      return
-    }
-
-    setShowCursor(true)
-    setDisplayedContent("")
-
-    let currentIndex = 0
-    const typeInterval = setInterval(() => {
-      if (currentIndex < contentRef.current.length) {
-        setDisplayedContent(contentRef.current.slice(0, currentIndex + 1))
-        currentIndex++
-      } else {
-        setShowCursor(false)
-        clearInterval(typeInterval)
-      }
-    }, TYPING_SPEED)
-
-    return () => clearInterval(typeInterval)
-  }, [content, isStreaming])
-
-  // Cursor blinking effect
-  useEffect(() => {
-    if (!showCursor) return
-
-    const cursorInterval = setInterval(() => {
-      setShowCursor(prev => !prev)
-    }, 500)
-
-    return () => clearInterval(cursorInterval)
-  }, [showCursor])
+  const displayedContent = content;
+  const showCursor = isStreaming;
 
   return (
     <motion.div
@@ -116,41 +74,19 @@ function StreamingMessage({ content, isStreaming, role, onCopy }: StreamingMessa
         <div className="prose prose-invert prose-sm max-w-none">
           <ReactMarkdown
             components={{
-              code: ({ node, className, children, ...props }: any) => {
-                const inline = node?.type === 'element' && node.children?.[0]?.type === 'text' && !node.children[0].value.includes('\n');
+              code: ({ node, inline, className, children, ...props }: any) => {
                 const match = /language-(\w+)/.exec(className || '')
-                const language = match ? match[1] : ''
-
-                if (!inline && language) {
-                  return (
-                    <div className="relative">
-                      <div className="flex items-center justify-between bg-gray-800 px-4 py-2 text-sm">
-                        <span className="text-gray-300">{language}</span>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            navigator.clipboard.writeText(String(children))
-                          }}
-                          className="h-6 px-2"
-                        >
-                          <Code className="w-3 h-3" />
-                        </Button>
-                      </div>
-                      <SyntaxHighlighter
-                        style={oneDark as any}
-                        language={language}
-                        PreTag="div"
-                        {...props}
-                      >
-                        {String(children).replace(/\n$/, '')}
-                      </SyntaxHighlighter>
-                    </div>
-                  )
-                }
-
-                return (
-                  <code className="bg-gray-800 px-1 py-0.5 rounded text-sm" {...props}>
+                return !inline && match ? (
+                  <SyntaxHighlighter
+                    style={oneDark as any}
+                    language={match[1]}
+                    PreTag="div"
+                    {...props}
+                  >
+                    {String(children).replace(/\n$/, '')}
+                  </SyntaxHighlighter>
+                ) : (
+                  <code className={className} {...props}>
                     {children}
                   </code>
                 )
@@ -213,17 +149,62 @@ export default function ChatPanel({
   isProcessing,
   onProviderChange,
   onVoiceToggle,
-  onVisibilityToggle,
-  selectedProvider = "openai",
-  selectedModel = "gpt-4",
+  selectedProvider = "openrouter",
+  selectedModel = "deepseek/deepseek-r1-0528:free",
   voiceEnabled = false,
-  visible = true,
   onToggleCodePreview
 }: ChatPanelProps) {
   const [providers, setProviders] = useState<LLMProvider[]>([])
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const [streamingMessageIndex, setStreamingMessageIndex] = useState<number | null>(null)
+  const [width, setWidth] = useState(384); // Default width 384px (w-96)
+  const [isResizing, setIsResizing] = useState(false);
+  
+  // Handle mouse/touch events for resizing
+  const startResizing = (e: React.MouseEvent | React.TouchEvent) => {
+    setIsResizing(true);
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent | TouchEvent) => {
+      if (!isResizing) return;
+      
+      let clientX;
+      if (e instanceof MouseEvent) {
+        clientX = e.clientX;
+      } else if (e.touches && e.touches[0]) {
+        clientX = e.touches[0].clientX;
+      } else {
+        return;
+      }
+      
+      // Calculate new width (window width - pointer position)
+      const newWidth = window.innerWidth - clientX;
+      
+      // Apply constraints (min: 300px, max: 800px)
+      if (newWidth < 300) setWidth(300);
+      else if (newWidth > 800) setWidth(800);
+      else setWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('touchmove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('touchend', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('touchmove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('touchend', handleMouseUp);
+    };
+  }, [isResizing]);
 
   // Fetch available providers on mount
   useEffect(() => {
@@ -282,34 +263,28 @@ export default function ChatPanel({
 
   const currentProvider = providers.find(p => p.id === selectedProvider)
 
-  if (!visible) {
-    return (
-      <Button
-        onClick={() => onVisibilityToggle(true)}
-        className="fixed top-4 right-4 z-50"
-        size="sm"
-        variant="secondary"
-      >
-        <Eye className="w-4 h-4 mr-2" />
-        Show Chat
-      </Button>
-    )
-  }
-
   return (
-    <motion.div
-      initial={{ opacity: 0, x: 400 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: 400 }}
-      transition={{ duration: 0.3 }}
-      className="fixed top-0 right-0 h-full w-96 bg-black/90 backdrop-blur-md border-l border-white/10 flex flex-col z-40"
+    <div
+      className="fixed md:relative top-auto md:top-0 right-0 bottom-0 md:bottom-auto w-full md:w-auto bg-black/90 backdrop-blur-md border-l border-white/10 flex flex-col z-40"
+      style={{
+        width: `${width}px`,
+        height: 'calc(100% - 5rem)',
+        bottom: 0
+      }}
     >
+      {/* Resize handle - hidden on mobile */}
+      <div
+        className="hidden md:block absolute left-0 top-0 bottom-0 w-2 cursor-col-resize z-50"
+        onMouseDown={startResizing}
+        onTouchStart={startResizing}
+      />
+      
       {/* Header */}
       <CardHeader className="flex-shrink-0 pb-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Bot className="w-5 h-5 text-blue-400" />
-            <span className="font-semibold">Chat Assistant</span>
+            <span className="font-semibold">conpute</span>
           </div>
           <div className="flex items-center gap-1">
             <Button
@@ -332,14 +307,6 @@ export default function ChatPanel({
               title="Toggle Code Preview Panel"
             >
               <Code className="w-4 h-4" />
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => onVisibilityToggle(false)}
-              className="h-8 w-8 p-0"
-            >
-              <EyeOff className="w-4 h-4" />
             </Button>
           </div>
         </div>
@@ -415,7 +382,7 @@ export default function ChatPanel({
       <Separator />
 
       {/* Messages */}
-      <ScrollArea ref={scrollAreaRef} className="flex-1 p-4">
+      <ScrollArea ref={scrollAreaRef} className="flex-1 p-4 pb-16 md:pb-4">
         <div className="space-y-4">
           <AnimatePresence>
             {messages.length === 0 ? (
@@ -474,6 +441,6 @@ export default function ChatPanel({
           )}
         </div>
       </div>
-    </motion.div>
+    </div>
   )
 }
