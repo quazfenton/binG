@@ -2,12 +2,21 @@
 
 import type React from "react";
 import { useState, useRef } from "react";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import type { Message, ConversationContext } from "@/types";
+import { Button } from '../components/ui/button';
+import { Textarea } from '../components/ui/textarea';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Card, CardContent } from '../components/ui/card';
+import { Badge } from '../components/ui/badge';
+import type { Message, ConversationContext } from '../types';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select';
 import {
   Send,
   Plus,
@@ -21,48 +30,60 @@ import {
   Square,
   MessageSquare,
   AlertCircle,
+  Code,
 } from "lucide-react";
+import type { LLMProvider } from '../lib/api/llm-providers';
 
 interface InteractionPanelProps {
-  onSubmit: (message: Message) => void;
+  onSubmit: (content: string) => void;
   onNewChat: () => void;
   isProcessing: boolean;
-  conversationContext: ConversationContext;
   toggleAccessibility: () => void;
   toggleHistory: () => void;
+  toggleCodePreview: () => void; // This prop is expected to be a function
   onStopGeneration?: () => void;
   currentProvider?: string;
   currentModel?: string;
   error?: string | null;
+  input: string; // Add input prop
+  setInput: (value: string) => void; // Add setInput prop
+  availableProviders: LLMProvider[];
+  onProviderChange: (provider: string, model: string) => void;
 }
 
 export default function InteractionPanel({
   onSubmit,
   onNewChat,
   isProcessing,
-  conversationContext,
   toggleAccessibility,
   toggleHistory,
+  toggleCodePreview, // Receive the prop
   onStopGeneration,
   currentProvider = "openrouter",
   currentModel = "deepseek/deepseek-r1-0528:free",
   error,
+  input, // Destructure input
+  setInput, // Destructure setInput
+  availableProviders,
+  onProviderChange,
 }: InteractionPanelProps) {
-  const [input, setInput] = useState("");
   const [activeTab, setActiveTab] = useState("chat");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Log the value of toggleCodePreview prop to debug runtime accessibility
+  console.log("InteractionPanel: toggleCodePreview prop value:", toggleCodePreview);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (input.trim() && !isProcessing) {
-      onSubmit({ id: `user-${Date.now()}`, role: "user", content: input });
-      setInput("");
+      onSubmit(input);
+      setInput(""); // Clear input using the passed setInput
     }
   };
 
   const handleSuggestionClick = (suggestion: string) => {
     if (!isProcessing) {
-      onSubmit({ id: `user-${Date.now()}`, role: "user", content: suggestion });
+      onSubmit(suggestion);
     }
   };
 
@@ -143,17 +164,44 @@ export default function InteractionPanel({
               >
                 <Accessibility className="h-4 w-4" />
               </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={toggleCodePreview} // Simplified onClick handler
+                title="Code Preview"
+              >
+                <Code className="h-4 w-4" />
+              </Button>
             </div>
           </div>
 
           <TabsContent value="chat" className="m-0">
-            {/* Provider Status */}
+            {/* Provider Status and Selection */}
             <div className="flex items-center justify-between mb-3 text-xs text-white/60">
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-green-400 rounded-full" />
-                <span>
-                  {currentProvider} • {currentModel}
-                </span>
+                <Select
+                  value={`${currentProvider}:${currentModel}`}
+                  onValueChange={(value) => {
+                    const [provider, model] = value.split(":");
+                    onProviderChange(provider, model);
+                  }}
+                >
+                  <SelectTrigger className="w-[280px] bg-black/40 border-white/20">
+                    <SelectValue placeholder="Select a model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableProviders.map((provider) => (
+                      <SelectGroup key={provider.id}>
+                        <SelectLabel>{provider.name}</SelectLabel>
+                        {provider.models.map((model) => (
+                          <SelectItem key={model} value={`${provider.id}:${model}`}>
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               {isProcessing && (
                 <div className="flex items-center gap-2">
@@ -192,7 +240,7 @@ export default function InteractionPanel({
                 <Textarea
                   ref={textareaRef}
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => setInput(e.target.value)} // Use the passed setInput
                   placeholder="Type your message..."
                   className="min-h-[60px] bg-black/40 border-white/20 pr-12 resize-none"
                   onKeyDown={(e) => {
@@ -320,18 +368,18 @@ export default function InteractionPanel({
                   </div>
 
                   <div className="flex items-start gap-3">
-                    <Settings className="h-5 w-5 text-blue-400 mt-0.5" />
-                    <div>
-                      <h3 className="font-medium">Current Mood</h3>
-                      <div className="flex items-center gap-2 mt-1">
-                        <Badge variant="secondary" className="bg-black/40">
-                          {conversationContext.mood}
-                        </Badge>
-                        <span className="text-xs text-white/60">
-                          Interface adapts to conversation tone
-                        </span>
-                      </div>
+                  <Settings className="h-5 w-5 text-blue-400 mt-0.5" />
+                  <div>
+                    <h3 className="font-medium">Current Mood</h3>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Badge variant="secondary" className="bg-black/40">
+                        N/A
+                      </Badge>
+                      <span className="text-xs text-white/60">
+                        Interface adapts to conversation tone
+                      </span>
                     </div>
+                  </div>
                   </div>
                 </div>
               </CardContent>

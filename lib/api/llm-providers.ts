@@ -57,7 +57,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     name: 'Chutes',
     models: ['deepseek-ai/DeepSeek-R1-0528', 'deepseek-ai/DeepSeek-Chat-V3-0324', 'tngtech/DeepSeek-TNG-R1T2-Chimera', 'gemma-3-27b-it', 'meta-llama/Llama-4-Maverick', 'meta-llama/Llama-3.3-70B-Instruct'],
     supportsStreaming: true,
-    maxTokens: 4096,
+    maxTokens: 10096,
     description: 'Chutes AI with high-performance models'
   },
   openrouter: {
@@ -65,7 +65,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     name: 'OpenRouter',
     models: ['deepseek/deepseek-r1-0528:free', 'deepseek/deepseek-chat-v3-0324:free', 'meta-llama/llama-4-maverick:free', 'gemma-3-27b-it:free', 'meta-llama/llama-3.3-70b-instruct:free', 'meta-llama/llama-3.2-11b-vision-instruct:free'],
     supportsStreaming: true,
-    maxTokens: 4096,
+    maxTokens: 10096,
     description: 'Access a variety of models through a single API'
   },
   anthropic: {
@@ -73,7 +73,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     name: 'Anthropic',
     models: ['claude-3-5-sonnet-20241022', 'claude-3-opus-20240229', 'claude-3-haiku-20240307'],
     supportsStreaming: true,
-    maxTokens: 4096,
+    maxTokens: 10096,
     description: 'Constitutional AI with strong reasoning capabilities'
   },
   google: {
@@ -81,7 +81,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     name: 'Google',
     models: ['gemini-2.5-flash-preview-05-20', 'gemini-pro', 'gemini-pro-vision', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-vision'],
     supportsStreaming: true,
-    maxTokens: 2048,
+    maxTokens: 80048,
     description: 'Google\'s multimodal AI models'
   },
   cohere: {
@@ -199,7 +199,7 @@ if (process.env.PORTKEY_API_KEY && process.env.PORTKEY_VIRTUAL_KEY) {
     if (this.anthropic) available.push(PROVIDERS.anthropic)
     if (this.google) available.push(PROVIDERS.google)
     if (this.cohere) available.push(PROVIDERS.cohere)
-    if (this.together) available.push(PROVIDERS.together)
+    // if (this.together) available.push(PROVIDERS.together)
     if (this.replicate) available.push(PROVIDERS.replicate)
     if (this.portkey) available.push(PROVIDERS.portkey)
 
@@ -207,7 +207,7 @@ if (process.env.PORTKEY_API_KEY && process.env.PORTKEY_VIRTUAL_KEY) {
   }
 
 async generateResponse(request: LLMRequest): Promise<LLMResponse> {
-    const { provider, model, messages, temperature = 0.7, maxTokens = 2000 } = request
+    const { provider, model, messages, temperature = 0.7, maxTokens = 4096 } = request
 
     try {
       switch (provider) {
@@ -221,8 +221,8 @@ async generateResponse(request: LLMRequest): Promise<LLMResponse> {
           return await this.callGoogle(messages, model, temperature, maxTokens)
         case 'cohere':
           return await this.callCohere(messages, model, temperature, maxTokens)
-        case 'together':
-          return await this.callTogether(messages, model, temperature, maxTokens)
+        // case 'together':
+        //   return await this.callTogether(messages, model, temperature, maxTokens)
         case 'replicate':
           return await this.callReplicate(messages, model, temperature, maxTokens)
         case 'portkey':
@@ -237,7 +237,7 @@ async generateResponse(request: LLMRequest): Promise<LLMResponse> {
   }
 
 async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingResponse> {
-    const { provider, model, messages, temperature = 0.7, maxTokens = 2000 } = request
+    const { provider, model, messages, temperature = 0.7, maxTokens = 4096 } = request
 
     try {
       switch (provider) {
@@ -256,9 +256,9 @@ async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingR
         case 'cohere':
           yield* this.streamCohere(messages, model, temperature, maxTokens)
           break
-        case 'together':
-          yield* this.streamTogether(messages, model, temperature, maxTokens)
-          break
+        // case 'together':
+        //   yield* this.streamTogether(messages, model, temperature, maxTokens)
+        //   break
         case 'portkey':
           yield* this.streamPortkey(messages, model, temperature, maxTokens)
           break
@@ -304,21 +304,13 @@ async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingR
       stream: true,
     })
 
-    let content = ''
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content || ''
-      content += delta
-
-      yield {
-        content: delta,
-        isComplete: chunk.choices[0]?.finish_reason !== null,
-        usage: chunk.usage ? {
-          promptTokens: chunk.usage.prompt_tokens,
-          completionTokens: chunk.usage.completion_tokens,
-          totalTokens: chunk.usage.total_tokens,
-        } : undefined,
+      if (delta) {
+        yield { content: delta, isComplete: false }
       }
     }
+    yield { content: '', isComplete: true }
   }
 
   private async callOpenRouter(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): Promise<LLMResponse> {
@@ -354,21 +346,13 @@ async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingR
       stream: true,
     })
 
-    let content = ''
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content || ''
-      content += delta
-
-      yield {
-        content: delta,
-        isComplete: chunk.choices[0]?.finish_reason !== null,
-        usage: chunk.usage ? {
-          promptTokens: chunk.usage.prompt_tokens,
-          completionTokens: chunk.usage.completion_tokens,
-          totalTokens: chunk.usage.total_tokens,
-        } : undefined,
+      if (delta) {
+        yield { content: delta, isComplete: false }
       }
     }
+    yield { content: '', isComplete: true }
   }
 
   private async callAnthropic(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): Promise<LLMResponse> {
@@ -577,17 +561,11 @@ async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingR
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content || ''
-
-      yield {
-        content: delta,
-        isComplete: chunk.choices[0]?.finish_reason !== null,
-        usage: chunk.usage ? {
-          promptTokens: chunk.usage.prompt_tokens,
-          completionTokens: chunk.usage.completion_tokens,
-          totalTokens: chunk.usage.total_tokens,
-        } : undefined,
+      if (delta) {
+        yield { content: delta, isComplete: false }
       }
     }
+    yield { content: '', isComplete: true }
   }
 
   private async callReplicate(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): Promise<LLMResponse> {
@@ -646,17 +624,11 @@ async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingR
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content || ''
-
-      yield {
-        content: delta,
-        isComplete: chunk.choices[0]?.finish_reason !== null,
-        usage: chunk.usage ? {
-          promptTokens: chunk.usage.prompt_tokens || 0,
-          completionTokens: chunk.usage.completion_tokens || 0,
-          totalTokens: chunk.usage.total_tokens || 0,
-        } : undefined,
+      if (delta) {
+        yield { content: delta, isComplete: false }
       }
     }
+    yield { content: '', isComplete: true }
   }
 }
 

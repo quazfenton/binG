@@ -14,7 +14,8 @@ import {
   Maximize2,
   Minimize2,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  Eye // Added Eye import
 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
@@ -25,7 +26,6 @@ interface CodePreviewPanelProps {
   messages: Message[]
   isOpen: boolean
   onClose: () => void
-  onRetry: (messageId: string) => void
 }
 
 interface CodeBlock {
@@ -43,7 +43,9 @@ interface ProjectStructure {
   dependencies?: string[]
 }
 
-export default function CodePreviewPanel({ messages, isOpen, onClose, onRetry }: CodePreviewPanelProps) {
+export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePreviewPanelProps) {
+  console.log("CodePreviewPanel isOpen:", isOpen);
+  const [detectedFramework, setDetectedFramework] = useState<'react'|'vue'|'vanilla'>('vanilla');
   const [selectedTab, setSelectedTab] = useState("preview")
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [projectStructure, setProjectStructure] = useState<ProjectStructure | null>(null)
@@ -96,23 +98,57 @@ export default function CodePreviewPanel({ messages, isOpen, onClose, onRetry }:
     const blocks: CodeBlock[] = [];
     messages.forEach((message) => {
       if (message.role === "assistant") {
-        const codeMatches = message.content.match(/```(\S*)\s*\n([\s\S]*?)```/g) || [];
-        codeMatches.forEach((match, blockIndex) => {
-          const languageMatch = match.match(/```(\S*)\s*\n/);
-          const language = languageMatch?.[1] || "text";
-          const code = match.replace(/```\S*\s*\n?/, '').replace(/```$/, '').trim();
+        let parsedContent: any = null;
+        try {
+          // Attempt to parse message.content as JSON
+          parsedContent = JSON.parse(message.content);
+          // Check if it has the expected structure for a code block
+          if (parsedContent && typeof parsedContent === 'object' && parsedContent.language && parsedContent.code) {
+            // It's a JSON object representing a code block
+            blocks.push({
+              language: parsedContent.language,
+              code: parsedContent.code.trim(),
+              // Use provided filename, or generate a default if missing or empty
+              filename: parsedContent.filename ? parsedContent.filename.trim() : `file-${message.id}-${blocks.length}.${getFileExtension(parsedContent.language)}`,
+              index: blocks.length, // Use blocks.length for sequential indexing
+              messageId: message.id,
+              isError: message.isError || false
+            });
+            return; // Processed this message, move to the next
+          }
+        } catch (e) {
+          // If parsing fails, it's likely not a JSON object, proceed to markdown parsing
+          // console.log("Message content is not a valid JSON object, attempting markdown parsing.");
+        }
+
+        // If not JSON, try parsing as markdown code blocks
+        const markdownCodeMatches = message.content.match(/```(\S*)(?:\s+(.*?))?\n([\s\S]*?)```/g) || [];
+        
+        markdownCodeMatches.forEach((match, blockIndex) => {
+          const parsed = match.match(/```(\S*)(?:\s+(.*?))?\n([\s\S]*?)```/);
+          if (!parsed) return;
           
+          const language = parsed[1] || "text";
+          const filenameHint = parsed[2] ? parsed[2].trim() : '';
+          let code = parsed[3].trim();
+
+          // Extract filename from hint or generate default
+          const filename = filenameHint && filenameHint.match(/\S+\.\S+$/)
+            ? filenameHint
+            : `file-${message.id}-${blocks.length}.${getFileExtension(language)}`; // Use blocks.length for index
+
           blocks.push({
             language,
             code,
-            filename: `file-${message.id}-${blockIndex}.${getFileExtension(language)}`,
-            index: blocks.length,
+            filename,
+            index: blocks.length, // Use blocks.length for sequential indexing
             messageId: message.id,
-            isError: message.isError
+            isError: message.isError || false
           });
         });
       }
     });
+    console.log("Detected and parsed code blocks:", blocks);
     return blocks;
   }, [messages]);
 
@@ -129,24 +165,33 @@ export default function CodePreviewPanel({ messages, isOpen, onClose, onRetry }:
     const dependencies: string[] = [];
     
     blocks.forEach((block) => {
-      // Create meaningful filenames based on content
-      let filename = block.filename || `file-${block.index}.${getFileExtension(block.language)}`
-      
-      // Analyze content for better naming
-      if (block.language === "html" && block.code.includes("<html")) {
-        filename = "index.html"
-      } else if (block.language === "css" && block.code.includes("body") || block.code.includes("*")) {
-        filename = "styles.css"
-      } else if (block.language === "javascript" && block.code.includes("function main") || block.code.includes("console.log")) {
-        filename = "main.js"
-      } else if (block.language === "json" && block.code.includes("\"name\"") && block.code.includes("\"version\"")) {
-        filename = "package.json"
+      let finalFilename = block.filename; // Start with the filename from the block
+
+      // If the filename is a generic placeholder, try to infer a better one.
+      // Otherwise, keep the provided filename.
+      if (!finalFilename || finalFilename.startsWith('file-')) {
+        if (block.language === "html" && block.code.includes("<html")) {
+          finalFilename = "index.html";
+        } else if (block.language === "css") {
+          finalFilename = "styles.css";
+        } else if (block.language === "javascript") {
+          finalFilename = "script.js"; // Changed from main.js to script.js as per user example
+        } else if (block.language === "json" && block.code.includes("\"name\"") && block.code.includes("\"version\"")) {
+          finalFilename = "package.json";
+        } else {
+          // If no specific inference, use the original filename or generate a default
+          finalFilename = finalFilename || `file-${block.index}.${getFileExtension(block.language)}`;
+        }
+      }
+      // Ensure a filename is always set, even if it's a default one.
+      if (!finalFilename) {
+           finalFilename = `file-${block.index}.${getFileExtension(block.language)}`;
       }
       
-      files[filename] = block.code
+      files[finalFilename] = block.code
       
       // Extract dependencies
-      if (block.language === "json" && filename === "package.json") {
+      if (block.language === "json" && finalFilename === "package.json") {
         try {
           const pkg = JSON.parse(block.code)
           if (pkg.dependencies) {
@@ -158,11 +203,13 @@ export default function CodePreviewPanel({ messages, isOpen, onClose, onRetry }:
       }
     })
     
-    return {
+    const structure = {
       name: "Generated Project",
       files,
       dependencies: dependencies.length > 0 ? dependencies : undefined
-    }
+    };
+    console.log("Analyzed project structure:", structure);
+    return structure;
   }
 
   const downloadAsZip = async () => {
@@ -247,7 +294,7 @@ Generated on: ${new Date().toLocaleString()}
 </body>
 </html>
 `
-    
+    console.log("Rendering live preview with HTML:", combinedHtml);
     return (
       <div className="relative">
         <div className="absolute top-2 right-2 z-10">
@@ -264,23 +311,23 @@ Generated on: ${new Date().toLocaleString()}
           srcDoc={combinedHtml}
           className={`w-full bg-white rounded-lg border ${isFullscreen ? 'h-screen' : 'h-96'}`}
           title="Live Preview"
-          sandbox="allow-scripts allow-same-origin"
+          sandbox="allow-scripts allow-scripts allow-same-origin"
         />
       </div>
     )
   }
 
-  if (!isOpen) return null
-
   return (
     <AnimatePresence>
-      <motion.div
-        initial={{ opacity: 0, x: 300 }}
-        animate={{ opacity: 1, x: 0 }}
-        exit={{ opacity: 0, x: 300 }}
-        transition={{ duration: 0.3 }}
-        className="fixed right-0 top-0 w-1/2 h-full bg-gray-900 border-l border-gray-700 z-50 overflow-hidden"
-      >
+      {isOpen && (
+        <motion.div
+          key={isOpen ? 'visible' : 'hidden'}
+          initial={{ opacity: 0, x: '100%' }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: '100%' }}
+          transition={{ duration: 0.3, ease: 'easeInOut' }}
+          className="fixed right-0 top-0 w-1/2 h-full bg-gray-900 border-l border-gray-700 z-[100] overflow-hidden shadow-2xl"
+        >
         <Card className="h-full bg-gray-900 border-0 rounded-none">
           <CardHeader className="border-b border-gray-700">
             <div className="flex items-center justify-between">
@@ -330,6 +377,12 @@ Generated on: ${new Date().toLocaleString()}
                 {renderLivePreview()}
               </TabsContent>
               
+              {detectedFramework !== 'vanilla' && (
+                <TabsContent value="sandpack" className="p-0 h-full">
+                  {renderLivePreview()}
+                </TabsContent>
+              )}
+              
               <TabsContent value="files" className="p-0 h-full">
                 <div className="flex h-full">
                   <div className="w-64 border-r border-gray-700 bg-gray-800 overflow-y-auto">
@@ -365,17 +418,6 @@ Generated on: ${new Date().toLocaleString()}
                             <span className="text-sm font-mono text-gray-300">{codeBlocks[selectedFileIndex].filename}</span>
                           </div>
                           <div className="flex items-center gap-2">
-                            {codeBlocks[selectedFileIndex].isError && (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => onRetry(codeBlocks[selectedFileIndex].messageId)}
-                                className="text-red-500 hover:text-red-400"
-                              >
-                                <RefreshCw className="w-4 h-4 mr-1" />
-                                Retry
-                              </Button>
-                            )}
                             <Button
                               size="sm"
                               variant="ghost"
@@ -458,6 +500,7 @@ Generated on: ${new Date().toLocaleString()}
           </CardContent>
         </Card>
       </motion.div>
+      )}
     </AnimatePresence>
   )
 }

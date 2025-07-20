@@ -1,6 +1,9 @@
 "use client"
 
 import { useState } from "react"
+import ReactMarkdown from "react-markdown"
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Button } from "@/components/ui/button"
 import { Copy, Check } from "lucide-react"
 import type { Message } from "@/types"
@@ -30,7 +33,29 @@ export default function MessageBubble({ message, isStreaming = false }: MessageB
           ${isStreaming ? "animate-pulse" : ""}
         `}
       >
-        <div className={`text-sm ${isStreaming ? "animate-fade-in" : ""}`}>{message.content}</div>
+        <ReactMarkdown
+          className="prose prose-invert text-sm"
+          components={{
+            code({ node, className, children, ...props }) {
+              const match = /language-(\w+)/.exec(className || "");
+              return node && !node.properties.inline && match ? (
+                <SyntaxHighlighter
+                  style={vscDarkPlus as any}
+                  language={match[1]}
+                  PreTag="div"
+                >
+                  {String(children).replace(/\n$/, "")}
+                </SyntaxHighlighter>
+              ) : (
+                <code className={className} {...props}>
+                  {children}
+                </code>
+              );
+            },
+          }}
+        >
+          {message.content}
+        </ReactMarkdown>
 
         {/* Copy button */}
         <Button

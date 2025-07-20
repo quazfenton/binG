@@ -1,6 +1,6 @@
 export interface Message {
   id: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "assistant" | "system" | "data";
   content: string;
   isError?: boolean;
   timestamp?: string; // ISO format date string

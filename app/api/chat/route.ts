@@ -10,8 +10,8 @@ export async function POST(request: NextRequest) {
       provider,
       model,
       temperature = 0.7,
-      maxTokens = 2000,
-      stream = false
+      maxTokens = 10096,
+      stream = true
     } = body as {
       messages: LLMMessage[]
       provider: string
@@ -72,43 +72,31 @@ export async function POST(request: NextRequest) {
 
     // Handle streaming response
     if (stream && selectedProvider.supportsStreaming) {
-      const encoder = new TextEncoder()
+      const encoder = new TextEncoder();
+      const llmStream = llmService.generateStreamingResponse(llmRequest);
 
-      const stream = new ReadableStream({
+      const readableStream = new ReadableStream({
         async start(controller) {
-          try {
-            for await (const chunk of llmService.generateStreamingResponse(llmRequest)) {
-              const data = JSON.stringify(chunk)
-              controller.enqueue(encoder.encode(`data: ${data}\n\n`))
-
-              if (chunk.isComplete) {
-                controller.enqueue(encoder.encode('data: [DONE]\n\n'))
-                controller.close()
-                break
-              }
+          for await (const chunk of llmStream) {
+            if (chunk.content) {
+              // Format according to Vercel AI SDK spec: '0:"[content]"'
+              controller.enqueue(encoder.encode(`0:"${JSON.stringify(chunk.content).slice(1, -1)}"\n`));
             }
-          } catch (error) {
-            console.error('Streaming error:', error)
-            const errorData = JSON.stringify({
-              error: error instanceof Error ? error.message : 'Unknown streaming error',
-              isComplete: true
-            })
-            controller.enqueue(encoder.encode(`data: ${errorData}\n\n`))
-            controller.close()
           }
+          controller.close();
+        },
+        cancel() {
+          console.log("Stream cancelled by client.");
         }
-      })
+      });
 
-      return new Response(stream, {
+      return new Response(readableStream, {
         headers: {
-          'Content-Type': 'text/event-stream',
+          'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'POST',
-          'Access-Control-Allow-Headers': 'Content-Type',
         },
-      })
+      });
     }
 
     // Handle non-streaming response
@@ -168,7 +156,7 @@ export async function GET() {
         defaultProvider: process.env.DEFAULT_LLM_PROVIDER || 'openrouter',
         defaultModel: process.env.DEFAULT_MODEL || 'deepseek/deepseek-r1-0528:free',
         defaultTemperature: parseFloat(process.env.DEFAULT_TEMPERATURE || '0.7'),
-        defaultMaxTokens: parseInt(process.env.DEFAULT_MAX_TOKENS || '2000'),
+        defaultMaxTokens: parseInt(process.env.DEFAULT_MAX_TOKENS || '80000'),
         features: {
           voiceEnabled: process.env.ENABLE_VOICE_FEATURES === 'true',
           imageGeneration: process.env.ENABLE_IMAGE_GENERATION === 'true',
