@@ -22,15 +22,31 @@ export default function ChatHistoryModal({
   onDownloadAll,
   chats,
 }: ChatHistoryModalProps) {
+  console.log(`[ChatHistoryModal] Raw chats data:`, chats); // Log the raw chats prop
   const [searchTerm, setSearchTerm] = useState("")
 
-  const filteredChats = chats.filter(
-    (chat) =>
-      chat.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      chat.messages.some((msg) => msg.content.toLowerCase().includes(searchTerm.toLowerCase())),
-  )
+  const filteredChatsWithDebug = chats.filter((chat) => {
+    const title = chat.title || ""; // Default to empty string if title is null/undefined
+    const messages = chat.messages || []; // Default to empty array if messages is null/undefined
+
+    const titleMatches = title.toLowerCase().includes(searchTerm.toLowerCase());
+    const messageMatches = messages.some((msg) => {
+      const content = msg.content || ""; // Default to empty string if content is null/undefined
+      return content.toLowerCase().includes(searchTerm.toLowerCase());
+    });
+
+
+    // If search term is empty, always include the chat
+    if (searchTerm === "") {
+      return true;
+    }
+
+    return titleMatches || messageMatches;
+  });
+
 
   const handleCopyChat = (chat: ChatHistory) => {
+    // add Log details about the chat object being processed by the filter
     const chatText = chat.messages.map((msg) => `${msg.role === "user" ? "You" : "AI"}: ${msg.content}`).join("\n\n")
 
     navigator.clipboard.writeText(chatText)
@@ -73,21 +89,24 @@ export default function ChatHistoryModal({
             <Input
               placeholder="Search chats..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                console.log(`[ChatHistoryModal] Search term updated to: "${e.target.value}"`);
+              }}
               className="pl-10 bg-black/40 border-white/20"
             />
           </div>
         </div>
 
         {/* Chat List */}
-        <ScrollArea className="flex-1 p-4">
-          {filteredChats.length === 0 ? (
+        <ScrollArea className="flex-1 p-4 h-96"> {/* Added h-96 to ensure scrollability */}
+          {filteredChatsWithDebug.length === 0 ? (
             <div className="text-center py-8 text-white/60">
               {searchTerm ? "No chats found matching your search." : "No chat history yet."}
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredChats.map((chat) => (
+              {filteredChatsWithDebug.map((chat) => (
                 <div
                   key={chat.id}
                   className="bg-black/40 rounded-lg p-4 border border-white/10 hover:border-white/20 transition-all duration-200 group"

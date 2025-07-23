@@ -19,8 +19,7 @@ export default function FallbackUI({ message = "Loading...", retry }: FallbackUI
         </Button>
       )}
       <p className="mt-8 text-sm text-gray-400 max-w-md text-center">
-        ayooo chat requires WebGL and modern browser features. If loading takes too long, try a different browser or
-        device.
+        computing....
       </p>
     </div>
   )

@@ -38,6 +38,7 @@ export function useConversation() {
   const [settings, setSettings] = useState<ConversationSettings>(DEFAULT_SETTINGS);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesRef = useRef<Message[]>(messages); // Create a ref for messages
+  const lastUpdateTime = useRef<number>(0); // For throttling updates
 
   // Update the ref whenever messages state changes
   useEffect(() => {
@@ -109,22 +110,28 @@ export function useConversation() {
             const parsed = JSON.parse(data);
             if (parsed.choices?.[0]?.delta?.content) {
               fullContent += parsed.choices[0].delta.content;
-              setMessages(prev => {
-                const existing = prev.find(m => m.id === messageId);
-                if (existing) {
-                  return prev.map(m => 
-                    m.id === messageId 
-                      ? { ...m, content: fullContent }
-                      : m
-                  );
-                }
-                return [...prev, {
-                  id: messageId,
-                  role: 'assistant',
-                  content: fullContent,
-                  timestamp: new Date().toISOString(),
-                }];
-              });
+              
+              // Throttle updates to once every 100ms
+              const now = Date.now();
+              if (now - lastUpdateTime.current > 100) {
+                lastUpdateTime.current = now;
+                setMessages(prev => {
+                  const existing = prev.find(m => m.id === messageId);
+                  if (existing) {
+                    return prev.map(m =>
+                      m.id === messageId
+                        ? { ...m, content: fullContent }
+                        : m
+                    );
+                  }
+                  return [...prev, {
+                    id: messageId,
+                    role: 'assistant',
+                    content: fullContent,
+                    timestamp: new Date().toISOString(),
+                  }];
+                });
+              }
             }
           } catch (e) {
             console.error('Error parsing chunk:', e);

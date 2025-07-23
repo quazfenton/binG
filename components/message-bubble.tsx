@@ -34,7 +34,7 @@ export default function MessageBubble({ message, isStreaming = false }: MessageB
         `}
       >
         <ReactMarkdown
-          className="prose prose-invert text-sm"
+          className="prose prose-invert text-base"
           components={{
             code({ node, className, children, ...props }) {
               const match = /language-(\w+)/.exec(className || "");
@@ -52,6 +52,17 @@ export default function MessageBubble({ message, isStreaming = false }: MessageB
                 </code>
               );
             },
+            // Add custom components for better formatting
+            p: ({ children }) => <p className="mb-4">{children}</p>,
+            ul: ({ children }) => <ul className="list-disc list-inside mb-4">{children}</ul>,
+            ol: ({ children }) => <ol className="list-decimal list-inside mb-4">{children}</ol>,
+            li: ({ children }) => <li className="mb-2">{children}</li>,
+            hr: () => <hr className="my-4 border-t border-white/20" />,
+            blockquote: ({ children }) => (
+              <blockquote className="border-l-4 border-purple-500 pl-4 italic mb-4">
+                {children}
+              </blockquote>
+            ),
           }}
         >
           {message.content}
@@ -62,9 +73,9 @@ export default function MessageBubble({ message, isStreaming = false }: MessageB
           variant="ghost"
           size="icon"
           className={`
-            absolute -right-2 top-1/2 transform -translate-y-1/2 h-6 w-6
-            opacity-0 group-hover:opacity-100 transition-all duration-200
-            bg-black/80 hover:bg-black/90 border border-white/20
+        absolute -right-2 top-1/2 transform -translate-y-1/2 h-6 w-6
+        opacity-0 group-hover:opacity-100 transition-all duration-200
+        bg-black/80 hover:bg-black/90 border border-white/20
           `}
           onClick={handleCopy}
         >

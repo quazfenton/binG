@@ -101,15 +101,13 @@ export default function ConversationInterface() {
       });
   }, []); // Removed settings.provider, updateSettings from dependency array
 
+  // Effect to fetch chat history when the history modal is shown
   useEffect(() => {
     if (showHistory) {
-      console.log("[ConversationInterface] History modal opened. Fetching chats.");
-      const chats = getAllChats();
-      const isChatHistoryEmpty = chats.length === 0;
-      console.log(`[ConversationInterface] Fetched chats. Is it empty? ${isChatHistoryEmpty}`, chats);
-      setChatHistory(chats);
+      const fetchedChats = getAllChats();
+      setChatHistory(fetchedChats);
     }
-  }, [showHistory, getAllChats]);
+  }, [showHistory]); // Depend only on showHistory to re-fetch when modal is opened
 
   // Handle voice service events
   useEffect(() => {
@@ -146,7 +144,6 @@ export default function ConversationInterface() {
 
   const handleNewChat = () => {
     const isEmpty = messages.length === 0;
-    console.log(`[ConversationInterface] handleNewChat called. Is messages empty? ${isEmpty}`);
     if (!isEmpty) {
       saveCurrentChat(messages);
       setChatHistory(getAllChats());
@@ -196,7 +193,10 @@ export default function ConversationInterface() {
   };
 
   const handleToggleCodePreview = () => {
-    setShowCodePreview((prevShowCodePreview) => !prevShowCodePreview);
+    setShowCodePreview((prevShowCodePreview) => {
+      const newState = !prevShowCodePreview;
+      return newState;
+    });
   };
 
   // Intermediary function to handle submit from InteractionPanel
@@ -225,7 +225,9 @@ export default function ConversationInterface() {
             isProcessing={isLoading}
             toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
             toggleHistory={() => setShowHistory(!showHistory)}
-            toggleCodePreview={handleToggleCodePreview} // This is the prop in question
+            toggleCodePreview={() => {
+              handleToggleCodePreview();
+            }} // Pass the function with an additional log
             onStopGeneration={stop} // Pass useChat's stop function
             currentProvider={currentProvider}
             currentModel={currentModel}
@@ -251,8 +253,6 @@ export default function ConversationInterface() {
             onClearChat={handleNewChat} // Map to handleNewChat
             onShowHistory={() => setShowHistory(true)} // Map to setShowHistory
             onStartGestureDetection={() => { /* Implement gesture start logic */ }} // Placeholder
-            onStopGestureDetection={() => { /* Implement gesture stop logic */ }} // Placeholder
-            currentConversationId={null} // Placeholder, needs actual conversation ID from history
             onSelectHistoryChat={handleLoadChat}
             currentProvider={currentProvider}
             currentModel={currentModel}

@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
+import { Sandpack } from "@codesandbox/sandpack-react";
 import JSZip from 'jszip';
 import type { Message } from '../types/index';
 
@@ -41,10 +42,10 @@ interface ProjectStructure {
   name: string
   files: { [key: string]: string }
   dependencies?: string[]
+  framework: 'react' | 'vue' | 'angular' | 'vanilla'
 }
 
 export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePreviewPanelProps) {
-  console.log("CodePreviewPanel isOpen:", isOpen);
   const [detectedFramework, setDetectedFramework] = useState<'react'|'vue'|'vanilla'>('vanilla');
   const [selectedTab, setSelectedTab] = useState("preview")
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -94,7 +95,6 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
 
   // Extract code blocks from messages
   const codeBlocks = useMemo(() => {
-    console.log("CodePreviewPanel messages:", messages);
     const blocks: CodeBlock[] = [];
     messages.forEach((message) => {
       if (message.role === "assistant") {
@@ -148,7 +148,6 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
         });
       }
     });
-    console.log("Detected and parsed code blocks:", blocks);
     return blocks;
   }, [messages]);
 
@@ -163,6 +162,7 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
   const analyzeProjectStructure = (blocks: CodeBlock[]): ProjectStructure => {
     const files: { [key: string]: string } = {};
     const dependencies: string[] = [];
+    let framework: 'react' | 'vue' | 'angular' | 'vanilla' = 'vanilla';
     
     blocks.forEach((block) => {
       let finalFilename = block.filename; // Start with the filename from the block
@@ -196,9 +196,30 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
           const pkg = JSON.parse(block.code)
           if (pkg.dependencies) {
             dependencies.push(...Object.keys(pkg.dependencies))
+            
+            // Detect framework based on dependencies
+            if (pkg.dependencies.react) {
+              framework = 'react';
+            } else if (pkg.dependencies.vue) {
+              framework = 'vue';
+            } else if (pkg.dependencies['@angular/core']) {
+              framework = 'angular';
+            }
           }
         } catch (e) {
           console.warn("Failed to parse package.json")
+        }
+      }
+      
+      // Detect framework based on file extensions
+      if (framework === 'vanilla') {
+        const ext = getFileExtension(block.language);
+        if (ext === 'jsx' || ext === 'tsx') {
+          framework = 'react';
+        } else if (ext === 'vue') {
+          framework = 'vue';
+        } else if (ext === 'ts' && finalFilename.includes('.component.')) {
+          framework = 'angular';
         }
       }
     })
@@ -206,9 +227,9 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     const structure = {
       name: "Generated Project",
       files,
-      dependencies: dependencies.length > 0 ? dependencies : undefined
+      dependencies: dependencies.length > 0 ? dependencies : undefined,
+      framework
     };
-    console.log("Analyzed project structure:", structure);
     return structure;
   }
 
@@ -260,26 +281,77 @@ Generated on: ${new Date().toLocaleString()}
     a.click()
     URL.revokeObjectURL(url)
   }
+const renderLivePreview = () => {
+  if (projectStructure?.framework === 'react' ||
+      projectStructure?.framework === 'vue' ||
+      projectStructure?.framework === 'angular') {
+    try {
+      // Map files to Sandpack format
+      const sandpackFiles = Object.entries(projectStructure.files).reduce(
+        (acc, [path, content]) => {
+          acc[`/${path}`] = { code: content };
+          return acc;
+        },
+        {} as Record<string, { code: string }>
+      );
 
-  const renderLivePreview = () => {
-    const htmlFile = codeBlocks.find(block => block.language === "html")
-    const cssFile = codeBlocks.find(block => block.language === "css")
-    const jsFile = codeBlocks.find(block => block.language === "javascript")
-    
-    if (!htmlFile) {
+      // Add entry file if missing
+      if (!sandpackFiles['/src/index.js'] && !sandpackFiles['/src/main.js']) {
+        sandpackFiles['/src/index.js'] = {
+          code: "console.log('Hello from Sandpack!');"
+        };
+      }
+
+      return (
+        <div className="h-96">
+          <Sandpack
+            template={projectStructure.framework}
+            theme="dark"
+            options={{
+              showTabs: true,
+              showLineNumbers: true,
+              showNavigator: true,
+              showConsole: true,
+            }}
+            files={sandpackFiles}
+          />
+        </div>
+      );
+    } catch (error) {
       return (
         <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
           <div className="text-center">
-            <CodeIcon className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-            <p className="text-gray-400">No HTML code found for live preview</p>
-            <p className="text-sm text-gray-600 mt-2">Add HTML code to enable live preview</p>
+            <AlertCircle className="w-16 h-16 mx-auto mb-4 text-red-400" />
+            <p className="text-red-400">Failed to render framework preview</p>
+            <p className="text-sm text-gray-600 mt-2">
+              Error: {(error as Error).message}
+            </p>
           </div>
         </div>
-      )
+      );
     }
-    
-    // Create complete HTML document
-    const combinedHtml = `
+  }
+
+
+    try {
+      const htmlFile = codeBlocks.find(block => block.language === "html")
+      const cssFile = codeBlocks.find(block => block.language === "css")
+      const jsFile = codeBlocks.find(block => block.language === "javascript")
+      
+      if (!htmlFile) {
+        return (
+          <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
+            <div className="text-center">
+              <CodeIcon className="w-16 h-16 mx-auto mb-4 text-gray-400" />
+              <p className="text-gray-400">No HTML code found for live preview</p>
+              <p className="text-sm text-gray-600 mt-2">Add HTML code to enable live preview</p>
+            </div>
+          </div>
+        )
+      }
+      
+      // Create complete HTML document
+      const combinedHtml = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -294,27 +366,40 @@ Generated on: ${new Date().toLocaleString()}
 </body>
 </html>
 `
-    console.log("Rendering live preview with HTML:", combinedHtml);
-    return (
-      <div className="relative">
-        <div className="absolute top-2 right-2 z-10">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setIsFullscreen(!isFullscreen)}
-          >
-            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-          </Button>
+      return (
+        <div className="relative">
+          <div className="absolute top-2 right-2 z-10">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIsFullscreen(!isFullscreen)}
+            >
+              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </Button>
+          </div>
+          <iframe
+            ref={iframeRef}
+            srcDoc={combinedHtml}
+            className={`w-full bg-white rounded-lg border ${isFullscreen ? 'h-screen' : 'h-96'}`}
+            title="Live Preview"
+            sandbox="allow-scripts allow-scripts allow-same-origin"
+            onError={(e) => console.error("Iframe error", e)}
+          />
         </div>
-        <iframe
-          ref={iframeRef}
-          srcDoc={combinedHtml}
-          className={`w-full bg-white rounded-lg border ${isFullscreen ? 'h-screen' : 'h-96'}`}
-          title="Live Preview"
-          sandbox="allow-scripts allow-scripts allow-same-origin"
-        />
-      </div>
-    )
+      )
+    } catch (error) {
+      return (
+        <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
+          <div className="text-center">
+            <AlertCircle className="w-16 h-16 mx-auto mb-4 text-red-400" />
+            <p className="text-red-400">Failed to render HTML preview</p>
+            <p className="text-sm text-gray-600 mt-2">
+              Error: {(error as Error).message}
+            </p>
+          </div>
+        </div>
+      );
+    }
   }
 
   return (
@@ -326,7 +411,7 @@ Generated on: ${new Date().toLocaleString()}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: '100%' }}
           transition={{ duration: 0.3, ease: 'easeInOut' }}
-          className="fixed right-0 top-0 w-1/2 h-full bg-gray-900 border-l border-gray-700 z-[100] overflow-hidden shadow-2xl"
+          className="fixed right-0 top-0 w-1/2 h-full bg-gray-800/80 backdrop-blur-lg border border-gray-700/50 z-[100] overflow-hidden shadow-2xl"
         >
         <Card className="h-full bg-gray-900 border-0 rounded-none">
           <CardHeader className="border-b border-gray-700">

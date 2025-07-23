@@ -24,8 +24,8 @@ interface ChatPanelProps {
   availableProviders: LLMProvider[];
   onClearChat: () => void;
   onShowHistory: () => void;
-  onStartGestureDetection: () => void; // Passed to AccessibilityControls
-  onStopGestureDetection: () => void; // Passed to AccessibilityControls
+  onStartGestureDetection: () => void; // Passed to InteractionPanel for gesture detection
+  onStopGestureDetection: () => void;  // Passed to InteractionPanel for gesture detection
   currentConversationId: string | null;
   onSelectHistoryChat: (id: string) => void;
   // Props for InteractionPanel
@@ -62,6 +62,7 @@ export function ChatPanel({
     useVoiceInput();
 
   const [isCodePreviewOpen, setIsCodePreviewOpen] = useState(false);
+  const [isAccessibilityOptionsOpen, setIsAccessibilityOptionsOpen] = useState(false); // State to control accessibility options visibility
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -82,8 +83,22 @@ export function ChatPanel({
     handleSubmit(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>);
   };
 
-  const handleCodeGeneration = () => {
-    setIsCodePreviewOpen(true);
+  // Handler for the accessibility button in InteractionPanel
+  const handleToggleAccessibilityOptions = () => {
+    setIsAccessibilityOptionsOpen(prevOpenState => {
+      const newState = !prevOpenState;
+      // Toggle gesture detection along with accessibility options
+      if (newState) {
+        onStartGestureDetection();
+      } else {
+        onStopGestureDetection();
+      }
+      return newState; // Return the new state
+    });
+  };
+
+  const toggleCodePreview = () => {
+    setIsCodePreviewOpen(prev => !prev);
   };
 
   return (
@@ -111,12 +126,23 @@ export function ChatPanel({
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Conditionally render AccessibilityControls */}
+      {isAccessibilityOptionsOpen && (
+        <AccessibilityControls
+          onClose={handleToggleAccessibilityOptions} // Pass the handler to close the panel
+          messages={messages} // Pass messages for transcript display
+          voiceEnabled={voiceEnabled}
+          onVoiceToggle={onVoiceToggle}
+        />
+      )}
+
       <InteractionPanel
         onSubmit={handleUserMessageSubmit}
         onNewChat={onClearChat}
         isProcessing={isLoading}
-        toggleAccessibility={onStartGestureDetection}
+        toggleAccessibility={handleToggleAccessibilityOptions} // Pass the handler to toggle options visibility
         toggleHistory={onShowHistory}
+        toggleCodePreview={toggleCodePreview}
         onStopGeneration={onStopGeneration}
         currentProvider={currentProvider}
         currentModel={currentModel}
@@ -125,8 +151,6 @@ export function ChatPanel({
         setInput={setInput}
         availableProviders={availableProviders}
         onProviderChange={onProviderChange}
-        voiceEnabled={voiceEnabled}
-        onVoiceToggle={onVoiceToggle}
       />
 
       <CodePreviewPanel
