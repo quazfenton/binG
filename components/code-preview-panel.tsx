@@ -414,7 +414,7 @@ const renderLivePreview = () => {
           className="fixed right-0 top-0 w-1/2 h-full bg-gray-800/80 backdrop-blur-lg border border-gray-700/50 z-[100] overflow-hidden shadow-2xl"
         >
         <Card className="h-full bg-gray-900 border-0 rounded-none">
-          <CardHeader className="border-b border-gray-700">
+          <CardHeader className="border-b border-white/10">
             <div className="flex items-center justify-between">
               <CardTitle className="text-white flex items-center gap-2">
                 <CodeIcon className="w-5 h-5" />
@@ -443,7 +443,7 @@ const renderLivePreview = () => {
           
           <CardContent className="p-0 h-full">
             <Tabs value={selectedTab} onValueChange={setSelectedTab} className="h-full">
-              <TabsList className="grid w-full grid-cols-3 bg-gray-800 border-b border-gray-700">
+              <TabsList className="grid w-full grid-cols-3 bg-black/30 border-b border-white/10">
                 <TabsTrigger value="preview" className="text-white">
                   <Eye className="w-4 h-4 mr-2" />
                   Live Preview
@@ -470,7 +470,7 @@ const renderLivePreview = () => {
               
               <TabsContent value="files" className="p-0 h-full">
                 <div className="flex h-full">
-                  <div className="w-64 border-r border-gray-700 bg-gray-800 overflow-y-auto">
+                  <div className="w-64 border-r border-white/10 bg-black/20 overflow-y-auto">
                     <div className="p-4">
                       <h3 className="text-sm font-medium text-gray-300 mb-2">Files</h3>
                       <div className="space-y-1">
@@ -497,7 +497,7 @@ const renderLivePreview = () => {
                   <div className="flex-1 overflow-y-auto">
                     {codeBlocks.length > 0 && selectedFileIndex !== null && (
                       <div className="h-full flex flex-col">
-                        <div className="p-4 border-b border-gray-700 bg-gray-800 flex justify-between items-center">
+                        <div className="p-4 border-b border-white/10 bg-black/30 flex justify-between items-center">
                           <div className="flex items-center gap-2">
                             <Badge variant="outline">{codeBlocks[selectedFileIndex].language}</Badge>
                             <span className="text-sm font-mono text-gray-300">{codeBlocks[selectedFileIndex].filename}</span>
@@ -515,7 +515,7 @@ const renderLivePreview = () => {
                             </Button>
                           </div>
                         </div>
-                        <div className="flex-1 overflow-y-auto bg-gray-900">
+                        <div className="flex-1 overflow-y-auto bg-black/20">
                           <SyntaxHighlighter
                             style={oneDark as any}
                             language={codeBlocks[selectedFileIndex].language}
@@ -537,7 +537,7 @@ const renderLivePreview = () => {
                   <div className="space-y-4">
                     <div>
                       <h3 className="text-lg font-semibold text-white mb-2">Project Structure</h3>
-                      <div className="bg-gray-800 rounded-lg p-4">
+                      <div className="bg-black/30 rounded-lg p-4">
                         <pre className="text-sm text-gray-300">
                           {Object.keys(projectStructure.files).map(filename => (
                             <div key={filename} className="flex items-center gap-2 mb-1">
@@ -562,7 +562,7 @@ const renderLivePreview = () => {
                     
                     <div>
                       <h4 className="text-md font-medium text-white mb-2">Setup Instructions</h4>
-                      <div className="bg-gray-800 rounded-lg p-4">
+                      <div className="bg-black/30 rounded-lg p-4">
                         <pre className="text-sm text-gray-300">
 {`1. Download the ZIP file
 2. Extract to your desired location
