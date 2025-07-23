@@ -1,0 +1,9 @@
+name: binG
+nextjs:
+    packageManager: npm
+    path: ./app/
+    scripts:
+        deploy:
+            - pnpm install
+region: us-east-1
+yamlVersion: 2
