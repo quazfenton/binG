@@ -95,7 +95,7 @@ export default function InteractionPanel({
     {
       id: 1,
       url: "/placeholder.svg?height=200&width=300",
-      title: "Neural Network Visualization",
+      title: "Neural Network Latent Visualization",
     },
     {
       id: 2,
@@ -105,12 +105,12 @@ export default function InteractionPanel({
     {
       id: 3,
       url: "/placeholder.svg?height=200&width=300",
-      title: "AI Architecture",
+      title: "AI Agent Architecture",
     },
     {
       id: 4,
       url: "/placeholder.svg?height=200&width=300",
-      title: "3D Interface Concept",
+      title: "Interface Concept",
     },
   ];
 
@@ -125,13 +125,13 @@ export default function InteractionPanel({
                   <Sparkles className="h-3 w-3 text-white" />
                 </div>
                 <span className="text-sm font-medium text-white/80">
-                  ayooo chat
+                 compute
                 </span>
               </div>
               <TabsList className="bg-black/40">
                 <TabsTrigger value="chat">Chat</TabsTrigger>
-                <TabsTrigger value="images">Images</TabsTrigger>
-                <TabsTrigger value="help">Help</TabsTrigger>
+                <TabsTrigger value="images">Code</TabsTrigger>
+                <TabsTrigger value="help">Images</TabsTrigger>
                 <TabsTrigger value="info">Info</TabsTrigger>
               </TabsList>
             </div>
@@ -366,10 +366,10 @@ export default function InteractionPanel({
                   <div className="flex items-start gap-3">
                     <Sparkles className="h-5 w-5 text-yellow-400 mt-0.5" />
                     <div>
-                      <h3 className="font-medium">About ayooo chat</h3>
+                      <h3 className="font-medium">kuji</h3>
                       <p className="text-sm text-white/70">
-                        A revolutionary 3D spatial interface for AI interactions
-                        that breaks traditional chat paradigms.
+                        A revolutionary spatial interface for AI interactions
+                        that breaks traditional paradigms. Code, run, & imagine.
                       </p>
                     </div>
                   </div>
@@ -377,7 +377,7 @@ export default function InteractionPanel({
                   <div className="flex items-start gap-3">
                   <Settings className="h-5 w-5 text-blue-400 mt-0.5" />
                   <div>
-                    <h3 className="font-medium">Current Mood</h3>
+                    <h3 className="font-medium"></h3>
                     <div className="flex items-center gap-2 mt-1">
                       <Badge variant="secondary" className="bg-black/40">
                         N/A
