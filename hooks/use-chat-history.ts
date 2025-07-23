@@ -7,34 +7,13 @@ import { v4 as uuidv4 } from 'uuid';
 const STORAGE_KEY = "ayooo_chat_chat_history"
 
 export function useChatHistory() {
-  const saveCurrentChat = useCallback((messages: Message[]) => {
-    const isEmpty = messages.length === 0;
-    console.log(`[useChatHistory] saveCurrentChat called. Is messages empty? ${isEmpty}`);
-    if (isEmpty) return;
-
-    const chatHistory: ChatHistory = {
-      id: Date.now().toString(),
-      title: messages[0]?.content.slice(0, 50) + (messages[0]?.content.length > 50 ? "..." : ""),
-      messages,
-      timestamp: Date.now(),
-    };
-
-    const existingChats = getAllChats();
-    const updatedChats = [chatHistory, ...existingChats].slice(0, 50);
-    console.log(`[useChatHistory] Saving ${updatedChats.length} chats to localStorage.`);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedChats));
-  }, []);
-
   const getAllChats = useCallback((): ChatHistory[] => {
     const stored = localStorage.getItem(STORAGE_KEY);
     const isStoredEmpty = !stored;
-    console.log(`[useChatHistory] getAllChats called. Is localStorage empty? ${isStoredEmpty}`);
     if (isStoredEmpty) return [];
 
     try {
       const chats: ChatHistory[] = JSON.parse(stored);
-      const isParsedEmpty = chats.length === 0;
-      console.log(`[useChatHistory] Parsed chats from localStorage. Is it empty? ${isParsedEmpty}`, chats);
       
       // Ensure all messages have IDs for backward compatibility
       return chats.map(chat => ({
@@ -50,6 +29,77 @@ export function useChatHistory() {
       return [];
     }
   }, []);
+
+  const saveCurrentChat = useCallback((messages: Message[], chatIdToUpdate?: string) => {
+    const isEmpty = messages.length === 0;
+    if (isEmpty) return;
+
+    const existingChats = getAllChats();
+
+    let updatedChats: ChatHistory[];
+
+    if (chatIdToUpdate) {
+      // Try to find and update the existing chat
+      const chatIndex = existingChats.findIndex((chat) => chat.id === chatIdToUpdate);
+
+      if (chatIndex !== -1) {
+        // Chat found, update it
+        const updatedChat: ChatHistory = {
+          id: chatIdToUpdate, // Keep the original ID
+          title: messages[0]?.content ? messages[0].content.slice(0, 50) + (messages[0].content.length > 50 ? "..." : "") : "Untitled Chat",
+          messages,
+          timestamp: Date.now(), // Update timestamp
+        };
+
+        // Replace the old chat with the updated one
+        updatedChats = [...existingChats];
+        updatedChats[chatIndex] = updatedChat;
+
+        // Reorder to keep the most recently updated chat at the top
+        // Filter out the old version and add the new one at the beginning
+        updatedChats = [updatedChat, ...updatedChats.filter(chat => chat.id !== chatIdToUpdate)];
+
+      } else {
+        // Chat not found, save as a new chat
+        console.warn(`[useChatHistory] Chat with ID ${chatIdToUpdate} not found for update. Saving as new.`);
+        const newChatId = uuidv4(); // Use uuid for new chats
+        const chatHistory: ChatHistory = {
+          id: newChatId,
+          title: messages[0]?.content ? messages[0].content.slice(0, 50) + (messages[0].content.length > 50 ? "..." : "") : "Untitled Chat",
+          messages,
+          timestamp: Date.now(),
+        };
+        updatedChats = [chatHistory, ...existingChats];
+      }
+    } else {
+      // Save as a new chat
+      // Check for exact duplicates based on messages content to prevent duplication
+      const isDuplicate = existingChats.some(chat =>
+        chat.messages.length === messages.length &&
+        chat.messages.every((existingMsg, index) =>
+          existingMsg.content === messages[index].content &&
+          existingMsg.role === messages[index].role
+        )
+      );
+
+      if (isDuplicate) {
+        console.log("[useChatHistory] Duplicate chat content detected. Not saving.");
+        return; // Do not save if it's an exact duplicate
+      }
+
+      const newChatId = uuidv4(); // Use uuid for new chats
+      const chatHistory: ChatHistory = {
+        id: newChatId,
+        title: messages[0]?.content ? messages[0].content.slice(0, 50) + (messages[0].content.length > 50 ? "..." : "") : "Untitled Chat",
+        messages,
+        timestamp: Date.now(),
+      };
+      updatedChats = [chatHistory, ...existingChats];
+    }
+
+    // Limit to 50 chats and save
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedChats.slice(0, 50)));
+  }, [getAllChats]);
 
   const loadChat = useCallback(
     (chatId: string): ChatHistory | null => {

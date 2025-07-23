@@ -38,7 +38,7 @@ interface InteractionPanelProps {
   onSubmit: (content: string) => void;
   onNewChat: () => void;
   isProcessing: boolean;
-  toggleAccessibility: () => void;
+  toggleAccessibility: () => void; // This prop is expected to be a function that toggles accessibility options
   toggleHistory: () => void;
   toggleCodePreview: () => void; // This prop is expected to be a function
   onStopGeneration?: () => void;
@@ -55,7 +55,7 @@ export default function InteractionPanel({
   onSubmit,
   onNewChat,
   isProcessing,
-  toggleAccessibility,
+  toggleAccessibility, // Receive the prop
   toggleHistory,
   toggleCodePreview, // Receive the prop
   onStopGeneration,
@@ -69,9 +69,6 @@ export default function InteractionPanel({
 }: InteractionPanelProps) {
   const [activeTab, setActiveTab] = useState("chat");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  // Log the value of toggleCodePreview prop to debug runtime accessibility
-  console.log("InteractionPanel: toggleCodePreview prop value:", toggleCodePreview);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,7 +86,7 @@ export default function InteractionPanel({
 
   const suggestions = [
     "unique app ideas",
-    "code an incredible ux",
+    "code a basic web app",
     "make an addicting web game",
     "show me sum interesting",
   ];
@@ -159,7 +156,7 @@ export default function InteractionPanel({
               <Button
                 variant="outline"
                 size="icon"
-                onClick={toggleAccessibility}
+                onClick={toggleAccessibility} // Call the passed prop
                 title="Accessibility Options"
               >
                 <Accessibility className="h-4 w-4" />
@@ -213,9 +210,19 @@ export default function InteractionPanel({
 
             {/* Error Display */}
             {error && (
-              <div className="flex items-center gap-2 mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-xs">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                <span>{error}</span>
+              <div className="flex items-center justify-between gap-2 mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-xs">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>{error}</span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => onSubmit(input)}
+                  className="ml-2"
+                >
+                  Retry
+                </Button>
               </div>
             )}
 
