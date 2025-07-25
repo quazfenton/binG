@@ -3,10 +3,8 @@
 import * as React from 'react';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Badge } from '../components/ui/badge';
 import { 
   Code as CodeIcon,
   FileText,
@@ -15,7 +13,8 @@ import {
   Minimize2,
   RefreshCw,
   AlertCircle,
-  Eye // Added Eye import
+  Eye,
+  Edit
 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
@@ -175,11 +174,19 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
         } else if (block.language === "css") {
           finalFilename = "styles.css";
         } else if (block.language === "javascript") {
-          finalFilename = "script.js"; // Changed from main.js to script.js as per user example
+          finalFilename = "script.js";
         } else if (block.language === "json" && block.code.includes("\"name\"") && block.code.includes("\"version\"")) {
           finalFilename = "package.json";
+        } else if (block.language === "jsx" || block.language === "tsx") {
+          // For React components
+          finalFilename = "src/App." + (block.language === "jsx" ? "jsx" : "tsx");
+        } else if (block.language === "vue") {
+          finalFilename = "src/App.vue";
+        } else if (block.language === "typescript" && block.code.includes("@Component")) {
+          // For Angular components
+          finalFilename = "src/app/app.component.ts";
         } else {
-          // If no specific inference, use the original filename or generate a default
+          // If no specific inference, use the original filename or generate a default.
           finalFilename = finalFilename || `file-${block.index}.${getFileExtension(block.language)}`;
         }
       }
@@ -281,56 +288,59 @@ Generated on: ${new Date().toLocaleString()}
     a.click()
     URL.revokeObjectURL(url)
   }
-const renderLivePreview = () => {
-  if (projectStructure?.framework === 'react' ||
-      projectStructure?.framework === 'vue' ||
-      projectStructure?.framework === 'angular') {
-    try {
-      // Map files to Sandpack format
-      const sandpackFiles = Object.entries(projectStructure.files).reduce(
-        (acc, [path, content]) => {
-          acc[`/${path}`] = { code: content };
-          return acc;
-        },
-        {} as Record<string, { code: string }>
-      );
 
-      // Add entry file if missing
-      if (!sandpackFiles['/src/index.js'] && !sandpackFiles['/src/main.js']) {
-        sandpackFiles['/src/index.js'] = {
-          code: "console.log('Hello from Sandpack!');"
-        };
-      }
+  const renderLivePreview = () => {
+    if (projectStructure?.framework === 'react' ||
+        projectStructure?.framework === 'vue' ||
+        projectStructure?.framework === 'angular') {
+      try {
+        // Map files to Sandpack format
+        const sandpackFiles = Object.entries(projectStructure.files).reduce(
+          (acc, [path, content]) => {
+            // Normalize paths to start with /src if they don't have a directory
+            const normalizedPath = path.startsWith('src/') ? `/${path}` : `/src/${path}`;
+            acc[normalizedPath] = { code: content };
+            return acc;
+          },
+          {} as Record<string, { code: string }>
+        );
 
-      return (
-        <div className="h-96">
-          <Sandpack
-            template={projectStructure.framework}
-            theme="dark"
-            options={{
-              showTabs: true,
-              showLineNumbers: true,
-              showNavigator: true,
-              showConsole: true,
-            }}
-            files={sandpackFiles}
-          />
-        </div>
-      );
-    } catch (error) {
-      return (
-        <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
-          <div className="text-center">
-            <AlertCircle className="w-16 h-16 mx-auto mb-4 text-red-400" />
-            <p className="text-red-400">Failed to render framework preview</p>
-            <p className="text-sm text-gray-600 mt-2">
-              Error: {(error as Error).message}
-            </p>
+        // Add entry file if missing
+        if (!sandpackFiles['/src/index.js'] && !sandpackFiles['/src/main.js']) {
+          sandpackFiles['/src/index.js'] = {
+            code: "console.log('Hello from Sandpack!');"
+          };
+        }
+
+        return (
+          <div className="h-96">
+            <Sandpack
+              template={projectStructure.framework}
+              theme="dark"
+              options={{
+                showTabs: true,
+                showLineNumbers: true,
+                showNavigator: true,
+                showConsole: true,
+              }}
+              files={sandpackFiles}
+            />
           </div>
-        </div>
-      );
+        );
+      } catch (error) {
+        return (
+          <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
+            <div className="text-center">
+              <AlertCircle className="w-16 h-16 mx-auto mb-4 text-red-400" />
+              <p className="text-red-400">Failed to render framework preview</p>
+              <p className="text-sm text-gray-600 mt-2">
+                Error: {(error as Error).message}
+              </p>
+            </div>
+          </div>
+        );
+      }
     }
-  }
 
 
     try {
@@ -369,13 +379,12 @@ const renderLivePreview = () => {
       return (
         <div className="relative">
           <div className="absolute top-2 right-2 z-10">
-            <Button
-              size="sm"
-              variant="outline"
+            <button
               onClick={() => setIsFullscreen(!isFullscreen)}
+              className="bg-gray-800 text-gray-300 p-1 rounded border border-gray-600"
             >
               {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-            </Button>
+            </button>
           </div>
           <iframe
             ref={iframeRef}
@@ -419,24 +428,36 @@ const renderLivePreview = () => {
               <CardTitle className="text-white flex items-center gap-2">
                 <CodeIcon className="w-5 h-5" />
                 Code Preview Panel
-                <Badge variant="secondary">{codeBlocks.length} file(s)</Badge>
+                <span className="bg-gray-700 text-gray-300 rounded-full px-2.5 py-0.5 text-xs">
+                  {codeBlocks.length} file(s)
+                </span>
               </CardTitle>
               <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
+                <button
                   onClick={downloadAsZip}
-                  className="bg-blue-600 hover:bg-blue-700"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm flex items-center"
                 >
                   <Package className="w-4 h-4 mr-2" />
                   Download ZIP
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
+                </button>
+                {projectStructure && (
+                  <button
+                    onClick={() => {
+                      localStorage.setItem('visualEditorProject', JSON.stringify(projectStructure));
+                      window.open('/visual-editor', '_blank');
+                    }}
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded text-sm flex items-center"
+                  >
+                    <Edit className="w-4 h-4 mr-2" />
+                    Edit
+                  </button>
+                )}
+                <button
                   onClick={onClose}
+                  className="border border-gray-300 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded text-sm"
                 >
                   Close
-                </Button>
+                </button>
               </div>
             </div>
           </CardHeader>
@@ -475,10 +496,11 @@ const renderLivePreview = () => {
                       <h3 className="text-sm font-medium text-gray-300 mb-2">Files</h3>
                       <div className="space-y-1">
                         {codeBlocks.map((block, index) => (
-                          <Button
+                          <div
+                            className={`flex items-center w-full justify-start p-2 cursor-pointer ${
+                              selectedFileIndex === index ? 'bg-gray-700' : 'hover:bg-gray-800'
+                            }`}
                             key={index}
-                            variant={selectedFileIndex === index ? "secondary" : "ghost"}
-                            className={`w-full justify-start ${selectedFileIndex === index ? 'bg-gray-700' : ''}`}
                             onClick={() => setSelectedFileIndex(index)}
                           >
                             <FileText className="w-4 h-4 mr-2" />
@@ -488,7 +510,7 @@ const renderLivePreview = () => {
                                 <AlertCircle className="w-4 h-4" />
                               </span>
                             )}
-                          </Button>
+                          </div>
                         ))}
                       </div>
                     </div>
@@ -499,20 +521,21 @@ const renderLivePreview = () => {
                       <div className="h-full flex flex-col">
                         <div className="p-4 border-b border-white/10 bg-black/30 flex justify-between items-center">
                           <div className="flex items-center gap-2">
-                            <Badge variant="outline">{codeBlocks[selectedFileIndex].language}</Badge>
+                            <span className="border border-gray-500 text-gray-300 rounded px-2 py-0.5 text-xs">
+                              {codeBlocks[selectedFileIndex].language}
+                            </span>
                             <span className="text-sm font-mono text-gray-300">{codeBlocks[selectedFileIndex].filename}</span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <Button
-                              size="sm"
-                              variant="ghost"
+                            <button
+                              className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
                               onClick={() => {
                                 navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code)
                               }}
                             >
-                              <CodeIcon className="w-4 h-4 mr-2" />
+                              <CodeIcon className="w-4 h-4 mr-1" />
                               Copy
-                            </Button>
+                            </button>
                           </div>
                         </div>
                         <div className="flex-1 overflow-y-auto bg-black/20">
@@ -554,7 +577,9 @@ const renderLivePreview = () => {
                         <h4 className="text-md font-medium text-white mb-2">Dependencies</h4>
                         <div className="flex flex-wrap gap-2">
                           {projectStructure.dependencies.map(dep => (
-                            <Badge key={dep} variant="secondary">{dep}</Badge>
+                            <span key={dep} className="bg-gray-700 text-gray-300 rounded px-2 py-0.5 text-xs">
+                              {dep}
+                            </span>
                           ))}
                         </div>
                       </div>

@@ -1,6 +1,6 @@
 name: binG
 nextjs:
-    packageManager: npm
+    packageManager: pnpm
     path: ./app/
     scripts:
         deploy:
