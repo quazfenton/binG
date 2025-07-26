@@ -420,10 +420,10 @@ Generated on: ${new Date().toLocaleString()}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: '100%' }}
           transition={{ duration: 0.3, ease: 'easeInOut' }}
-          className="fixed right-0 top-0 w-1/2 h-full bg-gray-800/80 backdrop-blur-lg border border-gray-700/50 z-[100] overflow-hidden shadow-2xl"
+          className="fixed right-0 top-0 w-1/2 h-full bg-black/20 backdrop-blur-2xl border border-white/10 rounded-l-xl z-[100] overflow-hidden shadow-2xl"
         >
-        <Card className="h-full bg-gray-900 border-0 rounded-none">
-          <CardHeader className="border-b border-white/10">
+        <Card className="h-full bg-transparent border-0 rounded-none">
+          <CardHeader className="border-b border-white/10 bg-black/20">
             <div className="flex items-center justify-between">
               <CardTitle className="text-white flex items-center gap-2">
                 <CodeIcon className="w-5 h-5" />
@@ -464,7 +464,7 @@ Generated on: ${new Date().toLocaleString()}
           
           <CardContent className="p-0 h-full">
             <Tabs value={selectedTab} onValueChange={setSelectedTab} className="h-full">
-              <TabsList className="grid w-full grid-cols-3 bg-black/30 border-b border-white/10">
+              <TabsList className="grid w-full grid-cols-3 bg-black/40 border-b border-white/10">
                 <TabsTrigger value="preview" className="text-white">
                   <Eye className="w-4 h-4 mr-2" />
                   Live Preview
@@ -491,7 +491,7 @@ Generated on: ${new Date().toLocaleString()}
               
               <TabsContent value="files" className="p-0 h-full">
                 <div className="flex h-full">
-                  <div className="w-64 border-r border-white/10 bg-black/20 overflow-y-auto">
+                  <div className="w-64 border-r border-white/10 bg-black/30 overflow-y-auto">
                     <div className="p-4">
                       <h3 className="text-sm font-medium text-gray-300 mb-2">Files</h3>
                       <div className="space-y-1">
@@ -519,7 +519,7 @@ Generated on: ${new Date().toLocaleString()}
                   <div className="flex-1 overflow-y-auto">
                     {codeBlocks.length > 0 && selectedFileIndex !== null && (
                       <div className="h-full flex flex-col">
-                        <div className="p-4 border-b border-white/10 bg-black/30 flex justify-between items-center">
+                        <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
                           <div className="flex items-center gap-2">
                             <span className="border border-gray-500 text-gray-300 rounded px-2 py-0.5 text-xs">
                               {codeBlocks[selectedFileIndex].language}
@@ -538,7 +538,7 @@ Generated on: ${new Date().toLocaleString()}
                             </button>
                           </div>
                         </div>
-                        <div className="flex-1 overflow-y-auto bg-black/20">
+                        <div className="flex-1 overflow-y-auto bg-black/30">
                           <SyntaxHighlighter
                             style={oneDark as any}
                             language={codeBlocks[selectedFileIndex].language}
@@ -560,7 +560,7 @@ Generated on: ${new Date().toLocaleString()}
                   <div className="space-y-4">
                     <div>
                       <h3 className="text-lg font-semibold text-white mb-2">Project Structure</h3>
-                      <div className="bg-black/30 rounded-lg p-4">
+                      <div className="bg-black/40 rounded-lg p-4">
                         <pre className="text-sm text-gray-300">
                           {Object.keys(projectStructure.files).map(filename => (
                             <div key={filename} className="flex items-center gap-2 mb-1">
@@ -587,7 +587,7 @@ Generated on: ${new Date().toLocaleString()}
                     
                     <div>
                       <h4 className="text-md font-medium text-white mb-2">Setup Instructions</h4>
-                      <div className="bg-black/30 rounded-lg p-4">
+                      <div className="bg-black/40 rounded-lg p-4">
                         <pre className="text-sm text-gray-300">
 {`1. Download the ZIP file
 2. Extract to your desired location
