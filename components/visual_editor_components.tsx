@@ -244,7 +244,17 @@ function ComponentRenderer({
 
   return (
     <div
-      className={`absolute cursor-move ${isSelected ? 'ring-2 ring-blue-500' : ''// visual-editor.tsx - Main Visual Editor Component
+      className={`absolute cursor-move ${isSelected ? 'ring-2 ring-blue-500' : ''}`}
+      onMouseDown={handleMouseDown}
+      style={{
+        left: component.bounds.x,
+        top: component.bounds.y,
+        width: component.bounds.width,
+        height: component.bounds.height
+      }}
+    >
+      {renderComponentContent()}
+    </div>
 "use client"
 
 import * as React from 'react';
