@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import React, { useState } from "react"
 import ReactMarkdown from "react-markdown"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
@@ -15,6 +15,7 @@ interface MessageBubbleProps {
 
 export default function MessageBubble({ message, isStreaming = false }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
+  const [displayedContent, setDisplayedContent] = useState("")
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(message.content)
@@ -24,13 +25,35 @@ export default function MessageBubble({ message, isStreaming = false }: MessageB
 
   const isUser = message.role === "user"
 
+  // Enhanced streaming effect - slower, smoother character-by-character reveal
+  React.useEffect(() => {
+    if (isStreaming && !isUser) {
+      let currentIndex = 0;
+      const content = message.content;
+      setDisplayedContent("");
+      
+      const streamInterval = setInterval(() => {
+        if (currentIndex < content.length) {
+          setDisplayedContent(content.slice(0, currentIndex + 1));
+          currentIndex++;
+        } else {
+          clearInterval(streamInterval);
+        }
+      }, 30); // Slower streaming - 30ms per character
+      
+      return () => clearInterval(streamInterval);
+    } else {
+      setDisplayedContent(message.content);
+    }
+  }, [message.content, isStreaming, isUser]);
+
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4 group`}>
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-6 group`}>
       <div
         className={`
-          max-w-[80%] rounded-2xl px-4 py-3 relative
+          max-w-[85%] rounded-2xl px-5 py-4 relative
           ${isUser ? "bg-purple-600 text-white" : "bg-black border border-white/20 text-white"}
-          ${isStreaming ? "animate-pulse" : ""}
+          ${isStreaming && !isUser ? "border-purple-500/50" : ""}
         `}
       >
         <ReactMarkdown
@@ -65,8 +88,13 @@ export default function MessageBubble({ message, isStreaming = false }: MessageB
             ),
           }}
         >
-          {message.content}
+          {displayedContent}
         </ReactMarkdown>
+        
+        {/* Streaming cursor */}
+        {isStreaming && !isUser && (
+          <span className="inline-block w-2 h-5 bg-purple-400 animate-pulse ml-1" />
+        )}
 
         {/* Copy button */}
         <Button

@@ -84,11 +84,41 @@ export default function InteractionPanel({
     }
   };
 
-  const suggestions = [
+  const chatSuggestions = [
     "unique app ideas",
-    "code a basic web app",
+    "code a basic web app", 
     "make an addicting web game",
     "show me sum interesting",
+  ];
+
+  const codeSuggestions = [
+    "Create a React component with TypeScript",
+    "Build a REST API with Node.js and Express",
+    "Design a responsive CSS layout with Flexbox",
+    "Implement authentication with JWT tokens",
+    "Create a database schema for an e-commerce app",
+    "Build a real-time chat application with WebSockets",
+    "Optimize performance for a large dataset",
+    "Set up CI/CD pipeline with GitHub Actions"
+  ];
+
+  const codePromptTemplates = [
+    {
+      title: "Component Creation",
+      template: "Create a [framework] component that [functionality]. Include:\n- TypeScript types\n- Props interface\n- Error handling\n- Unit tests\n- Documentation"
+    },
+    {
+      title: "API Development", 
+      template: "Build a [language] API for [purpose] with:\n- RESTful endpoints\n- Input validation\n- Error handling\n- Authentication\n- Database integration\n- API documentation"
+    },
+    {
+      title: "Full Stack App",
+      template: "Create a full-stack [type] application with:\n- Frontend: [frontend-tech]\n- Backend: [backend-tech]\n- Database: [database]\n- Authentication\n- Responsive design\n- Deployment configuration"
+    },
+    {
+      title: "Code Review",
+      template: "Review this code for:\n- Performance optimizations\n- Security vulnerabilities\n- Best practices\n- Code quality\n- Potential bugs\n- Refactoring suggestions\n\n[paste your code here]"
+    }
   ];
 
   const sampleImages = [
@@ -121,7 +151,7 @@ export default function InteractionPanel({
           <div className="flex justify-between items-center mb-4">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <div className="w-6 h-6 bg-gradient-to-r from-purple-500 to-blue-500 rounded flex items-center justify-center">
+                <div className="">
                   <Sparkles className="h-3 w-3 text-white" />
                 </div>
                 <span className="text-sm font-medium text-white/80">
@@ -129,10 +159,22 @@ export default function InteractionPanel({
                 </span>
               </div>
               <TabsList className="bg-black/40">
-                <TabsTrigger value="chat">Chat</TabsTrigger>
-                <TabsTrigger value="images">Code</TabsTrigger>
-                <TabsTrigger value="help">Images</TabsTrigger>
-                <TabsTrigger value="info">Info</TabsTrigger>
+                <TabsTrigger value="chat">
+                  <MessageSquare className="h-4 w-4 mr-2" />
+                  Chat
+                </TabsTrigger>
+                <TabsTrigger value="code">
+                  <Code className="h-4 w-4 mr-2" />
+                  Code
+                </TabsTrigger>
+                <TabsTrigger value="images">
+                  <ImageIcon className="h-4 w-4 mr-2" />
+                  Images
+                </TabsTrigger>
+                <TabsTrigger value="info">
+                  <HelpCircle className="h-4 w-4 mr-2" />
+                  Info
+                </TabsTrigger>
               </TabsList>
             </div>
 
@@ -228,7 +270,7 @@ export default function InteractionPanel({
 
             {/* Suggestions */}
             <div className="flex flex-wrap gap-2 mb-4">
-              {suggestions.map((suggestion, index) => (
+              {chatSuggestions.map((suggestion, index) => (
                 <Button
                   key={index}
                   variant="secondary"
@@ -288,6 +330,116 @@ export default function InteractionPanel({
                   )}
                 </Button>
               )}
+            </form>
+          </TabsContent>
+
+          <TabsContent value="code" className="m-0">
+            {/* Code Mode Header */}
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Code className="h-4 w-4 text-blue-400" />
+                <span className="text-sm font-medium text-white">Code Assistant</span>
+              </div>
+              <Badge variant="outline" className="text-xs">
+                Enhanced Prompting
+              </Badge>
+            </div>
+
+            {/* Quick Templates */}
+            <div className="mb-4">
+              <h4 className="text-xs font-medium text-white/80 mb-2">Quick Templates</h4>
+              <div className="grid grid-cols-2 gap-2">
+                {codePromptTemplates.map((template, index) => (
+                  <Button
+                    key={index}
+                    variant="outline"
+                    size="sm"
+                    className="text-xs bg-black/20 hover:bg-black/40 border-white/20 text-left justify-start h-auto p-2"
+                    onClick={() => setInput(template.template)}
+                    disabled={isProcessing}
+                  >
+                    <div>
+                      <div className="font-medium">{template.title}</div>
+                      <div className="text-xs text-white/60 mt-1 line-clamp-2">
+                        {template.template.split('\n')[0]}
+                      </div>
+                    </div>
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            {/* Code Suggestions */}
+            <div className="mb-4">
+              <h4 className="text-xs font-medium text-white/80 mb-2">Popular Requests</h4>
+              <div className="flex flex-wrap gap-2">
+                {codeSuggestions.slice(0, 4).map((suggestion, index) => (
+                  <Button
+                    key={index}
+                    variant="secondary"
+                    size="sm"
+                    className="text-xs bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/20 transition-all duration-200"
+                    onClick={() => handleSuggestionClick(suggestion)}
+                    disabled={isProcessing}
+                  >
+                    {suggestion}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            {/* Enhanced Code Input */}
+            <form onSubmit={handleSubmit} className="space-y-3">
+              <div className="relative">
+                <Textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
+                  className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-sm"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                      e.preventDefault();
+                      handleSubmit(e);
+                    }
+                  }}
+                  disabled={isProcessing}
+                />
+                <div className="absolute right-3 top-3">
+                  <Code className="h-4 w-4 text-blue-400" />
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-white/60">
+                  Tip: Use Ctrl+Enter to submit, Enter for new line
+                </div>
+                {isProcessing && onStopGeneration ? (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={onStopGeneration}
+                  >
+                    <Square className="h-4 w-4 mr-2" />
+                    Stop
+                  </Button>
+                ) : (
+                  <Button
+                    type="submit"
+                    size="sm"
+                    className="bg-blue-600 hover:bg-blue-700"
+                    disabled={isProcessing || !input.trim()}
+                  >
+                    {isProcessing ? (
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    ) : (
+                      <Code className="h-4 w-4 mr-2" />
+                    )}
+                    {isProcessing ? "Generating..." : "Generate Code"}
+                  </Button>
+                )}
+              </div>
             </form>
           </TabsContent>
 
@@ -375,18 +527,49 @@ export default function InteractionPanel({
                   </div>
 
                   <div className="flex items-start gap-3">
-                  <Settings className="h-5 w-5 text-blue-400 mt-0.5" />
-                  <div>
-                    <h3 className="font-medium"></h3>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="secondary" className="bg-black/40">
-                        N/A
-                      </Badge>
-                      <span className="text-xs text-white/60">
-                        Interface adapts to conversation tone
-                      </span>
+                    <Code className="h-5 w-5 text-blue-400 mt-0.5" />
+                    <div>
+                      <h3 className="font-medium">Code Features</h3>
+                      <div className="space-y-2 mt-2">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="secondary" className="bg-black/40 text-xs">
+                            Visual Editor
+                          </Badge>
+                          <span className="text-xs text-white/60">
+                            Drag & drop interface builder
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="secondary" className="bg-black/40 text-xs">
+                            Live Preview
+                          </Badge>
+                          <span className="text-xs text-white/60">
+                            Real-time code execution
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="secondary" className="bg-black/40 text-xs">
+                            Multi-Framework
+                          </Badge>
+                          <span className="text-xs text-white/60">
+                            React, Vue, Angular, Svelte & more
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
+
+                  <div className="flex items-start gap-3">
+                    <Settings className="h-5 w-5 text-green-400 mt-0.5" />
+                    <div>
+                      <h3 className="font-medium">Keyboard Shortcuts</h3>
+                      <div className="space-y-1 mt-2 text-xs text-white/60">
+                        <div><kbd className="bg-black/40 px-1 rounded">Ctrl+Enter</kbd> - Submit in Code mode</div>
+                        <div><kbd className="bg-black/40 px-1 rounded">Shift+Enter</kbd> - New line in chat</div>
+                        <div><kbd className="bg-black/40 px-1 rounded">Ctrl+K</kbd> - Focus input</div>
+                        <div><kbd className="bg-black/40 px-1 rounded">Esc</kbd> - Clear input</div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </CardContent>

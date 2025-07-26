@@ -102,8 +102,8 @@ export function ChatPanel({
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{ paddingBottom: "200px" }}>
+    <div className="flex flex-col h-full relative">
+      <div className="flex-1 overflow-y-auto p-4 space-y-2" style={{ paddingBottom: "240px" }}>
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <p className="text-lg">Start a conversation</p>
@@ -115,25 +115,31 @@ export function ChatPanel({
           <MessageBubble
             key={m.id}
             message={m}
+            isStreaming={isLoading && m.id === messages[messages.length - 1]?.id}
           />
         ))}
         {isLoading && (
           <MessageBubble
-            message={{ id: "loading", role: "assistant", content: "..." }}
-            isStreaming={isStreaming}
+            message={{ id: "loading", role: "assistant", content: "Thinking..." }}
+            isStreaming={true}
           />
         )}
         <div ref={messagesEndRef} />
+        {/* Extra padding div for better scrolling */}
+        <div className="h-20" />
       </div>
 
-      {/* Conditionally render AccessibilityControls */}
+      {/* Conditionally render AccessibilityControls as overlay */}
       {isAccessibilityOptionsOpen && (
-        <AccessibilityControls
-          onClose={handleToggleAccessibilityOptions} // Pass the handler to close the panel
-          messages={messages} // Pass messages for transcript display
-          voiceEnabled={voiceEnabled}
-          onVoiceToggle={onVoiceToggle}
-        />
+        <div className="absolute inset-0 z-50">
+          <AccessibilityControls
+            onClose={handleToggleAccessibilityOptions}
+            messages={messages}
+            voiceEnabled={voiceEnabled}
+            onVoiceToggle={onVoiceToggle}
+            isProcessing={isLoading}
+          />
+        </div>
       )}
 
       <InteractionPanel
