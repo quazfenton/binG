@@ -52,14 +52,6 @@ export interface StreamingResponse {
 
 // Available LLM Providers Configuration
 export const PROVIDERS: Record<string, LLMProvider> = {
-  chutes: {
-    id: 'chutes',
-    name: 'Chutes',
-    models: ['deepseek-ai/DeepSeek-R1-0528', 'deepseek-ai/DeepSeek-Chat-V3-0324', 'tngtech/DeepSeek-TNG-R1T2-Chimera', 'gemma-3-27b-it', 'meta-llama/Llama-4-Maverick', 'meta-llama/Llama-3.3-70B-Instruct'],
-    supportsStreaming: true,
-    maxTokens: 10096,
-    description: 'Chutes AI with high-performance models'
-  },
   openrouter: {
     id: 'openrouter',
     name: 'OpenRouter',
@@ -68,6 +60,22 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     maxTokens: 10096,
     description: 'Access a variety of models through a single API'
   },
+  google: {
+    id: 'google',
+    name: 'Google',
+    models: ['gemini-2.5-flash-preview-05-20', 'gemini-pro', 'gemini-pro-vision', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-vision'],
+    supportsStreaming: true,
+    maxTokens: 80048,
+    description: 'Google's multimodal AI models'
+  },  
+  chutes: {
+    id: 'chutes',
+    name: 'Chutes',
+    models: ['deepseek-ai/DeepSeek-R1-0528', 'deepseek-ai/DeepSeek-Chat-V3-0324', 'tngtech/DeepSeek-TNG-R1T2-Chimera', 'gemma-3-27b-it', 'meta-llama/Llama-4-Maverick', 'meta-llama/Llama-3.3-70B-Instruct'],
+    supportsStreaming: true,
+    maxTokens: 10096,
+    description: 'Chutes AI with high-performance models'
+  },
   anthropic: {
     id: 'anthropic',
     name: 'Anthropic',
@@ -75,14 +83,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: true,
     maxTokens: 10096,
     description: 'Constitutional AI with strong reasoning capabilities'
-  },
-  google: {
-    id: 'google',
-    name: 'Google',
-    models: ['gemini-2.5-flash-preview-05-20', 'gemini-pro', 'gemini-pro-vision', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-vision'],
-    supportsStreaming: true,
-    maxTokens: 80048,
-    description: 'Google\'s multimodal AI models'
   },
   cohere: {
     id: 'cohere',
@@ -119,10 +119,10 @@ export const PROVIDERS: Record<string, LLMProvider> = {
 }
 
 class LLMService {
-  private chutes: OpenAI | null = null
   private openrouter: OpenAI | null = null
-  private anthropic: Anthropic | null = null
   private google: GoogleGenerativeAI | null = null
+  private chutes: OpenAI | null = null
+  private anthropic: Anthropic | null = null
   private cohere: CohereClient | null = null
   private together: Together | null = null
   private replicate: Replicate | null = null
@@ -133,14 +133,7 @@ class LLMService {
   }
 
   private initializeProviders() {
-    // Initialize Chutes
-    if (process.env.CHUTES_API_KEY) {
-      this.chutes = new OpenAI({
-        apiKey: process.env.CHUTES_API_KEY,
-        baseURL: 'https://llm.chutes.ai/v1',
-      })
-    }
-
+    
     // Initialize OpenRouter (using OpenAI SDK)
     if (process.env.OPENAI_API_KEY) {
       this.openrouter = new OpenAI({
@@ -149,16 +142,23 @@ class LLMService {
       })
     }
 
+        // Initialize Google
+    if (process.env.GOOGLE_API_KEY) {
+      this.google = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY)
+    }
+    // Initialize Chutes
+    if (process.env.CHUTES_API_KEY) {
+      this.chutes = new OpenAI({
+        apiKey: process.env.CHUTES_API_KEY,
+        baseURL: 'https://llm.chutes.ai/v1',
+      })
+    }
+
     // Initialize Anthropic
     if (process.env.ANTHROPIC_API_KEY) {
       this.anthropic = new Anthropic({
         apiKey: process.env.ANTHROPIC_API_KEY,
       })
-    }
-
-    // Initialize Google
-    if (process.env.GOOGLE_API_KEY) {
-      this.google = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY)
     }
 
     // Initialize Cohere
@@ -194,10 +194,10 @@ if (process.env.PORTKEY_API_KEY && process.env.PORTKEY_VIRTUAL_KEY) {
   getAvailableProviders(): LLMProvider[] {
     const available: LLMProvider[] = []
 
-    if (this.chutes) available.push(PROVIDERS.chutes)
     if (this.openrouter) available.push(PROVIDERS.openrouter)
+    if (this.google) available.push(PROVIDERS.google)    
+    if (this.chutes) available.push(PROVIDERS.chutes)      
     if (this.anthropic) available.push(PROVIDERS.anthropic)
-    if (this.google) available.push(PROVIDERS.google)
     if (this.cohere) available.push(PROVIDERS.cohere)
     // if (this.together) available.push(PROVIDERS.together)
     if (this.replicate) available.push(PROVIDERS.replicate)
@@ -237,7 +237,7 @@ async generateResponse(request: LLMRequest): Promise<LLMResponse> {
   }
 
 async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingResponse> {
-    const { provider, model, messages, temperature = 0.7, maxTokens = 4096 } = request
+    const { provider, model, messages, temperature = 0.7, maxTokens = 8096 } = request
 
     try {
       switch (provider) {
