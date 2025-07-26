@@ -163,7 +163,12 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     const dependencies: string[] = [];
     let framework: 'react' | 'vue' | 'angular' | 'vanilla' = 'vanilla';
     
-    blocks.forEach((block) => {
+    for (const block of blocks) {
+      // Skip empty files first
+      if (!block.code.trim()) {
+        continue;
+      }
+
       let finalFilename = block.filename; // Start with the filename from the block
 
       // If the filename is a generic placeholder, try to infer a better one.
@@ -185,11 +190,25 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
         } else if (block.language === "typescript" && block.code.includes("@Component")) {
           // For Angular components
           finalFilename = "src/app/app.component.ts";
+        } else if (block.language === "shell" || block.language === "bash") {
+          finalFilename = `script-${block.index}.sh`;
         } else {
           // If no specific inference, use the original filename or generate a default.
           finalFilename = finalFilename || `file-${block.index}.${getFileExtension(block.language)}`;
         }
       }
+      
+      // Clean up filenames - remove any special characters and comments
+      finalFilename = finalFilename
+        .replace(/^[\/\\]+/, '') // Remove leading slashes/backslashes
+        .replace(/^[\/\\]{2,}\s*/, '') // Remove leading comment slashes
+        .replace(/^#\s*/, '') // Remove leading # comments
+        .replace(/^\/\*\s*|\s*\*\/$/, '') // Remove block comments
+        .replace(/^\s+|\s+$/, '') // Trim whitespace
+        .replace(/[^a-zA-Z0-9_\-.\/\\]/g, '_') // Replace special characters
+        .replace(/(\.\.\/|\.\/)+/g, '') // Remove relative paths
+        .trim();
+
       // Ensure a filename is always set, even if it's a default one.
       if (!finalFilename) {
            finalFilename = `file-${block.index}.${getFileExtension(block.language)}`;
@@ -229,7 +248,7 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
           framework = 'angular';
         }
       }
-    })
+    }
     
     const structure = {
       name: "Generated Project",
@@ -297,9 +316,25 @@ Generated on: ${new Date().toLocaleString()}
         // Map files to Sandpack format
         const sandpackFiles = Object.entries(projectStructure.files).reduce(
           (acc, [path, content]) => {
-            // Normalize paths to start with /src if they don't have a directory
-            const normalizedPath = path.startsWith('src/') ? `/${path}` : `/src/${path}`;
-            acc[normalizedPath] = { code: content };
+            // Skip empty files
+            if (!content.trim()) return acc;
+            
+            // Normalize paths
+            let normalizedPath = path
+              .replace(/^[\/\\]+/, '')
+              .replace(/^[\/\\]{2,}\s*/, '')
+              .replace(/^#\s*/, '')
+              .replace(/^\/\*\s*|\s*\*\/$/, '')
+              .replace(/^\s+|\s+$/, '')
+              .replace(/[^a-zA-Z0-9_\-.\/\\]/g, '_')
+              .replace(/(\.\.\/|\.\/)+/g, '')
+              .trim();
+            
+            // Ensure src/ prefix for framework projects
+            if (!normalizedPath.startsWith('src/') && !normalizedPath.startsWith('app/')) {
+              normalizedPath = `src/${normalizedPath}`;
+            }
+            acc[`/${normalizedPath}`] = { code: content };
             return acc;
           },
           {} as Record<string, { code: string }>
