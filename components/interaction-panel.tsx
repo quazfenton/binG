@@ -32,7 +32,6 @@ import {
   AlertCircle,
   Code,
   GripHorizontal,
-  RotateCcw,
   Maximize2,
   Minimize2,
   Brain,
@@ -488,16 +487,6 @@ export default function InteractionPanel({
             </div>
 
             <div className="flex space-x-2">
-              {onRotateProvider && (
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={onRotateProvider}
-                  title="Rotate to Next Provider"
-                >
-                  <RotateCcw className="h-4 w-4" />
-                </Button>
-              )}
               <Button
                 variant="outline"
                 size="icon"
@@ -620,9 +609,23 @@ export default function InteractionPanel({
                   }}
                   disabled={isProcessing}
                 />
-                <div className="absolute right-3 top-3">
-                  <Sparkles className="h-4 w-4 text-purple-400" />
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const enhancePrompt = `Please enhance and improve this message to be more clear, detailed, and effective:\n\n"${input}"\n\nProvide an enhanced version that is:
+- More specific and detailed
+- Better structured
+- More engaging
+- Clearer in intent
+- Professional yet conversational`;
+                    setInput(enhancePrompt);
+                  }}
+                  className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
+                  title="Enhance this message"
+                  disabled={!input.trim() || isProcessing}
+                >
+                  <Sparkles className={`h-4 w-4 ${input.trim() && !isProcessing ? 'text-purple-400 hover:text-purple-300' : 'text-gray-500'}`} />
+                </button>
               </div>
               {isProcessing && onStopGeneration ? (
                 <Button
@@ -725,9 +728,23 @@ export default function InteractionPanel({
                   }}
                   disabled={isProcessing}
                 />
-                <div className="absolute right-3 top-3">
-                  <Code className="h-4 w-4 text-blue-400" />
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const enhancePrompt = `Please enhance and improve this coding request to be more detailed and specific:\n\n"${input}"\n\nProvide an enhanced version that includes:
+- Specific framework/language requirements
+- Detailed feature specifications
+- Performance and security considerations
+- Code structure and architecture preferences
+- Testing and documentation requirements`;
+                    setInput(enhancePrompt);
+                  }}
+                  className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
+                  title="Enhance this coding request"
+                  disabled={!input.trim() || isProcessing}
+                >
+                  <Code className={`h-4 w-4 ${input.trim() && !isProcessing ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500'}`} />
+                </button>
               </div>
               
               <div className="flex items-center justify-between">
