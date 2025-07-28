@@ -66,7 +66,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     models: ['gemini-2.5-flash-preview-05-20', 'gemini-pro', 'gemini-pro-vision', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-vision'],
     supportsStreaming: true,
     maxTokens: 80048,
-    description: 'By Google, leading high context pro and flash multimodal AI models'
+    description: 'Google's multimodal AI models'
   },  
   chutes: {
     id: 'chutes',

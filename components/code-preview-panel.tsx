@@ -5,6 +5,8 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Input } from '../components/ui/input';
+import { Button } from '../components/ui/button';
 import { 
   Code as CodeIcon,
   FileText,
@@ -14,7 +16,9 @@ import {
   RefreshCw,
   AlertCircle,
   Eye,
-  Edit
+  Edit,
+  Check,
+  X
 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
@@ -54,6 +58,8 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [projectStructure, setProjectStructure] = useState<ProjectStructure | null>(null)
   const [selectedFileIndex, setSelectedFileIndex] = useState<number>(0)
+  const [editingFileIndex, setEditingFileIndex] = useState<number | null>(null)
+  const [editingFileName, setEditingFileName] = useState<string>('')
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
   const getFileExtension = (language: string): string => {
@@ -133,34 +139,34 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     // This logic should *add* prefixes only if they are not already present.
     if (language === "html") {
       // For HTML, if it's a root file or contains <html>, standardize to index.html
-      if (finalFilename.includes("<html") || finalFilename === "index.html") {
+     // For other HTML files, assume they are components or views, often in src/ or app/
+      if (finalFilename.includes("/")) {
+        finalFilename = finalFilename;
+      } else {
         finalFilename = "index.html";
-      } else if (!finalFilename.startsWith('src/') && !finalFilename.startsWith('public/') && !finalFilename.startsWith('app/')) {
-        // For other HTML files, assume they are components or views, often in src/ or app/
-        finalFilename = `src/${finalFilename}`;
       }
     } else if (language === "css") {
-      if (finalFilename === ".css" || finalFilename === "css" || !finalFilename.includes('.')) {
+      if (finalFilename.includes('/')) {
+        finalFilename = finalFilename;
+      } else if (finalFilename === "styles" || finalFilename.includes('css')) {        
         finalFilename = "styles.css";
-      } else if (!finalFilename.startsWith('src/') && !finalFilename.startsWith('public/') && !finalFilename.startsWith('styles/')) {
-        finalFilename = `src/${finalFilename}`;
       }
     } else if (language === "javascript") {
       // If it's a common entry point or app file, standardize its path
       if ((finalFilename.includes("App") || finalFilename.includes("index") || finalFilename.includes("main")) && !finalFilename.startsWith('src/')) {
         finalFilename = `src/App.js`; // Standardize to src/App.js
       } else if (!finalFilename.startsWith('src/') && !finalFilename.startsWith('lib/') && !finalFilename.startsWith('public/')) {
-        finalFilename = `src/${finalFilename}`;
+        finalFilename = finalFilename;
       }
     } else if (language === "jsx" || language === "tsx") {
       // If the cleaned filename already has a valid path (e.g., 'src/App.jsx', 'components/Greeting.jsx')
       // or is a common root file, use it directly.
-      if (finalFilename.startsWith('src/') || finalFilename.startsWith('components/')) {
         // Ensure it has the correct extension
         if (!finalFilename.endsWith(`.${expectedExt}`)) {
           finalFilename = `${finalFilename.split('.')[0]}.${expectedExt}`;
         }
-      } else if (finalFilename.includes("App") || finalFilename.includes("index") || finalFilename.includes("main")) {
+       //if (finalFilename.startsWith('src/') || finalFilename.startsWith('components/')) {
+       if (finalFilename.includes("App") || finalFilename.includes("index") || finalFilename.includes("main")) {
         // For main app files, standardize to src/App.jsx or src/App.tsx
         finalFilename = `src/App.${expectedExt}`;
       } else {
@@ -171,8 +177,8 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
           finalFilename = `${finalFilename.split('.')[0]}.${expectedExt}`;
         }
       }
-    } else if (language === "vue") {
-      finalFilename = "src/App.vue";
+  //  } else if (language === "vue") {
+     // finalFilename = "src/App.vue";
     } else if (language === "typescript") {
       // For Angular components, ensure 'src/app/' prefix and correct extension
       if (finalFilename.includes('.component.') && !finalFilename.startsWith('src/app/')) {
@@ -482,6 +488,54 @@ Generated on: ${new Date().toLocaleString()}
     URL.revokeObjectURL(url)
   }
 
+  // Filename editing functions
+  const startEditingFilename = (index: number, currentFilename: string) => {
+    setEditingFileIndex(index)
+    setEditingFileName(currentFilename)
+  }
+
+  const cancelEditingFilename = () => {
+    setEditingFileIndex(null)
+    setEditingFileName('')
+  }
+
+  const saveFilename = (index: number, newFilename: string) => {
+    if (!newFilename.trim()) {
+      cancelEditingFilename()
+      return
+    }
+
+    // Update the filename in codeBlocks
+    const updatedBlocks = codeBlocks.map((block, i) => {
+      if (i === index) {
+        return { ...block, filename: newFilename.trim() }
+      }
+      return block
+    })
+
+    // Update project structure if it exists
+    if (projectStructure) {
+      const oldFilename = codeBlocks[index].filename
+      const newFiles = { ...projectStructure.files }
+      
+      if (oldFilename && newFiles[oldFilename]) {
+        // Move the content to the new filename
+        newFiles[newFilename.trim()] = newFiles[oldFilename]
+        delete newFiles[oldFilename]
+        
+        setProjectStructure({
+          ...projectStructure,
+          files: newFiles
+        })
+      }
+    }
+
+    // Note: In a real implementation, you would also need to update the original messages
+    // or have a callback to update the parent component's state
+    
+    cancelEditingFilename()
+  }
+
   const renderLivePreview = () => {
     // Enhanced framework support with better template mapping
     const getSandpackTemplate = (framework: string) => {
@@ -726,7 +780,7 @@ export default {
             <div className="text-center">
               <CodeIcon className="w-16 h-16 mx-auto mb-4 text-gray-400" />
               <p className="text-gray-400">No HTML code found for live preview</p>
-              <p className="text-sm text-gray-600 mt-2">Add HTML code to enable live preview</p>
+              <p className="text-sm text-gray-600 mt-2">Generate code to enable live preview</p>
               {codeBlocks.length > 0 && (
                 <div className="mt-4">
                   <p className="text-xs text-gray-500 mb-2">Available code blocks:</p>
@@ -948,19 +1002,76 @@ export default {
                       <div className="space-y-1">
                         {codeBlocks.map((block, index) => (
                           <div
-                            className={`flex items-center w-full justify-start p-2 cursor-pointer ${
+                            className={`flex items-center w-full justify-between p-2 group ${
                               selectedFileIndex === index ? 'bg-gray-700' : 'hover:bg-gray-800'
                             }`}
                             key={index}
-                            onClick={() => setSelectedFileIndex(index)}
                           >
-                            <FileText className="w-4 h-4 mr-2" />
-                            <span className="truncate">{block.filename}</span>
-                            {block.isError && (
-                              <span className="ml-auto text-red-500">
-                                <AlertCircle className="w-4 h-4" />
-                              </span>
-                            )}
+                            <div 
+                              className="flex items-center flex-1 cursor-pointer"
+                              onClick={() => setSelectedFileIndex(index)}
+                            >
+                              <FileText className="w-4 h-4 mr-2 flex-shrink-0" />
+                              
+                              {editingFileIndex === index ? (
+                                <div className="flex items-center gap-1 flex-1">
+                                  <Input
+                                    value={editingFileName}
+                                    onChange={(e) => setEditingFileName(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        saveFilename(index, editingFileName)
+                                      } else if (e.key === 'Escape') {
+                                        cancelEditingFilename()
+                                      }
+                                    }}
+                                    className="h-6 text-xs bg-gray-600 border-gray-500 text-white flex-1"
+                                    autoFocus
+                                    onBlur={() => saveFilename(index, editingFileName)}
+                                  />
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => saveFilename(index, editingFileName)}
+                                    className="h-6 w-6 p-0 text-green-400 hover:text-green-300"
+                                  >
+                                    <Check className="w-3 h-3" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={cancelEditingFilename}
+                                    className="h-6 w-6 p-0 text-red-400 hover:text-red-300"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </Button>
+                                </div>
+                              ) : (
+                                <span className="truncate flex-1">{block.filename}</span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1">
+                              {editingFileIndex !== index && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    startEditingFilename(index, block.filename || '')
+                                  }}
+                                  className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-white transition-opacity"
+                                >
+                                  <Edit className="w-3 h-3" />
+                                </Button>
+                              )}
+                              
+                              {block.isError && (
+                                <span className="text-red-500">
+                                  <AlertCircle className="w-4 h-4" />
+                                </span>
+                              )}
+                            </div>
                           </div>
                         ))}
                       </div>

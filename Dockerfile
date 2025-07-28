@@ -1,38 +1,33 @@
-# Use an official Node.js runtime as the base image
+# Base stage
 FROM node:18-alpine AS base
 
-# Install dependencies only when needed
+# Deps stage
 FROM base AS deps
 WORKDIR /app
-
-# Copy package.json and package-lock.json (or yarn.lock)
 COPY package*.json ./
-
-# Install dependencies
+RUN npm install -g pnpm
 RUN pnpm install
 
-# Rebuild the source code only when needed
+# Builder stage
 FROM base AS builder
 WORKDIR /app
+RUN npm install -g pnpm
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build the Next.js app
 RUN pnpm run build
 
-# Production image, copy only the necessary artifacts
-FROM base AS runner
+# Production stage
+FROM node:18-alpine AS runner
 WORKDIR /app
 
 # Set environment to production
 ENV NODE_ENV=production
 
-# Copy only the necessary files for the standalone build
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
 
-# Expose the port the app runs on (default for Next.js is 3000)
+RUN npm install -g pnpm
 EXPOSE 3000
-
-# Start the Next.js app
-CMD ["node", "server.js"]
+CMD ["pnpm", "start"]
