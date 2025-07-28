@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import type { Message, ConversationContext } from '../types';
+import { toast } from "sonner";
 import {
   Select,
   SelectContent,
@@ -46,6 +47,17 @@ import {
   Gamepad2,
   Shield,
   Zap,
+  Database,
+  CheckCircle,
+  Brain,
+  FileCode,
+  Search,
+  FolderPlus,
+  Hash,
+  RefreshCw,
+  Package,
+  GitBranch,
+  Key,
 } from "lucide-react";
 import type { LLMProvider } from '../lib/api/llm-providers';
 
@@ -96,6 +108,8 @@ export default function InteractionPanel({
   const [isDraggingSide, setIsDraggingSide] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isAttachedToEdge, setIsAttachedToEdge] = useState(false);
+  const [attachedSide, setAttachedSide] = useState<'bottom' | 'left' | 'right'>('bottom');
+  const [panelPosition, setPanelPosition] = useState({ x: 0, y: 0 });
 
   // Plugin modules with randomization
   const pluginModules = useMemo(() => {
@@ -235,6 +249,94 @@ export default function InteractionPanel({
         icon: Palette,
         color: 'text-purple-500',
         action: () => setInput('Create UX design including: 1) User journey mapping 2) Wireframes & mockups 3) Usability principles 4) Accessibility guidelines 5) Design system recommendations\n\nTarget Users: \nPlatform: \nKey Features: ')
+      },
+      {
+        id: 'database-architect',
+        name: 'Database Architect',
+        description: 'Design database schemas, optimize queries, and data modeling',
+        icon: Database,
+        color: 'text-green-500',
+        action: () => setInput('Design database architecture including: 1) Entity relationship diagram 2) Table schemas with constraints 3) Indexing strategy 4) Query optimization 5) Migration scripts\n\nData Requirements: \nExpected Scale: \nDatabase Type: ')
+      },
+      {
+        id: 'test-engineer',
+        name: 'Test Engineer',
+        description: 'Create comprehensive test suites, automation, and QA strategies',
+        icon: CheckCircle,
+        color: 'text-emerald-500',
+        action: () => setInput('Create testing strategy including: 1) Unit test cases 2) Integration tests 3) E2E test scenarios 4) Test automation setup 5) Performance testing\n\nApplication Type: \nTesting Framework: \nCoverage Goals: ')
+      },
+      {
+        id: 'ai-trainer',
+        name: 'AI/ML Engineer',
+        description: 'Machine learning models, data pipelines, and AI solutions',
+        icon: Brain,
+        color: 'text-cyan-500',
+        action: () => setInput('Design AI/ML solution including: 1) Data preprocessing pipeline 2) Model architecture 3) Training strategy 4) Evaluation metrics 5) Deployment plan\n\nProblem Type: \nData Available: \nPerformance Requirements: ')
+      },
+      {
+        id: 'code-generator',
+        name: 'Code Generator',
+        description: 'Generate complete applications with multiple files',
+        icon: FileCode,
+        color: 'text-blue-400',
+        action: () => setInput('Generate a complete application with the following structure:\n\n```\nProject Structure:\n- Frontend (React/Vue/Angular)\n- Backend (Node.js/Python/Go)\n- Database schema\n- API endpoints\n- Configuration files\n- Documentation\n```\n\nApplication Type: \nTech Stack: \nFeatures Required: ')
+      },
+      {
+        id: 'file-analyzer',
+        name: 'File Analyzer',
+        description: 'Analyze and optimize existing code files',
+        icon: Search,
+        color: 'text-orange-500',
+        action: () => setInput('Analyze the provided code and generate:\n\n1. **Code Quality Report**\n   - Performance bottlenecks\n   - Security vulnerabilities\n   - Best practice violations\n\n2. **Optimization Suggestions**\n   - Refactoring opportunities\n   - Performance improvements\n   - Memory optimization\n\n3. **Enhanced Version**\n   - Optimized code with comments\n   - Unit tests\n   - Documentation\n\nPaste your code below:\n```\n\n```')
+      },
+      {
+        id: 'project-scaffolder',
+        name: 'Project Scaffolder',
+        description: 'Create complete project templates with best practices',
+        icon: FolderPlus,
+        color: 'text-green-400',
+        action: () => setInput('Create a complete project scaffold including:\n\n📁 **Project Structure**\n- Organized folder hierarchy\n- Configuration files\n- Environment setup\n\n🔧 **Development Tools**\n- Build scripts\n- Linting configuration\n- Testing setup\n\n📚 **Documentation**\n- README with setup instructions\n- API documentation\n- Contributing guidelines\n\nProject Type: \nFramework: \nDeployment Target: ')
+      },
+      {
+        id: 'regex-builder',
+        name: 'Regex Builder',
+        description: 'Build and test complex regular expressions',
+        icon: Hash,
+        color: 'text-yellow-500',
+        action: () => setInput('Create a regex pattern for:\n\n**Pattern Requirements:**\n- What you want to match\n- What you want to exclude\n- Specific format requirements\n\n**Output will include:**\n- Regex pattern with explanation\n- Test cases with examples\n- Code snippets for different languages\n- Alternative approaches\n\nDescribe what you want to match: ')
+      },
+      {
+        id: 'data-transformer',
+        name: 'Data Transformer',
+        description: 'Convert data between formats (JSON, CSV, XML, etc.)',
+        icon: RefreshCw,
+        color: 'text-purple-400',
+        action: () => setInput('Transform data between formats:\n\n**Supported Formats:**\n- JSON ↔ CSV ↔ XML ↔ YAML\n- Database schemas\n- API responses\n- Configuration files\n\n**Features:**\n- Format validation\n- Structure optimization\n- Data cleaning\n- Schema generation\n\nSource Format: \nTarget Format: \nPaste your data:\n```\n\n```')
+      },
+      {
+        id: 'docker-composer',
+        name: 'Docker Composer',
+        description: 'Generate Docker configurations and compose files',
+        icon: Package,
+        color: 'text-blue-600',
+        action: () => setInput('Generate Docker configuration:\n\n🐳 **Docker Setup**\n- Multi-stage Dockerfile\n- Docker Compose with services\n- Environment configuration\n- Volume and network setup\n\n📦 **Services to Include**\n- Application containers\n- Database services\n- Caching layers\n- Reverse proxy\n\n🔧 **Production Ready**\n- Health checks\n- Resource limits\n- Security best practices\n- Logging configuration\n\nApplication Stack: \nServices Needed: \nEnvironment: ')
+      },
+      {
+        id: 'git-workflow',
+        name: 'Git Workflow',
+        description: 'Generate Git hooks, workflows, and automation scripts',
+        icon: GitBranch,
+        color: 'text-orange-600',
+        action: () => setInput('Create Git workflow automation:\n\n🌿 **Branch Strategy**\n- Branching model (GitFlow/GitHub Flow)\n- Branch protection rules\n- Merge strategies\n\n🔄 **CI/CD Pipeline**\n- GitHub Actions / GitLab CI\n- Automated testing\n- Deployment workflows\n\n🪝 **Git Hooks**\n- Pre-commit hooks\n- Commit message validation\n- Code quality checks\n\n📋 **Templates**\n- PR/MR templates\n- Issue templates\n- Contributing guidelines\n\nRepository Type: \nCI/CD Platform: \nTeam Size: ')
+      },
+      {
+        id: 'env-manager',
+        name: 'Environment Manager',
+        description: 'Generate environment configurations and secrets management',
+        icon: Key,
+        color: 'text-indigo-500',
+        action: () => setInput('Setup environment management:\n\n🔐 **Environment Variables**\n- Development, staging, production configs\n- Secret management strategy\n- Environment validation\n\n🛡️ **Security**\n- API key rotation\n- Encrypted secrets\n- Access control\n\n📁 **Configuration Files**\n- .env templates\n- Docker environment files\n- Kubernetes secrets\n- Cloud provider configs\n\n🔄 **Deployment**\n- Environment promotion\n- Configuration drift detection\n- Rollback strategies\n\nDeployment Platform: \nSecrets to Manage: \nEnvironments Needed: ')
       }
     ];
 
@@ -246,11 +348,12 @@ export default function InteractionPanel({
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
 
-  // Drag handlers for resizing panel
+  // Drag handlers for resizing and repositioning panel
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     setIsDragging(true);
     dragStartY.current = e.clientY;
     dragStartHeight.current = panelHeight;
+    dragStartX.current = e.clientX;
     e.preventDefault();
   }, [panelHeight]);
 
@@ -258,9 +361,37 @@ export default function InteractionPanel({
     if (!isDragging) return;
     
     const deltaY = dragStartY.current - e.clientY;
-    const newHeight = Math.max(100, dragStartHeight.current + deltaY);
-    setPanelHeight(newHeight);
-  }, [isDragging]);
+    const deltaX = e.clientX - dragStartX.current;
+    
+    // Check for side attachment based on mouse position
+    const windowWidth = window.innerWidth;
+    const windowHeight = window.innerHeight;
+    const threshold = 50; // pixels from edge to trigger attachment
+    
+    if (e.clientX < threshold) {
+      // Attach to left side
+      setIsAttachedToEdge(true);
+      setAttachedSide('left');
+      setPanelWidth(Math.max(300, Math.min(600, windowWidth * 0.3)));
+    } else if (e.clientX > windowWidth - threshold) {
+      // Attach to right side
+      setIsAttachedToEdge(true);
+      setAttachedSide('right');
+      setPanelWidth(Math.max(300, Math.min(600, windowWidth * 0.3)));
+    } else if (e.clientY > windowHeight - threshold) {
+      // Attach to bottom
+      setIsAttachedToEdge(true);
+      setAttachedSide('bottom');
+      const newHeight = Math.max(100, dragStartHeight.current + deltaY);
+      setPanelHeight(newHeight);
+    } else {
+      // Floating panel
+      setIsAttachedToEdge(false);
+      const newHeight = Math.max(100, dragStartHeight.current + deltaY);
+      setPanelHeight(newHeight);
+      setPanelPosition({ x: deltaX, y: -deltaY });
+    }
+  }, [isDragging, panelHeight]);
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
@@ -450,23 +581,48 @@ export default function InteractionPanel({
 
   return (
     <div 
-      className={`absolute bottom-0 bg-black/60 backdrop-blur-md border-t border-white/10 transition-all duration-200 ${
-        isAttachedToEdge ? 'left-0 right-0' : 'left-1/2 transform -translate-x-1/2'
+      className={`absolute bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 ${
+        isAttachedToEdge 
+          ? attachedSide === 'left' 
+            ? 'left-0 top-0 bottom-0 border-r' 
+            : attachedSide === 'right' 
+              ? 'right-0 top-0 bottom-0 border-l' 
+              : 'left-0 right-0 bottom-0 border-t'
+          : 'left-1/2 bottom-0 transform -translate-x-1/2 border'
       }`}
       style={{ 
-        height: isMinimized ? '60px' : `${panelHeight}px`,
-        width: isAttachedToEdge ? '100%' : `${panelWidth}px`,
-        transform: isDragging || isDraggingSide ? 'none' : isAttachedToEdge ? undefined : 'translateX(-50%)'
+        height: isAttachedToEdge && (attachedSide === 'left' || attachedSide === 'right') 
+          ? '100vh' 
+          : isMinimized 
+            ? '60px' 
+            : `${panelHeight + (activeTab === 'code' || activeTab === 'info' ? 80 : 0)}px`,
+        width: isAttachedToEdge 
+          ? attachedSide === 'bottom' 
+            ? '100%' 
+            : `${panelWidth}px`
+          : `${panelWidth}px`,
+        transform: isDragging || isDraggingSide 
+          ? 'none' 
+          : isAttachedToEdge 
+            ? undefined 
+            : `translate(-50%, ${panelPosition.y}px)`,
+        left: !isAttachedToEdge ? `calc(50% + ${panelPosition.x}px)` : undefined
       }}
     >
-      {/* Top Drag Handle */}
+      {/* Drag Handle - changes based on attachment */}
       <div 
-        className={`absolute top-0 left-0 right-0 h-1 bg-white/20 cursor-ns-resize hover:bg-white/30 transition-all duration-200 ${isDragging ? 'bg-white/40' : ''}`}
+        className={`absolute bg-white/20 hover:bg-white/30 transition-all duration-200 ${isDragging ? 'bg-white/40' : ''} ${
+          attachedSide === 'left' 
+            ? 'top-0 right-0 bottom-0 w-1 cursor-ew-resize'
+            : attachedSide === 'right'
+              ? 'top-0 left-0 bottom-0 w-1 cursor-ew-resize'
+              : 'top-0 left-0 right-0 h-1 cursor-ns-resize'
+        }`}
         onMouseDown={handleMouseDown}
       />
       
-      {/* Side Drag Handles */}
-      {!isAttachedToEdge && (
+      {/* Side Drag Handles for width adjustment when attached to sides */}
+      {isAttachedToEdge && (attachedSide === 'left' || attachedSide === 'right') && (
         <>
           <div 
             className={`absolute top-0 left-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200 ${isDraggingSide ? 'bg-white/40' : ''}`}
@@ -479,7 +635,11 @@ export default function InteractionPanel({
         </>
       )}
       
-      <div className="p-4 max-w-4xl mx-auto h-full overflow-hidden">
+      <div className={`p-4 h-full overflow-hidden ${
+        attachedSide === 'left' || attachedSide === 'right' 
+          ? 'max-w-none' 
+          : 'max-w-4xl mx-auto'
+      }`}>
         {/* Minimize/Maximize Controls */}
         <div className="absolute top-2 right-4 flex items-center gap-2">
           <Button
@@ -894,7 +1054,7 @@ export default function InteractionPanel({
                 <div className="space-y-3">
                   <div className="text-center mb-4">
                     <h3 className="font-medium text-white mb-2">Advanced AI Modules</h3>
-                    <p className="text-xs text-white/60">Click any plugin to load its specialized prompt</p>
+                    <p className="text-xs text-white/60">Click any plugin to load its specialized prompt and switch to chat</p>
                   </div>
                   
                   <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
@@ -903,7 +1063,11 @@ export default function InteractionPanel({
                       return (
                         <button
                           key={plugin.id}
-                          onClick={plugin.action}
+                          onClick={() => {
+                            plugin.action();
+                            setActiveTab('chat'); // Switch to chat tab to show the input
+                            toast.success(`${plugin.name} plugin activated! Check the chat input.`);
+                          }}
                           className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
                         >
                           <div className="flex items-center gap-2 w-full">

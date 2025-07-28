@@ -18,6 +18,13 @@ import {
   Play,
   Pause,
   Square,
+  Palette,
+  User,
+  LogIn,
+  LogOut,
+  Settings as SettingsIcon,
+  Crown,
+  Mail,
 } from "lucide-react";
 
 interface AccessibilityControlsProps {
@@ -43,6 +50,57 @@ export default function AccessibilityControls({
   const [speechRate, setSpeechRate] = useState(1);
   const [speechVolume, setSpeechVolume] = useState(0.8);
   const [isListening, setIsListening] = useState(false);
+  
+  // New state for themes and account
+  const [currentTheme, setCurrentTheme] = useState('default');
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [userEmail, setUserEmail] = useState('');
+  const [promptCount, setPromptCount] = useState(0);
+  const [showAdWarning, setShowAdWarning] = useState(false);
+
+  // Theme definitions
+  const themes = {
+    default: {
+      name: 'Dark Default',
+      primary: '#8b5cf6',
+      secondary: '#ec4899',
+      accent: '#06b6d4',
+      background: 'bg-black',
+      description: 'Classic dark theme'
+    },
+    pink: {
+      name: 'Pink Noir',
+      primary: '#ec4899',
+      secondary: '#f97316',
+      accent: '#8b5cf6',
+      background: 'bg-gray-900',
+      description: 'Pink and orange accents'
+    },
+    blue: {
+      name: 'Ocean Deep',
+      primary: '#0ea5e9',
+      secondary: '#06b6d4',
+      accent: '#3b82f6',
+      background: 'bg-slate-900',
+      description: 'Deep blue tones'
+    },
+    green: {
+      name: 'Matrix',
+      primary: '#10b981',
+      secondary: '#059669',
+      accent: '#34d399',
+      background: 'bg-gray-900',
+      description: 'Green matrix style'
+    },
+    purple: {
+      name: 'Cosmic',
+      primary: '#8b5cf6',
+      secondary: '#a855f7',
+      accent: '#c084fc',
+      background: 'bg-indigo-950',
+      description: 'Purple cosmic theme'
+    }
+  };
   
   const speechSynthesis = useRef<SpeechSynthesis | null>(null);
   const recognition = useRef<SpeechRecognition | null>(null);
@@ -164,13 +222,177 @@ export default function AccessibilityControls({
         }
       `}</style>
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-bold">Accessibility</h2>
+        <div className="flex items-center gap-2">
+          <SettingsIcon className="h-5 w-5" />
+          <h2 className="text-xl font-bold">Settings</h2>
+        </div>
         <Button variant="ghost" size="icon" onClick={onClose}>
           <X className="h-4 w-4" />
         </Button>
       </div>
 
+      {/* Custom Toggle Component */}
+      <style jsx>{`
+        .custom-toggle {
+          width: 44px;
+          height: 24px;
+          background: rgba(255, 255, 255, 0.1);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          border-radius: 4px;
+          position: relative;
+          cursor: pointer;
+          transition: all 0.3s ease;
+        }
+        .custom-toggle.active {
+          background: linear-gradient(45deg, ${themes[currentTheme].primary}, ${themes[currentTheme].secondary});
+          border-color: ${themes[currentTheme].primary};
+          box-shadow: 0 0 8px ${themes[currentTheme].primary}40;
+        }
+        .custom-toggle-slider {
+          width: 18px;
+          height: 18px;
+          background: white;
+          border-radius: 2px;
+          position: absolute;
+          top: 2px;
+          left: 2px;
+          transition: all 0.3s ease;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .custom-toggle.active .custom-toggle-slider {
+          transform: translateX(18px);
+        }
+      `}</style>
+
       <div className="space-y-6">
+        {/* Account Section */}
+        <div className="bg-black/30 rounded-lg p-4 border border-white/10">
+          <div className="flex items-center gap-2 mb-4">
+            <User className="h-4 w-4" />
+            <h3 className="font-medium">Account</h3>
+          </div>
+          
+          {isLoggedIn ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
+                    <User className="h-4 w-4 text-white" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">{userEmail}</p>
+                    <div className="flex items-center gap-1">
+                      <Crown className="h-3 w-3 text-yellow-400" />
+                      <span className="text-xs text-yellow-400">Premium</span>
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setIsLoggedIn(false)}
+                  className="text-xs"
+                >
+                  <LogOut className="h-3 w-3 mr-1" />
+                  Sign Out
+                </Button>
+              </div>
+              <div className="text-xs text-gray-400">
+                Unlimited prompts • Custom themes • Prompt history
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="text-sm text-gray-300">
+                Sign up for unlimited prompts and exclusive features
+              </div>
+              {promptCount >= 3 && (
+                <div className="bg-orange-500/20 border border-orange-500/30 rounded p-2 text-xs text-orange-300">
+                  ⚠️ You've used {promptCount} prompts. Sign up to continue without ads.
+                </div>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                  onClick={() => {
+                    setIsLoggedIn(true);
+                    setUserEmail('user@example.com');
+                  }}
+                >
+                  <LogIn className="h-3 w-3 mr-1" />
+                  Sign Up
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => {
+                    setIsLoggedIn(true);
+                    setUserEmail('user@example.com');
+                  }}
+                >
+                  <Mail className="h-3 w-3 mr-1" />
+                  Sign In
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Themes Section */}
+        <div className="bg-black/30 rounded-lg p-4 border border-white/10">
+          <div className="flex items-center gap-2 mb-4">
+            <Palette className="h-4 w-4" />
+            <h3 className="font-medium">Themes</h3>
+            {!isLoggedIn && (
+              <div className="ml-auto">
+                <Crown className="h-3 w-3 text-yellow-400" />
+              </div>
+            )}
+          </div>
+          
+          <div className="grid grid-cols-1 gap-2">
+            {Object.entries(themes).map(([key, theme]) => (
+              <button
+                key={key}
+                onClick={() => isLoggedIn && setCurrentTheme(key)}
+                disabled={!isLoggedIn && key !== 'default'}
+                className={`flex items-center gap-3 p-3 rounded-lg border transition-all duration-200 ${
+                  currentTheme === key
+                    ? 'border-white/30 bg-white/5'
+                    : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+                } ${!isLoggedIn && key !== 'default' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              >
+                <div 
+                  className="w-6 h-6 rounded border border-white/20"
+                  style={{
+                    background: `linear-gradient(45deg, ${theme.primary}, ${theme.secondary})`
+                  }}
+                />
+                <div className="flex-1 text-left">
+                  <div className="text-sm font-medium">{theme.name}</div>
+                  <div className="text-xs text-gray-400">{theme.description}</div>
+                </div>
+                {currentTheme === key && (
+                  <div className="w-2 h-2 bg-white rounded-full" />
+                )}
+                {!isLoggedIn && key !== 'default' && (
+                  <Crown className="h-3 w-3 text-yellow-400" />
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Accessibility Section */}
+        <div className="bg-black/30 rounded-lg p-4 border border-white/10">
+          <div className="flex items-center gap-2 mb-4">
+            <Contrast className="h-4 w-4" />
+            <h3 className="font-medium">Accessibility</h3>
+          </div>
+          
+          <div className="space-y-4">
         <div className="space-y-2">
           <div className="flex items-center">
             <Type className="h-4 w-4 mr-2" />
@@ -186,17 +408,18 @@ export default function AccessibilityControls({
           />
         </div>
 
-        <div className="flex items-center justify-between">
-          <div className="flex items-center">
-            <Contrast className="h-4 w-4 mr-2" />
-            <Label htmlFor="high-contrast">High Contrast</Label>
-          </div>
-          <Switch
-            id="high-contrast"
-            checked={highContrast}
-            onCheckedChange={setHighContrast}
-          />
-        </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <Contrast className="h-4 w-4 mr-2" />
+                <Label htmlFor="high-contrast">High Contrast</Label>
+              </div>
+              <div 
+                className={`custom-toggle ${highContrast ? 'active' : ''}`}
+                onClick={() => setHighContrast(!highContrast)}
+              >
+                <div className="custom-toggle-slider" />
+              </div>
+            </div>
 
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -204,11 +427,12 @@ export default function AccessibilityControls({
               <Volume2 className="h-4 w-4 mr-2" />
               <Label htmlFor="screen-reader">Screen Reader</Label>
             </div>
-            <Switch
-              id="screen-reader"
-              checked={screenReader}
-              onCheckedChange={setScreenReader}
-            />
+            <div 
+              className={`custom-toggle ${screenReader ? 'active' : ''}`}
+              onClick={() => setScreenReader(!screenReader)}
+            >
+              <div className="custom-toggle-slider" />
+            </div>
           </div>
           
           {screenReader && (
@@ -284,12 +508,12 @@ export default function AccessibilityControls({
               )}
               <Label htmlFor="voice-enabled">Voice Assistant</Label>
             </div>
-            <Switch
-              id="voice-enabled"
-              checked={voiceEnabled}
-              onCheckedChange={onVoiceToggle}
-              disabled={isProcessing}
-            />
+            <div 
+              className={`custom-toggle ${voiceEnabled ? 'active' : ''}`}
+              onClick={() => onVoiceToggle && onVoiceToggle(!voiceEnabled)}
+            >
+              <div className="custom-toggle-slider" />
+            </div>
           </div>
         )}
 
@@ -305,12 +529,12 @@ export default function AccessibilityControls({
               )}
               <Label htmlFor="voice-input">Voice Input</Label>
             </div>
-            <Switch
-              id="voice-input"
-              checked={voiceEnabled}
-              onCheckedChange={onVoiceToggle}
-              disabled={isProcessing || !onVoiceToggle}
-            />
+            <div 
+              className={`custom-toggle ${voiceEnabled ? 'active' : ''}`}
+              onClick={() => onVoiceToggle && onVoiceToggle(!voiceEnabled)}
+            >
+              <div className="custom-toggle-slider" />
+            </div>
           </div>
           
           {voiceEnabled && recognition.current && (
@@ -350,16 +574,19 @@ export default function AccessibilityControls({
           )}
         </div>
 
-        <div className="flex items-center justify-between">
-          <div className="flex items-center">
-            <MousePointer className="h-4 w-4 mr-2" />
-            <Label htmlFor="reduced-motion">Reduced Motion</Label>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center">
+                <MousePointer className="h-4 w-4 mr-2" />
+                <Label htmlFor="reduced-motion">Reduced Motion</Label>
+              </div>
+              <div 
+                className={`custom-toggle ${reducedMotion ? 'active' : ''}`}
+                onClick={() => setReducedMotion(!reducedMotion)}
+              >
+                <div className="custom-toggle-slider" />
+              </div>
+            </div>
           </div>
-          <Switch
-            id="reduced-motion"
-            checked={reducedMotion}
-            onCheckedChange={setReducedMotion}
-          />
         </div>
 
         <div className="mt-8">

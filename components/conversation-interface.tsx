@@ -32,6 +32,32 @@ export default function ConversationInterface() {
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null); // This ref is not used in this component, consider removing if not needed elsewhere
+  
+  // Advertisement system
+  const [promptCount, setPromptCount] = useState(0);
+  const [showAd, setShowAd] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  // ESC key handler for closing temporary panels
+  useEffect(() => {
+    const handleEscKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        // Close any open temporary panels
+        if (showAccessibility) {
+          setShowAccessibility(false);
+        } else if (showCodePreview) {
+          setShowCodePreview(false);
+        } else if (showHistory) {
+          setShowHistory(false);
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleEscKey);
+    return () => {
+      document.removeEventListener('keydown', handleEscKey);
+    };
+  }, [showAccessibility, showCodePreview, showHistory]);
 
   const {
     messages,
@@ -272,12 +298,21 @@ export default function ConversationInterface() {
     });
   };
 
-  // Intermediary function to handle submit from InteractionPanel
+  // Intermediary function to handle submit from InteractionPanel with ad system
   const handleChatSubmit = (content: string) => {
+    // Check if user needs to see an ad
+    if (!isLoggedIn && promptCount > 0 && promptCount % 3 === 0) {
+      setShowAd(true);
+      return;
+    }
+    
+    // Increment prompt count for non-logged-in users
+    if (!isLoggedIn) {
+      setPromptCount(prev => prev + 1);
+    }
+    
     setInput(content);
     // The handleSubmit from useChat expects a React.FormEvent.
-    // Creating a dummy event might be necessary if it's not handled internally.
-    // However, the current implementation passes it directly, which might be fine if useChat handles it.
     handleSubmit(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>);
   };
 
@@ -303,6 +338,15 @@ export default function ConversationInterface() {
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
+      {/* Subtle animated background */}
+      <div className="absolute inset-0 opacity-20">
+        <div className="absolute inset-0 bg-gradient-to-br from-gray-900/30 via-black to-gray-800/20"></div>
+        <div className="absolute inset-0 animate-pulse-slow">
+          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-gray-700/10 rounded-full blur-3xl animate-float-slow"></div>
+          <div className="absolute top-3/4 right-1/4 w-80 h-80 bg-gray-600/10 rounded-full blur-3xl animate-float-reverse"></div>
+          <div className="absolute bottom-1/4 left-1/2 w-64 h-64 bg-gray-800/10 rounded-full blur-3xl animate-float-slow"></div>
+        </div>
+      </div>
       <div className="flex flex-col md:flex-row h-full">
         {/* Main content area */}
         <div className="flex-1 flex flex-col">
@@ -311,8 +355,8 @@ export default function ConversationInterface() {
           </div>
 
           {/* Interaction Controls */}
-          {/* The log here is to check if handleToggleCodePreview is defined when passed */}
-          <InteractionPanel
+          <div className="relative z-50">
+            <InteractionPanel
             onSubmit={handleChatSubmit} // Pass the intermediary function
             onNewChat={handleNewChat}
             isProcessing={isLoading}
@@ -331,11 +375,12 @@ export default function ConversationInterface() {
             availableProviders={availableProviders}
             onProviderChange={handleProviderChange}
             hasCodeBlocks={hasCodeBlocks}
-          />
+            />
+          </div>
         </div>
 
         {/* Chat Panel */}
-        <div className="md:border-l md:border-white/10">
+        <div className="md:border-l md:border-white/10 relative z-10">
           <ChatPanel
             messages={messages} // Pass messages from useChat
             input={input} // Pass input from useChat
@@ -386,6 +431,62 @@ export default function ConversationInterface() {
           voiceEnabled={isVoiceEnabled}
           onVoiceToggle={handleVoiceToggle}
         />
+      )}
+
+      {/* Advertisement Modal */}
+      {showAd && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-white/20 rounded-lg p-6 max-w-md w-full">
+            <div className="text-center space-y-4">
+              <div className="w-16 h-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full mx-auto flex items-center justify-center">
+                <span className="text-2xl">🚀</span>
+              </div>
+              <h3 className="text-xl font-bold text-white">Continue with Premium</h3>
+              <p className="text-gray-300 text-sm">
+                You've used {promptCount} prompts. Sign up for unlimited access and exclusive features!
+              </p>
+              
+              {/* Ad placeholder */}
+              <div className="bg-black/40 border border-white/10 rounded-lg p-4 my-4">
+                <div className="text-center text-gray-400 text-sm">
+                  [Advertisement Space]
+                  <br />
+                  <span className="text-xs">Your ad service integration goes here</span>
+                </div>
+              </div>
+              
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setIsLoggedIn(true);
+                    setShowAd(false);
+                    // Continue with the original submission
+                    handleSubmit(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>);
+                  }}
+                  className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white px-4 py-2 rounded-lg font-medium transition-all duration-200"
+                >
+                  Sign Up Free
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAd(false);
+                    // Continue with the original submission after ad
+                    setTimeout(() => {
+                      handleSubmit(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>);
+                    }, 100);
+                  }}
+                  className="flex-1 border border-white/20 text-white px-4 py-2 rounded-lg hover:bg-white/5 transition-all duration-200"
+                >
+                  Continue
+                </button>
+              </div>
+              
+              <p className="text-xs text-gray-500">
+                Free users see ads every 3 prompts
+              </p>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
