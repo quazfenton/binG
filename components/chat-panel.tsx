@@ -151,7 +151,7 @@ export function ChatPanel({
         <div className="absolute bottom-64 right-6 z-10">
           <button
             onClick={jumpToLatest}
-            className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-full shadow-lg transition-all duration-200 flex items-center gap-2"
+            className="bg-black/60 hover:bg-black/80 backdrop-blur-sm border border-white/20 text-white p-2 rounded-full shadow-lg transition-all duration-200 flex items-center gap-2"
             title="Jump to latest message"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
