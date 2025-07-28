@@ -82,6 +82,20 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
       jsx: 'jsx',
       tsx: 'tsx',
       php: 'php',
+      vue: 'vue',
+      vite: 'js', // Vite config files are typically JS
+      gradio: 'py', // Gradio apps are Python
+      streamlit: 'py', // Streamlit apps are Python
+      flask: 'py', // Flask apps are Python
+      fastapi: 'py', // FastAPI apps are Python
+      django: 'py', // Django apps are Python
+      svelte: 'svelte',
+      astro: 'astro',
+      solid: 'jsx', // SolidJS uses JSX
+      qwik: 'tsx', // Qwik uses TSX
+      remix: 'tsx', // Remix uses TSX
+      nuxt: 'vue', // Nuxt uses Vue
+      next: 'tsx', // Next.js typically uses TSX
       ruby: 'rb',
       go: 'go',
       rust: 'rs',
@@ -319,7 +333,7 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
             // Enhanced framework detection based on dependencies
             if (pkg.dependencies.next || pkg.dependencies['next']) {
               framework = 'next';
-            } else if (pkg.dependencies.nuxt || pkg.dependencies['@nuxt/core']) {
+            } else if (pkg.dependencies.nuxt || pkg.dependencies['@nuxt/core'] || pkg.dependencies['nuxt3']) {
               framework = 'nuxt';
             } else if (pkg.dependencies.gatsby || pkg.dependencies['gatsby']) {
               framework = 'gatsby';
@@ -331,9 +345,21 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
               framework = 'svelte';
             } else if (pkg.dependencies['solid-js']) {
               framework = 'solid';
+            } else if (pkg.dependencies['@builder.io/qwik']) {
+              framework = 'qwik';
+            } else if (pkg.dependencies.gradio) {
+              framework = 'gradio';
+            } else if (pkg.dependencies.streamlit) {
+              framework = 'streamlit';
+            } else if (pkg.dependencies.flask || pkg.dependencies['Flask']) {
+              framework = 'flask';
+            } else if (pkg.dependencies.fastapi || pkg.dependencies['fastapi']) {
+              framework = 'fastapi';
+            } else if (pkg.dependencies.django || pkg.dependencies['Django']) {
+              framework = 'django';
             } else if (pkg.dependencies.react) {
               framework = 'react';
-            } else if (pkg.dependencies.vue) {
+            } else if (pkg.dependencies.vue || pkg.dependencies['@vue/core']) {
               framework = 'vue';
             } else if (pkg.dependencies['@angular/core']) {
               framework = 'angular';
@@ -385,6 +411,19 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
           framework = 'astro';
         } else if (ext === 'ts' && finalFilename.includes('.component.')) {
           framework = 'angular';
+        } else if (ext === 'py' && (finalFilename.includes('gradio') || block.code.includes('import gradio'))) {
+          framework = 'gradio';
+        } else if (ext === 'py' && (finalFilename.includes('streamlit') || block.code.includes('import streamlit'))) {
+          framework = 'streamlit';
+        } else if (ext === 'py' && (finalFilename.includes('app.py') || block.code.includes('from flask import'))) {
+          framework = 'flask';
+        } else if (ext === 'py' && (finalFilename.includes('main.py') || block.code.includes('from fastapi import'))) {
+          framework = 'fastapi';
+        } else if (ext === 'py' && (finalFilename.includes('manage.py') || block.code.includes('django'))) {
+          framework = 'django';
+        } else if (finalFilename.includes('vite.config') || finalFilename.includes('vite.config.js') || finalFilename.includes('vite.config.ts')) {
+          // If we see a vite config, it's likely a vite project
+          if (framework === 'vanilla') framework = 'vite-react';
         }
       }
       

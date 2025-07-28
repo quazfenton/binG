@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { type Message } from "ai/react"; // Only import Message type, useChat is now in parent
 import { toast } from "sonner";
 import { useVoiceInput } from "@/hooks/use-voice-input";
@@ -59,12 +59,36 @@ export function ChatPanel({
 
   const [isCodePreviewOpen, setIsCodePreviewOpen] = useState(false);
   const [isAccessibilityOptionsOpen, setIsAccessibilityOptionsOpen] = useState(false); // State to control accessibility options visibility
+  const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  // Handle scroll position tracking
+  const handleScroll = useCallback(() => {
+    if (!scrollContainerRef.current) return;
+    
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50; // 50px threshold
+    
+    setIsUserScrolledUp(!isAtBottom);
+    setShowJumpToLatest(!isAtBottom);
+  }, []);
+
+  // Auto-scroll only if user is at bottom or it's a new conversation
   useEffect(() => {
+    if (!isUserScrolledUp || messages.length <= 1) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, isUserScrolledUp]);
+
+  // Jump to latest function
+  const jumpToLatest = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    setIsUserScrolledUp(false);
+    setShowJumpToLatest(false);
+  }, []);
 
   useEffect(() => {
     if (transcript) {
@@ -93,7 +117,12 @@ export function ChatPanel({
 
   return (
     <div className="flex flex-col h-full relative">
-      <div className="flex-1 overflow-y-auto p-4 space-y-2" style={{ paddingBottom: "240px" }}>
+      <div 
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto p-4 space-y-2" 
+        style={{ paddingBottom: "240px" }}
+        onScroll={handleScroll}
+      >
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <p className="text-lg">Start a conversation</p>
@@ -118,6 +147,21 @@ export function ChatPanel({
         {/* Extra padding div for better scrolling */}
         <div className="h-20" />
       </div>
+
+      {/* Jump to Latest Button */}
+      {showJumpToLatest && (
+        <div className="absolute bottom-64 right-6 z-10">
+          <button
+            onClick={jumpToLatest}
+            className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-full shadow-lg transition-all duration-200 flex items-center gap-2"
+            title="Jump to latest message"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       {/* Conditionally render AccessibilityControls as overlay */}
       {isAccessibilityOptionsOpen && (

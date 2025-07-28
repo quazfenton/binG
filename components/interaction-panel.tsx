@@ -1,7 +1,7 @@
 "use client";
 
 import type React from "react";
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
@@ -32,8 +32,19 @@ import {
   AlertCircle,
   Code,
   GripHorizontal,
+  RotateCcw,
   Maximize2,
   Minimize2,
+  Brain,
+  FileText,
+  Calculator,
+  Globe,
+  Database,
+  Palette,
+  Music,
+  Camera,
+  Map,
+  Gamepad2,
 } from "lucide-react";
 import type { LLMProvider } from '../lib/api/llm-providers';
 
@@ -53,6 +64,8 @@ interface InteractionPanelProps {
   setInput: (value: string) => void; // Add setInput prop
   availableProviders: LLMProvider[];
   onProviderChange: (provider: string, model: string) => void;
+  onRotateProvider?: () => void; // Add rotate provider function
+  hasCodeBlocks?: boolean; // Add code blocks detection
 }
 
 export default function InteractionPanel({
@@ -71,17 +84,124 @@ export default function InteractionPanel({
   setInput, // Destructure setInput
   availableProviders,
   onProviderChange,
+  onRotateProvider,
+  hasCodeBlocks = false,
 }: InteractionPanelProps) {
   const [activeTab, setActiveTab] = useState("chat");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   
   // Draggable panel state
-  const [panelHeight, setPanelHeight] = useState(300); // Default height
+  const [panelHeight, setPanelHeight] = useState(250); // Default height
   const [panelWidth, setPanelWidth] = useState(800);
   const [isDragging, setIsDragging] = useState(false);
   const [isDraggingSide, setIsDraggingSide] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isAttachedToEdge, setIsAttachedToEdge] = useState(false);
+
+  // Plugin modules with randomization
+  const pluginModules = useMemo(() => {
+    const modules = [
+      {
+        id: 'ai-tutor',
+        name: 'AI Tutor',
+        description: 'Interactive learning assistant with step-by-step explanations',
+        icon: Brain,
+        color: 'text-purple-400',
+        action: () => setInput('Act as an expert tutor. Break down complex topics into digestible steps with examples and practice questions. Topic: ')
+      },
+      {
+        id: 'code-reviewer',
+        name: 'Code Reviewer',
+        description: 'Professional code review with best practices and optimizations',
+        icon: Code,
+        color: 'text-blue-400',
+        action: () => setInput('Review this code for best practices, performance, security, and maintainability. Provide specific suggestions:\n\n```\n// Paste your code here\n```')
+      },
+      {
+        id: 'document-analyzer',
+        name: 'Document Analyzer',
+        description: 'Analyze and summarize documents, extract key insights',
+        icon: FileText,
+        color: 'text-green-400',
+        action: () => setInput('Analyze this document and provide: 1) Executive summary 2) Key points 3) Action items 4) Questions for clarification:\n\n')
+      },
+      {
+        id: 'math-solver',
+        name: 'Math Solver',
+        description: 'Step-by-step mathematical problem solving with visualizations',
+        icon: Calculator,
+        color: 'text-orange-400',
+        action: () => setInput('Solve this mathematical problem step-by-step with clear explanations and visual representations where helpful:\n\n')
+      },
+      {
+        id: 'research-assistant',
+        name: 'Research Assistant',
+        description: 'Comprehensive research with sources, analysis, and citations',
+        icon: Globe,
+        color: 'text-cyan-400',
+        action: () => setInput('Research this topic comprehensively. Provide: 1) Overview 2) Key findings 3) Different perspectives 4) Recent developments 5) Reliable sources. Topic: ')
+      },
+      {
+        id: 'data-analyst',
+        name: 'Data Analyst',
+        description: 'Analyze datasets, create visualizations, and extract insights',
+        icon: Database,
+        color: 'text-indigo-400',
+        action: () => setInput('Analyze this data and provide insights, trends, and visualizations. Include statistical analysis and actionable recommendations:\n\n')
+      },
+      {
+        id: 'creative-writer',
+        name: 'Creative Writer',
+        description: 'Generate creative content, stories, and marketing copy',
+        icon: Palette,
+        color: 'text-pink-400',
+        action: () => setInput('Create engaging creative content. Specify the type (story, blog post, marketing copy, etc.) and key requirements:\n\nContent type: \nTone: \nAudience: \nKey points: ')
+      },
+      {
+        id: 'music-composer',
+        name: 'Music Composer',
+        description: 'Generate musical compositions, lyrics, and audio concepts',
+        icon: Music,
+        color: 'text-yellow-400',
+        action: () => setInput('Help me create music. Provide chord progressions, melody ideas, lyrics, or composition structure for:\n\nGenre: \nMood: \nInstruments: \nTheme: ')
+      },
+      {
+        id: 'image-prompter',
+        name: 'Image Prompter',
+        description: 'Generate detailed prompts for AI image generation',
+        icon: Camera,
+        color: 'text-red-400',
+        action: () => setInput('Create a detailed image generation prompt for: \n\nSubject: \nStyle: \nLighting: \nComposition: \nMood: ')
+      },
+      {
+        id: 'travel-planner',
+        name: 'Travel Planner',
+        description: 'Plan trips with itineraries, recommendations, and logistics',
+        icon: Map,
+        color: 'text-emerald-400',
+        action: () => setInput('Plan a detailed travel itinerary including: 1) Daily schedule 2) Accommodations 3) Transportation 4) Activities 5) Budget estimates 6) Local tips\n\nDestination: \nDuration: \nBudget: \nInterests: ')
+      },
+      {
+        id: 'game-designer',
+        name: 'Game Designer',
+        description: 'Design games, mechanics, narratives, and interactive experiences',
+        icon: Gamepad2,
+        color: 'text-violet-400',
+        action: () => setInput('Design a game concept including: 1) Core mechanics 2) Player objectives 3) Progression system 4) Art style 5) Target audience\n\nGame type: \nPlatform: \nTheme: ')
+      },
+      {
+        id: 'business-strategist',
+        name: 'Business Strategist',
+        description: 'Business analysis, strategy development, and market insights',
+        icon: Sparkles,
+        color: 'text-amber-400',
+        action: () => setInput('Provide strategic business analysis including: 1) Market analysis 2) Competitive landscape 3) SWOT analysis 4) Growth opportunities 5) Action plan\n\nBusiness/Industry: ')
+      }
+    ];
+
+    // Randomize order using the same approach as template suggestions
+    return [...modules].sort(() => Math.random() - 0.5);
+  }, [setInput]);
   const dragStartY = useRef(0);
   const dragStartHeight = useRef(0);
   const dragStartX = useRef(0);
@@ -99,7 +219,7 @@ export default function InteractionPanel({
     if (!isDragging) return;
     
     const deltaY = dragStartY.current - e.clientY;
-    const newHeight = Math.max(100, Math.min(600, dragStartHeight.current + deltaY));
+    const newHeight = Math.max(100, dragStartHeight.current + deltaY);
     setPanelHeight(newHeight);
   }, [isDragging]);
 
@@ -172,12 +292,25 @@ export default function InteractionPanel({
     }
   };
 
-  const chatSuggestions = [
-    "unique app ideas",
-    "code a basic web app", 
-    "make an addicting web game",
-    "show me sum interesting",
-  ];
+  const chatSuggestions = useMemo(() => {
+    const suggestions = [
+      "unique app ideas",
+      "code a basic web app", 
+      "make an addicting web game",
+      "show me sum interesting",
+      "explain quantum computing simply",
+      "create a business plan",
+      "write a short story",
+      "design a logo concept",
+      "plan a workout routine",
+      "suggest healthy recipes",
+      "debug this error",
+      "optimize my workflow"
+    ];
+    
+    // Randomize order and return first 4
+    return [...suggestions].sort(() => Math.random() - 0.5).slice(0, 4);
+  }, []);
 
   const codeSuggestions = [
     "Create a React component with TypeScript",
@@ -347,14 +480,24 @@ export default function InteractionPanel({
                   <ImageIcon className="h-4 w-4 mr-2" />
                   Images
                 </TabsTrigger>
-                <TabsTrigger value="info">
-                  <HelpCircle className="h-4 w-4 mr-2" />
-                  Info
+                <TabsTrigger value="plugins">
+                  <Zap className="h-4 w-4 mr-2" />
+                  Plugins
                 </TabsTrigger>
               </TabsList>
             </div>
 
             <div className="flex space-x-2">
+              {onRotateProvider && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={onRotateProvider}
+                  title="Rotate to Next Provider"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="icon"
@@ -384,8 +527,9 @@ export default function InteractionPanel({
                 size="icon"
                 onClick={toggleCodePreview} // Simplified onClick handler
                 title="Code Preview"
+                className={hasCodeBlocks ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse" : ""}
               >
-                <Code className="h-4 w-4" />
+                <Code className={`h-4 w-4 ${hasCodeBlocks ? "text-white" : ""}`} />
               </Button>
             </div>
           </div>
@@ -687,64 +831,44 @@ export default function InteractionPanel({
             </Card>
           </TabsContent>
 
-          <TabsContent value="info" className="m-0">
+          <TabsContent value="plugins" className="m-0">
             <Card className="bg-black/40 border-white/10">
               <CardContent className="pt-6">
-                <div className="space-y-4">
-                  <div className="flex items-start gap-3">
-                    <Sparkles className="h-5 w-5 text-yellow-400 mt-0.5" />
-                    <div>
-                      <h3 className="font-medium">kuji</h3>
-                      <p className="text-sm text-white/70">
-                        A revolutionary spatial interface for AI interactions
-                        that breaks traditional paradigms. Code, run, & imagine.
-                      </p>
-                    </div>
+                <div className="space-y-3">
+                  <div className="text-center mb-4">
+                    <h3 className="font-medium text-white mb-2">Advanced AI Modules</h3>
+                    <p className="text-xs text-white/60">Click any plugin to load its specialized prompt</p>
                   </div>
-
-                  <div className="flex items-start gap-3">
-                    <Code className="h-5 w-5 text-blue-400 mt-0.5" />
-                    <div>
-                      <h3 className="font-medium">Code Features</h3>
-                      <div className="space-y-2 mt-2">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="secondary" className="bg-black/40 text-xs">
-                            Visual Editor
-                          </Badge>
-                          <span className="text-xs text-white/60">
-                            Drag & drop interface builder
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Badge variant="secondary" className="bg-black/40 text-xs">
-                            Live Preview
-                          </Badge>
-                          <span className="text-xs text-white/60">
-                            Real-time code execution
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Badge variant="secondary" className="bg-black/40 text-xs">
-                            Multi-Framework
-                          </Badge>
-                          <span className="text-xs text-white/60">
-                            React, Vue, Angular, Svelte & more
-                          </span>
-                        </div>
-                      </div>
-                    </div>
+                  
+                  <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
+                    {pluginModules.map((plugin) => {
+                      const IconComponent = plugin.icon;
+                      return (
+                        <button
+                          key={plugin.id}
+                          onClick={plugin.action}
+                          className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
+                        >
+                          <div className="flex items-center gap-2 w-full">
+                            <IconComponent className={`h-4 w-4 ${plugin.color} group-hover:scale-110 transition-transform`} />
+                            <span className="font-medium text-sm text-white truncate">{plugin.name}</span>
+                          </div>
+                          <p className="text-xs text-white/60 line-clamp-2 w-full">{plugin.description}</p>
+                        </button>
+                      );
+                    })}
                   </div>
-
-                  <div className="flex items-start gap-3">
-                    <Settings className="h-5 w-5 text-green-400 mt-0.5" />
-                    <div>
-                      <h3 className="font-medium">Keyboard Shortcuts</h3>
-                      <div className="space-y-1 mt-2 text-xs text-white/60">
-                        <div><kbd className="bg-black/40 px-1 rounded">Ctrl+Enter</kbd> - Submit in Code mode</div>
-                        <div><kbd className="bg-black/40 px-1 rounded">Shift+Enter</kbd> - New line in chat</div>
-                        <div><kbd className="bg-black/40 px-1 rounded">Ctrl+K</kbd> - Focus input</div>
-                        <div><kbd className="bg-black/40 px-1 rounded">Esc</kbd> - Clear input</div>
-                      </div>
+                  
+                  <div className="mt-4 pt-3 border-t border-white/10">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Settings className="h-4 w-4 text-green-400" />
+                      <span className="text-sm font-medium">Quick Shortcuts</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1 text-xs text-white/60">
+                      <div><kbd className="bg-black/40 px-1 rounded">Ctrl+Enter</kbd> Submit</div>
+                      <div><kbd className="bg-black/40 px-1 rounded">Shift+Enter</kbd> New line</div>
+                      <div><kbd className="bg-black/40 px-1 rounded">Ctrl+K</kbd> Focus input</div>
+                      <div><kbd className="bg-black/40 px-1 rounded">Esc</kbd> Clear input</div>
                     </div>
                   </div>
                 </div>
