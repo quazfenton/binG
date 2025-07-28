@@ -119,6 +119,58 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     return extensions[language.toLowerCase()] || 'txt';
   };
 
+  // Generate smart filename based on code content
+  const generateSmartFilename = (code: string, language: string): string | null => {
+    try {
+      // Extract meaningful names from code content
+      const lines = code.split('\n').slice(0, 10); // Check first 10 lines
+      
+      // React/JSX component detection
+      if (language === 'jsx' || language === 'tsx' || language === 'javascript' || language === 'typescript') {
+        const componentMatch = code.match(/(?:export\s+default\s+|export\s+(?:const|function)\s+|function\s+|const\s+)([A-Z][a-zA-Z0-9]*)/);
+        if (componentMatch) return componentMatch[1];
+        
+        const classMatch = code.match(/class\s+([A-Z][a-zA-Z0-9]*)/);
+        if (classMatch) return classMatch[1];
+      }
+      
+      // Vue component detection
+      if (language === 'vue') {
+        const nameMatch = code.match(/name:\s*['"`]([^'"`]+)['"`]/);
+        if (nameMatch) return nameMatch[1];
+      }
+      
+      // CSS class or ID detection
+      if (language === 'css' || language === 'scss' || language === 'sass') {
+        const classMatch = code.match(/\.([a-zA-Z][a-zA-Z0-9-_]*)/);
+        if (classMatch) return classMatch[1];
+      }
+      
+      // HTML title or main element
+      if (language === 'html') {
+        const titleMatch = code.match(/<title[^>]*>([^<]+)<\/title>/i);
+        if (titleMatch) return titleMatch[1].replace(/\s+/g, '-').toLowerCase();
+        
+        const h1Match = code.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+        if (h1Match) return h1Match[1].replace(/\s+/g, '-').toLowerCase();
+      }
+      
+      // Python class or function detection
+      if (language === 'python') {
+        const classMatch = code.match(/class\s+([A-Z][a-zA-Z0-9_]*)/);
+        if (classMatch) return classMatch[1].toLowerCase();
+        
+        const funcMatch = code.match(/def\s+([a-zA-Z][a-zA-Z0-9_]*)/);
+        if (funcMatch) return funcMatch[1];
+      }
+      
+      return null;
+    } catch (error) {
+      console.warn('Error generating smart filename:', error);
+      return null;
+    }
+  };
+
   // Helper to clean and normalize filenames
   const cleanFilename = (filenameHint: string, language: string, index: number): string => {
     let cleaned = filenameHint.trim();
@@ -263,30 +315,83 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
           // console.log("Message content is not a valid JSON object, attempting markdown parsing.");
         }
 
-        // If not JSON, try parsing as markdown code blocks
+        // If not JSON, try parsing as markdown code blocks with enhanced error handling
         const markdownCodeMatches = message.content.match(/```(\S*)(?:\s+(.*?))?\n([\s\S]*?)```/g) || [];
         
         markdownCodeMatches.forEach((match, blockIndex) => {
-          const parsed = match.match(/```(\S*)(?:\s+(.*?))?\n([\s\S]*?)```/);
-          if (!parsed) return;
-          
-          const language = parsed[1] || "text";
-          const filenameHint = parsed[2] ? parsed[2].trim() : '';
-          let code = parsed[3].trim();
+          try {
+            const parsed = match.match(/```(\S*)(?:\s+(.*?))?\n([\s\S]*?)```/);
+            if (!parsed || parsed.length < 4) return;
+            
+            const language = (parsed[1] || "text").toLowerCase().trim();
+            const filenameHint = parsed[2] ? parsed[2].trim() : '';
+            let code = parsed[3];
 
-          if (!code.trim()) return; // Skip empty code blocks
+            // Validate code content
+            if (!code || typeof code !== 'string' || !code.trim()) return;
+            code = code.trim();
 
-          // Extract filename from hint or generate default, then clean
-          const filename = cleanFilename(filenameHint || `file-${message.id}-${blocks.length}.${getFileExtension(language)}`, language, blocks.length);
+            // Enhanced filename generation with validation
+            let filename = '';
+            try {
+              if (filenameHint) {
+                filename = cleanFilename(filenameHint, language, blocks.length);
+              } else {
+                // Generate smart default filename based on language and content
+                const extension = getFileExtension(language);
+                const baseName = generateSmartFilename(code, language) || `file-${blocks.length}`;
+                filename = cleanFilename(`${baseName}.${extension}`, language, blocks.length);
+              }
+              
+              // Ensure filename is valid and unique
+              if (!filename || filename.length === 0) {
+                filename = `file-${blocks.length}.${getFileExtension(language)}`;
+              }
+              
+              // Check for duplicate filenames and append number if needed
+              const existingFilenames = blocks.map(b => b.filename);
+              let uniqueFilename = filename;
+              let counter = 1;
+              while (existingFilenames.includes(uniqueFilename)) {
+                const parts = filename.split('.');
+                if (parts.length > 1) {
+                  const ext = parts.pop();
+                  const base = parts.join('.');
+                  uniqueFilename = `${base}-${counter}.${ext}`;
+                } else {
+                  uniqueFilename = `${filename}-${counter}`;
+                }
+                counter++;
+              }
+              filename = uniqueFilename;
+              
+            } catch (filenameError) {
+              console.warn('Error processing filename:', filenameError);
+              filename = `file-${blocks.length}.${getFileExtension(language)}`;
+            }
 
-          blocks.push({
-            language,
-            code,
-            filename,
-            index: blocks.length, // Use blocks.length for sequential indexing
-            messageId: message.id,
-            isError: message.isError || false
-          });
+            blocks.push({
+              language,
+              code,
+              filename,
+              index: blocks.length, // Use blocks.length for sequential indexing
+              messageId: message.id,
+              isError: message.isError || false
+            });
+            
+          } catch (blockError) {
+            console.warn('Error processing code block:', blockError);
+            // Add fallback block with safe defaults
+            const safeFilename = `file-${blocks.length}.txt`;
+            blocks.push({
+              language: 'text',
+              code: match || 'Error processing code block',
+              filename: safeFilename,
+              index: blocks.length,
+              messageId: message.id,
+              isError: true
+            });
+          }
         });
       }
     });

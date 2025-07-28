@@ -30,6 +30,7 @@ export default function ConversationInterface() {
   const [currentModel, setCurrentModel] = useState<string>("");
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null); // This ref is not used in this component, consider removing if not needed elsewhere
 
   const {
@@ -165,6 +166,7 @@ export default function ConversationInterface() {
       setChatHistory(getAllChats());
     }
     setMessages([]);
+    setCurrentConversationId(null);
     toast.success("New chat started");
   };
 
@@ -177,6 +179,7 @@ export default function ConversationInterface() {
     const chat = loadChat(chatId);
     if (chat) {
       setMessages(chat.messages); // Load messages using useChat's setMessages
+      setCurrentConversationId(chatId);
       toast.success("Chat loaded");
     }
     setShowHistory(false);
@@ -202,13 +205,35 @@ export default function ConversationInterface() {
     }
   }, [availableProviders, currentProvider, handleProviderChange]);
 
-  // Auto-rotate on error (optional - can be triggered manually)
+  // Auto-rotate on API errors
   useEffect(() => {
-    if (error && error.message.includes('rate limit') || error?.message.includes('quota')) {
-      toast.info("Rate limit detected, rotating to next provider...");
-      setTimeout(() => {
-        rotateToNextProvider();
-      }, 1000);
+    if (error && error.message) {
+      const errorMessage = error.message.toLowerCase();
+      const shouldRotate = 
+        errorMessage.includes('rate limit') ||
+        errorMessage.includes('quota') ||
+        errorMessage.includes('invalid api key') ||
+        errorMessage.includes('unauthorized') ||
+        errorMessage.includes('not found') ||
+        errorMessage.includes('forbidden') ||
+        errorMessage.includes('service unavailable') ||
+        errorMessage.includes('timeout');
+      
+      if (shouldRotate) {
+        const errorType = 
+          errorMessage.includes('rate limit') || errorMessage.includes('quota') ? 'Rate limit' :
+          errorMessage.includes('invalid api key') || errorMessage.includes('unauthorized') ? 'Invalid API key' :
+          errorMessage.includes('not found') ? 'Service not found' :
+          errorMessage.includes('forbidden') ? 'Access forbidden' :
+          errorMessage.includes('service unavailable') ? 'Service unavailable' :
+          errorMessage.includes('timeout') ? 'Request timeout' :
+          'API error';
+        
+        toast.info(`${errorType} detected, switching to next provider...`);
+        setTimeout(() => {
+          rotateToNextProvider();
+        }, 1500);
+      }
     }
   }, [error, rotateToNextProvider]);
 
@@ -305,7 +330,6 @@ export default function ConversationInterface() {
             setInput={setInput} // Pass setInput to InteractionPanel
             availableProviders={availableProviders}
             onProviderChange={handleProviderChange}
-            onRotateProvider={rotateToNextProvider}
             hasCodeBlocks={hasCodeBlocks}
           />
         </div>
@@ -323,6 +347,7 @@ export default function ConversationInterface() {
             availableProviders={availableProviders}
             onClearChat={handleNewChat} // Map to handleNewChat
             onShowHistory={() => setShowHistory(true)} // Map to setShowHistory
+            currentConversationId={currentConversationId}
             onSelectHistoryChat={handleLoadChat}
             currentProvider={currentProvider}
             currentModel={currentModel}
