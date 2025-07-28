@@ -74,6 +74,22 @@ export default function ConversationInterface() {
     // clearAllChats, // Removed as it does not exist in useChatHistory
   } = useChatHistory();
 
+  // Save chat history whenever messages change (after AI responses)
+  useEffect(() => {
+    if (messages.length > 0 && !isLoading) {
+      // Only save if the last message is from assistant (completed response)
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage && lastMessage.role === 'assistant') {
+        saveCurrentChat(messages, currentConversationId || undefined);
+        
+        // Auto-speak AI responses if voice is enabled
+        if (isVoiceEnabled && voiceService.getSettings().autoSpeak) {
+          voiceService.speak(lastMessage.content).catch(console.error);
+        }
+      }
+    }
+  }, [messages, isLoading, saveCurrentChat, currentConversationId, isVoiceEnabled]);
+
   // Fetch available providers on mount
   useEffect(() => {
     fetch("/api/chat")

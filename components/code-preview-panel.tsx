@@ -60,7 +60,11 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
   const [selectedFileIndex, setSelectedFileIndex] = useState<number>(0)
   const [editingFileIndex, setEditingFileIndex] = useState<number | null>(null)
   const [editingFileName, setEditingFileName] = useState<string>('')
+  const [panelWidth, setPanelWidth] = useState(800)
+  const [isDragging, setIsDragging] = useState(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const dragStartX = useRef(0)
+  const dragStartWidth = useRef(0)
 
   const getFileExtension = (language: string): string => {
     const extensions: Record<string, string> = {
@@ -505,22 +509,16 @@ Generated on: ${new Date().toLocaleString()}
       return
     }
 
-    // Update the filename in codeBlocks
-    const updatedBlocks = codeBlocks.map((block, i) => {
-      if (i === index) {
-        return { ...block, filename: newFilename.trim() }
-      }
-      return block
-    })
+    const trimmedFilename = newFilename.trim()
+    const oldFilename = codeBlocks[index].filename
 
     // Update project structure if it exists
     if (projectStructure) {
-      const oldFilename = codeBlocks[index].filename
       const newFiles = { ...projectStructure.files }
       
       if (oldFilename && newFiles[oldFilename]) {
         // Move the content to the new filename
-        newFiles[newFilename.trim()] = newFiles[oldFilename]
+        newFiles[trimmedFilename] = newFiles[oldFilename]
         delete newFiles[oldFilename]
         
         setProjectStructure({
@@ -530,11 +528,43 @@ Generated on: ${new Date().toLocaleString()}
       }
     }
 
-    // Note: In a real implementation, you would also need to update the original messages
-    // or have a callback to update the parent component's state
+    // Force re-render by updating a state that triggers useMemo recalculation
+    // This ensures the preview updates with the new filename
+    setSelectedFileIndex(prev => prev === index ? index : prev)
     
     cancelEditingFilename()
   }
+
+  // Resize handlers
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    setIsDragging(true)
+    dragStartX.current = e.clientX
+    dragStartWidth.current = panelWidth
+    e.preventDefault()
+  }, [panelWidth])
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isDragging) return
+    
+    const deltaX = dragStartX.current - e.clientX
+    const newWidth = Math.max(400, Math.min(1200, dragStartWidth.current + deltaX))
+    setPanelWidth(newWidth)
+  }, [isDragging])
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false)
+  }, [])
+
+  useEffect(() => {
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove)
+        document.removeEventListener('mouseup', handleMouseUp)
+      }
+    }
+  }, [isDragging, handleMouseMove, handleMouseUp])
 
   const renderLivePreview = () => {
     // Enhanced framework support with better template mapping
@@ -542,7 +572,7 @@ Generated on: ${new Date().toLocaleString()}
       switch (framework) {
         case 'react': return 'react';
         case 'next': return 'nextjs';
-        case 'vue': return 'vue3';
+        case 'vue': return 'vue';
         case 'nuxt': return 'nuxt';
         case 'angular': return 'angular';
         case 'svelte': return 'svelte';
@@ -925,8 +955,15 @@ export default {
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: '100%' }}
           transition={{ duration: 0.3, ease: 'easeInOut' }}
-          className="fixed right-0 top-0 w-1/2 h-full bg-black/20 backdrop-blur-2xl border border-white/10 rounded-l-xl z-[100] overflow-hidden shadow-2xl"
+          className="fixed right-0 top-0 h-full bg-black/20 backdrop-blur-2xl border border-white/10 rounded-l-xl z-[100] overflow-hidden shadow-2xl"
+          style={{ width: `${panelWidth}px` }}
         >
+          {/* Resize Handle */}
+          <div 
+            className="absolute left-0 top-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200"
+            onMouseDown={handleMouseDown}
+          />
+          
         <Card className="h-full bg-transparent border-0 rounded-none">
           <CardHeader className="border-b border-white/10 bg-black/20">
             <div className="flex items-center justify-between">

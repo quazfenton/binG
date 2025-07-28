@@ -131,24 +131,7 @@ export function ChatPanel({
           />
         </div>
       )}
-/*
-      <InteractionPanel
-        onSubmit={handleUserMessageSubmit}
-        onNewChat={onClearChat}
-        isProcessing={isLoading}
-        toggleAccessibility={handleToggleAccessibilityOptions} // Pass the handler to toggle options visibility
-        toggleHistory={onShowHistory}
-        toggleCodePreview={toggleCodePreview}
-        onStopGeneration={onStopGeneration}
-        currentProvider={currentProvider}
-        currentModel={currentModel}
-        error={error?.message}
-        input={input}
-        setInput={setInput}
-        availableProviders={availableProviders}
-        onProviderChange={onProviderChange}
-      />
-*/
+
       <CodePreviewPanel
         isOpen={isCodePreviewOpen}
         onClose={() => setIsCodePreviewOpen(false)}

@@ -77,10 +77,15 @@ export default function InteractionPanel({
   
   // Draggable panel state
   const [panelHeight, setPanelHeight] = useState(300); // Default height
+  const [panelWidth, setPanelWidth] = useState(800);
   const [isDragging, setIsDragging] = useState(false);
+  const [isDraggingSide, setIsDraggingSide] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [isAttachedToEdge, setIsAttachedToEdge] = useState(false);
   const dragStartY = useRef(0);
   const dragStartHeight = useRef(0);
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(0);
 
   // Drag handlers for resizing panel
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -112,6 +117,46 @@ export default function InteractionPanel({
       };
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
+
+  // Side drag handlers
+  const handleSideMouseDown = useCallback((e: React.MouseEvent) => {
+    setIsDraggingSide(true);
+    dragStartX.current = e.clientX;
+    dragStartWidth.current = panelWidth;
+    e.preventDefault();
+  }, [panelWidth]);
+
+  const handleSideMouseMove = useCallback((e: MouseEvent) => {
+    if (!isDraggingSide) return;
+    
+    const deltaX = e.clientX - dragStartX.current;
+    const newWidth = Math.max(400, Math.min(1200, dragStartWidth.current + deltaX));
+    setPanelWidth(newWidth);
+    
+    // Check if close to edge for attachment
+    const windowWidth = window.innerWidth;
+    if (newWidth >= windowWidth * 0.9) {
+      setIsAttachedToEdge(true);
+      setPanelWidth(windowWidth);
+    } else {
+      setIsAttachedToEdge(false);
+    }
+  }, [isDraggingSide]);
+
+  const handleSideMouseUp = useCallback(() => {
+    setIsDraggingSide(false);
+  }, []);
+
+  useEffect(() => {
+    if (isDraggingSide) {
+      document.addEventListener('mousemove', handleSideMouseMove);
+      document.addEventListener('mouseup', handleSideMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleSideMouseMove);
+        document.removeEventListener('mouseup', handleSideMouseUp);
+      };
+    }
+  }, [isDraggingSide, handleSideMouseMove, handleSideMouseUp]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -233,17 +278,34 @@ export default function InteractionPanel({
 
   return (
     <div 
-      className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-md border-t border-white/10 transition-all duration-200"
+      className={`absolute bottom-0 bg-black/60 backdrop-blur-md border-t border-white/10 transition-all duration-200 ${
+        isAttachedToEdge ? 'left-0 right-0' : 'left-1/2 transform -translate-x-1/2'
+      }`}
       style={{ 
         height: isMinimized ? '60px' : `${panelHeight}px`,
-        transform: isDragging ? 'none' : undefined 
+        width: isAttachedToEdge ? '100%' : `${panelWidth}px`,
+        transform: isDragging || isDraggingSide ? 'none' : isAttachedToEdge ? undefined : 'translateX(-50%)'
       }}
     >
-      {/* Drag Handle */}
+      {/* Top Drag Handle */}
       <div 
-        className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500/50 to-pink-500/50 cursor-ns-resize hover:h-2 transition-all duration-200 ${isDragging ? 'h-2 bg-gradient-to-r from-purple-500 to-pink-500' : ''}`}
+        className={`absolute top-0 left-0 right-0 h-1 bg-white/20 cursor-ns-resize hover:bg-white/30 transition-all duration-200 ${isDragging ? 'bg-white/40' : ''}`}
         onMouseDown={handleMouseDown}
       />
+      
+      {/* Side Drag Handles */}
+      {!isAttachedToEdge && (
+        <>
+          <div 
+            className={`absolute top-0 left-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200 ${isDraggingSide ? 'bg-white/40' : ''}`}
+            onMouseDown={handleSideMouseDown}
+          />
+          <div 
+            className={`absolute top-0 right-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200 ${isDraggingSide ? 'bg-white/40' : ''}`}
+            onMouseDown={handleSideMouseDown}
+          />
+        </>
+      )}
       
       <div className="p-4 max-w-4xl mx-auto h-full overflow-hidden">
         {/* Minimize/Maximize Controls */}
