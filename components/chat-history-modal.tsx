@@ -99,7 +99,7 @@ export default function ChatHistoryModal({
         </div>
 
         {/* Chat List */}
-        <ScrollArea className="flex-1 p-4 h-96"> {/* Added h-96 to ensure scrollability */}
+        <div className="flex-1 overflow-y-auto p-4 min-h-0 max-h-[50vh]">
           {filteredChatsWithDebug.length === 0 ? (
             <div className="text-center py-8 text-white/60">
               {searchTerm ? "No chats found matching your search." : "No chat history yet."}
@@ -160,7 +160,7 @@ export default function ChatHistoryModal({
               ))}
             </div>
           )}
-        </ScrollArea>
+        </div>
       </div>
     </div>
   )

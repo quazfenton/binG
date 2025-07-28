@@ -1,7 +1,7 @@
 "use client";
 
 import type React from "react";
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
@@ -31,6 +31,9 @@ import {
   MessageSquare,
   AlertCircle,
   Code,
+  GripHorizontal,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import type { LLMProvider } from '../lib/api/llm-providers';
 
@@ -42,6 +45,7 @@ interface InteractionPanelProps {
   toggleHistory: () => void;
   toggleCodePreview: () => void; // This prop is expected to be a function
   onStopGeneration?: () => void;
+  onRetry?: () => void; // Add retry function prop
   currentProvider?: string;
   currentModel?: string;
   error?: string | null;
@@ -59,6 +63,7 @@ export default function InteractionPanel({
   toggleHistory,
   toggleCodePreview, // Receive the prop
   onStopGeneration,
+  onRetry,
   currentProvider = "openrouter",
   currentModel = "deepseek/deepseek-r1-0528:free",
   error,
@@ -69,6 +74,44 @@ export default function InteractionPanel({
 }: InteractionPanelProps) {
   const [activeTab, setActiveTab] = useState("chat");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  
+  // Draggable panel state
+  const [panelHeight, setPanelHeight] = useState(300); // Default height
+  const [isDragging, setIsDragging] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
+  const dragStartY = useRef(0);
+  const dragStartHeight = useRef(0);
+
+  // Drag handlers for resizing panel
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    setIsDragging(true);
+    dragStartY.current = e.clientY;
+    dragStartHeight.current = panelHeight;
+    e.preventDefault();
+  }, [panelHeight]);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isDragging) return;
+    
+    const deltaY = dragStartY.current - e.clientY;
+    const newHeight = Math.max(100, Math.min(600, dragStartHeight.current + deltaY));
+    setPanelHeight(newHeight);
+  }, [isDragging]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsDragging(false);
+  }, []);
+
+  useEffect(() => {
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isDragging, handleMouseMove, handleMouseUp]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,7 +145,7 @@ export default function InteractionPanel({
     "Set up CI/CD pipeline with GitHub Actions"
   ];
 
-  const codePromptTemplates = [
+  const allCodePromptTemplates = [
     {
       title: "Component Creation",
       template: "Create a [framework] component that [functionality]. Include:\n- TypeScript types\n- Props interface\n- Error handling\n- Unit tests\n- Documentation"
@@ -118,8 +161,52 @@ export default function InteractionPanel({
     {
       title: "Code Review",
       template: "Review this code for:\n- Performance optimizations\n- Security vulnerabilities\n- Best practices\n- Code quality\n- Potential bugs\n- Refactoring suggestions\n\n[paste your code here]"
+    },
+    {
+      title: "Database Design",
+      template: "Design a database schema for [application type] with:\n- Entity relationships\n- Primary/Foreign keys\n- Indexes for performance\n- Data validation rules\n- Migration scripts\n- Sample queries"
+    },
+    {
+      title: "Testing Strategy",
+      template: "Create a comprehensive testing strategy for [project] including:\n- Unit tests\n- Integration tests\n- E2E tests\n- Performance tests\n- Test data setup\n- CI/CD integration"
+    },
+    {
+      title: "Performance Optimization",
+      template: "Optimize [application/code] for better performance:\n- Identify bottlenecks\n- Memory usage optimization\n- Database query optimization\n- Caching strategies\n- Load balancing\n- Monitoring setup"
+    },
+    {
+      title: "Security Implementation",
+      template: "Implement security measures for [application] including:\n- Authentication & Authorization\n- Input validation & sanitization\n- SQL injection prevention\n- XSS protection\n- CSRF protection\n- Security headers"
+    },
+    {
+      title: "Microservices Architecture",
+      template: "Design a microservices architecture for [system] with:\n- Service boundaries\n- Communication patterns\n- Data consistency\n- Service discovery\n- Load balancing\n- Monitoring & logging"
+    },
+    {
+      title: "Mobile App Development",
+      template: "Create a [platform] mobile app for [purpose] with:\n- Native/Cross-platform approach\n- UI/UX design\n- State management\n- API integration\n- Offline functionality\n- App store deployment"
+    },
+    {
+      title: "DevOps Pipeline",
+      template: "Set up a DevOps pipeline for [project] including:\n- Version control workflow\n- Automated testing\n- Build automation\n- Deployment strategies\n- Infrastructure as Code\n- Monitoring & alerting"
     }
   ];
+
+  // Function to get random templates
+  const getRandomTemplates = (count: number = 4) => {
+    const shuffled = [...allCodePromptTemplates].sort(() => 0.5 - Math.random());
+    return shuffled.slice(0, count);
+  };
+
+  // Get random templates on component mount and when activeTab changes
+  const [displayedTemplates, setDisplayedTemplates] = useState(() => getRandomTemplates());
+
+  // Refresh templates when switching to code tab
+  useEffect(() => {
+    if (activeTab === 'code') {
+      setDisplayedTemplates(getRandomTemplates());
+    }
+  }, [activeTab]);
 
   const sampleImages = [
     {
@@ -145,8 +232,35 @@ export default function InteractionPanel({
   ];
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-md border-t border-white/10">
-      <div className="p-4 max-w-4xl mx-auto">
+    <div 
+      className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-md border-t border-white/10 transition-all duration-200"
+      style={{ 
+        height: isMinimized ? '60px' : `${panelHeight}px`,
+        transform: isDragging ? 'none' : undefined 
+      }}
+    >
+      {/* Drag Handle */}
+      <div 
+        className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-500/50 to-pink-500/50 cursor-ns-resize hover:h-2 transition-all duration-200 ${isDragging ? 'h-2 bg-gradient-to-r from-purple-500 to-pink-500' : ''}`}
+        onMouseDown={handleMouseDown}
+      />
+      
+      <div className="p-4 max-w-4xl mx-auto h-full overflow-hidden">
+        {/* Minimize/Maximize Controls */}
+        <div className="absolute top-2 right-4 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setIsMinimized(!isMinimized)}
+            className="w-6 h-6 p-0 text-gray-400 hover:text-white"
+          >
+            {isMinimized ? <Maximize2 className="w-3 h-3" /> : <Minimize2 className="w-3 h-3" />}
+          </Button>
+          <div className="flex items-center gap-1">
+            <GripHorizontal className="w-4 h-4 text-gray-500" />
+          </div>
+        </div>
+        {!isMinimized && (
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <div className="flex justify-between items-center mb-4">
             <div className="flex items-center gap-4">
@@ -260,7 +374,7 @@ export default function InteractionPanel({
                 <Button
                   size="sm"
                   variant="destructive"
-                  onClick={() => onSubmit(input)}
+                  onClick={() => onRetry ? onRetry() : onSubmit(input)}
                   className="ml-2"
                 >
                   Retry
@@ -349,7 +463,7 @@ export default function InteractionPanel({
             <div className="mb-4">
               <h4 className="text-xs font-medium text-white/80 mb-2">Quick Templates</h4>
               <div className="grid grid-cols-2 gap-2">
-                {codePromptTemplates.map((template, index) => (
+                {displayedTemplates.map((template, index) => (
                   <Button
                     key={index}
                     variant="outline"
@@ -576,6 +690,7 @@ export default function InteractionPanel({
             </Card>
           </TabsContent>
         </Tabs>
+        )}
       </div>
     </div>
   );

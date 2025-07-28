@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Button } from "@/components/ui/button"
-import { Copy, Check } from "lucide-react"
+import { Copy, Check, ChevronDown, ChevronUp, Brain } from "lucide-react"
 import type { Message } from "@/types"
 
 interface MessageBubbleProps {
@@ -16,6 +16,7 @@ interface MessageBubbleProps {
 export default function MessageBubble({ message, isStreaming = false }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const [displayedContent, setDisplayedContent] = useState("")
+  const [showReasoning, setShowReasoning] = useState(false)
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(message.content)
@@ -25,27 +26,71 @@ export default function MessageBubble({ message, isStreaming = false }: MessageB
 
   const isUser = message.role === "user"
 
-  // Enhanced streaming effect - slower, smoother character-by-character reveal
+  // Parse reasoning/thinking content from models like DeepSeek R1
+  const parseReasoningContent = (content: string) => {
+    // Look for thinking tags or reasoning patterns
+    const thinkingRegex = /<think>([\s\S]*?)<\/think>/g
+    const reasoningRegex = /\*\*Reasoning:\*\*([\s\S]*?)(?=\*\*|$)/g
+    const thoughtRegex = /\*\*Thought:\*\*([\s\S]*?)(?=\*\*|$)/g
+    
+    let reasoning = ""
+    let mainContent = content
+    
+    // Extract thinking content
+    let match
+    while ((match = thinkingRegex.exec(content)) !== null) {
+      reasoning += match[1].trim() + "\n\n"
+      mainContent = mainContent.replace(match[0], "")
+    }
+    
+    // Extract reasoning sections
+    while ((match = reasoningRegex.exec(content)) !== null) {
+      reasoning += "**Reasoning:**" + match[1].trim() + "\n\n"
+      mainContent = mainContent.replace(match[0], "")
+    }
+    
+    // Extract thought sections
+    while ((match = thoughtRegex.exec(content)) !== null) {
+      reasoning += "**Thought:**" + match[1].trim() + "\n\n"
+      mainContent = mainContent.replace(match[0], "")
+    }
+    
+    return {
+      reasoning: reasoning.trim(),
+      mainContent: mainContent.trim()
+    }
+  }
+
+  const { reasoning, mainContent } = parseReasoningContent(message.content)
+
+  // Fixed streaming effect - smooth character-by-character reveal without glitching
   React.useEffect(() => {
     if (isStreaming && !isUser) {
-      let currentIndex = 0;
-      const content = message.content;
-      setDisplayedContent("");
+      // Only start streaming if we don't already have content displayed
+      // or if the new content is longer than what we're displaying
+      const currentLength = displayedContent.length;
+      const newLength = message.content.length;
       
-      const streamInterval = setInterval(() => {
-        if (currentIndex < content.length) {
-          setDisplayedContent(content.slice(0, currentIndex + 1));
-          currentIndex++;
-        } else {
-          clearInterval(streamInterval);
-        }
-      }, 30); // Slower streaming - 30ms per character
-      
-      return () => clearInterval(streamInterval);
+      if (newLength > currentLength) {
+        // Continue from where we left off
+        let currentIndex = currentLength;
+        
+        const streamInterval = setInterval(() => {
+          if (currentIndex < message.content.length) {
+            setDisplayedContent(message.content.slice(0, currentIndex + 1));
+            currentIndex++;
+          } else {
+            clearInterval(streamInterval);
+          }
+        }, 20); // Smooth streaming - 20ms per character
+        
+        return () => clearInterval(streamInterval);
+      }
     } else {
+      // Not streaming or is user message - show full content immediately
       setDisplayedContent(message.content);
     }
-  }, [message.content, isStreaming, isUser]);
+  }, [message.content, isStreaming, isUser, displayedContent.length]);
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-6 group`}>
@@ -88,12 +133,57 @@ export default function MessageBubble({ message, isStreaming = false }: MessageB
             ),
           }}
         >
-          {displayedContent}
+          {isStreaming ? displayedContent : (isUser ? message.content : mainContent)}
         </ReactMarkdown>
         
         {/* Streaming cursor */}
         {isStreaming && !isUser && (
           <span className="inline-block w-2 h-5 bg-purple-400 animate-pulse ml-1" />
+        )}
+
+        {/* Reasoning section for AI responses */}
+        {!isUser && reasoning && (
+          <div className="mt-4 border-t border-white/10 pt-3">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowReasoning(!showReasoning)}
+              className="flex items-center gap-2 text-xs text-white/60 hover:text-white/80 mb-2"
+            >
+              <Brain className="w-3 h-3" />
+              {showReasoning ? "Hide" : "Show"} Reasoning
+              {showReasoning ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </Button>
+            
+            {showReasoning && (
+              <div className="bg-black/20 rounded-lg p-3 border border-white/10">
+                <ReactMarkdown
+                  className="text-sm text-white/70 prose prose-invert max-w-none"
+                  components={{
+                    code: ({ node, inline, className, children, ...props }) => {
+                      const match = /language-(\w+)/.exec(className || "");
+                      return node && !node.properties.inline && match ? (
+                        <SyntaxHighlighter
+                          style={vscDarkPlus as any}
+                          language={match[1]}
+                          PreTag="div"
+                        >
+                          {String(children).replace(/\n$/, "")}
+                        </SyntaxHighlighter>
+                      ) : (
+                        <code className={className} {...props}>
+                          {children}
+                        </code>
+                      );
+                    },
+                    p: ({ children }) => <p className="mb-2 text-xs">{children}</p>,
+                  }}
+                >
+                  {reasoning}
+                </ReactMarkdown>
+              </div>
+            )}
+          </div>
         )}
 
         {/* Copy button */}

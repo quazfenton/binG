@@ -208,6 +208,26 @@ export default function ConversationInterface() {
     handleSubmit(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>);
   };
 
+  // Retry function to resend the last user message
+  const handleRetry = () => {
+    if (messages.length > 0) {
+      // Find the last user message
+      const lastUserMessage = [...messages].reverse().find(msg => msg.role === 'user');
+      if (lastUserMessage) {
+        // Remove any assistant messages after the last user message
+        const lastUserIndex = messages.lastIndexOf(lastUserMessage);
+        const messagesToKeep = messages.slice(0, lastUserIndex + 1);
+        setMessages(messagesToKeep);
+        
+        // Resend the last user message
+        setInput(lastUserMessage.content);
+        setTimeout(() => {
+          handleSubmit(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>);
+        }, 100);
+      }
+    }
+  };
+
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
       <div className="flex flex-col md:flex-row h-full">
@@ -229,6 +249,7 @@ export default function ConversationInterface() {
               handleToggleCodePreview();
             }} // Pass the function with an additional log
             onStopGeneration={stop} // Pass useChat's stop function
+            onRetry={handleRetry} // Pass the retry function
             currentProvider={currentProvider}
             currentModel={currentModel}
             error={error?.message}
@@ -252,7 +273,6 @@ export default function ConversationInterface() {
             availableProviders={availableProviders}
             onClearChat={handleNewChat} // Map to handleNewChat
             onShowHistory={() => setShowHistory(true)} // Map to setShowHistory
-            onStartGestureDetection={() => { /* Implement gesture start logic */ }} // Placeholder
             onSelectHistoryChat={handleLoadChat}
             currentProvider={currentProvider}
             currentModel={currentModel}

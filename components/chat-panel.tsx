@@ -24,8 +24,6 @@ interface ChatPanelProps {
   availableProviders: LLMProvider[];
   onClearChat: () => void;
   onShowHistory: () => void;
-  onStartGestureDetection: () => void; // Passed to InteractionPanel for gesture detection
-  onStopGestureDetection: () => void;  // Passed to InteractionPanel for gesture detection
   currentConversationId: string | null;
   onSelectHistoryChat: (id: string) => void;
   // Props for InteractionPanel
@@ -47,8 +45,6 @@ export function ChatPanel({
   availableProviders,
   onClearChat,
   onShowHistory,
-  onStartGestureDetection,
-  onStopGestureDetection,
   currentConversationId,
   onSelectHistoryChat,
   currentProvider,
@@ -85,14 +81,8 @@ export function ChatPanel({
 
   // Handler for the accessibility button in InteractionPanel
   const handleToggleAccessibilityOptions = () => {
-    setIsAccessibilityOptionsOpen(prevOpenState => {
-      const newState = !prevOpenState;
-      // Toggle gesture detection along with accessibility options
-      if (newState) {
-        onStartGestureDetection();
-      } else {
-        onStopGestureDetection();
-      }
+    setIsAccessibilityOptionsOpen(prevState => {
+      const newState = !prevState;
       return newState; // Return the new state
     });
   };
@@ -120,7 +110,7 @@ export function ChatPanel({
         ))}
         {isLoading && (
           <MessageBubble
-            message={{ id: "loading", role: "assistant", content: "Thinking..." }}
+            message={{ id: "loading", role: "assistant", content: "..." }}
             isStreaming={true}
           />
         )}
@@ -141,7 +131,7 @@ export function ChatPanel({
           />
         </div>
       )}
-
+/*
       <InteractionPanel
         onSubmit={handleUserMessageSubmit}
         onNewChat={onClearChat}
@@ -158,7 +148,7 @@ export function ChatPanel({
         availableProviders={availableProviders}
         onProviderChange={onProviderChange}
       />
-
+*/
       <CodePreviewPanel
         isOpen={isCodePreviewOpen}
         onClose={() => setIsCodePreviewOpen(false)}
