@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from 'react';
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
@@ -47,7 +47,7 @@ interface ProjectStructure {
   dependencies?: string[]
   devDependencies?: string[]
   scripts?: { [key: string]: string }
-  framework: 'react' | 'vue' | 'angular' | 'svelte' | 'solid' | 'vanilla' | 'next' | 'nuxt' | 'gatsby' | 'vite' | 'astro' | 'remix'
+  framework: 'react' | 'vue' | 'angular' | 'svelte' | 'solid' | 'vanilla' | 'next' | 'nuxt' | 'gatsby' | 'vite' | 'astro' | 'remix' | 'qwik' | 'gradio' | 'streamlit' | 'flask' | 'fastapi' | 'django' | 'vite-react'
   bundler?: 'webpack' | 'vite' | 'parcel' | 'rollup' | 'esbuild'
   packageManager?: 'npm' | 'yarn' | 'pnpm' | 'bun'
 }
@@ -107,8 +107,7 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
       perl: 'pl',
       lua: 'lua',
       dart: 'dart',
-      vue: 'vue',
-      svelte: 'svelte',
+      // Removed duplicate entries
       shell: 'sh',
       bash: 'sh',
       yaml: 'yml',
@@ -605,81 +604,14 @@ Generated on: ${new Date().toLocaleString()}
     }
   }, [isDragging, handleMouseMove, handleMouseUp])
 
-  // Function to detect and add popular dependencies based on code content
+  // Function to detect popular dependencies from code content (only used when package.json is missing)
   const getPopularDependencies = (codeContent: string, framework: string): Record<string, string> => {
     const deps: Record<string, string> = {};
     
-    // Common utility libraries
-    if (codeContent.includes('lodash') || codeContent.includes('_')) {
-      deps['lodash'] = 'latest';
-    }
-    if (codeContent.includes('axios') || codeContent.includes('axios.')) {
-      deps['axios'] = 'latest';
-    }
-    if (codeContent.includes('moment') || codeContent.includes('dayjs')) {
-      deps['dayjs'] = 'latest';
-    }
-    if (codeContent.includes('uuid') || codeContent.includes('v4()')) {
-      deps['uuid'] = 'latest';
-    }
-    
-    // React-specific dependencies
+    // Only add core framework dependencies if not already defined
     if (framework === 'react' || framework === 'next') {
-      if (codeContent.includes('useState') || codeContent.includes('useEffect')) {
-        deps['react'] = 'latest';
-        deps['react-dom'] = 'latest';
-      }
-      if (codeContent.includes('react-router') || codeContent.includes('useNavigate')) {
-        deps['react-router-dom'] = 'latest';
-      }
-      if (codeContent.includes('styled-components') || codeContent.includes('styled.')) {
-        deps['styled-components'] = 'latest';
-      }
-      if (codeContent.includes('framer-motion') || codeContent.includes('motion.')) {
-        deps['framer-motion'] = 'latest';
-      }
-      if (codeContent.includes('react-hook-form') || codeContent.includes('useForm')) {
-        deps['react-hook-form'] = 'latest';
-      }
-    }
-    
-    // Vue-specific dependencies
-    if (framework === 'vue') {
-      if (codeContent.includes('vue-router') || codeContent.includes('useRouter')) {
-        deps['vue-router'] = 'latest';
-      }
-      if (codeContent.includes('pinia') || codeContent.includes('useStore')) {
-        deps['pinia'] = 'latest';
-      }
-    }
-    
-    // CSS frameworks
-    if (codeContent.includes('tailwind') || codeContent.includes('tw-')) {
-      deps['tailwindcss'] = 'latest';
-    }
-    if (codeContent.includes('bootstrap') || codeContent.includes('btn-')) {
-      deps['bootstrap'] = 'latest';
-    }
-    
-    // Animation libraries
-    if (codeContent.includes('gsap') || codeContent.includes('TweenMax')) {
-      deps['gsap'] = 'latest';
-    }
-    
-    // Chart libraries
-    if (codeContent.includes('chart.js') || codeContent.includes('Chart(')) {
-      deps['chart.js'] = 'latest';
-    }
-    if (codeContent.includes('d3') || codeContent.includes('d3.')) {
-      deps['d3'] = 'latest';
-    }
-    
-    // Form validation
-    if (codeContent.includes('yup') || codeContent.includes('Yup.')) {
-      deps['yup'] = 'latest';
-    }
-    if (codeContent.includes('joi') || codeContent.includes('Joi.')) {
-      deps['joi'] = 'latest';
+      deps['react'] = 'latest';
+      deps['react-dom'] = 'latest';
     }
     
     return deps;
@@ -830,15 +762,10 @@ export default {
               }}
               files={sandpackFiles}
               customSetup={{
-                dependencies: {
-                  // Add detected dependencies
-                  ...(projectStructure.dependencies?.reduce((acc, dep) => {
-                    acc[dep] = 'latest';
-                    return acc;
-                  }, {} as Record<string, string>) || {}),
-                  // Add popular packages based on code content
-                  ...getPopularDependencies(Object.values(projectStructure.files).join('\n'), projectStructure.framework)
-                },
+                dependencies: projectStructure.dependencies?.reduce((acc, dep) => {
+                  acc[dep] = 'latest';
+                  return acc;
+                }, {} as Record<string, string>) || getPopularDependencies(Object.values(projectStructure.files).join('\n'), projectStructure.framework),
                 devDependencies: projectStructure.devDependencies?.reduce((acc, dep) => {
                   acc[dep] = 'latest';
                   return acc;
