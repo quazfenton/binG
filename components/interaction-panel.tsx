@@ -44,6 +44,8 @@ import {
   Camera,
   Map,
   Gamepad2,
+  Shield,
+  Zap,
 } from "lucide-react";
 import type { LLMProvider } from '../lib/api/llm-providers';
 
@@ -63,7 +65,6 @@ interface InteractionPanelProps {
   setInput: (value: string) => void; // Add setInput prop
   availableProviders: LLMProvider[];
   onProviderChange: (provider: string, model: string) => void;
-  onRotateProvider?: () => void; // Add rotate provider function
   hasCodeBlocks?: boolean; // Add code blocks detection
 }
 
@@ -83,7 +84,6 @@ export default function InteractionPanel({
   setInput, // Destructure setInput
   availableProviders,
   onProviderChange,
-  onRotateProvider,
   hasCodeBlocks = false,
 }: InteractionPanelProps) {
   const [activeTab, setActiveTab] = useState("chat");
@@ -195,6 +195,46 @@ export default function InteractionPanel({
         icon: Sparkles,
         color: 'text-amber-400',
         action: () => setInput('Provide strategic business analysis including: 1) Market analysis 2) Competitive landscape 3) SWOT analysis 4) Growth opportunities 5) Action plan\n\nBusiness/Industry: ')
+      },
+      {
+        id: 'api-designer',
+        name: 'API Designer',
+        description: 'Design RESTful APIs, GraphQL schemas, and API documentation',
+        icon: Globe,
+        color: 'text-teal-400',
+        action: () => setInput('Design a comprehensive API including: 1) Endpoint structure 2) Request/response schemas 3) Authentication methods 4) Error handling 5) Rate limiting 6) Documentation\n\nAPI Purpose: \nData Models: \nAuthentication Type: ')
+      },
+      {
+        id: 'security-auditor',
+        name: 'Security Auditor',
+        description: 'Security analysis, vulnerability assessment, and best practices',
+        icon: Settings,
+        color: 'text-red-500',
+        action: () => setInput('Perform security analysis including: 1) Vulnerability assessment 2) Security best practices 3) Compliance requirements 4) Risk mitigation strategies 5) Security implementation guide\n\nSystem/Application: \nSecurity Level Required: \nCompliance Standards: ')
+      },
+      {
+        id: 'performance-optimizer',
+        name: 'Performance Optimizer',
+        description: 'Code optimization, performance analysis, and bottleneck identification',
+        icon: Zap,
+        color: 'text-yellow-500',
+        action: () => setInput('Analyze and optimize performance including: 1) Code profiling 2) Bottleneck identification 3) Optimization strategies 4) Caching solutions 5) Monitoring recommendations\n\nCode/System: \nPerformance Goals: \nCurrent Issues: ')
+      },
+      {
+        id: 'devops-engineer',
+        name: 'DevOps Engineer',
+        description: 'CI/CD pipelines, infrastructure as code, and deployment strategies',
+        icon: Settings,
+        color: 'text-blue-500',
+        action: () => setInput('Design DevOps solution including: 1) CI/CD pipeline 2) Infrastructure as Code 3) Deployment strategies 4) Monitoring & logging 5) Scaling solutions\n\nTech Stack: \nCloud Provider: \nDeployment Requirements: ')
+      },
+      {
+        id: 'ux-designer',
+        name: 'UX Designer',
+        description: 'User experience design, wireframes, and usability analysis',
+        icon: Palette,
+        color: 'text-purple-500',
+        action: () => setInput('Create UX design including: 1) User journey mapping 2) Wireframes & mockups 3) Usability principles 4) Accessibility guidelines 5) Design system recommendations\n\nTarget Users: \nPlatform: \nKey Features: ')
       }
     ];
 

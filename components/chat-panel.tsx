@@ -7,7 +7,6 @@ import { useVoiceInput } from "@/hooks/use-voice-input";
 import MessageBubble from "@/components/message-bubble";
 import AccessibilityControls from "@/components/accessibility-controls";
 import CodePreviewPanel from "@/components/code-preview-panel";
-import InteractionPanel from "@/components/interaction-panel";
 import { LLMProvider } from "@/types";
 
 interface ChatPanelProps {
@@ -26,7 +25,6 @@ interface ChatPanelProps {
   onShowHistory: () => void;
   currentConversationId: string | null;
   onSelectHistoryChat: (id: string) => void;
-  // Props for InteractionPanel
   currentProvider: string;
   currentModel: string;
   voiceEnabled: boolean;
