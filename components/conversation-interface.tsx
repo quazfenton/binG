@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, Suspense, useEffect, useCallback } from "react"; // Import useCallback
+import { useState, useRef, Suspense, useEffect, useCallback, useMemo } from "react"; // Import useCallback and useMemo
 import { useChat, type Message } from "ai/react"; // Import useChat and Message type
 import type { ChatHistory } from "@/types";
 import {
@@ -188,6 +188,30 @@ export default function ConversationInterface() {
     toast.success(`Switched to ${provider} - ${model}`);
   };
 
+  // Auto-rotate to next provider
+  const rotateToNextProvider = useCallback(() => {
+    if (availableProviders.length <= 1) return;
+    
+    const currentProviderIndex = availableProviders.findIndex(p => p.name === currentProvider);
+    const nextIndex = (currentProviderIndex + 1) % availableProviders.length;
+    const nextProvider = availableProviders[nextIndex];
+    
+    if (nextProvider && nextProvider.models.length > 0) {
+      const nextModel = nextProvider.models[0].id; // Use first model of next provider
+      handleProviderChange(nextProvider.name, nextModel);
+    }
+  }, [availableProviders, currentProvider, handleProviderChange]);
+
+  // Auto-rotate on error (optional - can be triggered manually)
+  useEffect(() => {
+    if (error && error.message.includes('rate limit') || error?.message.includes('quota')) {
+      toast.info("Rate limit detected, rotating to next provider...");
+      setTimeout(() => {
+        rotateToNextProvider();
+      }, 1000);
+    }
+  }, [error, rotateToNextProvider]);
+
   const handleVoiceToggle = (enabled: boolean) => {
     setIsVoiceEnabled(enabled);
     const voiceSettings = voiceService.getSettings();
@@ -207,6 +231,14 @@ export default function ConversationInterface() {
       voiceService.stopListening();
     }
   };
+
+  // Check if there are code blocks in messages for preview button glow
+  const hasCodeBlocks = useMemo(() => {
+    return messages.some(message => 
+      message.role === 'assistant' && 
+      message.content.includes('```')
+    );
+  }, [messages]);
 
   const handleToggleCodePreview = () => {
     setShowCodePreview((prevShowCodePreview) => {
@@ -273,6 +305,8 @@ export default function ConversationInterface() {
             setInput={setInput} // Pass setInput to InteractionPanel
             availableProviders={availableProviders}
             onProviderChange={handleProviderChange}
+            onRotateProvider={rotateToNextProvider}
+            hasCodeBlocks={hasCodeBlocks}
           />
         </div>
 
