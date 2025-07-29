@@ -24,7 +24,12 @@ export default function ChatBox() {
   }
 
   return (
-    <ThemeProvider>
+    <ThemeProvider
+      attribute="class"
+      defaultTheme="dark"
+      enableSystem
+      disableTransitionOnChange
+    >
       <ConversationInterface />
     </ThemeProvider>
   )

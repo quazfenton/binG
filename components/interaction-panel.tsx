@@ -61,6 +61,7 @@ import {
 } from "lucide-react";
 import type { LLMProvider } from '../lib/api/llm-providers';
 import { templateCache, cacheKey } from '../lib/cache';
+import MultiModelComparison from './multi-model-comparison';
 
 interface InteractionPanelProps {
   onSubmit: (content: string) => void;
@@ -113,6 +114,7 @@ export default function InteractionPanel({
   const [pendingDiffs, setPendingDiffs] = useState<any[]>([]);
   const [showFileSelector, setShowFileSelector] = useState(false);
   const [codeMode, setCodeMode] = useState<'basic' | 'advanced'>('basic');
+  const [showMultiModelComparison, setShowMultiModelComparison] = useState(false);
 
   // Plugin modules with randomization
   const pluginModules = useMemo(() => {
@@ -132,6 +134,14 @@ export default function InteractionPanel({
         icon: Code,
         color: 'text-blue-400',
         action: () => setInput('Review this code for best practices, performance, security, and maintainability. Provide specific suggestions:\n\n```\n// Paste your code here\n```')
+      },
+      {
+        id: 'multi-model-compare',
+        name: 'Multi-Model Compare',
+        description: 'Compare responses from multiple AI models simultaneously',
+        icon: Zap,
+        color: 'text-yellow-400',
+        action: () => setShowMultiModelComparison(true)
       },
       {
         id: 'document-analyzer',
@@ -1103,6 +1113,15 @@ export default function InteractionPanel({
           </Tabs>
         )}
       </div>
+
+      {/* Multi-Model Comparison Modal */}
+      <MultiModelComparison
+        isOpen={showMultiModelComparison}
+        onClose={() => setShowMultiModelComparison(false)}
+        availableProviders={availableProviders}
+        currentProvider={currentProvider}
+        currentModel={currentModel}
+      />
     </div>
   );
 }
