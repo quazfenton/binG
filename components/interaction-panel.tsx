@@ -56,7 +56,6 @@ import {
   Package,
   GitBranch,
   Key,
-  Zap,
   Cloud,
   Server,
 } from "lucide-react";
