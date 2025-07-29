@@ -83,11 +83,50 @@ const config: Config = {
   				to: {
   					height: '0'
   				}
+  			},
+  			'float-slow': {
+  				'0%, 100%': {
+  					transform: 'translateY(0px) translateX(0px) scale(1)'
+  				},
+  				'25%': {
+  					transform: 'translateY(-20px) translateX(10px) scale(1.05)'
+  				},
+  				'50%': {
+  					transform: 'translateY(-10px) translateX(-15px) scale(0.95)'
+  				},
+  				'75%': {
+  					transform: 'translateY(-30px) translateX(5px) scale(1.02)'
+  				}
+  			},
+  			'float-reverse': {
+  				'0%, 100%': {
+  					transform: 'translateY(0px) translateX(0px) scale(1)'
+  				},
+  				'25%': {
+  					transform: 'translateY(15px) translateX(-10px) scale(0.98)'
+  				},
+  				'50%': {
+  					transform: 'translateY(25px) translateX(20px) scale(1.03)'
+  				},
+  				'75%': {
+  					transform: 'translateY(5px) translateX(-8px) scale(0.97)'
+  				}
+  			},
+  			'pulse-slow': {
+  				'0%, 100%': {
+  					opacity: '0.3'
+  				},
+  				'50%': {
+  					opacity: '0.6'
+  				}
   			}
   		},
   		animation: {
   			'accordion-down': 'accordion-down 0.2s ease-out',
-  			'accordion-up': 'accordion-up 0.2s ease-out'
+  			'accordion-up': 'accordion-up 0.2s ease-out',
+  			'float-slow': 'float-slow 6s ease-in-out infinite',
+  			'float-reverse': 'float-reverse 8s ease-in-out infinite',
+  			'pulse-slow': 'pulse-slow 4s ease-in-out infinite'
   		}
   	}
   },

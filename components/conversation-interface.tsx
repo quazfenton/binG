@@ -312,8 +312,14 @@ export default function ConversationInterface() {
     }
 
     setInput(content);
-    // The handleSubmit from useChat expects a React.FormEvent.
-    handleSubmit(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>);
+    // Use setTimeout to ensure input is set before submitting
+    setTimeout(() => {
+      const fakeEvent = {
+        preventDefault: () => {},
+        currentTarget: { reset: () => {} }
+      } as React.FormEvent<HTMLFormElement>;
+      handleSubmit(fakeEvent);
+    }, 0);
   };
 
   // Retry function to resend the last user message
@@ -356,7 +362,7 @@ export default function ConversationInterface() {
         </div>
 
         {/* Chat Panel */}
-        <div className="w-full md:w-96 md:border-l md:border-white/10 relative z-10">
+        <div className="md:border-l md:border-white/10 relative z-10">
           <ChatPanel
             messages={messages} // Pass messages from useChat
             input={input} // Pass input from useChat
@@ -416,7 +422,7 @@ export default function ConversationInterface() {
       {/* Code Preview Panel */}
       <CodePreviewPanel
         messages={messages}
-        isOpen={showCodePreview}
+        isVisible={showCodePreview}
         onClose={() => setShowCodePreview(false)}
       />
 
