@@ -58,6 +58,9 @@ import {
   Package,
   GitBranch,
   Key,
+  Zap,
+  Cloud,
+  Server,
 } from "lucide-react";
 import type { LLMProvider } from '../lib/api/llm-providers';
 
@@ -100,16 +103,23 @@ export default function InteractionPanel({
 }: InteractionPanelProps) {
   const [activeTab, setActiveTab] = useState("chat");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  
+
   // Draggable panel state
-  const [panelHeight, setPanelHeight] = useState(250); // Default height
+  const [panelHeight, setPanelHeight] = useState(350); // Default height
   const [panelWidth, setPanelWidth] = useState(800);
   const [isDragging, setIsDragging] = useState(false);
   const [isDraggingSide, setIsDraggingSide] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
-  const [isAttachedToEdge, setIsAttachedToEdge] = useState(false);
+  const [isAttachedToEdge, setIsAttachedToEdge] = useState(true);
   const [attachedSide, setAttachedSide] = useState<'bottom' | 'left' | 'right'>('bottom');
   const [panelPosition, setPanelPosition] = useState({ x: 0, y: 0 });
+
+  // Advanced Code Mode State
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [projectStructure, setProjectStructure] = useState<any[]>([]);
+  const [pendingDiffs, setPendingDiffs] = useState<any[]>([]);
+  const [showFileSelector, setShowFileSelector] = useState(false);
+  const [codeMode, setCodeMode] = useState<'basic' | 'advanced'>('basic');
 
   // Plugin modules with randomization
   const pluginModules = useMemo(() => {
@@ -337,6 +347,38 @@ export default function InteractionPanel({
         icon: Key,
         color: 'text-indigo-500',
         action: () => setInput('Setup environment management:\n\n🔐 **Environment Variables**\n- Development, staging, production configs\n- Secret management strategy\n- Environment validation\n\n🛡️ **Security**\n- API key rotation\n- Encrypted secrets\n- Access control\n\n📁 **Configuration Files**\n- .env templates\n- Docker environment files\n- Kubernetes secrets\n- Cloud provider configs\n\n🔄 **Deployment**\n- Environment promotion\n- Configuration drift detection\n- Rollback strategies\n\nDeployment Platform: \nSecrets to Manage: \nEnvironments Needed: ')
+      },
+      {
+        id: 'huggingface-spaces',
+        name: 'HF Spaces ImageGen',
+        description: 'Embed Hugging Face Spaces image generation models',
+        icon: ImageIcon,
+        color: 'text-yellow-400',
+        action: () => setInput('Generate images using Hugging Face Spaces:\n\n🎨 **Available Models:**\n- DALL-E Mini/Mega\n- Stable Diffusion variants\n- Midjourney-style models\n- Artistic style transfer\n- Face generation models\n\n⚡ **Zero GPU Hosting:**\n- Free GPU access\n- Instant model loading\n- No setup required\n- Community models\n\n🖼️ **Image Generation:**\n- Text-to-image\n- Image-to-image\n- Style transfer\n- Upscaling\n- Inpainting\n\n**Prompt:** Describe the image you want to generate\n**Style:** (realistic, artistic, cartoon, etc.)\n**Dimensions:** (512x512, 1024x1024, etc.)\n\nDescribe your image: ')
+      },
+      {
+        id: 'github-explorer',
+        name: 'GitHub Explorer',
+        description: 'Browse trending repos with retro game-like interface',
+        icon: GitBranch,
+        color: 'text-green-400',
+        action: () => setInput('🕹️ **GITHUB ARCADE** 🕹️\n\n```\n┌─────────────────────────────────────┐\n│  🎮 SELECT TRENDING REPOSITORY 🎮   │\n├─────────────────────────────────────┤\n│ [A] 🔥 React 19 - Latest Features  │\n│ [B] ⚡ Vite 5.0 - Lightning Fast   │\n│ [C] 🤖 LangChain - AI Chains       │\n│ [D] 🎨 Tailwind CSS - Utility CSS  │\n│ [E] 📦 Next.js 14 - Full Stack     │\n│ [F] 🔧 TypeScript - Type Safety    │\n│ [G] 🚀 Astro - Static Site Gen     │\n│ [H] 💾 Prisma - Database ORM       │\n└─────────────────────────────────────┘\n```\n\n🎯 **MISSION:** Select a repository to:\n- 📋 Auto-fetch README.md\n- 📦 Parse package.json\n- 🔍 Extract main scripts\n- 📝 Generate project analysis\n- 🛠️ Suggest improvements\n\n**Enter your choice (A-H) or specify a custom repo:**\nRepository: ')
+      },
+      {
+        id: 'cloud-storage',
+        name: 'Cloud Storage 5GB',
+        description: 'Setup cloud storage with 5GB free tier',
+        icon: Cloud,
+        color: 'text-blue-400',
+        action: () => setInput('☁️ **CLOUD STORAGE SETUP** (5GB Free)\n\n🗄️ **Storage Providers:**\n- Google Cloud Storage\n- AWS S3\n- Azure Blob Storage\n- DigitalOcean Spaces\n- Cloudflare R2\n\n📦 **Implementation Features:**\n- File upload/download API\n- Automatic backup system\n- CDN integration\n- Image optimization\n- Version control\n- Access permissions\n\n🔧 **Self-Hosting Option:**\n- MinIO server setup\n- Docker containerization\n- SSL/TLS encryption\n- Backup strategies\n\n**ENABLE_CLOUD_STORAGE = true** (set to false to disable)\n\nPreferred Provider: \nUse Case: \nSecurity Requirements: ')
+      },
+      {
+        id: 'vps-deployment',
+        name: 'VPS Deployment',
+        description: 'Deploy applications to VPS with automated setup',
+        icon: Server,
+        color: 'text-purple-400',
+        action: () => setInput('🖥️ **VPS DEPLOYMENT SYSTEM**\n\n🚀 **VPS Providers:**\n- DigitalOcean Droplets\n- Linode\n- Vultr\n- Hetzner Cloud\n- Google Compute Engine\n\n⚙️ **Automated Setup:**\n- Server provisioning\n- Docker installation\n- Nginx reverse proxy\n- SSL certificate (Let\'s Encrypt)\n- Firewall configuration\n- Monitoring setup\n\n🔄 **CI/CD Pipeline:**\n- GitHub Actions integration\n- Automated deployments\n- Health checks\n- Rollback capabilities\n- Log aggregation\n\n**ENABLE_VPS_DEPLOYMENT = true** (set to false to disable)\n\nApplication Type: \nTraffic Expected: \nBudget Range: ')
       }
     ];
 
@@ -359,15 +401,15 @@ export default function InteractionPanel({
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!isDragging) return;
-    
+
     const deltaY = dragStartY.current - e.clientY;
     const deltaX = e.clientX - dragStartX.current;
-    
+
     // Check for side attachment based on mouse position
     const windowWidth = window.innerWidth;
     const windowHeight = window.innerHeight;
     const threshold = 50; // pixels from edge to trigger attachment
-    
+
     if (e.clientX < threshold) {
       // Attach to left side
       setIsAttachedToEdge(true);
@@ -418,11 +460,11 @@ export default function InteractionPanel({
 
   const handleSideMouseMove = useCallback((e: MouseEvent) => {
     if (!isDraggingSide) return;
-    
+
     const deltaX = e.clientX - dragStartX.current;
     const newWidth = Math.max(400, Math.min(1200, dragStartWidth.current + deltaX));
     setPanelWidth(newWidth);
-    
+
     // Check if close to edge for attachment
     const windowWidth = window.innerWidth;
     if (newWidth >= windowWidth * 0.9) {
@@ -465,7 +507,7 @@ export default function InteractionPanel({
   const chatSuggestions = useMemo(() => {
     const suggestions = [
       "unique app ideas",
-      "code a basic web app", 
+      "code a basic web app",
       "make an addicting web game",
       "show me sum interesting",
       "explain quantum computing simply",
@@ -477,7 +519,7 @@ export default function InteractionPanel({
       "debug this error",
       "optimize my workflow"
     ];
-    
+
     // Randomize order and return first 4
     return [...suggestions].sort(() => Math.random() - 0.5).slice(0, 4);
   }, []);
@@ -499,7 +541,7 @@ export default function InteractionPanel({
       template: "Create a [framework] component that [functionality]. Include:\n- TypeScript types\n- Props interface\n- Error handling\n- Unit tests\n- Documentation"
     },
     {
-      title: "API Development", 
+      title: "API Development",
       template: "Build a [language] API for [purpose] with:\n- RESTful endpoints\n- Input validation\n- Error handling\n- Authentication\n- Database integration\n- API documentation"
     },
     {
@@ -580,66 +622,63 @@ export default function InteractionPanel({
   ];
 
   return (
-    <div 
-      className={`absolute bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 ${
-        isAttachedToEdge 
-          ? attachedSide === 'left' 
-            ? 'left-0 top-0 bottom-0 border-r' 
-            : attachedSide === 'right' 
-              ? 'right-0 top-0 bottom-0 border-l' 
+    <div
+      className={`absolute bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 ${isAttachedToEdge
+          ? attachedSide === 'left'
+            ? 'left-0 top-0 bottom-0 border-r'
+            : attachedSide === 'right'
+              ? 'right-0 top-0 bottom-0 border-l'
               : 'left-0 right-0 bottom-0 border-t'
-          : 'left-1/2 bottom-0 transform -translate-x-1/2 border'
-      }`}
-      style={{ 
-        height: isAttachedToEdge && (attachedSide === 'left' || attachedSide === 'right') 
-          ? '100vh' 
-          : isMinimized 
-            ? '60px' 
+          : 'left-0 right-0 bottom-0 border-t'
+        }`}
+      style={{
+        height: isAttachedToEdge && (attachedSide === 'left' || attachedSide === 'right')
+          ? '100vh'
+          : isMinimized
+            ? '60px'
             : `${panelHeight + (activeTab === 'code' || activeTab === 'info' ? 80 : 0)}px`,
-        width: isAttachedToEdge 
-          ? attachedSide === 'bottom' 
-            ? '100%' 
+        width: isAttachedToEdge
+          ? attachedSide === 'bottom'
+            ? '100%'
             : `${panelWidth}px`
           : `${panelWidth}px`,
-        transform: isDragging || isDraggingSide 
-          ? 'none' 
-          : isAttachedToEdge 
-            ? undefined 
+        transform: isDragging || isDraggingSide
+          ? 'none'
+          : isAttachedToEdge
+            ? undefined
             : `translate(-50%, ${panelPosition.y}px)`,
         left: !isAttachedToEdge ? `calc(50% + ${panelPosition.x}px)` : undefined
       }}
     >
       {/* Drag Handle - changes based on attachment */}
-      <div 
-        className={`absolute bg-white/20 hover:bg-white/30 transition-all duration-200 ${isDragging ? 'bg-white/40' : ''} ${
-          attachedSide === 'left' 
+      <div
+        className={`absolute bg-white/20 hover:bg-white/30 transition-all duration-200 ${isDragging ? 'bg-white/40' : ''} ${attachedSide === 'left'
             ? 'top-0 right-0 bottom-0 w-1 cursor-ew-resize'
             : attachedSide === 'right'
               ? 'top-0 left-0 bottom-0 w-1 cursor-ew-resize'
               : 'top-0 left-0 right-0 h-1 cursor-ns-resize'
-        }`}
+          }`}
         onMouseDown={handleMouseDown}
       />
-      
+
       {/* Side Drag Handles for width adjustment when attached to sides */}
       {isAttachedToEdge && (attachedSide === 'left' || attachedSide === 'right') && (
         <>
-          <div 
+          <div
             className={`absolute top-0 left-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200 ${isDraggingSide ? 'bg-white/40' : ''}`}
             onMouseDown={handleSideMouseDown}
           />
-          <div 
+          <div
             className={`absolute top-0 right-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200 ${isDraggingSide ? 'bg-white/40' : ''}`}
             onMouseDown={handleSideMouseDown}
           />
         </>
       )}
-      
-      <div className={`p-4 h-full overflow-hidden ${
-        attachedSide === 'left' || attachedSide === 'right' 
-          ? 'max-w-none' 
+
+      <div className={`p-4 h-full overflow-hidden ${attachedSide === 'left' || attachedSide === 'right'
+          ? 'max-w-none'
           : 'max-w-4xl mx-auto'
-      }`}>
+        }`}>
         {/* Minimize/Maximize Controls */}
         <div className="absolute top-2 right-4 flex items-center gap-2">
           <Button
@@ -655,253 +694,136 @@ export default function InteractionPanel({
           </div>
         </div>
         {!isMinimized && (
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <div className="flex justify-between items-center mb-4">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <div className="">
-                  <Sparkles className="h-3 w-3 text-white" />
-                </div>
-                <span className="text-sm font-medium text-white/80">
-                 compute
-                </span>
-              </div>
-              <TabsList className="bg-black/40">
-                <TabsTrigger value="chat">
-                  <MessageSquare className="h-4 w-4 mr-2" />
-                  Chat
-                </TabsTrigger>
-                <TabsTrigger value="code">
-                  <Code className="h-4 w-4 mr-2" />
-                  Code
-                </TabsTrigger>
-                <TabsTrigger value="images">
-                  <ImageIcon className="h-4 w-4 mr-2" />
-                  Images
-                </TabsTrigger>
-                <TabsTrigger value="plugins">
-                  <Zap className="h-4 w-4 mr-2" />
-                  Plugins
-                </TabsTrigger>
-              </TabsList>
-            </div>
-
-            <div className="flex space-x-2">
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={onNewChat}
-                title="New Chat"
-              >
-                <Plus className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={toggleHistory}
-                title="Chat History"
-              >
-                <History className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={toggleAccessibility} // Call the passed prop
-                title="Accessibility Options"
-              >
-                <Accessibility className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={toggleCodePreview} // Simplified onClick handler
-                title="Code Preview"
-                className={hasCodeBlocks ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse" : ""}
-              >
-                <Code className={`h-4 w-4 ${hasCodeBlocks ? "text-white" : ""}`} />
-              </Button>
-            </div>
-          </div>
-
-          <TabsContent value="chat" className="m-0">
-            {/* Provider Status and Selection */}
-            <div className="flex items-center justify-between mb-3 text-xs text-white/60">
-              <div className="flex items-center gap-2">
-                <Select
-                  value={`${currentProvider}:${currentModel}`}
-                  onValueChange={(value) => {
-                    const [provider, model] = value.split(":");
-                    onProviderChange(provider, model);
-                  }}
-                >
-                  <SelectTrigger className="w-[280px] bg-black/40 border-white/20">
-                    <SelectValue placeholder="Select a model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableProviders.map((provider) => (
-                      <SelectGroup key={provider.id}>
-                        <SelectLabel>{provider.name}</SelectLabel>
-                        {provider.models.map((model) => (
-                          <SelectItem key={model} value={`${provider.id}:${model}`}>
-                            {model}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {isProcessing && (
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <div className="flex justify-between items-center mb-4">
+              <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  <span>Generating...</span>
+                  <div className="">
+                    <Sparkles className="h-3 w-3 text-white" />
+                  </div>
+                  <span className="text-sm font-medium text-white/80">
+                    compute
+                  </span>
                 </div>
-              )}
+                <TabsList className="bg-black/40">
+                  <TabsTrigger value="chat">
+                    <MessageSquare className="h-4 w-4 mr-2" />
+                    Chat
+                  </TabsTrigger>
+                  <TabsTrigger value="code">
+                    <Code className="h-4 w-4 mr-2" />
+                    Code
+                  </TabsTrigger>
+                  <TabsTrigger value="images">
+                    <ImageIcon className="h-4 w-4 mr-2" />
+                    Images
+                  </TabsTrigger>
+                  <TabsTrigger value="plugins">
+                    <Zap className="h-4 w-4 mr-2" />
+                    Plugins
+                  </TabsTrigger>
+                </TabsList>
+              </div>
+
+              <div className="flex space-x-2">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={onNewChat}
+                  title="New Chat"
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={toggleHistory}
+                  title="Chat History"
+                >
+                  <History className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={toggleAccessibility} // Call the passed prop
+                  title="Accessibility Options"
+                >
+                  <Accessibility className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={toggleCodePreview} // Simplified onClick handler
+                  title="Code Preview"
+                  className={hasCodeBlocks ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse" : ""}
+                >
+                  <Code className={`h-4 w-4 ${hasCodeBlocks ? "text-white" : ""}`} />
+                </Button>
+              </div>
             </div>
 
-            {/* Error Display */}
-            {error && (
-              <div className="flex items-center justify-between gap-2 mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-xs">
+            <TabsContent value="chat" className="m-0">
+              {/* Provider Status and Selection */}
+              <div className="flex items-center justify-between mb-3 text-xs text-white/60">
                 <div className="flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                  <span>{error}</span>
-                </div>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => onRetry ? onRetry() : onSubmit(input)}
-                  className="ml-2"
-                >
-                  Retry
-                </Button>
-              </div>
-            )}
-
-            {/* Suggestions */}
-            <div className="flex flex-wrap gap-2 mb-4">
-              {chatSuggestions.map((suggestion, index) => (
-                <Button
-                  key={index}
-                  variant="secondary"
-                  size="sm"
-                  className="text-xs bg-black/20 hover:bg-black/40 transition-all duration-200"
-                  onClick={() => handleSuggestionClick(suggestion)}
-                  disabled={isProcessing}
-                >
-                  {suggestion}
-                </Button>
-              ))}
-            </div>
-
-            <form onSubmit={handleSubmit} className="flex space-x-2">
-              <div className="relative flex-1">
-                <Textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)} // Use the passed setInput
-                  placeholder="Type your message..."
-                  className="min-h-[60px] bg-black/40 border-white/20 pr-12 resize-none"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      handleSubmit(e);
-                    }
-                  }}
-                  disabled={isProcessing}
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    const enhancePrompt = `Please enhance and improve this message to be more clear, detailed, and effective:\n\n"${input}"\n\nProvide an enhanced version that is:
-- More specific and detailed
-- Better structured
-- More engaging
-- Clearer in intent
-- Professional yet conversational`;
-                    setInput(enhancePrompt);
-                  }}
-                  className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
-                  title="Enhance this message"
-                  disabled={!input.trim() || isProcessing}
-                >
-                  <Sparkles className={`h-4 w-4 ${input.trim() && !isProcessing ? 'text-purple-400 hover:text-purple-300' : 'text-gray-500'}`} />
-                </button>
-              </div>
-              {isProcessing && onStopGeneration ? (
-                <Button
-                  type="button"
-                  variant="destructive"
-                  className="self-end min-w-[80px]"
-                  onClick={onStopGeneration}
-                >
-                  <Square className="h-4 w-4 mr-2" />
-                  Stop
-                </Button>
-              ) : (
-                <Button
-                  type="submit"
-                  className="self-end min-w-[80px]"
-                  disabled={isProcessing || !input.trim()}
-                >
-                  {isProcessing ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <>
-                      <Send className="h-4 w-4 mr-2" />
-                      Send
-                    </>
-                  )}
-                </Button>
-              )}
-            </form>
-          </TabsContent>
-
-          <TabsContent value="code" className="m-0">
-            {/* Code Mode Header */}
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <Code className="h-4 w-4 text-blue-400" />
-                <span className="text-sm font-medium text-white">Code Assistant</span>
-              </div>
-              <Badge variant="outline" className="text-xs">
-                Enhanced Prompting
-              </Badge>
-            </div>
-
-            {/* Quick Templates */}
-            <div className="mb-4">
-              <h4 className="text-xs font-medium text-white/80 mb-2">Quick Templates</h4>
-              <div className="grid grid-cols-2 gap-2">
-                {displayedTemplates.map((template, index) => (
-                  <Button
-                    key={index}
-                    variant="outline"
-                    size="sm"
-                    className="text-xs bg-black/20 hover:bg-black/40 border-white/20 text-left justify-start h-auto p-2"
-                    onClick={() => setInput(template.template)}
-                    disabled={isProcessing}
+                  <Select
+                    value={`${currentProvider}:${currentModel}`}
+                    onValueChange={(value) => {
+                      const [provider, model] = value.split(":");
+                      onProviderChange(provider, model);
+                    }}
                   >
-                    <div>
-                      <div className="font-medium">{template.title}</div>
-                      <div className="text-xs text-white/60 mt-1 line-clamp-2">
-                        {template.template.split('\n')[0]}
-                      </div>
-                    </div>
-                  </Button>
-                ))}
+                    <SelectTrigger className="w-[280px] bg-black/40 border-white/20">
+                      <SelectValue placeholder="Select a model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableProviders.map((provider) => (
+                        <SelectGroup key={provider.id}>
+                          <SelectLabel>{provider.name}</SelectLabel>
+                          {provider.models.map((model) => (
+                            <SelectItem key={model} value={`${provider.id}:${model}`}>
+                              {model}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {isProcessing && (
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Generating...</span>
+                  </div>
+                )}
               </div>
-            </div>
 
-            {/* Code Suggestions */}
-            <div className="mb-4">
-              <h4 className="text-xs font-medium text-white/80 mb-2">Popular Requests</h4>
-              <div className="flex flex-wrap gap-2">
-                {codeSuggestions.slice(0, 4).map((suggestion, index) => (
+              {/* Error Display */}
+              {error && (
+                <div className="flex items-center justify-between gap-2 mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-xs">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <span>{error}</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => onRetry ? onRetry() : onSubmit(input)}
+                    className="ml-2"
+                  >
+                    Retry
+                  </Button>
+                </div>
+              )}
+
+              {/* Suggestions */}
+              <div className="flex flex-wrap gap-2 mb-4">
+                {chatSuggestions.map((suggestion, index) => (
                   <Button
                     key={index}
                     variant="secondary"
                     size="sm"
-                    className="text-xs bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/20 transition-all duration-200"
+                    className="text-xs bg-black/20 hover:bg-black/40 transition-all duration-200"
                     onClick={() => handleSuggestionClick(suggestion)}
                     disabled={isProcessing}
                   >
@@ -909,53 +831,46 @@ export default function InteractionPanel({
                   </Button>
                 ))}
               </div>
-            </div>
 
-            {/* Enhanced Code Input */}
-            <form onSubmit={handleSubmit} className="space-y-3">
-              <div className="relative">
-                <Textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
-                  className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-sm"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                      e.preventDefault();
-                      handleSubmit(e);
-                    }
-                  }}
-                  disabled={isProcessing}
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    const enhancePrompt = `Please enhance and improve this coding request to be more detailed and specific:\n\n"${input}"\n\nProvide an enhanced version that includes:
-- Specific framework/language requirements
-- Detailed feature specifications
-- Performance and security considerations
-- Code structure and architecture preferences
-- Testing and documentation requirements`;
-                    setInput(enhancePrompt);
-                  }}
-                  className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
-                  title="Enhance this coding request"
-                  disabled={!input.trim() || isProcessing}
-                >
-                  <Code className={`h-4 w-4 ${input.trim() && !isProcessing ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500'}`} />
-                </button>
-              </div>
-              
-              <div className="flex items-center justify-between">
-                <div className="text-xs text-white/60">
-                  Tip: Use Ctrl+Enter to submit, Enter for new line
+              <form onSubmit={handleSubmit} className="flex space-x-2">
+                <div className="relative flex-1">
+                  <Textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)} // Use the passed setInput
+                    placeholder="Type your message..."
+                    className="min-h-[60px] bg-black/40 border-white/20 pr-12 resize-none"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSubmit(e);
+                      }
+                    }}
+                    disabled={isProcessing}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const enhancePrompt = `Please enhance and improve this message to be more clear, detailed, and effective:\n\n"${input}"\n\nProvide an enhanced version that is:
+- More specific and detailed
+- Better structured
+- More engaging
+- Clearer in intent
+- Professional yet conversational`;
+                      setInput(enhancePrompt);
+                    }}
+                    className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
+                    title="Enhance this message"
+                    disabled={!input.trim() || isProcessing}
+                  >
+                    <Sparkles className={`h-4 w-4 ${input.trim() && !isProcessing ? 'text-purple-400 hover:text-purple-300' : 'text-gray-500'}`} />
+                  </button>
                 </div>
                 {isProcessing && onStopGeneration ? (
                   <Button
                     type="button"
                     variant="destructive"
-                    size="sm"
+                    className="self-end min-w-[80px]"
                     onClick={onStopGeneration}
                   >
                     <Square className="h-4 w-4 mr-2" />
@@ -964,139 +879,330 @@ export default function InteractionPanel({
                 ) : (
                   <Button
                     type="submit"
-                    size="sm"
-                    className="bg-blue-600 hover:bg-blue-700"
+                    className="self-end min-w-[80px]"
                     disabled={isProcessing || !input.trim()}
                   >
                     {isProcessing ? (
-                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
-                      <Code className="h-4 w-4 mr-2" />
+                      <>
+                        <Send className="h-4 w-4 mr-2" />
+                        Send
+                      </>
                     )}
-                    {isProcessing ? "Generating..." : "Generate Code"}
                   </Button>
                 )}
-              </div>
-            </form>
-          </TabsContent>
+              </form>
+            </TabsContent>
 
-          <TabsContent value="images" className="m-0">
-            <div className="max-h-64 overflow-y-auto space-y-3">
-              {sampleImages.map((image) => (
-                <div
-                  key={image.id}
-                  className="flex items-center gap-3 p-3 bg-black/20 rounded-lg hover:bg-black/30 transition-colors"
-                >
-                  <img
-                    src={image.url || "/placeholder.svg"}
-                    alt={image.title}
-                    className="w-16 h-12 object-cover rounded"
-                  />
-                  <div className="flex-1">
-                    <h4 className="text-sm font-medium text-white">
-                      {image.title}
-                    </h4>
-                    <p className="text-xs text-white/60">
-                      Click to use in conversation
-                    </p>
-                  </div>
-                  <Button size="sm" variant="ghost">
-                    <ImageIcon className="h-4 w-4" />
+            <TabsContent value="code" className="m-0">
+              {/* Code Mode Header */}
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Code className="h-4 w-4 text-blue-400" />
+                  <span className="text-sm font-medium text-white">Code Assistant</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant={codeMode === 'advanced' ? 'default' : 'outline'}
+                    onClick={() => setCodeMode(codeMode === 'basic' ? 'advanced' : 'basic')}
+                    className="text-xs"
+                  >
+                    {codeMode === 'advanced' ? '🔧 Advanced' : '📝 Basic'}
                   </Button>
+                  <Badge variant="outline" className="text-xs">
+                    {codeMode === 'advanced' ? 'IDE Mode' : 'Enhanced Prompting'}
+                  </Badge>
                 </div>
-              ))}
-            </div>
-          </TabsContent>
+              </div>
 
-          <TabsContent value="help" className="m-0">
-            <Card className="bg-black/40 border-white/10">
-              <CardContent className="pt-6">
-                <div className="space-y-4">
-                  <div className="flex items-start gap-3">
-                    <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
-                    <div>
-                      <h3 className="font-medium">Navigation</h3>
-                      <p className="text-sm text-white/70">
-                        Click and drag to rotate the view. Scroll to zoom
-                        in/out.
+              {/* Advanced Code Mode - File Selector */}
+              {codeMode === 'advanced' && (
+                <div className="mb-4 p-3 bg-black/30 rounded-lg border border-white/10">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-xs font-medium text-white/80">Project Files</h4>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setShowFileSelector(!showFileSelector)}
+                      className="text-xs"
+                    >
+                      {showFileSelector ? 'Hide' : 'Select Files'}
+                    </Button>
+                  </div>
+
+                  {showFileSelector && (
+                    <div className="space-y-2 max-h-32 overflow-y-auto">
+                      {['src/components/App.tsx', 'src/utils/helpers.ts', 'package.json', 'README.md', 'src/styles/globals.css'].map((file) => (
+                        <label key={file} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-white/5 p-1 rounded">
+                          <input
+                            type="checkbox"
+                            checked={selectedFiles.includes(file)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedFiles([...selectedFiles, file]);
+                              } else {
+                                setSelectedFiles(selectedFiles.filter(f => f !== file));
+                              }
+                            }}
+                            className="rounded"
+                          />
+                          <span className="text-white/70">{file}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+
+                  {selectedFiles.length > 0 && (
+                    <div className="mt-2 text-xs text-green-400">
+                      ✓ {selectedFiles.length} file(s) selected for context
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Quick Templates */}
+              <div className="mb-4">
+                <h4 className="text-xs font-medium text-white/80 mb-2">Quick Templates</h4>
+                <div className="grid grid-cols-2 gap-2">
+                  {displayedTemplates.map((template, index) => (
+                    <Button
+                      key={index}
+                      variant="outline"
+                      size="sm"
+                      className="text-xs bg-black/20 hover:bg-black/40 border-white/20 text-left justify-start h-auto p-2"
+                      onClick={() => setInput(template.template)}
+                      disabled={isProcessing}
+                    >
+                      <div>
+                        <div className="font-medium">{template.title}</div>
+                        <div className="text-xs text-white/60 mt-1 line-clamp-2">
+                          {template.template.split('\n')[0]}
+                        </div>
+                      </div>
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Code Suggestions */}
+              <div className="mb-4">
+                <h4 className="text-xs font-medium text-white/80 mb-2">Popular Requests</h4>
+                <div className="flex flex-wrap gap-2">
+                  {codeSuggestions.slice(0, 4).map((suggestion, index) => (
+                    <Button
+                      key={index}
+                      variant="secondary"
+                      size="sm"
+                      className="text-xs bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/20 transition-all duration-200"
+                      onClick={() => handleSuggestionClick(suggestion)}
+                      disabled={isProcessing}
+                    >
+                      {suggestion}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Enhanced Code Input */}
+              <form onSubmit={handleSubmit} className="space-y-3">
+                {codeMode === 'advanced' && (
+                  <div className="bg-black/20 rounded-lg p-3 border border-white/10 mb-3">
+                    <h4 className="text-xs font-medium text-white/80 mb-2">IDE Command Schema</h4>
+                    <div className="text-xs text-white/60 space-y-1">
+                      <div><code className="bg-white/10 px-1 rounded">@read_file(path)</code> - Request file content</div>
+                      <div><code className="bg-white/10 px-1 rounded">@write_diff(file, changes)</code> - Apply changes</div>
+                      <div><code className="bg-white/10 px-1 rounded">@list_project</code> - Show project structure</div>
+                      <div><code className="bg-white/10 px-1 rounded">@analyze_code(file)</code> - Code analysis</div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="relative">
+                  <Textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
+                    className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-sm"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        handleSubmit(e);
+                      }
+                    }}
+                    disabled={isProcessing}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const enhancePrompt = `Please enhance and improve this coding request to be more detailed and specific:\n\n"${input}"\n\nProvide an enhanced version that includes:
+- Specific framework/language requirements
+- Detailed feature specifications
+- Performance and security considerations
+- Code structure and architecture preferences
+- Testing and documentation requirements`;
+                      setInput(enhancePrompt);
+                    }}
+                    className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
+                    title="Enhance this coding request"
+                    disabled={!input.trim() || isProcessing}
+                  >
+                    <Code className={`h-4 w-4 ${input.trim() && !isProcessing ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500'}`} />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-white/60">
+                    Tip: Use Ctrl+Enter to submit, Enter for new line
+                  </div>
+                  {isProcessing && onStopGeneration ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      onClick={onStopGeneration}
+                    >
+                      <Square className="h-4 w-4 mr-2" />
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button
+                      type="submit"
+                      size="sm"
+                      className="bg-blue-600 hover:bg-blue-700"
+                      disabled={isProcessing || !input.trim()}
+                    >
+                      {isProcessing ? (
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      ) : (
+                        <Code className="h-4 w-4 mr-2" />
+                      )}
+                      {isProcessing ? "Generating..." : "Generate Code"}
+                    </Button>
+                  )}
+                </div>
+              </form>
+            </TabsContent>
+
+            <TabsContent value="images" className="m-0">
+              <div className="max-h-64 overflow-y-auto space-y-3">
+                {sampleImages.map((image) => (
+                  <div
+                    key={image.id}
+                    className="flex items-center gap-3 p-3 bg-black/20 rounded-lg hover:bg-black/30 transition-colors"
+                  >
+                    <img
+                      src={image.url || "/placeholder.svg"}
+                      alt={image.title}
+                      className="w-16 h-12 object-cover rounded"
+                    />
+                    <div className="flex-1">
+                      <h4 className="text-sm font-medium text-white">
+                        {image.title}
+                      </h4>
+                      <p className="text-xs text-white/60">
+                        Click to use in conversation
                       </p>
                     </div>
+                    <Button size="sm" variant="ghost">
+                      <ImageIcon className="h-4 w-4" />
+                    </Button>
                   </div>
+                ))}
+              </div>
+            </TabsContent>
 
-                  <div className="flex items-start gap-3">
-                    <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
-                    <div>
-                      <h3 className="font-medium">Interaction</h3>
-                      <p className="text-sm text-white/70">
-                        Click on message nodes to expand and view their content.
-                      </p>
+            <TabsContent value="help" className="m-0">
+              <Card className="bg-black/40 border-white/10">
+                <CardContent className="pt-6">
+                  <div className="space-y-4">
+                    <div className="flex items-start gap-3">
+                      <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
+                      <div>
+                        <h3 className="font-medium">Navigation</h3>
+                        <p className="text-sm text-white/70">
+                          Click and drag to rotate the view. Scroll to zoom
+                          in/out.
+                        </p>
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="flex items-start gap-3">
-                    <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
-                    <div>
-                      <h3 className="font-medium">Chat History</h3>
-                      <p className="text-sm text-white/70">
-                        Use the + button for new chats and history button to
-                        view past conversations.
-                      </p>
+                    <div className="flex items-start gap-3">
+                      <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
+                      <div>
+                        <h3 className="font-medium">Interaction</h3>
+                        <p className="text-sm text-white/70">
+                          Click on message nodes to expand and view their content.
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
 
-          <TabsContent value="plugins" className="m-0">
-            <Card className="bg-black/40 border-white/10">
-              <CardContent className="pt-6">
-                <div className="space-y-3">
-                  <div className="text-center mb-4">
-                    <h3 className="font-medium text-white mb-2">Advanced AI Modules</h3>
-                    <p className="text-xs text-white/60">Click any plugin to load its specialized prompt and switch to chat</p>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
-                    {pluginModules.map((plugin) => {
-                      const IconComponent = plugin.icon;
-                      return (
-                        <button
-                          key={plugin.id}
-                          onClick={() => {
-                            plugin.action();
-                            setActiveTab('chat'); // Switch to chat tab to show the input
-                            toast.success(`${plugin.name} plugin activated! Check the chat input.`);
-                          }}
-                          className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
-                        >
-                          <div className="flex items-center gap-2 w-full">
-                            <IconComponent className={`h-4 w-4 ${plugin.color} group-hover:scale-110 transition-transform`} />
-                            <span className="font-medium text-sm text-white truncate">{plugin.name}</span>
-                          </div>
-                          <p className="text-xs text-white/60 line-clamp-2 w-full">{plugin.description}</p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  
-                  <div className="mt-4 pt-3 border-t border-white/10">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Settings className="h-4 w-4 text-green-400" />
-                      <span className="text-sm font-medium">Quick Shortcuts</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1 text-xs text-white/60">
-                      <div><kbd className="bg-black/40 px-1 rounded">Ctrl+Enter</kbd> Submit</div>
-                      <div><kbd className="bg-black/40 px-1 rounded">Shift+Enter</kbd> New line</div>
-                      <div><kbd className="bg-black/40 px-1 rounded">Ctrl+K</kbd> Focus input</div>
-                      <div><kbd className="bg-black/40 px-1 rounded">Esc</kbd> Clear input</div>
+                    <div className="flex items-start gap-3">
+                      <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
+                      <div>
+                        <h3 className="font-medium">Chat History</h3>
+                        <p className="text-sm text-white/70">
+                          Use the + button for new chats and history button to
+                          view past conversations.
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="plugins" className="m-0">
+              <Card className="bg-black/40 border-white/10">
+                <CardContent className="pt-6">
+                  <div className="space-y-3">
+                    <div className="text-center mb-4">
+                      <h3 className="font-medium text-white mb-2">Advanced AI Modules</h3>
+                      <p className="text-xs text-white/60">Click any plugin to load its specialized prompt and switch to chat</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
+                      {pluginModules.map((plugin) => {
+                        const IconComponent = plugin.icon;
+                        return (
+                          <button
+                            key={plugin.id}
+                            onClick={() => {
+                              plugin.action();
+                              setActiveTab('chat'); // Switch to chat tab to show the input
+                              toast.success(`${plugin.name} plugin activated! Check the chat input.`);
+                            }}
+                            className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
+                          >
+                            <div className="flex items-center gap-2 w-full">
+                              <IconComponent className={`h-4 w-4 ${plugin.color} group-hover:scale-110 transition-transform`} />
+                              <span className="font-medium text-sm text-white truncate">{plugin.name}</span>
+                            </div>
+                            <p className="text-xs text-white/60 line-clamp-2 w-full">{plugin.description}</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-white/10">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Settings className="h-4 w-4 text-green-400" />
+                        <span className="text-sm font-medium">Quick Shortcuts</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 text-xs text-white/60">
+                        <div><kbd className="bg-black/40 px-1 rounded">Ctrl+Enter</kbd> Submit</div>
+                        <div><kbd className="bg-black/40 px-1 rounded">Shift+Enter</kbd> New line</div>
+                        <div><kbd className="bg-black/40 px-1 rounded">Ctrl+K</kbd> Focus input</div>
+                        <div><kbd className="bg-black/40 px-1 rounded">Esc</kbd> Clear input</div>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
         )}
       </div>
     </div>

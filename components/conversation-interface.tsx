@@ -32,7 +32,7 @@ export default function ConversationInterface() {
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null); // This ref is not used in this component, consider removing if not needed elsewhere
-  
+
   // Advertisement system
   const [promptCount, setPromptCount] = useState(0);
   const [showAd, setShowAd] = useState(false);
@@ -108,7 +108,7 @@ export default function ConversationInterface() {
       const lastMessage = messages[messages.length - 1];
       if (lastMessage && lastMessage.role === 'assistant') {
         saveCurrentChat(messages, currentConversationId || undefined);
-        
+
         // Auto-speak AI responses if voice is enabled
         if (isVoiceEnabled && voiceService.getSettings().autoSpeak) {
           voiceService.speak(lastMessage.content).catch(console.error);
@@ -220,11 +220,11 @@ export default function ConversationInterface() {
   // Auto-rotate to next provider
   const rotateToNextProvider = useCallback(() => {
     if (availableProviders.length <= 1) return;
-    
+
     const currentProviderIndex = availableProviders.findIndex(p => p.name === currentProvider);
     const nextIndex = (currentProviderIndex + 1) % availableProviders.length;
     const nextProvider = availableProviders[nextIndex];
-    
+
     if (nextProvider && nextProvider.models.length > 0) {
       const nextModel = nextProvider.models[0].id; // Use first model of next provider
       handleProviderChange(nextProvider.name, nextModel);
@@ -235,7 +235,7 @@ export default function ConversationInterface() {
   useEffect(() => {
     if (error && error.message) {
       const errorMessage = error.message.toLowerCase();
-      const shouldRotate = 
+      const shouldRotate =
         errorMessage.includes('rate limit') ||
         errorMessage.includes('quota') ||
         errorMessage.includes('invalid api key') ||
@@ -244,17 +244,17 @@ export default function ConversationInterface() {
         errorMessage.includes('forbidden') ||
         errorMessage.includes('service unavailable') ||
         errorMessage.includes('timeout');
-      
+
       if (shouldRotate) {
-        const errorType = 
+        const errorType =
           errorMessage.includes('rate limit') || errorMessage.includes('quota') ? 'Rate limit' :
-          errorMessage.includes('invalid api key') || errorMessage.includes('unauthorized') ? 'Invalid API key' :
-          errorMessage.includes('not found') ? 'Service not found' :
-          errorMessage.includes('forbidden') ? 'Access forbidden' :
-          errorMessage.includes('service unavailable') ? 'Service unavailable' :
-          errorMessage.includes('timeout') ? 'Request timeout' :
-          'API error';
-        
+            errorMessage.includes('invalid api key') || errorMessage.includes('unauthorized') ? 'Invalid API key' :
+              errorMessage.includes('not found') ? 'Service not found' :
+                errorMessage.includes('forbidden') ? 'Access forbidden' :
+                  errorMessage.includes('service unavailable') ? 'Service unavailable' :
+                    errorMessage.includes('timeout') ? 'Request timeout' :
+                      'API error';
+
         toast.info(`${errorType} detected, switching to next provider...`);
         setTimeout(() => {
           rotateToNextProvider();
@@ -285,8 +285,8 @@ export default function ConversationInterface() {
 
   // Check if there are code blocks in messages for preview button glow
   const hasCodeBlocks = useMemo(() => {
-    return messages.some(message => 
-      message.role === 'assistant' && 
+    return messages.some(message =>
+      message.role === 'assistant' &&
       message.content.includes('```')
     );
   }, [messages]);
@@ -305,12 +305,12 @@ export default function ConversationInterface() {
       setShowAd(true);
       return;
     }
-    
+
     // Increment prompt count for non-logged-in users
     if (!isLoggedIn) {
       setPromptCount(prev => prev + 1);
     }
-    
+
     setInput(content);
     // The handleSubmit from useChat expects a React.FormEvent.
     handleSubmit(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>);
@@ -326,7 +326,7 @@ export default function ConversationInterface() {
         const lastUserIndex = messages.lastIndexOf(lastUserMessage);
         const messagesToKeep = messages.slice(0, lastUserIndex + 1);
         setMessages(messagesToKeep);
-        
+
         // Resend the last user message
         setInput(lastUserMessage.content);
         setTimeout(() => {
@@ -357,24 +357,24 @@ export default function ConversationInterface() {
           {/* Interaction Controls */}
           <div className="relative z-50">
             <InteractionPanel
-            onSubmit={handleChatSubmit} // Pass the intermediary function
-            onNewChat={handleNewChat}
-            isProcessing={isLoading}
-            toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
-            toggleHistory={() => setShowHistory(!showHistory)}
-            toggleCodePreview={() => {
-              handleToggleCodePreview();
-            }} // Pass the function with an additional log
-            onStopGeneration={stop} // Pass useChat's stop function
-            onRetry={handleRetry} // Pass the retry function
-            currentProvider={currentProvider}
-            currentModel={currentModel}
-            error={error?.message}
-            input={input} // Pass input to InteractionPanel
-            setInput={setInput} // Pass setInput to InteractionPanel
-            availableProviders={availableProviders}
-            onProviderChange={handleProviderChange}
-            hasCodeBlocks={hasCodeBlocks}
+              onSubmit={handleChatSubmit} // Pass the intermediary function
+              onNewChat={handleNewChat}
+              isProcessing={isLoading}
+              toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
+              toggleHistory={() => setShowHistory(!showHistory)}
+              toggleCodePreview={() => {
+                handleToggleCodePreview();
+              }} // Pass the function with an additional log
+              onStopGeneration={stop} // Pass useChat's stop function
+              onRetry={handleRetry} // Pass the retry function
+              currentProvider={currentProvider}
+              currentModel={currentModel}
+              error={error?.message}
+              input={input} // Pass input to InteractionPanel
+              setInput={setInput} // Pass setInput to InteractionPanel
+              availableProviders={availableProviders}
+              onProviderChange={handleProviderChange}
+              hasCodeBlocks={hasCodeBlocks}
             />
           </div>
         </div>
@@ -445,7 +445,7 @@ export default function ConversationInterface() {
               <p className="text-gray-300 text-sm">
                 You've used {promptCount} prompts. Sign up for unlimited access and exclusive features!
               </p>
-              
+
               {/* Ad placeholder */}
               <div className="bg-black/40 border border-white/10 rounded-lg p-4 my-4">
                 <div className="text-center text-gray-400 text-sm">
@@ -454,7 +454,7 @@ export default function ConversationInterface() {
                   <span className="text-xs">Your ad service integration goes here</span>
                 </div>
               </div>
-              
+
               <div className="flex gap-3">
                 <button
                   onClick={() => {
@@ -480,7 +480,7 @@ export default function ConversationInterface() {
                   Continue
                 </button>
               </div>
-              
+
               <p className="text-xs text-gray-500">
                 Free users see ads every 3 prompts
               </p>

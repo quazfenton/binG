@@ -50,7 +50,7 @@ export default function AccessibilityControls({
   const [speechRate, setSpeechRate] = useState(1);
   const [speechVolume, setSpeechVolume] = useState(0.8);
   const [isListening, setIsListening] = useState(false);
-  
+
   // New state for themes and account
   const [currentTheme, setCurrentTheme] = useState('default');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -101,7 +101,7 @@ export default function AccessibilityControls({
       description: 'Purple cosmic theme'
     }
   };
-  
+
   const speechSynthesis = useRef<SpeechSynthesis | null>(null);
   const recognition = useRef<SpeechRecognition | null>(null);
   const currentUtterance = useRef<SpeechSynthesisUtterance | null>(null);
@@ -110,7 +110,7 @@ export default function AccessibilityControls({
   useEffect(() => {
     if (typeof window !== 'undefined') {
       speechSynthesis.current = window.speechSynthesis;
-      
+
       // Initialize speech recognition
       if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -118,30 +118,30 @@ export default function AccessibilityControls({
         recognition.current.continuous = true;
         recognition.current.interimResults = true;
         recognition.current.lang = 'en-US';
-        
+
         recognition.current.onresult = (event: any) => {
           const transcript = Array.from(event.results)
             .map((result: any) => result[0])
             .map((result: any) => result.transcript)
             .join('');
-          
+
           if (event.results[event.results.length - 1].isFinal) {
             console.log('Voice input:', transcript);
             // Here you would typically send the transcript to your chat handler
           }
         };
-        
+
         recognition.current.onerror = (event: any) => {
           console.error('Speech recognition error:', event.error);
           setIsListening(false);
         };
-        
+
         recognition.current.onend = () => {
           setIsListening(false);
         };
       }
     }
-    
+
     return () => {
       if (speechSynthesis.current) {
         speechSynthesis.current.cancel();
@@ -155,17 +155,17 @@ export default function AccessibilityControls({
   // Screen reader functionality
   const speakText = (text: string) => {
     if (!speechSynthesis.current || !screenReader) return;
-    
+
     // Cancel any ongoing speech
     speechSynthesis.current.cancel();
-    
+
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = speechRate;
     utterance.volume = speechVolume;
     utterance.onstart = () => setIsReading(true);
     utterance.onend = () => setIsReading(false);
     utterance.onerror = () => setIsReading(false);
-    
+
     currentUtterance.current = utterance;
     speechSynthesis.current.speak(utterance);
   };
@@ -179,7 +179,7 @@ export default function AccessibilityControls({
 
   const toggleVoiceInput = () => {
     if (!recognition.current) return;
-    
+
     if (isListening) {
       recognition.current.stop();
       setIsListening(false);
@@ -271,7 +271,7 @@ export default function AccessibilityControls({
             <User className="h-4 w-4" />
             <h3 className="font-medium">Account</h3>
           </div>
-          
+
           {isLoggedIn ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -351,20 +351,19 @@ export default function AccessibilityControls({
               </div>
             )}
           </div>
-          
+
           <div className="grid grid-cols-1 gap-2">
             {Object.entries(themes).map(([key, theme]) => (
               <button
                 key={key}
                 onClick={() => isLoggedIn && setCurrentTheme(key)}
                 disabled={!isLoggedIn && key !== 'default'}
-                className={`flex items-center gap-3 p-3 rounded-lg border transition-all duration-200 ${
-                  currentTheme === key
+                className={`flex items-center gap-3 p-3 rounded-lg border transition-all duration-200 ${currentTheme === key
                     ? 'border-white/30 bg-white/5'
                     : 'border-white/10 hover:border-white/20 hover:bg-white/5'
-                } ${!isLoggedIn && key !== 'default' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  } ${!isLoggedIn && key !== 'default' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
               >
-                <div 
+                <div
                   className="w-6 h-6 rounded border border-white/20"
                   style={{
                     background: `linear-gradient(45deg, ${theme.primary}, ${theme.secondary})`
@@ -391,29 +390,29 @@ export default function AccessibilityControls({
             <Contrast className="h-4 w-4" />
             <h3 className="font-medium">Accessibility</h3>
           </div>
-          
+
           <div className="space-y-4">
-        <div className="space-y-2">
-          <div className="flex items-center">
-            <Type className="h-4 w-4 mr-2" />
-            <Label htmlFor="text-size">Text Size ({textSize}%)</Label>
-          </div>
-          <Slider
-            id="text-size"
-            value={[textSize]}
-            min={75}
-            max={200}
-            step={5}
-            onValueChange={(value) => setTextSize(value[0])}
-          />
-        </div>
+            <div className="space-y-2">
+              <div className="flex items-center">
+                <Type className="h-4 w-4 mr-2" />
+                <Label htmlFor="text-size">Text Size ({textSize}%)</Label>
+              </div>
+              <Slider
+                id="text-size"
+                value={[textSize]}
+                min={75}
+                max={200}
+                step={5}
+                onValueChange={(value) => setTextSize(value[0])}
+              />
+            </div>
 
             <div className="flex items-center justify-between">
               <div className="flex items-center">
                 <Contrast className="h-4 w-4 mr-2" />
                 <Label htmlFor="high-contrast">High Contrast</Label>
               </div>
-              <div 
+              <div
                 className={`custom-toggle ${highContrast ? 'active' : ''}`}
                 onClick={() => setHighContrast(!highContrast)}
               >
@@ -421,165 +420,165 @@ export default function AccessibilityControls({
               </div>
             </div>
 
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              <Volume2 className="h-4 w-4 mr-2" />
-              <Label htmlFor="screen-reader">Screen Reader</Label>
-            </div>
-            <div 
-              className={`custom-toggle ${screenReader ? 'active' : ''}`}
-              onClick={() => setScreenReader(!screenReader)}
-            >
-              <div className="custom-toggle-slider" />
-            </div>
-          </div>
-          
-          {screenReader && (
-            <div className="ml-6 space-y-3 p-3 bg-black/30 rounded-lg">
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => speakText("Screen reader test. This is how text will sound.")}
-                  disabled={isReading}
-                  className="flex-1"
-                >
-                  <Play className="w-3 h-3 mr-1" />
-                  Test Voice
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={stopSpeaking}
-                  disabled={!isReading}
-                >
-                  <Square className="w-3 h-3" />
-                </Button>
-              </div>
-              
-              <div className="space-y-2">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center">
-                  <Label htmlFor="speech-rate" className="text-xs">Speed ({speechRate}x)</Label>
+                  <Volume2 className="h-4 w-4 mr-2" />
+                  <Label htmlFor="screen-reader">Screen Reader</Label>
                 </div>
-                <Slider
-                  id="speech-rate"
-                  value={[speechRate]}
-                  min={0.5}
-                  max={2}
-                  step={0.1}
-                  onValueChange={(value) => setSpeechRate(value[0])}
-                  className="w-full"
-                />
+                <div
+                  className={`custom-toggle ${screenReader ? 'active' : ''}`}
+                  onClick={() => setScreenReader(!screenReader)}
+                >
+                  <div className="custom-toggle-slider" />
+                </div>
               </div>
-              
-              <div className="space-y-2">
+
+              {screenReader && (
+                <div className="ml-6 space-y-3 p-3 bg-black/30 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => speakText("Screen reader test. This is how text will sound.")}
+                      disabled={isReading}
+                      className="flex-1"
+                    >
+                      <Play className="w-3 h-3 mr-1" />
+                      Test Voice
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={stopSpeaking}
+                      disabled={!isReading}
+                    >
+                      <Square className="w-3 h-3" />
+                    </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center">
+                      <Label htmlFor="speech-rate" className="text-xs">Speed ({speechRate}x)</Label>
+                    </div>
+                    <Slider
+                      id="speech-rate"
+                      value={[speechRate]}
+                      min={0.5}
+                      max={2}
+                      step={0.1}
+                      onValueChange={(value) => setSpeechRate(value[0])}
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center">
+                      <Label htmlFor="speech-volume" className="text-xs">Volume ({Math.round(speechVolume * 100)}%)</Label>
+                    </div>
+                    <Slider
+                      id="speech-volume"
+                      value={[speechVolume]}
+                      min={0}
+                      max={1}
+                      step={0.1}
+                      onValueChange={(value) => setSpeechVolume(value[0])}
+                      className="w-full"
+                    />
+                  </div>
+
+                  {isReading && (
+                    <div className="flex items-center gap-2 text-green-400 text-xs">
+                      <Volume2 className="w-3 h-3 animate-pulse" />
+                      <span>Reading...</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {onVoiceToggle && (
+              <div className="flex items-center justify-between">
                 <div className="flex items-center">
-                  <Label htmlFor="speech-volume" className="text-xs">Volume ({Math.round(speechVolume * 100)}%)</Label>
+                  {voiceEnabled ? (
+                    <Volume2 className="h-4 w-4 mr-2 text-green-400" />
+                  ) : (
+                    <VolumeX className="h-4 w-4 mr-2" />
+                  )}
+                  <Label htmlFor="voice-enabled">Voice Assistant</Label>
                 </div>
-                <Slider
-                  id="speech-volume"
-                  value={[speechVolume]}
-                  min={0}
-                  max={1}
-                  step={0.1}
-                  onValueChange={(value) => setSpeechVolume(value[0])}
-                  className="w-full"
-                />
+                <div
+                  className={`custom-toggle ${voiceEnabled ? 'active' : ''}`}
+                  onClick={() => onVoiceToggle && onVoiceToggle(!voiceEnabled)}
+                >
+                  <div className="custom-toggle-slider" />
+                </div>
               </div>
-              
-              {isReading && (
-                <div className="flex items-center gap-2 text-green-400 text-xs">
-                  <Volume2 className="w-3 h-3 animate-pulse" />
-                  <span>Reading...</span>
+            )}
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  {isListening ? (
+                    <Mic className="h-4 w-4 mr-2 text-red-400 animate-pulse" />
+                  ) : voiceEnabled ? (
+                    <Mic className="h-4 w-4 mr-2 text-blue-400" />
+                  ) : (
+                    <MicOff className="h-4 w-4 mr-2" />
+                  )}
+                  <Label htmlFor="voice-input">Voice Input</Label>
+                </div>
+                <div
+                  className={`custom-toggle ${voiceEnabled ? 'active' : ''}`}
+                  onClick={() => onVoiceToggle && onVoiceToggle(!voiceEnabled)}
+                >
+                  <div className="custom-toggle-slider" />
+                </div>
+              </div>
+
+              {voiceEnabled && recognition.current && (
+                <div className="ml-6 space-y-2 p-3 bg-black/30 rounded-lg">
+                  <Button
+                    size="sm"
+                    variant={isListening ? "destructive" : "outline"}
+                    onClick={toggleVoiceInput}
+                    className="w-full"
+                  >
+                    {isListening ? (
+                      <>
+                        <Square className="w-3 h-3 mr-2" />
+                        Stop Listening
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="w-3 h-3 mr-2" />
+                        Start Voice Input
+                      </>
+                    )}
+                  </Button>
+
+                  {isListening && (
+                    <div className="flex items-center gap-2 text-red-400 text-xs">
+                      <div className="w-2 h-2 bg-red-400 rounded-full animate-pulse" />
+                      <span>Listening...</span>
+                    </div>
+                  )}
+
+                  {!recognition.current && (
+                    <p className="text-xs text-yellow-400">
+                      Voice recognition not supported in this browser
+                    </p>
+                  )}
                 </div>
               )}
             </div>
-          )}
-        </div>
-
-        {onVoiceToggle && (
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              {voiceEnabled ? (
-                <Volume2 className="h-4 w-4 mr-2 text-green-400" />
-              ) : (
-                <VolumeX className="h-4 w-4 mr-2" />
-              )}
-              <Label htmlFor="voice-enabled">Voice Assistant</Label>
-            </div>
-            <div 
-              className={`custom-toggle ${voiceEnabled ? 'active' : ''}`}
-              onClick={() => onVoiceToggle && onVoiceToggle(!voiceEnabled)}
-            >
-              <div className="custom-toggle-slider" />
-            </div>
-          </div>
-        )}
-
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              {isListening ? (
-                <Mic className="h-4 w-4 mr-2 text-red-400 animate-pulse" />
-              ) : voiceEnabled ? (
-                <Mic className="h-4 w-4 mr-2 text-blue-400" />
-              ) : (
-                <MicOff className="h-4 w-4 mr-2" />
-              )}
-              <Label htmlFor="voice-input">Voice Input</Label>
-            </div>
-            <div 
-              className={`custom-toggle ${voiceEnabled ? 'active' : ''}`}
-              onClick={() => onVoiceToggle && onVoiceToggle(!voiceEnabled)}
-            >
-              <div className="custom-toggle-slider" />
-            </div>
-          </div>
-          
-          {voiceEnabled && recognition.current && (
-            <div className="ml-6 space-y-2 p-3 bg-black/30 rounded-lg">
-              <Button
-                size="sm"
-                variant={isListening ? "destructive" : "outline"}
-                onClick={toggleVoiceInput}
-                className="w-full"
-              >
-                {isListening ? (
-                  <>
-                    <Square className="w-3 h-3 mr-2" />
-                    Stop Listening
-                  </>
-                ) : (
-                  <>
-                    <Mic className="w-3 h-3 mr-2" />
-                    Start Voice Input
-                  </>
-                )}
-              </Button>
-              
-              {isListening && (
-                <div className="flex items-center gap-2 text-red-400 text-xs">
-                  <div className="w-2 h-2 bg-red-400 rounded-full animate-pulse" />
-                  <span>Listening...</span>
-                </div>
-              )}
-              
-              {!recognition.current && (
-                <p className="text-xs text-yellow-400">
-                  Voice recognition not supported in this browser
-                </p>
-              )}
-            </div>
-          )}
-        </div>
 
             <div className="flex items-center justify-between">
               <div className="flex items-center">
                 <MousePointer className="h-4 w-4 mr-2" />
                 <Label htmlFor="reduced-motion">Reduced Motion</Label>
               </div>
-              <div 
+              <div
                 className={`custom-toggle ${reducedMotion ? 'active' : ''}`}
                 onClick={() => setReducedMotion(!reducedMotion)}
               >
