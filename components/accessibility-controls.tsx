@@ -200,7 +200,7 @@ export default function AccessibilityControls({
   }, [messages, screenReader, speechRate, speechVolume]);
 
   return (
-    <div className="absolute top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-md p-6 border-l border-white/10 overflow-y-auto custom-scrollbar">
+    <div className="fixed top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-md p-6 border-l border-white/10 overflow-y-auto custom-scrollbar z-50">
       <style jsx>{`
         .custom-scrollbar::-webkit-scrollbar {
           width: 8px;

@@ -60,6 +60,7 @@ import {
   Server,
 } from "lucide-react";
 import type { LLMProvider } from '../lib/api/llm-providers';
+import { templateCache, cacheKey } from '../lib/cache';
 
 interface InteractionPanelProps {
   onSubmit: (content: string) => void;
@@ -101,15 +102,10 @@ export default function InteractionPanel({
   const [activeTab, setActiveTab] = useState("chat");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Draggable panel state
+  // Panel state
   const [panelHeight, setPanelHeight] = useState(350); // Default height
-  const [panelWidth, setPanelWidth] = useState(800);
   const [isDragging, setIsDragging] = useState(false);
-  const [isDraggingSide, setIsDraggingSide] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
-  const [isAttachedToEdge, setIsAttachedToEdge] = useState(true);
-  const [attachedSide, setAttachedSide] = useState<'bottom' | 'left' | 'right'>('bottom');
-  const [panelPosition, setPanelPosition] = useState({ x: 0, y: 0 });
 
   // Advanced Code Mode State
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
@@ -384,15 +380,12 @@ export default function InteractionPanel({
   }, [setInput]);
   const dragStartY = useRef(0);
   const dragStartHeight = useRef(0);
-  const dragStartX = useRef(0);
-  const dragStartWidth = useRef(0);
 
-  // Drag handlers for resizing and repositioning panel
+  // Simplified drag handlers for vertical resizing only
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     setIsDragging(true);
     dragStartY.current = e.clientY;
     dragStartHeight.current = panelHeight;
-    dragStartX.current = e.clientX;
     e.preventDefault();
   }, [panelHeight]);
 
@@ -400,37 +393,9 @@ export default function InteractionPanel({
     if (!isDragging) return;
 
     const deltaY = dragStartY.current - e.clientY;
-    const deltaX = e.clientX - dragStartX.current;
-
-    // Check for side attachment based on mouse position
-    const windowWidth = window.innerWidth;
-    const windowHeight = window.innerHeight;
-    const threshold = 50; // pixels from edge to trigger attachment
-
-    if (e.clientX < threshold) {
-      // Attach to left side
-      setIsAttachedToEdge(true);
-      setAttachedSide('left');
-      setPanelWidth(Math.max(300, Math.min(600, windowWidth * 0.3)));
-    } else if (e.clientX > windowWidth - threshold) {
-      // Attach to right side
-      setIsAttachedToEdge(true);
-      setAttachedSide('right');
-      setPanelWidth(Math.max(300, Math.min(600, windowWidth * 0.3)));
-    } else if (e.clientY > windowHeight - threshold) {
-      // Attach to bottom
-      setIsAttachedToEdge(true);
-      setAttachedSide('bottom');
-      const newHeight = Math.max(100, dragStartHeight.current + deltaY);
-      setPanelHeight(newHeight);
-    } else {
-      // Floating panel
-      setIsAttachedToEdge(false);
-      const newHeight = Math.max(100, dragStartHeight.current + deltaY);
-      setPanelHeight(newHeight);
-      setPanelPosition({ x: deltaX, y: -deltaY });
-    }
-  }, [isDragging, panelHeight]);
+    const newHeight = Math.max(200, Math.min(800, dragStartHeight.current + deltaY));
+    setPanelHeight(newHeight);
+  }, [isDragging]);
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(false);
@@ -447,45 +412,9 @@ export default function InteractionPanel({
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
-  // Side drag handlers
-  const handleSideMouseDown = useCallback((e: React.MouseEvent) => {
-    setIsDraggingSide(true);
-    dragStartX.current = e.clientX;
-    dragStartWidth.current = panelWidth;
-    e.preventDefault();
-  }, [panelWidth]);
 
-  const handleSideMouseMove = useCallback((e: MouseEvent) => {
-    if (!isDraggingSide) return;
 
-    const deltaX = e.clientX - dragStartX.current;
-    const newWidth = Math.max(400, Math.min(1200, dragStartWidth.current + deltaX));
-    setPanelWidth(newWidth);
 
-    // Check if close to edge for attachment
-    const windowWidth = window.innerWidth;
-    if (newWidth >= windowWidth * 0.9) {
-      setIsAttachedToEdge(true);
-      setPanelWidth(windowWidth);
-    } else {
-      setIsAttachedToEdge(false);
-    }
-  }, [isDraggingSide]);
-
-  const handleSideMouseUp = useCallback(() => {
-    setIsDraggingSide(false);
-  }, []);
-
-  useEffect(() => {
-    if (isDraggingSide) {
-      document.addEventListener('mousemove', handleSideMouseMove);
-      document.addEventListener('mouseup', handleSideMouseUp);
-      return () => {
-        document.removeEventListener('mousemove', handleSideMouseMove);
-        document.removeEventListener('mouseup', handleSideMouseUp);
-      };
-    }
-  }, [isDraggingSide, handleSideMouseMove, handleSideMouseUp]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -579,10 +508,24 @@ export default function InteractionPanel({
     }
   ];
 
-  // Function to get random templates
+  // Function to get random templates with caching
   const getRandomTemplates = (count: number = 4) => {
+    const cacheKeyStr = cacheKey.codeTemplate('all', `random_${count}`);
+    
+    // Try to get from cache first
+    const cached = templateCache.get<typeof allCodePromptTemplates>(cacheKeyStr);
+    if (cached) {
+      return cached;
+    }
+    
+    // Generate new random templates
     const shuffled = [...allCodePromptTemplates].sort(() => 0.5 - Math.random());
-    return shuffled.slice(0, count);
+    const result = shuffled.slice(0, count);
+    
+    // Cache for 10 minutes
+    templateCache.set(cacheKeyStr, result, 10 * 60 * 1000);
+    
+    return result;
   };
 
   // Get random templates on component mount and when activeTab changes
@@ -620,62 +563,20 @@ export default function InteractionPanel({
 
   return (
     <div
-      className={`absolute bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 ${isAttachedToEdge
-          ? attachedSide === 'left'
-            ? 'left-0 top-0 bottom-0 border-r'
-            : attachedSide === 'right'
-              ? 'right-0 top-0 bottom-0 border-l'
-              : 'left-0 right-0 bottom-0 border-t'
-          : 'left-0 right-0 bottom-0 border-t'
-        }`}
+      className={`fixed bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 bottom-0 border-t`}
       style={{
-        height: isAttachedToEdge && (attachedSide === 'left' || attachedSide === 'right')
-          ? '100vh'
-          : isMinimized
-            ? '60px'
-            : `${panelHeight + (activeTab === 'code' || activeTab === 'info' ? 80 : 0)}px`,
-        width: isAttachedToEdge
-          ? attachedSide === 'bottom'
-            ? '100%'
-            : `${panelWidth}px`
-          : `${panelWidth}px`,
-        transform: isDragging || isDraggingSide
-          ? 'none'
-          : isAttachedToEdge
-            ? undefined
-            : `translate(-50%, ${panelPosition.y}px)`,
-        left: !isAttachedToEdge ? `calc(50% + ${panelPosition.x}px)` : undefined
+        height: isMinimized
+          ? '60px'
+          : `${panelHeight}px`
       }}
     >
-      {/* Drag Handle - changes based on attachment */}
+      {/* Drag Handle - Only vertical resizing */}
       <div
-        className={`absolute bg-white/20 hover:bg-white/30 transition-all duration-200 ${isDragging ? 'bg-white/40' : ''} ${attachedSide === 'left'
-            ? 'top-0 right-0 bottom-0 w-1 cursor-ew-resize'
-            : attachedSide === 'right'
-              ? 'top-0 left-0 bottom-0 w-1 cursor-ew-resize'
-              : 'top-0 left-0 right-0 h-1 cursor-ns-resize'
-          }`}
+        className={`absolute top-0 left-0 right-0 h-1 bg-white/20 hover:bg-white/30 cursor-ns-resize transition-all duration-200 ${isDragging ? 'bg-white/40' : ''}`}
         onMouseDown={handleMouseDown}
       />
 
-      {/* Side Drag Handles for width adjustment when attached to sides */}
-      {isAttachedToEdge && (attachedSide === 'left' || attachedSide === 'right') && (
-        <>
-          <div
-            className={`absolute top-0 left-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200 ${isDraggingSide ? 'bg-white/40' : ''}`}
-            onMouseDown={handleSideMouseDown}
-          />
-          <div
-            className={`absolute top-0 right-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200 ${isDraggingSide ? 'bg-white/40' : ''}`}
-            onMouseDown={handleSideMouseDown}
-          />
-        </>
-      )}
-
-      <div className={`p-4 h-full overflow-hidden ${attachedSide === 'left' || attachedSide === 'right'
-          ? 'max-w-none'
-          : 'max-w-4xl mx-auto'
-        }`}>
+      <div className="p-4 h-full overflow-hidden max-w-4xl mx-auto">
         {/* Minimize/Maximize Controls */}
         <div className="absolute top-2 right-4 flex items-center gap-2">
           <Button

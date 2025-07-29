@@ -118,7 +118,7 @@ export function ChatPanel({
       <div 
         ref={scrollContainerRef}
         className="flex-1 overflow-y-auto p-4 space-y-2" 
-        style={{ paddingBottom: "240px" }}
+        style={{ paddingBottom: "400px" }}
         onScroll={handleScroll}
       >
         {messages.length === 0 && (

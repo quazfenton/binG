@@ -353,34 +353,10 @@ export default function ConversationInterface() {
           <div className="flex-1 relative">
             {/* Placeholder for the main 3D scene or other content */}
           </div>
-
-          {/* Interaction Controls */}
-          <div className="relative z-50">
-            <InteractionPanel
-              onSubmit={handleChatSubmit} // Pass the intermediary function
-              onNewChat={handleNewChat}
-              isProcessing={isLoading}
-              toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
-              toggleHistory={() => setShowHistory(!showHistory)}
-              toggleCodePreview={() => {
-                handleToggleCodePreview();
-              }} // Pass the function with an additional log
-              onStopGeneration={stop} // Pass useChat's stop function
-              onRetry={handleRetry} // Pass the retry function
-              currentProvider={currentProvider}
-              currentModel={currentModel}
-              error={error?.message}
-              input={input} // Pass input to InteractionPanel
-              setInput={setInput} // Pass setInput to InteractionPanel
-              availableProviders={availableProviders}
-              onProviderChange={handleProviderChange}
-              hasCodeBlocks={hasCodeBlocks}
-            />
-          </div>
         </div>
 
         {/* Chat Panel */}
-        <div className="md:border-l md:border-white/10 relative z-10">
+        <div className="w-full md:w-96 md:border-l md:border-white/10 relative z-10">
           <ChatPanel
             messages={messages} // Pass messages from useChat
             input={input} // Pass input from useChat
@@ -403,6 +379,28 @@ export default function ConversationInterface() {
           />
         </div>
       </div>
+
+      {/* Interaction Controls - Positioned absolutely to avoid layout conflicts */}
+      <InteractionPanel
+        onSubmit={handleChatSubmit} // Pass the intermediary function
+        onNewChat={handleNewChat}
+        isProcessing={isLoading}
+        toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
+        toggleHistory={() => setShowHistory(!showHistory)}
+        toggleCodePreview={() => {
+          handleToggleCodePreview();
+        }} // Pass the function with an additional log
+        onStopGeneration={stop} // Pass useChat's stop function
+        onRetry={handleRetry} // Pass the retry function
+        currentProvider={currentProvider}
+        currentModel={currentModel}
+        error={error?.message}
+        input={input} // Pass input to InteractionPanel
+        setInput={setInput} // Pass setInput to InteractionPanel
+        availableProviders={availableProviders}
+        onProviderChange={handleProviderChange}
+        hasCodeBlocks={hasCodeBlocks}
+      />
 
       {/* Chat History Modal */}
       {showHistory && (

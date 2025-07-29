@@ -1,117 +1,107 @@
-"use client"
-
-import * as React from 'react';
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Input } from '../components/ui/input';
-import { Button } from '../components/ui/button';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Button } from './ui/button';
+import { Badge } from './ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { 
-  Code as CodeIcon,
-  FileText,
-  Package,
+  Code, 
+  Download, 
+  Copy, 
+  Play, 
+  Folder, 
+  File, 
+  ChevronRight, 
+  ChevronDown,
+  X,
   Maximize2,
   Minimize2,
   RefreshCw,
-  AlertCircle,
   Eye,
-  Edit,
-  Check,
-  X
+  EyeOff,
+  Settings,
+  Package,
+  Terminal,
+  FileText,
+  Zap,
+  Globe,
+  Monitor,
+  Smartphone,
+  Tablet
 } from 'lucide-react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
-import { Sandpack } from "@codesandbox/sandpack-react";
-import JSZip from 'jszip';
-import type { Message } from '../types/index';
-
-interface CodePreviewPanelProps {
-  messages: Message[]
-  isOpen: boolean
-  onClose: () => void
-}
+import { SandpackProvider, SandpackLayout, SandpackCodeEditor, SandpackPreview, SandpackConsole } from '@codesandbox/sandpack-react';
 
 interface CodeBlock {
-  language: string
-  code: string
-  filename?: string
-  index: number
-  messageId: string
-  isError?: boolean
+  language: string;
+  code: string;
+  filename: string;
+  index: number;
 }
 
 interface ProjectStructure {
-  name: string
-  files: { [key: string]: string }
-  dependencies?: string[]
-  devDependencies?: string[]
-  scripts?: { [key: string]: string }
-  framework: 'react' | 'vue' | 'angular' | 'svelte' | 'solid' | 'vanilla' | 'next' | 'nuxt' | 'gatsby' | 'vite' | 'astro' | 'remix' | 'qwik' | 'gradio' | 'streamlit' | 'flask' | 'fastapi' | 'django' | 'vite-react'
-  bundler?: 'webpack' | 'vite' | 'parcel' | 'rollup' | 'esbuild'
-  packageManager?: 'npm' | 'yarn' | 'pnpm' | 'bun'
+  files: { [key: string]: string };
+  dependencies: string[];
+  devDependencies: string[];
+  scripts: { [key: string]: string };
+  framework: 'react' | 'vue' | 'angular' | 'svelte' | 'vanilla' | 'next' | 'nuxt' | 'astro' | 'remix' | 'gatsby' | 'vite' | 'solid';
+  bundler?: 'webpack' | 'vite' | 'parcel' | 'rollup' | 'esbuild';
+  packageManager: 'npm' | 'yarn' | 'pnpm';
 }
 
-export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePreviewPanelProps) {
-  const [detectedFramework, setDetectedFramework] = useState<'react'|'vue'|'vanilla'>('vanilla');
-  const [selectedTab, setSelectedTab] = useState("preview")
-  const [isFullscreen, setIsFullscreen] = useState(false)
-  const [projectStructure, setProjectStructure] = useState<ProjectStructure | null>(null)
-  const [selectedFileIndex, setSelectedFileIndex] = useState<number>(0)
-  const [editingFileIndex, setEditingFileIndex] = useState<number | null>(null)
-  const [editingFileName, setEditingFileName] = useState<string>('')
-  const [panelWidth, setPanelWidth] = useState(800)
-  const [isDragging, setIsDragging] = useState(false)
-  const iframeRef = useRef<HTMLIFrameElement>(null)
-  const dragStartX = useRef(0)
-  const dragStartWidth = useRef(0)
+interface CodePreviewPanelProps {
+  messages: Array<{ role: string; content: string; id?: string }>;
+  isVisible: boolean;
+  onClose: () => void;
+}
 
+export default function CodePreviewPanel({ messages, isVisible, onClose }: CodePreviewPanelProps) {
+  const [activeTab, setActiveTab] = useState('preview');
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [previewMode, setPreviewMode] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
+  const [showConsole, setShowConsole] = useState(false);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['src']));
+
+  if (!isVisible) return null;
+
+  // Helper to get file extension based on language
   const getFileExtension = (language: string): string => {
-    const extensions: Record<string, string> = {
+    const extensions: { [key: string]: string } = {
       javascript: 'js',
       typescript: 'ts',
+      jsx: 'jsx',
+      tsx: 'tsx',
+      html: 'html',
+      css: 'css',
+      scss: 'scss',
+      sass: 'sass',
+      less: 'less',
+      json: 'json',
+      xml: 'xml',
+      yaml: 'yml',
+      yml: 'yml',
       python: 'py',
       java: 'java',
       cpp: 'cpp',
       c: 'c',
-      html: 'html',
-      css: 'css',
-      json: 'json',
-      xml: 'xml',
-      sql: 'sql',
-      jsx: 'jsx',
-      tsx: 'tsx',
       php: 'php',
-      vue: 'vue',
-      vite: 'js', // Vite config files are typically JS
-      gradio: 'py', // Gradio apps are Python
-      streamlit: 'py', // Streamlit apps are Python
-      flask: 'py', // Flask apps are Python
-      fastapi: 'py', // FastAPI apps are Python
-      django: 'py', // Django apps are Python
-      svelte: 'svelte',
-      astro: 'astro',
-      solid: 'jsx', // SolidJS uses JSX
-      qwik: 'tsx', // Qwik uses TSX
-      remix: 'tsx', // Remix uses TSX
-      nuxt: 'vue', // Nuxt uses Vue
-      next: 'tsx', // Next.js typically uses TSX
       ruby: 'rb',
       go: 'go',
       rust: 'rs',
       swift: 'swift',
       kotlin: 'kt',
-      scala: 'scala',
-      r: 'r',
-      matlab: 'm',
-      perl: 'pl',
-      lua: 'lua',
       dart: 'dart',
-      // Removed duplicate entries
-      shell: 'sh',
+      vue: 'vue',
+      svelte: 'svelte',
+      angular: 'ts',
+      react: 'jsx',
       bash: 'sh',
-      yaml: 'yml',
-      yml: 'yml',
+      shell: 'sh',
+      sh: 'sh',
+      sql: 'sql',
+      dockerfile: 'dockerfile',
+      docker: 'dockerfile',
+      makefile: 'makefile',
+      make: 'makefile',
       markdown: 'md',
       md: 'md',
       text: 'txt'
@@ -119,170 +109,36 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     return extensions[language.toLowerCase()] || 'txt';
   };
 
-  // Generate smart filename based on code content
-  const generateSmartFilename = (code: string, language: string): string | null => {
-    try {
-      // Extract meaningful names from code content
-      const lines = code.split('\n').slice(0, 10); // Check first 10 lines
-      
-      // React/JSX component detection
-      if (language === 'jsx' || language === 'tsx' || language === 'javascript' || language === 'typescript') {
-        const componentMatch = code.match(/(?:export\s+default\s+|export\s+(?:const|function)\s+|function\s+|const\s+)([A-Z][a-zA-Z0-9]*)/);
-        if (componentMatch) return componentMatch[1];
-        
-        const classMatch = code.match(/class\s+([A-Z][a-zA-Z0-9]*)/);
-        if (classMatch) return classMatch[1];
-      }
-      
-      // Vue component detection
-      if (language === 'vue') {
-        const nameMatch = code.match(/name:\s*['"`]([^'"`]+)['"`]/);
-        if (nameMatch) return nameMatch[1];
-      }
-      
-      // CSS class or ID detection
-      if (language === 'css' || language === 'scss' || language === 'sass') {
-        const classMatch = code.match(/\.([a-zA-Z][a-zA-Z0-9-_]*)/);
-        if (classMatch) return classMatch[1];
-      }
-      
-      // HTML title or main element
-      if (language === 'html') {
-        const titleMatch = code.match(/<title[^>]*>([^<]+)<\/title>/i);
-        if (titleMatch) return titleMatch[1].replace(/\s+/g, '-').toLowerCase();
-        
-        const h1Match = code.match(/<h1[^>]*>([^<]+)<\/h1>/i);
-        if (h1Match) return h1Match[1].replace(/\s+/g, '-').toLowerCase();
-      }
-      
-      // Python class or function detection
-      if (language === 'python') {
-        const classMatch = code.match(/class\s+([A-Z][a-zA-Z0-9_]*)/);
-        if (classMatch) return classMatch[1].toLowerCase();
-        
-        const funcMatch = code.match(/def\s+([a-zA-Z][a-zA-Z0-9_]*)/);
-        if (funcMatch) return funcMatch[1];
-      }
-      
-      return null;
-    } catch (error) {
-      console.warn('Error generating smart filename:', error);
-      return null;
-    }
-  };
-
-  // Helper to clean and normalize filenames
+  // Simplified filename cleaning
   const cleanFilename = (filenameHint: string, language: string, index: number): string => {
+    if (!filenameHint || filenameHint.trim().length === 0) {
+      return `file-${index}.${getFileExtension(language)}`;
+    }
+
     let cleaned = filenameHint.trim();
-
-    // Step 1: Aggressively remove leading special characters, comments, and common path prefixes/suffixes
-    // This is to get a "base" filename from potentially messy markdown hints.
-    cleaned = cleaned
-      .replace(/^[\s\-_=\+\*`~!@#$%^&()\[\]{}|;:'",.<>?\/\\-]+/, '') // Remove leading special chars, including __--_
-      .replace(/^\s*(\/\/|#|\/\*)\s*/, '') // Remove leading //, #, /*
-      .replace(/\s*(\*\/)\s*$/, '') // Remove trailing */
-      .replace(/^(\.\/|\.\.\/)+/, '') // Remove leading ./ or ../ segments
-      .replace(/\/\/+/g, '/') // Remove any duplicate slashes (e.g., "src//App.js" -> "src/App.js")
-      .replace(/\/$/, '') // Remove trailing slashes if any
-      .trim(); // Trim any remaining whitespace
-
-    // Normalize backslashes to forward slashes
-    cleaned = cleaned.replace(/\\/g, '/');
-
-    // Replace any characters that are not alphanumeric, underscore, hyphen, dot, or slash with an underscore
-    // This allows for valid path structures like 'src/components/file.js'
-    cleaned = cleaned.replace(/[^a-zA-Z0-9_\-./]/g, '_');
-
-    // Deduplicate common path prefixes if they appear as 'src/src/' or 'components/components/'
-    if (cleaned.startsWith('src/src/')) {
-      cleaned = cleaned.substring(4);
+    
+    // Remove common markdown artifacts
+    cleaned = cleaned.replace(/^```[a-zA-Z]*\s*/, ''); // Remove ```language
+    cleaned = cleaned.replace(/```$/, ''); // Remove trailing ```
+    cleaned = cleaned.replace(/^[#\-\*\s]+/, ''); // Remove leading #, -, *, spaces
+    cleaned = cleaned.replace(/[#\-\*\s]+$/, ''); // Remove trailing #, -, *, spaces
+    
+    // Extract just the filename if it looks like a path
+    if (cleaned.includes('/')) {
+      const parts = cleaned.split('/');
+      cleaned = parts[parts.length - 1]; // Get last part
     }
-    if (cleaned.startsWith('components/components/')) {
-      cleaned = cleaned.substring(11);
+    
+    // Remove invalid filename characters
+    cleaned = cleaned.replace(/[<>:"|?*]/g, '');
+    cleaned = cleaned.replace(/\s+/g, '_'); // Replace spaces with underscores
+    
+    // Ensure it has an extension
+    if (!cleaned.includes('.')) {
+      cleaned += `.${getFileExtension(language)}`;
     }
-
-    let finalFilename = cleaned;
-    const expectedExt = getFileExtension(language);
-
-    // Step 2: Apply framework-specific naming conventions and ensure correct path/extension
-    // This logic should *add* prefixes only if they are not already present.
-    if (language === "html") {
-      // For HTML, if it's a root file or contains <html>, standardize to index.html
-     // For other HTML files, assume they are components or views, often in src/ or app/
-      if (finalFilename.includes("/")) {
-        finalFilename = finalFilename;
-      } else {
-        finalFilename = "index.html";
-      }
-    } else if (language === "css") {
-      if (finalFilename.includes('/')) {
-        finalFilename = finalFilename;
-      } else if (finalFilename === "styles" || finalFilename.includes('css')) {        
-        finalFilename = "styles.css";
-      }
-    } else if (language === "javascript") {
-      // If it's a common entry point or app file, standardize its path
-      if ((finalFilename.includes("App") || finalFilename.includes("index") || finalFilename.includes("main")) && !finalFilename.startsWith('src/')) {
-        finalFilename = `src/App.js`; // Standardize to src/App.js
-      } else if (!finalFilename.startsWith('src/') && !finalFilename.startsWith('lib/') && !finalFilename.startsWith('public/')) {
-        finalFilename = finalFilename;
-      }
-    } else if (language === "jsx" || language === "tsx") {
-      // If the cleaned filename already has a valid path (e.g., 'src/App.jsx', 'components/Greeting.jsx')
-      // or is a common root file, use it directly.
-        // Ensure it has the correct extension
-        if (!finalFilename.endsWith(`.${expectedExt}`)) {
-          finalFilename = `${finalFilename.split('.')[0]}.${expectedExt}`;
-        }
-       //if (finalFilename.startsWith('src/') || finalFilename.startsWith('components/')) {
-       if (finalFilename.includes("App") || finalFilename.includes("index") || finalFilename.includes("main")) {
-        // For main app files, standardize to src/App.jsx or src/App.tsx
-        finalFilename = `src/App.${expectedExt}`;
-      } else {
-        // For other components, assume they belong in src/
-        finalFilename = `src/${finalFilename}`;
-        // Ensure it has the correct extension
-        if (!finalFilename.endsWith(`.${expectedExt}`)) {
-          finalFilename = `${finalFilename.split('.')[0]}.${expectedExt}`;
-        }
-      }
-  //  } else if (language === "vue") {
-     // finalFilename = "src/App.vue";
-    } else if (language === "typescript") {
-      // For Angular components, ensure 'src/app/' prefix and correct extension
-      if (finalFilename.includes('.component.') && !finalFilename.startsWith('src/app/')) {
-        finalFilename = `src/app/${finalFilename}`;
-      } else if (!finalFilename.startsWith('src/')) {
-        finalFilename = `src/${finalFilename}`;
-      }
-      // Ensure correct extension
-      if (!finalFilename.endsWith(`.${expectedExt}`)) {
-        finalFilename = `${finalFilename.split('.')[0]}.${expectedExt}`;
-      }
-    } else if (language === "json" && finalFilename.includes("package")) {
-      finalFilename = "package.json";
-    } else if (language === "shell" || language === "bash") {
-      finalFilename = `script-${index}.sh`;
-    }
-
-    // Step 3: Ensure a valid filename and correct extension as a final pass
-    // Only generate a default filename if it's truly empty or a generic placeholder like ".txt"
-    if (!finalFilename || finalFilename === '.' || finalFilename === '..') {
-      finalFilename = `file-${index}.${expectedExt}`;
-    } else {
-      const parts = finalFilename.split('.');
-      const currentExt = parts.length > 1 ? parts[parts.length - 1] : '';
-      if (currentExt === 'txt' || currentExt === '' || currentExt !== expectedExt) {
-        if (parts.length > 1) {
-          parts[parts.length - 1] = expectedExt;
-          finalFilename = parts.join('.');
-        } else {
-          finalFilename = `${finalFilename}.${expectedExt}`;
-        }
-      }
-    }
-
-    return finalFilename;
+    
+    return cleaned || `file-${index}.${getFileExtension(language)}`;
   };
 
   // Extract code blocks from messages
@@ -290,1082 +146,363 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     const blocks: CodeBlock[] = [];
     messages.forEach((message) => {
       if (message.role === "assistant") {
-        let parsedContent: any = null;
-        try {
-          // Attempt to parse message.content as JSON
-          parsedContent = JSON.parse(message.content);
-          // Check if it has the expected structure for a code block
-          if (parsedContent && typeof parsedContent === 'object' && parsedContent.language && parsedContent.code) {
-            // It's a JSON object representing a code block
-            const filename = cleanFilename(parsedContent.filename || `file-${message.id}-${blocks.length}.${getFileExtension(parsedContent.language)}`, parsedContent.language, blocks.length);
-            if (!parsedContent.code.trim()) return; // Skip empty code blocks
-
-            blocks.push({
-              language: parsedContent.language,
-              code: parsedContent.code.trim(),
-              filename,
-              index: blocks.length, // Use blocks.length for sequential indexing
-              messageId: message.id,
-              isError: message.isError || false
-            });
-            return; // Processed this message, move to the next
-          }
-        } catch (e) {
-          // If parsing fails, it's likely not a JSON object, proceed to markdown parsing
-          // console.log("Message content is not a valid JSON object, attempting markdown parsing.");
-        }
-
-        // If not JSON, try parsing as markdown code blocks with enhanced error handling
-        const markdownCodeMatches = message.content.match(/```(\S*)(?:\s+(.*?))?\n([\s\S]*?)```/g) || [];
+        const codeBlockRegex = /```(\w+)?\s*([^\n]*)\n([\s\S]*?)```/g;
+        let match;
+        let blockIndex = 0;
         
-        markdownCodeMatches.forEach((match, blockIndex) => {
-          try {
-            const parsed = match.match(/```(\S*)(?:\s+(.*?))?\n([\s\S]*?)```/);
-            if (!parsed || parsed.length < 4) return;
-            
-            const language = (parsed[1] || "text").toLowerCase().trim();
-            const filenameHint = parsed[2] ? parsed[2].trim() : '';
-            let code = parsed[3];
-
-            // Validate code content
-            if (!code || typeof code !== 'string' || !code.trim()) return;
-            code = code.trim();
-
-            // Enhanced filename generation with validation
-            let filename = '';
-            try {
-              if (filenameHint) {
-                filename = cleanFilename(filenameHint, language, blocks.length);
-              } else {
-                // Generate smart default filename based on language and content
-                const extension = getFileExtension(language);
-                const baseName = generateSmartFilename(code, language) || `file-${blocks.length}`;
-                filename = cleanFilename(`${baseName}.${extension}`, language, blocks.length);
-              }
-              
-              // Ensure filename is valid and unique
-              if (!filename || filename.length === 0) {
-                filename = `file-${blocks.length}.${getFileExtension(language)}`;
-              }
-              
-              // Check for duplicate filenames and append number if needed
-              const existingFilenames = blocks.map(b => b.filename);
-              let uniqueFilename = filename;
-              let counter = 1;
-              while (existingFilenames.includes(uniqueFilename)) {
-                const parts = filename.split('.');
-                if (parts.length > 1) {
-                  const ext = parts.pop();
-                  const base = parts.join('.');
-                  uniqueFilename = `${base}-${counter}.${ext}`;
-                } else {
-                  uniqueFilename = `${filename}-${counter}`;
-                }
-                counter++;
-              }
-              filename = uniqueFilename;
-              
-            } catch (filenameError) {
-              console.warn('Error processing filename:', filenameError);
-              filename = `file-${blocks.length}.${getFileExtension(language)}`;
-            }
-
-            blocks.push({
-              language,
-              code,
-              filename,
-              index: blocks.length, // Use blocks.length for sequential indexing
-              messageId: message.id,
-              isError: message.isError || false
-            });
-            
-          } catch (blockError) {
-            console.warn('Error processing code block:', blockError);
-            // Add fallback block with safe defaults
-            const safeFilename = `file-${blocks.length}.txt`;
-            blocks.push({
-              language: 'text',
-              code: match || 'Error processing code block',
-              filename: safeFilename,
-              index: blocks.length,
-              messageId: message.id,
-              isError: true
-            });
-          }
-        });
+        while ((match = codeBlockRegex.exec(message.content)) !== null) {
+          const language = match[1] || 'text';
+          const filenameHint = match[2] ? match[2].trim() : '';
+          const code = match[3];
+          
+          const filename = cleanFilename(filenameHint, language, blockIndex);
+          
+          blocks.push({
+            language,
+            code: code.trim(),
+            filename,
+            index: blockIndex
+          });
+          blockIndex++;
+        }
       }
     });
     return blocks;
   }, [messages]);
 
-  // Generate project structure for complex projects
-  useEffect(() => {
-    if (codeBlocks.length > 0) { // Changed from > 1 to > 0 to handle single file projects
-      const structure = analyzeProjectStructure(codeBlocks);
-      setProjectStructure(structure);
-    }
-  }, [codeBlocks]);
-
-  const analyzeProjectStructure = (blocks: CodeBlock[]): ProjectStructure => {
+  // Analyze project structure
+  const projectStructure = useMemo(() => {
     const files: { [key: string]: string } = {};
     const dependencies: string[] = [];
     const devDependencies: string[] = [];
     const scripts: { [key: string]: string } = {};
     let framework: ProjectStructure['framework'] = 'vanilla';
-    let bundler: ProjectStructure['bundler'] = undefined;
-    let packageManager: ProjectStructure['packageManager'] = 'npm';
-    
-    for (const block of blocks) {
-      // Use the filename that was already cleaned in useMemo
-      const finalFilename = block.filename; 
+
+    codeBlocks.forEach(block => {
+      files[block.filename] = block.code;
       
-      // Ensure a filename is always set, even if it's a default one.
-      if (!finalFilename) {
-           console.error("Filename is unexpectedly null or undefined after cleaning.");
-           continue; // Skip this block if filename is missing
+      // Detect framework
+      if (block.code.includes('import React') || block.code.includes('from "react"')) {
+        framework = 'react';
+      } else if (block.code.includes('import Vue') || block.code.includes('from "vue"')) {
+        framework = 'vue';
+      } else if (block.code.includes('@angular/') || block.code.includes('import { Component }')) {
+        framework = 'angular';
       }
-      
-      files[finalFilename] = block.code
-      
-      // Extract dependencies and project info
-      if (block.language === "json" && finalFilename === "package.json") {
-        try {
-          const pkg = JSON.parse(block.code)
-          if (pkg.dependencies) {
-            dependencies.push(...Object.keys(pkg.dependencies))
-            
-            // Enhanced framework detection based on dependencies
-            if (pkg.dependencies.next || pkg.dependencies['next']) {
-              framework = 'next';
-            } else if (pkg.dependencies.nuxt || pkg.dependencies['@nuxt/core'] || pkg.dependencies['nuxt3']) {
-              framework = 'nuxt';
-            } else if (pkg.dependencies.gatsby || pkg.dependencies['gatsby']) {
-              framework = 'gatsby';
-            } else if (pkg.dependencies.astro || pkg.dependencies['astro']) {
-              framework = 'astro';
-            } else if (pkg.dependencies['@remix-run/react']) {
-              framework = 'remix';
-            } else if (pkg.dependencies.svelte || pkg.dependencies['svelte']) {
-              framework = 'svelte';
-            } else if (pkg.dependencies['solid-js']) {
-              framework = 'solid';
-            } else if (pkg.dependencies['@builder.io/qwik']) {
-              framework = 'qwik';
-            } else if (pkg.dependencies.gradio) {
-              framework = 'gradio';
-            } else if (pkg.dependencies.streamlit) {
-              framework = 'streamlit';
-            } else if (pkg.dependencies.flask || pkg.dependencies['Flask']) {
-              framework = 'flask';
-            } else if (pkg.dependencies.fastapi || pkg.dependencies['fastapi']) {
-              framework = 'fastapi';
-            } else if (pkg.dependencies.django || pkg.dependencies['Django']) {
-              framework = 'django';
-            } else if (pkg.dependencies.react) {
-              framework = 'react';
-            } else if (pkg.dependencies.vue || pkg.dependencies['@vue/core']) {
-              framework = 'vue';
-            } else if (pkg.dependencies['@angular/core']) {
-              framework = 'angular';
-            }
-          }
-          
-          if (pkg.devDependencies) {
-            devDependencies.push(...Object.keys(pkg.devDependencies))
-            
-            // Detect bundler from devDependencies
-            if (pkg.devDependencies.vite) {
-              bundler = 'vite';
-            } else if (pkg.devDependencies.webpack) {
-              bundler = 'webpack';
-            } else if (pkg.devDependencies.parcel) {
-              bundler = 'parcel';
-            } else if (pkg.devDependencies.rollup) {
-              bundler = 'rollup';
-            } else if (pkg.devDependencies.esbuild) {
-              bundler = 'esbuild';
-            }
-          }
-          
-          if (pkg.scripts) {
-            Object.assign(scripts, pkg.scripts);
-          }
-          
-          // Detect package manager from lockfiles or packageManager field
-          if (pkg.packageManager) {
-            if (pkg.packageManager.includes('yarn')) packageManager = 'yarn';
-            else if (pkg.packageManager.includes('pnpm')) packageManager = 'pnpm';
-            else if (pkg.packageManager.includes('bun')) packageManager = 'bun';
-          }
-        } catch (e) {
-          console.warn("Failed to parse package.json")
-        }
-      }
-      
-      // Detect framework based on file extensions and paths
-      if (framework === 'vanilla') {
-        const ext = getFileExtension(block.language);
-        if (ext === 'jsx' || ext === 'tsx') {
-          framework = 'react';
-        } else if (ext === 'vue') {
-          framework = 'vue';
-        } else if (ext === 'svelte') {
-          framework = 'svelte';
-        } else if (ext === 'astro') {
-          framework = 'astro';
-        } else if (ext === 'ts' && finalFilename.includes('.component.')) {
-          framework = 'angular';
-        } else if (ext === 'py' && (finalFilename.includes('gradio') || block.code.includes('import gradio'))) {
-          framework = 'gradio';
-        } else if (ext === 'py' && (finalFilename.includes('streamlit') || block.code.includes('import streamlit'))) {
-          framework = 'streamlit';
-        } else if (ext === 'py' && (finalFilename.includes('app.py') || block.code.includes('from flask import'))) {
-          framework = 'flask';
-        } else if (ext === 'py' && (finalFilename.includes('main.py') || block.code.includes('from fastapi import'))) {
-          framework = 'fastapi';
-        } else if (ext === 'py' && (finalFilename.includes('manage.py') || block.code.includes('django'))) {
-          framework = 'django';
-        } else if (finalFilename.includes('vite.config') || finalFilename.includes('vite.config.js') || finalFilename.includes('vite.config.ts')) {
-          // If we see a vite config, it's likely a vite project
-          if (framework === 'vanilla') framework = 'vite-react';
-        }
-      }
-      
-      // Detect package manager from lockfiles
-      if (finalFilename === 'yarn.lock') packageManager = 'yarn';
-      else if (finalFilename === 'pnpm-lock.yaml') packageManager = 'pnpm';
-      else if (finalFilename === 'bun.lockb') packageManager = 'bun';
-    }
-    
-    // Add README content if there's remaining text
-    const readmeContent = extractReadmeContent(blocks);
-    if (readmeContent) {
-      files['README.md'] = readmeContent;
-    }
-    
-    const structure: ProjectStructure = {
-      name: "Generated Project",
+    });
+
+    return {
       files,
-      dependencies: dependencies.length > 0 ? dependencies : undefined,
-      devDependencies: devDependencies.length > 0 ? devDependencies : undefined,
-      scripts: Object.keys(scripts).length > 0 ? scripts : undefined,
+      dependencies,
+      devDependencies,
+      scripts,
       framework,
-      bundler,
-      packageManager
+      packageManager: 'npm' as const
     };
-    return structure;
-  }
-  
-  // Extract README content from non-code text in messages
-  const extractReadmeContent = (blocks: CodeBlock[]): string | null => {
-    const readmeBlocks = blocks.filter(block => 
-      block.language === 'markdown' || 
-      block.language === 'md' || 
-      block.filename?.toLowerCase().includes('readme')
-    );
-    
-    if (readmeBlocks.length > 0) {
-      return readmeBlocks.map(block => block.code).join('\n\n');
-    }
-    
-    // Extract tutorial/summary text from messages
-    const tutorialText = messages
-      .filter(msg => msg.role === 'assistant')
-      .map(msg => {
-        // Remove code blocks and extract remaining text
-        const textWithoutCode = msg.content.replace(/```[\s\S]*?```/g, '').trim();
-        return textWithoutCode;
-      })
-      .filter(text => text.length > 100) // Only include substantial text
-      .join('\n\n');
-    
-    if (tutorialText.length > 200) {
-      return `# Project Documentation\n\n${tutorialText}`;
-    }
-    
-    return null;
-  }
+  }, [codeBlocks]);
 
-  const downloadAsZip = async () => {
-    const zip = new JSZip()
-    
-    // Use project structure files if available
-    if (projectStructure) {
-      Object.entries(projectStructure.files).forEach(([filename, content]) => {
-        zip.file(filename, content)
-      })
-    } else {
-      // Fallback to code blocks
-      codeBlocks.forEach((block) => {
-        const filename = block.filename || `snippet-${block.index}.${getFileExtension(block.language)}`
-        zip.file(filename, block.code)
-      })
-    }
-    
-    // Always add README
-    const readme = `# Generated Code Project
-
-This project contains ${projectStructure ? Object.keys(projectStructure.files).length : codeBlocks.length} code files extracted from an AI conversation.
-
-## Files:
-${projectStructure
-  ? Object.keys(projectStructure.files).map(filename => `- ${filename}`).join('\n')
-  : codeBlocks.map(block => `- ${block.filename} (${block.language})`).join('\n')
-}
-
-## Dependencies:
-${projectStructure?.dependencies?.length
-  ? projectStructure.dependencies.map(dep => `- ${dep}`).join('\n')
-  : 'None'
-}
-
-## Usage:
-Please review each file and follow the appropriate setup instructions for your programming language.
-
-Generated on: ${new Date().toLocaleString()}
-`
-    zip.file("README.md", readme)
-    
-    const content = await zip.generateAsync({ type: "blob" })
-    const url = URL.createObjectURL(content)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `code-project-${Date.now()}.zip`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  // Filename editing functions
-  const startEditingFilename = (index: number, currentFilename: string) => {
-    setEditingFileIndex(index)
-    setEditingFileName(currentFilename)
-  }
-
-  const cancelEditingFilename = () => {
-    setEditingFileIndex(null)
-    setEditingFileName('')
-  }
-
-  const saveFilename = (index: number, newFilename: string) => {
-    if (!newFilename.trim()) {
-      cancelEditingFilename()
-      return
-    }
-
-    const trimmedFilename = newFilename.trim()
-    const oldFilename = codeBlocks[index].filename
-
-    // Update project structure if it exists
-    if (projectStructure) {
-      const newFiles = { ...projectStructure.files }
-      
-      if (oldFilename && newFiles[oldFilename]) {
-        // Move the content to the new filename
-        newFiles[trimmedFilename] = newFiles[oldFilename]
-        delete newFiles[oldFilename]
-        
-        setProjectStructure({
-          ...projectStructure,
-          files: newFiles
-        })
-      }
-    }
-
-    // Force re-render by updating a state that triggers useMemo recalculation
-    // This ensures the preview updates with the new filename
-    setSelectedFileIndex(prev => prev === index ? index : prev)
-    
-    cancelEditingFilename()
-  }
-
-  // Resize handlers
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    setIsDragging(true)
-    dragStartX.current = e.clientX
-    dragStartWidth.current = panelWidth
-    e.preventDefault()
-  }, [panelWidth])
-
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (!isDragging) return
-    
-    const deltaX = dragStartX.current - e.clientX
-    const newWidth = Math.max(400, Math.min(1200, dragStartWidth.current + deltaX))
-    setPanelWidth(newWidth)
-  }, [isDragging])
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false)
-  }, [])
-
+  // Set initial selected file
   useEffect(() => {
-    if (isDragging) {
-      document.addEventListener('mousemove', handleMouseMove)
-      document.addEventListener('mouseup', handleMouseUp)
-      return () => {
-        document.removeEventListener('mousemove', handleMouseMove)
-        document.removeEventListener('mouseup', handleMouseUp)
-      }
+    if (codeBlocks.length > 0 && !selectedFile) {
+      setSelectedFile(codeBlocks[0].filename);
     }
-  }, [isDragging, handleMouseMove, handleMouseUp])
+  }, [codeBlocks, selectedFile]);
 
-  // Function to detect popular dependencies from code content (only used when package.json is missing)
-  const getPopularDependencies = (codeContent: string, framework: string): Record<string, string> => {
-    const deps: Record<string, string> = {};
-    
-    // Only add core framework dependencies if not already defined
-    if (framework === 'react' || framework === 'next') {
-      deps['react'] = 'latest';
-      deps['react-dom'] = 'latest';
+  const handleDownload = () => {
+    if (codeBlocks.length === 1) {
+      // Single file download
+      const block = codeBlocks[0];
+      const blob = new Blob([block.code], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = block.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } else {
+      // Multiple files - create a zip-like structure
+      let content = '';
+      codeBlocks.forEach(block => {
+        content += `// File: ${block.filename}\n`;
+        content += block.code;
+        content += '\n\n';
+      });
+      
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'project-files.txt';
+      a.click();
+      URL.revokeObjectURL(url);
     }
+  };
+
+  const handleCopy = (code: string) => {
+    navigator.clipboard.writeText(code);
+  };
+
+  const renderFileTree = () => {
+    const fileTree: { [key: string]: any } = {};
     
-    return deps;
+    Object.keys(projectStructure.files).forEach(filepath => {
+      const parts = filepath.split('/');
+      let current = fileTree;
+      
+      parts.forEach((part, index) => {
+        if (index === parts.length - 1) {
+          // It's a file
+          current[part] = { type: 'file', path: filepath };
+        } else {
+          // It's a folder
+          if (!current[part]) {
+            current[part] = { type: 'folder', children: {} };
+          }
+          current = current[part].children;
+        }
+      });
+    });
+
+    const renderTreeNode = (name: string, node: any, depth: number = 0): React.ReactNode => {
+      if (node.type === 'file') {
+        return (
+          <div
+            key={node.path}
+            className={`flex items-center gap-2 py-1 px-2 cursor-pointer hover:bg-white/5 rounded text-sm ${
+              selectedFile === node.path ? 'bg-blue-500/20 text-blue-300' : 'text-white/70'
+            }`}
+            style={{ paddingLeft: `${depth * 16 + 8}px` }}
+            onClick={() => setSelectedFile(node.path)}
+          >
+            <File className="h-4 w-4" />
+            <span>{name}</span>
+          </div>
+        );
+      } else {
+        const isExpanded = expandedFolders.has(name);
+        return (
+          <div key={name}>
+            <div
+              className="flex items-center gap-2 py-1 px-2 cursor-pointer hover:bg-white/5 rounded text-sm text-white/70"
+              style={{ paddingLeft: `${depth * 16 + 8}px` }}
+              onClick={() => {
+                const newExpanded = new Set(expandedFolders);
+                if (isExpanded) {
+                  newExpanded.delete(name);
+                } else {
+                  newExpanded.add(name);
+                }
+                setExpandedFolders(newExpanded);
+              }}
+            >
+              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              <Folder className="h-4 w-4" />
+              <span>{name}</span>
+            </div>
+            {isExpanded && (
+              <div>
+                {Object.entries(node.children).map(([childName, childNode]) =>
+                  renderTreeNode(childName, childNode, depth + 1)
+                )}
+              </div>
+            )}
+          </div>
+        );
+      }
+    };
+
+    return (
+      <div className="space-y-1">
+        {Object.entries(fileTree).map(([name, node]) => renderTreeNode(name, node))}
+      </div>
+    );
   };
 
   const renderLivePreview = () => {
-    // Enhanced framework support with better template mapping
-    const getSandpackTemplate = (framework: string) => {
-      switch (framework) {
-        case 'react': return 'react';
-        case 'next': return 'nextjs';
-        case 'vue': return 'vue';
-        case 'nuxt': return 'nuxt';
-        case 'angular': return 'angular';
-        case 'svelte': return 'svelte';
-        case 'solid': return 'solid';
-        case 'astro': return 'astro';
-        case 'remix': return 'remix';
-        case 'gatsby': return 'gatsby';
-        case 'vite': return 'vite-react';
-        default: return 'vanilla';
-      }
-    };
+    if (projectStructure.framework === 'react' && Object.keys(projectStructure.files).length > 0) {
+      const sandpackFiles: { [key: string]: { code: string } } = {};
+      
+      Object.entries(projectStructure.files).forEach(([path, content]) => {
+        const sandpackPath = path.startsWith('/') ? path : `/${path}`;
+        sandpackFiles[sandpackPath] = { code: content };
+      });
 
-    if (projectStructure && ['react', 'vue', 'angular', 'svelte', 'solid', 'next', 'nuxt', 'astro', 'remix', 'gatsby', 'vite'].includes(projectStructure.framework)) {
-      try {
-        // Map files to Sandpack format
-        const sandpackFiles = Object.entries(projectStructure.files).reduce(
-          (acc, [path, content]) => {
-            // Skip empty files
-            if (!content.trim()) return acc;
-            
-            // The path should already be correctly formatted by cleanFilename.
-            // We just need to ensure it's prefixed with '/' for Sandpack.
-            const sandpackPath = path.startsWith('/') ? path : `/${path}`;
-            
-            acc[sandpackPath] = { code: content };
-            return acc;
-          },
-          {} as Record<string, { code: string }>
-        );
-
-        // Framework-specific entry file handling
-        const addEntryFileIfMissing = () => {
-          const hasEntryFile = Object.keys(sandpackFiles).some(path => 
-            path.includes('index.') || path.includes('main.') || path.includes('App.')
-          );
-
-          if (!hasEntryFile) {
-            switch (projectStructure.framework) {
-              case 'react':
-              case 'next':
-              case 'gatsby':
-                sandpackFiles['/src/App.jsx'] = {
-                  code: `import React from 'react';
-
-export default function App() {
-  return (
-    <div className="App">
-      <h1>Hello React!</h1>
-      <p>This is a generated React application.</p>
-    </div>
-  );
-}`
-                };
-                sandpackFiles['/src/index.js'] = {
-                  code: `import React from 'react';
+      // Add default files if missing
+      if (!sandpackFiles['/src/index.js'] && !sandpackFiles['/src/index.jsx']) {
+        sandpackFiles['/src/index.js'] = {
+          code: `import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);`
-                };
-                break;
-              case 'vue':
-              case 'nuxt':
-                sandpackFiles['/src/App.vue'] = {
-                  code: `<template>
-  <div id="app">
-    <h1>Hello Vue!</h1>
-    <p>This is a generated Vue application.</p>
-  </div>
-</template>
-
-<script>
-export default {
-  name: 'App'
-}
-</script>
-
-<style>
-#app {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
-  text-align: center;
-  color: #2c3e50;
-  margin-top: 60px;
-}
-</style>`
-                };
-                break;
-              case 'svelte':
-                sandpackFiles['/src/App.svelte'] = {
-                  code: `<script>
-  let name = 'Svelte';
-</script>
-
-<main>
-  <h1>Hello {name}!</h1>
-  <p>This is a generated Svelte application.</p>
-</main>
-
-<style>
-  main {
-    text-align: center;
-    padding: 1em;
-    max-width: 240px;
-    margin: 0 auto;
-  }
-</style>`
-                };
-                break;
-              default:
-                sandpackFiles['/src/index.js'] = {
-                  code: `console.log('Hello from ${projectStructure.framework}!');`
-                };
-            }
-          }
         };
-
-        addEntryFileIfMissing();
-
-        const template = getSandpackTemplate(projectStructure.framework);
-
-        return (
-          <div className="h-96">
-            <Sandpack
-              template={template as any}
-              theme="dark"
-              options={{
-                showTabs: true,
-                showLineNumbers: true,
-                showNavigator: true,
-                showConsole: true,
-                showRefreshButton: true,
-                autorun: true,
-                recompileMode: 'delayed',
-                recompileDelay: 300,
-              }}
-              files={sandpackFiles}
-              customSetup={{
-                dependencies: projectStructure.dependencies?.reduce((acc, dep) => {
-                  acc[dep] = 'latest';
-                  return acc;
-                }, {} as Record<string, string>) || getPopularDependencies(Object.values(projectStructure.files).join('\n'), projectStructure.framework),
-                devDependencies: projectStructure.devDependencies?.reduce((acc, dep) => {
-                  acc[dep] = 'latest';
-                  return acc;
-                }, {} as Record<string, string>) || {},
-              }}
-            />
-          </div>
-        );
-      } catch (error) {
-        return (
-          <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
-            <div className="text-center">
-              <AlertCircle className="w-16 h-16 mx-auto mb-4 text-red-400" />
-              <p className="text-red-400">Failed to render framework preview</p>
-              <p className="text-sm text-gray-600 mt-2">
-                Framework: {projectStructure.framework}
-              </p>
-              <p className="text-sm text-gray-600">
-                Error: {(error as Error).message}
-              </p>
-              <button
-                onClick={() => window.location.reload()}
-                className="mt-2 px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
-              >
-                Retry
-              </button>
-            </div>
-          </div>
-        );
       }
-    }
 
-
-    // Enhanced vanilla HTML/CSS/JS preview with JSBin-style features
-    try {
-      const htmlFile = codeBlocks.find(block => block.language === "html")
-      const cssFile = codeBlocks.find(block => block.language === "css")
-      const jsFile = codeBlocks.find(block => block.language === "javascript" || block.language === "js")
-      const tsFile = codeBlocks.find(block => block.language === "typescript" || block.language === "ts")
-      
-      // If no HTML but has other web files, create a basic HTML structure
-      if (!htmlFile && (cssFile || jsFile || tsFile)) {
-        const autoGeneratedHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Generated Preview</title>
-  ${cssFile ? `<style>${cssFile.code}</style>` : ''}
-</head>
-<body>
-  <div id="app">
-    <h1>Auto-generated Preview</h1>
-    <p>This preview was automatically generated from your code.</p>
-    <div id="content"></div>
-  </div>
-  ${jsFile ? `<script>${jsFile.code}</script>` : ''}
-  ${tsFile ? `<script type="module">
-    // TypeScript code (simplified for preview)
-    ${tsFile.code.replace(/import .* from .*/g, '// Import removed for preview')}
-  </script>` : ''}
-</body>
-</html>`;
-
-        return (
-          <div className="relative">
-            <div className="absolute top-2 right-2 z-10 flex gap-2">
-              <div className="bg-yellow-600 text-white px-2 py-1 rounded text-xs">
-                Auto-generated
+      return (
+        <SandpackProvider
+          template="react"
+          files={sandpackFiles}
+          theme="dark"
+          options={{
+            showConsole: showConsole,
+            showConsoleButton: true,
+            showRefreshButton: true,
+          }}
+        >
+          <SandpackLayout>
+            <div className="flex-1">
+              <SandpackPreview 
+                style={{ height: '100%' }}
+                showOpenInCodeSandbox={false}
+                showRefreshButton={true}
+              />
+            </div>
+            {showConsole && (
+              <div className="h-48">
+                <SandpackConsole />
               </div>
-              <button
-                onClick={() => setIsFullscreen(!isFullscreen)}
-                className="bg-gray-800 text-gray-300 p-1 rounded border border-gray-600"
-              >
-                {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-              </button>
-            </div>
-            <iframe
-              ref={iframeRef}
-              srcDoc={autoGeneratedHtml}
-              className={`w-full bg-white rounded-lg border ${isFullscreen ? 'h-screen' : 'h-96'}`}
-              title="Auto-generated Preview"
-              sandbox="allow-scripts allow-same-origin"
-            />
-          </div>
-        );
-      }
-      
-      if (!htmlFile) {
-        return (
-          <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
-            <div className="text-center">
-              <CodeIcon className="w-16 h-16 mx-auto mb-4 text-gray-400" />
-              <p className="text-gray-400">No HTML code found for live preview</p>
-              <p className="text-sm text-gray-600 mt-2">Generate code to enable live preview</p>
-              {codeBlocks.length > 0 && (
-                <div className="mt-4">
-                  <p className="text-xs text-gray-500 mb-2">Available code blocks:</p>
-                  <div className="flex flex-wrap gap-1 justify-center">
-                    {codeBlocks.map((block, index) => (
-                      <span key={index} className="bg-gray-700 text-gray-300 px-2 py-1 rounded text-xs">
-                        {block.language}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )
-      }
-      
-      // Enhanced HTML document with better error handling and console capture
-      const combinedHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Live Preview</title>
-  <style>
-    /* Reset and base styles */
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    
-    /* Custom styles */
-    ${cssFile ? cssFile.code : ''}
-    
-    /* Error display styles */
-    .preview-error {
-      background: #fee;
-      border: 1px solid #fcc;
-      color: #c33;
-      padding: 10px;
-      margin: 10px 0;
-      border-radius: 4px;
-      font-family: monospace;
-      font-size: 12px;
-    }
-  </style>
-</head>
-<body>
-  ${htmlFile.code}
-  
-  <script>
-    // Error handling and console capture
-    window.addEventListener('error', function(e) {
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'preview-error';
-      errorDiv.innerHTML = '<strong>JavaScript Error:</strong><br>' + e.message + '<br>Line: ' + e.lineno;
-      document.body.appendChild(errorDiv);
-    });
-    
-    // Console capture for debugging
-    const originalLog = console.log;
-    const originalError = console.error;
-    const originalWarn = console.warn;
-    
-    console.log = function(...args) {
-      originalLog.apply(console, args);
-      // Could add visual console output here if needed
-    };
-    
-    console.error = function(...args) {
-      originalError.apply(console, args);
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'preview-error';
-      errorDiv.innerHTML = '<strong>Console Error:</strong><br>' + args.join(' ');
-      document.body.appendChild(errorDiv);
-    };
-    
-    // User JavaScript
-    try {
-      ${jsFile ? jsFile.code : ''}
-    } catch (error) {
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'preview-error';
-      errorDiv.innerHTML = '<strong>Script Error:</strong><br>' + error.message;
-      document.body.appendChild(errorDiv);
-    }
-  </script>
-</body>
-</html>`;
-
-      return (
-        <div className="relative">
-          <div className="absolute top-2 right-2 z-10 flex gap-2">
-            <button
-              onClick={() => {
-                if (iframeRef.current) {
-                  iframeRef.current.src = iframeRef.current.src; // Refresh iframe
-                }
-              }}
-              className="bg-gray-800 text-gray-300 p-1 rounded border border-gray-600"
-              title="Refresh Preview"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setIsFullscreen(!isFullscreen)}
-              className="bg-gray-800 text-gray-300 p-1 rounded border border-gray-600"
-            >
-              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-            </button>
-          </div>
-          <iframe
-            ref={iframeRef}
-            srcDoc={combinedHtml}
-            className={`w-full bg-white rounded-lg border ${isFullscreen ? 'h-screen' : 'h-96'}`}
-            title="Live Preview"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-            onError={(e) => console.error("Iframe error", e)}
-          />
-        </div>
-      )
-    } catch (error) {
-      return (
-        <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
-          <div className="text-center">
-            <AlertCircle className="w-16 h-16 mx-auto mb-4 text-red-400" />
-            <p className="text-red-400">Failed to render HTML preview</p>
-            <p className="text-sm text-gray-600 mt-2">
-              Error: {(error as Error).message}
-            </p>
-          </div>
-        </div>
+            )}
+          </SandpackLayout>
+        </SandpackProvider>
       );
     }
-  }
+
+    // Fallback for non-React projects
+    return (
+      <div className="flex items-center justify-center h-full text-white/60">
+        <div className="text-center">
+          <Monitor className="h-12 w-12 mx-auto mb-4 opacity-50" />
+          <p>Live preview not available for this project type</p>
+          <p className="text-sm mt-2">Framework: {projectStructure.framework}</p>
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          key={isOpen ? 'visible' : 'hidden'}
-          initial={{ opacity: 0, x: '100%' }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: '100%' }}
-          transition={{ duration: 0.3, ease: 'easeInOut' }}
-          className="fixed right-0 top-0 h-full bg-black/20 backdrop-blur-2xl border border-white/10 rounded-l-xl z-[100] overflow-hidden shadow-2xl"
-          style={{ width: `${panelWidth}px` }}
-        >
-          {/* Resize Handle */}
-          <div 
-            className="absolute left-0 top-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200"
-            onMouseDown={handleMouseDown}
-          />
-          
-        <Card className="h-full bg-transparent border-0 rounded-none">
-          <CardHeader className="border-b border-white/10 bg-black/20">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-white flex items-center gap-2">
-                <CodeIcon className="w-5 h-5" />
-                Code Preview Panel
-                <span className="bg-gray-700 text-gray-300 rounded-full px-2.5 py-0.5 text-xs">
-                  {codeBlocks.length} file(s)
-                </span>
-              </CardTitle>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={downloadAsZip}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm flex items-center"
-                >
-                  <Package className="w-4 h-4 mr-2" />
-                  Download ZIP
-                </button>
-                {projectStructure && (
-                  <button
-                    onClick={() => {
-                      localStorage.setItem('visualEditorProject', JSON.stringify(projectStructure));
-                      window.open('/visual-editor', '_blank');
-                    }}
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded text-sm flex items-center"
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className={`bg-gray-900 border border-white/20 rounded-lg shadow-2xl transition-all duration-300 ${
+        isMinimized ? 'w-80 h-16' : 'w-full h-full max-w-7xl max-h-[90vh]'
+      }`}>
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-white/10">
+          <div className="flex items-center gap-3">
+            <Code className="h-5 w-5 text-blue-400" />
+            <h2 className="text-lg font-semibold text-white">Code Preview</h2>
+            <Badge variant="outline" className="text-xs">
+              {codeBlocks.length} file{codeBlocks.length !== 1 ? 's' : ''}
+            </Badge>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setIsMinimized(!isMinimized)}
+              className="text-gray-400 hover:text-white"
+            >
+              {isMinimized ? <Maximize2 className="h-4 w-4" /> : <Minimize2 className="h-4 w-4" />}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={onClose}
+              className="text-gray-400 hover:text-white"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        {!isMinimized && (
+          <div className="flex h-full">
+            {/* Sidebar */}
+            <div className="w-80 border-r border-white/10 flex flex-col">
+              <div className="p-4 border-b border-white/10">
+                <h3 className="text-sm font-medium text-white mb-3">Project Files</h3>
+                <div className="max-h-60 overflow-y-auto">
+                  {renderFileTree()}
+                </div>
+              </div>
+              
+              <div className="p-4 flex-1">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-white">Actions</h3>
+                </div>
+                <div className="space-y-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleDownload}
+                    className="w-full justify-start"
                   >
-                    <Edit className="w-4 h-4 mr-2" />
-                    Edit
-                  </button>
-                )}
-                <button
-                  onClick={onClose}
-                  className="border border-gray-300 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded text-sm"
-                >
-                  Close
-                </button>
+                    <Download className="h-4 w-4 mr-2" />
+                    Download Files
+                  </Button>
+                  {selectedFile && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleCopy(projectStructure.files[selectedFile])}
+                      className="w-full justify-start"
+                    >
+                      <Copy className="h-4 w-4 mr-2" />
+                      Copy Selected
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
-          </CardHeader>
-          
-          <CardContent className="p-0 h-full">
-            <Tabs value={selectedTab} onValueChange={setSelectedTab} className="h-full">
-              <TabsList className="grid w-full grid-cols-3 bg-black/40 border-b border-white/10">
-                <TabsTrigger value="preview" className="text-white">
-                  <Eye className="w-4 h-4 mr-2" />
-                  Live Preview
-                </TabsTrigger>
-                <TabsTrigger value="files" className="text-white">
-                  <FileText className="w-4 h-4 mr-2" />
-                  Files
-                </TabsTrigger>
-                <TabsTrigger value="structure" className="text-white">
-                  <Package className="w-4 h-4 mr-2" />
-                  Project
-                </TabsTrigger>
-              </TabsList>
-              
-              <TabsContent value="preview" className="p-4 h-full">
-                {renderLivePreview()}
-              </TabsContent>
-              
-              {detectedFramework !== 'vanilla' && (
-                <TabsContent value="sandpack" className="p-0 h-full">
-                  {renderLivePreview()}
-                </TabsContent>
-              )}
-              
-              <TabsContent value="files" className="p-0 h-full">
-                <div className="flex h-full">
-                  <div className="w-64 border-r border-white/10 bg-black/30 overflow-y-auto">
-                    <div className="p-4">
-                      <h3 className="text-sm font-medium text-gray-300 mb-2">Files</h3>
-                      <div className="space-y-1">
-                        {codeBlocks.map((block, index) => (
-                          <div
-                            className={`flex items-center w-full justify-between p-2 group ${
-                              selectedFileIndex === index ? 'bg-gray-700' : 'hover:bg-gray-800'
-                            }`}
-                            key={index}
-                          >
-                            <div 
-                              className="flex items-center flex-1 cursor-pointer"
-                              onClick={() => setSelectedFileIndex(index)}
-                            >
-                              <FileText className="w-4 h-4 mr-2 flex-shrink-0" />
-                              
-                              {editingFileIndex === index ? (
-                                <div className="flex items-center gap-1 flex-1">
-                                  <Input
-                                    value={editingFileName}
-                                    onChange={(e) => setEditingFileName(e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') {
-                                        saveFilename(index, editingFileName)
-                                      } else if (e.key === 'Escape') {
-                                        cancelEditingFilename()
-                                      }
-                                    }}
-                                    className="h-6 text-xs bg-gray-600 border-gray-500 text-white flex-1"
-                                    autoFocus
-                                    onBlur={() => saveFilename(index, editingFileName)}
-                                  />
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => saveFilename(index, editingFileName)}
-                                    className="h-6 w-6 p-0 text-green-400 hover:text-green-300"
-                                  >
-                                    <Check className="w-3 h-3" />
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={cancelEditingFilename}
-                                    className="h-6 w-6 p-0 text-red-400 hover:text-red-300"
-                                  >
-                                    <X className="w-3 h-3" />
-                                  </Button>
-                                </div>
-                              ) : (
-                                <span className="truncate flex-1">{block.filename}</span>
-                              )}
-                            </div>
 
-                            <div className="flex items-center gap-1">
-                              {editingFileIndex !== index && (
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    startEditingFilename(index, block.filename || '')
-                                  }}
-                                  className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-white transition-opacity"
-                                >
-                                  <Edit className="w-3 h-3" />
-                                </Button>
-                              )}
-                              
-                              {block.isError && (
-                                <span className="text-red-500">
-                                  <AlertCircle className="w-4 h-4" />
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="flex-1 overflow-y-auto">
-                    {codeBlocks.length > 0 && selectedFileIndex !== null && (
-                      <div className="h-full flex flex-col">
-                        <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
-                          <div className="flex items-center gap-2">
-                            <span className="border border-gray-500 text-gray-300 rounded px-2 py-0.5 text-xs">
-                              {codeBlocks[selectedFileIndex].language}
-                            </span>
-                            <span className="text-sm font-mono text-gray-300">{codeBlocks[selectedFileIndex].filename}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
-                              onClick={() => {
-                                navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code)
-                              }}
-                            >
-                              <CodeIcon className="w-4 h-4 mr-1" />
-                              Copy
-                            </button>
-                          </div>
-                        </div>
-                        <div className="flex-1 overflow-y-auto bg-black/30">
-                          <SyntaxHighlighter
-                            style={oneDark as any}
-                            language={codeBlocks[selectedFileIndex].language}
-                            PreTag="div"
-                            className="!m-0 !bg-gray-900 h-full text-sm"
-                            showLineNumbers
-                          >
-                            {codeBlocks[selectedFileIndex].code}
-                          </SyntaxHighlighter>
-                        </div>
-                      </div>
-                    )}
-                  </div>
+            {/* Main Content */}
+            <div className="flex-1 flex flex-col">
+              <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
+                <div className="border-b border-white/10 px-4">
+                  <TabsList className="bg-transparent">
+                    <TabsTrigger value="preview" className="data-[state=active]:bg-white/10">
+                      <Eye className="h-4 w-4 mr-2" />
+                      Live Preview
+                    </TabsTrigger>
+                    <TabsTrigger value="code" className="data-[state=active]:bg-white/10">
+                      <Code className="h-4 w-4 mr-2" />
+                      Code Editor
+                    </TabsTrigger>
+                  </TabsList>
                 </div>
-              </TabsContent>
-              
-              <TabsContent value="structure" className="p-4 h-full overflow-y-auto">
-                {projectStructure ? (
-                  <div className="space-y-4">
-                    <div>
-                      <h3 className="text-lg font-semibold text-white mb-2">Project Structure</h3>
-                      <div className="bg-black/40 rounded-lg p-4">
-                        <pre className="text-sm text-gray-300">
-                          {Object.keys(projectStructure.files).map(filename => (
-                            <div key={filename} className="flex items-center gap-2 mb-1">
-                              <FileText className="w-4 h-4" />
-                              {filename}
-                            </div>
-                          ))}
-                        </pre>
-                      </div>
-                    </div>
-                    
-                    {projectStructure.dependencies && (
-                      <div>
-                        <h4 className="text-md font-medium text-white mb-2">Dependencies</h4>
-                        <div className="flex flex-wrap gap-2">
-                          {projectStructure.dependencies.map(dep => (
-                            <span key={dep} className="bg-gray-700 text-gray-300 rounded px-2 py-0.5 text-xs">
-                              {dep}
-                            </span>
-                          ))}
+
+                <TabsContent value="preview" className="flex-1 m-0 p-0">
+                  <div className="h-full">
+                    {renderLivePreview()}
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="code" className="flex-1 m-0 p-0">
+                  <div className="h-full flex">
+                    {selectedFile && (
+                      <div className="flex-1 p-4">
+                        <div className="flex items-center justify-between mb-4">
+                          <h3 className="text-sm font-medium text-white">{selectedFile}</h3>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleCopy(projectStructure.files[selectedFile])}
+                          >
+                            <Copy className="h-4 w-4 mr-2" />
+                            Copy
+                          </Button>
                         </div>
+                        <pre className="bg-black/40 rounded-lg p-4 overflow-auto text-sm text-white/90 h-full">
+                          <code>{projectStructure.files[selectedFile]}</code>
+                        </pre>
                       </div>
                     )}
-                    
-                    <div>
-                      <h4 className="text-md font-medium text-white mb-2">Setup Instructions</h4>
-                      <div className="bg-black/40 rounded-lg p-4">
-                        <pre className="text-sm text-gray-300">
-{`1. Download the ZIP file
-2. Extract to your desired location
-3. Review the README.md file
-4. Install dependencies (if any)
-5. Run the project according to the language requirements`}
-                        </pre>
-                      </div>
-                    </div>
                   </div>
-                ) : (
-                  <div className="text-center text-gray-400">
-                    <Package className="w-16 h-16 mx-auto mb-4" />
-                    <p>No project structure detected</p>
-                    <p className="text-sm mt-2">Add more code files to analyze project structure</p>
-                  </div>
-                )}
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
-      </motion.div>
-      )}
-    </AnimatePresence>
-  )
+                </TabsContent>
+              </Tabs>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
