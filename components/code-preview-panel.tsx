@@ -61,8 +61,6 @@ export default function CodePreviewPanel({ messages, isVisible, onClose }: CodeP
   const [showConsole, setShowConsole] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['src']));
 
-  if (!isVisible) return null;
-
   // Helper to get file extension based on language
   const getFileExtension = (language: string): string => {
     const extensions: { [key: string]: string } = {
@@ -207,6 +205,9 @@ export default function CodePreviewPanel({ messages, isVisible, onClose }: CodeP
       setSelectedFile(codeBlocks[0].filename);
     }
   }, [codeBlocks, selectedFile]);
+
+  // Early return after all hooks are called
+  if (!isVisible) return null;
 
   const handleDownload = () => {
     if (codeBlocks.length === 1) {
