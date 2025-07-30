@@ -69,6 +69,18 @@ body {
     overscroll-behavior: contain;
   }
   
+  /* Smooth scrolling for mobile interaction panel */
+  .mobile-scroll-container {
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  /* Highlight input section on mobile */
+  .mobile-input-highlight {
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+    transition: box-shadow 0.2s ease;
+  }
+  
   /* Safe area handling */
   .mobile-safe-bottom {
     padding-bottom: env(safe-area-inset-bottom);

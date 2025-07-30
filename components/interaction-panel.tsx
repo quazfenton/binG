@@ -712,7 +712,7 @@ Please include:
               </div>
             </div>
 
-            <TabsContent value="chat" className="m-0 flex-1 flex flex-col min-h-0">
+            <TabsContent value="chat" className="m-0 flex-1 flex flex-col min-h-0 overflow-y-auto md:overflow-hidden mobile-scroll-container">
               {/* Provider Status and Selection */}
               <div className="flex items-center justify-between mb-3 text-xs text-white/60">
                 <div className="flex items-center gap-2">
@@ -766,11 +766,11 @@ Please include:
                 </div>
               )}
 
-              {/* Spacer to push input to bottom */}
-              <div className="flex-1 min-h-0"></div>
+              {/* Spacer to push input to bottom - only on desktop */}
+              <div className="hidden md:block flex-1 min-h-0"></div>
 
               {/* Input Section - Always at bottom */}
-              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0">
+              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
                 {/* Suggestions */}
                 <div className="flex flex-wrap gap-2">
                   {chatSuggestions.map((suggestion, index) => (
@@ -799,6 +799,17 @@ Please include:
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
                         handleSubmit(e);
+                      }
+                    }}
+                    onFocus={() => {
+                      // Scroll to input on mobile when focused
+                      if (window.innerWidth <= 768 && textareaRef.current) {
+                        setTimeout(() => {
+                          textareaRef.current?.scrollIntoView({ 
+                            behavior: 'smooth', 
+                            block: 'center' 
+                          });
+                        }, 300); // Delay to allow keyboard to appear
                       }
                     }}
                     disabled={isProcessing}
@@ -851,7 +862,7 @@ Please include:
               </div>
             </TabsContent>
 
-            <TabsContent value="code" className="m-0 flex-1 flex flex-col min-h-0">
+            <TabsContent value="code" className="m-0 flex-1 flex flex-col min-h-0 overflow-y-auto md:overflow-hidden mobile-scroll-container">
               {/* Code Mode Header */}
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
@@ -942,11 +953,11 @@ Please include:
                 </div>
               </div>
 
-              {/* Spacer to push input to bottom */}
-              <div className="flex-1 min-h-0"></div>
+              {/* Spacer to push input to bottom - only on desktop */}
+              <div className="hidden md:block flex-1 min-h-0"></div>
 
               {/* Input Section - Always at bottom */}
-              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0">
+              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
                 {/* Code Suggestions */}
                 <div>
                   <h4 className="text-xs font-medium text-white/80 mb-2">Popular Requests</h4>
@@ -991,6 +1002,17 @@ Please include:
                       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                         e.preventDefault();
                         handleSubmit(e);
+                      }
+                    }}
+                    onFocus={() => {
+                      // Scroll to input on mobile when focused
+                      if (window.innerWidth <= 768 && textareaRef.current) {
+                        setTimeout(() => {
+                          textareaRef.current?.scrollIntoView({ 
+                            behavior: 'smooth', 
+                            block: 'center' 
+                          });
+                        }, 300); // Delay to allow keyboard to appear
                       }
                     }}
                     disabled={isProcessing}
