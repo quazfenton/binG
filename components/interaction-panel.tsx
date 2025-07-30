@@ -70,7 +70,6 @@ interface InteractionPanelProps {
   toggleAccessibility: () => void; // This prop is expected to be a function that toggles accessibility options
   toggleHistory: () => void;
   toggleCodePreview: () => void; // This prop is expected to be a function
-  toggleCodeMode?: () => void; // Add code mode toggle
   onStopGeneration?: () => void;
   onRetry?: () => void; // Add retry function prop
   currentProvider?: string;
@@ -90,7 +89,6 @@ export default function InteractionPanel({
   toggleAccessibility, // Receive the prop
   toggleHistory,
   toggleCodePreview, // Receive the prop
-  toggleCodeMode, // Add code mode toggle
   onStopGeneration,
   onRetry,
   currentProvider = "openrouter",
@@ -833,25 +831,14 @@ export default function InteractionPanel({
                   <div className="flex items-center justify-between mb-2">
                     <h4 className="text-xs font-medium text-white/80">Project Files</h4>
                     <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setShowFileSelector(!showFileSelector)}
-                        className="text-xs"
-                      >
-                        {showFileSelector ? 'Hide' : 'Select Files'}
-                      </Button>
-                      {toggleCodeMode && (
-                        <Button
-                          size="sm"
-                          variant="default"
-                          onClick={toggleCodeMode}
-                          className="text-xs bg-blue-600 hover:bg-blue-700"
-                        >
-                          🚀 IDE Mode
-                        </Button>
-                      )}
-                    </div>
+            <Button
+-                      size="sm"
+-                      variant="outline"
+-                      onClick={() => setShowFileSelector(!showFileSelector)}
+-                      className="text-xs"
+-                    >
+-                      {showFileSelector ? 'Hide' : 'Select Files'}
+-                    </Button>
                   </div>
 
                   {showFileSelector && (
