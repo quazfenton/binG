@@ -114,11 +114,15 @@ export function ChatPanel({
   };
 
   return (
-    <div className="flex flex-col h-full relative">
+    <div className="flex flex-col h-full relative min-h-0">
       <div 
         ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto p-4 space-y-2 overscroll-contain touch-pan-y" 
-        style={{ paddingBottom: "120px" }}
+        className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2 overscroll-contain touch-pan-y" 
+        style={{ 
+          paddingBottom: "120px",
+          WebkitOverflowScrolling: "touch",
+          scrollBehavior: "smooth"
+        }}
         onScroll={handleScroll}
       >
         {messages.length === 0 && (

@@ -370,15 +370,15 @@ export default function ConversationInterface() {
         </div>
       </div>
       <div className="flex flex-col md:flex-row h-full min-h-0">
-        {/* Main content area */}
-        <div className="flex-1 flex flex-col">
+        {/* Main content area - hidden on mobile when chat is active */}
+        <div className="hidden md:flex flex-1 flex-col">
           <div className="flex-1 relative">
             {/* Placeholder for the main 3D scene or other content */}
           </div>
         </div>
 
-        {/* Chat Panel */}
-        <div className="md:border-l md:border-white/10 relative z-10">
+        {/* Chat Panel - full width on mobile */}
+        <div className="flex-1 md:flex-initial md:border-l md:border-white/10 relative z-10 flex flex-col min-h-0">
           <ChatPanel
             messages={messages} // Pass messages from useChat
             input={input} // Pass input from useChat

@@ -162,6 +162,7 @@ interface CodeBlockError {
   file?: string;
   line?: number;
   componentId?: string;
+  id?: string;
 }
 
 // Placeholder for SelectionOverlay - assuming it's a component that needs to be imported or defined
@@ -1207,6 +1208,213 @@ const dismissError = (errorId: string) => {
   console.log('Dismissing error:', errorId);
 };
 
+// Visual Canvas Component
+interface VisualCanvasProps {
+  project: VisualEditorProject;
+  selectedComponents: Set<string>;
+  editorState: EditorState;
+  onSelectionChange: (selection: Set<string>) => void;
+  onComponentUpdate: (componentId: string, updates: Partial<ComponentMetadata>) => void;
+  onStateChange: (state: EditorState) => void;
+  onComponentDrop: (componentType: string, position: { x: number; y: number }) => void;
+  isLoading: boolean;
+}
+
+const VisualCanvas: React.FC<VisualCanvasProps> = ({
+  project,
+  selectedComponents,
+  editorState,
+  onSelectionChange,
+  onComponentUpdate,
+  onStateChange,
+  onComponentDrop,
+  isLoading
+}) => {
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [previewHtml, setPreviewHtml] = useState<string>('');
+
+  // Generate preview HTML from project
+  useEffect(() => {
+    const generatePreviewHtml = () => {
+      try {
+        const htmlContent = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preview</title>
+    <style>
+        body { margin: 0; padding: 20px; font-family: system-ui, sans-serif; }
+        .component { border: 1px dashed #ccc; padding: 10px; margin: 5px; min-height: 30px; }
+        .selected { border-color: #007acc; background-color: rgba(0, 122, 204, 0.1); }
+    </style>
+</head>
+<body>
+    <div id="root">
+        <h2>Visual Editor Preview</h2>
+        <p>Project: ${project.name}</p>
+        <p>Framework: ${project.framework}</p>
+        ${project.visualConfig?.componentMap ? 
+          Array.from(project.visualConfig.componentMap.values()).map(comp => 
+            `<div class="component ${selectedComponents.has(comp.id) ? 'selected' : ''}" data-id="${comp.id}">
+              ${comp.type} - ${comp.id}
+            </div>`
+          ).join('') : 
+          '<p>No components yet. Drag components from the library to get started.</p>'
+        }
+    </div>
+    <script>
+        // Handle component selection
+        document.addEventListener('click', (e) => {
+            const component = e.target.closest('.component');
+            if (component) {
+                const componentId = component.dataset.id;
+                window.parent.postMessage({ type: 'selectComponent', componentId }, '*');
+            }
+        });
+    </script>
+</body>
+</html>`;
+        setPreviewHtml(htmlContent);
+      } catch (error: any) {
+        console.error('Failed to generate preview HTML:', error);
+        setPreviewHtml(`
+<!DOCTYPE html>
+<html><body>
+  <div style="padding: 20px; text-align: center; color: #666;">
+    <h3>Preview Error</h3>
+    <p>Failed to generate preview: ${error?.message || 'Unknown error'}</p>
+  </div>
+</body></html>`);
+      }
+    };
+
+    generatePreviewHtml();
+  }, [project, selectedComponents]);
+
+  // Handle messages from iframe
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === 'selectComponent') {
+        const componentId = event.data.componentId;
+        onSelectionChange(new Set([componentId]));
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [onSelectionChange]);
+
+  if (isLoading) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-gray-900">
+        <div className="text-center">
+          <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-2 text-blue-400" />
+          <p className="text-gray-400">Loading preview...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 bg-gray-900 relative overflow-hidden">
+      <div className="absolute inset-0 p-4">
+        <iframe
+          ref={iframeRef}
+          srcDoc={previewHtml}
+          className="w-full h-full border border-gray-700 rounded-lg bg-white"
+          title="Visual Editor Preview"
+          sandbox="allow-scripts allow-same-origin"
+        />
+      </div>
+    </div>
+  );
+};
+
+// Code Editor Component
+interface CodeEditorProps {
+  project: VisualEditorProject;
+  onCodeChange: (filePath: string, content: string) => void;
+  errors: CodeBlockError[];
+  selectedComponents: Set<string>;
+}
+
+const CodeEditor: React.FC<CodeEditorProps> = ({
+  project,
+  onCodeChange,
+  errors,
+  selectedComponents
+}) => {
+  const [activeFile, setActiveFile] = useState<string>('');
+  const [fileContent, setFileContent] = useState<string>('');
+
+  // Initialize with main file
+  useEffect(() => {
+    const mainFile = getMainFile(project.framework);
+    if (project.files[mainFile]) {
+      setActiveFile(mainFile);
+      setFileContent(project.files[mainFile]);
+    }
+  }, [project]);
+
+  const handleContentChange = (content: string) => {
+    setFileContent(content);
+    if (activeFile) {
+      onCodeChange(activeFile, content);
+    }
+  };
+
+  const fileList = Object.keys(project.files);
+
+  return (
+    <div className="flex-1 flex flex-col bg-gray-900">
+      {/* File Tabs */}
+      <div className="flex border-b border-gray-700 bg-gray-800">
+        {fileList.map(filePath => (
+          <button
+            key={filePath}
+            onClick={() => {
+              setActiveFile(filePath);
+              setFileContent(project.files[filePath] || '');
+            }}
+            className={`px-4 py-2 text-sm border-r border-gray-700 ${
+              activeFile === filePath 
+                ? 'bg-gray-900 text-white' 
+                : 'text-gray-400 hover:text-white hover:bg-gray-700'
+            }`}
+          >
+            {filePath.split('/').pop()}
+          </button>
+        ))}
+      </div>
+
+      {/* Code Editor */}
+      <div className="flex-1 relative">
+        <Textarea
+          value={fileContent}
+          onChange={(e) => handleContentChange(e.target.value)}
+          className="absolute inset-0 w-full h-full resize-none border-0 bg-gray-900 text-gray-100 font-mono text-sm p-4"
+          placeholder="Select a file to edit..."
+        />
+      </div>
+
+      {/* Error Panel */}
+      {errors.length > 0 && (
+        <div className="border-t border-gray-700 bg-red-900/20 p-2 max-h-32 overflow-y-auto">
+          {errors.map((error, index) => (
+            <div key={index} className="flex items-center gap-2 text-red-400 text-sm py-1">
+              <AlertCircle className="h-4 w-4" />
+              <span>{error.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Helper functions that would be implemented
 const extractStyleSheets = (files: { [key: string]: string }): string[] => {
   return Object.entries(files)
@@ -1844,10 +2052,11 @@ export default function VisualEditor({ initialProject, onSaveToOriginal, onClose
       
       // Add to undo history
       setUndoHistory([initialProject]);
-    } catch (error) {
+    } catch (error: any) {
       setErrors(prev => [...prev, {
         type: 'parse',
-        message: `Failed to initialize visual editor: ${error.message}`
+        message: `Failed to initialize visual editor: ${error?.message || 'Unknown error'}`,
+        id: `error_${Date.now()}`
       }]);
     } finally {
       setIsPreviewLoading(false);
