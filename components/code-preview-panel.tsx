@@ -1283,32 +1283,38 @@ export default {
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: '100%' }}
           transition={{ duration: 0.3, ease: 'easeInOut' }}
-          className="fixed right-0 top-0 h-full bg-black/20 backdrop-blur-2xl border border-white/10 rounded-l-xl z-[100] overflow-hidden shadow-2xl"
-          style={{ width: `${panelWidth}px` }}
+          className="fixed top-0 h-full bg-black/20 backdrop-blur-2xl border border-white/10 z-[100] overflow-hidden shadow-2xl
+                     md:right-0 md:rounded-l-xl md:left-auto
+                     left-0 right-0 rounded-none"
+          style={{ 
+            width: `min(100vw, ${panelWidth}px)`
+          }}
         >
-          {/* Resize Handle */}
+          {/* Resize Handle - Hidden on mobile */}
           <div 
-            className="absolute left-0 top-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200"
+            className="absolute left-0 top-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200 hidden md:block"
             onMouseDown={handleMouseDown}
           />
           
         <Card className="h-full bg-transparent border-0 rounded-none">
-          <CardHeader className="border-b border-white/10 bg-black/20">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-white flex items-center gap-2">
-                <CodeIcon className="w-5 h-5" />
-                Code Preview Panel
-                <span className="bg-gray-700 text-gray-300 rounded-full px-2.5 py-0.5 text-xs">
-                  {codeBlocks.length} file(s)
+          <CardHeader className="border-b border-white/10 bg-black/20 px-3 md:px-6">
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="text-white flex items-center gap-2 text-sm md:text-base">
+                <CodeIcon className="w-4 h-4 md:w-5 md:h-5" />
+                <span className="hidden sm:inline">Code Preview Panel</span>
+                <span className="sm:hidden">Code</span>
+                <span className="bg-gray-700 text-gray-300 rounded-full px-2 py-0.5 text-xs">
+                  {codeBlocks.length}
                 </span>
               </CardTitle>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 md:gap-2">
                 <button
                   onClick={downloadAsZip}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm flex items-center"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
                 >
-                  <Package className="w-4 h-4 mr-2" />
-                  Download ZIP
+                  <Package className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
+                  <span className="hidden sm:inline">Download ZIP</span>
+                  <span className="sm:hidden">ZIP</span>
                 </button>
                 {projectStructure && (
                   <button
@@ -1316,15 +1322,16 @@ export default {
                       localStorage.setItem('visualEditorProject', JSON.stringify(projectStructure));
                       window.open('/visual-editor', '_blank');
                     }}
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded text-sm flex items-center"
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
                   >
-                    <Edit className="w-4 h-4 mr-2" />
-                    Edit
+                    <Edit className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
+                    <span className="hidden sm:inline">Edit</span>
+                    <span className="sm:hidden">Edit</span>
                   </button>
                 )}
                 <button
                   onClick={onClose}
-                  className="border border-gray-300 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded text-sm"
+                  className="border border-gray-300 hover:bg-gray-700 text-gray-300 px-2 md:px-3 py-1.5 rounded text-xs md:text-sm min-w-[44px]"
                 >
                   Close
                 </button>
@@ -1334,22 +1341,25 @@ export default {
           
           <CardContent className="p-0 h-full">
             <Tabs value={selectedTab} onValueChange={setSelectedTab} className="h-full">
-              <TabsList className="grid w-full grid-cols-3 bg-black/40 border-b border-white/10">
-                <TabsTrigger value="preview" className="text-white">
-                  <Eye className="w-4 h-4 mr-2" />
-                  Live Preview
+              <TabsList className="grid w-full grid-cols-3 bg-black/40 border-b border-white/10 px-2 md:px-4">
+                <TabsTrigger value="preview" className="text-white text-xs md:text-sm">
+                  <Eye className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
+                  <span className="hidden sm:inline">Live Preview</span>
+                  <span className="sm:hidden">Preview</span>
                 </TabsTrigger>
-                <TabsTrigger value="files" className="text-white">
-                  <FileText className="w-4 h-4 mr-2" />
-                  Files
+                <TabsTrigger value="files" className="text-white text-xs md:text-sm">
+                  <FileText className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
+                  <span className="hidden sm:inline">Files</span>
+                  <span className="sm:hidden">Files</span>
                 </TabsTrigger>
-                <TabsTrigger value="structure" className="text-white">
-                  <Package className="w-4 h-4 mr-2" />
-                  Project
+                <TabsTrigger value="structure" className="text-white text-xs md:text-sm">
+                  <Package className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
+                  <span className="hidden sm:inline">Project</span>
+                  <span className="sm:hidden">Project</span>
                 </TabsTrigger>
               </TabsList>
               
-              <TabsContent value="preview" className="p-4 h-full">
+              <TabsContent value="preview" className="p-2 md:p-4 h-full">
                 {renderLivePreview()}
               </TabsContent>
               
@@ -1360,9 +1370,9 @@ export default {
               )}
               
               <TabsContent value="files" className="p-0 h-full">
-                <div className="flex h-full">
-                  <div className="w-64 border-r border-white/10 bg-black/30 overflow-y-auto">
-                    <div className="p-4">
+                <div className="flex h-full flex-col md:flex-row">
+                  <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 bg-black/30 overflow-y-auto max-h-48 md:max-h-none">
+                    <div className="p-2 md:p-4">
                       <h3 className="text-sm font-medium text-gray-300 mb-2">Files</h3>
                       <div className="space-y-1">
                         {codeBlocks.map((block, index) => (
