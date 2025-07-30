@@ -208,34 +208,34 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     // This logic should *add* prefixes only if they are not already present.
     if (language === "html") {
       // For HTML, if it's a root file or contains <html>, standardize to index.html
-     // For other HTML files, assume they are components or views, often in src/ or app/
-      if (finalFilename.includes("/")) {
-        finalFilename = finalFilename;
-      } else {
+      if (finalFilename.includes("<html") || finalFilename === "index.html") {
         finalFilename = "index.html";
+      } else if (!finalFilename.startsWith('src/') && !finalFilename.startsWith('public/') && !finalFilename.startsWith('app/')) {
+        // For other HTML files, assume they are components or views, often in src/ or app/
+        finalFilename = `src/${finalFilename}`;
       }
     } else if (language === "css") {
-      if (finalFilename.includes('/')) {
-        finalFilename = finalFilename;
-      } else if (finalFilename === "styles" || finalFilename.includes('css')) {        
+      if (finalFilename === ".css" || finalFilename === "css" || !finalFilename.includes('.')) {
         finalFilename = "styles.css";
+      } else if (!finalFilename.startsWith('src/') && !finalFilename.startsWith('public/') && !finalFilename.startsWith('styles/')) {
+        finalFilename = `src/${finalFilename}`;
       }
     } else if (language === "javascript") {
       // If it's a common entry point or app file, standardize its path
       if ((finalFilename.includes("App") || finalFilename.includes("index") || finalFilename.includes("main")) && !finalFilename.startsWith('src/')) {
         finalFilename = `src/App.js`; // Standardize to src/App.js
       } else if (!finalFilename.startsWith('src/') && !finalFilename.startsWith('lib/') && !finalFilename.startsWith('public/')) {
-        finalFilename = finalFilename;
+        finalFilename = `src/${finalFilename}`;
       }
     } else if (language === "jsx" || language === "tsx") {
       // If the cleaned filename already has a valid path (e.g., 'src/App.jsx', 'components/Greeting.jsx')
       // or is a common root file, use it directly.
+      if (finalFilename.startsWith('src/') || finalFilename.startsWith('components/')) {
         // Ensure it has the correct extension
         if (!finalFilename.endsWith(`.${expectedExt}`)) {
           finalFilename = `${finalFilename.split('.')[0]}.${expectedExt}`;
         }
-       //if (finalFilename.startsWith('src/') || finalFilename.startsWith('components/')) {
-       if (finalFilename.includes("App") || finalFilename.includes("index") || finalFilename.includes("main")) {
+      } else if (finalFilename.includes("App") || finalFilename.includes("index") || finalFilename.includes("main")) {
         // For main app files, standardize to src/App.jsx or src/App.tsx
         finalFilename = `src/App.${expectedExt}`;
       } else {
@@ -246,8 +246,8 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
           finalFilename = `${finalFilename.split('.')[0]}.${expectedExt}`;
         }
       }
-  //  } else if (language === "vue") {
-     // finalFilename = "src/App.vue";
+    } else if (language === "vue") {
+      finalFilename = "src/App.vue";
     } else if (language === "typescript") {
       // For Angular components, ensure 'src/app/' prefix and correct extension
       if (finalFilename.includes('.component.') && !finalFilename.startsWith('src/app/')) {
