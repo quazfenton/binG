@@ -119,12 +119,170 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     return extensions[language.toLowerCase()] || 'txt';
   };
 
-  // Generate smart filename based on code content
+  // Extract filename from text context before code block
+  const extractFilenameFromContext = (messageContent: string, codeBlockMatch: string, language: string): string | null => {
+    try {
+      const codeBlockIndex = messageContent.indexOf(codeBlockMatch);
+      if (codeBlockIndex === -1) return null;
+      
+      // Look at text before the code block (up to 500 characters)
+      const contextBefore = messageContent.substring(Math.max(0, codeBlockIndex - 500), codeBlockIndex);
+      
+      // Get file extension for this language
+      const expectedExt = getFileExtension(language);
+      
+      // Look for filenames with the correct extension in the context
+      const extensionPattern = new RegExp(`([\\w\\-\\/\\.]+\\.${expectedExt})(?![\\w])`, 'gi');
+      const matches = contextBefore.match(extensionPattern);
+      
+      if (matches && matches.length > 0) {
+        // Get the last (closest) match to the code block
+        const filename = matches[matches.length - 1];
+        
+        // Clean up the filename
+        let cleaned = filename.trim();
+        
+        // Remove common prefixes that might be captured
+        cleaned = cleaned.replace(/^[^\w\/]*/, ''); // Remove leading non-word chars except /
+        cleaned = cleaned.replace(/[^\w\/\.\-]*$/, ''); // Remove trailing non-word chars except . and -
+        
+        return cleaned;
+      }
+      
+      // Fallback: look for common path patterns for all frameworks
+      const pathPatterns = [
+        // Framework-specific patterns
+        /(?:src\/(?:components\/|pages\/|views\/|utils\/|hooks\/|lib\/|services\/|store\/|styles\/|assets\/)?[\w\-]+\.[\w]+)/gi,
+        /(?:components\/[\w\-]+\.[\w]+)/gi,
+        /(?:pages\/[\w\-]+\.[\w]+)/gi,
+        /(?:views\/[\w\-]+\.[\w]+)/gi,
+        /(?:utils\/[\w\-]+\.[\w]+)/gi,
+        /(?:hooks\/[\w\-]+\.[\w]+)/gi,
+        /(?:lib\/[\w\-]+\.[\w]+)/gi,
+        /(?:services\/[\w\-]+\.[\w]+)/gi,
+        /(?:store\/[\w\-]+\.[\w]+)/gi,
+        /(?:styles\/[\w\-]+\.[\w]+)/gi,
+        /(?:assets\/[\w\-]+\.[\w]+)/gi,
+        // Python specific
+        /(?:app\/[\w\-]+\.py)/gi,
+        /(?:models\/[\w\-]+\.py)/gi,
+        /(?:views\/[\w\-]+\.py)/gi,
+        /(?:templates\/[\w\-]+\.html)/gi,
+        /(?:static\/[\w\-]+\.(?:css|js))/gi,
+        // Java specific
+        /(?:src\/main\/java\/[\w\/\-]+\.java)/gi,
+        /(?:src\/test\/java\/[\w\/\-]+\.java)/gi,
+        // C/C++ specific
+        /(?:src\/[\w\-]+\.(?:c|cpp|h|hpp))/gi,
+        /(?:include\/[\w\-]+\.(?:h|hpp))/gi,
+        // PHP specific
+        /(?:app\/[\w\-]+\.php)/gi,
+        /(?:public\/[\w\-]+\.php)/gi,
+        /(?:resources\/views\/[\w\-]+\.blade\.php)/gi,
+        // Ruby specific
+        /(?:app\/(?:models\/|controllers\/|views\/)?[\w\-]+\.rb)/gi,
+        /(?:lib\/[\w\-]+\.rb)/gi,
+        // Go specific
+        /(?:cmd\/[\w\-]+\.go)/gi,
+        /(?:pkg\/[\w\-]+\.go)/gi,
+        /(?:internal\/[\w\-]+\.go)/gi,
+        // Rust specific
+        /(?:src\/[\w\-]+\.rs)/gi,
+        /(?:tests\/[\w\-]+\.rs)/gi,
+        // Swift specific
+        /(?:Sources\/[\w\-]+\.swift)/gi,
+        /(?:Tests\/[\w\-]+\.swift)/gi,
+        // Kotlin specific
+        /(?:src\/main\/kotlin\/[\w\/\-]+\.kt)/gi,
+        /(?:src\/test\/kotlin\/[\w\/\-]+\.kt)/gi,
+        // Dart/Flutter specific
+        /(?:lib\/[\w\-]+\.dart)/gi,
+        /(?:test\/[\w\-]+\.dart)/gi,
+        // Vue specific
+        /(?:src\/(?:components\/|views\/|pages\/)?[\w\-]+\.vue)/gi,
+        // Svelte specific
+        /(?:src\/(?:components\/|routes\/)?[\w\-]+\.svelte)/gi,
+        // Angular specific
+        /(?:src\/app\/[\w\-]+\.(?:component|service|module|directive|pipe)\.ts)/gi,
+        /(?:src\/app\/[\w\-]+\.component\.(?:html|css|scss))/gi,
+        // Generic patterns (catch-all)
+        /(?:[\w\-]+\.(?:js|jsx|ts|tsx|css|scss|sass|less|html|py|java|cpp|c|php|rb|go|rs|swift|kt|dart|vue|svelte|astro|md|json|xml|yaml|yml|sh|bash|sql|dockerfile))/gi
+      ];
+      
+      for (const pattern of pathPatterns) {
+        const pathMatches = contextBefore.match(pattern);
+        if (pathMatches && pathMatches.length > 0) {
+          const filename = pathMatches[pathMatches.length - 1];
+          
+          // Check if the extension matches the language
+          const fileExt = filename.split('.').pop()?.toLowerCase();
+          
+          // Enhanced language-extension matching for all frameworks
+          const isValidExtension = 
+            fileExt === expectedExt ||
+            // JavaScript variants
+            (language === 'javascript' && ['js', 'mjs', 'cjs'].includes(fileExt)) ||
+            (language === 'typescript' && ['ts', 'mts', 'cts'].includes(fileExt)) ||
+            (language === 'jsx' && ['jsx', 'js'].includes(fileExt)) ||
+            (language === 'tsx' && ['tsx', 'ts'].includes(fileExt)) ||
+            // CSS variants
+            (language === 'css' && ['css', 'scss', 'sass', 'less'].includes(fileExt)) ||
+            // HTML variants
+            (language === 'html' && ['html', 'htm', 'xhtml'].includes(fileExt)) ||
+            // Python variants
+            (language === 'python' && ['py', 'pyw', 'pyi'].includes(fileExt)) ||
+            // Java variants
+            (language === 'java' && ['java'].includes(fileExt)) ||
+            // C/C++ variants
+            (language === 'c' && ['c', 'h'].includes(fileExt)) ||
+            (language === 'cpp' && ['cpp', 'cxx', 'cc', 'hpp', 'hxx', 'hh'].includes(fileExt)) ||
+            // PHP variants
+            (language === 'php' && ['php', 'phtml', 'php3', 'php4', 'php5'].includes(fileExt)) ||
+            // Ruby variants
+            (language === 'ruby' && ['rb', 'rbw'].includes(fileExt)) ||
+            // Go variants
+            (language === 'go' && ['go'].includes(fileExt)) ||
+            // Rust variants
+            (language === 'rust' && ['rs'].includes(fileExt)) ||
+            // Swift variants
+            (language === 'swift' && ['swift'].includes(fileExt)) ||
+            // Kotlin variants
+            (language === 'kotlin' && ['kt', 'kts'].includes(fileExt)) ||
+            // Dart variants
+            (language === 'dart' && ['dart'].includes(fileExt)) ||
+            // Vue variants
+            (language === 'vue' && ['vue'].includes(fileExt)) ||
+            // Svelte variants
+            (language === 'svelte' && ['svelte'].includes(fileExt)) ||
+            // Shell variants
+            (['shell', 'bash', 'sh'].includes(language) && ['sh', 'bash', 'zsh', 'fish'].includes(fileExt)) ||
+            // Config/Data variants
+            (language === 'json' && ['json', 'jsonc'].includes(fileExt)) ||
+            (language === 'yaml' && ['yaml', 'yml'].includes(fileExt)) ||
+            (language === 'xml' && ['xml', 'xsd', 'xsl'].includes(fileExt)) ||
+            // Markdown variants
+            (language === 'markdown' && ['md', 'markdown', 'mdown'].includes(fileExt)) ||
+            // SQL variants
+            (language === 'sql' && ['sql', 'mysql', 'pgsql', 'sqlite'].includes(fileExt)) ||
+            // Docker variants
+            (['dockerfile', 'docker'].includes(language) && ['dockerfile', 'containerfile'].includes(fileExt.toLowerCase()));
+          
+          if (isValidExtension) {
+            return filename.trim();
+          }
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.warn('Error extracting filename from context:', error);
+      return null;
+    }
+  };
+
+  // Generate smart filename based on code content (fallback)
   const generateSmartFilename = (code: string, language: string): string | null => {
     try {
-      // Extract meaningful names from code content
-      const lines = code.split('\n').slice(0, 10); // Check first 10 lines
-      
       // React/JSX component detection
       if (language === 'jsx' || language === 'tsx' || language === 'javascript' || language === 'typescript') {
         const componentMatch = code.match(/(?:export\s+default\s+|export\s+(?:const|function)\s+|function\s+|const\s+)([A-Z][a-zA-Z0-9]*)/);
@@ -334,7 +492,12 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
             // Enhanced filename generation with validation
             let filename = '';
             try {
-              if (filenameHint) {
+              // First, try to extract filename from context before the code block
+              const contextFilename = extractFilenameFromContext(message.content, match, language);
+              
+              if (contextFilename) {
+                filename = contextFilename;
+              } else if (filenameHint) {
                 filename = cleanFilename(filenameHint, language, blocks.length);
               } else {
                 // Generate smart default filename based on language and content
