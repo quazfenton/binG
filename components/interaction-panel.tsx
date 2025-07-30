@@ -702,7 +702,8 @@ Please include:
           </div>
         </div>
         {!isMinimized && (
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
+          <div className="flex-1 flex flex-col min-h-0 overflow-hidden" style={{ WebkitOverflowScrolling: 'touch' }}>
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
               <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
                 <div className="flex items-center gap-2">
@@ -773,7 +774,7 @@ Please include:
               </div>
             </div>
 
-            <TabsContent value="chat" className="m-0 flex flex-col h-full">
+            <TabsContent value="chat" className="m-0 flex flex-col h-full overflow-y-auto md:overflow-hidden touch-pan-y">
               {/* Provider Status and Selection */}
               <div className="flex items-center justify-between mb-3 text-xs text-white/60">
                 <div className="flex items-center gap-2">
@@ -916,7 +917,7 @@ Please include:
               </div>
             </TabsContent>
 
-            <TabsContent value="code" className="m-0 flex flex-col h-full">
+            <TabsContent value="code" className="m-0 flex flex-col h-full overflow-y-auto md:overflow-hidden touch-pan-y">
               {/* Code Mode Header */}
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
@@ -1149,7 +1150,7 @@ Please include:
               </div>
             </TabsContent>
 
-            <TabsContent value="plugins" className="m-0">
+            <TabsContent value="plugins" className="m-0 overflow-y-auto md:overflow-hidden touch-pan-y">
               <Card className="bg-black/40 border-white/10">
                 <CardContent className="pt-6">
                   <div className="space-y-3">
@@ -1209,7 +1210,7 @@ Please include:
               </Card>
             </TabsContent>
 
-            <TabsContent value="help" className="m-0">
+            <TabsContent value="help" className="m-0 overflow-y-auto md:overflow-hidden touch-pan-y">
               <Card className="bg-black/40 border-white/10">
                 <CardContent className="pt-6">
                   <div className="space-y-4">
@@ -1251,6 +1252,7 @@ Please include:
 
 
           </Tabs>
+          </div>
         )}
       </div>
 
