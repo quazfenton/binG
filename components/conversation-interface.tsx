@@ -422,7 +422,7 @@ export default function ConversationInterface() {
       {/* Code Preview Panel */}
       <CodePreviewPanel
         messages={messages}
-        isVisible={showCodePreview}
+        isOpen={showCodePreview}
         onClose={() => setShowCodePreview(false)}
       />
 
