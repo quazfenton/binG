@@ -139,6 +139,62 @@ export default function InteractionPanel({
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [projectStructure, setProjectStructure] = useState<any[]>([]);
   const [pendingDiffs, setPendingDiffs] = useState<any[]>([]);
+
+  // Plugin System
+  const availablePlugins: Plugin[] = [
+    {
+      id: 'ai-enhancer',
+      name: 'AI Enhancer',
+      description: 'Enhance and improve text with AI',
+      icon: Sparkles,
+      component: AIEnhancerPlugin,
+      category: 'ai',
+      defaultSize: { width: 500, height: 600 },
+      minSize: { width: 400, height: 400 }
+    },
+    {
+      id: 'code-formatter',
+      name: 'Code Formatter',
+      description: 'Format and beautify code',
+      icon: Code,
+      component: CodeFormatterPlugin,
+      category: 'code',
+      defaultSize: { width: 600, height: 700 },
+      minSize: { width: 500, height: 500 }
+    },
+    {
+      id: 'calculator',
+      name: 'Calculator',
+      description: 'Perform calculations',
+      icon: Calculator,
+      component: CalculatorPlugin,
+      category: 'utility',
+      defaultSize: { width: 350, height: 500 },
+      minSize: { width: 300, height: 400 }
+    },
+    {
+      id: 'note-taker',
+      name: 'Notes',
+      description: 'Take and manage notes',
+      icon: FileText,
+      component: NoteTakerPlugin,
+      category: 'utility',
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 400 }
+    }
+  ];
+
+  const handlePluginResult = (pluginId: string, result: any) => {
+    // Handle plugin results - could insert into chat, save to context, etc.
+    console.log(`Plugin ${pluginId} result:`, result);
+    
+    // For text-based results, we could insert them into the input
+    if (typeof result === 'string') {
+      setInput(result);
+    } else if (result?.content) {
+      setInput(result.content);
+    }
+  };
   const [showFileSelector, setShowFileSelector] = useState(false);
   const [codeMode, setCodeMode] = useState<'basic' | 'advanced'>('basic');
   const [showMultiModelComparison, setShowMultiModelComparison] = useState(false);
@@ -772,14 +828,8 @@ Please include:
                 </div>
               )}
 
-              {/* Content area that grows on mobile, shrinks on desktop */}
-              <div className="flex-1 min-h-0 md:flex-none">
-                {/* Placeholder for chat messages/content */}
-                <div className="h-full md:h-auto"></div>
-              </div>
-
               {/* Input Section - Always at bottom */}
-              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10 md:mt-auto">
+              <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
                 {/* Suggestions */}
                 <div className="flex flex-wrap gap-2">
                   {chatSuggestions.map((suggestion, index) => (
@@ -826,19 +876,15 @@ Please include:
                   <button
                     type="button"
                     onClick={() => {
-                      const enhancePrompt = `Please enhance and improve this message to be more clear, detailed, and effective:\n\n"${input}"\n\nProvide an enhanced version that is:
-- More specific and detailed
-- Better structured
-- More engaging
-- Clearer in intent
-- Professional yet conversational`;
-                      setInput(enhancePrompt);
+                      // Switch to plugins tab and open AI Enhancer with current input
+                      setActiveTab('plugins');
+                      // The plugin will be opened via the PluginManager
                     }}
                     className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
-                    title="Enhance this message"
-                    disabled={!input.trim() || isProcessing}
+                    title="Open AI Enhancer Plugin"
+                    disabled={isProcessing}
                   >
-                    <Sparkles className={`h-4 w-4 ${input.trim() && !isProcessing ? 'text-purple-400 hover:text-purple-300' : 'text-gray-500'}`} />
+                    <Zap className={`h-4 w-4 ${!isProcessing ? 'text-yellow-400 hover:text-yellow-300' : 'text-gray-500'}`} />
                   </button>
                 </div>
                 {isProcessing && onStopGeneration ? (
@@ -962,14 +1008,8 @@ Please include:
                 </div>
               </div>
 
-              {/* Content area that grows on mobile, shrinks on desktop */}
-              <div className="flex-1 min-h-0 md:flex-none">
-                {/* Placeholder for chat messages/content */}
-                <div className="h-full md:h-auto"></div>
-              </div>
-
               {/* Input Section - Always at bottom */}
-              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10 md:mt-auto">
+              <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
                 {/* Code Suggestions */}
                 <div>
                   <h4 className="text-xs font-medium text-white/80 mb-2">Popular Requests</h4>
@@ -1110,6 +1150,23 @@ Please include:
               </div>
             </TabsContent>
 
+            <TabsContent value="plugins" className="m-0 flex-1 flex flex-col min-h-0">
+              <div className="p-4 flex-1">
+                <div className="flex items-center gap-2 mb-4">
+                  <Zap className="w-5 h-5 text-yellow-400" />
+                  <h3 className="text-lg font-semibold text-white">Plugins</h3>
+                  <span className="text-xs text-white/60 bg-white/10 px-2 py-1 rounded">
+                    Modular Tools
+                  </span>
+                </div>
+                
+                <PluginManager 
+                  availablePlugins={availablePlugins}
+                  onPluginResult={handlePluginResult}
+                />
+              </div>
+            </TabsContent>
+
             <TabsContent value="help" className="m-0">
               <Card className="bg-black/40 border-white/10">
                 <CardContent className="pt-6">
@@ -1150,54 +1207,7 @@ Please include:
               </Card>
             </TabsContent>
 
-            <TabsContent value="plugins" className="m-0">
-              <Card className="bg-black/40 border-white/10">
-                <CardContent className="pt-6">
-                  <div className="space-y-3">
-                    <div className="text-center mb-4">
-                      <h3 className="font-medium text-white mb-2">Advanced AI Modules</h3>
-                      <p className="text-xs text-white/60">Click any plugin to load its specialized prompt and switch to chat</p>
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
-                      {pluginModules.map((plugin) => {
-                        const IconComponent = plugin.icon;
-                        return (
-                          <button
-                            key={plugin.id}
-                            onClick={() => {
-                              plugin.action();
-                              setActiveTab('chat'); // Switch to chat tab to show the input
-                              toast.success(`${plugin.name} plugin activated! Check the chat input.`);
-                            }}
-                            className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
-                          >
-                            <div className="flex items-center gap-2 w-full">
-                              <IconComponent className={`h-4 w-4 ${plugin.color} group-hover:scale-110 transition-transform`} />
-                              <span className="font-medium text-sm text-white truncate">{plugin.name}</span>
-                            </div>
-                            <p className="text-xs text-white/60 line-clamp-2 w-full">{plugin.description}</p>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <div className="mt-4 pt-3 border-t border-white/10">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Settings className="h-4 w-4 text-green-400" />
-                        <span className="text-sm font-medium">Quick Shortcuts</span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-1 text-xs text-white/60">
-                        <div><kbd className="bg-black/40 px-1 rounded">Ctrl+Enter</kbd> Submit</div>
-                        <div><kbd className="bg-black/40 px-1 rounded">Shift+Enter</kbd> New line</div>
-                        <div><kbd className="bg-black/40 px-1 rounded">Ctrl+K</kbd> Focus input</div>
-                        <div><kbd className="bg-black/40 px-1 rounded">Esc</kbd> Clear input</div>
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
           </Tabs>
         )}
       </div>

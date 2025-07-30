@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
-import { 
+import {
   Code as CodeIcon,
   FileText,
   Package,
@@ -53,7 +53,7 @@ interface ProjectStructure {
 }
 
 export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePreviewPanelProps) {
-  const [detectedFramework, setDetectedFramework] = useState<'react'|'vue'|'vanilla'>('vanilla');
+  const [detectedFramework, setDetectedFramework] = useState<'react' | 'vue' | 'vanilla'>('vanilla');
   const [selectedTab, setSelectedTab] = useState("preview")
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [projectStructure, setProjectStructure] = useState<ProjectStructure | null>(null)
@@ -124,31 +124,31 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     try {
       const codeBlockIndex = messageContent.indexOf(codeBlockMatch);
       if (codeBlockIndex === -1) return null;
-      
+
       // Look at text before the code block (up to 500 characters)
       const contextBefore = messageContent.substring(Math.max(0, codeBlockIndex - 500), codeBlockIndex);
-      
+
       // Get file extension for this language
       const expectedExt = getFileExtension(language);
-      
+
       // Look for filenames with the correct extension in the context
       const extensionPattern = new RegExp(`([\\w\\-\\/\\.]+\\.${expectedExt})(?![\\w])`, 'gi');
       const matches = contextBefore.match(extensionPattern);
-      
+
       if (matches && matches.length > 0) {
         // Get the last (closest) match to the code block
         const filename = matches[matches.length - 1];
-        
+
         // Clean up the filename
         let cleaned = filename.trim();
-        
+
         // Remove common prefixes that might be captured
         cleaned = cleaned.replace(/^[^\w\/]*/, ''); // Remove leading non-word chars except /
         cleaned = cleaned.replace(/[^\w\/\.\-]*$/, ''); // Remove trailing non-word chars except . and -
-        
+
         return cleaned;
       }
-      
+
       // Fallback: look for common path patterns for all frameworks
       const pathPatterns = [
         // Framework-specific patterns
@@ -208,17 +208,17 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
         // Generic patterns (catch-all)
         /(?:[\w\-]+\.(?:js|jsx|ts|tsx|css|scss|sass|less|html|py|java|cpp|c|php|rb|go|rs|swift|kt|dart|vue|svelte|astro|md|json|xml|yaml|yml|sh|bash|sql|dockerfile))/gi
       ];
-      
+
       for (const pattern of pathPatterns) {
         const pathMatches = contextBefore.match(pattern);
         if (pathMatches && pathMatches.length > 0) {
           const filename = pathMatches[pathMatches.length - 1];
-          
+
           // Check if the extension matches the language
           const fileExt = filename.split('.').pop()?.toLowerCase();
-          
+
           // Enhanced language-extension matching for all frameworks
-          const isValidExtension = 
+          const isValidExtension =
             fileExt === expectedExt ||
             // JavaScript variants
             (language === 'javascript' && ['js', 'mjs', 'cjs'].includes(fileExt)) ||
@@ -266,13 +266,13 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
             (language === 'sql' && ['sql', 'mysql', 'pgsql', 'sqlite'].includes(fileExt)) ||
             // Docker variants
             (['dockerfile', 'docker'].includes(language) && ['dockerfile', 'containerfile'].includes(fileExt.toLowerCase()));
-          
+
           if (isValidExtension) {
             return filename.trim();
           }
         }
       }
-      
+
       return null;
     } catch (error) {
       console.warn('Error extracting filename from context:', error);
@@ -287,41 +287,41 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
       if (language === 'jsx' || language === 'tsx' || language === 'javascript' || language === 'typescript') {
         const componentMatch = code.match(/(?:export\s+default\s+|export\s+(?:const|function)\s+|function\s+|const\s+)([A-Z][a-zA-Z0-9]*)/);
         if (componentMatch) return componentMatch[1];
-        
+
         const classMatch = code.match(/class\s+([A-Z][a-zA-Z0-9]*)/);
         if (classMatch) return classMatch[1];
       }
-      
+
       // Vue component detection
       if (language === 'vue') {
         const nameMatch = code.match(/name:\s*['"`]([^'"`]+)['"`]/);
         if (nameMatch) return nameMatch[1];
       }
-      
+
       // CSS class or ID detection
       if (language === 'css' || language === 'scss' || language === 'sass') {
         const classMatch = code.match(/\.([a-zA-Z][a-zA-Z0-9-_]*)/);
         if (classMatch) return classMatch[1];
       }
-      
+
       // HTML title or main element
       if (language === 'html') {
         const titleMatch = code.match(/<title[^>]*>([^<]+)<\/title>/i);
         if (titleMatch) return titleMatch[1].replace(/\s+/g, '-').toLowerCase();
-        
+
         const h1Match = code.match(/<h1[^>]*>([^<]+)<\/h1>/i);
         if (h1Match) return h1Match[1].replace(/\s+/g, '-').toLowerCase();
       }
-      
+
       // Python class or function detection
       if (language === 'python') {
         const classMatch = code.match(/class\s+([A-Z][a-zA-Z0-9_]*)/);
         if (classMatch) return classMatch[1].toLowerCase();
-        
+
         const funcMatch = code.match(/def\s+([a-zA-Z][a-zA-Z0-9_]*)/);
         if (funcMatch) return funcMatch[1];
       }
-      
+
       return null;
     } catch (error) {
       console.warn('Error generating smart filename:', error);
@@ -443,9 +443,12 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     return finalFilename;
   };
 
-  // Extract code blocks from messages
+  // Extract code blocks from messages and collect non-code text
   const codeBlocks = useMemo(() => {
     const blocks: CodeBlock[] = [];
+    let nonCodeText = ''; // Collect all non-code text
+    let shellCommands = ''; // Collect all .sh file contents
+
     messages.forEach((message) => {
       if (message.role === "assistant") {
         let parsedContent: any = null;
@@ -458,14 +461,20 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
             const filename = cleanFilename(parsedContent.filename || `file-${message.id}-${blocks.length}.${getFileExtension(parsedContent.language)}`, parsedContent.language, blocks.length);
             if (!parsedContent.code.trim()) return; // Skip empty code blocks
 
-            blocks.push({
-              language: parsedContent.language,
-              code: parsedContent.code.trim(),
-              filename,
-              index: blocks.length, // Use blocks.length for sequential indexing
-              messageId: message.id,
-              isError: message.isError || false
-            });
+            // Handle .sh files specially - collect their content for README
+            if (parsedContent.language === 'shell' || parsedContent.language === 'bash' || parsedContent.language === 'sh' || filename.endsWith('.sh')) {
+              shellCommands += `\n${parsedContent.code.trim()}\n`;
+              // Don't add .sh files to blocks, they'll go in README
+            } else {
+              blocks.push({
+                language: parsedContent.language,
+                code: parsedContent.code.trim(),
+                filename,
+                index: blocks.length, // Use blocks.length for sequential indexing
+                messageId: message.id,
+                isError: message.isError || false
+              });
+            }
             return; // Processed this message, move to the next
           }
         } catch (e) {
@@ -475,12 +484,12 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
 
         // If not JSON, try parsing as markdown code blocks with enhanced error handling
         const markdownCodeMatches = message.content.match(/```(\S*)(?:\s+(.*?))?\n([\s\S]*?)```/g) || [];
-        
+
         markdownCodeMatches.forEach((match, blockIndex) => {
           try {
             const parsed = match.match(/```(\S*)(?:\s+(.*?))?\n([\s\S]*?)```/);
             if (!parsed || parsed.length < 4) return;
-            
+
             const language = (parsed[1] || "text").toLowerCase().trim();
             const filenameHint = parsed[2] ? parsed[2].trim() : '';
             let code = parsed[3];
@@ -494,7 +503,7 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
             try {
               // First, try to extract filename from context before the code block
               const contextFilename = extractFilenameFromContext(message.content, match, language);
-              
+
               if (contextFilename) {
                 filename = contextFilename;
               } else if (filenameHint) {
@@ -505,12 +514,12 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
                 const baseName = generateSmartFilename(code, language) || `file-${blocks.length}`;
                 filename = cleanFilename(`${baseName}.${extension}`, language, blocks.length);
               }
-              
+
               // Ensure filename is valid and unique
               if (!filename || filename.length === 0) {
                 filename = `file-${blocks.length}.${getFileExtension(language)}`;
               }
-              
+
               // Check for duplicate filenames and append number if needed
               const existingFilenames = blocks.map(b => b.filename);
               let uniqueFilename = filename;
@@ -527,21 +536,27 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
                 counter++;
               }
               filename = uniqueFilename;
-              
+
             } catch (filenameError) {
               console.warn('Error processing filename:', filenameError);
               filename = `file-${blocks.length}.${getFileExtension(language)}`;
             }
 
-            blocks.push({
-              language,
-              code,
-              filename,
-              index: blocks.length, // Use blocks.length for sequential indexing
-              messageId: message.id,
-              isError: message.isError || false
-            });
-            
+            // Handle .sh files specially - collect their content for README
+            if (language === 'shell' || language === 'bash' || language === 'sh' || filename.endsWith('.sh')) {
+              shellCommands += `\n${code}\n`;
+              // Don't add .sh files to blocks, they'll go in README
+            } else {
+              blocks.push({
+                language,
+                code,
+                filename,
+                index: blocks.length, // Use blocks.length for sequential indexing
+                messageId: message.id,
+                isError: message.isError || false
+              });
+            }
+
           } catch (blockError) {
             console.warn('Error processing code block:', blockError);
             // Add fallback block with safe defaults
@@ -556,8 +571,19 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
             });
           }
         });
+
+        // Collect non-code text from this message
+        const textWithoutCode = message.content.replace(/```[\s\S]*?```/g, '').trim();
+        if (textWithoutCode.length > 50) { // Only include substantial text
+          nonCodeText += `\n${textWithoutCode}\n`;
+        }
       }
     });
+
+    // Store collected data for use in README generation
+    (blocks as any).nonCodeText = nonCodeText.trim();
+    (blocks as any).shellCommands = shellCommands.trim();
+
     return blocks;
   }, [messages]);
 
@@ -586,26 +612,26 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     let framework: ProjectStructure['framework'] = 'vanilla';
     let bundler: ProjectStructure['bundler'] = undefined;
     let packageManager: ProjectStructure['packageManager'] = 'npm';
-    
+
     for (const block of blocks) {
       // Use the filename that was already cleaned in useMemo
-      const finalFilename = block.filename; 
-      
+      const finalFilename = block.filename;
+
       // Ensure a filename is always set, even if it's a default one.
       if (!finalFilename) {
-           console.error("Filename is unexpectedly null or undefined after cleaning.");
-           continue; // Skip this block if filename is missing
+        console.error("Filename is unexpectedly null or undefined after cleaning.");
+        continue; // Skip this block if filename is missing
       }
-      
+
       files[finalFilename] = block.code
-      
+
       // Extract dependencies and project info
       if (block.language === "json" && finalFilename === "package.json") {
         try {
           const pkg = JSON.parse(block.code)
           if (pkg.dependencies) {
             dependencies.push(...Object.keys(pkg.dependencies))
-            
+
             // Enhanced framework detection based on dependencies
             if (pkg.dependencies.next || pkg.dependencies['next']) {
               framework = 'next';
@@ -641,10 +667,10 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
               framework = 'angular';
             }
           }
-          
+
           if (pkg.devDependencies) {
             devDependencies.push(...Object.keys(pkg.devDependencies))
-            
+
             // Detect bundler from devDependencies
             if (pkg.devDependencies.vite) {
               bundler = 'vite';
@@ -658,11 +684,11 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
               bundler = 'esbuild';
             }
           }
-          
+
           if (pkg.scripts) {
             Object.assign(scripts, pkg.scripts);
           }
-          
+
           // Detect package manager from lockfiles or packageManager field
           if (pkg.packageManager) {
             if (pkg.packageManager.includes('yarn')) packageManager = 'yarn';
@@ -673,7 +699,7 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
           console.warn("Failed to parse package.json")
         }
       }
-      
+
       // Detect framework based on file extensions and paths
       if (framework === 'vanilla') {
         const ext = getFileExtension(block.language);
@@ -702,19 +728,15 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
           if (framework === 'vanilla') framework = 'vite-react';
         }
       }
-      
+
       // Detect package manager from lockfiles
       if (finalFilename === 'yarn.lock') packageManager = 'yarn';
       else if (finalFilename === 'pnpm-lock.yaml') packageManager = 'pnpm';
       else if (finalFilename === 'bun.lockb') packageManager = 'bun';
     }
-    
-    // Add README content if there's remaining text
-    const readmeContent = extractReadmeContent(blocks);
-    if (readmeContent) {
-      files['README.md'] = readmeContent;
-    }
-    
+
+
+
     const structure: ProjectStructure = {
       name: "Generated Project",
       files,
@@ -727,40 +749,11 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     };
     return structure;
   }
-  
-  // Extract README content from non-code text in messages
-  const extractReadmeContent = (blocks: CodeBlock[]): string | null => {
-    const readmeBlocks = blocks.filter(block => 
-      block.language === 'markdown' || 
-      block.language === 'md' || 
-      block.filename?.toLowerCase().includes('readme')
-    );
-    
-    if (readmeBlocks.length > 0) {
-      return readmeBlocks.map(block => block.code).join('\n\n');
-    }
-    
-    // Extract tutorial/summary text from messages
-    const tutorialText = messages
-      .filter(msg => msg.role === 'assistant')
-      .map(msg => {
-        // Remove code blocks and extract remaining text
-        const textWithoutCode = msg.content.replace(/```[\s\S]*?```/g, '').trim();
-        return textWithoutCode;
-      })
-      .filter(text => text.length > 100) // Only include substantial text
-      .join('\n\n');
-    
-    if (tutorialText.length > 200) {
-      return `# Project Documentation\n\n${tutorialText}`;
-    }
-    
-    return null;
-  }
+
 
   const downloadAsZip = async () => {
     const zip = new JSZip()
-    
+
     // Use project structure files if available
     if (projectStructure) {
       Object.entries(projectStructure.files).forEach(([filename, content]) => {
@@ -773,36 +766,50 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
         zip.file(filename, block.code)
       })
     }
-    
-    // Always add README
-    const readme = `# Generated Code Project
 
-This project contains ${projectStructure ? Object.keys(projectStructure.files).length : codeBlocks.length} code files extracted from an AI conversation.
+    // Get collected data from codeBlocks
+    const nonCodeText = (codeBlocks as any).nonCodeText || '';
+    const shellCommands = (codeBlocks as any).shellCommands || '';
+
+    // Always add README
+    const readme = `# Code Project
+
+This project contains ${projectStructure ? Object.keys(projectStructure.files).length : codeBlocks.length} files.
 
 ## Files:
 ${projectStructure
-  ? Object.keys(projectStructure.files).map(filename => `- ${filename}`).join('\n')
-  : codeBlocks.map(block => `- ${block.filename} (${block.language})`).join('\n')
-}
+        ? Object.keys(projectStructure.files).map(filename => `- ${filename}`).join('\n')
+        : codeBlocks.map(block => `- ${block.filename} (${block.language})`).join('\n')
+      }
 
 ## Dependencies:
 ${projectStructure?.dependencies?.length
-  ? projectStructure.dependencies.map(dep => `- ${dep}`).join('\n')
-  : 'None'
-}
+        ? projectStructure.dependencies.map(dep => `- ${dep}`).join('\n')
+        : 'None'
+      }
 
 ## Usage:
-Please review each file and follow the appropriate setup instructions for your programming language.
+${shellCommands ? `### Setup Commands:
+\`\`\`bash
+${shellCommands}
+\`\`\`
 
-Generated on: ${new Date().toLocaleString()}
+### Instructions:
+` : ''}Please review each file and follow the appropriate setup instructions for your programming language.
+
+${nonCodeText ? `## Documentation:
+
+${nonCodeText}
+
+` : ''}Programmed on: ${new Date().toLocaleString()}
 `
     zip.file("README.md", readme)
-    
+
     const content = await zip.generateAsync({ type: "blob" })
     const url = URL.createObjectURL(content)
     const a = document.createElement("a")
     a.href = url
-    a.download = `code-project-${Date.now()}.zip`
+    a.download = `code-${Date.now()}.zip`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -830,12 +837,12 @@ Generated on: ${new Date().toLocaleString()}
     // Update project structure if it exists
     if (projectStructure) {
       const newFiles = { ...projectStructure.files }
-      
+
       if (oldFilename && newFiles[oldFilename]) {
         // Move the content to the new filename
         newFiles[trimmedFilename] = newFiles[oldFilename]
         delete newFiles[oldFilename]
-        
+
         setProjectStructure({
           ...projectStructure,
           files: newFiles
@@ -846,7 +853,7 @@ Generated on: ${new Date().toLocaleString()}
     // Force re-render by updating a state that triggers useMemo recalculation
     // This ensures the preview updates with the new filename
     setSelectedFileIndex(prev => prev === index ? index : prev)
-    
+
     cancelEditingFilename()
   }
 
@@ -860,7 +867,7 @@ Generated on: ${new Date().toLocaleString()}
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!isDragging) return
-    
+
     const deltaX = dragStartX.current - e.clientX
     const newWidth = Math.max(400, Math.min(1200, dragStartWidth.current + deltaX))
     setPanelWidth(newWidth)
@@ -884,13 +891,13 @@ Generated on: ${new Date().toLocaleString()}
   // Function to detect popular dependencies from code content (only used when package.json is missing)
   const getPopularDependencies = (codeContent: string, framework: string): Record<string, string> => {
     const deps: Record<string, string> = {};
-    
+
     // Only add core framework dependencies if not already defined
     if (framework === 'react' || framework === 'next') {
       deps['react'] = 'latest';
       deps['react-dom'] = 'latest';
     }
-    
+
     return deps;
   };
 
@@ -920,11 +927,11 @@ Generated on: ${new Date().toLocaleString()}
           (acc, [path, content]) => {
             // Skip empty files
             if (!content.trim()) return acc;
-            
+
             // The path should already be correctly formatted by cleanFilename.
             // We just need to ensure it's prefixed with '/' for Sandpack.
             const sandpackPath = path.startsWith('/') ? path : `/${path}`;
-            
+
             acc[sandpackPath] = { code: content };
             return acc;
           },
@@ -933,7 +940,7 @@ Generated on: ${new Date().toLocaleString()}
 
         // Framework-specific entry file handling
         const addEntryFileIfMissing = () => {
-          const hasEntryFile = Object.keys(sandpackFiles).some(path => 
+          const hasEntryFile = Object.keys(sandpackFiles).some(path =>
             path.includes('index.') || path.includes('main.') || path.includes('App.')
           );
 
@@ -1082,7 +1089,7 @@ export default {
       const cssFile = codeBlocks.find(block => block.language === "css")
       const jsFile = codeBlocks.find(block => block.language === "javascript" || block.language === "js")
       const tsFile = codeBlocks.find(block => block.language === "typescript" || block.language === "ts")
-      
+
       // If no HTML but has other web files, create a basic HTML structure
       if (!htmlFile && (cssFile || jsFile || tsFile)) {
         const autoGeneratedHtml = `
@@ -1131,7 +1138,7 @@ export default {
           </div>
         );
       }
-      
+
       if (!htmlFile) {
         return (
           <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
@@ -1155,7 +1162,7 @@ export default {
           </div>
         )
       }
-      
+
       // Enhanced HTML document with better error handling and console capture
       const combinedHtml = `
 <!DOCTYPE html>
@@ -1286,275 +1293,274 @@ export default {
           className="fixed top-0 h-full bg-black/20 backdrop-blur-2xl border border-white/10 z-[100] overflow-hidden shadow-2xl
                      md:right-0 md:rounded-l-xl md:left-auto
                      left-0 right-0 rounded-none"
-          style={{ 
+          style={{
             width: `min(100vw, ${panelWidth}px)`
           }}
         >
           {/* Resize Handle - Hidden on mobile */}
-          <div 
+          <div
             className="absolute left-0 top-0 bottom-0 w-1 bg-white/20 cursor-ew-resize hover:bg-white/30 transition-all duration-200 hidden md:block"
             onMouseDown={handleMouseDown}
           />
-          
-        <Card className="h-full bg-transparent border-0 rounded-none">
-          <CardHeader className="border-b border-white/10 bg-black/20 px-3 md:px-6">
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle className="text-white flex items-center gap-2 text-sm md:text-base">
-                <CodeIcon className="w-4 h-4 md:w-5 md:h-5" />
-                <span className="hidden sm:inline">Code Preview Panel</span>
-                <span className="sm:hidden">Code</span>
-                <span className="bg-gray-700 text-gray-300 rounded-full px-2 py-0.5 text-xs">
-                  {codeBlocks.length}
-                </span>
-              </CardTitle>
-              <div className="flex items-center gap-1 md:gap-2">
-                <button
-                  onClick={downloadAsZip}
-                  className="bg-blue-600 hover:bg-blue-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
-                >
-                  <Package className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
-                  <span className="hidden sm:inline">Download ZIP</span>
-                  <span className="sm:hidden">ZIP</span>
-                </button>
-                {projectStructure && (
+
+          <Card className="h-full bg-transparent border-0 rounded-none">
+            <CardHeader className="border-b border-white/10 bg-black/20 px-3 md:px-6">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-white flex items-center gap-2 text-sm md:text-base">
+                  <CodeIcon className="w-4 h-4 md:w-5 md:h-5" />
+                  <span className="hidden sm:inline">Code Preview Panel</span>
+                  <span className="sm:hidden">Code</span>
+                  <span className="bg-gray-700 text-gray-300 rounded-full px-2 py-0.5 text-xs">
+                    {codeBlocks.length}
+                  </span>
+                </CardTitle>
+                <div className="flex items-center gap-1 md:gap-2">
                   <button
-                    onClick={() => {
-                      localStorage.setItem('visualEditorProject', JSON.stringify(projectStructure));
-                      window.open('/visual-editor', '_blank');
-                    }}
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
+                    onClick={downloadAsZip}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
                   >
-                    <Edit className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
-                    <span className="hidden sm:inline">Edit</span>
-                    <span className="sm:hidden">Edit</span>
+                    <Package className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
+                    <span className="hidden sm:inline">Download ZIP</span>
+                    <span className="sm:hidden">ZIP</span>
                   </button>
-                )}
-                <button
-                  onClick={onClose}
-                  className="border border-gray-300 hover:bg-gray-700 text-gray-300 px-2 md:px-3 py-1.5 rounded text-xs md:text-sm min-w-[44px]"
-                >
-                  Close
-                </button>
+                  {projectStructure && (
+                    <button
+                      onClick={() => {
+                        localStorage.setItem('visualEditorProject', JSON.stringify(projectStructure));
+                        window.open('/visual-editor', '_blank');
+                      }}
+                      className="bg-purple-600 hover:bg-purple-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
+                    >
+                      <Edit className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
+                      <span className="hidden sm:inline">Edit</span>
+                      <span className="sm:hidden">Edit</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={onClose}
+                    className="border border-gray-300 hover:bg-gray-700 text-gray-300 px-2 md:px-3 py-1.5 rounded text-xs md:text-sm min-w-[44px]"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
-            </div>
-          </CardHeader>
-          
-          <CardContent className="p-0 h-full">
-            <Tabs value={selectedTab} onValueChange={setSelectedTab} className="h-full">
-              <TabsList className="grid w-full grid-cols-3 bg-black/40 border-b border-white/10 px-2 md:px-4">
-                <TabsTrigger value="preview" className="text-white text-xs md:text-sm">
-                  <Eye className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
-                  <span className="hidden sm:inline">Live Preview</span>
-                  <span className="sm:hidden">Preview</span>
-                </TabsTrigger>
-                <TabsTrigger value="files" className="text-white text-xs md:text-sm">
-                  <FileText className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
-                  <span className="hidden sm:inline">Files</span>
-                  <span className="sm:hidden">Files</span>
-                </TabsTrigger>
-                <TabsTrigger value="structure" className="text-white text-xs md:text-sm">
-                  <Package className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
-                  <span className="hidden sm:inline">Project</span>
-                  <span className="sm:hidden">Project</span>
-                </TabsTrigger>
-              </TabsList>
-              
-              <TabsContent value="preview" className="p-2 md:p-4 h-full">
-                {renderLivePreview()}
-              </TabsContent>
-              
-              {detectedFramework !== 'vanilla' && (
-                <TabsContent value="sandpack" className="p-0 h-full">
+            </CardHeader>
+
+            <CardContent className="p-0 h-full">
+              <Tabs value={selectedTab} onValueChange={setSelectedTab} className="h-full">
+                <TabsList className="grid w-full grid-cols-3 bg-black/40 border-b border-white/10 px-2 md:px-4">
+                  <TabsTrigger value="preview" className="text-white text-xs md:text-sm">
+                    <Eye className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
+                    <span className="hidden sm:inline">Live Preview</span>
+                    <span className="sm:hidden">Preview</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="files" className="text-white text-xs md:text-sm">
+                    <FileText className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
+                    <span className="hidden sm:inline">Files</span>
+                    <span className="sm:hidden">Files</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="structure" className="text-white text-xs md:text-sm">
+                    <Package className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
+                    <span className="hidden sm:inline">Project</span>
+                    <span className="sm:hidden">Project</span>
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="preview" className="p-2 md:p-4 h-full">
                   {renderLivePreview()}
                 </TabsContent>
-              )}
-              
-              <TabsContent value="files" className="p-0 h-full">
-                <div className="flex h-full flex-col md:flex-row">
-                  <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 bg-black/30 overflow-y-auto max-h-48 md:max-h-none">
-                    <div className="p-2 md:p-4">
-                      <h3 className="text-sm font-medium text-gray-300 mb-2">Files</h3>
-                      <div className="space-y-1">
-                        {codeBlocks.map((block, index) => (
-                          <div
-                            className={`flex items-center w-full justify-between p-2 group ${
-                              selectedFileIndex === index ? 'bg-gray-700' : 'hover:bg-gray-800'
-                            }`}
-                            key={index}
-                          >
-                            <div 
-                              className="flex items-center flex-1 cursor-pointer"
-                              onClick={() => setSelectedFileIndex(index)}
-                            >
-                              <FileText className="w-4 h-4 mr-2 flex-shrink-0" />
-                              
-                              {editingFileIndex === index ? (
-                                <div className="flex items-center gap-1 flex-1">
-                                  <Input
-                                    value={editingFileName}
-                                    onChange={(e) => setEditingFileName(e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') {
-                                        saveFilename(index, editingFileName)
-                                      } else if (e.key === 'Escape') {
-                                        cancelEditingFilename()
-                                      }
-                                    }}
-                                    className="h-6 text-xs bg-gray-600 border-gray-500 text-white flex-1"
-                                    autoFocus
-                                    onBlur={() => saveFilename(index, editingFileName)}
-                                  />
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => saveFilename(index, editingFileName)}
-                                    className="h-6 w-6 p-0 text-green-400 hover:text-green-300"
-                                  >
-                                    <Check className="w-3 h-3" />
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={cancelEditingFilename}
-                                    className="h-6 w-6 p-0 text-red-400 hover:text-red-300"
-                                  >
-                                    <X className="w-3 h-3" />
-                                  </Button>
-                                </div>
-                              ) : (
-                                <span className="truncate flex-1">{block.filename}</span>
-                              )}
-                            </div>
 
-                            <div className="flex items-center gap-1">
-                              {editingFileIndex !== index && (
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    startEditingFilename(index, block.filename || '')
-                                  }}
-                                  className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-white transition-opacity"
-                                >
-                                  <Edit className="w-3 h-3" />
-                                </Button>
-                              )}
-                              
-                              {block.isError && (
-                                <span className="text-red-500">
-                                  <AlertCircle className="w-4 h-4" />
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="flex-1 overflow-y-auto">
-                    {codeBlocks.length > 0 && selectedFileIndex !== null && (
-                      <div className="h-full flex flex-col">
-                        {codeBlocks[selectedFileIndex] ? (
-                          <>
-                            <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
-                              <div className="flex items-center gap-2">
-                                <span className="border border-gray-500 text-gray-300 rounded px-2 py-0.5 text-xs">
-                                  {codeBlocks[selectedFileIndex].language}
-                                </span>
-                                <span className="text-sm font-mono text-gray-300">{codeBlocks[selectedFileIndex].filename}</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code)
-                                  }}
-                                >
-                                  <CodeIcon className="w-4 h-4 mr-1" />
-                                  Copy
-                                </button>
-                              </div>
-                            </div>
-                            <div className="flex-1 overflow-y-auto bg-black/30">
-                              <SyntaxHighlighter
-                                style={oneDark as any}
-                                language={codeBlocks[selectedFileIndex].language}
-                                PreTag="div"
-                                className="!m-0 !bg-gray-900 h-full text-sm"
-                                showLineNumbers
+                {detectedFramework !== 'vanilla' && (
+                  <TabsContent value="sandpack" className="p-0 h-full">
+                    {renderLivePreview()}
+                  </TabsContent>
+                )}
+
+                <TabsContent value="files" className="p-0 h-full">
+                  <div className="flex h-full flex-col md:flex-row">
+                    <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 bg-black/30 overflow-y-auto max-h-48 md:max-h-none">
+                      <div className="p-2 md:p-4">
+                        <h3 className="text-sm font-medium text-gray-300 mb-2">Files</h3>
+                        <div className="space-y-1">
+                          {codeBlocks.map((block, index) => (
+                            <div
+                              className={`flex items-center w-full justify-between p-2 group ${selectedFileIndex === index ? 'bg-gray-700' : 'hover:bg-gray-800'
+                                }`}
+                              key={index}
+                            >
+                              <div
+                                className="flex items-center flex-1 cursor-pointer"
+                                onClick={() => setSelectedFileIndex(index)}
                               >
-                                {codeBlocks[selectedFileIndex].code}
-                              </SyntaxHighlighter>
+                                <FileText className="w-4 h-4 mr-2 flex-shrink-0" />
+
+                                {editingFileIndex === index ? (
+                                  <div className="flex items-center gap-1 flex-1">
+                                    <Input
+                                      value={editingFileName}
+                                      onChange={(e) => setEditingFileName(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          saveFilename(index, editingFileName)
+                                        } else if (e.key === 'Escape') {
+                                          cancelEditingFilename()
+                                        }
+                                      }}
+                                      className="h-6 text-xs bg-gray-600 border-gray-500 text-white flex-1"
+                                      autoFocus
+                                      onBlur={() => saveFilename(index, editingFileName)}
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => saveFilename(index, editingFileName)}
+                                      className="h-6 w-6 p-0 text-green-400 hover:text-green-300"
+                                    >
+                                      <Check className="w-3 h-3" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={cancelEditingFilename}
+                                      className="h-6 w-6 p-0 text-red-400 hover:text-red-300"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <span className="truncate flex-1">{block.filename}</span>
+                                )}
+                              </div>
+
+                              <div className="flex items-center gap-1">
+                                {editingFileIndex !== index && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      startEditingFilename(index, block.filename || '')
+                                    }}
+                                    className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-white transition-opacity"
+                                  >
+                                    <Edit className="w-3 h-3" />
+                                  </Button>
+                                )}
+
+                                {block.isError && (
+                                  <span className="text-red-500">
+                                    <AlertCircle className="w-4 h-4" />
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                          </>
-                        ) : (
-                          <div className="flex-1 flex items-center justify-center text-gray-400">
-                            <p>No code block selected</p>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </TabsContent>
-              
-              <TabsContent value="structure" className="p-4 h-full overflow-y-auto">
-                {projectStructure ? (
-                  <div className="space-y-4">
-                    <div>
-                      <h3 className="text-lg font-semibold text-white mb-2">Project Structure</h3>
-                      <div className="bg-black/40 rounded-lg p-4">
-                        <pre className="text-sm text-gray-300">
-                          {Object.keys(projectStructure.files).map(filename => (
-                            <div key={filename} className="flex items-center gap-2 mb-1">
-                              <FileText className="w-4 h-4" />
-                              {filename}
-                            </div>
-                          ))}
-                        </pre>
-                      </div>
-                    </div>
-                    
-                    {projectStructure.dependencies && (
-                      <div>
-                        <h4 className="text-md font-medium text-white mb-2">Dependencies</h4>
-                        <div className="flex flex-wrap gap-2">
-                          {projectStructure.dependencies.map(dep => (
-                            <span key={dep} className="bg-gray-700 text-gray-300 rounded px-2 py-0.5 text-xs">
-                              {dep}
-                            </span>
                           ))}
                         </div>
                       </div>
-                    )}
-                    
-                    <div>
-                      <h4 className="text-md font-medium text-white mb-2">Setup Instructions</h4>
-                      <div className="bg-black/40 rounded-lg p-4">
-                        <pre className="text-sm text-gray-300">
-{`1. Download the ZIP file
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto">
+                      {codeBlocks.length > 0 && selectedFileIndex !== null && (
+                        <div className="h-full flex flex-col">
+                          {codeBlocks[selectedFileIndex] ? (
+                            <>
+                              <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
+                                <div className="flex items-center gap-2">
+                                  <span className="border border-gray-500 text-gray-300 rounded px-2 py-0.5 text-xs">
+                                    {codeBlocks[selectedFileIndex].language}
+                                  </span>
+                                  <span className="text-sm font-mono text-gray-300">{codeBlocks[selectedFileIndex].filename}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code)
+                                    }}
+                                  >
+                                    <CodeIcon className="w-4 h-4 mr-1" />
+                                    Copy
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="flex-1 overflow-y-auto bg-black/30">
+                                <SyntaxHighlighter
+                                  style={oneDark as any}
+                                  language={codeBlocks[selectedFileIndex].language}
+                                  PreTag="div"
+                                  className="!m-0 !bg-gray-900 h-full text-sm"
+                                  showLineNumbers
+                                >
+                                  {codeBlocks[selectedFileIndex].code}
+                                </SyntaxHighlighter>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex-1 flex items-center justify-center text-gray-400">
+                              <p>No code block selected</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="structure" className="p-4 h-full overflow-y-auto">
+                  {projectStructure ? (
+                    <div className="space-y-4">
+                      <div>
+                        <h3 className="text-lg font-semibold text-white mb-2">Project Structure</h3>
+                        <div className="bg-black/40 rounded-lg p-4">
+                          <pre className="text-sm text-gray-300">
+                            {Object.keys(projectStructure.files).map(filename => (
+                              <div key={filename} className="flex items-center gap-2 mb-1">
+                                <FileText className="w-4 h-4" />
+                                {filename}
+                              </div>
+                            ))}
+                          </pre>
+                        </div>
+                      </div>
+
+                      {projectStructure.dependencies && (
+                        <div>
+                          <h4 className="text-md font-medium text-white mb-2">Dependencies</h4>
+                          <div className="flex flex-wrap gap-2">
+                            {projectStructure.dependencies.map(dep => (
+                              <span key={dep} className="bg-gray-700 text-gray-300 rounded px-2 py-0.5 text-xs">
+                                {dep}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div>
+                        <h4 className="text-md font-medium text-white mb-2">Setup Instructions</h4>
+                        <div className="bg-black/40 rounded-lg p-4">
+                          <pre className="text-sm text-gray-300">
+                            {`1. Download the ZIP file
 2. Extract to your desired location
 3. Review the README.md file
 4. Install dependencies (if any)
 5. Run the project according to the language requirements`}
-                        </pre>
+                          </pre>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ) : (
-                  <div className="text-center text-gray-400">
-                    <Package className="w-16 h-16 mx-auto mb-4" />
-                    <p>No project structure detected</p>
-                    <p className="text-sm mt-2">Add more code files to analyze project structure</p>
-                  </div>
-                )}
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
-      </motion.div>
+                  ) : (
+                    <div className="text-center text-gray-400">
+                      <Package className="w-16 h-16 mx-auto mb-4" />
+                      <p>No project structure detected</p>
+                      <p className="text-sm mt-2">Add more code files to analyze project structure</p>
+                    </div>
+                  )}
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+        </motion.div>
       )}
     </AnimatePresence>
   )
