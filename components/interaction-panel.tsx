@@ -1076,7 +1076,7 @@ export default function InteractionPanel({
               </Card>
             </TabsContent>
 
-            <TabsContent value="plugins" className="m-0 flex-1 flex flex-col overflow-hidden">
+            <TabsContent value="plugins" className="m-0">
               <Card className="bg-black/40 border-white/10">
                 <CardContent className="pt-6">
                   <div className="space-y-3">
