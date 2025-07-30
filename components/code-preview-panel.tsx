@@ -561,6 +561,15 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     return blocks;
   }, [messages]);
 
+  // Reset selectedFileIndex when codeBlocks change
+  useEffect(() => {
+    if (codeBlocks.length === 0) {
+      setSelectedFileIndex(0);
+    } else if (selectedFileIndex >= codeBlocks.length) {
+      setSelectedFileIndex(0);
+    }
+  }, [codeBlocks.length, selectedFileIndex]);
+
   // Generate project structure for complex projects
   useEffect(() => {
     if (codeBlocks.length > 0) { // Changed from > 1 to > 0 to handle single file projects
@@ -1437,36 +1446,44 @@ export default {
                   <div className="flex-1 overflow-y-auto">
                     {codeBlocks.length > 0 && selectedFileIndex !== null && (
                       <div className="h-full flex flex-col">
-                        <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
-                          <div className="flex items-center gap-2">
-                            <span className="border border-gray-500 text-gray-300 rounded px-2 py-0.5 text-xs">
-                              {codeBlocks[selectedFileIndex].language}
-                            </span>
-                            <span className="text-sm font-mono text-gray-300">{codeBlocks[selectedFileIndex].filename}</span>
+                        {codeBlocks[selectedFileIndex] ? (
+                          <>
+                            <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
+                              <div className="flex items-center gap-2">
+                                <span className="border border-gray-500 text-gray-300 rounded px-2 py-0.5 text-xs">
+                                  {codeBlocks[selectedFileIndex].language}
+                                </span>
+                                <span className="text-sm font-mono text-gray-300">{codeBlocks[selectedFileIndex].filename}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code)
+                                  }}
+                                >
+                                  <CodeIcon className="w-4 h-4 mr-1" />
+                                  Copy
+                                </button>
+                              </div>
+                            </div>
+                            <div className="flex-1 overflow-y-auto bg-black/30">
+                              <SyntaxHighlighter
+                                style={oneDark as any}
+                                language={codeBlocks[selectedFileIndex].language}
+                                PreTag="div"
+                                className="!m-0 !bg-gray-900 h-full text-sm"
+                                showLineNumbers
+                              >
+                                {codeBlocks[selectedFileIndex].code}
+                              </SyntaxHighlighter>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex-1 flex items-center justify-center text-gray-400">
+                            <p>No code block selected</p>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
-                              onClick={() => {
-                                navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code)
-                              }}
-                            >
-                              <CodeIcon className="w-4 h-4 mr-1" />
-                              Copy
-                            </button>
-                          </div>
-                        </div>
-                        <div className="flex-1 overflow-y-auto bg-black/30">
-                          <SyntaxHighlighter
-                            style={oneDark as any}
-                            language={codeBlocks[selectedFileIndex].language}
-                            PreTag="div"
-                            className="!m-0 !bg-gray-900 h-full text-sm"
-                            showLineNumbers
-                          >
-                            {codeBlocks[selectedFileIndex].code}
-                          </SyntaxHighlighter>
-                        </div>
+                        )}
                       </div>
                     )}
                   </div>
