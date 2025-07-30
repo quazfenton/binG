@@ -104,9 +104,30 @@ export default function InteractionPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Panel state
-  const [panelHeight, setPanelHeight] = useState(280); // Default height - lowered for better mobile experience
+  const [panelHeight, setPanelHeight] = useState(() => {
+    // Use smaller height on mobile devices
+    if (typeof window !== 'undefined' && window.innerWidth <= 768) {
+      return Math.min(250, window.innerHeight * 0.4); // Max 40% of screen height on mobile
+    }
+    return 280;
+  }); // Default height - lowered for better mobile experience
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
+
+  // Adjust panel height on window resize (mobile orientation change)
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth <= 768) {
+        const maxMobileHeight = Math.min(250, window.innerHeight * 0.4);
+        if (panelHeight > maxMobileHeight) {
+          setPanelHeight(maxMobileHeight);
+        }
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [panelHeight]);
 
   // Advanced Code Mode State
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
@@ -594,7 +615,7 @@ Please include:
         bottom: 'env(safe-area-inset-bottom, 0px)',
         height: isMinimized
           ? '60px'
-          : `${panelHeight}px`,
+          : `min(${panelHeight}px, calc(100vh - env(safe-area-inset-top, 0px) - 60px))`,
         maxHeight: 'calc(100vh - env(safe-area-inset-top, 0px) - 60px)'
       }}
     >
@@ -604,7 +625,7 @@ Please include:
         onMouseDown={handleMouseDown}
       />
 
-      <div className="p-4 h-full overflow-hidden max-w-4xl mx-auto">
+      <div className="p-2 sm:p-4 h-full overflow-hidden max-w-4xl mx-auto flex flex-col">
         {/* Minimize/Maximize Controls */}
         <div className="absolute top-2 right-4 flex items-center gap-2">
           <Button
@@ -620,7 +641,7 @@ Please include:
           </div>
         </div>
         {!isMinimized && (
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
               <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
                 <div className="flex items-center gap-2">
@@ -691,7 +712,7 @@ Please include:
               </div>
             </div>
 
-            <TabsContent value="chat" className="m-0">
+            <TabsContent value="chat" className="m-0 flex-1 flex flex-col min-h-0">
               {/* Provider Status and Selection */}
               <div className="flex items-center justify-between mb-3 text-xs text-white/60">
                 <div className="flex items-center gap-2">
@@ -745,30 +766,35 @@ Please include:
                 </div>
               )}
 
-              {/* Suggestions */}
-              <div className="flex flex-wrap gap-2 mb-4">
-                {chatSuggestions.map((suggestion, index) => (
-                  <Button
-                    key={index}
-                    variant="secondary"
-                    size="sm"
-                    className="text-xs bg-black/20 hover:bg-black/40 transition-all duration-200"
-                    onClick={() => handleSuggestionClick(suggestion)}
-                    disabled={isProcessing}
-                  >
-                    {suggestion}
-                  </Button>
-                ))}
-              </div>
+              {/* Spacer to push input to bottom */}
+              <div className="flex-1 min-h-0"></div>
 
-              <form onSubmit={handleSubmit} className="flex space-x-2">
+              {/* Input Section - Always at bottom */}
+              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0">
+                {/* Suggestions */}
+                <div className="flex flex-wrap gap-2">
+                  {chatSuggestions.map((suggestion, index) => (
+                    <Button
+                      key={index}
+                      variant="secondary"
+                      size="sm"
+                      className="text-xs bg-black/20 hover:bg-black/40 transition-all duration-200"
+                      onClick={() => handleSuggestionClick(suggestion)}
+                      disabled={isProcessing}
+                    >
+                      {suggestion}
+                    </Button>
+                  ))}
+                </div>
+
+                <form onSubmit={handleSubmit} className="flex space-x-2">
                 <div className="relative flex-1">
                   <Textarea
                     ref={textareaRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value)} // Use the passed setInput
                     placeholder="Type your message..."
-                    className="min-h-[60px] bg-black/40 border-white/20 pr-12 resize-none"
+                    className="min-h-[60px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
@@ -821,10 +847,11 @@ Please include:
                     )}
                   </Button>
                 )}
-              </form>
+                </form>
+              </div>
             </TabsContent>
 
-            <TabsContent value="code" className="m-0">
+            <TabsContent value="code" className="m-0 flex-1 flex flex-col min-h-0">
               {/* Code Mode Header */}
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
@@ -915,27 +942,32 @@ Please include:
                 </div>
               </div>
 
-              {/* Code Suggestions */}
-              <div className="mb-4">
-                <h4 className="text-xs font-medium text-white/80 mb-2">Popular Requests</h4>
-                <div className="flex flex-wrap gap-2">
-                  {codeSuggestions.slice(0, 4).map((suggestion, index) => (
-                    <Button
-                      key={index}
-                      variant="secondary"
-                      size="sm"
-                      className="text-xs bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/20 transition-all duration-200"
-                      onClick={() => handleSuggestionClick(suggestion)}
-                      disabled={isProcessing}
-                    >
-                      {suggestion}
-                    </Button>
-                  ))}
-                </div>
-              </div>
+              {/* Spacer to push input to bottom */}
+              <div className="flex-1 min-h-0"></div>
 
-              {/* Enhanced Code Input */}
-              <form onSubmit={handleSubmit} className="space-y-3">
+              {/* Input Section - Always at bottom */}
+              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0">
+                {/* Code Suggestions */}
+                <div>
+                  <h4 className="text-xs font-medium text-white/80 mb-2">Popular Requests</h4>
+                  <div className="flex flex-wrap gap-2">
+                    {codeSuggestions.slice(0, 4).map((suggestion, index) => (
+                      <Button
+                        key={index}
+                        variant="secondary"
+                        size="sm"
+                        className="text-xs bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/20 transition-all duration-200"
+                        onClick={() => handleSuggestionClick(suggestion)}
+                        disabled={isProcessing}
+                      >
+                        {suggestion}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Enhanced Code Input */}
+                <form onSubmit={handleSubmit} className="space-y-3">
                 {codeMode === 'advanced' && (
                   <div className="bg-black/20 rounded-lg p-3 border border-white/10 mb-3">
                     <h4 className="text-xs font-medium text-white/80 mb-2">IDE Command Schema</h4>
@@ -954,7 +986,7 @@ Please include:
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
-                    className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-sm"
+                    className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                         e.preventDefault();
@@ -1012,7 +1044,8 @@ Please include:
                     </Button>
                   )}
                 </div>
-              </form>
+                </form>
+              </div>
             </TabsContent>
 
             <TabsContent value="images" className="m-0">

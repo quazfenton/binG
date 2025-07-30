@@ -47,6 +47,11 @@ body {
     font-size: 16px !important;
   }
   
+  /* Ensure mobile keyboard doesn't hide input */
+  .mobile-input-container {
+    padding-bottom: env(keyboard-inset-height, 0px);
+  }
+  
   /* Better touch targets */
   button, [role="button"] {
     min-height: 44px;
