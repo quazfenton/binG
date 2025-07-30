@@ -104,7 +104,7 @@ export default function InteractionPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Panel state
-  const [panelHeight, setPanelHeight] = useState(350); // Default height
+  const [panelHeight, setPanelHeight] = useState(280); // Default height - lowered for better mobile experience
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
 
@@ -589,11 +589,13 @@ Please include:
 
   return (
     <div
-      className={`fixed bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 bottom-0 border-t`}
+      className={`fixed bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 border-t`}
       style={{
+        bottom: 'env(safe-area-inset-bottom, 0px)',
         height: isMinimized
           ? '60px'
-          : `${panelHeight}px`
+          : `${panelHeight}px`,
+        maxHeight: 'calc(100vh - env(safe-area-inset-top, 0px) - 60px)'
       }}
     >
       {/* Drag Handle - Only vertical resizing */}
