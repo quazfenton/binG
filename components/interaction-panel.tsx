@@ -70,6 +70,8 @@ interface InteractionPanelProps {
   toggleAccessibility: () => void; // This prop is expected to be a function that toggles accessibility options
   toggleHistory: () => void;
   toggleCodePreview: () => void; // This prop is expected to be a function
+  toggleCodeMode?: () => void; // Add code mode toggle
+  toggleCodeMode?: () => void; // Add code mode toggle
   onStopGeneration?: () => void;
   onRetry?: () => void; // Add retry function prop
   currentProvider?: string;
@@ -89,6 +91,7 @@ export default function InteractionPanel({
   toggleAccessibility, // Receive the prop
   toggleHistory,
   toggleCodePreview, // Receive the prop
+  toggleCodeMode, // Add code mode toggle
   onStopGeneration,
   onRetry,
   currentProvider = "openrouter",
@@ -586,7 +589,7 @@ export default function InteractionPanel({
         onMouseDown={handleMouseDown}
       />
 
-      <div className="p-4 h-full overflow-hidden max-w-4xl mx-auto">
+      <div className="p-4 h-full overflow-hidden max-w-4xl mx-auto flex flex-col">
         {/* Minimize/Maximize Controls */}
         <div className="absolute top-2 right-4 flex items-center gap-2">
           <Button
@@ -602,7 +605,7 @@ export default function InteractionPanel({
           </div>
         </div>
         {!isMinimized && (
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 overflow-hidden">
             <div className="flex justify-between items-center mb-4">
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
@@ -670,7 +673,7 @@ export default function InteractionPanel({
               </div>
             </div>
 
-            <TabsContent value="chat" className="m-0">
+            <TabsContent value="chat" className="m-0 flex-1 flex flex-col overflow-hidden">
               {/* Provider Status and Selection */}
               <div className="flex items-center justify-between mb-3 text-xs text-white/60">
                 <div className="flex items-center gap-2">
@@ -740,7 +743,7 @@ export default function InteractionPanel({
                 ))}
               </div>
 
-              <form onSubmit={handleSubmit} className="flex space-x-2">
+              <form onSubmit={handleSubmit} className="flex space-x-2 mt-auto">
                 <div className="relative flex-1">
                   <Textarea
                     ref={textareaRef}
@@ -803,7 +806,7 @@ export default function InteractionPanel({
               </form>
             </TabsContent>
 
-            <TabsContent value="code" className="m-0">
+            <TabsContent value="code" className="m-0 flex-1 flex flex-col overflow-hidden">
               {/* Code Mode Header */}
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
@@ -830,14 +833,26 @@ export default function InteractionPanel({
                 <div className="mb-4 p-3 bg-black/30 rounded-lg border border-white/10">
                   <div className="flex items-center justify-between mb-2">
                     <h4 className="text-xs font-medium text-white/80">Project Files</h4>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setShowFileSelector(!showFileSelector)}
-                      className="text-xs"
-                    >
-                      {showFileSelector ? 'Hide' : 'Select Files'}
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setShowFileSelector(!showFileSelector)}
+                        className="text-xs"
+                      >
+                        {showFileSelector ? 'Hide' : 'Select Files'}
+                      </Button>
+                      {toggleCodeMode && (
+                        <Button
+                          size="sm"
+                          variant="default"
+                          onClick={toggleCodeMode}
+                          className="text-xs bg-blue-600 hover:bg-blue-700"
+                        >
+                          🚀 IDE Mode
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
                   {showFileSelector && (
@@ -994,7 +1009,7 @@ export default function InteractionPanel({
               </form>
             </TabsContent>
 
-            <TabsContent value="images" className="m-0">
+            <TabsContent value="images" className="m-0 flex-1 flex flex-col overflow-hidden">
               <div className="max-h-64 overflow-y-auto space-y-3">
                 {sampleImages.map((image) => (
                   <div
@@ -1062,7 +1077,7 @@ export default function InteractionPanel({
               </Card>
             </TabsContent>
 
-            <TabsContent value="plugins" className="m-0">
+            <TabsContent value="plugins" className="m-0 flex-1 flex flex-col overflow-hidden">
               <Card className="bg-black/40 border-white/10">
                 <CardContent className="pt-6">
                   <div className="space-y-3">

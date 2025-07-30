@@ -13,6 +13,7 @@ import AccessibilityControls from "@/components/accessibility-controls";
 import ChatHistoryModal from "@/components/chat-history-modal";
 import { ChatPanel } from "@/components/chat-panel";
 import CodePreviewPanel from "@/components/code-preview-panel";
+import CodeMode from "@/components/code-mode";
 // import { useConversation } from "@/hooks/use-conversation"; // No longer needed
 import { useChatHistory } from "@/hooks/use-chat-history";
 import { voiceService } from "@/lib/voice/voice-service";
@@ -23,6 +24,8 @@ export default function ConversationInterface() {
   const [showAccessibility, setShowAccessibility] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showCodePreview, setShowCodePreview] = useState(false);
+  const [showCodeMode, setShowCodeMode] = useState(false);
+  const [projectFiles, setProjectFiles] = useState<{ [key: string]: string }>({});
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
     [],
   );
@@ -298,6 +301,19 @@ export default function ConversationInterface() {
     });
   };
 
+  const handleToggleCodeMode = () => {
+    setShowCodeMode((prev) => !prev);
+  };
+
+  const handleUpdateProjectFiles = (files: { [key: string]: string }) => {
+    setProjectFiles(files);
+  };
+
+  const handleCodeModeMessage = (message: string, context?: any) => {
+    // Send the formatted code mode message
+    handleSubmit(undefined, { data: { message, context } });
+  };
+
   // Intermediary function to handle submit from InteractionPanel with ad system
   const handleChatSubmit = (content: string) => {
     // Check if user needs to see an ad
@@ -343,7 +359,7 @@ export default function ConversationInterface() {
   };
 
   return (
-    <div className="relative w-full h-screen bg-black overflow-hidden">
+    <div className="relative w-full h-screen bg-black overflow-hidden touch-pan-y">
       {/* Subtle animated background */}
       <div className="absolute inset-0 opacity-20">
         <div className="absolute inset-0 bg-gradient-to-br from-gray-900/30 via-black to-gray-800/20"></div>
@@ -353,7 +369,7 @@ export default function ConversationInterface() {
           <div className="absolute bottom-1/4 left-1/2 w-64 h-64 bg-gray-800/10 rounded-full blur-3xl animate-float-slow"></div>
         </div>
       </div>
-      <div className="flex flex-col md:flex-row h-full">
+      <div className="flex flex-col md:flex-row h-full min-h-0">
         {/* Main content area */}
         <div className="flex-1 flex flex-col">
           <div className="flex-1 relative">
@@ -396,6 +412,7 @@ export default function ConversationInterface() {
         toggleCodePreview={() => {
           handleToggleCodePreview();
         }} // Pass the function with an additional log
+        toggleCodeMode={handleToggleCodeMode}
         onStopGeneration={stop} // Pass useChat's stop function
         onRetry={handleRetry} // Pass the retry function
         currentProvider={currentProvider}
@@ -424,6 +441,15 @@ export default function ConversationInterface() {
         messages={messages}
         isOpen={showCodePreview}
         onClose={() => setShowCodePreview(false)}
+      />
+
+      {/* Code Mode Panel */}
+      <CodeMode
+        projectFiles={projectFiles}
+        onUpdateFiles={handleUpdateProjectFiles}
+        onSendMessage={handleCodeModeMessage}
+        isVisible={showCodeMode}
+        onClose={() => setShowCodeMode(false)}
       />
 
       {/* Accessibility Layer */}

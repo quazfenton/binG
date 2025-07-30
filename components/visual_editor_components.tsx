@@ -3,16 +3,16 @@
 import * as React from 'react';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Button, ButtonProps } from '../components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Badge, BadgeProps } from '../components/ui/badge';
-import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { Slider } from '../components/ui/slider';
-import { Switch } from '../components/ui/switch';
-import { Textarea } from '../components/ui/textarea';
+import { Button, ButtonProps } from './ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { Badge, BadgeProps } from './ui/badge';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Slider } from './ui/slider';
+import { Switch } from './ui/switch';
+import { Textarea } from './ui/textarea';
 import { 
   Eye, Code, Layers, Package, Settings, Save, Undo, Redo,
   MousePointer, Move, RotateCw, Square, Type, Image,

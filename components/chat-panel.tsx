@@ -117,7 +117,7 @@ export function ChatPanel({
     <div className="flex flex-col h-full relative">
       <div 
         ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto p-4 space-y-2" 
+        className="flex-1 overflow-y-auto p-4 space-y-2 overscroll-contain touch-pan-y" 
         style={{ paddingBottom: "120px" }}
         onScroll={handleScroll}
       >
