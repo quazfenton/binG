@@ -70,7 +70,6 @@ interface InteractionPanelProps {
   toggleAccessibility: () => void; // This prop is expected to be a function that toggles accessibility options
   toggleHistory: () => void;
   toggleCodePreview: () => void; // This prop is expected to be a function
-  toggleCodeMode?: () => void; // Add code mode toggle
   onStopGeneration?: () => void;
   onRetry?: () => void; // Add retry function prop
   currentProvider?: string;
@@ -430,7 +429,23 @@ export default function InteractionPanel({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (input.trim() && !isProcessing) {
-      onSubmit(input);
+      let enhancedInput = input;
+      
+      // Auto-enhance prompts when in Code tab
+      if (activeTab === 'code') {
+        enhancedInput = `As an expert developer, please help with this coding request. Provide detailed, production-ready code with explanations:
+
+${input}
+
+Please include:
+- Complete, working code examples
+- Best practices and patterns
+- Error handling where appropriate
+- Comments explaining key concepts
+- Any necessary dependencies or setup instructions`;
+      }
+      
+      onSubmit(enhancedInput);
       setInput(""); // Clear input using the passed setInput
     }
   };
@@ -604,8 +619,8 @@ export default function InteractionPanel({
         </div>
         {!isMinimized && (
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <div className="flex justify-between items-center mb-4">
-              <div className="flex items-center gap-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
+              <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
                 <div className="flex items-center gap-2">
                   <div className="">
                     <Sparkles className="h-3 w-3 text-white" />
@@ -615,58 +630,61 @@ export default function InteractionPanel({
                   </span>
                 </div>
                 <TabsList className="bg-black/40">
-                  <TabsTrigger value="chat">
-                    <MessageSquare className="h-4 w-4 mr-2" />
-                    Chat
+                  <TabsTrigger value="chat" className="text-xs sm:text-sm">
+                    <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                    <span className="hidden sm:inline">Chat</span>
                   </TabsTrigger>
-                  <TabsTrigger value="code">
-                    <Code className="h-4 w-4 mr-2" />
-                    Code
+                  <TabsTrigger value="code" className="text-xs sm:text-sm">
+                    <Code className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                    <span className="hidden sm:inline">Code</span>
                   </TabsTrigger>
-                  <TabsTrigger value="images">
-                    <ImageIcon className="h-4 w-4 mr-2" />
-                    Images
+                  <TabsTrigger value="images" className="text-xs sm:text-sm">
+                    <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                    <span className="hidden sm:inline">Images</span>
                   </TabsTrigger>
-                  <TabsTrigger value="plugins">
-                    <Zap className="h-4 w-4 mr-2" />
-                    Plugins
+                  <TabsTrigger value="plugins" className="text-xs sm:text-sm">
+                    <Zap className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                    <span className="hidden sm:inline">Plugins</span>
                   </TabsTrigger>
                 </TabsList>
               </div>
 
-              <div className="flex space-x-2">
+              <div className="flex space-x-1 sm:space-x-2 flex-shrink-0">
                 <Button
                   variant="outline"
-                  size="icon"
+                  size="sm"
                   onClick={onNewChat}
                   title="New Chat"
+                  className="h-8 w-8 sm:h-10 sm:w-10 p-0"
                 >
-                  <Plus className="h-4 w-4" />
+                  <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
                 </Button>
                 <Button
                   variant="outline"
-                  size="icon"
+                  size="sm"
                   onClick={toggleHistory}
                   title="Chat History"
+                  className="h-8 w-8 sm:h-10 sm:w-10 p-0"
                 >
-                  <History className="h-4 w-4" />
+                  <History className="h-3 w-3 sm:h-4 sm:w-4" />
                 </Button>
                 <Button
                   variant="outline"
-                  size="icon"
+                  size="sm"
                   onClick={toggleAccessibility} // Call the passed prop
                   title="Accessibility Options"
+                  className="h-8 w-8 sm:h-10 sm:w-10 p-0"
                 >
-                  <Accessibility className="h-4 w-4" />
+                  <Accessibility className="h-3 w-3 sm:h-4 sm:w-4" />
                 </Button>
                 <Button
                   variant="outline"
-                  size="icon"
+                  size="sm"
                   onClick={toggleCodePreview} // Simplified onClick handler
                   title="Code Preview"
-                  className={hasCodeBlocks ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse" : ""}
+                  className={`h-8 w-8 sm:h-10 sm:w-10 p-0 ${hasCodeBlocks ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse" : ""}`}
                 >
-                  <Code className={`h-4 w-4 ${hasCodeBlocks ? "text-white" : ""}`} />
+                  <Code className={`h-3 w-3 sm:h-4 sm:w-4 ${hasCodeBlocks ? "text-white" : ""}`} />
                 </Button>
               </div>
             </div>

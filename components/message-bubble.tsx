@@ -82,7 +82,7 @@ export default function MessageBubble({ message, isStreaming = false }: MessageB
           } else {
             clearInterval(streamInterval);
           }
-        }, 14); // Smooth streaming - 14ms per character
+        }, 7); // Smooth streaming - 14ms per character
         
         return () => clearInterval(streamInterval);
       }
