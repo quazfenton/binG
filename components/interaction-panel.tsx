@@ -41,6 +41,7 @@ import {
   Globe,
   Palette,
   Music,
+  Zap,
   Camera,
   Map,
   Gamepad2,
@@ -62,6 +63,11 @@ import {
 import type { LLMProvider } from '../lib/api/llm-providers';
 import { templateCache, cacheKey } from '../lib/cache';
 import MultiModelComparison from './multi-model-comparison';
+import PluginManager, { type Plugin } from './plugins/plugin-manager';
+import AIEnhancerPlugin from './plugins/ai-enhancer-plugin';
+import CodeFormatterPlugin from './plugins/code-formatter-plugin';
+import CalculatorPlugin from './plugins/calculator-plugin';
+import NoteTakerPlugin from './plugins/note-taker-plugin';
 
 interface InteractionPanelProps {
   onSubmit: (content: string) => void;
@@ -766,11 +772,14 @@ Please include:
                 </div>
               )}
 
-              {/* Spacer to push input to bottom - only on desktop */}
-              <div className="hidden md:block flex-1 min-h-0"></div>
+              {/* Content area that grows on mobile, shrinks on desktop */}
+              <div className="flex-1 min-h-0 md:flex-none">
+                {/* Placeholder for chat messages/content */}
+                <div className="h-full md:h-auto"></div>
+              </div>
 
               {/* Input Section - Always at bottom */}
-              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
+              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10 md:mt-auto">
                 {/* Suggestions */}
                 <div className="flex flex-wrap gap-2">
                   {chatSuggestions.map((suggestion, index) => (
@@ -953,11 +962,14 @@ Please include:
                 </div>
               </div>
 
-              {/* Spacer to push input to bottom - only on desktop */}
-              <div className="hidden md:block flex-1 min-h-0"></div>
+              {/* Content area that grows on mobile, shrinks on desktop */}
+              <div className="flex-1 min-h-0 md:flex-none">
+                {/* Placeholder for chat messages/content */}
+                <div className="h-full md:h-auto"></div>
+              </div>
 
               {/* Input Section - Always at bottom */}
-              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
+              <div className="flex-shrink-0 space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10 md:mt-auto">
                 {/* Code Suggestions */}
                 <div>
                   <h4 className="text-xs font-medium text-white/80 mb-2">Popular Requests</h4>
