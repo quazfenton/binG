@@ -134,6 +134,32 @@ export default function InteractionPanel({
     return () => window.removeEventListener('resize', handleResize);
   }, [panelHeight]);
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Ctrl+K to focus input
+      if (event.ctrlKey && event.key === 'k') {
+        event.preventDefault();
+        setActiveTab('chat'); // Switch to chat tab
+        setTimeout(() => {
+          textareaRef.current?.focus();
+        }, 100);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Mobile: Focus input on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth <= 768) {
+      setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 500);
+    }
+  }, []);
+
   // Advanced Code Mode State
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [projectStructure, setProjectStructure] = useState<any[]>([]);
@@ -899,11 +925,14 @@ Please include:
                 ) : (
                   <Button
                     type="submit"
-                    className="self-end min-w-[80px]"
+                    className="self-end min-w-[100px] bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 border-0 shadow-lg transition-all duration-200"
                     disabled={isProcessing || !input.trim()}
                   >
                     {isProcessing ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        Sending...
+                      </>
                     ) : (
                       <>
                         <Send className="h-4 w-4 mr-2" />
@@ -1105,15 +1134,20 @@ Please include:
                     <Button
                       type="submit"
                       size="sm"
-                      className="bg-blue-600 hover:bg-blue-700"
+                      className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 border-0 shadow-lg transition-all duration-200"
                       disabled={isProcessing || !input.trim()}
                     >
                       {isProcessing ? (
-                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                          Generating...
+                        </>
                       ) : (
-                        <Code className="h-4 w-4 mr-2" />
+                        <>
+                          <Code className="h-4 w-4 mr-2" />
+                          Generate Code
+                        </>
                       )}
-                      {isProcessing ? "Generating..." : "Generate Code"}
                     </Button>
                   )}
                 </div>
@@ -1151,9 +1185,9 @@ Please include:
 
             <TabsContent value="plugins" className="m-0 overflow-y-auto sm:overflow-hidden touch-pan-y">
               <Card className="bg-black/40 border-white/10">
-                <CardContent className="pt-6">
+                <CardContent className="pt-2">
                   <div className="space-y-3">
-                    <div className="text-center mb-4">
+                    <div className="text-center mb-2">
                       <h3 className="font-medium text-white mb-2">Advanced AI Modules</h3>
                       <p className="text-xs text-white/60">Click any plugin to load its specialized prompt and switch to chat</p>
                     </div>
@@ -1183,7 +1217,6 @@ Please include:
 
                     <div className="mt-4 pt-3 border-t border-white/10">
                       <div className="flex items-center gap-2 mb-2">
-                        <Zap className="h-4 w-4 text-yellow-400" />
                         <span className="text-sm font-medium">Modular Tools</span>
                       </div>
                       <div className="mb-3">
