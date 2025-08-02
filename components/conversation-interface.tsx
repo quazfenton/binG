@@ -90,7 +90,10 @@ export default function ConversationInterface() {
     },
     onFinish: () => {
       if (messages.length > 0) {
-        saveCurrentChat(messages);
+        const savedChatId = saveCurrentChat(messages, currentConversationId || undefined);
+        if (!currentConversationId && savedChatId) {
+          setCurrentConversationId(savedChatId);
+        }
       }
     },
   });
@@ -110,7 +113,11 @@ export default function ConversationInterface() {
       // Only save if the last message is from assistant (completed response)
       const lastMessage = messages[messages.length - 1];
       if (lastMessage && lastMessage.role === 'assistant') {
-        saveCurrentChat(messages, currentConversationId || undefined);
+        const savedChatId = saveCurrentChat(messages, currentConversationId || undefined);
+        // If it was a new chat and an ID was returned, set it as the current conversation ID
+        if (!currentConversationId && savedChatId) {
+          setCurrentConversationId(savedChatId);
+        }
 
         // Auto-speak AI responses if voice is enabled
         if (isVoiceEnabled && voiceService.getSettings().autoSpeak) {
@@ -191,11 +198,12 @@ export default function ConversationInterface() {
   const handleNewChat = () => {
     const isEmpty = messages.length === 0;
     if (!isEmpty) {
-      saveCurrentChat(messages);
+      // Save the current chat before starting a new one, if there are messages
+      saveCurrentChat(messages, currentConversationId || undefined);
       setChatHistory(getAllChats());
     }
     setMessages([]);
-    setCurrentConversationId(null);
+    setCurrentConversationId(null); // Ensure current conversation ID is reset for a new chat
     toast.success("New chat started");
   };
 

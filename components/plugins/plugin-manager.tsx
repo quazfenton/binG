@@ -26,7 +26,7 @@ export interface Plugin {
   description: string;
   icon: React.ComponentType<any>;
   component: React.ComponentType<PluginProps>;
-  category: 'ai' | 'code' | 'data' | 'media' | 'utility';
+  category: 'ai' | 'code' | 'data' | 'media' | 'utility' | 'design';
   defaultSize: { width: number; height: number };
   minSize: { width: number; height: number };
   maxSize?: { width: number; height: number };
@@ -52,11 +52,15 @@ interface PluginWindow {
 interface PluginManagerProps {
   availablePlugins: Plugin[];
   onPluginResult?: (pluginId: string, result: any) => void;
+  openPluginId?: string | null;
+  onOpenComplete?: () => void;
 }
 
 export const PluginManager: React.FC<PluginManagerProps> = ({
   availablePlugins,
-  onPluginResult
+  onPluginResult,
+  openPluginId,
+  onOpenComplete
 }) => {
   const [openWindows, setOpenWindows] = useState<PluginWindow[]>([]);
   const [nextZIndex, setNextZIndex] = useState(1000);
@@ -75,6 +79,18 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
     startSize: { width: 0, height: 0 },
     startWindowPos: { x: 0, y: 0 }
   });
+
+  useEffect(() => {
+    if (openPluginId) {
+      const plugin = availablePlugins.find(p => p.id === openPluginId);
+      if (plugin) {
+        openPlugin(plugin);
+      }
+      if (onOpenComplete) {
+        onOpenComplete();
+      }
+    }
+  }, [openPluginId]);
 
   const openPlugin = (plugin: Plugin, initialData?: any) => {
     const windowId = `${plugin.id}-${Date.now()}`;

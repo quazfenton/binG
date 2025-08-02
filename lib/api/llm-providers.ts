@@ -27,6 +27,7 @@ export interface LLMRequest {
   maxTokens?: number
   stream?: boolean
   provider: string
+  apiKeys?: Record<string, string>
 }
 
 export interface LLMResponse {
@@ -132,60 +133,68 @@ class LLMService {
     this.initializeProviders()
   }
 
-  private initializeProviders() {
+  private initializeProviders(apiKeys?: Record<string, string>) {
     
     // Initialize OpenRouter (using OpenAI SDK)
-    if (process.env.OPENAI_API_KEY) {
+    const openRouterApiKey = apiKeys?.openrouter || process.env.OPENAI_API_KEY;
+    if (openRouterApiKey) {
       this.openrouter = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
+        apiKey: openRouterApiKey,
         baseURL: process.env.OPENAI_BASE_URL,
       })
     }
 
         // Initialize Google
-    if (process.env.GOOGLE_API_KEY) {
-      this.google = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY)
+    const googleApiKey = apiKeys?.google || process.env.GOOGLE_API_KEY;
+    if (googleApiKey) {
+      this.google = new GoogleGenerativeAI(googleApiKey)
     }
     // Initialize Chutes
-    if (process.env.CHUTES_API_KEY) {
+    const chutesApiKey = apiKeys?.chutes || process.env.CHUTES_API_KEY;
+    if (chutesApiKey) {
       this.chutes = new OpenAI({
-        apiKey: process.env.CHUTES_API_KEY,
+        apiKey: chutesApiKey,
         baseURL: 'https://llm.chutes.ai/v1',
       })
     }
 
     // Initialize Anthropic
-    if (process.env.ANTHROPIC_API_KEY) {
+    const anthropicApiKey = apiKeys?.anthropic || process.env.ANTHROPIC_API_KEY;
+    if (anthropicApiKey) {
       this.anthropic = new Anthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY,
+        apiKey: anthropicApiKey,
       })
     }
 
     // Initialize Cohere
-    if (process.env.COHERE_API_KEY) {
+    const cohereApiKey = apiKeys?.cohere || process.env.COHERE_API_KEY;
+    if (cohereApiKey) {
       this.cohere = new CohereClient({
-        token: process.env.COHERE_API_KEY,
+        token: cohereApiKey,
       })
     }
 
     // Initialize Together AI
-    if (process.env.TOGETHER_API_KEY) {
+    const togetherApiKey = apiKeys?.together || process.env.TOGETHER_API_KEY;
+    if (togetherApiKey) {
       this.together = new Together({
-        auth: process.env.TOGETHER_API_KEY,
+        auth: togetherApiKey,
       })
     }
 
     // Initialize Replicate
-if (process.env.REPLICATE_API_TOKEN) {
+    const replicateApiKey = apiKeys?.replicate || process.env.REPLICATE_API_TOKEN;
+if (replicateApiKey) {
   this.replicate = new Replicate({
-    auth: process.env.REPLICATE_API_TOKEN,
+    auth: replicateApiKey,
   })
 }
 
 // Initialize Portkey AI
-if (process.env.PORTKEY_API_KEY && process.env.PORTKEY_VIRTUAL_KEY) {
+const portkeyApiKey = apiKeys?.portkey || process.env.PORTKEY_API_KEY;
+if (portkeyApiKey && process.env.PORTKEY_VIRTUAL_KEY) {
   this.portkey = new Portkey({
-    apiKey: process.env.PORTKEY_API_KEY,
+    apiKey: portkeyApiKey,
     config: process.env.PORTKEY_VIRTUAL_KEY,
   })
 }
@@ -207,7 +216,8 @@ if (process.env.PORTKEY_API_KEY && process.env.PORTKEY_VIRTUAL_KEY) {
   }
 
 async generateResponse(request: LLMRequest): Promise<LLMResponse> {
-    const { provider, model, messages, temperature = 0.7, maxTokens = 4096 } = request
+    const { provider, model, messages, temperature = 0.7, maxTokens = 4096, apiKeys } = request
+    this.initializeProviders(apiKeys);
 
     try {
       switch (provider) {
@@ -237,7 +247,8 @@ async generateResponse(request: LLMRequest): Promise<LLMResponse> {
   }
 
 async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingResponse> {
-    const { provider, model, messages, temperature = 0.7, maxTokens = 8096 } = request
+    const { provider, model, messages, temperature = 0.7, maxTokens = 8096, apiKeys } = request
+    this.initializeProviders(apiKeys);
 
     try {
       switch (provider) {
@@ -551,7 +562,7 @@ async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingR
   private async *streamTogether(messages: LLMMessage[], model: string, temperature: number, maxTokens: number): AsyncGenerator<StreamingResponse> {
     if (!this.together) throw new Error('Together AI not initialized')
 
-    const stream = await this.together.completions.create({
+    const stream = await this.together.chat.completions.create({
       model,
       messages: messages as any,
       temperature,

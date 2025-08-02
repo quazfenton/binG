@@ -47,6 +47,7 @@ import {
   Palette,
   Music,
   Zap,
+  Film,
   Camera,
   Map,
   Gamepad2,
@@ -63,6 +64,7 @@ import {
   Key,
   Cloud,
   Server,
+  Scale,
 } from "lucide-react";
 import type { LLMProvider } from "../lib/api/llm-providers";
 import { templateCache, cacheKey } from "../lib/cache";
@@ -72,6 +74,14 @@ import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";
 import CodeFormatterPlugin from "./plugins/code-formatter-plugin";
 import CalculatorPlugin from "./plugins/calculator-plugin";
 import NoteTakerPlugin from "./plugins/note-taker-plugin";
+import InteractiveDiagrammingPlugin from './plugins/interactive-diagramming-plugin';
+import DataVisualizationBuilderPlugin from './plugins/data-visualization-builder-plugin';
+import NetworkRequestBuilderPlugin from './plugins/network-request-builder-plugin';
+import LegalDocumentPlugin from './plugins/legal-document-plugin';
+import GitHubExplorerPlugin from './plugins/github-explorer-plugin';
+import HuggingFaceSpacesPlugin from './plugins/huggingface-spaces-plugin';
+import InteractiveStoryboardPlugin from './plugins/interactive-storyboard-plugin';
+import CloudStoragePlugin from './plugins/cloud-storage-plugin';
 
 interface InteractionPanelProps {
   onSubmit: (content: string) => void;
@@ -166,6 +176,7 @@ export default function InteractionPanel({
   }, []);
   // Advanced Code Mode State
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<Record<string, {content: string, version: number}>>({});
   const [projectStructure, setProjectStructure] = useState<any[]>([]);
   const [pendingDiffs, setPendingDiffs] = useState<any[]>([]);
 
@@ -211,6 +222,86 @@ export default function InteractionPanel({
       defaultSize: { width: 800, height: 600 },
       minSize: { width: 600, height: 400 },
     },
+    {
+      id: 'interactive-diagramming',
+      name: 'Diagramming Tool',
+      description: 'Create and edit diagrams like flowcharts and architecture.',
+      icon: GitBranch,
+      component: InteractiveDiagrammingPlugin,
+      category: 'design',
+      defaultSize: { width: 800, height: 700 },
+      minSize: { width: 600, height: 500 }
+    },
+    {
+      id: 'data-visualization-builder',
+      name: 'Data Visualizer',
+      description: 'Interactively build charts and graphs from data.',
+      icon: Database,
+      component: DataVisualizationBuilderPlugin,
+      category: 'data',
+      defaultSize: { width: 850, height: 650 },
+      minSize: { width: 650, height: 450 }
+    },
+    {
+      id: 'network-request-builder',
+      name: 'API Tester',
+      description: 'Construct and send HTTP requests.',
+      icon: Globe,
+      component: NetworkRequestBuilderPlugin,
+      category: 'utility',
+      defaultSize: { width: 700, height: 600 },
+      minSize: { width: 500, height: 400 }
+    },
+    {
+      id: 'legal-document',
+      name: 'Legal Document Generator',
+      description: 'Generate legal documents and analyze existing ones',
+      icon: Scale,
+      component: LegalDocumentPlugin,
+      category: 'utility',
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 400 }
+    },
+    {
+      id: 'interactive-storyboard',
+      name: 'Storyboard Creator',
+      description: 'Create visual storyboards for films and animations',
+      icon: Film,
+      component: InteractiveStoryboardPlugin,
+      category: 'media',
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 }
+    },
+    {
+      id: 'huggingface-spaces',
+      name: 'HF Image Generator',
+      description: 'Generate images using Hugging Face Spaces models',
+      icon: ImageIcon,
+      component: HuggingFaceSpacesPlugin,
+      category: 'ai',
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 400 }
+    },
+    {
+      id: 'github-explorer',
+      name: 'GitHub Explorer',
+      description: 'Browse trending repositories and analyze code',
+      icon: GitBranch,
+      component: GitHubExplorerPlugin,
+      category: 'code',
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 }
+    },
+    {
+      id: 'cloud-storage',
+      name: 'Cloud Storage 5GB',
+      description: 'Access encrypted files from cloud providers',
+      icon: Cloud,
+      component: CloudStoragePlugin,
+      category: 'utility',
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 400 }
+    },
   ];
 
   const handlePluginResult = (pluginId: string, result: any) => {
@@ -228,6 +319,7 @@ export default function InteractionPanel({
   const [codeMode, setCodeMode] = useState<"basic" | "advanced">("basic");
   const [showMultiModelComparison, setShowMultiModelComparison] =
     useState(false);
+  const [pluginToOpen, setPluginToOpen] = useState<string | null>(null);
 
   // Plugin modules with randomization
   const pluginModules = useMemo(() => {
@@ -658,16 +750,49 @@ export default function InteractionPanel({
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const mockFileContents: Record<string, {content: string, version: number}> = {
+    'src/components/App.tsx': {content: `import React from 'react';\n\nconst App = () => (\n  <div>Hello World</div>\n);\n\nexport default App;`, version: 1},
+    'src/utils/helpers.ts': {content: `export function formatDate(date: Date) {\n  return date.toISOString().split('T')[0];\n}`, version: 1},
+    'package.json': {content: `{\n  "name": "my-app",\n  "version": "1.0.0",\n  "dependencies": {}\n}`, version: 1},
+    'README.md': {content: `# My App\n\nA sample application`, version: 1},
+    'src/styles/globals.css': {content: `body {\n  margin: 0;\n  padding: 0;\n}`, version: 1}
+  };
+
+  const getFileContent = async (path: string): Promise<{content: string, version: number}> => {
+    return mockFileContents[path] || {content: `Content of ${path}`, version: 1};
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (input.trim() && !isProcessing) {
       let enhancedInput = input;
+      
+      // Attach selected files to context
+      if (selectedFiles.length > 0) {
+        const filesContent: string[] = [];
+        const newAttachedFiles = { ...attachedFiles };
+        let cacheUpdated = false;
+        
+        for (const file of selectedFiles) {
+          if (!newAttachedFiles[file]) {
+            newAttachedFiles[file] = await getFileContent(file);
+            cacheUpdated = true;
+          }
+          filesContent.push(`File: ${file} (v${newAttachedFiles[file].version})\n\`\`\`\n${newAttachedFiles[file].content}\n\`\`\``);
+        }
+        
+        if (cacheUpdated) {
+          setAttachedFiles(newAttachedFiles);
+        }
+        
+        enhancedInput += '\n\n### Attached Files:\n\n' + filesContent.join('\n\n');
+      }
 
       // Auto-enhance prompts when in Code tab
       if (activeTab === "code") {
         enhancedInput = `As an expert developer, please help with this coding request. Provide detailed, production-ready code with explanations:
 
-${input}
+${enhancedInput}
 
 Please include:
 - Complete, working code examples
@@ -678,7 +803,7 @@ Please include:
       }
 
       onSubmit(enhancedInput);
-      setInput(""); // Clear input using the passed setInput
+      setInput("");
     }
   };
 
@@ -1059,25 +1184,85 @@ Please include:
                       }}
                       disabled={isProcessing}
                     />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // Switch to plugins tab and open AI Enhancer with current input
-                        setActiveTab("plugins");
-                        // The plugin will be opened via the PluginManager
-                      }}
-                      className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
-                      title="Open AI Enhancer Plugin"
-                      disabled={isProcessing}
-                    >
-                      <Zap
-                        className={`h-4 w-4 ${
-                          !isProcessing
-                            ? "text-white-400 hover:text-white-300"
-                            : "text-gray-500"
-                        }`}
-                      />
-                    </button>
+                    <div className="absolute right-3 top-3 flex gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowFileSelector(!showFileSelector);
+                        }}
+                        className="p-1 rounded hover:bg-white/10 transition-colors"
+                        title="Attach Files"
+                        disabled={isProcessing}
+                      >
+                        <FolderPlus className="h-4 w-4 text-blue-400" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTab("plugins");
+                        }}
+                        className="p-1 rounded hover:bg-white/10 transition-colors"
+                        title="Open AI Enhancer Plugin"
+                        disabled={isProcessing}
+                      >
+                        <Zap
+                          className={`h-4 w-4 ${
+                            !isProcessing
+                              ? "text-yellow-400 hover:text-yellow-300"
+                              : "text-gray-500"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    
+                    {showFileSelector && (
+                      <div className="absolute right-0 top-10 w-64 bg-black/90 border border-white/20 rounded-lg shadow-lg z-10 p-2">
+                        <h4 className="text-sm font-medium mb-2">Attach Files</h4>
+                        <div className="max-h-60 overflow-y-auto">
+                          <div className="mb-3">
+                            <h5 className="text-xs font-medium mb-1">Project Files</h5>
+                            {[
+                              'src/components/App.tsx',
+                              'src/utils/helpers.ts',
+                              'package.json',
+                              'README.md',
+                              'src/styles/globals.css'
+                            ].map(file => (
+                              <div key={file} className="flex items-center gap-2 text-xs p-1 hover:bg-white/10 rounded">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedFiles.includes(file)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedFiles([...selectedFiles, file]);
+                                    } else {
+                                      setSelectedFiles(selectedFiles.filter(f => f !== file));
+                                    }
+                                  }}
+                                />
+                                <span className="truncate">{file}</span>
+                              </div>
+                            ))}
+                          </div>
+                          
+                          <div>
+                            <h5 className="text-xs font-medium mb-1">Cloud Storage</h5>
+                            <button
+                              onClick={() => {
+                                setActiveTab("plugins");
+                                setPluginToOpen('cloud-storage');
+                              }}
+                              className="text-xs w-full text-left p-2 bg-blue-500/20 hover:bg-blue-500/30 rounded"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Cloud className="w-4 h-4" />
+                                <span>Select from Cloud Storage</span>
+                              </div>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   {isProcessing && onStopGeneration ? (
                     <Button
@@ -1452,6 +1637,8 @@ Please include:
                         <PluginManager
                           availablePlugins={availablePlugins}
                           onPluginResult={handlePluginResult}
+                          openPluginId={pluginToOpen}
+                          onOpenComplete={() => setPluginToOpen(null)}
                         />
                       </div>
                       <div className="flex items-center gap-2 mb-2">
@@ -1543,4 +1730,3 @@ Please include:
     </div>
   );
 }
-

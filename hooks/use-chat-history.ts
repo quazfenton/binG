@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback } from "react"
+import React, { useCallback } from "react"
 import type { Message, ChatHistory } from "@/types"
 import { v4 as uuidv4 } from 'uuid';
 
@@ -16,9 +16,9 @@ export function useChatHistory() {
       const chats: ChatHistory[] = JSON.parse(stored);
       
       // Ensure all messages have IDs for backward compatibility
-      return chats.map(chat => ({
+      return chats.map((chat: ChatHistory) => ({
         ...chat,
-        messages: chat.messages.map(message => ({
+        messages: chat.messages.map((message: Message) => ({
           ...message,
           id: message.id || uuidv4()
         }))
@@ -30,17 +30,18 @@ export function useChatHistory() {
     }
   }, []);
 
-  const saveCurrentChat = useCallback((messages: Message[], chatIdToUpdate?: string) => {
+  const saveCurrentChat = useCallback((messages: Message[], chatIdToUpdate?: string): string => {
     const isEmpty = messages.length === 0;
-    if (isEmpty) return;
+    if (isEmpty) return chatIdToUpdate || ""; // Return existing ID or empty if no messages
 
     const existingChats = getAllChats();
 
     let updatedChats: ChatHistory[];
+    let finalChatId: string;
 
     if (chatIdToUpdate) {
       // Try to find and update the existing chat
-      const chatIndex = existingChats.findIndex((chat) => chat.id === chatIdToUpdate);
+      const chatIndex = existingChats.findIndex((chat: ChatHistory) => chat.id === chatIdToUpdate);
 
       if (chatIndex !== -1) {
         // Chat found, update it
@@ -57,7 +58,8 @@ export function useChatHistory() {
 
         // Reorder to keep the most recently updated chat at the top
         // Filter out the old version and add the new one at the beginning
-        updatedChats = [updatedChat, ...updatedChats.filter(chat => chat.id !== chatIdToUpdate)];
+        updatedChats = [updatedChat, ...updatedChats.filter((chat: ChatHistory) => chat.id !== chatIdToUpdate)];
+        finalChatId = chatIdToUpdate;
 
       } else {
         // Chat not found, save as a new chat
@@ -70,13 +72,14 @@ export function useChatHistory() {
           timestamp: Date.now(),
         };
         updatedChats = [chatHistory, ...existingChats];
+        finalChatId = newChatId;
       }
     } else {
       // Save as a new chat
       // Check for exact duplicates based on messages content to prevent duplication
-      const isDuplicate = existingChats.some(chat =>
+      const isDuplicate = existingChats.some((chat: ChatHistory) =>
         chat.messages.length === messages.length &&
-        chat.messages.every((existingMsg, index) =>
+        chat.messages.every((existingMsg: Message, index: number) =>
           existingMsg.content === messages[index].content &&
           existingMsg.role === messages[index].role
         )
@@ -84,7 +87,7 @@ export function useChatHistory() {
 
       if (isDuplicate) {
         console.log("[useChatHistory] Duplicate chat content detected. Not saving.");
-        return; // Do not save if it's an exact duplicate
+        return existingChats[0]?.id || ""; // Return the ID of the existing duplicate, or empty
       }
 
       const newChatId = uuidv4(); // Use uuid for new chats
@@ -95,16 +98,18 @@ export function useChatHistory() {
         timestamp: Date.now(),
       };
       updatedChats = [chatHistory, ...existingChats];
+      finalChatId = newChatId;
     }
 
     // Limit to 50 chats and save
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedChats.slice(0, 50)));
+    return finalChatId;
   }, [getAllChats]);
 
   const loadChat = useCallback(
     (chatId: string): ChatHistory | null => {
       const chats = getAllChats()
-      return chats.find((chat) => chat.id === chatId) || null
+      return chats.find((chat: ChatHistory) => chat.id === chatId) || null
     },
     [getAllChats],
   )
@@ -112,7 +117,7 @@ export function useChatHistory() {
   const deleteChat = useCallback(
     (chatId: string) => {
       const chats = getAllChats()
-      const updatedChats = chats.filter((chat) => chat.id !== chatId)
+      const updatedChats = chats.filter((chat: ChatHistory) => chat.id !== chatId)
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedChats))
     },
     [getAllChats],
@@ -121,9 +126,9 @@ export function useChatHistory() {
   const downloadAllHistory = useCallback(() => {
     const chats = getAllChats()
     const allText = chats
-      .map((chat) => {
+      .map((chat: ChatHistory) => {
         const chatText = chat.messages
-          .map((msg) => `${msg.role === "user" ? "You" : "AI"}: ${msg.content}`)
+          .map((msg: Message) => `${msg.role === "user" ? "You" : "AI"}: ${msg.content}`)
           .join("\n\n")
         return `=== ${chat.title} (${new Date(chat.timestamp).toLocaleString()}) ===\n\n${chatText}`
       })

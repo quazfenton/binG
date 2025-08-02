@@ -217,58 +217,60 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
           // Check if the extension matches the language
           const fileExt = filename.split('.').pop()?.toLowerCase();
 
-          // Enhanced language-extension matching for all frameworks
-          const isValidExtension =
-            fileExt === expectedExt ||
-            // JavaScript variants
-            (language === 'javascript' && ['js', 'mjs', 'cjs'].includes(fileExt)) ||
-            (language === 'typescript' && ['ts', 'mts', 'cts'].includes(fileExt)) ||
-            (language === 'jsx' && ['jsx', 'js'].includes(fileExt)) ||
-            (language === 'tsx' && ['tsx', 'ts'].includes(fileExt)) ||
-            // CSS variants
-            (language === 'css' && ['css', 'scss', 'sass', 'less'].includes(fileExt)) ||
-            // HTML variants
-            (language === 'html' && ['html', 'htm', 'xhtml'].includes(fileExt)) ||
-            // Python variants
-            (language === 'python' && ['py', 'pyw', 'pyi'].includes(fileExt)) ||
-            // Java variants
-            (language === 'java' && ['java'].includes(fileExt)) ||
-            // C/C++ variants
-            (language === 'c' && ['c', 'h'].includes(fileExt)) ||
-            (language === 'cpp' && ['cpp', 'cxx', 'cc', 'hpp', 'hxx', 'hh'].includes(fileExt)) ||
-            // PHP variants
-            (language === 'php' && ['php', 'phtml', 'php3', 'php4', 'php5'].includes(fileExt)) ||
-            // Ruby variants
-            (language === 'ruby' && ['rb', 'rbw'].includes(fileExt)) ||
-            // Go variants
-            (language === 'go' && ['go'].includes(fileExt)) ||
-            // Rust variants
-            (language === 'rust' && ['rs'].includes(fileExt)) ||
-            // Swift variants
-            (language === 'swift' && ['swift'].includes(fileExt)) ||
-            // Kotlin variants
-            (language === 'kotlin' && ['kt', 'kts'].includes(fileExt)) ||
-            // Dart variants
-            (language === 'dart' && ['dart'].includes(fileExt)) ||
-            // Vue variants
-            (language === 'vue' && ['vue'].includes(fileExt)) ||
-            // Svelte variants
-            (language === 'svelte' && ['svelte'].includes(fileExt)) ||
-            // Shell variants
-            (['shell', 'bash', 'sh'].includes(language) && ['sh', 'bash', 'zsh', 'fish'].includes(fileExt)) ||
-            // Config/Data variants
-            (language === 'json' && ['json', 'jsonc'].includes(fileExt)) ||
-            (language === 'yaml' && ['yaml', 'yml'].includes(fileExt)) ||
-            (language === 'xml' && ['xml', 'xsd', 'xsl'].includes(fileExt)) ||
-            // Markdown variants
-            (language === 'markdown' && ['md', 'markdown', 'mdown'].includes(fileExt)) ||
-            // SQL variants
-            (language === 'sql' && ['sql', 'mysql', 'pgsql', 'sqlite'].includes(fileExt)) ||
-            // Docker variants
-            (['dockerfile', 'docker'].includes(language) && ['dockerfile', 'containerfile'].includes(fileExt.toLowerCase()));
+          if (fileExt) {
+            // Enhanced language-extension matching for all frameworks
+            const isValidExtension =
+              fileExt === expectedExt ||
+              // JavaScript variants
+              (language === 'javascript' && ['js', 'mjs', 'cjs'].includes(fileExt)) ||
+              (language === 'typescript' && ['ts', 'mts', 'cts'].includes(fileExt)) ||
+              (language === 'jsx' && ['jsx', 'js'].includes(fileExt)) ||
+              (language === 'tsx' && ['tsx', 'ts'].includes(fileExt)) ||
+              // CSS variants
+              (language === 'css' && ['css', 'scss', 'sass', 'less'].includes(fileExt)) ||
+              // HTML variants
+              (language === 'html' && ['html', 'htm', 'xhtml'].includes(fileExt)) ||
+              // Python variants
+              (language === 'python' && ['py', 'pyw', 'pyi'].includes(fileExt)) ||
+              // Java variants
+              (language === 'java' && ['java'].includes(fileExt)) ||
+              // C/C++ variants
+              (language === 'c' && ['c', 'h'].includes(fileExt)) ||
+              (language === 'cpp' && ['cpp', 'cxx', 'cc', 'hpp', 'hxx', 'hh'].includes(fileExt)) ||
+              // PHP variants
+              (language === 'php' && ['php', 'phtml', 'php3', 'php4', 'php5'].includes(fileExt)) ||
+              // Ruby variants
+              (language === 'ruby' && ['rb', 'rbw'].includes(fileExt)) ||
+              // Go variants
+              (language === 'go' && ['go'].includes(fileExt)) ||
+              // Rust variants
+              (language === 'rust' && ['rs'].includes(fileExt)) ||
+              // Swift variants
+              (language === 'swift' && ['swift'].includes(fileExt)) ||
+              // Kotlin variants
+              (language === 'kotlin' && ['kt', 'kts'].includes(fileExt)) ||
+              // Dart variants
+              (language === 'dart' && ['dart'].includes(fileExt)) ||
+              // Vue variants
+              (language === 'vue' && ['vue'].includes(fileExt)) ||
+              // Svelte variants
+              (language === 'svelte' && ['svelte'].includes(fileExt)) ||
+              // Shell variants
+              (['shell', 'bash', 'sh'].includes(language) && ['sh', 'bash', 'zsh', 'fish'].includes(fileExt)) ||
+              // Config/Data variants
+              (language === 'json' && ['json', 'jsonc'].includes(fileExt)) ||
+              (language === 'yaml' && ['yaml', 'yml'].includes(fileExt)) ||
+              (language === 'xml' && ['xml', 'xsd', 'xsl'].includes(fileExt)) ||
+              // Markdown variants
+              (language === 'markdown' && ['md', 'markdown', 'mdown'].includes(fileExt)) ||
+              // SQL variants
+              (language === 'sql' && ['sql', 'mysql', 'pgsql', 'sqlite'].includes(fileExt)) ||
+              // Docker variants
+              (['dockerfile', 'docker'].includes(language) && ['dockerfile', 'containerfile'].includes(fileExt.toLowerCase()));
 
-          if (isValidExtension) {
-            return filename.trim();
+            if (isValidExtension) {
+              return filename.trim();
+            }
           }
         }
       }
@@ -925,8 +927,8 @@ ${nonCodeText}
         // Map files to Sandpack format
         const sandpackFiles = Object.entries(projectStructure.files).reduce(
           (acc, [path, content]) => {
-            // Skip empty files
-            if (!content.trim()) return acc;
+            // Skip empty or invalid files
+            if (typeof content !== 'string' || !content.trim()) return acc;
 
             // The path should already be correctly formatted by cleanFilename.
             // We just need to ensure it's prefixed with '/' for Sandpack.

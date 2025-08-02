@@ -26,6 +26,9 @@ import {
   Crown,
   Mail,
 } from "lucide-react";
+import LoginForm from "@/components/auth/login-form"; // Import LoginForm
+import SignupForm from "@/components/auth/signup-form"; // Import SignupForm (to be created)
+import { useAuth } from "@/contexts/auth-context"; // Import useAuth
 
 interface AccessibilityControlsProps {
   onClose: () => void;
@@ -51,15 +54,14 @@ export default function AccessibilityControls({
   const [speechVolume, setSpeechVolume] = useState(0.8);
   const [isListening, setIsListening] = useState(false);
 
-  // New state for themes and account
-  const [currentTheme, setCurrentTheme] = useState('default');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [userEmail, setUserEmail] = useState('');
-  const [promptCount, setPromptCount] = useState(0);
-  const [showAdWarning, setShowAdWarning] = useState(false);
+  // State for managing auth modal visibility and mode
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const { isAuthenticated, user, login, logout, register, getApiKeys, setApiKeys } = useAuth();
+  const [currentTheme, setCurrentTheme] = useState('default'); // Keep theme state local for now
 
   // Theme definitions
-  const themes = {
+  const themes: { [key: string]: { name: string; primary: string; secondary: string; accent: string; background: string; description: string; } } = {
     default: {
       name: 'Dark Default',
       primary: '#8b5cf6',
@@ -115,30 +117,32 @@ export default function AccessibilityControls({
       if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         recognition.current = new SpeechRecognition();
-        recognition.current.continuous = true;
-        recognition.current.interimResults = true;
-        recognition.current.lang = 'en-US';
+        if (recognition.current) {
+          recognition.current.continuous = true;
+          recognition.current.interimResults = true;
+          recognition.current.lang = 'en-US';
 
-        recognition.current.onresult = (event: any) => {
-          const transcript = Array.from(event.results)
-            .map((result: any) => result[0])
-            .map((result: any) => result.transcript)
-            .join('');
+          recognition.current.onresult = (event: any) => {
+            const transcript = Array.from(event.results)
+              .map((result: any) => result[0])
+              .map((result: any) => result.transcript)
+              .join('');
 
-          if (event.results[event.results.length - 1].isFinal) {
-            console.log('Voice input:', transcript);
-            // Here you would typically send the transcript to your chat handler
-          }
-        };
+            if (event.results[event.results.length - 1].isFinal) {
+              console.log('Voice input:', transcript);
+              // Here you would typically send the transcript to your chat handler
+            }
+          };
 
-        recognition.current.onerror = (event: any) => {
-          console.error('Speech recognition error:', event.error);
-          setIsListening(false);
-        };
+          recognition.current.onerror = (event: any) => {
+            console.error('Speech recognition error:', event.error);
+            setIsListening(false);
+          };
 
-        recognition.current.onend = () => {
-          setIsListening(false);
-        };
+          recognition.current.onend = () => {
+            setIsListening(false);
+          };
+        }
       }
     }
 
@@ -198,6 +202,19 @@ export default function AccessibilityControls({
       }
     }
   }, [messages, screenReader, speechRate, speechVolume]);
+
+  // Function to handle switching between login and signup forms
+  const handleAuthSwitch = (mode: 'login' | 'signup') => {
+    setAuthMode(mode);
+    setShowAuthModal(true);
+  };
+
+  // Function to close the auth modal
+  const handleCloseAuthModal = () => {
+    setShowAuthModal(false);
+    // Optionally reset authMode to 'login' when closing
+    setAuthMode('login');
+  };
 
   return (
     <div className="fixed top-0 right-0 h-full w-80 bg-black/80 backdrop-blur-md p-6 border-l border-white/10 overflow-y-auto custom-scrollbar z-50">
@@ -272,7 +289,7 @@ export default function AccessibilityControls({
             <h3 className="font-medium">Account</h3>
           </div>
 
-          {isLoggedIn ? (
+          {isAuthenticated ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -280,22 +297,32 @@ export default function AccessibilityControls({
                     <User className="h-4 w-4 text-white" />
                   </div>
                   <div>
-                    <p className="text-sm font-medium">{userEmail}</p>
+                    <p className="text-sm font-medium">{user?.email || 'N/A'}</p>
                     <div className="flex items-center gap-1">
                       <Crown className="h-3 w-3 text-yellow-400" />
                       <span className="text-xs text-yellow-400">Premium</span>
                     </div>
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setIsLoggedIn(false)}
-                  className="text-xs"
-                >
-                  <LogOut className="h-3 w-3 mr-1" />
-                  Sign Out
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    asChild
+                    className="text-xs"
+                  >
+                    <a href="/settings">Settings</a>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={logout}
+                    className="text-xs"
+                  >
+                    <LogOut className="h-3 w-3 mr-1" />
+                    Sign Out
+                  </Button>
+                </div>
               </div>
               <div className="text-xs text-gray-400">
                 Unlimited prompts • Custom themes • Prompt history
@@ -306,19 +333,11 @@ export default function AccessibilityControls({
               <div className="text-sm text-gray-300">
                 Sign up for unlimited prompts and exclusive features
               </div>
-              {promptCount >= 3 && (
-                <div className="bg-orange-500/20 border border-orange-500/30 rounded p-2 text-xs text-orange-300">
-                  ⚠️ You've used {promptCount} prompts. Sign up to continue without ads.
-                </div>
-              )}
               <div className="flex gap-2">
                 <Button
                   size="sm"
                   className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
-                  onClick={() => {
-                    setIsLoggedIn(true);
-                    setUserEmail('user@example.com');
-                  }}
+                  onClick={() => handleAuthSwitch('signup')}
                 >
                   <LogIn className="h-3 w-3 mr-1" />
                   Sign Up
@@ -327,10 +346,7 @@ export default function AccessibilityControls({
                   size="sm"
                   variant="outline"
                   className="flex-1"
-                  onClick={() => {
-                    setIsLoggedIn(true);
-                    setUserEmail('user@example.com');
-                  }}
+                  onClick={() => handleAuthSwitch('login')}
                 >
                   <Mail className="h-3 w-3 mr-1" />
                   Sign In
@@ -345,7 +361,7 @@ export default function AccessibilityControls({
           <div className="flex items-center gap-2 mb-4">
             <Palette className="h-4 w-4" />
             <h3 className="font-medium">Themes</h3>
-            {!isLoggedIn && (
+            {!isAuthenticated && (
               <div className="ml-auto">
                 <Crown className="h-3 w-3 text-yellow-400" />
               </div>
@@ -356,12 +372,12 @@ export default function AccessibilityControls({
             {Object.entries(themes).map(([key, theme]) => (
               <button
                 key={key}
-                onClick={() => isLoggedIn && setCurrentTheme(key)}
-                disabled={!isLoggedIn && key !== 'default'}
+                onClick={() => isAuthenticated && setCurrentTheme(key)}
+                disabled={!isAuthenticated && key !== 'default'}
                 className={`flex items-center gap-3 p-3 rounded-lg border transition-all duration-200 ${currentTheme === key
                     ? 'border-white/30 bg-white/5'
                     : 'border-white/10 hover:border-white/20 hover:bg-white/5'
-                  } ${!isLoggedIn && key !== 'default' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  } ${!isAuthenticated && key !== 'default' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
               >
                 <div
                   className="w-6 h-6 rounded border border-white/20"
@@ -376,7 +392,7 @@ export default function AccessibilityControls({
                 {currentTheme === key && (
                   <div className="w-2 h-2 bg-white rounded-full" />
                 )}
-                {!isLoggedIn && key !== 'default' && (
+                {!isAuthenticated && key !== 'default' && (
                   <Crown className="h-3 w-3 text-yellow-400" />
                 )}
               </button>
@@ -641,6 +657,27 @@ export default function AccessibilityControls({
           </div>
         </div>
       </div>
+
+      {/* Auth Modal */}
+      {showAuthModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 backdrop-blur-sm">
+          <div className="relative p-6">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute top-2 right-2 text-white/70 hover:text-white"
+              onClick={handleCloseAuthModal}
+            >
+              <X className="h-5 w-5" />
+            </Button>
+            {authMode === 'login' ? (
+              <LoginForm onSwitchMode={() => setAuthMode('signup')} />
+            ) : (
+              <SignupForm onSwitchMode={() => setAuthMode('login')} />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

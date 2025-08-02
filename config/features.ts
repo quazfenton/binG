@@ -1,14 +1,19 @@
 // Feature flags for optional services
 export const FEATURE_FLAGS = {
   // Cloud Storage Configuration
-  ENABLE_CLOUD_STORAGE: true, // Set to false to disable cloud storage features
-  CLOUD_STORAGE_PROVIDER: 'gcp', // 'gcp', 'aws', 's3', 'azure', 'minio'
+  ENABLE_CLOUD_STORAGE: true,
+  CLOUD_STORAGE_PROVIDER: 'nextcloud', // Updated to nextcloud
   CLOUD_STORAGE_BUCKET: 'binG-storage',
   CLOUD_STORAGE_MAX_SIZE: 5 * 1024 * 1024 * 1024, // 5GB in bytes
+
+  // Nextcloud integration
+  NEXTCLOUD_URL: 'https://your-nextcloud-instance/remote.php/dav/files/username/',
+  NEXTCLOUD_USERNAME: 'admin',
+  NEXTCLOUD_PASSWORD: 'securepassword',
   
   // VPS Deployment Configuration  
-  ENABLE_VPS_DEPLOYMENT: true, // Set to false to disable VPS deployment features
-  VPS_PROVIDER: 'digitalocean', // 'digitalocean', 'linode', 'vultr', 'gcp'
+  ENABLE_VPS_DEPLOYMENT: true,
+  VPS_PROVIDER: 'digitalocean',
   VPS_DEFAULT_REGION: 'nyc1',
   VPS_DEFAULT_SIZE: 's-1vcpu-1gb',
   
@@ -32,6 +37,7 @@ export const FEATURE_FLAGS = {
   ENABLE_PREMIUM_THEMES: true,
   ENABLE_UNLIMITED_PROMPTS: true,
   ENABLE_PROMPT_HISTORY: true,
+  SKIP_AUTH_IN_DEV: true, // Skip authentication in development
 } as const;
 
 // Helper functions
@@ -50,56 +56,4 @@ export interface CloudStorageService {
   delete(path: string): Promise<void>;
   list(prefix?: string): Promise<string[]>;
   getSignedUrl(path: string, expiresIn?: number): Promise<string>;
-}
-
-// VPS Deployment Service Interface
-export interface VPSDeploymentService {
-  createDroplet(config: VPSConfig): Promise<VPSInstance>;
-  deployApp(instanceId: string, appConfig: AppConfig): Promise<DeploymentResult>;
-  getStatus(instanceId: string): Promise<VPSStatus>;
-  destroy(instanceId: string): Promise<void>;
-}
-
-export interface VPSConfig {
-  name: string;
-  region: string;
-  size: string;
-  image: string;
-  sshKeys?: string[];
-  userData?: string;
-}
-
-export interface VPSInstance {
-  id: string;
-  name: string;
-  status: string;
-  ipAddress: string;
-  region: string;
-  createdAt: Date;
-}
-
-export interface AppConfig {
-  repository: string;
-  branch: string;
-  buildCommand?: string;
-  startCommand?: string;
-  envVars?: Record<string, string>;
-  domain?: string;
-}
-
-export interface DeploymentResult {
-  success: boolean;
-  deploymentId: string;
-  url?: string;
-  logs: string[];
-  error?: string;
-}
-
-export interface VPSStatus {
-  status: 'creating' | 'active' | 'off' | 'archive';
-  ipAddress?: string;
-  memory: number;
-  vcpus: number;
-  disk: number;
-  region: string;
 }

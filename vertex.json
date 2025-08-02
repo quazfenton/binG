@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "buoyant-nectar-459122-h3",
+  "private_key_id": "c59ee6fbefefdb4721371d2bb18b39b64da04c7c",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASC>
+  "client_email": "my-account@buoyant-nectar-459122-h3.iam.gserviceaccount.com",
+  "client_id": "102724301980583874456",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/my>
+  "universe_domain": "googleapis.com"
+}

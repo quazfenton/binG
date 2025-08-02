@@ -11,7 +11,8 @@ export async function POST(request: NextRequest) {
       model,
       temperature = 0.7,
       maxTokens = 10096,
-      stream = true
+      stream = true,
+      apiKeys = {}
     } = body as {
       messages: LLMMessage[]
       provider: string
@@ -19,6 +20,7 @@ export async function POST(request: NextRequest) {
       temperature?: number
       maxTokens?: number
       stream?: boolean
+      apiKeys?: Record<string, string>
     }
 
     // Validate required fields
@@ -67,7 +69,8 @@ export async function POST(request: NextRequest) {
       model,
       temperature,
       maxTokens,
-      stream
+      stream,
+      apiKeys
     }
 
     // Handle streaming response
