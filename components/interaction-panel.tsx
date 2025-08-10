@@ -90,6 +90,8 @@ interface InteractionPanelProps {
   toggleAccessibility: () => void; // This prop is expected to be a function that toggles accessibility options
   toggleHistory: () => void;
   toggleCodePreview: () => void; // This prop is expected to be a function
+  onAcceptPendingDiffs?: () => void;
+  onDismissPendingDiffs?: () => void;
   onStopGeneration?: () => void;
   onRetry?: () => void; // Add retry function prop
   currentProvider?: string;
@@ -100,6 +102,7 @@ interface InteractionPanelProps {
   availableProviders: LLMProvider[];
   onProviderChange: (provider: string, model: string) => void;
   hasCodeBlocks?: boolean; // Add code blocks detection
+  pendingDiffs?: { path: string; diff: string }[];
 }
 
 export default function InteractionPanel({
@@ -119,6 +122,9 @@ export default function InteractionPanel({
   availableProviders,
   onProviderChange,
   hasCodeBlocks = false,
+  pendingDiffs = [],
+  onAcceptPendingDiffs,
+  onDismissPendingDiffs,
 }: InteractionPanelProps) {
   const [activeTab, setActiveTab] = useState("chat");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -178,7 +184,7 @@ export default function InteractionPanel({
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<Record<string, {content: string, version: number}>>({});
   const [projectStructure, setProjectStructure] = useState<any[]>([]);
-  const [pendingDiffs, setPendingDiffs] = useState<any[]>([]);
+  // pending diffs come from parent via props now
 
   // Plugin System
   const availablePlugins: Plugin[] = [
@@ -766,14 +772,45 @@ export default function InteractionPanel({
     e.preventDefault();
     if (input.trim() && !isProcessing) {
       let enhancedInput = input;
+
+      // Prepend command schema/rules section (parseable by the model)
+      const rulesHeader = [
+        '=== TASK_RULES_START ===',
+        'You can ask for project context using command lines:',
+        '@list_project                       # get project file list',
+        '@read_file("path")                 # request file content',
+        '@write_diff("path")\n*** Begin Diff\n...\n*** End Diff   # unified diff, minimal context',
+        '@next_file("path")                 # ask the app to attach this file next',
+        '',
+        'When proposing edits, respond with a dedicated section:',
+        '=== COMMANDS_START ===',
+        'request_files: ["optional/next/file1", "optional/next/file2"]',
+        'write_diffs: [',
+        '  { path: "file", diff: "*** Begin Diff\\n...\\n*** End Diff" }',
+        ']\n=== COMMANDS_END ===',
+        'Do not mix prose inside the command block.',
+        '=== TASK_RULES_END ===',
+        ''
+      ].join('\n');
+      enhancedInput = `${rulesHeader}${enhancedInput}`;
       
+      // Detect @next_file("path") commands to auto-attach requested files
+      const nextFileRegex = /@next_file\(["']([^"']+)["']\)/g;
+      const autoFiles: string[] = [];
+      let m: RegExpExecArray | null;
+      while ((m = nextFileRegex.exec(input)) !== null) {
+        autoFiles.push(m[1]);
+      }
+
+      const allFilesToAttach = Array.from(new Set([...(selectedFiles || []), ...autoFiles]));
+
       // Attach selected files to context
-      if (selectedFiles.length > 0) {
+      if (allFilesToAttach.length > 0) {
         const filesContent: string[] = [];
         const newAttachedFiles = { ...attachedFiles };
         let cacheUpdated = false;
         
-        for (const file of selectedFiles) {
+        for (const file of allFilesToAttach) {
           if (!newAttachedFiles[file]) {
             newAttachedFiles[file] = await getFileContent(file);
             cacheUpdated = true;
@@ -785,7 +822,7 @@ export default function InteractionPanel({
           setAttachedFiles(newAttachedFiles);
         }
         
-        enhancedInput += '\n\n### Attached Files:\n\n' + filesContent.join('\n\n');
+        enhancedInput += '\n\n=== CONTEXT_FILES_START ===\n' + filesContent.join('\n\n') + '\n=== CONTEXT_FILES_END ===\n';
       }
 
       // Auto-enhance prompts when in Code tab
@@ -806,6 +843,20 @@ Please include:
       setInput("");
     }
   };
+
+  // Keyboard handling for accepting/dismissing pending diffs
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (!pendingDiffs || pendingDiffs.length === 0) return;
+      if (ev.key === 'Enter' && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
+        onAcceptPendingDiffs?.();
+      } else if (ev.key === 'Escape') {
+        onDismissPendingDiffs?.();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [pendingDiffs, onAcceptPendingDiffs, onDismissPendingDiffs]);
 
   const handleSuggestionClick = (suggestion: string) => {
     if (!isProcessing) {
@@ -1141,6 +1192,17 @@ Please include:
 
               {/* Input Section - Always at bottom */}
               <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
+                {pendingDiffs && pendingDiffs.length > 0 && (
+                  <div className="mb-3 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-200">
+                    <div className="flex items-center justify-between">
+                      <span>{pendingDiffs.length} diff(s) proposed. Press Enter to apply to preview, Esc to dismiss.</span>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" onClick={onAcceptPendingDiffs} className="h-6 px-2">Apply</Button>
+                        <Button size="sm" variant="ghost" onClick={onDismissPendingDiffs} className="h-6 px-2">Dismiss</Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {/* Suggestions */}
                 <div className="flex flex-wrap gap-2">
                   {chatSuggestions.map((suggestion, index) => (

@@ -26,6 +26,7 @@ export default function ConversationInterface() {
   const [showCodePreview, setShowCodePreview] = useState(false);
   const [showCodeMode, setShowCodeMode] = useState(false);
   const [projectFiles, setProjectFiles] = useState<{ [key: string]: string }>({});
+  const [pendingDiffs, setPendingDiffs] = useState<{ path: string; diff: string }[]>([]);
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
     [],
   );
@@ -77,13 +78,35 @@ export default function ConversationInterface() {
     body: {
       provider: currentProvider,
       model: currentModel,
+      stream: false,
     },
-    onResponse: (response) => {
+    onResponse: async (response) => {
       if (response.status === 401) {
         toast.error(
           "You are not authorized to perform this action. Please log in."
         );
       }
+      // Intercept response JSON for command blocks when not streaming
+      try {
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) return;
+        const clone = response.clone();
+        const text = await clone.text();
+        if (!text || !text.trim().startsWith('{')) return;
+        const json = JSON.parse(text);
+        if (json?.commands) {
+          const cmd = json.commands as { request_files?: string[]; write_diffs?: { path: string; diff: string }[] };
+          if (cmd.request_files && cmd.request_files.length > 0) {
+            // Prepend @next_file commands into input so next submit auto-attaches
+            const nextLines = cmd.request_files.map(f => `@next_file("${f}")`).join('\n');
+            setInput(prev => `${nextLines}\n\n${prev || ''}`);
+            toast.info(`Model requested ${cmd.request_files.length} file(s). They will be attached on next send.`);
+          }
+          if (cmd.write_diffs && cmd.write_diffs.length > 0) {
+            setPendingDiffs(cmd.write_diffs);
+          }
+        }
+      } catch {}
     },
     onError: (error) => {
       toast.error(error.message);
@@ -322,6 +345,24 @@ export default function ConversationInterface() {
     handleSubmit(undefined, { data: { message, context } });
   };
 
+  const acceptPendingDiffs = () => {
+    if (pendingDiffs.length === 0) return;
+    const diffMessages = pendingDiffs.map((d, idx) => ({
+      id: `diff-${Date.now()}-${idx}`,
+      role: 'assistant' as const,
+      content: `\`\`\`diff ${d.path}\n${d.diff}\n\`\`\``,
+    }));
+    setMessages(prev => [...prev, ...diffMessages]);
+    setPendingDiffs([]);
+    toast.success('Applied diffs to preview. Press Code Preview to view updated state.');
+  };
+
+  const dismissPendingDiffs = () => {
+    if (pendingDiffs.length === 0) return;
+    setPendingDiffs([]);
+    toast.info('Dismissed pending diffs');
+  };
+
   // Intermediary function to handle submit from InteractionPanel with ad system
   const handleChatSubmit = (content: string) => {
     // Check if user needs to see an ad
@@ -431,6 +472,9 @@ export default function ConversationInterface() {
         availableProviders={availableProviders}
         onProviderChange={handleProviderChange}
         hasCodeBlocks={hasCodeBlocks}
+        pendingDiffs={pendingDiffs}
+        onAcceptPendingDiffs={acceptPendingDiffs}
+        onDismissPendingDiffs={dismissPendingDiffs}
       />
 
       {/* Chat History Modal */}

@@ -5,10 +5,10 @@ import { FEATURE_FLAGS } from '@/config/features';
 
 interface AuthContextType {
   isAuthenticated: boolean;
-  user: { email: string } | null;
-  login: (email: string) => Promise<void>;
+  user: { id?: number; email: string } | null;
+  login: (email: string, password?: string) => Promise<void>;
   logout: () => void;
-  register: (email: string) => Promise<void>;
+  register: (email: string, password?: string) => Promise<void>;
   getApiKeys: () => Record<string, string>;
   setApiKeys: (keys: Record<string, string>) => void;
 }
@@ -16,7 +16,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<{ email: string } | null>(null);
+  const [user, setUser] = useState<{ id?: number; email: string } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Skip auth in development mode
@@ -34,15 +34,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsLoading(false);
   }, [skipAuth]);
 
-  const login = async (email: string) => {
+  const login = async (email: string, password?: string) => {
     if (skipAuth) {
       setUser({ email });
       return;
     }
 
-    // In production, this would call the backend
-    // For now, mock authentication
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Login failed');
     localStorage.setItem('user', JSON.stringify({ email }));
+    localStorage.setItem('token', data.token);
     setUser({ email });
   };
 
@@ -51,13 +57,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
-  const register = async (email: string) => {
+  const register = async (email: string, password?: string) => {
     if (skipAuth) {
       setUser({ email });
       return;
     }
 
-    // In production, this would call the backend
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Registration failed');
     localStorage.setItem('user', JSON.stringify({ email }));
     setUser({ email });
   };

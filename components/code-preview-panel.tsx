@@ -450,6 +450,7 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     const blocks: CodeBlock[] = [];
     let nonCodeText = ''; // Collect all non-code text
     let shellCommands = ''; // Collect all .sh file contents
+    const diffs: { path: string; diff: string }[] = [];
 
     messages.forEach((message) => {
       if (message.role === "assistant") {
@@ -492,13 +493,18 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
             const parsed = match.match(/```(\S*)(?:\s+(.*?))?\n([\s\S]*?)```/);
             if (!parsed || parsed.length < 4) return;
 
-            const language = (parsed[1] || "text").toLowerCase().trim();
+            let language = (parsed[1] || "text").toLowerCase().trim();
             const filenameHint = parsed[2] ? parsed[2].trim() : '';
             let code = parsed[3];
 
             // Validate code content
             if (!code || typeof code !== 'string' || !code.trim()) return;
             code = code.trim();
+
+            // Map unified diff blocks to language=diff and filename from first header
+            if (language === 'diff' || code.startsWith('*** Begin Diff') || code.startsWith('diff --git')) {
+              language = 'diff';
+            }
 
             // Enhanced filename generation with validation
             let filename = '';
@@ -549,6 +555,12 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
               shellCommands += `\n${code}\n`;
               // Don't add .sh files to blocks, they'll go in README
             } else {
+              // If it's a diff, skip adding as a normal file block
+              if (language === 'diff') {
+                const targetPath = filenameHint || filename || '';
+                diffs.push({ path: targetPath, diff: code });
+                return;
+              }
               blocks.push({
                 language,
                 code,
@@ -585,6 +597,7 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
     // Store collected data for use in README generation
     (blocks as any).nonCodeText = nonCodeText.trim();
     (blocks as any).shellCommands = shellCommands.trim();
+    (blocks as any).diffs = diffs;
 
     return blocks;
   }, [messages]);
@@ -601,10 +614,54 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
   // Generate project structure for complex projects
   useEffect(() => {
     if (codeBlocks.length > 0) { // Changed from > 1 to > 0 to handle single file projects
-      const structure = analyzeProjectStructure(codeBlocks);
+      let structure = analyzeProjectStructure(codeBlocks);
+      // Apply any diffs captured in messages to the structure
+      try {
+        const diffs: { path: string; diff: string }[] = (codeBlocks as any).diffs || [];
+        if (diffs.length > 0) {
+          const filesCopy: { [key: string]: string } = { ...structure.files };
+          for (const d of diffs) {
+            const filePath = (d.path || '').trim();
+            if (!filePath) continue;
+            const original = filesCopy[filePath] || '';
+            const applied = applySimpleLineDiff(original, d.diff);
+            if (applied) {
+              filesCopy[filePath] = applied;
+            }
+          }
+          structure = { ...structure, files: filesCopy };
+        }
+      } catch {}
       setProjectStructure(structure);
     }
   }, [codeBlocks]);
+
+  const applySimpleLineDiff = (originalContent: string, diffBlock: string): string => {
+    try {
+      // Extract only lines with prefixes from unified-like simple diff
+      const lines = diffBlock
+        .split('\n')
+        .filter(l => /^(\+\s|\-\s|\s\s)/.test(l.trimStart()))
+        .map(l => l.replace(/^\s+/, ''));
+      if (lines.length === 0) return originalContent;
+      const resultLines: string[] = [];
+      for (const line of lines) {
+        if (line.startsWith('+ ')) {
+          resultLines.push(line.slice(2));
+        } else if (line.startsWith('- ')) {
+          // removed line: skip
+          continue;
+        } else if (line.startsWith('  ')) {
+          resultLines.push(line.slice(2));
+        }
+      }
+      const result = resultLines.join('\n');
+      return result || originalContent;
+    } catch (e) {
+      console.warn('Failed to apply diff, returning original content');
+      return originalContent;
+    }
+  };
 
   const analyzeProjectStructure = (blocks: CodeBlock[]): ProjectStructure => {
     const files: { [key: string]: string } = {};
@@ -834,13 +891,13 @@ ${nonCodeText}
     }
 
     const trimmedFilename = newFilename.trim()
-    const oldFilename = codeBlocks[index].filename
+    const oldFilename = codeBlocks[index]?.filename
 
     // Update project structure if it exists
-    if (projectStructure) {
+    if (projectStructure && oldFilename) {
       const newFiles = { ...projectStructure.files }
 
-      if (oldFilename && newFiles[oldFilename]) {
+      if (newFiles[oldFilename]) {
         // Move the content to the new filename
         newFiles[trimmedFilename] = newFiles[oldFilename]
         delete newFiles[oldFilename]
@@ -893,13 +950,29 @@ ${nonCodeText}
   // Function to detect popular dependencies from code content (only used when package.json is missing)
   const getPopularDependencies = (codeContent: string, framework: string): Record<string, string> => {
     const deps: Record<string, string> = {};
-
-    // Only add core framework dependencies if not already defined
-    if (framework === 'react' || framework === 'next') {
-      deps['react'] = 'latest';
-      deps['react-dom'] = 'latest';
+    switch (framework) {
+      case 'react':
+      case 'next':
+      case 'vite':
+      case 'vite-react':
+      case 'gatsby':
+      case 'remix':
+        deps['react'] = 'latest';
+        deps['react-dom'] = 'latest';
+        break;
+      case 'vue':
+      case 'nuxt':
+        deps['vue'] = 'latest';
+        break;
+      case 'svelte':
+        deps['svelte'] = 'latest';
+        break;
+      case 'solid':
+        deps['solid-js'] = 'latest';
+        break;
+      default:
+        break;
     }
-
     return deps;
   };
 
@@ -907,17 +980,21 @@ ${nonCodeText}
     // Enhanced framework support with better template mapping
     const getSandpackTemplate = (framework: string) => {
       switch (framework) {
-        case 'react': return 'react';
-        case 'next': return 'nextjs';
-        case 'vue': return 'vue';
-        case 'nuxt': return 'nuxt';
+        case 'react':
+        case 'vite-react':
+          return 'react';
+        case 'next':
+          return 'nextjs';
+        case 'vue':
+        case 'nuxt':
+          return 'vue';
         case 'angular': return 'angular';
         case 'svelte': return 'svelte';
         case 'solid': return 'solid';
         case 'astro': return 'astro';
         case 'remix': return 'remix';
         case 'gatsby': return 'gatsby';
-        case 'vite': return 'vite-react';
+        case 'vite': return 'react';
         default: return 'vanilla';
       }
     };
@@ -971,6 +1048,20 @@ import App from './App';
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);`
                 };
+                sandpackFiles['/index.html'] = {
+                  code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="/src/index.js"></script>
+  </body>
+</html>`
+                };
                 break;
               case 'vue':
               case 'nuxt':
@@ -997,6 +1088,25 @@ export default {
 }
 </style>`
                 };
+                sandpackFiles['/src/main.js'] = {
+                  code: `import { createApp } from 'vue';
+import App from './App.vue';
+createApp(App).mount('#app');`
+                };
+                sandpackFiles['/index.html'] = {
+                  code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>`
+                };
                 break;
               case 'svelte':
                 sandpackFiles['/src/App.svelte'] = {
@@ -1018,10 +1128,43 @@ export default {
   }
 </style>`
                 };
+                sandpackFiles['/src/main.js'] = {
+                  code: `import App from './App.svelte';
+const app = new App({ target: document.getElementById('app') });
+export default app;`
+                };
+                sandpackFiles['/index.html'] = {
+                  code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>`
+                };
                 break;
               default:
                 sandpackFiles['/src/index.js'] = {
                   code: `console.log('Hello from ${projectStructure.framework}!');`
+                };
+                sandpackFiles['/index.html'] = {
+                  code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="/src/index.js"></script>
+  </body>
+</html>`
                 };
             }
           }

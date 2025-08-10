@@ -2,9 +2,10 @@
 export const FEATURE_FLAGS = {
   // Cloud Storage Configuration
   ENABLE_CLOUD_STORAGE: true,
-  CLOUD_STORAGE_PROVIDER: 'nextcloud', // Updated to nextcloud
+  CLOUD_STORAGE_PROVIDER: 'gcp',
   CLOUD_STORAGE_BUCKET: 'binG-storage',
   CLOUD_STORAGE_MAX_SIZE: 5 * 1024 * 1024 * 1024, // 5GB in bytes
+  CLOUD_STORAGE_PER_USER_LIMIT_BYTES: 5 * 1024 * 1024 * 1024, // 5GB per user quota
 
   // Nextcloud integration
   NEXTCLOUD_URL: 'https://your-nextcloud-instance/remote.php/dav/files/username/',

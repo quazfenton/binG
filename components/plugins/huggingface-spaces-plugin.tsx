@@ -4,34 +4,74 @@ import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
-import { ImageIcon, Download, Sparkles, X } from 'lucide-react';
+import { ImageIcon, Download, Sparkles, X, Shuffle, ImagePlus } from 'lucide-react';
+import type { PluginProps } from './plugin-manager';
+import { toast } from 'sonner';
 
-const HuggingFaceSpacesPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
-  const [prompt, setPrompt] = useState('');
+const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, initialData }) => {
+  const [prompt, setPrompt] = useState(initialData?.prompt || '');
+  const [negativePrompt, setNegativePrompt] = useState('');
   const [style, setStyle] = useState('realistic');
-  const [dimensions, setDimensions] = useState('512x512');
+  const [dimensions, setDimensions] = useState('768x768');
+  const [steps, setSteps] = useState(28);
+  const [guidance, setGuidance] = useState(4.5);
+  const [seed, setSeed] = useState<number | ''>('');
+  const [model, setModel] = useState('stability-ai/sdxl');
+  const [initImageUrl, setInitImageUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<string[]>([]);
   
   const models = [
-    { id: 'stabilityai/stable-diffusion', name: 'Stable Diffusion' },
-    { id: 'runwayml/stable-diffusion-v1-5', name: 'Runway ML SD v1.5' },
-    { id: 'CompVis/stable-diffusion-v1-4', name: 'CompVis SD v1.4' },
-    { id: 'hakurei/waifu-diffusion', name: 'Waifu Diffusion' },
-    { id: 'prompthero/openjourney', name: 'Open Journey' }
+    { id: 'stability-ai/sdxl', name: 'Stable Diffusion XL' },
+    { id: 'flux-schnell', name: 'FLUX Schnell' },
+    { id: 'stable-diffusion-3.5', name: 'Stable Diffusion 3.5' },
   ];
   
-  const styles = ['realistic', 'artistic', 'cartoon', 'anime', 'painting', '3d-render'];
-  const dimensionOptions = ['512x512', '768x768', '1024x1024', '512x768', '768x512'];
+  const styles = ['realistic', 'cinematic', 'artistic', 'cartoon', 'anime', 'painting', '3d-render', 'isometric', 'low-poly'];
+  const dimensionOptions = ['512x512', '768x768', '1024x1024', '512x768', '768x512', '640x960', '960x640'];
   
-  const generateImage = () => {
-    setIsGenerating(true);
-    // Simulate API call
-    setTimeout(() => {
-      const newImage = `/placeholder.svg?text=${encodeURIComponent(prompt.substring(0, 20))}&width=${dimensions.split('x')[0]}&height=${dimensions.split('x')[1]}`;
-      setGeneratedImages([...generatedImages, newImage]);
+  const generateImage = async () => {
+    if (!prompt.trim()) {
+      toast.error('Prompt is required');
+      return;
+    }
+    try {
+      setIsGenerating(true);
+      const [w, h] = dimensions.split('x').map((v) => parseInt(v, 10));
+      const res = await fetch('/api/image/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: `${prompt}${style ? `, ${style}` : ''}`,
+          negativePrompt,
+          width: Number.isFinite(w) ? w : 768,
+          height: Number.isFinite(h) ? h : 768,
+          steps,
+          guidance,
+          seed: seed === '' ? undefined : Number(seed),
+          model,
+          initImageUrl: initImageUrl || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to generate image');
+      }
+      const data = await res.json();
+      const images: string[] = data?.data?.images || [];
+      setGeneratedImages((prev) => [...images, ...prev]);
+      if (images.length) {
+        onResult?.({
+          content: `Generated ${images.length} image(s) for: "${prompt}"\nModel: ${model}\nStyle: ${style}`,
+          images,
+        });
+      }
+      toast.success('Image(s) generated');
+    } catch (e: any) {
+      toast.error(e?.message || 'Generation failed');
+    } finally {
       setIsGenerating(false);
-    }, 2000);
+    }
   };
   
   return (
@@ -52,14 +92,14 @@ const HuggingFaceSpacesPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
         <div className="space-y-4">
           <div>
             <label className="text-sm font-medium mb-2 block">Model</label>
-            <Select>
+            <Select value={model} onValueChange={setModel}>
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select a model" />
               </SelectTrigger>
               <SelectContent>
-                {models.map(model => (
-                  <SelectItem key={model.id} value={model.id}>
-                    {model.name}
+                {models.map(m => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -73,6 +113,15 @@ const HuggingFaceSpacesPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
               onChange={e => setPrompt(e.target.value)}
               placeholder="Describe the image you want to generate"
               className="min-h-[120px]"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-2 block">Negative Prompt</label>
+            <Input
+              value={negativePrompt}
+              onChange={(e) => setNegativePrompt(e.target.value)}
+              placeholder="Unwanted elements, e.g. low quality, blurry"
             />
           </div>
           
@@ -109,6 +158,39 @@ const HuggingFaceSpacesPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
               </Select>
             </div>
           </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="text-sm font-medium mb-1 block">Steps</label>
+              <Input type="number" min={1} max={64} value={steps}
+                onChange={(e) => setSteps(parseInt(e.target.value || '0', 10))} />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Guidance</label>
+              <Input type="number" step="0.1" min={0} max={20} value={guidance}
+                onChange={(e) => setGuidance(parseFloat(e.target.value || '0'))} />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Seed</label>
+              <div className="flex gap-2">
+                <Input type="number" placeholder="random" value={seed}
+                  onChange={(e) => setSeed(e.target.value === '' ? '' : parseInt(e.target.value, 10))} />
+                <Button type="button" variant="secondary" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+                  <Shuffle className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-1 block">Init Image URL (optional)</label>
+            <div className="flex gap-2">
+              <Input value={initImageUrl} onChange={(e) => setInitImageUrl(e.target.value)} placeholder="https://..." />
+              <Button type="button" variant="secondary" onClick={() => setInitImageUrl('')}>
+                <ImagePlus className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
           
           <Button 
             onClick={generateImage} 
@@ -131,7 +213,14 @@ const HuggingFaceSpacesPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
                   className="w-full h-40 object-cover rounded border border-white/10"
                 />
                 <div className="absolute bottom-0 right-0 p-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Button variant="secondary" size="icon">
+                  <Button variant="secondary" size="icon" onClick={() => {
+                    const a = document.createElement('a');
+                    a.href = img;
+                    a.download = `image-${index + 1}.png`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                  }}>
                     <Download className="w-4 h-4" />
                   </Button>
                 </div>

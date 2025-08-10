@@ -20,6 +20,7 @@ const nextConfig = {
     ENABLE_CODE_EXECUTION: process.env.ENABLE_CODE_EXECUTION,
     PORTKEY_API_KEY: process.env.PORTKEY_API_KEY,
     PORTKEY_VIRTUAL_KEY: process.env.PORTKEY_VIRTUAL_KEY,
+    REPLICATE_API_TOKEN: process.env.REPLICATE_API_TOKEN,
   },
   serverExternalPackages: [
       "livekit-server-sdk",

@@ -1,5 +1,22 @@
 import { FEATURE_FLAGS, CloudStorageService } from '../../config/features';
 
+export interface CloudUsageRecord {
+  userId: string;
+  usedBytes: number;
+}
+
+const inMemoryUsage: Record<string, number> = {};
+
+const getUserPrefix = (userId: string) => `users/${userId}/`;
+
+const assertQuota = (userId: string, incomingBytes: number) => {
+  const used = inMemoryUsage[userId] || 0;
+  const limit = FEATURE_FLAGS.CLOUD_STORAGE_PER_USER_LIMIT_BYTES;
+  if (used + incomingBytes > limit) {
+    throw new Error('Storage quota exceeded (5GB per account)');
+  }
+};
+
 class GCPStorageService implements CloudStorageService {
   private bucketName: string;
   
@@ -7,7 +24,7 @@ class GCPStorageService implements CloudStorageService {
     this.bucketName = FEATURE_FLAGS.CLOUD_STORAGE_BUCKET;
   }
 
-  async upload(file: File, path: string): Promise<string> {
+  async upload(file: File, path: string, userId?: string): Promise<string> {
     if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
       throw new Error('Cloud storage is disabled');
     }
@@ -18,9 +35,14 @@ class GCPStorageService implements CloudStorageService {
     }
 
     try {
+      if (userId) {
+        assertQuota(userId, file.size);
+      }
+
+      const namespacedPath = userId ? `${getUserPrefix(userId)}${path}` : path;
       // In production, this would use Google Cloud Storage SDK
       // For now, return a mock URL
-      const mockUrl = `https://storage.googleapis.com/${this.bucketName}/${path}`;
+      const mockUrl = `https://storage.googleapis.com/${this.bucketName}/${namespacedPath}`;
       
       if (FEATURE_FLAGS.IS_DEVELOPMENT) {
         console.log(`[DEV] Would upload ${file.name} to ${mockUrl}`);
@@ -28,6 +50,10 @@ class GCPStorageService implements CloudStorageService {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
       
+      if (userId) {
+        inMemoryUsage[userId] = (inMemoryUsage[userId] || 0) + file.size;
+      }
+
       return mockUrl;
     } catch (error) {
       console.error('Upload failed:', error);
@@ -35,14 +61,15 @@ class GCPStorageService implements CloudStorageService {
     }
   }
 
-  async download(path: string): Promise<Blob> {
+  async download(path: string, userId?: string): Promise<Blob> {
     if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
       throw new Error('Cloud storage is disabled');
     }
 
     try {
+      const namespacedPath = userId ? `${getUserPrefix(userId)}${path}` : path;
       if (FEATURE_FLAGS.IS_DEVELOPMENT) {
-        console.log(`[DEV] Would download from ${path}`);
+        console.log(`[DEV] Would download from ${namespacedPath}`);
         // Return mock blob
         return new Blob(['Mock file content'], { type: 'text/plain' });
       }
@@ -55,14 +82,15 @@ class GCPStorageService implements CloudStorageService {
     }
   }
 
-  async delete(path: string): Promise<void> {
+  async delete(path: string, userId?: string): Promise<void> {
     if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
       throw new Error('Cloud storage is disabled');
     }
 
     try {
+      const namespacedPath = userId ? `${getUserPrefix(userId)}${path}` : path;
       if (FEATURE_FLAGS.IS_DEVELOPMENT) {
-        console.log(`[DEV] Would delete ${path}`);
+        console.log(`[DEV] Would delete ${namespacedPath}`);
         return;
       }
       
@@ -73,15 +101,21 @@ class GCPStorageService implements CloudStorageService {
     }
   }
 
-  async list(prefix?: string): Promise<string[]> {
+  async list(prefix?: string, userId?: string): Promise<string[]> {
     if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
       throw new Error('Cloud storage is disabled');
     }
 
     try {
+      const namespacedPrefix = userId ? `${getUserPrefix(userId)}${prefix || ''}` : prefix || '';
       if (FEATURE_FLAGS.IS_DEVELOPMENT) {
-        console.log(`[DEV] Would list files with prefix: ${prefix}`);
-        return ['file1.txt', 'file2.js', 'folder/file3.css'];
+        console.log(`[DEV] Would list files with prefix: ${namespacedPrefix}`);
+        // Return a mocked namespaced listing
+        return [
+          `${namespacedPrefix}file1.txt`,
+          `${namespacedPrefix}file2.js`,
+          `${namespacedPrefix}folder/file3.css`
+        ];
       }
       
       // In production, implement actual GCS list
@@ -92,15 +126,16 @@ class GCPStorageService implements CloudStorageService {
     }
   }
 
-  async getSignedUrl(path: string, expiresIn: number = 3600): Promise<string> {
+  async getSignedUrl(path: string, expiresIn: number = 3600, userId?: string): Promise<string> {
     if (!FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) {
       throw new Error('Cloud storage is disabled');
     }
 
     try {
+      const namespacedPath = userId ? `${getUserPrefix(userId)}${path}` : path;
       if (FEATURE_FLAGS.IS_DEVELOPMENT) {
-        console.log(`[DEV] Would generate signed URL for ${path}, expires in ${expiresIn}s`);
-        return `https://storage.googleapis.com/${this.bucketName}/${path}?signed=true&expires=${Date.now() + expiresIn * 1000}`;
+        console.log(`[DEV] Would generate signed URL for ${namespacedPath}, expires in ${expiresIn}s`);
+        return `https://storage.googleapis.com/${this.bucketName}/${namespacedPath}?signed=true&expires=${Date.now() + expiresIn * 1000}`;
       }
       
       // In production, implement actual signed URL generation

@@ -105,9 +105,40 @@ export async function POST(request: NextRequest) {
     // Handle non-streaming response
     const response = await llmService.generateResponse(llmRequest)
 
+    // Post-process assistant content to extract COMMANDS block for the client
+    let commands: { request_files?: string[]; write_diffs?: { path: string; diff: string }[] } | null = null;
+    try {
+      const content = response.content || '';
+      const match = content.match(/=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/);
+      if (match) {
+        const block = match[1];
+        // Naive parse: look for JSON-like arrays
+        const reqMatch = block.match(/request_files:\s*\[(.*?)\]/s);
+        const diffsMatch = block.match(/write_diffs:\s*\[([\s\S]*?)\]/);
+        const request_files = reqMatch ? JSON.parse(`[${reqMatch[1]}]`.replace(/([a-zA-Z0-9_\-\/\.]+)(?=\s*[\],])/g, '"$1"')) : [];
+        let write_diffs: { path: string; diff: string }[] = [];
+        if (diffsMatch) {
+          const items = diffsMatch[1]
+            .split(/},/)
+            .map(s => (s.endsWith('}') ? s : s + '}'))
+            .map(s => s.trim())
+            .filter(Boolean);
+          write_diffs = items.map(raw => {
+            const pathMatch = raw.match(/path:\s*"([^"]+)"/);
+            const diffMatch = raw.match(/diff:\s*"([\s\S]*)"/);
+            return { path: pathMatch?.[1] || '', diff: (diffMatch?.[1] || '').replace(/\\n/g, '\n') };
+          });
+        }
+        commands = { request_files, write_diffs };
+      }
+    } catch {
+      // Ignore parse errors
+    }
+
     return NextResponse.json({
       success: true,
       data: response,
+      commands,
       timestamp: new Date().toISOString()
     })
 

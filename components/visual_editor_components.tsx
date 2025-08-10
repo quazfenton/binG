@@ -1706,6 +1706,12 @@ export default function VisualEditor({ initialProject, onSaveToOriginal, onClose
     autoSave: true,
     collaborationMode: false
   });
+
+  // Viewport controls for responsive preview
+  const setViewport = (vp: EditorState['viewport']) =>
+    setEditorState(prev => ({ ...prev, viewport: vp }));
+  const zoomIn = () => setEditorState(prev => ({ ...prev, zoom: Math.min(2, prev.zoom + 0.1) }));
+  const zoomOut = () => setEditorState(prev => ({ ...prev, zoom: Math.max(0.3, prev.zoom - 0.1) }));
   const [undoHistory, setUndoHistory] = useState<VisualEditorProject[]>([]);
   const [redoHistory, setRedoHistory] = useState<VisualEditorProject[]>([]);
 
