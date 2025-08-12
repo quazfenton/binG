@@ -84,6 +84,11 @@ export async function POST(request: NextRequest) {
             if (chunk.content) {
               // Format according to Vercel AI SDK spec: '0:"[content]"'
               controller.enqueue(encoder.encode(`0:"${JSON.stringify(chunk.content).slice(1, -1)}"\n`));
+              // Side-channel: detect commands blocks in streamed content and emit as special lines starting with 2:
+              const match = chunk.content.match(/=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/);
+              if (match) {
+                controller.enqueue(encoder.encode(`2:"${Buffer.from(match[1]).toString('base64')}"\n`));
+              }
             }
           }
           controller.close();

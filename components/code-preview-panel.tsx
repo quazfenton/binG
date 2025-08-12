@@ -25,6 +25,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import { Sandpack } from "@codesandbox/sandpack-react";
 import JSZip from 'jszip';
 import type { Message } from '../types/index';
+import { parsePatch, applyPatch } from 'diff';
 
 interface CodePreviewPanelProps {
   messages: Message[]
@@ -65,6 +66,10 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const dragStartX = useRef(0)
   const dragStartWidth = useRef(0)
+  const [diffContent, setDiffContent] = useState<string>('');
+  const [diffErrors, setDiffErrors] = useState<string[]>([]);
+  const [selectedFile, setSelectedFile] = useState<string>('');
+
 
   const getFileExtension = (language: string): string => {
     const extensions: Record<string, string> = {
@@ -1425,6 +1430,108 @@ export default app;`
       );
     }
   }
+
+  useEffect(() => {
+    if (isOpen && messages.length > 0) {
+      // Extract project structure from messages
+      const projectMessages = messages
+        .filter(msg => msg.role === 'assistant')
+        .filter(msg => {
+          const content = typeof msg.content === 'string' ? msg.content : '';
+          return content.includes('```json') && content.includes('"files"');
+        });
+
+      if (projectMessages.length > 0) {
+        const lastProjectMessage = projectMessages[projectMessages.length - 1];
+        const content = typeof lastProjectMessage.content === 'string' ? lastProjectMessage.content : '';
+        const jsonMatch = content.match(/```json\s*(\{[\s\S]*?\})\s*```/);
+        
+        if (jsonMatch) {
+          try {
+            const projectData = JSON.parse(jsonMatch[1]);
+            setProjectStructure(projectData);
+          } catch (error) {
+            console.error('Error parsing project structure:', error);
+          }
+        }
+      }
+
+      // Apply diffs from messages
+      const diffBlocks = messages
+        .filter(msg => msg.role === 'assistant')
+        .flatMap(msg => {
+          const content = typeof msg.content === 'string' ? msg.content : '';
+          const diffMatches = content.match(/```diff\s+([^\n]+)\s*\n([\s\S]*?)```/g);
+          return diffMatches?.map(match => {
+            const [, path, diff] = match.match(/```diff\s+([^\n]+)\s*\n([\s\S]*?)```/) || [];
+            return { path, diff };
+          }) || [];
+        })
+        .filter(Boolean);
+
+      if (diffBlocks.length > 0 && projectStructure) {
+        const newProjectStructure = { ...projectStructure };
+        
+        for (const { path, diff } of diffBlocks) {
+          try {
+            // Parse unified diff and apply patch
+            const unifiedDiff = `--- ${path}\n+++ ${path}\n${diff}`;
+            const parsedDiff = parsePatch(unifiedDiff);
+            
+            if (parsedDiff.length > 0) {
+              const currentContent = newProjectStructure.files[path] || '';
+              const patchedContent = applyPatch(currentContent, parsedDiff[0]);
+              
+              if (patchedContent !== false) {
+                newProjectStructure.files[path] = patchedContent;
+              } else {
+                throw new Error(`Failed to apply patch to ${path}`);
+              }
+            }
+          } catch (error) {
+            console.error(`Error applying diff to ${path}:`, error);
+            setDiffErrors(prev => [...prev, `Failed to apply diff to ${path}: ${(error as Error).message}`]);
+          }
+        }
+        
+        setProjectStructure(newProjectStructure);
+      }
+    }
+  }, [messages, projectStructure, isOpen]);
+
+  // Clear diff errors when closing
+  useEffect(() => {
+    if (!isOpen) {
+      setDiffErrors([]);
+    }
+  }, [isOpen]);
+
+  const handleApplyDiff = () => {
+    if (!diffContent.trim() || !selectedFile || !projectStructure) return;
+
+    try {
+      const unifiedDiff = `--- ${selectedFile}\n+++ ${selectedFile}\n${diffContent}`;
+      const parsedDiff = parsePatch(unifiedDiff);
+      
+      if (parsedDiff.length > 0) {
+        const currentContent = projectStructure.files[selectedFile] || '';
+        const patchedContent = applyPatch(currentContent, parsedDiff[0]);
+        
+        if (patchedContent !== false) {
+          const newProjectStructure = { ...projectStructure };
+          newProjectStructure.files[selectedFile] = patchedContent;
+          setProjectStructure(newProjectStructure);
+          setDiffContent('');
+          setDiffErrors([]);
+        } else {
+          throw new Error('Failed to apply patch');
+        }
+      }
+    } catch (error) {
+      console.error('Error applying diff:', error);
+      setDiffErrors(prev => [...prev, `Failed to apply diff: ${(error as Error).message}`]);
+    }
+  };
 
   return (
     <AnimatePresence>

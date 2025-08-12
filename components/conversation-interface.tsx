@@ -78,7 +78,7 @@ export default function ConversationInterface() {
     body: {
       provider: currentProvider,
       model: currentModel,
-      stream: false,
+      stream: true,
     },
     onResponse: async (response) => {
       if (response.status === 401) {
@@ -86,27 +86,40 @@ export default function ConversationInterface() {
           "You are not authorized to perform this action. Please log in."
         );
       }
-      // Intercept response JSON for command blocks when not streaming
+      
+      // Intercept response for command blocks in streaming mode
       try {
-        const contentType = response.headers.get('content-type') || '';
-        if (!contentType.includes('application/json')) return;
         const clone = response.clone();
         const text = await clone.text();
-        if (!text || !text.trim().startsWith('{')) return;
-        const json = JSON.parse(text);
-        if (json?.commands) {
-          const cmd = json.commands as { request_files?: string[]; write_diffs?: { path: string; diff: string }[] };
-          if (cmd.request_files && cmd.request_files.length > 0) {
-            // Prepend @next_file commands into input so next submit auto-attaches
-            const nextLines = cmd.request_files.map(f => `@next_file("${f}")`).join('\n');
-            setInput(prev => `${nextLines}\n\n${prev || ''}`);
-            toast.info(`Model requested ${cmd.request_files.length} file(s). They will be attached on next send.`);
-          }
-          if (cmd.write_diffs && cmd.write_diffs.length > 0) {
-            setPendingDiffs(cmd.write_diffs);
+        
+        // Look for command blocks in the streamed response (lines starting with 2:)
+        const commandMatches = text.match(/2:"([^"]+)"/g);
+        if (commandMatches) {
+          for (const match of commandMatches) {
+            try {
+              const base64Data = match.match(/2:"([^"]+)"/)?.[1];
+              if (base64Data) {
+                const decodedData = Buffer.from(base64Data, 'base64').toString();
+                const commands = JSON.parse(decodedData);
+                
+                if (commands.request_files && commands.request_files.length > 0) {
+                  // Prepend @next_file commands into input so next submit auto-attaches
+                  const nextLines = commands.request_files.map((f: string) => `@next_file("${f}")`).join('\n');
+                  setInput(prev => `${nextLines}\n\n${prev || ''}`);
+                  toast.info(`Model requested ${commands.request_files.length} file(s). They will be attached on next send.`);
+                }
+                if (commands.write_diffs && commands.write_diffs.length > 0) {
+                  setPendingDiffs(commands.write_diffs);
+                }
+              }
+            } catch (parseError) {
+              console.warn("Error parsing command block:", parseError);
+            }
           }
         }
-      } catch {}
+      } catch (e) {
+        console.warn("Error parsing response for commands:", e);
+      }
     },
     onError: (error) => {
       toast.error(error.message);

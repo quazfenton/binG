@@ -19,26 +19,78 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
 
   useEffect(() => {
     if (!isAuthenticated || !FEATURE_FLAGS.ENABLE_CLOUD_STORAGE) return;
-    const email = user?.email || 'anonymous';
-    (async () => {
-      try {
-        const listing = await cloudStorage?.list('', email);
-        setFiles(listing || []);
-        // In dev, we do not have persisted usage; show calculated from mocked listing lengths
-        setQuotaUsedBytes(0);
-      } catch (e) {
-        console.error(e);
-      }
-    })();
-  }, [isAuthenticated]);
+    fetchFiles();
+    fetchUsage();
+  }, [isAuthenticated, user?.email]);
+
+  const fetchFiles = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) throw new Error('No authentication token');
+      
+      const response = await fetch('/api/storage/list?prefix=users/' + encodeURIComponent(user?.email || ''), {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) throw new Error('Failed to fetch files');
+      
+      const data = await response.json();
+      setFiles(data.data.files || []);
+    } catch (error) {
+      console.error('Failed to fetch files:', error);
+      setFiles([]);
+    }
+  };
+
+  const fetchUsage = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) throw new Error('No authentication token');
+      
+      const response = await fetch('/api/storage/usage', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) throw new Error('Failed to fetch usage');
+      
+      const data = await response.json();
+      setQuotaUsedBytes(data.data.used || 0);
+    } catch (error) {
+      console.error('Failed to fetch usage:', error);
+      setQuotaUsedBytes(0);
+    }
+  };
 
   // removed helper in favor of context value
 
-  const handleFileSelect = (file: string) => {
+  const handleFileSelect = async (file: string) => {
     setSelectedFile(file);
-    // Mock file content
-    setFileContent(`Content of ${file}\n\nThis is a sample file content.`);
-    setDiffContent('');
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) throw new Error('No authentication token');
+      
+      const response = await fetch(`/api/storage/download?path=users/${encodeURIComponent(user?.email || '')}/${file}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (!response.ok) throw new Error('Failed to download file');
+      
+      const content = await response.text();
+      setFileContent(content);
+      setDiffContent('');
+    } catch (error) {
+      console.error('Failed to download file:', error);
+      toast.error('Failed to download file', { description: (error as Error).message });
+      // Fallback to mock content
+      setFileContent(`Content of ${file}\n\nThis is a sample file content.`);
+      setDiffContent('');
+    }
   };
 
   const handleGenerateDiff = () => {
@@ -88,13 +140,31 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         description: 'File updated successfully',
       });
       
-      // Save to cloud (dev stub)
-      const email = user?.email || 'anonymous';
+      // Save to cloud via API
+      const token = localStorage.getItem('token');
+      if (!token) throw new Error('No authentication token');
+      
+      const formData = new FormData();
       const blob = new Blob([newContent], { type: 'text/plain' });
-      // @ts-ignore File constructor may not be available in all envs
-      const f = new File([blob], selectedFile, { type: 'text/plain' });
-      const url = await cloudStorage?.upload(f, selectedFile, email);
-      console.log('Saved file to:', url);
+      const file = new File([blob], selectedFile, { type: 'text/plain' });
+      formData.append('file', file);
+      formData.append('path', `users/${user?.email}/${selectedFile}`);
+      
+      const response = await fetch('/api/storage/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+      
+      if (!response.ok) throw new Error('Failed to upload file');
+      
+      const data = await response.json();
+      console.log('Saved file to:', data.data.url);
+      
+      // Refresh usage after upload
+      fetchUsage();
     } catch (error) {
       console.error('Error applying diff:', error);
       toast.error('Apply Error', {
@@ -137,7 +207,7 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
           <div className="mb-4">
             <div className="flex items-center justify-between mb-2 text-xs text-white/70">
               <span>Per-account quota: 5GB</span>
-              <span>Used: {(quotaUsedBytes / (1024*1024)).toFixed(2)} MB</span>
+              <span>Used: {(quotaUsedBytes / (1024*1024)).toFixed(2)} MB / {Math.round(FEATURE_FLAGS.CLOUD_STORAGE_PER_USER_LIMIT_BYTES / (1024*1024*1024))} GB</span>
             </div>
             <h3 className="text-sm font-medium mb-2">Select a File</h3>
             <div className="grid grid-cols-2 gap-2">
