@@ -87,8 +87,7 @@
     "replicate": "^0.30.2",
     "smithery": "^0.5.2",
     "sonner": "^1.7.1",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.7",
+    "better-sqlite3": "^11.1.2",
     "tailwind-merge": "^2.5.5",
     "tailwindcss-animate": "^1.0.7",
     "together-ai": "^0.5.0",
@@ -98,7 +97,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/jsonwebtoken": "^9.0.10",
+    "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",

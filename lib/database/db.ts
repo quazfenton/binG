@@ -1,16 +1,12 @@
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 
 const DATABASE_PATH = './database.sqlite';
 
-export async function initializeDatabase() {
-  const db = await open({
-    filename: DATABASE_PATH,
-    driver: sqlite3.Database,
-  });
+export function initializeDatabase() {
+  const db = new Database(DATABASE_PATH, { verbose: console.log });
 
-  await db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT UNIQUE NOT NULL,
