@@ -27,6 +27,7 @@ export default function ConversationInterface() {
   const [showCodeMode, setShowCodeMode] = useState(false);
   const [projectFiles, setProjectFiles] = useState<{ [key: string]: string }>({});
   const [pendingDiffs, setPendingDiffs] = useState<{ path: string; diff: string }[]>([]);
+  const [commandsByFile, setCommandsByFile] = useState<Record<string, string[]>>({});
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
     [],
   );
@@ -86,40 +87,7 @@ export default function ConversationInterface() {
           "You are not authorized to perform this action. Please log in."
         );
       }
-      
-      // Intercept response for command blocks in streaming mode
-      try {
-        const clone = response.clone();
-        const text = await clone.text();
-        
-        // Look for command blocks in the streamed response (lines starting with 2:)
-        const commandMatches = text.match(/2:"([^"]+)"/g);
-        if (commandMatches) {
-          for (const match of commandMatches) {
-            try {
-              const base64Data = match.match(/2:"([^"]+)"/)?.[1];
-              if (base64Data) {
-                const decodedData = Buffer.from(base64Data, 'base64').toString();
-                const commands = JSON.parse(decodedData);
-                
-                if (commands.request_files && commands.request_files.length > 0) {
-                  // Prepend @next_file commands into input so next submit auto-attaches
-                  const nextLines = commands.request_files.map((f: string) => `@next_file("${f}")`).join('\n');
-                  setInput(prev => `${nextLines}\n\n${prev || ''}`);
-                  toast.info(`Model requested ${commands.request_files.length} file(s). They will be attached on next send.`);
-                }
-                if (commands.write_diffs && commands.write_diffs.length > 0) {
-                  setPendingDiffs(commands.write_diffs);
-                }
-              }
-            } catch (parseError) {
-              console.warn("Error parsing command block:", parseError);
-            }
-          }
-        }
-      } catch (e) {
-        console.warn("Error parsing response for commands:", e);
-      }
+      // We rely on useChat for token streaming; commands are extracted from message content via effects below.
     },
     onError: (error) => {
       toast.error(error.message);
@@ -163,22 +131,112 @@ export default function ConversationInterface() {
     }
   }, [messages, isLoading, saveCurrentChat, currentConversationId, isVoiceEnabled]);
 
-  // Fetch available providers on mount
+  // Extract and persist streamed COMMANDS blocks into a per-file map
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+    if (!lastAssistant || typeof lastAssistant.content !== 'string') return;
+    const content = lastAssistant.content;
+    const blocks = [...content.matchAll(/=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/g)];
+    if (blocks.length === 0) return;
+
+    const newEntries: { path: string; diff: string }[] = [];
+    for (const match of blocks) {
+      const block = match[1];
+      try {
+        const diffsMatch = block.match(/write_diffs:\s*\[([\s\S]*?)\]/);
+        if (diffsMatch) {
+          const items = diffsMatch[1]
+            .split(/},/)
+            .map(s => (s.endsWith('}') ? s : s + '}'))
+            .map(s => s.trim())
+            .filter(Boolean);
+          const write_diffs = items.map(raw => {
+            const pathMatch = raw.match(/path:\s*"([^"]+)"/);
+            const diffMatch = raw.match(/diff:\s*"([\s\S]*)"/);
+            return { path: pathMatch?.[1] || '', diff: (diffMatch?.[1] || '').replace(/\\n/g, '\n') };
+          });
+          newEntries.push(...write_diffs);
+        }
+      } catch {
+        // ignore parse errors per block
+      }
+    }
+    if (newEntries.length === 0) return;
+
+    setCommandsByFile(prev => {
+      const next: Record<string, string[]> = { ...prev };
+      for (const { path, diff } of newEntries) {
+        if (!path) continue;
+        const list = next[path] ? [...next[path]] : [];
+        // avoid duplicate consecutive identical patches
+        if (list.length === 0 || list[list.length - 1] !== diff) {
+          list.push(diff);
+          next[path] = list;
+        }
+      }
+      return next;
+    });
+  }, [messages]);
+
+  // Persist commands map by conversation id
+  useEffect(() => {
+    if (!currentConversationId) return;
+    try {
+      localStorage.setItem(`commands_diffs_${currentConversationId}`, JSON.stringify(commandsByFile));
+    } catch {}
+  }, [commandsByFile, currentConversationId]);
+
+  // Load commands map when switching conversations
+  useEffect(() => {
+    if (!currentConversationId) return;
+    try {
+      const raw = localStorage.getItem(`commands_diffs_${currentConversationId}`);
+      if (raw) setCommandsByFile(JSON.parse(raw));
+      else setCommandsByFile({});
+    } catch {
+      setCommandsByFile({});
+    }
+  }, [currentConversationId]);
+
+  // Fetch available providers on mount and align defaults with server config
   useEffect(() => {
     fetch("/api/chat")
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
-          setAvailableProviders(data.data.providers);
-          // Set default provider and model from the first available provider
-          if (data.data.providers.length > 0) {
-            const defaultProvider = data.data.providers[0];
-            if (!currentProvider) {
-              setCurrentProvider(defaultProvider.id);
-            }
-            if (!currentModel) {
-              setCurrentModel(defaultProvider.models[0]);
-            }
+          const providers: LLMProvider[] = data.data.providers || [];
+          setAvailableProviders(providers);
+
+          // Attempt to restore persisted selection first
+          const persistedProvider = (() => {
+            try { return localStorage.getItem('chat_provider') || ''; } catch { return ''; }
+          })();
+          const persistedModel = (() => {
+            try { return localStorage.getItem('chat_model') || ''; } catch { return ''; }
+          })();
+
+          const serverDefaultProvider: string | undefined = data.data.defaultProvider;
+          const serverDefaultModel: string | undefined = data.data.defaultModel;
+
+          const pickValid = (provId?: string, modelId?: string) => {
+            if (!provId) return undefined;
+            const prov = providers.find(p => p.id === provId);
+            if (!prov) return undefined;
+            const model = modelId && prov.models.includes(modelId) ? modelId : (prov.models[0] || undefined);
+            if (!model) return undefined;
+            return { provider: prov.id, model } as { provider: string; model: string };
+          };
+
+          // Priority: persisted -> server defaults -> first available
+          const fromPersisted = pickValid(persistedProvider, persistedModel);
+          const fromServer = pickValid(serverDefaultProvider, serverDefaultModel);
+          const fromFirst = providers.length > 0 ? pickValid(providers[0].id, providers[0].models[0]) : undefined;
+
+          const selection = fromPersisted || fromServer || fromFirst;
+          if (selection) {
+            if (!currentProvider) setCurrentProvider(selection.provider);
+            if (!currentModel) setCurrentModel(selection.model);
           }
         }
       })
@@ -188,7 +246,7 @@ export default function ConversationInterface() {
           "Failed to load AI providers. Check your API configuration.",
         );
       });
-  }, []); // Removed settings.provider, updateSettings from dependency array
+  }, []); // initial load only
 
   // Effect to fetch chat history when the history modal is shown
   useEffect(() => {
@@ -261,6 +319,11 @@ export default function ConversationInterface() {
   const handleProviderChange = (provider: string, model: string) => {
     setCurrentProvider(provider);
     setCurrentModel(model);
+    // Persist selection
+    try {
+      localStorage.setItem('chat_provider', provider);
+      localStorage.setItem('chat_model', model);
+    } catch {}
     toast.success(`Switched to ${provider} - ${model}`);
   };
 
@@ -370,6 +433,66 @@ export default function ConversationInterface() {
     toast.success('Applied diffs to preview. Press Code Preview to view updated state.');
   };
 
+  // Commands map actions
+  const applyAllCommandDiffs = () => {
+    const entries: { path: string; diff: string }[] = [];
+    Object.entries(commandsByFile).forEach(([path, diffs]) => {
+      diffs.forEach(diff => entries.push({ path, diff }));
+    });
+    if (entries.length === 0) {
+      toast.info('No pending command diffs to apply.');
+      return;
+    }
+    const diffMessages = entries.map((d, idx) => ({
+      id: `cmd-diff-${Date.now()}-${idx}`,
+      role: 'assistant' as const,
+      content: `\`\`\`diff ${d.path}\n${d.diff}\n\`\`\``,
+    }));
+    setMessages(prev => [...prev, ...diffMessages]);
+    setCommandsByFile({});
+    toast.success(`Applied ${entries.length} diff(s) to preview.`);
+  };
+
+  const applyDiffsForFile = (path: string) => {
+    const diffs = commandsByFile[path] || [];
+    if (diffs.length === 0) return;
+    const diffMessages = diffs.map((diff, idx) => ({
+      id: `cmd-file-diff-${Date.now()}-${idx}`,
+      role: 'assistant' as const,
+      content: `\`\`\`diff ${path}\n${diff}\n\`\`\``,
+    }));
+    setMessages(prev => [...prev, ...diffMessages]);
+    setCommandsByFile(prev => {
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
+    toast.success(`Applied ${diffs.length} diff(s) for ${path}.`);
+  };
+
+  const clearAllCommandDiffs = () => {
+    setCommandsByFile({});
+    toast.info('Cleared all pending command diffs.');
+  };
+
+  const clearCommandDiffsForFile = (path: string) => {
+    setCommandsByFile(prev => {
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
+  };
+
+  const squashCommandDiffsForFile = (path: string) => {
+    setCommandsByFile(prev => {
+      const list = prev[path] || [];
+      if (list.length <= 1) return prev;
+      const squashed = list.join('\n');
+      return { ...prev, [path]: [squashed] };
+    });
+    toast.success(`Squashed diffs for ${path}.`);
+  };
+
   const dismissPendingDiffs = () => {
     if (pendingDiffs.length === 0) return;
     setPendingDiffs([]);
@@ -441,6 +564,23 @@ export default function ConversationInterface() {
 
         {/* Chat Panel - full width on mobile */}
         <div className="flex-1 md:flex-initial md:border-l md:border-white/10 relative z-10 flex flex-col min-h-0">
+          {/* Header showing current provider/model */}
+          <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-black/30">
+            <div className="text-xs text-white/70 truncate">
+              <span className="mr-2">Provider:</span>
+              <span className="font-medium text-white">{currentProvider || '—'}</span>
+              <span className="mx-2 text-white/40">|</span>
+              <span className="mr-2">Model:</span>
+              <span className="font-medium text-white truncate inline-block max-w-[60%] align-bottom">{currentModel || '—'}</span>
+            </div>
+            {/* Quick open history */}
+            <button
+              onClick={() => setShowHistory(true)}
+              className="text-xs px-2 py-1 border border-white/20 rounded text-white/70 hover:bg-white/10"
+            >
+              History
+            </button>
+          </div>
           <ChatPanel
             messages={messages} // Pass messages from useChat
             input={input} // Pass input from useChat
@@ -506,6 +646,12 @@ export default function ConversationInterface() {
         messages={messages}
         isOpen={showCodePreview}
         onClose={() => setShowCodePreview(false)}
+        commandsByFile={commandsByFile}
+        onApplyAllCommandDiffs={applyAllCommandDiffs}
+        onApplyFileCommandDiffs={applyDiffsForFile}
+        onClearAllCommandDiffs={clearAllCommandDiffs}
+        onClearFileCommandDiffs={clearCommandDiffsForFile}
+        onSquashFileCommandDiffs={squashCommandDiffsForFile}
       />
 
       {/* Code Mode Panel */}

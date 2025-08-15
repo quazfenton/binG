@@ -9,13 +9,18 @@ FROM base AS deps
 # Install toolchain for compiling sqlite3
 RUN apk add --no-cache python3 make g++ sqlite-dev
 COPY package.json pnpm-lock.yaml ./
-# Force sqlite3 to be built from source in Alpine
+# Force sqlite3 to be built from source
 ENV npm_config_build_from_source=true
+# Explicitly set Node.js architecture to avoid mismatches
+ENV npm_config_arch=x64
+ENV npm_config_target=18.20.8
 RUN pnpm install --frozen-lockfile
 
 # Builder stage
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/package.json ./package.json
+COPY --from=deps /app/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY . .
 
 

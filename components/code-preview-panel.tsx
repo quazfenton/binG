@@ -31,6 +31,13 @@ interface CodePreviewPanelProps {
   messages: Message[]
   isOpen: boolean
   onClose: () => void
+  // commands management
+  commandsByFile?: Record<string, string[]>
+  onApplyAllCommandDiffs?: () => void
+  onApplyFileCommandDiffs?: (path: string) => void
+  onClearAllCommandDiffs?: () => void
+  onClearFileCommandDiffs?: (path: string) => void
+  onSquashFileCommandDiffs?: (path: string) => void
 }
 
 interface CodeBlock {
@@ -53,7 +60,7 @@ interface ProjectStructure {
   packageManager?: 'npm' | 'yarn' | 'pnpm' | 'bun'
 }
 
-export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePreviewPanelProps) {
+export default function CodePreviewPanel({ messages, isOpen, onClose, commandsByFile = {}, onApplyAllCommandDiffs, onApplyFileCommandDiffs, onClearAllCommandDiffs, onClearFileCommandDiffs, onSquashFileCommandDiffs }: CodePreviewPanelProps) {
   const [detectedFramework, setDetectedFramework] = useState<'react' | 'vue' | 'vanilla'>('vanilla');
   const [selectedTab, setSelectedTab] = useState("preview")
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -69,6 +76,7 @@ export default function CodePreviewPanel({ messages, isOpen, onClose }: CodePrev
   const [diffContent, setDiffContent] = useState<string>('');
   const [diffErrors, setDiffErrors] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState<string>('');
+  const pendingFiles = useMemo(() => Object.keys(commandsByFile || {}), [commandsByFile]);
 
 
   const getFileExtension = (language: string): string => {

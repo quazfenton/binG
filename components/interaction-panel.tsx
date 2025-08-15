@@ -4,6 +4,7 @@ import type React from "react";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
+import { Switch } from "../components/ui/switch";
 import {
   Tabs,
   TabsContent,
@@ -40,6 +41,7 @@ import {
   GripHorizontal,
   Maximize2,
   Minimize2,
+  ArrowDownToLine,
   Brain,
   FileText,
   Calculator,
@@ -128,6 +130,14 @@ export default function InteractionPanel({
 }: InteractionPanelProps) {
   const [activeTab, setActiveTab] = useState("chat");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const codeTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Autosuggest state
+  const [autosuggestEnabled, setAutosuggestEnabled] = useState(true);
+  const [ghostSuffix, setGhostSuffix] = useState("");
+  const suggestCache = useRef(new Map<string, string>());
+  const debounceTimerRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   // Panel state
   const [panelHeight, setPanelHeight] = useState(() => {
@@ -139,20 +149,50 @@ export default function InteractionPanel({
   }); // Default height - lowered for better mobile experience
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const prevPanelHeightRef = useRef<number | null>(null);
 
-  // Adjust panel height on window resize (mobile orientation change)
+  // Adjust panel height on window/viewport resize (mobile orientation + keyboard)
   useEffect(() => {
-    const handleResize = () => {
-      if (window.innerWidth <= 768) {
-        const maxMobileHeight = Math.min(250, window.innerHeight * 0.4);
-        if (panelHeight > maxMobileHeight) {
-          setPanelHeight(maxMobileHeight);
+    let t: number | undefined;
+
+    const adjustForViewport = () => {
+      // Debounce rapid resize events
+      window.clearTimeout(t);
+      t = window.setTimeout(() => {
+        const vw = window.visualViewport;
+        const viewportH = vw?.height ?? window.innerHeight;
+
+        if (window.innerWidth <= 768) {
+          const maxMobileHeight = Math.min(250, viewportH * 0.4);
+          setPanelHeight((prev) => (prev > maxMobileHeight ? maxMobileHeight : prev));
+
+          // Keep textarea in view when keyboard opens
+          if (document.activeElement === textareaRef.current) {
+            textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          }
         }
-      }
+      }, 100);
     };
 
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    window.addEventListener("resize", adjustForViewport);
+    // Listen to visualViewport if available (iOS/Android keyboards)
+    if (typeof window !== "undefined" && (window as any).visualViewport) {
+      const vv = (window as any).visualViewport as VisualViewport;
+      vv.addEventListener("resize", adjustForViewport);
+      vv.addEventListener("scroll", adjustForViewport);
+      return () => {
+        window.removeEventListener("resize", adjustForViewport);
+        vv.removeEventListener("resize", adjustForViewport);
+        vv.removeEventListener("scroll", adjustForViewport);
+        if (t) window.clearTimeout(t);
+      };
+    }
+
+    return () => {
+      window.removeEventListener("resize", adjustForViewport);
+      if (t) window.clearTimeout(t);
+    };
   }, [panelHeight]);
 
   // Keyboard shortcuts
@@ -172,12 +212,74 @@ export default function InteractionPanel({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Mobile: Focus input on mount
+  // Debounced suggest fetcher
+  useEffect(() => {
+    if (!autosuggestEnabled) {
+      setGhostSuffix("");
+      return;
+    }
+
+    const q = input;
+    if (!q || !q.trim()) {
+      setGhostSuffix("");
+      return;
+    }
+
+    // Try cache by prefix: find longest cached key K where K is prefix of q and (K+suffix) startsWith q
+    let usedFromCache = false;
+    let bestKey = "";
+    let bestFull = "";
+    for (const [k, s] of suggestCache.current.entries()) {
+      if (q.startsWith(k)) {
+        const full = k + s;
+        if (full.toLowerCase().startsWith(q.toLowerCase())) {
+          if (k.length > bestKey.length) {
+            bestKey = k;
+            bestFull = full;
+          }
+        }
+      }
+    }
+    if (bestKey) {
+      setGhostSuffix(bestFull.slice(q.length));
+      usedFromCache = true;
+    }
+
+    if (usedFromCache) return;
+
+    if (debounceTimerRef.current) window.clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = window.setTimeout(async () => {
+      try {
+        abortRef.current?.abort();
+        abortRef.current = new AbortController();
+        const res = await fetch(`/api/suggest?q=${encodeURIComponent(q)}`, {
+          signal: abortRef.current.signal,
+        });
+        if (!res.ok) throw new Error("suggest failed");
+        const data = await res.json();
+        const suffix = (data?.suggestion as string) || "";
+        suggestCache.current.set(q, suffix);
+        // Only apply if input hasn't changed significantly
+        if (input === q) {
+          setGhostSuffix(suffix);
+        }
+      } catch (e) {
+        if ((e as any)?.name === "AbortError") return;
+        // ignore errors silently
+      }
+    }, 300); // 250–400 ms debounce; we use ~300ms
+
+    return () => {
+      if (debounceTimerRef.current) window.clearTimeout(debounceTimerRef.current);
+    };
+  }, [input, autosuggestEnabled]);
+
+  // Mobile: Focus input on mount and when tapping the panel background
   useEffect(() => {
     if (typeof window !== "undefined" && window.innerWidth <= 768) {
       setTimeout(() => {
         textareaRef.current?.focus();
-      }, 500);
+      }, 400);
     }
   }, []);
   // Advanced Code Mode State
@@ -841,6 +943,7 @@ Please include:
 
       onSubmit(enhancedInput);
       setInput("");
+      setGhostSuffix("");
     }
   };
 
@@ -1018,8 +1121,19 @@ Please include:
         bottom: "env(safe-area-inset-bottom, 0px)",
         height: isMinimized
           ? "60px"
-          : `min(${panelHeight}px, calc(100vh - env(safe-area-inset-top, 0px) - 60px))`,
-        maxHeight: "calc(100vh - env(safe-area-inset-top, 0px) - 60px)",
+          : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
+        maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)",
+      }}
+      onClick={(e) => {
+        // Tap anywhere on the panel background to focus the textarea on mobile
+        if (
+          window.innerWidth <= 768 &&
+          textareaRef.current &&
+          e.target instanceof HTMLElement &&
+          !["TEXTAREA", "INPUT", "BUTTON", "SELECT"].includes(e.target.tagName)
+        ) {
+          textareaRef.current.focus();
+        }
       }}
     >
       {/* Drag Handle - Only vertical resizing */}
@@ -1032,17 +1146,47 @@ Please include:
 
       <div className="p-2 sm:p-4 h-full overflow-hidden max-w-4xl mx-auto flex flex-col">
         {/* Minimize/Maximize Controls */}
-        <div className="absolute top-2 right-4 flex items-center gap-2">
+        	<div className="absolute top-2 right-4 flex items-center gap-2">
+          {/* Minimize toggle */}
           <Button
             size="sm"
             variant="ghost"
             onClick={() => setIsMinimized(!isMinimized)}
             className="w-6 h-6 p-0 text-gray-400 hover:text-white"
+            title={isMinimized ? "Restore" : "Minimize"}
           >
             {isMinimized ? (
               <Maximize2 className="w-3 h-3" />
             ) : (
               <Minimize2 className="w-3 h-3" />
+            )}
+          </Button>
+          {/* Expand to ~60% viewport toggle */}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              if (!isExpanded) {
+                prevPanelHeightRef.current = panelHeight;
+                const vv = (typeof window !== 'undefined' && (window as any).visualViewport) ? (window as any).visualViewport as VisualViewport : null;
+                const viewportH = vv?.height ?? (typeof window !== 'undefined' ? window.innerHeight : 0);
+                const target = Math.max(200, Math.round(viewportH * 0.6));
+                setPanelHeight(target);
+                setIsExpanded(true);
+              } else {
+                const restore = prevPanelHeightRef.current ?? 280;
+                setPanelHeight(restore);
+                setIsExpanded(false);
+              }
+            }}
+            className="w-6 h-6 p-0 text-gray-400 hover:text-white"
+            title={isExpanded ? "Collapse height" : "Expand height"}
+            disabled={isMinimized}
+          >
+            {isExpanded ? (
+              <Minimize2 className="w-3 h-3" />
+            ) : (
+              <Maximize2 className="w-3 h-3" />
             )}
           </Button>
           <div className="flex items-center gap-1">
@@ -1164,12 +1308,18 @@ Please include:
                     </SelectContent>
                   </Select>
                 </div>
-                {isProcessing && (
+                <div className="flex items-center gap-3">
                   <div className="flex items-center gap-2">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    <span>Generating...</span>
+                    <span className="text-xs">Suggest</span>
+                    <Switch checked={autosuggestEnabled} onCheckedChange={(v) => setAutosuggestEnabled(!!v)} />
                   </div>
-                )}
+                  {isProcessing && (
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span>Generating...</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Error Display */}
@@ -1191,7 +1341,7 @@ Please include:
               )}
 
               {/* Input Section - Always at bottom */}
-              <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
+              <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-2 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
                 {pendingDiffs && pendingDiffs.length > 0 && (
                   <div className="mb-3 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-200">
                     <div className="flex items-center justify-between">
@@ -1227,7 +1377,14 @@ Please include:
                       onChange={(e) => setInput(e.target.value)} // Use the passed setInput
                       placeholder="Type your message..."
                       className="min-h-[60px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
+                      rows={3}
                       onKeyDown={(e) => {
+                        if (e.key === "Tab" && autosuggestEnabled && ghostSuffix) {
+                          e.preventDefault();
+                          setInput(input + ghostSuffix);
+                          setGhostSuffix("");
+                          return;
+                        }
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
                           handleSubmit(e);
@@ -1246,6 +1403,12 @@ Please include:
                       }}
                       disabled={isProcessing}
                     />
+                    {autosuggestEnabled && !!ghostSuffix && (
+                      <div className="pointer-events-none absolute left-3 right-12 top-3 whitespace-pre-wrap text-white/40 text-base sm:text-sm">
+                        <span className="invisible">{input}</span>
+                        <span>{ghostSuffix}</span>
+                      </div>
+                    )}
                     <div className="absolute right-3 top-3 flex gap-1">
                       <button
                         type="button"
@@ -1469,7 +1632,7 @@ Please include:
               </div>
 
               {/* Input Section - Always at bottom */}
-              <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-3 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
+              <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-2 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
                 {/* Code Suggestions */}
                 <div>
                   <h4 className="text-xs font-medium text-white/80 mb-2">
@@ -1529,12 +1692,19 @@ Please include:
 
                   <div className="relative">
                     <Textarea
-                      ref={textareaRef}
+                      ref={codeTextareaRef}
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
                       className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
+                      rows={6}
                       onKeyDown={(e) => {
+                        if (e.key === "Tab" && autosuggestEnabled && ghostSuffix) {
+                          e.preventDefault();
+                          setInput(input + ghostSuffix);
+                          setGhostSuffix("");
+                          return;
+                        }
                         if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                           e.preventDefault();
                           handleSubmit(e);
@@ -1542,9 +1712,9 @@ Please include:
                       }}
                       onFocus={() => {
                         // Scroll to input on mobile when focused
-                        if (window.innerWidth <= 768 && textareaRef.current) {
+                        if (window.innerWidth <= 768 && codeTextareaRef.current) {
                           setTimeout(() => {
-                            textareaRef.current?.scrollIntoView({
+                            codeTextareaRef.current?.scrollIntoView({
                               behavior: "smooth",
                               block: "center",
                             });
@@ -1553,6 +1723,12 @@ Please include:
                       }}
                       disabled={isProcessing}
                     />
+                    {autosuggestEnabled && !!ghostSuffix && (
+                      <div className="pointer-events-none absolute left-3 right-12 top-3 whitespace-pre-wrap text-white/40 text-base sm:text-sm">
+                        <span className="invisible">{input}</span>
+                        <span>{ghostSuffix}</span>
+                      </div>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -1779,10 +1955,24 @@ Please include:
             </TabsContent>
           </Tabs>
         )}
-      </div>
+      {/* Floating "Jump to input" FAB */}
+      {!isMinimized && (
+        <button
+          type="button"
+          onClick={() => {
+            textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            setTimeout(() => textareaRef.current?.focus(), 250);
+          }}
+          className="fixed bottom-24 right-4 z-[60] bg-black/70 hover:bg-black/80 backdrop-blur-sm border border-white/20 text-white p-3 rounded-full shadow-lg transition-all duration-200"
+          title="Jump to input"
+        >
+          <ArrowDownToLine className="w-4 h-4" />
+        </button>
+      )}
+    </div>
 
-      {/* Multi-Model Comparison Modal */}
-      <MultiModelComparison
+    {/* Multi-Model Comparison Modal */}
+    <MultiModelComparison
         isOpen={showMultiModelComparison}
         onClose={() => setShowMultiModelComparison(false)}
         availableProviders={availableProviders}

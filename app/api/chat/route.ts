@@ -80,18 +80,55 @@ export async function POST(request: NextRequest) {
 
       const readableStream = new ReadableStream({
         async start(controller) {
-          for await (const chunk of llmStream) {
-            if (chunk.content) {
-              // Format according to Vercel AI SDK spec: '0:"[content]"'
-              controller.enqueue(encoder.encode(`0:"${JSON.stringify(chunk.content).slice(1, -1)}"\n`));
-              // Side-channel: detect commands blocks in streamed content and emit as special lines starting with 2:
-              const match = chunk.content.match(/=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/);
-              if (match) {
-                controller.enqueue(encoder.encode(`2:"${Buffer.from(match[1]).toString('base64')}"\n`));
+          try {
+            for await (const chunk of llmStream) {
+              if (chunk?.content) {
+                // Emit SSE data frames per token
+                const dataFrame = `data: ${JSON.stringify({ type: 'delta', content: chunk.content })}\n\n`;
+                controller.enqueue(encoder.encode(dataFrame));
+
+                // Detect and emit commands on a dedicated SSE event channel
+                const match = chunk.content.match(/=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/);
+                if (match) {
+                  const block = match[1];
+                  // Naive parse similar to non-streaming path
+                  let commands: { request_files?: string[]; write_diffs?: { path: string; diff: string }[] } | null = null;
+                  try {
+                    const reqMatch = block.match(/request_files:\s*\[(.*?)\]/s);
+                    const diffsMatch = block.match(/write_diffs:\s*\[([\s\S]*?)\]/);
+                    const request_files = reqMatch ? JSON.parse(`[${reqMatch[1]}]`.replace(/([a-zA-Z0-9_\-\/\.]+)(?=\s*[\],])/g, '"$1"')) : [];
+                    let write_diffs: { path: string; diff: string }[] = [];
+                    if (diffsMatch) {
+                      const items = diffsMatch[1]
+                        .split(/},/)
+                        .map(s => (s.endsWith('}') ? s : s + '}'))
+                        .map(s => s.trim())
+                        .filter(Boolean);
+                      write_diffs = items.map(raw => {
+                        const pathMatch = raw.match(/path:\s*"([^"]+)"/);
+                        const diffMatch = raw.match(/diff:\s*"([\s\S]*)"/);
+                        return { path: pathMatch?.[1] || '', diff: (diffMatch?.[1] || '').replace(/\\n/g, '\n') };
+                      });
+                    }
+                    commands = { request_files, write_diffs };
+                  } catch {
+                    commands = null;
+                  }
+
+                  const commandsEvent = `event: commands\ndata: ${JSON.stringify(commands || { raw: block })}\n\n`;
+                  controller.enqueue(encoder.encode(commandsEvent));
+                }
               }
             }
+            // Signal completion
+            controller.enqueue(encoder.encode(`event: done\ndata: {"success": true}\n\n`));
+          } catch (err) {
+            // Optionally emit an error event channel for clients to handle
+            const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+            controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ message: errorMsg })}\n\n`));
+          } finally {
+            controller.close();
           }
-          controller.close();
         },
         cancel() {
           console.log("Stream cancelled by client.");
@@ -100,7 +137,7 @@ export async function POST(request: NextRequest) {
 
       return new Response(readableStream, {
         headers: {
-          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
         },
