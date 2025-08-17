@@ -24,50 +24,48 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
-import {
-  Send,
-  Plus,
-  Sparkles,
-  Settings,
-  Accessibility,
-  HelpCircle,
-  History,
-  Loader2,
-  ImageIcon,
-  Square,
-  MessageSquare,
-  AlertCircle,
-  Code,
-  GripHorizontal,
-  Maximize2,
-  Minimize2,
-  ArrowDownToLine,
-  Brain,
-  FileText,
-  Calculator,
-  Globe,
-  Palette,
-  Music,
-  Zap,
-  Film,
-  Camera,
-  Map,
-  Gamepad2,
-  Shield,
-  Database,
-  CheckCircle,
-  FileCode,
-  Search,
-  FolderPlus,
-  Hash,
-  RefreshCw,
-  Package,
-  GitBranch,
-  Key,
-  Cloud,
-  Server,
-  Scale,
-} from "lucide-react";
+import Send from "lucide-react/dist/esm/icons/send";
+import Plus from "lucide-react/dist/esm/icons/plus";
+import Sparkles from "lucide-react/dist/esm/icons/sparkles";
+import Settings from "lucide-react/dist/esm/icons/settings";
+import Accessibility from "lucide-react/dist/esm/icons/accessibility";
+import HelpCircle from "lucide-react/dist/esm/icons/help-circle";
+import History from "lucide-react/dist/esm/icons/history";
+import Loader2 from "lucide-react/dist/esm/icons/loader-2";
+import ImageIcon from "lucide-react/dist/esm/icons/image-icon";
+import Square from "lucide-react/dist/esm/icons/square";
+import MessageSquare from "lucide-react/dist/esm/icons/message-square";
+import AlertCircle from "lucide-react/dist/esm/icons/alert-circle";
+import Code from "lucide-react/dist/esm/icons/code";
+import GripHorizontal from "lucide-react/dist/esm/icons/grip-horizontal";
+import Maximize2 from "lucide-react/dist/esm/icons/maximize-2";
+import Minimize2 from "lucide-react/dist/esm/icons/minimize-2";
+import ArrowDownToLine from "lucide-react/dist/esm/icons/arrow-down-to-line";
+import Brain from "lucide-react/dist/esm/icons/brain";
+import FileText from "lucide-react/dist/esm/icons/file-text";
+import Calculator from "lucide-react/dist/esm/icons/calculator";
+import Globe from "lucide-react/dist/esm/icons/globe";
+import Palette from "lucide-react/dist/esm/icons/palette";
+import Music from "lucide-react/dist/esm/icons/music";
+import Zap from "lucide-react/dist/esm/icons/zap";
+import Film from "lucide-react/dist/esm/icons/film";
+import Camera from "lucide-react/dist/esm/icons/camera";
+import Map from "lucide-react/dist/esm/icons/map";
+import Gamepad2 from "lucide-react/dist/esm/icons/gamepad-2";
+import Shield from "lucide-react/dist/esm/icons/shield";
+import Database from "lucide-react/dist/esm/icons/database";
+import CheckCircle from "lucide-react/dist/esm/icons/check-circle";
+import FileCode from "lucide-react/dist/esm/icons/file-code";
+import Search from "lucide-react/dist/esm/icons/search";
+import FolderPlus from "lucide-react/dist/esm/icons/folder-plus";
+import Hash from "lucide-react/dist/esm/icons/hash";
+import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw";
+import Package from "lucide-react/dist/esm/icons/package";
+import GitBranch from "lucide-react/dist/esm/icons/git-branch";
+import Key from "lucide-react/dist/esm/icons/key";
+import Cloud from "lucide-react/dist/esm/icons/cloud";
+import Server from "lucide-react/dist/esm/icons/server";
+import Scale from "lucide-react/dist/esm/icons/scale";
 import type { LLMProvider } from "../lib/api/llm-providers";
 import { templateCache, cacheKey } from "../lib/cache";
 import MultiModelComparison from "./multi-model-comparison";
