@@ -90,6 +90,7 @@ interface InteractionPanelProps {
   toggleAccessibility: () => void; // This prop is expected to be a function that toggles accessibility options
   toggleHistory: () => void;
   toggleCodePreview: () => void; // This prop is expected to be a function
+  toggleCodeMode?: () => void; // This prop is expected to be a function that toggles code mode
   onAcceptPendingDiffs?: () => void;
   onDismissPendingDiffs?: () => void;
   onStopGeneration?: () => void;
@@ -103,6 +104,8 @@ interface InteractionPanelProps {
   onProviderChange: (provider: string, model: string) => void;
   hasCodeBlocks?: boolean; // Add code blocks detection
   pendingDiffs?: { path: string; diff: string }[];
+  activeTab?: "chat" | "code"; // Add activeTab prop
+  onActiveTabChange?: (tab: "chat" | "code") => void; // Add activeTab change handler
 }
 
 export default function InteractionPanel({
@@ -112,6 +115,7 @@ export default function InteractionPanel({
   toggleAccessibility, // Receive the prop
   toggleHistory,
   toggleCodePreview, // Receive the prop
+  toggleCodeMode,
   onStopGeneration,
   onRetry,
   currentProvider = "openrouter",
@@ -125,8 +129,9 @@ export default function InteractionPanel({
   pendingDiffs = [],
   onAcceptPendingDiffs,
   onDismissPendingDiffs,
+  activeTab = "chat",
+  onActiveTabChange,
 }: InteractionPanelProps) {
-  const [activeTab, setActiveTab] = useState("chat");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const codeTextareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -204,7 +209,7 @@ export default function InteractionPanel({
       // Ctrl+K to focus input
       if (event.ctrlKey && event.key === "k") {
         event.preventDefault();
-        setActiveTab("chat"); // Switch to chat tab
+        onActiveTabChange?.("chat"); // Switch to chat tab
         setTimeout(() => {
           textareaRef.current?.focus();
         }, 100);
@@ -1232,7 +1237,9 @@ Please include:
         {!isMinimized && (
           <Tabs
             value={activeTab}
-            onValueChange={setActiveTab}
+            onValueChange={(value) =>
+              onActiveTabChange?.(value as "chat" | "code")
+            }
             className="flex-1 flex flex-col min-h-0"
           >
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
@@ -1484,7 +1491,7 @@ Please include:
                       <button
                         type="button"
                         onClick={() => {
-                          setActiveTab("plugins");
+                          onActiveTabChange?.("chat");
                         }}
                         className="p-1 rounded hover:bg-white/10 transition-colors"
                         title="Open AI Enhancer Plugin"
@@ -1548,7 +1555,7 @@ Please include:
                             </h5>
                             <button
                               onClick={() => {
-                                setActiveTab("plugins");
+                                onActiveTabChange?.("chat");
                                 setPluginToOpen("cloud-storage");
                               }}
                               className="text-xs w-full text-left p-2 bg-blue-500/20 hover:bg-blue-500/30 rounded"
@@ -1919,7 +1926,7 @@ Please include:
                             key={plugin.id}
                             onClick={() => {
                               plugin.action();
-                              setActiveTab("chat"); // Switch to chat tab to show the input
+                              onActiveTabChange?.("chat"); // Switch to chat tab to show the input
                               toast.success(
                                 `${plugin.name} plugin activated! Check the chat input.`,
                               );

@@ -1,13 +1,9 @@
 "use client";
 
-import { useState, useRef, Suspense, useEffect, useCallback, useMemo } from "react"; // Import useCallback and useMemo
-import { useChat, type Message } from "ai/react"; // Import useChat and Message type
+import { useState, useEffect, useCallback, useMemo } from "react"; // Import useCallback and useMemo
+import { useChat } from "ai/react"; // Import useChat
 import type { ChatHistory } from "@/types";
-import {
-  ResizablePanel,
-  ResizablePanelGroup,
-  ResizableHandle,
-} from "@/components/ui/resizable";
+
 import InteractionPanel from "@/components/interaction-panel";
 import AccessibilityControls from "@/components/accessibility-controls";
 import ChatHistoryModal from "@/components/chat-history-modal";
@@ -19,15 +15,36 @@ import { useChatHistory } from "@/hooks/use-chat-history";
 import { voiceService } from "@/lib/voice/voice-service";
 import { toast } from "sonner";
 import type { LLMProvider } from "@/lib/api/llm-providers";
+import {
+  CodeServiceProvider,
+  useCodeService,
+} from "@/contexts/code-service-context";
+import { parseCodeBlocksFromMessages } from "@/lib/code-parser";
 
+// Main component wrapped with CodeServiceProvider
 export default function ConversationInterface() {
+  return (
+    <CodeServiceProvider>
+      <ConversationInterfaceContent />
+    </CodeServiceProvider>
+  );
+}
+
+// Main component content
+function ConversationInterfaceContent() {
   const [showAccessibility, setShowAccessibility] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showCodePreview, setShowCodePreview] = useState(false);
   const [showCodeMode, setShowCodeMode] = useState(false);
-  const [projectFiles, setProjectFiles] = useState<{ [key: string]: string }>({});
-  const [pendingDiffs, setPendingDiffs] = useState<{ path: string; diff: string }[]>([]);
-  const [commandsByFile, setCommandsByFile] = useState<Record<string, string[]>>({});
+  const [projectFiles, setProjectFiles] = useState<{ [key: string]: string }>(
+    {},
+  );
+  const [pendingDiffs, setPendingDiffs] = useState<
+    { path: string; diff: string }[]
+  >([]);
+  const [commandsByFile, setCommandsByFile] = useState<
+    Record<string, string[]>
+  >({});
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
     [],
   );
@@ -35,8 +52,13 @@ export default function ConversationInterface() {
   const [currentModel, setCurrentModel] = useState<string>("");
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null); // This ref is not used in this component, consider removing if not needed elsewhere
+  const [currentConversationId, setCurrentConversationId] = useState<
+    string | null
+  >(null);
+
+  // Enhanced code system integration
+  const [activeTab, setActiveTab] = useState<"chat" | "code">("chat");
+  const codeServiceContext = useCodeService();
 
   // Advertisement system
   const [promptCount, setPromptCount] = useState(0);
@@ -46,7 +68,7 @@ export default function ConversationInterface() {
   // ESC key handler for closing temporary panels
   useEffect(() => {
     const handleEscKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === "Escape") {
         // Close any open temporary panels
         if (showAccessibility) {
           setShowAccessibility(false);
@@ -58,9 +80,9 @@ export default function ConversationInterface() {
       }
     };
 
-    document.addEventListener('keydown', handleEscKey);
+    document.addEventListener("keydown", handleEscKey);
     return () => {
-      document.removeEventListener('keydown', handleEscKey);
+      document.removeEventListener("keydown", handleEscKey);
     };
   }, [showAccessibility, showCodePreview, showHistory]);
 
@@ -68,7 +90,7 @@ export default function ConversationInterface() {
     messages,
     input,
     handleInputChange,
-    handleSubmit,
+    handleSubmit: originalHandleSubmit,
     isLoading,
     error,
     setMessages,
@@ -84,7 +106,7 @@ export default function ConversationInterface() {
     onResponse: async (response) => {
       if (response.status === 401) {
         toast.error(
-          "You are not authorized to perform this action. Please log in."
+          "You are not authorized to perform this action. Please log in.",
         );
       }
       // We rely on useChat for token streaming; commands are extracted from message content via effects below.
@@ -94,13 +116,97 @@ export default function ConversationInterface() {
     },
     onFinish: () => {
       if (messages.length > 0) {
-        const savedChatId = saveCurrentChat(messages, currentConversationId || undefined);
+        const savedChatId = saveCurrentChat(
+          messages,
+          currentConversationId || undefined,
+        );
         if (!currentConversationId && savedChatId) {
           setCurrentConversationId(savedChatId);
         }
+        setPromptCount((prev) => prev + 1);
       }
     },
   });
+
+  // Enhanced submit handler that routes to appropriate service based on active tab
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+
+      if (activeTab === "code") {
+        // Use enhanced code service
+        try {
+          const selectedFiles: { [key: string]: string } = {};
+
+          // Extract current project files if available
+          Object.entries(projectFiles).forEach(([path, content]) => {
+            selectedFiles[path] = content;
+          });
+
+          await codeServiceContext.startSession({
+            prompt: input,
+            selectedFiles,
+            context: {
+              messages,
+            },
+          });
+
+          // Clear input after starting session
+          setInput("");
+
+          // Show code preview panel if not already visible
+          if (!showCodePreview) {
+            setShowCodePreview(true);
+          }
+        } catch (error) {
+          toast.error("Failed to start code session");
+          console.error("Code session error:", error);
+        }
+      } else {
+        // Use regular chat
+        originalHandleSubmit(e);
+      }
+    },
+    [
+      activeTab,
+      input,
+      projectFiles,
+      messages,
+      codeServiceContext,
+      setInput,
+      showCodePreview,
+      originalHandleSubmit,
+    ],
+  );
+
+  // Update code preview panel data when code service completes
+  useEffect(() => {
+    if (codeServiceContext.state.lastSessionResult) {
+      const { files, diffs } = codeServiceContext.state.lastSessionResult;
+
+      // Update project files
+      if (files) {
+        setProjectFiles((prevFiles) => ({ ...prevFiles, ...files }));
+      }
+
+      // Update pending diffs
+      if (diffs) {
+        setPendingDiffs(diffs);
+      }
+
+      // Parse code blocks from messages and add to project files
+      const parsedData = parseCodeBlocksFromMessages(messages);
+      if (parsedData.codeBlocks.length > 0) {
+        const newFiles: { [key: string]: string } = {};
+        parsedData.codeBlocks.forEach((block) => {
+          if (block.filename && !block.isError) {
+            newFiles[block.filename] = block.code;
+          }
+        });
+        setProjectFiles((prevFiles) => ({ ...prevFiles, ...newFiles }));
+      }
+    }
+  }, [codeServiceContext.state.lastSessionResult, messages]);
 
   const {
     saveCurrentChat,
@@ -116,8 +222,11 @@ export default function ConversationInterface() {
     if (messages.length > 0 && !isLoading) {
       // Only save if the last message is from assistant (completed response)
       const lastMessage = messages[messages.length - 1];
-      if (lastMessage && lastMessage.role === 'assistant') {
-        const savedChatId = saveCurrentChat(messages, currentConversationId || undefined);
+      if (lastMessage && lastMessage.role === "assistant") {
+        const savedChatId = saveCurrentChat(
+          messages,
+          currentConversationId || undefined,
+        );
         // If it was a new chat and an ID was returned, set it as the current conversation ID
         if (!currentConversationId && savedChatId) {
           setCurrentConversationId(savedChatId);
@@ -129,15 +238,27 @@ export default function ConversationInterface() {
         }
       }
     }
-  }, [messages, isLoading, saveCurrentChat, currentConversationId, isVoiceEnabled]);
+  }, [
+    messages,
+    isLoading,
+    saveCurrentChat,
+    currentConversationId,
+    isVoiceEnabled,
+  ]);
 
   // Extract and persist streamed COMMANDS blocks into a per-file map
   useEffect(() => {
     if (messages.length === 0) return;
-    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
-    if (!lastAssistant || typeof lastAssistant.content !== 'string') return;
+    const lastAssistant = [...messages]
+      .reverse()
+      .find((m) => m.role === "assistant");
+    if (!lastAssistant || typeof lastAssistant.content !== "string") return;
     const content = lastAssistant.content;
-    const blocks = [...content.matchAll(/=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/g)];
+    const blocks = [
+      ...content.matchAll(
+        /=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/g,
+      ),
+    ];
     if (blocks.length === 0) return;
 
     const newEntries: { path: string; diff: string }[] = [];
@@ -148,13 +269,16 @@ export default function ConversationInterface() {
         if (diffsMatch) {
           const items = diffsMatch[1]
             .split(/},/)
-            .map(s => (s.endsWith('}') ? s : s + '}'))
-            .map(s => s.trim())
+            .map((s) => (s.endsWith("}") ? s : s + "}"))
+            .map((s) => s.trim())
             .filter(Boolean);
-          const write_diffs = items.map(raw => {
+          const write_diffs = items.map((raw) => {
             const pathMatch = raw.match(/path:\s*"([^"]+)"/);
             const diffMatch = raw.match(/diff:\s*"([\s\S]*)"/);
-            return { path: pathMatch?.[1] || '', diff: (diffMatch?.[1] || '').replace(/\\n/g, '\n') };
+            return {
+              path: pathMatch?.[1] || "",
+              diff: (diffMatch?.[1] || "").replace(/\\n/g, "\n"),
+            };
           });
           newEntries.push(...write_diffs);
         }
@@ -164,7 +288,7 @@ export default function ConversationInterface() {
     }
     if (newEntries.length === 0) return;
 
-    setCommandsByFile(prev => {
+    setCommandsByFile((prev) => {
       const next: Record<string, string[]> = { ...prev };
       for (const { path, diff } of newEntries) {
         if (!path) continue;
@@ -183,7 +307,10 @@ export default function ConversationInterface() {
   useEffect(() => {
     if (!currentConversationId) return;
     try {
-      localStorage.setItem(`commands_diffs_${currentConversationId}`, JSON.stringify(commandsByFile));
+      localStorage.setItem(
+        `commands_diffs_${currentConversationId}`,
+        JSON.stringify(commandsByFile),
+      );
     } catch {}
   }, [commandsByFile, currentConversationId]);
 
@@ -191,7 +318,9 @@ export default function ConversationInterface() {
   useEffect(() => {
     if (!currentConversationId) return;
     try {
-      const raw = localStorage.getItem(`commands_diffs_${currentConversationId}`);
+      const raw = localStorage.getItem(
+        `commands_diffs_${currentConversationId}`,
+      );
       if (raw) setCommandsByFile(JSON.parse(raw));
       else setCommandsByFile({});
     } catch {
@@ -210,28 +339,49 @@ export default function ConversationInterface() {
 
           // Attempt to restore persisted selection first
           const persistedProvider = (() => {
-            try { return localStorage.getItem('chat_provider') || ''; } catch { return ''; }
+            try {
+              return localStorage.getItem("chat_provider") || "";
+            } catch {
+              return "";
+            }
           })();
           const persistedModel = (() => {
-            try { return localStorage.getItem('chat_model') || ''; } catch { return ''; }
+            try {
+              return localStorage.getItem("chat_model") || "";
+            } catch {
+              return "";
+            }
           })();
 
-          const serverDefaultProvider: string | undefined = data.data.defaultProvider;
+          const serverDefaultProvider: string | undefined =
+            data.data.defaultProvider;
           const serverDefaultModel: string | undefined = data.data.defaultModel;
 
           const pickValid = (provId?: string, modelId?: string) => {
             if (!provId) return undefined;
-            const prov = providers.find(p => p.id === provId);
+            const prov = providers.find((p) => p.id === provId);
             if (!prov) return undefined;
-            const model = modelId && prov.models.includes(modelId) ? modelId : (prov.models[0] || undefined);
+            const model =
+              modelId && prov.models.includes(modelId)
+                ? modelId
+                : prov.models[0] || undefined;
             if (!model) return undefined;
-            return { provider: prov.id, model } as { provider: string; model: string };
+            return { provider: prov.id, model } as {
+              provider: string;
+              model: string;
+            };
           };
 
           // Priority: persisted -> server defaults -> first available
           const fromPersisted = pickValid(persistedProvider, persistedModel);
-          const fromServer = pickValid(serverDefaultProvider, serverDefaultModel);
-          const fromFirst = providers.length > 0 ? pickValid(providers[0].id, providers[0].models[0]) : undefined;
+          const fromServer = pickValid(
+            serverDefaultProvider,
+            serverDefaultModel,
+          );
+          const fromFirst =
+            providers.length > 0
+              ? pickValid(providers[0].id, providers[0].models[0])
+              : undefined;
 
           const selection = fromPersisted || fromServer || fromFirst;
           if (selection) {
@@ -321,8 +471,8 @@ export default function ConversationInterface() {
     setCurrentModel(model);
     // Persist selection
     try {
-      localStorage.setItem('chat_provider', provider);
-      localStorage.setItem('chat_model', model);
+      localStorage.setItem("chat_provider", provider);
+      localStorage.setItem("chat_model", model);
     } catch {}
     toast.success(`Switched to ${provider} - ${model}`);
   };
@@ -331,12 +481,14 @@ export default function ConversationInterface() {
   const rotateToNextProvider = useCallback(() => {
     if (availableProviders.length <= 1) return;
 
-    const currentProviderIndex = availableProviders.findIndex(p => p.name === currentProvider);
+    const currentProviderIndex = availableProviders.findIndex(
+      (p) => p.name === currentProvider,
+    );
     const nextIndex = (currentProviderIndex + 1) % availableProviders.length;
     const nextProvider = availableProviders[nextIndex];
 
     if (nextProvider && nextProvider.models.length > 0) {
-      const nextModel = nextProvider.models[0].id; // Use first model of next provider
+      const nextModel = nextProvider.models[0]; // Use first model of next provider
       handleProviderChange(nextProvider.name, nextModel);
     }
   }, [availableProviders, currentProvider, handleProviderChange]);
@@ -346,24 +498,31 @@ export default function ConversationInterface() {
     if (error && error.message) {
       const errorMessage = error.message.toLowerCase();
       const shouldRotate =
-        errorMessage.includes('rate limit') ||
-        errorMessage.includes('quota') ||
-        errorMessage.includes('invalid api key') ||
-        errorMessage.includes('unauthorized') ||
-        errorMessage.includes('not found') ||
-        errorMessage.includes('forbidden') ||
-        errorMessage.includes('service unavailable') ||
-        errorMessage.includes('timeout');
+        errorMessage.includes("rate limit") ||
+        errorMessage.includes("quota") ||
+        errorMessage.includes("invalid api key") ||
+        errorMessage.includes("unauthorized") ||
+        errorMessage.includes("not found") ||
+        errorMessage.includes("forbidden") ||
+        errorMessage.includes("service unavailable") ||
+        errorMessage.includes("timeout");
 
       if (shouldRotate) {
         const errorType =
-          errorMessage.includes('rate limit') || errorMessage.includes('quota') ? 'Rate limit' :
-            errorMessage.includes('invalid api key') || errorMessage.includes('unauthorized') ? 'Invalid API key' :
-              errorMessage.includes('not found') ? 'Service not found' :
-                errorMessage.includes('forbidden') ? 'Access forbidden' :
-                  errorMessage.includes('service unavailable') ? 'Service unavailable' :
-                    errorMessage.includes('timeout') ? 'Request timeout' :
-                      'API error';
+          errorMessage.includes("rate limit") || errorMessage.includes("quota")
+            ? "Rate limit"
+            : errorMessage.includes("invalid api key") ||
+                errorMessage.includes("unauthorized")
+              ? "Invalid API key"
+              : errorMessage.includes("not found")
+                ? "Service not found"
+                : errorMessage.includes("forbidden")
+                  ? "Access forbidden"
+                  : errorMessage.includes("service unavailable")
+                    ? "Service unavailable"
+                    : errorMessage.includes("timeout")
+                      ? "Request timeout"
+                      : "API error";
 
         toast.info(`${errorType} detected, switching to next provider...`);
         setTimeout(() => {
@@ -395,9 +554,9 @@ export default function ConversationInterface() {
 
   // Check if there are code blocks in messages for preview button glow
   const hasCodeBlocks = useMemo(() => {
-    return messages.some(message =>
-      message.role === 'assistant' &&
-      message.content.includes('```')
+    return messages.some(
+      (message) =>
+        message.role === "assistant" && message.content.includes("```"),
     );
   }, [messages]);
 
@@ -416,39 +575,48 @@ export default function ConversationInterface() {
     setProjectFiles(files);
   };
 
-  const handleCodeModeMessage = (message: string, context?: any) => {
+  const handleCodeModeMessage = (message: string, _context?: any) => {
     // Send the formatted code mode message
-    handleSubmit(undefined, { data: { message, context } });
+    setInput(message);
+    setTimeout(() => {
+      const fakeEvent = {
+        preventDefault: () => {},
+        currentTarget: { reset: () => {} },
+      } as React.FormEvent<HTMLFormElement>;
+      handleSubmit(fakeEvent);
+    }, 0);
   };
 
   const acceptPendingDiffs = () => {
     if (pendingDiffs.length === 0) return;
     const diffMessages = pendingDiffs.map((d, idx) => ({
       id: `diff-${Date.now()}-${idx}`,
-      role: 'assistant' as const,
+      role: "assistant" as const,
       content: `\`\`\`diff ${d.path}\n${d.diff}\n\`\`\``,
     }));
-    setMessages(prev => [...prev, ...diffMessages]);
+    setMessages((prev) => [...prev, ...diffMessages]);
     setPendingDiffs([]);
-    toast.success('Applied diffs to preview. Press Code Preview to view updated state.');
+    toast.success(
+      "Applied diffs to preview. Press Code Preview to view updated state.",
+    );
   };
 
   // Commands map actions
   const applyAllCommandDiffs = () => {
     const entries: { path: string; diff: string }[] = [];
     Object.entries(commandsByFile).forEach(([path, diffs]) => {
-      diffs.forEach(diff => entries.push({ path, diff }));
+      diffs.forEach((diff) => entries.push({ path, diff }));
     });
     if (entries.length === 0) {
-      toast.info('No pending command diffs to apply.');
+      toast.info("No pending command diffs to apply.");
       return;
     }
     const diffMessages = entries.map((d, idx) => ({
       id: `cmd-diff-${Date.now()}-${idx}`,
-      role: 'assistant' as const,
+      role: "assistant" as const,
       content: `\`\`\`diff ${d.path}\n${d.diff}\n\`\`\``,
     }));
-    setMessages(prev => [...prev, ...diffMessages]);
+    setMessages((prev) => [...prev, ...diffMessages]);
     setCommandsByFile({});
     toast.success(`Applied ${entries.length} diff(s) to preview.`);
   };
@@ -458,11 +626,11 @@ export default function ConversationInterface() {
     if (diffs.length === 0) return;
     const diffMessages = diffs.map((diff, idx) => ({
       id: `cmd-file-diff-${Date.now()}-${idx}`,
-      role: 'assistant' as const,
+      role: "assistant" as const,
       content: `\`\`\`diff ${path}\n${diff}\n\`\`\``,
     }));
-    setMessages(prev => [...prev, ...diffMessages]);
-    setCommandsByFile(prev => {
+    setMessages((prev) => [...prev, ...diffMessages]);
+    setCommandsByFile((prev) => {
       const next = { ...prev };
       delete next[path];
       return next;
@@ -472,11 +640,11 @@ export default function ConversationInterface() {
 
   const clearAllCommandDiffs = () => {
     setCommandsByFile({});
-    toast.info('Cleared all pending command diffs.');
+    toast.info("Cleared all pending command diffs.");
   };
 
   const clearCommandDiffsForFile = (path: string) => {
-    setCommandsByFile(prev => {
+    setCommandsByFile((prev) => {
       const next = { ...prev };
       delete next[path];
       return next;
@@ -484,10 +652,10 @@ export default function ConversationInterface() {
   };
 
   const squashCommandDiffsForFile = (path: string) => {
-    setCommandsByFile(prev => {
+    setCommandsByFile((prev) => {
       const list = prev[path] || [];
       if (list.length <= 1) return prev;
-      const squashed = list.join('\n');
+      const squashed = list.join("\n");
       return { ...prev, [path]: [squashed] };
     });
     toast.success(`Squashed diffs for ${path}.`);
@@ -496,7 +664,7 @@ export default function ConversationInterface() {
   const dismissPendingDiffs = () => {
     if (pendingDiffs.length === 0) return;
     setPendingDiffs([]);
-    toast.info('Dismissed pending diffs');
+    toast.info("Dismissed pending diffs");
   };
 
   // Intermediary function to handle submit from InteractionPanel with ad system
@@ -509,7 +677,7 @@ export default function ConversationInterface() {
 
     // Increment prompt count for non-logged-in users
     if (!isLoggedIn) {
-      setPromptCount(prev => prev + 1);
+      setPromptCount((prev) => prev + 1);
     }
 
     setInput(content);
@@ -517,7 +685,7 @@ export default function ConversationInterface() {
     setTimeout(() => {
       const fakeEvent = {
         preventDefault: () => {},
-        currentTarget: { reset: () => {} }
+        currentTarget: { reset: () => {} },
       } as React.FormEvent<HTMLFormElement>;
       handleSubmit(fakeEvent);
     }, 0);
@@ -527,7 +695,9 @@ export default function ConversationInterface() {
   const handleRetry = () => {
     if (messages.length > 0) {
       // Find the last user message
-      const lastUserMessage = [...messages].reverse().find(msg => msg.role === 'user');
+      const lastUserMessage = [...messages]
+        .reverse()
+        .find((msg) => msg.role === "user");
       if (lastUserMessage) {
         // Remove any assistant messages after the last user message
         const lastUserIndex = messages.lastIndexOf(lastUserMessage);
@@ -537,7 +707,9 @@ export default function ConversationInterface() {
         // Resend the last user message
         setInput(lastUserMessage.content);
         setTimeout(() => {
-          handleSubmit(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>);
+          handleSubmit(
+            new Event("submit") as unknown as React.FormEvent<HTMLFormElement>,
+          );
         }, 100);
       }
     }
@@ -568,10 +740,14 @@ export default function ConversationInterface() {
           <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-black/30">
             <div className="text-xs text-white/70 truncate">
               <span className="mr-2">Provider:</span>
-              <span className="font-medium text-white">{currentProvider || '—'}</span>
+              <span className="font-medium text-white">
+                {currentProvider || "—"}
+              </span>
               <span className="mx-2 text-white/40">|</span>
               <span className="mr-2">Model:</span>
-              <span className="font-medium text-white truncate inline-block max-w-[60%] align-bottom">{currentModel || '—'}</span>
+              <span className="font-medium text-white truncate inline-block max-w-[60%] align-bottom">
+                {currentModel || "—"}
+              </span>
             </div>
             {/* Quick open history */}
             <button
@@ -608,7 +784,7 @@ export default function ConversationInterface() {
       <InteractionPanel
         onSubmit={handleChatSubmit} // Pass the intermediary function
         onNewChat={handleNewChat}
-        isProcessing={isLoading}
+        isProcessing={isLoading || codeServiceContext.state.isProcessing}
         toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
         toggleHistory={() => setShowHistory(!showHistory)}
         toggleCodePreview={() => {
@@ -619,7 +795,7 @@ export default function ConversationInterface() {
         onRetry={handleRetry} // Pass the retry function
         currentProvider={currentProvider}
         currentModel={currentModel}
-        error={error?.message}
+        error={error?.message || codeServiceContext.state.error}
         input={input} // Pass input to InteractionPanel
         setInput={setInput} // Pass setInput to InteractionPanel
         availableProviders={availableProviders}
@@ -628,6 +804,8 @@ export default function ConversationInterface() {
         pendingDiffs={pendingDiffs}
         onAcceptPendingDiffs={acceptPendingDiffs}
         onDismissPendingDiffs={dismissPendingDiffs}
+        activeTab={activeTab}
+        onActiveTabChange={setActiveTab}
       />
 
       {/* Chat History Modal */}
@@ -682,9 +860,12 @@ export default function ConversationInterface() {
               <div className="w-16 h-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full mx-auto flex items-center justify-center">
                 <span className="text-2xl">🚀</span>
               </div>
-              <h3 className="text-xl font-bold text-white">Continue with Premium</h3>
+              <h3 className="text-xl font-bold text-white">
+                Continue with Premium
+              </h3>
               <p className="text-gray-300 text-sm">
-                You've used {promptCount} prompts. Sign up for unlimited access and exclusive features!
+                You've used {promptCount} prompts. Sign up for unlimited access
+                and exclusive features!
               </p>
 
               {/* Ad placeholder */}
@@ -692,7 +873,9 @@ export default function ConversationInterface() {
                 <div className="text-center text-gray-400 text-sm">
                   [Advertisement Space]
                   <br />
-                  <span className="text-xs">Your ad service integration goes here</span>
+                  <span className="text-xs">
+                    Your ad service integration goes here
+                  </span>
                 </div>
               </div>
 
@@ -702,7 +885,11 @@ export default function ConversationInterface() {
                     setIsLoggedIn(true);
                     setShowAd(false);
                     // Continue with the original submission
-                    handleSubmit(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>);
+                    handleSubmit(
+                      new Event(
+                        "submit",
+                      ) as unknown as React.FormEvent<HTMLFormElement>,
+                    );
                   }}
                   className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white px-4 py-2 rounded-lg font-medium transition-all duration-200"
                 >
@@ -713,7 +900,11 @@ export default function ConversationInterface() {
                     setShowAd(false);
                     // Continue with the original submission after ad
                     setTimeout(() => {
-                      handleSubmit(new Event('submit') as unknown as React.FormEvent<HTMLFormElement>);
+                      handleSubmit(
+                        new Event(
+                          "submit",
+                        ) as unknown as React.FormEvent<HTMLFormElement>,
+                      );
                     }, 100);
                   }}
                   className="flex-1 border border-white/20 text-white px-4 py-2 rounded-lg hover:bg-white/5 transition-all duration-200"
