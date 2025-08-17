@@ -74,14 +74,14 @@ import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";
 import CodeFormatterPlugin from "./plugins/code-formatter-plugin";
 import CalculatorPlugin from "./plugins/calculator-plugin";
 import NoteTakerPlugin from "./plugins/note-taker-plugin";
-import InteractiveDiagrammingPlugin from './plugins/interactive-diagramming-plugin';
-import DataVisualizationBuilderPlugin from './plugins/data-visualization-builder-plugin';
-import NetworkRequestBuilderPlugin from './plugins/network-request-builder-plugin';
-import LegalDocumentPlugin from './plugins/legal-document-plugin';
-import GitHubExplorerPlugin from './plugins/github-explorer-plugin';
-import HuggingFaceSpacesPlugin from './plugins/huggingface-spaces-plugin';
-import InteractiveStoryboardPlugin from './plugins/interactive-storyboard-plugin';
-import CloudStoragePlugin from './plugins/cloud-storage-plugin';
+import InteractiveDiagrammingPlugin from "./plugins/interactive-diagramming-plugin";
+import DataVisualizationBuilderPlugin from "./plugins/data-visualization-builder-plugin";
+import NetworkRequestBuilderPlugin from "./plugins/network-request-builder-plugin";
+import LegalDocumentPlugin from "./plugins/legal-document-plugin";
+import GitHubExplorerPlugin from "./plugins/github-explorer-plugin";
+import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
+import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
+import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
 
 interface InteractionPanelProps {
   onSubmit: (content: string) => void;
@@ -163,11 +163,16 @@ export default function InteractionPanel({
 
         if (window.innerWidth <= 768) {
           const maxMobileHeight = Math.min(250, viewportH * 0.4);
-          setPanelHeight((prev) => (prev > maxMobileHeight ? maxMobileHeight : prev));
+          setPanelHeight((prev) =>
+            prev > maxMobileHeight ? maxMobileHeight : prev,
+          );
 
           // Keep textarea in view when keyboard opens
           if (document.activeElement === textareaRef.current) {
-            textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            textareaRef.current?.scrollIntoView({
+              behavior: "smooth",
+              block: "nearest",
+            });
           }
         }
       }, 100);
@@ -268,7 +273,8 @@ export default function InteractionPanel({
     }, 300); // 250–400 ms debounce; we use ~300ms
 
     return () => {
-      if (debounceTimerRef.current) window.clearTimeout(debounceTimerRef.current);
+      if (debounceTimerRef.current)
+        window.clearTimeout(debounceTimerRef.current);
     };
   }, [input, autosuggestEnabled]);
 
@@ -282,7 +288,9 @@ export default function InteractionPanel({
   }, []);
   // Advanced Code Mode State
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-  const [attachedFiles, setAttachedFiles] = useState<Record<string, {content: string, version: number}>>({});
+  const [attachedFiles, setAttachedFiles] = useState<
+    Record<string, { content: string; version: number }>
+  >({});
   const [projectStructure, setProjectStructure] = useState<any[]>([]);
   // pending diffs come from parent via props now
 
@@ -329,84 +337,84 @@ export default function InteractionPanel({
       minSize: { width: 600, height: 400 },
     },
     {
-      id: 'interactive-diagramming',
-      name: 'Diagramming Tool',
-      description: 'Create and edit diagrams like flowcharts and architecture.',
+      id: "interactive-diagramming",
+      name: "Diagramming Tool",
+      description: "Create and edit diagrams like flowcharts and architecture.",
       icon: GitBranch,
       component: InteractiveDiagrammingPlugin,
-      category: 'design',
+      category: "design",
       defaultSize: { width: 800, height: 700 },
-      minSize: { width: 600, height: 500 }
+      minSize: { width: 600, height: 500 },
     },
     {
-      id: 'data-visualization-builder',
-      name: 'Data Visualizer',
-      description: 'Interactively build charts and graphs from data.',
+      id: "data-visualization-builder",
+      name: "Data Visualizer",
+      description: "Interactively build charts and graphs from data.",
       icon: Database,
       component: DataVisualizationBuilderPlugin,
-      category: 'data',
+      category: "data",
       defaultSize: { width: 850, height: 650 },
-      minSize: { width: 650, height: 450 }
+      minSize: { width: 650, height: 450 },
     },
     {
-      id: 'network-request-builder',
-      name: 'API Tester',
-      description: 'Construct and send HTTP requests.',
+      id: "network-request-builder",
+      name: "API Tester",
+      description: "Construct and send HTTP requests.",
       icon: Globe,
       component: NetworkRequestBuilderPlugin,
-      category: 'utility',
+      category: "utility",
       defaultSize: { width: 700, height: 600 },
-      minSize: { width: 500, height: 400 }
+      minSize: { width: 500, height: 400 },
     },
     {
-      id: 'legal-document',
-      name: 'Legal Document Generator',
-      description: 'Generate legal documents and analyze existing ones',
+      id: "legal-document",
+      name: "Legal Document Generator",
+      description: "Generate legal documents and analyze existing ones",
       icon: Scale,
       component: LegalDocumentPlugin,
-      category: 'utility',
+      category: "utility",
       defaultSize: { width: 800, height: 600 },
-      minSize: { width: 600, height: 400 }
+      minSize: { width: 600, height: 400 },
     },
     {
-      id: 'interactive-storyboard',
-      name: 'Storyboard Creator',
-      description: 'Create visual storyboards for films and animations',
+      id: "interactive-storyboard",
+      name: "Storyboard Creator",
+      description: "Create visual storyboards for films and animations",
       icon: Film,
       component: InteractiveStoryboardPlugin,
-      category: 'media',
+      category: "media",
       defaultSize: { width: 900, height: 700 },
-      minSize: { width: 700, height: 500 }
+      minSize: { width: 700, height: 500 },
     },
     {
-      id: 'huggingface-spaces',
-      name: 'HF Image Generator',
-      description: 'Generate images using Hugging Face Spaces models',
+      id: "huggingface-spaces",
+      name: "HF Image Generator",
+      description: "Generate images using Hugging Face Spaces models",
       icon: ImageIcon,
       component: HuggingFaceSpacesPlugin,
-      category: 'ai',
+      category: "ai",
       defaultSize: { width: 800, height: 600 },
-      minSize: { width: 600, height: 400 }
+      minSize: { width: 600, height: 400 },
     },
     {
-      id: 'github-explorer',
-      name: 'GitHub Explorer',
-      description: 'Browse trending repositories and analyze code',
+      id: "github-explorer",
+      name: "GitHub Explorer",
+      description: "Browse trending repositories and analyze code",
       icon: GitBranch,
       component: GitHubExplorerPlugin,
-      category: 'code',
+      category: "code",
       defaultSize: { width: 900, height: 700 },
-      minSize: { width: 700, height: 500 }
+      minSize: { width: 700, height: 500 },
     },
     {
-      id: 'cloud-storage',
-      name: 'Cloud Storage 5GB',
-      description: 'Access encrypted files from cloud providers',
+      id: "cloud-storage",
+      name: "Cloud Storage 5GB",
+      description: "Access encrypted files from cloud providers",
       icon: Cloud,
       component: CloudStoragePlugin,
-      category: 'utility',
+      category: "utility",
       defaultSize: { width: 800, height: 600 },
-      minSize: { width: 600, height: 400 }
+      minSize: { width: 600, height: 400 },
     },
   ];
 
@@ -439,7 +447,7 @@ export default function InteractionPanel({
         color: "text-purple-400",
         action: () =>
           setInput(
-            "Act as an expert tutor. Break down complex topics into digestible steps with examples and practice questions. Topic: "
+            "Act as an expert tutor. Break down complex topics into digestible steps with examples and practice questions. Topic: ",
           ),
       },
       {
@@ -451,7 +459,7 @@ export default function InteractionPanel({
         color: "text-blue-400",
         action: () =>
           setInput(
-            "Review this code for best practices, performance, security, and maintainability. Provide specific suggestions:\n\n```\n// Paste your code here\n```"
+            "Review this code for best practices, performance, security, and maintainability. Provide specific suggestions:\n\n```\n// Paste your code here\n```",
           ),
       },
       {
@@ -470,7 +478,7 @@ export default function InteractionPanel({
         color: "text-green-400",
         action: () =>
           setInput(
-            "Analyze this document and provide: 1) Executive summary 2) Key points 3) Action items 4) Questions for clarification:\n\n"
+            "Analyze this document and provide: 1) Executive summary 2) Key points 3) Action items 4) Questions for clarification:\n\n",
           ),
       },
       {
@@ -482,7 +490,7 @@ export default function InteractionPanel({
         color: "text-orange-400",
         action: () =>
           setInput(
-            "Solve this mathematical problem step-by-step with clear explanations and visual representations where helpful:\n\n"
+            "Solve this mathematical problem step-by-step with clear explanations and visual representations where helpful:\n\n",
           ),
       },
       {
@@ -494,7 +502,7 @@ export default function InteractionPanel({
         color: "text-cyan-400",
         action: () =>
           setInput(
-            "Research this topic comprehensively. Provide: 1) Overview 2) Key findings 3) Different perspectives 4) Recent developments 5) Reliable sources. Topic: "
+            "Research this topic comprehensively. Provide: 1) Overview 2) Key findings 3) Different perspectives 4) Recent developments 5) Reliable sources. Topic: ",
           ),
       },
       {
@@ -506,7 +514,7 @@ export default function InteractionPanel({
         color: "text-indigo-400",
         action: () =>
           setInput(
-            "Analyze this data and provide insights, trends, and visualizations. Include statistical analysis and actionable recommendations:\n\n"
+            "Analyze this data and provide insights, trends, and visualizations. Include statistical analysis and actionable recommendations:\n\n",
           ),
       },
       {
@@ -517,7 +525,7 @@ export default function InteractionPanel({
         color: "text-pink-400",
         action: () =>
           setInput(
-            "Create engaging creative content. Specify the type (story, blog post, marketing copy, etc.) and key requirements:\n\nContent type: \nTone: \nAudience: \nKey points: "
+            "Create engaging creative content. Specify the type (story, blog post, marketing copy, etc.) and key requirements:\n\nContent type: \nTone: \nAudience: \nKey points: ",
           ),
       },
       {
@@ -529,7 +537,7 @@ export default function InteractionPanel({
         color: "text-yellow-400",
         action: () =>
           setInput(
-            "Help me create music. Provide chord progressions, melody ideas, lyrics, or composition structure for:\n\nGenre: \nMood: \nInstruments: \nTheme: "
+            "Help me create music. Provide chord progressions, melody ideas, lyrics, or composition structure for:\n\nGenre: \nMood: \nInstruments: \nTheme: ",
           ),
       },
       {
@@ -540,7 +548,7 @@ export default function InteractionPanel({
         color: "text-red-400",
         action: () =>
           setInput(
-            "Create a detailed image generation prompt for: \n\nSubject: \nStyle: \nLighting: \nComposition: \nMood: "
+            "Create a detailed image generation prompt for: \n\nSubject: \nStyle: \nLighting: \nComposition: \nMood: ",
           ),
       },
       {
@@ -552,7 +560,7 @@ export default function InteractionPanel({
         color: "text-emerald-400",
         action: () =>
           setInput(
-            "Plan a detailed travel itinerary including: 1) Daily schedule 2) Accommodations 3) Transportation 4) Activities 5) Budget estimates 6) Local tips\n\nDestination: \nDuration: \nBudget: \nInterests: "
+            "Plan a detailed travel itinerary including: 1) Daily schedule 2) Accommodations 3) Transportation 4) Activities 5) Budget estimates 6) Local tips\n\nDestination: \nDuration: \nBudget: \nInterests: ",
           ),
       },
       {
@@ -564,7 +572,7 @@ export default function InteractionPanel({
         color: "text-violet-400",
         action: () =>
           setInput(
-            "Design a game concept including: 1) Core mechanics 2) Player objectives 3) Progression system 4) Art style 5) Target audience\n\nGame type: \nPlatform: \nTheme: "
+            "Design a game concept including: 1) Core mechanics 2) Player objectives 3) Progression system 4) Art style 5) Target audience\n\nGame type: \nPlatform: \nTheme: ",
           ),
       },
       {
@@ -576,7 +584,7 @@ export default function InteractionPanel({
         color: "text-amber-400",
         action: () =>
           setInput(
-            "Provide strategic business analysis including: 1) Market analysis 2) Competitive landscape 3) SWOT analysis 4) Growth opportunities 5) Action plan\n\nBusiness/Industry: "
+            "Provide strategic business analysis including: 1) Market analysis 2) Competitive landscape 3) SWOT analysis 4) Growth opportunities 5) Action plan\n\nBusiness/Industry: ",
           ),
       },
       {
@@ -588,7 +596,7 @@ export default function InteractionPanel({
         color: "text-teal-400",
         action: () =>
           setInput(
-            "Design a comprehensive API including: 1) Endpoint structure 2) Request/response schemas 3) Authentication methods 4) Error handling 5) Rate limiting 6) Documentation\n\nAPI Purpose: \nData Models: \nAuthentication Type: "
+            "Design a comprehensive API including: 1) Endpoint structure 2) Request/response schemas 3) Authentication methods 4) Error handling 5) Rate limiting 6) Documentation\n\nAPI Purpose: \nData Models: \nAuthentication Type: ",
           ),
       },
       {
@@ -600,7 +608,7 @@ export default function InteractionPanel({
         color: "text-red-500",
         action: () =>
           setInput(
-            "Perform security analysis including: 1) Vulnerability assessment 2) Security best practices 3) Compliance requirements 4) Risk mitigation strategies 5) Security implementation guide\n\nSystem/Application: \nSecurity Level Required: \nCompliance Standards: "
+            "Perform security analysis including: 1) Vulnerability assessment 2) Security best practices 3) Compliance requirements 4) Risk mitigation strategies 5) Security implementation guide\n\nSystem/Application: \nSecurity Level Required: \nCompliance Standards: ",
           ),
       },
       {
@@ -612,7 +620,7 @@ export default function InteractionPanel({
         color: "text-yellow-500",
         action: () =>
           setInput(
-            "Analyze and optimize performance including: 1) Code profiling 2) Bottleneck identification 3) Optimization strategies 4) Caching solutions 5) Monitoring recommendations\n\nCode/System: \nPerformance Goals: \nCurrent Issues: "
+            "Analyze and optimize performance including: 1) Code profiling 2) Bottleneck identification 3) Optimization strategies 4) Caching solutions 5) Monitoring recommendations\n\nCode/System: \nPerformance Goals: \nCurrent Issues: ",
           ),
       },
       {
@@ -624,7 +632,7 @@ export default function InteractionPanel({
         color: "text-blue-500",
         action: () =>
           setInput(
-            "Design DevOps solution including: 1) CI/CD pipeline 2) Infrastructure as Code 3) Deployment strategies 4) Monitoring & logging 5) Scaling solutions\n\nTech Stack: \nCloud Provider: \nDeployment Requirements: "
+            "Design DevOps solution including: 1) CI/CD pipeline 2) Infrastructure as Code 3) Deployment strategies 4) Monitoring & logging 5) Scaling solutions\n\nTech Stack: \nCloud Provider: \nDeployment Requirements: ",
           ),
       },
       {
@@ -636,7 +644,7 @@ export default function InteractionPanel({
         color: "text-purple-500",
         action: () =>
           setInput(
-            "Create UX design including: 1) User journey mapping 2) Wireframes & mockups 3) Usability principles 4) Accessibility guidelines 5) Design system recommendations\n\nTarget Users: \nPlatform: \nKey Features: "
+            "Create UX design including: 1) User journey mapping 2) Wireframes & mockups 3) Usability principles 4) Accessibility guidelines 5) Design system recommendations\n\nTarget Users: \nPlatform: \nKey Features: ",
           ),
       },
       {
@@ -648,7 +656,7 @@ export default function InteractionPanel({
         color: "text-green-500",
         action: () =>
           setInput(
-            "Design database architecture including: 1) Entity relationship diagram 2) Table schemas with constraints 3) Indexing strategy 4) Query optimization 5) Migration scripts\n\nData Requirements: \nExpected Scale: \nDatabase Type: "
+            "Design database architecture including: 1) Entity relationship diagram 2) Table schemas with constraints 3) Indexing strategy 4) Query optimization 5) Migration scripts\n\nData Requirements: \nExpected Scale: \nDatabase Type: ",
           ),
       },
       {
@@ -660,7 +668,7 @@ export default function InteractionPanel({
         color: "text-emerald-500",
         action: () =>
           setInput(
-            "Create testing strategy including: 1) Unit test cases 2) Integration tests 3) E2E test scenarios 4) Test automation setup 5) Performance testing\n\nApplication Type: \nTesting Framework: \nCoverage Goals: "
+            "Create testing strategy including: 1) Unit test cases 2) Integration tests 3) E2E test scenarios 4) Test automation setup 5) Performance testing\n\nApplication Type: \nTesting Framework: \nCoverage Goals: ",
           ),
       },
       {
@@ -672,7 +680,7 @@ export default function InteractionPanel({
         color: "text-cyan-500",
         action: () =>
           setInput(
-            "Design AI/ML solution including: 1) Data preprocessing pipeline 2) Model architecture 3) Training strategy 4) Evaluation metrics 5) Deployment plan\n\nProblem Type: \nData Available: \nPerformance Requirements: "
+            "Design AI/ML solution including: 1) Data preprocessing pipeline 2) Model architecture 3) Training strategy 4) Evaluation metrics 5) Deployment plan\n\nProblem Type: \nData Available: \nPerformance Requirements: ",
           ),
       },
       {
@@ -683,7 +691,7 @@ export default function InteractionPanel({
         color: "text-blue-400",
         action: () =>
           setInput(
-            "Generate a complete application with the following structure:\n\n```\nProject Structure:\n- Frontend (React/Vue/Angular)\n- Backend (Node.js/Python/Go)\n- Database schema\n- API endpoints\n- Configuration files\n- Documentation\n```\n\nApplication Type: \nTech Stack: \nFeatures Required: "
+            "Generate a complete application with the following structure:\n\n```\nProject Structure:\n- Frontend (React/Vue/Angular)\n- Backend (Node.js/Python/Go)\n- Database schema\n- API endpoints\n- Configuration files\n- Documentation\n```\n\nApplication Type: \nTech Stack: \nFeatures Required: ",
           ),
       },
       {
@@ -694,7 +702,7 @@ export default function InteractionPanel({
         color: "text-orange-500",
         action: () =>
           setInput(
-            "Analyze the provided code and generate:\n\n1. **Code Quality Report**\n   - Performance bottlenecks\n   - Security vulnerabilities\n   - Best practice violations\n\n2. **Optimization Suggestions**\n   - Refactoring opportunities\n   - Performance improvements\n   - Memory optimization\n\n3. **Enhanced Version**\n   - Optimized code with comments\n   - Unit tests\n   - Documentation\n\nPaste your code below:\n```\n\n```"
+            "Analyze the provided code and generate:\n\n1. **Code Quality Report**\n   - Performance bottlenecks\n   - Security vulnerabilities\n   - Best practice violations\n\n2. **Optimization Suggestions**\n   - Refactoring opportunities\n   - Performance improvements\n   - Memory optimization\n\n3. **Enhanced Version**\n   - Optimized code with comments\n   - Unit tests\n   - Documentation\n\nPaste your code below:\n```\n\n```",
           ),
       },
       {
@@ -705,7 +713,7 @@ export default function InteractionPanel({
         color: "text-green-400",
         action: () =>
           setInput(
-            "Create a complete project scaffold including:\n\n📁 **Project Structure**\n- Organized folder hierarchy\n- Configuration files\n- Environment setup\n\n🔧 **Development Tools**\n- Build scripts\n- Linting configuration\n- Testing setup\n\n📚 **Documentation**\n- README with setup instructions\n- API documentation\n- Contributing guidelines\n\nProject Type: \nFramework: \nDeployment Target: "
+            "Create a complete project scaffold including:\n\n📁 **Project Structure**\n- Organized folder hierarchy\n- Configuration files\n- Environment setup\n\n🔧 **Development Tools**\n- Build scripts\n- Linting configuration\n- Testing setup\n\n📚 **Documentation**\n- README with setup instructions\n- API documentation\n- Contributing guidelines\n\nProject Type: \nFramework: \nDeployment Target: ",
           ),
       },
       {
@@ -716,7 +724,7 @@ export default function InteractionPanel({
         color: "text-yellow-500",
         action: () =>
           setInput(
-            "Create a regex pattern for:\n\n**Pattern Requirements:**\n- What you want to match\n- What you want to exclude\n- Specific format requirements\n\n**Output will include:**\n- Regex pattern with explanation\n- Test cases with examples\n- Code snippets for different languages\n- Alternative approaches\n\nDescribe what you want to match: "
+            "Create a regex pattern for:\n\n**Pattern Requirements:**\n- What you want to match\n- What you want to exclude\n- Specific format requirements\n\n**Output will include:**\n- Regex pattern with explanation\n- Test cases with examples\n- Code snippets for different languages\n- Alternative approaches\n\nDescribe what you want to match: ",
           ),
       },
       {
@@ -727,7 +735,7 @@ export default function InteractionPanel({
         color: "text-purple-400",
         action: () =>
           setInput(
-            "Transform data between formats:\n\n**Supported Formats:**\n- JSON ↔ CSV ↔ XML ↔ YAML\n- Database schemas\n- API responses\n- Configuration files\n\n**Features:**\n- Format validation\n- Structure optimization\n- Data cleaning\n- Schema generation\n\nSource Format: \nTarget Format: \nPaste your data:\n```\n\n```"
+            "Transform data between formats:\n\n**Supported Formats:**\n- JSON ↔ CSV ↔ XML ↔ YAML\n- Database schemas\n- API responses\n- Configuration files\n\n**Features:**\n- Format validation\n- Structure optimization\n- Data cleaning\n- Schema generation\n\nSource Format: \nTarget Format: \nPaste your data:\n```\n\n```",
           ),
       },
       {
@@ -738,7 +746,7 @@ export default function InteractionPanel({
         color: "text-blue-600",
         action: () =>
           setInput(
-            "Generate Docker configuration:\n\n🐳 **Docker Setup**\n- Multi-stage Dockerfile\n- Docker Compose with services\n- Environment configuration\n- Volume and network setup\n\n📦 **Services to Include**\n- Application containers\n- Database services\n- Caching layers\n- Reverse proxy\n\n🔧 **Production Ready**\n- Health checks\n- Resource limits\n- Security best practices\n- Logging configuration\n\nApplication Stack: \nServices Needed: \nEnvironment: "
+            "Generate Docker configuration:\n\n🐳 **Docker Setup**\n- Multi-stage Dockerfile\n- Docker Compose with services\n- Environment configuration\n- Volume and network setup\n\n📦 **Services to Include**\n- Application containers\n- Database services\n- Caching layers\n- Reverse proxy\n\n🔧 **Production Ready**\n- Health checks\n- Resource limits\n- Security best practices\n- Logging configuration\n\nApplication Stack: \nServices Needed: \nEnvironment: ",
           ),
       },
       {
@@ -749,7 +757,7 @@ export default function InteractionPanel({
         color: "text-orange-600",
         action: () =>
           setInput(
-            "Create Git workflow automation:\n\n🌿 **Branch Strategy**\n- Branching model (GitFlow/GitHub Flow)\n- Branch protection rules\n- Merge strategies\n\n🔄 **CI/CD Pipeline**\n- GitHub Actions / GitLab CI\n- Automated testing\n- Deployment workflows\n\n🪝 **Git Hooks**\n- Pre-commit hooks\n- Commit message validation\n- Code quality checks\n\n📋 **Templates**\n- PR/MR templates\n- Issue templates\n- Contributing guidelines\n\nRepository Type: \nCI/CD Platform: \nTeam Size: "
+            "Create Git workflow automation:\n\n🌿 **Branch Strategy**\n- Branching model (GitFlow/GitHub Flow)\n- Branch protection rules\n- Merge strategies\n\n🔄 **CI/CD Pipeline**\n- GitHub Actions / GitLab CI\n- Automated testing\n- Deployment workflows\n\n🪝 **Git Hooks**\n- Pre-commit hooks\n- Commit message validation\n- Code quality checks\n\n📋 **Templates**\n- PR/MR templates\n- Issue templates\n- Contributing guidelines\n\nRepository Type: \nCI/CD Platform: \nTeam Size: ",
           ),
       },
       {
@@ -761,7 +769,7 @@ export default function InteractionPanel({
         color: "text-indigo-500",
         action: () =>
           setInput(
-            "Setup environment management:\n\n🔐 **Environment Variables**\n- Development, staging, production configs\n- Secret management strategy\n- Environment validation\n\n🛡️ **Security**\n- API key rotation\n- Encrypted secrets\n- Access control\n\n📁 **Configuration Files**\n- .env templates\n- Docker environment files\n- Kubernetes secrets\n- Cloud provider configs\n\n🔄 **Deployment**\n- Environment promotion\n- Configuration drift detection\n- Rollback strategies\n\nDeployment Platform: \nSecrets to Manage: \nEnvironments Needed: "
+            "Setup environment management:\n\n🔐 **Environment Variables**\n- Development, staging, production configs\n- Secret management strategy\n- Environment validation\n\n🛡️ **Security**\n- API key rotation\n- Encrypted secrets\n- Access control\n\n📁 **Configuration Files**\n- .env templates\n- Docker environment files\n- Kubernetes secrets\n- Cloud provider configs\n\n🔄 **Deployment**\n- Environment promotion\n- Configuration drift detection\n- Rollback strategies\n\nDeployment Platform: \nSecrets to Manage: \nEnvironments Needed: ",
           ),
       },
       {
@@ -772,7 +780,7 @@ export default function InteractionPanel({
         color: "text-yellow-400",
         action: () =>
           setInput(
-            "Generate images using Hugging Face Spaces:\n\n🎨 **Available Models:**\n- DALL-E Mini/Mega\n- Stable Diffusion variants\n- Midjourney-style models\n- Artistic style transfer\n- Face generation models\n\n⚡ **Zero GPU Hosting:**\n- Free GPU access\n- Instant model loading\n- No setup required\n- Community models\n\n🖼️ **Image Generation:**\n- Text-to-image\n- Image-to-image\n- Style transfer\n- Upscaling\n- Inpainting\n\n**Prompt:** Describe the image you want to generate\n**Style:** (realistic, artistic, cartoon, etc.)\n**Dimensions:** (512x512, 1024x1024, etc.)\n\nDescribe your image: "
+            "Generate images using Hugging Face Spaces:\n\n🎨 **Available Models:**\n- DALL-E Mini/Mega\n- Stable Diffusion variants\n- Midjourney-style models\n- Artistic style transfer\n- Face generation models\n\n⚡ **Zero GPU Hosting:**\n- Free GPU access\n- Instant model loading\n- No setup required\n- Community models\n\n🖼️ **Image Generation:**\n- Text-to-image\n- Image-to-image\n- Style transfer\n- Upscaling\n- Inpainting\n\n**Prompt:** Describe the image you want to generate\n**Style:** (realistic, artistic, cartoon, etc.)\n**Dimensions:** (512x512, 1024x1024, etc.)\n\nDescribe your image: ",
           ),
       },
       {
@@ -783,7 +791,7 @@ export default function InteractionPanel({
         color: "text-green-400",
         action: () =>
           setInput(
-            "🕹️ **GITHUB ARCADE** 🕹️\n\n```\n┌─────────────────────────────────────┐\n│  🎮 SELECT TRENDING REPOSITORY 🎮   │\n├─────────────────────────────────────┤\n│ [A] 🔥 React 19 - Latest Features  │\n│ [B] ⚡ Vite 5.0 - Lightning Fast   │\n│ [C] 🤖 LangChain - AI Chains       │\n│ [D] 🎨 Tailwind CSS - Utility CSS  │\n│ [E] 📦 Next.js 14 - Full Stack     │\n│ [F] 🔧 TypeScript - Type Safety    │\n│ [G] 🚀 Astro - Static Site Gen     │\n│ [H] 💾 Prisma - Database ORM       │\n└─────────────────────────────────────┘\n```\n\n🎯 **MISSION:** Select a repository to:\n- 📋 Auto-fetch README.md\n- 📦 Parse package.json\n- 🔍 Extract main scripts\n- 📝 Generate project analysis\n- 🛠️ Suggest improvements\n\n**Enter your choice (A-H) or specify a custom repo:**\nRepository: "
+            "🕹️ **GITHUB ARCADE** 🕹️\n\n```\n┌─────────────────────────────────────┐\n│  🎮 SELECT TRENDING REPOSITORY 🎮   │\n├─────────────────────────────────────┤\n│ [A] 🔥 React 19 - Latest Features  │\n│ [B] ⚡ Vite 5.0 - Lightning Fast   │\n│ [C] 🤖 LangChain - AI Chains       │\n│ [D] 🎨 Tailwind CSS - Utility CSS  │\n│ [E] 📦 Next.js 14 - Full Stack     │\n│ [F] 🔧 TypeScript - Type Safety    │\n│ [G] 🚀 Astro - Static Site Gen     │\n│ [H] 💾 Prisma - Database ORM       │\n└─────────────────────────────────────┘\n```\n\n🎯 **MISSION:** Select a repository to:\n- 📋 Auto-fetch README.md\n- 📦 Parse package.json\n- 🔍 Extract main scripts\n- 📝 Generate project analysis\n- 🛠️ Suggest improvements\n\n**Enter your choice (A-H) or specify a custom repo:**\nRepository: ",
           ),
       },
       {
@@ -794,7 +802,7 @@ export default function InteractionPanel({
         color: "text-blue-400",
         action: () =>
           setInput(
-            "☁️ **CLOUD STORAGE SETUP** (5GB Free)\n\n🗄️ **Storage Providers:**\n- Google Cloud Storage\n- AWS S3\n- Azure Blob Storage\n- DigitalOcean Spaces\n- Cloudflare R2\n\n📦 **Implementation Features:**\n- File upload/download API\n- Automatic backup system\n- CDN integration\n- Image optimization\n- Version control\n- Access permissions\n\n🔧 **Self-Hosting Option:**\n- MinIO server setup\n- Docker containerization\n- SSL/TLS encryption\n- Backup strategies\n\n**ENABLE_CLOUD_STORAGE = true** (set to false to disable)\n\nPreferred Provider: \nUse Case: \nSecurity Requirements: "
+            "☁️ **CLOUD STORAGE SETUP** (5GB Free)\n\n🗄️ **Storage Providers:**\n- Google Cloud Storage\n- AWS S3\n- Azure Blob Storage\n- DigitalOcean Spaces\n- Cloudflare R2\n\n📦 **Implementation Features:**\n- File upload/download API\n- Automatic backup system\n- CDN integration\n- Image optimization\n- Version control\n- Access permissions\n\n🔧 **Self-Hosting Option:**\n- MinIO server setup\n- Docker containerization\n- SSL/TLS encryption\n- Backup strategies\n\n**ENABLE_CLOUD_STORAGE = true** (set to false to disable)\n\nPreferred Provider: \nUse Case: \nSecurity Requirements: ",
           ),
       },
       {
@@ -805,7 +813,7 @@ export default function InteractionPanel({
         color: "text-purple-400",
         action: () =>
           setInput(
-            "🖥️ **VPS DEPLOYMENT SYSTEM**\n\n🚀 **VPS Providers:**\n- DigitalOcean Droplets\n- Linode\n- Vultr\n- Hetzner Cloud\n- Google Compute Engine\n\n⚙️ **Automated Setup:**\n- Server provisioning\n- Docker installation\n- Nginx reverse proxy\n- SSL certificate (Let's Encrypt)\n- Firewall configuration\n- Monitoring setup\n\n🔄 **CI/CD Pipeline:**\n- GitHub Actions integration\n- Automated deployments\n- Health checks\n- Rollback capabilities\n- Log aggregation\n\n**ENABLE_VPS_DEPLOYMENT = true** (set to false to disable)\n\nApplication Type: \nTraffic Expected: \nBudget Range: "
+            "🖥️ **VPS DEPLOYMENT SYSTEM**\n\n🚀 **VPS Providers:**\n- DigitalOcean Droplets\n- Linode\n- Vultr\n- Hetzner Cloud\n- Google Compute Engine\n\n⚙️ **Automated Setup:**\n- Server provisioning\n- Docker installation\n- Nginx reverse proxy\n- SSL certificate (Let's Encrypt)\n- Firewall configuration\n- Monitoring setup\n\n🔄 **CI/CD Pipeline:**\n- GitHub Actions integration\n- Automated deployments\n- Health checks\n- Rollback capabilities\n- Log aggregation\n\n**ENABLE_VPS_DEPLOYMENT = true** (set to false to disable)\n\nApplication Type: \nTraffic Expected: \nBudget Range: ",
           ),
       },
     ];
@@ -824,7 +832,7 @@ export default function InteractionPanel({
       dragStartHeight.current = panelHeight;
       e.preventDefault();
     },
-    [panelHeight]
+    [panelHeight],
   );
 
   const handleMouseMove = useCallback(
@@ -834,11 +842,11 @@ export default function InteractionPanel({
       const deltaY = dragStartY.current - e.clientY;
       const newHeight = Math.max(
         200,
-        Math.min(800, dragStartHeight.current + deltaY)
+        Math.min(800, dragStartHeight.current + deltaY),
       );
       setPanelHeight(newHeight);
     },
-    [isDragging]
+    [isDragging],
   );
 
   const handleMouseUp = useCallback(() => {
@@ -856,16 +864,33 @@ export default function InteractionPanel({
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
-  const mockFileContents: Record<string, {content: string, version: number}> = {
-    'src/components/App.tsx': {content: `import React from 'react';\n\nconst App = () => (\n  <div>Hello World</div>\n);\n\nexport default App;`, version: 1},
-    'src/utils/helpers.ts': {content: `export function formatDate(date: Date) {\n  return date.toISOString().split('T')[0];\n}`, version: 1},
-    'package.json': {content: `{\n  "name": "my-app",\n  "version": "1.0.0",\n  "dependencies": {}\n}`, version: 1},
-    'README.md': {content: `# My App\n\nA sample application`, version: 1},
-    'src/styles/globals.css': {content: `body {\n  margin: 0;\n  padding: 0;\n}`, version: 1}
-  };
+  const mockFileContents: Record<string, { content: string; version: number }> =
+    {
+      "src/components/App.tsx": {
+        content: `import React from 'react';\n\nconst App = () => (\n  <div>Hello World</div>\n);\n\nexport default App;`,
+        version: 1,
+      },
+      "src/utils/helpers.ts": {
+        content: `export function formatDate(date: Date) {\n  return date.toISOString().split('T')[0];\n}`,
+        version: 1,
+      },
+      "package.json": {
+        content: `{\n  "name": "my-app",\n  "version": "1.0.0",\n  "dependencies": {}\n}`,
+        version: 1,
+      },
+      "README.md": { content: `# My App\n\nA sample application`, version: 1 },
+      "src/styles/globals.css": {
+        content: `body {\n  margin: 0;\n  padding: 0;\n}`,
+        version: 1,
+      },
+    };
 
-  const getFileContent = async (path: string): Promise<{content: string, version: number}> => {
-    return mockFileContents[path] || {content: `Content of ${path}`, version: 1};
+  const getFileContent = async (
+    path: string,
+  ): Promise<{ content: string; version: number }> => {
+    return (
+      mockFileContents[path] || { content: `Content of ${path}`, version: 1 }
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -875,25 +900,25 @@ export default function InteractionPanel({
 
       // Prepend command schema/rules section (parseable by the model)
       const rulesHeader = [
-        '=== TASK_RULES_START ===',
-        'You can ask for project context using command lines:',
-        '@list_project                       # get project file list',
+        "=== TASK_RULES_START ===",
+        "You can ask for project context using command lines:",
+        "@list_project                       # get project file list",
         '@read_file("path")                 # request file content',
         '@write_diff("path")\n*** Begin Diff\n...\n*** End Diff   # unified diff, minimal context',
         '@next_file("path")                 # ask the app to attach this file next',
-        '',
-        'When proposing edits, respond with a dedicated section:',
-        '=== COMMANDS_START ===',
+        "",
+        "When proposing edits, respond with a dedicated section:",
+        "=== COMMANDS_START ===",
         'request_files: ["optional/next/file1", "optional/next/file2"]',
-        'write_diffs: [',
+        "write_diffs: [",
         '  { path: "file", diff: "*** Begin Diff\\n...\\n*** End Diff" }',
-        ']\n=== COMMANDS_END ===',
-        'Do not mix prose inside the command block.',
-        '=== TASK_RULES_END ===',
-        ''
-      ].join('\n');
+        "]\n=== COMMANDS_END ===",
+        "Do not mix prose inside the command block.",
+        "=== TASK_RULES_END ===",
+        "",
+      ].join("\n");
       enhancedInput = `${rulesHeader}${enhancedInput}`;
-      
+
       // Detect @next_file("path") commands to auto-attach requested files
       const nextFileRegex = /@next_file\(["']([^"']+)["']\)/g;
       const autoFiles: string[] = [];
@@ -902,27 +927,34 @@ export default function InteractionPanel({
         autoFiles.push(m[1]);
       }
 
-      const allFilesToAttach = Array.from(new Set([...(selectedFiles || []), ...autoFiles]));
+      const allFilesToAttach = Array.from(
+        new Set([...(selectedFiles || []), ...autoFiles]),
+      );
 
       // Attach selected files to context
       if (allFilesToAttach.length > 0) {
         const filesContent: string[] = [];
         const newAttachedFiles = { ...attachedFiles };
         let cacheUpdated = false;
-        
+
         for (const file of allFilesToAttach) {
           if (!newAttachedFiles[file]) {
             newAttachedFiles[file] = await getFileContent(file);
             cacheUpdated = true;
           }
-          filesContent.push(`File: ${file} (v${newAttachedFiles[file].version})\n\`\`\`\n${newAttachedFiles[file].content}\n\`\`\``);
+          filesContent.push(
+            `File: ${file} (v${newAttachedFiles[file].version})\n\`\`\`\n${newAttachedFiles[file].content}\n\`\`\``,
+          );
         }
-        
+
         if (cacheUpdated) {
           setAttachedFiles(newAttachedFiles);
         }
-        
-        enhancedInput += '\n\n=== CONTEXT_FILES_START ===\n' + filesContent.join('\n\n') + '\n=== CONTEXT_FILES_END ===\n';
+
+        enhancedInput +=
+          "\n\n=== CONTEXT_FILES_START ===\n" +
+          filesContent.join("\n\n") +
+          "\n=== CONTEXT_FILES_END ===\n";
       }
 
       // Auto-enhance prompts when in Code tab
@@ -949,14 +981,14 @@ Please include:
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       if (!pendingDiffs || pendingDiffs.length === 0) return;
-      if (ev.key === 'Enter' && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
+      if (ev.key === "Enter" && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
         onAcceptPendingDiffs?.();
-      } else if (ev.key === 'Escape') {
+      } else if (ev.key === "Escape") {
         onDismissPendingDiffs?.();
       }
     };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, [pendingDiffs, onAcceptPendingDiffs, onDismissPendingDiffs]);
 
   const handleSuggestionClick = (suggestion: string) => {
@@ -1067,7 +1099,7 @@ Please include:
 
     // Generate new random templates
     const shuffled = [...allCodePromptTemplates].sort(
-      () => 0.5 - Math.random()
+      () => 0.5 - Math.random(),
     );
     const result = shuffled.slice(0, count);
 
@@ -1079,7 +1111,7 @@ Please include:
 
   // Get random templates on component mount and when activeTab changes
   const [displayedTemplates, setDisplayedTemplates] = useState(() =>
-    getRandomTemplates()
+    getRandomTemplates(),
   );
 
   // Refresh templates when switching to code tab
@@ -1144,7 +1176,7 @@ Please include:
 
       <div className="p-2 sm:p-4 h-full overflow-hidden max-w-4xl mx-auto flex flex-col">
         {/* Minimize/Maximize Controls */}
-        	<div className="absolute top-2 right-4 flex items-center gap-2">
+        <div className="absolute top-2 right-4 flex items-center gap-2">
           {/* Minimize toggle */}
           <Button
             size="sm"
@@ -1166,8 +1198,14 @@ Please include:
             onClick={() => {
               if (!isExpanded) {
                 prevPanelHeightRef.current = panelHeight;
-                const vv = (typeof window !== 'undefined' && (window as any).visualViewport) ? (window as any).visualViewport as VisualViewport : null;
-                const viewportH = vv?.height ?? (typeof window !== 'undefined' ? window.innerHeight : 0);
+                const vv =
+                  typeof window !== "undefined" &&
+                  (window as any).visualViewport
+                    ? ((window as any).visualViewport as VisualViewport)
+                    : null;
+                const viewportH =
+                  vv?.height ??
+                  (typeof window !== "undefined" ? window.innerHeight : 0);
                 const target = Math.max(200, Math.round(viewportH * 0.6));
                 setPanelHeight(target);
                 setIsExpanded(true);
@@ -1309,7 +1347,10 @@ Please include:
                 <div className="flex items-center gap-3">
                   <div className="flex items-center gap-2">
                     <span className="text-xs">Suggest</span>
-                    <Switch checked={autosuggestEnabled} onCheckedChange={(v) => setAutosuggestEnabled(!!v)} />
+                    <Switch
+                      checked={autosuggestEnabled}
+                      onCheckedChange={(v) => setAutosuggestEnabled(!!v)}
+                    />
                   </div>
                   {isProcessing && (
                     <div className="flex items-center gap-2">
@@ -1343,10 +1384,27 @@ Please include:
                 {pendingDiffs && pendingDiffs.length > 0 && (
                   <div className="mb-3 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-200">
                     <div className="flex items-center justify-between">
-                      <span>{pendingDiffs.length} diff(s) proposed. Press Enter to apply to preview, Esc to dismiss.</span>
+                      <span>
+                        {pendingDiffs.length} diff(s) proposed. Press Enter to
+                        apply to preview, Esc to dismiss.
+                      </span>
                       <div className="flex gap-2">
-                        <Button size="sm" variant="outline" onClick={onAcceptPendingDiffs} className="h-6 px-2">Apply</Button>
-                        <Button size="sm" variant="ghost" onClick={onDismissPendingDiffs} className="h-6 px-2">Dismiss</Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={onAcceptPendingDiffs}
+                          className="h-6 px-2"
+                        >
+                          Apply
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={onDismissPendingDiffs}
+                          className="h-6 px-2"
+                        >
+                          Dismiss
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -1377,7 +1435,11 @@ Please include:
                       className="min-h-[60px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
                       rows={3}
                       onKeyDown={(e) => {
-                        if (e.key === "Tab" && autosuggestEnabled && ghostSuffix) {
+                        if (
+                          e.key === "Tab" &&
+                          autosuggestEnabled &&
+                          ghostSuffix
+                        ) {
                           e.preventDefault();
                           setInput(input + ghostSuffix);
                           setGhostSuffix("");
@@ -1431,35 +1493,47 @@ Please include:
                         <Zap
                           className={`h-4 w-4 ${
                             !isProcessing
-                              ? "text-yellow-400 hover:text-yellow-300"
+                              ? "text-white-400 hover:text-yellow-300"
                               : "text-gray-500"
                           }`}
                         />
                       </button>
                     </div>
-                    
+
                     {showFileSelector && (
                       <div className="absolute right-0 top-10 w-64 bg-black/90 border border-white/20 rounded-lg shadow-lg z-10 p-2">
-                        <h4 className="text-sm font-medium mb-2">Attach Files</h4>
+                        <h4 className="text-sm font-medium mb-2">
+                          Attach Files
+                        </h4>
                         <div className="max-h-60 overflow-y-auto">
                           <div className="mb-3">
-                            <h5 className="text-xs font-medium mb-1">Project Files</h5>
+                            <h5 className="text-xs font-medium mb-1">
+                              Project Files
+                            </h5>
                             {[
-                              'src/components/App.tsx',
-                              'src/utils/helpers.ts',
-                              'package.json',
-                              'README.md',
-                              'src/styles/globals.css'
-                            ].map(file => (
-                              <div key={file} className="flex items-center gap-2 text-xs p-1 hover:bg-white/10 rounded">
+                              "src/components/App.tsx",
+                              "src/utils/helpers.ts",
+                              "package.json",
+                              "README.md",
+                              "src/styles/globals.css",
+                            ].map((file) => (
+                              <div
+                                key={file}
+                                className="flex items-center gap-2 text-xs p-1 hover:bg-white/10 rounded"
+                              >
                                 <input
                                   type="checkbox"
                                   checked={selectedFiles.includes(file)}
                                   onChange={(e) => {
                                     if (e.target.checked) {
-                                      setSelectedFiles([...selectedFiles, file]);
+                                      setSelectedFiles([
+                                        ...selectedFiles,
+                                        file,
+                                      ]);
                                     } else {
-                                      setSelectedFiles(selectedFiles.filter(f => f !== file));
+                                      setSelectedFiles(
+                                        selectedFiles.filter((f) => f !== file),
+                                      );
                                     }
                                   }}
                                 />
@@ -1467,13 +1541,15 @@ Please include:
                               </div>
                             ))}
                           </div>
-                          
+
                           <div>
-                            <h5 className="text-xs font-medium mb-1">Cloud Storage</h5>
+                            <h5 className="text-xs font-medium mb-1">
+                              Cloud Storage
+                            </h5>
                             <button
                               onClick={() => {
                                 setActiveTab("plugins");
-                                setPluginToOpen('cloud-storage');
+                                setPluginToOpen("cloud-storage");
                               }}
                               className="text-xs w-full text-left p-2 bg-blue-500/20 hover:bg-blue-500/30 rounded"
                             >
@@ -1583,7 +1659,7 @@ Please include:
                                 setSelectedFiles([...selectedFiles, file]);
                               } else {
                                 setSelectedFiles(
-                                  selectedFiles.filter((f) => f !== file)
+                                  selectedFiles.filter((f) => f !== file),
                                 );
                               }
                             }}
@@ -1697,7 +1773,11 @@ Please include:
                       className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
                       rows={6}
                       onKeyDown={(e) => {
-                        if (e.key === "Tab" && autosuggestEnabled && ghostSuffix) {
+                        if (
+                          e.key === "Tab" &&
+                          autosuggestEnabled &&
+                          ghostSuffix
+                        ) {
                           e.preventDefault();
                           setInput(input + ghostSuffix);
                           setGhostSuffix("");
@@ -1710,7 +1790,10 @@ Please include:
                       }}
                       onFocus={() => {
                         // Scroll to input on mobile when focused
-                        if (window.innerWidth <= 768 && codeTextareaRef.current) {
+                        if (
+                          window.innerWidth <= 768 &&
+                          codeTextareaRef.current
+                        ) {
                           setTimeout(() => {
                             codeTextareaRef.current?.scrollIntoView({
                               behavior: "smooth",
@@ -1838,7 +1921,7 @@ Please include:
                               plugin.action();
                               setActiveTab("chat"); // Switch to chat tab to show the input
                               toast.success(
-                                `${plugin.name} plugin activated! Check the chat input.`
+                                `${plugin.name} plugin activated! Check the chat input.`,
                               );
                             }}
                             className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
@@ -1953,24 +2036,27 @@ Please include:
             </TabsContent>
           </Tabs>
         )}
-      {/* Floating "Jump to input" FAB */}
-      {!isMinimized && (
-        <button
-          type="button"
-          onClick={() => {
-            textareaRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            setTimeout(() => textareaRef.current?.focus(), 250);
-          }}
-          className="fixed bottom-24 right-4 z-[60] bg-black/70 hover:bg-black/80 backdrop-blur-sm border border-white/20 text-white p-3 rounded-full shadow-lg transition-all duration-200"
-          title="Jump to input"
-        >
-          <ArrowDownToLine className="w-4 h-4" />
-        </button>
-      )}
-    </div>
+        {/* Floating "Jump to input" FAB */}
+        {!isMinimized && (
+          <button
+            type="button"
+            onClick={() => {
+              textareaRef.current?.scrollIntoView({
+                behavior: "smooth",
+                block: "center",
+              });
+              setTimeout(() => textareaRef.current?.focus(), 250);
+            }}
+            className="fixed bottom-24 right-4 z-[60] bg-black/70 hover:bg-black/80 backdrop-blur-sm border border-white/20 text-white p-3 rounded-full shadow-lg transition-all duration-200"
+            title="Jump to input"
+          >
+            <ArrowDownToLine className="w-4 h-4" />
+          </button>
+        )}
+      </div>
 
-    {/* Multi-Model Comparison Modal */}
-    <MultiModelComparison
+      {/* Multi-Model Comparison Modal */}
+      <MultiModelComparison
         isOpen={showMultiModelComparison}
         onClose={() => setShowMultiModelComparison(false)}
         availableProviders={availableProviders}
