@@ -32,7 +32,7 @@ import Accessibility from "lucide-react/dist/esm/icons/accessibility";
 import HelpCircle from "lucide-react/dist/esm/icons/help-circle";
 import History from "lucide-react/dist/esm/icons/history";
 import Loader2 from "lucide-react/dist/esm/icons/loader-2";
-import ImageIcon from "lucide-react/dist/esm/icons/image-icon";
+import ImageIcon from "lucide-react/dist/esm/icons/image";
 import Square from "lucide-react/dist/esm/icons/square";
 import MessageSquare from "lucide-react/dist/esm/icons/message-square";
 import AlertCircle from "lucide-react/dist/esm/icons/alert-circle";
