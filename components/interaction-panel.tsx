@@ -50,7 +50,7 @@ import Music from "lucide-react/dist/esm/icons/music";
 import Zap from "lucide-react/dist/esm/icons/zap";
 import Film from "lucide-react/dist/esm/icons/film";
 import Camera from "lucide-react/dist/esm/icons/camera";
-import Map from "lucide-react/dist/esm/icons/map";
+import MapIcon from "lucide-react/dist/esm/icons/map";
 import Gamepad2 from "lucide-react/dist/esm/icons/gamepad-2";
 import Shield from "lucide-react/dist/esm/icons/shield";
 import Database from "lucide-react/dist/esm/icons/database";
@@ -548,7 +548,7 @@ export default function InteractionPanel({
         name: "Travel Planner",
         description:
           "Plan trips with itineraries, recommendations, and logistics",
-        icon: Map,
+        icon: MapIcon,
         color: "text-emerald-400",
         action: () =>
           setInput(
