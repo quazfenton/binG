@@ -1,6 +1,7 @@
 {
-    "workbench.colorTheme": "Cursor Dark Midnight",
+    "workbench.colorTheme": "Kiro Light",
     "editor.language.colorizedBracketPairs": [
         
-    ]
+    ],
+    "kiroAgent.configureMCP": "Disabled"
 }
