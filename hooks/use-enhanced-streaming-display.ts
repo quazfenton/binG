@@ -84,7 +84,7 @@ export function useEnhancedStreamingDisplay({
     if (isStreaming && sessionIdRef.current && content !== lastContentRef.current) {
       const newContent = content.slice(lastContentRef.current.length);
       
-      if (newContent) {
+      if (newContent && enhancedBufferManager.getSessionState(sessionIdRef.current)) {
         // Process the new content chunk
         enhancedBufferManager.processChunk(sessionIdRef.current, newContent, {
           chunkType: 'text',
@@ -223,15 +223,16 @@ export function useEnhancedStreamingDisplay({
 
   // Cleanup on unmount
   useEffect(() => {
+    const sessionToDestroy = sessionIdRef.current;
     return () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
-      if (sessionIdRef.current) {
-        enhancedBufferManager.destroySession(sessionIdRef.current);
+      if (sessionToDestroy && !isStreaming) {
+        enhancedBufferManager.destroySession(sessionToDestroy);
       }
     };
-  }, []);
+  }, [isStreaming]);
 
   // Manual control functions
   const pauseAnimation = useCallback(() => {

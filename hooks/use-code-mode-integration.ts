@@ -45,7 +45,7 @@ export function useCodeModeIntegration(
 ): [CodeModeIntegrationState, CodeModeIntegrationActions] {
   const {
     autoCleanup = true,
-    sessionTimeout = 30 * 60 * 1000, // 30 minutes
+    sessionTimeout = 10 * 60 * 1000, // 10 minutes
     enableRealTimeUpdates = true,
   } = options;
 
