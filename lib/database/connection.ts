@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import crypto from 'crypto';
+import * as crypto from 'crypto';
 
 // Database configuration
 const DB_PATH = process.env.DATABASE_PATH || join(process.cwd(), 'data', 'binG.db');
@@ -12,6 +12,8 @@ const encryptionKey = Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
 
 // Initialize database
 let db: Database.Database | null = null;
+
+let dbInitialized = false;
 
 export function getDatabase(): Database.Database {
   if (!db) {
@@ -29,8 +31,11 @@ export function getDatabase(): Database.Database {
       db.pragma('cache_size = 1000');
       db.pragma('temp_store = memory');
       
-      // Initialize schema
-      initializeSchema();
+      // Initialize schema synchronously first time
+      if (!dbInitialized) {
+        initializeSchemaSync();
+        dbInitialized = true;
+      }
       
       console.log('Database initialized successfully');
     } catch (error) {
@@ -42,19 +47,45 @@ export function getDatabase(): Database.Database {
   return db;
 }
 
-function initializeSchema() {
+export async function initializeDatabaseAsync(): Promise<Database.Database> {
+  const database = getDatabase();
+  
+  if (!dbInitialized) {
+    await initializeSchema();
+    dbInitialized = true;
+  }
+  
+  return database;
+}
+
+function initializeSchemaSync() {
   if (!db) return;
   
   try {
     const schemaPath = join(__dirname, 'schema.sql');
     const schema = readFileSync(schemaPath, 'utf-8');
     
-    // Execute schema
+    // Execute base schema
     db.exec(schema);
     
-    console.log('Database schema initialized');
+    console.log('Database base schema initialized');
   } catch (error) {
-    console.error('Failed to initialize schema:', error);
+    console.error('Failed to initialize base schema:', error);
+    throw error;
+  }
+}
+
+async function initializeSchema() {
+  if (!db) return;
+  
+  try {
+    // Run migrations
+    const { migrationRunner } = await import('./migration-runner');
+    await migrationRunner.runMigrations();
+    
+    console.log('Database migrations completed');
+  } catch (error) {
+    console.error('Failed to run migrations:', error);
     throw error;
   }
 }

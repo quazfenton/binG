@@ -2,67 +2,67 @@
 
 ## Introduction
 
-This feature addresses critical stability and functionality issues in the application, focusing on API reliability, streaming improvements, UI responsiveness, code integration, authentication, and plugin robustness. The goal is to create a more stable, user-friendly experience with proper error handling and consistent functionality across all components.
+This feature addresses critical stability and functionality issues in the application, including UI reorganization, authentication system improvements, code mode fixes, and resolution of TypeScript errors causing infinite render loops. The goal is to create a more stable, user-friendly application with proper authentication flow and working core features.
 
 ## Requirements
 
 ### Requirement 1
 
-**User Story:** As a user, I want API calls to work reliably with proper fallback mechanisms, so that I don't experience application failures when services are unavailable.
+**User Story:** As a user, I want the plugin interface to be better organized so that I can easily find and access different types of tools and features.
 
 #### Acceptance Criteria
 
-1. WHEN an API call fails THEN the system SHALL implement appropriate fallback mechanisms
-2. WHEN a service is unavailable THEN the system SHALL display meaningful error messages to the user
-3. WHEN network connectivity is poor THEN the system SHALL retry failed requests with exponential backoff
-4. IF an API endpoint returns an error THEN the system SHALL log the error and provide user-friendly feedback
+1. WHEN I navigate to the interface THEN the "Advanced AI Plugins" section SHALL be moved from the Plugins tab to a renamed "Extra" tab (previously "Images")
+2. WHEN I view the Plugins tab THEN the "Modular Tools" section SHALL remain in its current location
+3. WHEN I access the Extra tab THEN I SHALL see both image-related features and the Advanced AI Plugins section
+4. WHEN the reorganization is complete THEN all existing functionality SHALL work without breaking changes
 
 ### Requirement 2
 
-**User Story:** As a user, I want to see streaming responses display smoothly in real-time, so that I can follow the conversation naturally without jarring interruptions.
+**User Story:** As a new user, I want to create an account and have my credentials securely stored so that I can access personalized features and maintain my session across visits.
 
 #### Acceptance Criteria
 
-1. WHEN receiving a streaming response THEN the system SHALL display content incrementally as it arrives
-2. WHEN streaming content THEN the system SHALL NOT wait until completion to show the full response
-3. WHEN displaying streaming text THEN the system SHALL maintain smooth animations without glitches
-4. IF streaming fails THEN the system SHALL gracefully fall back to non-streaming display
-5. WHEN streaming is active THEN the system SHALL provide visual indicators of the ongoing process
+1. WHEN I access the application THEN I SHALL see an option to create a new account instead of a mock account
+2. WHEN I register with an email THEN the system SHALL check if the email is already in use
+3. IF the email is already registered THEN the system SHALL display an appropriate error message
+4. WHEN I successfully register THEN my credentials SHALL be stored in the database
+5. WHEN I log in with valid credentials THEN my session SHALL persist across browser sessions
+6. WHEN I close and reopen the application THEN I SHALL remain logged in if my session is valid
+7. WHEN I log out THEN my session SHALL be properly terminated
 
 ### Requirement 3
 
-**User Story:** As a user, I want chat message bubbles to display properly on all screen sizes, so that I can read all content without horizontal scrolling or text being cut off.
+**User Story:** As a developer, I want the code mode functionality to work properly so that I can send prompts and receive responses without the system getting stuck.
 
 #### Acceptance Criteria
 
-1. WHEN displaying chat messages THEN the system SHALL ensure bubbles fit within the viewport width
-2. WHEN content is long THEN the system SHALL wrap text appropriately within message bubbles
-3. WHEN on mobile devices THEN the system SHALL adjust bubble sizing for smaller screens
-4. WHEN messages contain code or long URLs THEN the system SHALL handle overflow gracefully
-5. IF screen size changes THEN the system SHALL dynamically adjust message bubble layouts
+1. WHEN I select the "code" section and send a prompt THEN the system SHALL process the request properly
+2. WHEN a code mode request is sent THEN the system SHALL NOT get stuck in an indefinite generating state
+3. WHEN the API processes a code request THEN it SHALL return a proper response or error
+4. WHEN there are issues with code mode requests THEN appropriate error handling SHALL be implemented
+5. WHEN code mode is active THEN all related components SHALL function without blocking the UI
 
 ### Requirement 4
 
-**User Story:** As a developer, I want the enhanced code orchestrator integrated with the code mode interface, so that code generation and editing operations are consistent and safe.
+**User Story:** As a user, I want the stop button to work properly so that I can cancel ongoing operations when needed.
 
 #### Acceptance Criteria
 
-1. WHEN user selects "Code" option THEN the system SHALL use the enhanced code orchestrator for processing
-2. WHEN performing code operations THEN the system SHALL ensure diff operations are safe and reversible
-3. WHEN generating code THEN the system SHALL maintain consistency with existing codebase patterns
-4. IF code operations fail THEN the system SHALL provide clear error messages and rollback options
-5. WHEN editing code THEN the system SHALL validate changes before applying them
+1. WHEN I click the stop button during an ongoing operation THEN the operation SHALL be cancelled
+2. WHEN an operation is cancelled THEN the UI SHALL return to its ready state
+3. WHEN the stop button is pressed THEN any streaming responses SHALL be terminated
+4. WHEN cancellation occurs THEN appropriate cleanup SHALL be performed to prevent memory leaks
 
 ### Requirement 5
 
-**User Story:** As a user, I want to be able to log into my account through the accessibility controls, so that I can access personalized features and settings.
+**User Story:** As a developer, I want the application to be free of TypeScript errors and infinite render loops so that the application runs smoothly and efficiently.
 
 #### Acceptance Criteria
 
-1. WHEN clicking login option in accessibility controls THEN the system SHALL display a functional login interface
-2. WHEN entering valid credentials THEN the system SHALL authenticate the user successfully
-3. WHEN login fails THEN the system SHALL display appropriate error messages
-4. WHEN logged in THEN the system SHALL update the UI to reflect authenticated state
+1. WHEN I run `npx tsc` THEN there SHALL be no TypeScript compilation errors
+2. WHEN components render THEN there SHALL be no "Maximum update depth exceeded" errors
+3. WHEN useEffect hooks are used THEN they SHALL have proper dependency arrays to prevent infinite lo
 5. IF user is already logged in THEN the system SHALL show logout option instead
 
 ### Requirement 6

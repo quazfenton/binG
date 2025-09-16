@@ -6,14 +6,20 @@ import { FEATURE_FLAGS } from '@/config/features';
 interface User {
   id: number;
   email: string;
+  username?: string;
+  createdAt: Date;
+  lastLogin?: Date;
+  isActive: boolean;
+  subscriptionTier: string;
+  emailVerified: boolean;
 }
 
 interface AuthContextType {
   isAuthenticated: boolean;
   user: User | null;
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
-  register: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  register: (email: string, password: string, username?: string) => Promise<void>;
   getApiKeys: () => Record<string, string>;
   setApiKeys: (keys: Record<string, string>) => void;
   refreshToken: () => Promise<boolean>;
@@ -30,7 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isDev = FEATURE_FLAGS.IS_DEVELOPMENT;
   const skipAuth = isDev && FEATURE_FLAGS.SKIP_AUTH_IN_DEV;
 
-  // Token management utilities
+  // Token management utilities (kept for backward compatibility)
   const getStoredToken = (): string | null => {
     if (typeof window === 'undefined') return null;
     return localStorage.getItem('token');
@@ -49,24 +55,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // Validate token and get user info
-  const validateToken = async (token: string): Promise<User | null> => {
+  // Validate session and get user info
+  const validateSession = async (): Promise<User | null> => {
     try {
       const response = await fetch('/api/auth/validate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
         },
+        credentials: 'include', // Include cookies for session validation
       });
 
       if (response.ok) {
         const data = await response.json();
-        return data.user;
+        if (data.valid && data.user) {
+          return {
+            ...data.user,
+            createdAt: new Date(data.user.createdAt),
+            lastLogin: data.user.lastLogin ? new Date(data.user.lastLogin) : undefined,
+          };
+        }
       }
       return null;
     } catch (error) {
-      console.error('Token validation failed:', error);
+      console.error('Session validation failed:', error);
       return null;
     }
   };
@@ -74,20 +86,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const initializeAuth = async () => {
       if (skipAuth) {
-        setUser({ id: 1, email: 'dev@example.com' });
+        setUser({ 
+          id: 1, 
+          email: 'dev@example.com',
+          createdAt: new Date(),
+          isActive: true,
+          subscriptionTier: 'premium',
+          emailVerified: true
+        });
         setIsLoading(false);
         return;
       }
 
-      const token = getStoredToken();
-      if (token) {
-        const validatedUser = await validateToken(token);
-        if (validatedUser) {
-          setUser(validatedUser);
-        } else {
-          // Token is invalid, remove it
-          removeStoredToken();
-        }
+      // Try session-based validation first
+      const validatedUser = await validateSession();
+      if (validatedUser) {
+        setUser(validatedUser);
+      } else {
+        // Session is invalid, clean up any stored tokens
+        removeStoredToken();
       }
       setIsLoading(false);
     };
@@ -97,7 +114,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     if (skipAuth) {
-      setUser({ id: 1, email });
+      setUser({ 
+        id: 1, 
+        email,
+        createdAt: new Date(),
+        isActive: true,
+        subscriptionTier: 'premium',
+        emailVerified: true
+      });
       return;
     }
 
@@ -110,6 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
+        credentials: 'include', // Include cookies for session
       });
 
       const data = await response.json();
@@ -118,14 +143,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw new Error(data.error || 'Login failed');
       }
 
-      if (!data.token || !data.user) {
+      if (!data.success || !data.user) {
         throw new Error('Invalid response from server');
       }
 
-      // Store token and user data
-      setStoredToken(data.token);
-      localStorage.setItem('user', JSON.stringify(data.user));
-      setUser(data.user);
+      // Store token if provided (for backward compatibility)
+      if (data.token) {
+        setStoredToken(data.token);
+      }
+
+      // Convert date strings to Date objects
+      const user = {
+        ...data.user,
+        createdAt: new Date(data.user.createdAt),
+        lastLogin: data.user.lastLogin ? new Date(data.user.lastLogin) : undefined,
+      };
+
+      setUser(user);
     } catch (error: any) {
       // Clean up any partial state
       removeStoredToken();
@@ -134,14 +168,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    if (skipAuth) {
+      setUser(null);
+      return;
+    }
+
+    try {
+      // Call logout API to invalidate session
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include', // Include cookies for session
+      });
+    } catch (error) {
+      console.error('Logout API call failed:', error);
+      // Continue with local logout even if API call fails
+    }
+
+    // Clean up local state
     removeStoredToken();
     setUser(null);
   };
 
-  const register = async (email: string, password: string) => {
+  const register = async (email: string, password: string, username?: string) => {
     if (skipAuth) {
-      setUser({ id: 1, email });
+      setUser({ 
+        id: 1, 
+        email,
+        username,
+        createdAt: new Date(),
+        isActive: true,
+        subscriptionTier: 'premium',
+        emailVerified: true
+      });
       return;
     }
 
@@ -153,7 +212,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const response = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, username }),
+        credentials: 'include', // Include cookies for session
       });
 
       const data = await response.json();
@@ -162,8 +222,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw new Error(data.error || 'Registration failed');
       }
 
-      // After successful registration, log the user in
-      await login(email, password);
+      if (!data.success || !data.user) {
+        throw new Error('Invalid response from server');
+      }
+
+      // Store token if provided (for backward compatibility)
+      if (data.token) {
+        setStoredToken(data.token);
+      }
+
+      // Convert date strings to Date objects
+      const user = {
+        ...data.user,
+        createdAt: new Date(data.user.createdAt),
+        lastLogin: data.user.lastLogin ? new Date(data.user.lastLogin) : undefined,
+      };
+
+      setUser(user);
     } catch (error: any) {
       throw error;
     }
@@ -172,30 +247,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshToken = async (): Promise<boolean> => {
     if (skipAuth) return true;
 
-    const currentToken = getStoredToken();
-    if (!currentToken) return false;
-
     try {
       const response = await fetch('/api/auth/refresh', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${currentToken}`,
         },
+        credentials: 'include', // Include cookies for session
       });
 
       if (response.ok) {
         const data = await response.json();
-        setStoredToken(data.token);
+        if (data.token) {
+          setStoredToken(data.token);
+        }
         return true;
       }
       
       // Token refresh failed, logout user
-      logout();
+      await logout();
       return false;
     } catch (error) {
       console.error('Token refresh failed:', error);
-      logout();
+      await logout();
       return false;
     }
   };

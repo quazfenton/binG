@@ -83,6 +83,7 @@ import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
 import { useInteractionCodeMode } from "../hooks/use-interaction-code-mode";
+import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
 
 interface InteractionPanelProps {
   onSubmit: (content: string) => void;
@@ -295,6 +296,23 @@ export default function InteractionPanel({
   // Code Mode Integration
   const [codeModeState, codeModeActions] = useInteractionCodeMode();
   // pending diffs come from parent via props now
+
+  // Initialize plugin migration service
+  useEffect(() => {
+    // Perform the migration: move Advanced AI Plugins to Extra tab
+    const advancedAIPluginIds = ['advanced-ai-plugins'];
+    const modularToolsIds = ['modular-tools'];
+    
+    // Update tab configurations
+    pluginMigrationService.movePluginsToTab(advancedAIPluginIds, 'extra');
+    pluginMigrationService.movePluginsToTab(modularToolsIds, 'plugins');
+    
+    // Validate the structure
+    const isValid = pluginMigrationService.validateTabStructure();
+    if (!isValid) {
+      console.warn('Plugin tab structure validation failed');
+    }
+  }, []);
 
   // Plugin System
   const availablePlugins: Plugin[] = [
@@ -1282,7 +1300,7 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                   </TabsTrigger>
                   <TabsTrigger value="images" className="text-xs sm:text-sm">
                     <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                    <span className="hidden sm:inline">Images</span>
+                    <span className="hidden sm:inline">Extra</span>
                   </TabsTrigger>
                   <TabsTrigger value="plugins" className="text-xs sm:text-sm">
                     <Zap className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
@@ -1962,40 +1980,13 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
             </TabsContent>
 
             <TabsContent value="images" className="m-0">
-              <div className="max-h-64 overflow-y-auto space-y-3">
-                {sampleImages.map((image) => (
-                  <div
-                    key={image.id}
-                    className="flex items-center gap-3 p-3 bg-black/20 rounded-lg hover:bg-black/30 transition-colors"
-                  >
-                    <img
-                      src={image.url || "/placeholder.svg"}
-                      alt={image.title}
-                      className="w-16 h-12 object-cover rounded"
-                    />
-                    <div className="flex-1">
-                      <h4 className="text-sm font-medium text-white">
-                        {image.title}
-                      </h4>
-                      <p className="text-xs text-white/60">
-                        Click to use in conversation
-                      </p>
-                    </div>
-                    <Button size="sm" variant="ghost">
-                      <ImageIcon className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </TabsContent>
-
-            <TabsContent value="plugins" className="m-0">
               <Card className="bg-black/40 border-white/10">
                 <CardContent className="pt-6">
-                  <div className="space-y-3">
+                  <div className="space-y-4">
+                    {/* Advanced AI Plugins Section */}
                     <div className="text-center mb-4">
                       <h3 className="font-medium text-white mb-2">
-                        Advanced AI Modules
+                        Advanced AI Plugins
                       </h3>
                       <p className="text-xs text-white/60">
                         Click any plugin to load its specialized prompt and
@@ -2034,51 +2025,92 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                       })}
                     </div>
 
-                    <div className="mt-4 pt-3 border-t border-white/10">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Zap className="h-4 w-4 text-yellow-400" />
+                    {/* Images Section */}
+                    <div className="mt-6 pt-4 border-t border-white/10">
+                      <div className="flex items-center gap-2 mb-3">
+                        <ImageIcon className="h-4 w-4 text-blue-400" />
                         <span className="text-sm font-medium">
-                          Modular Tools
+                          Sample Images
                         </span>
                       </div>
-                      <div className="mb-3">
-                        <p className="text-xs text-white/60 mb-2">
-                          Pop-out plugin windows for advanced functionality:
-                        </p>
-                        <PluginManager
-                          availablePlugins={availablePlugins}
-                          onPluginResult={handlePluginResult}
-                          openPluginId={pluginToOpen}
-                          onOpenComplete={() => setPluginToOpen(null)}
-                        />
+                      <div className="max-h-64 overflow-y-auto space-y-3">
+                        {sampleImages.map((image) => (
+                          <div
+                            key={image.id}
+                            className="flex items-center gap-3 p-3 bg-black/20 rounded-lg hover:bg-black/30 transition-colors"
+                          >
+                            <img
+                              src={image.url || "/placeholder.svg"}
+                              alt={image.title}
+                              className="w-16 h-12 object-cover rounded"
+                            />
+                            <div className="flex-1">
+                              <h4 className="text-sm font-medium text-white">
+                                {image.title}
+                              </h4>
+                              <p className="text-xs text-white/60">
+                                Click to use in conversation
+                              </p>
+                            </div>
+                            <Button size="sm" variant="ghost">
+                              <ImageIcon className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ))}
                       </div>
-                      <div className="flex items-center gap-2 mb-2">
-                        <Settings className="h-4 w-4 text-green-400" />
-                        <span className="text-sm font-medium">
-                          Quick Shortcuts
-                        </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="plugins" className="m-0">
+              <Card className="bg-black/40 border-white/10">
+                <CardContent className="pt-6">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Zap className="h-4 w-4 text-yellow-400" />
+                      <span className="text-sm font-medium">
+                        Modular Tools
+                      </span>
+                    </div>
+                    <div className="mb-3">
+                      <p className="text-xs text-white/60 mb-2">
+                        Pop-out plugin windows for advanced functionality:
+                      </p>
+                      <PluginManager
+                        availablePlugins={availablePlugins}
+                        onPluginResult={handlePluginResult}
+                        openPluginId={pluginToOpen}
+                        onOpenComplete={() => setPluginToOpen(null)}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <Settings className="h-4 w-4 text-green-400" />
+                      <span className="text-sm font-medium">
+                        Quick Shortcuts
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1 text-xs text-white/60">
+                      <div>
+                        <kbd className="bg-black/40 px-1 rounded">
+                          Ctrl+Enter
+                        </kbd>{" "}
+                        Submit
                       </div>
-                      <div className="grid grid-cols-2 gap-1 text-xs text-white/60">
-                        <div>
-                          <kbd className="bg-black/40 px-1 rounded">
-                            Ctrl+Enter
-                          </kbd>{" "}
-                          Submit
-                        </div>
-                        <div>
-                          <kbd className="bg-black/40 px-1 rounded">
-                            Shift+Enter
-                          </kbd>{" "}
-                          New line
-                        </div>
-                        <div>
-                          <kbd className="bg-black/40 px-1 rounded">Ctrl+K</kbd>{" "}
-                          Focus input
-                        </div>
-                        <div>
-                          <kbd className="bg-black/40 px-1 rounded">Esc</kbd>{" "}
-                          Clear input
-                        </div>
+                      <div>
+                        <kbd className="bg-black/40 px-1 rounded">
+                          Shift+Enter
+                        </kbd>{" "}
+                        New line
+                      </div>
+                      <div>
+                        <kbd className="bg-black/40 px-1 rounded">Ctrl+K</kbd>{" "}
+                        Focus input
+                      </div>
+                      <div>
+                        <kbd className="bg-black/40 px-1 rounded">Esc</kbd>{" "}
+                        Clear input
                       </div>
                     </div>
                   </div>

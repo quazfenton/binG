@@ -320,6 +320,11 @@ export default function AccessibilityControls({
                     <p className="text-sm font-medium truncate" title={user?.email}>
                       {user?.email || 'N/A'}
                     </p>
+                    {user?.username && (
+                      <p className="text-xs text-gray-400 truncate" title={user.username}>
+                        @{user.username}
+                      </p>
+                    )}
                     <div className="flex items-center gap-1">
                       <div className="w-2 h-2 bg-green-400 rounded-full"></div>
                       <span className="text-xs text-green-400">Online</span>
@@ -351,14 +356,23 @@ export default function AccessibilityControls({
                 </div>
               </div>
               <div className="text-xs text-gray-400 flex items-center justify-between">
-                <span>Premium Account</span>
+                <span>{user?.subscriptionTier === 'premium' ? 'Premium Account' : 'Free Account'}</span>
                 <div className="flex items-center gap-1">
-                  <Crown className="h-3 w-3 text-yellow-400" />
-                  <span className="text-yellow-400">Active</span>
+                  {user?.subscriptionTier === 'premium' ? (
+                    <>
+                      <Crown className="h-3 w-3 text-yellow-400" />
+                      <span className="text-yellow-400">Active</span>
+                    </>
+                  ) : (
+                    <span className="text-gray-400">Free</span>
+                  )}
                 </div>
               </div>
               <div className="text-xs text-gray-500">
-                Unlimited prompts • Custom themes • Priority support
+                {user?.subscriptionTier === 'premium' 
+                  ? 'Unlimited prompts • Custom themes • Priority support'
+                  : 'Limited prompts • Basic features'
+                }
               </div>
             </div>
           ) : (

@@ -1,36 +1,59 @@
-import { NextResponse } from 'next/server';
-import { initializeDatabase, hashPassword } from '@/lib/database/db';
+import { NextRequest, NextResponse } from 'next/server';
+import { authService } from '@/lib/auth/auth-service';
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
-    const { email, password } = await req.json();
+    const body = await request.json();
+    const { email, password, username } = body;
 
+    // Validate required fields
     if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
+      return NextResponse.json(
+        { success: false, error: 'Email and password are required' },
+        { status: 400 }
+      );
     }
 
-    const db = await initializeDatabase();
-    const hashedPassword = await hashPassword(password);
+    // Get client info for session
+    const ipAddress = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+    const userAgent = request.headers.get('user-agent') || 'unknown';
 
-    try {
-      const result = db.prepare('INSERT INTO users (email, password) VALUES (?, ?)').run(email, hashedPassword);
-      
-      return NextResponse.json({ 
-        message: 'User registered successfully', 
-        userId: result.lastInsertRowid,
-        user: {
-          id: result.lastInsertRowid,
-          email: email
-        }
+    // Register user
+    const result = await authService.register(
+      { email, password, username },
+      { ipAddress, userAgent }
+    );
+
+    if (!result.success) {
+      return NextResponse.json(
+        { success: false, error: result.error },
+        { status: 400 }
+      );
+    }
+
+    // Set session cookie
+    const response = NextResponse.json({
+      success: true,
+      user: result.user,
+      token: result.token
+    });
+
+    if (result.sessionId) {
+      response.cookies.set('session_id', result.sessionId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 7 * 24 * 60 * 60 // 7 days
       });
-    } catch (error: any) {
-      if (error.message.includes('UNIQUE constraint failed')) {
-        return NextResponse.json({ error: 'User with this email already exists' }, { status: 409 });
-      }
-      throw error;
     }
+
+    return response;
+
   } catch (error) {
     console.error('Registration API error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: 'Internal server error' },
+      { status: 500 }
+    );
   }
 }

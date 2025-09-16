@@ -9,32 +9,8 @@
 import { EventEmitter } from 'events';
 import { CodeModeErrorHandler, CodeModeError } from './code-mode-error-handler';
 
-// Mock orchestrator for now - in real implementation, import the actual orchestrator
-class MockEnhancedCodeOrchestrator extends EventEmitter {
-  async startSession(request: any): Promise<string> {
-    const sessionId = `orchestrator_${Date.now()}`;
-    
-    // Simulate async processing
-    setTimeout(() => {
-      this.emit('session_completed', {
-        sessionId,
-        results: {
-          responses: [{
-            diffs: [],
-            file_context: { file_name: 'example.ts' },
-            next_file_request: null,
-          }],
-        },
-      });
-    }, 1000);
-    
-    return sessionId;
-  }
-
-  async cancelSession(sessionId: string): Promise<void> {
-    this.emit('session_cancelled', { sessionId });
-  }
-}
+// Import the actual enhanced code orchestrator
+import { EnhancedCodeOrchestrator } from '../../enhanced-code-system/enhanced-code-orchestrator';
 
 // Types for code mode integration
 export interface CodeModeSession {
@@ -107,7 +83,7 @@ export interface CodeModeConfig {
  * providing session management, request/response mapping, and error handling.
  */
 export class CodeModeIntegrationService extends EventEmitter {
-  private orchestrator: MockEnhancedCodeOrchestrator;
+  private orchestrator: EnhancedCodeOrchestrator;
   private sessions: Map<string, CodeModeSession> = new Map();
   private config: CodeModeConfig;
   private sessionCleanupInterval: NodeJS.Timeout;
@@ -130,7 +106,14 @@ export class CodeModeIntegrationService extends EventEmitter {
     };
 
     // Initialize the enhanced code orchestrator
-    this.orchestrator = new MockEnhancedCodeOrchestrator();
+    this.orchestrator = new EnhancedCodeOrchestrator({
+      mode: this.config.orchestratorConfig?.mode || 'hybrid',
+      enableStreaming: this.config.orchestratorConfig?.enableStreaming ?? true,
+      enableFileManagement: this.config.orchestratorConfig?.enableFileManagement ?? true,
+      qualityThreshold: this.config.orchestratorConfig?.qualityThreshold || 0.8,
+      maxConcurrentSessions: this.config.maxConcurrentSessions,
+      defaultTimeoutMs: this.config.sessionTimeoutMs,
+    });
 
     // Set up orchestrator event listeners
     this.setupOrchestratorEventHandlers();
@@ -245,14 +228,33 @@ export class CodeModeIntegrationService extends EventEmitter {
       throw error;
     }
 
+    // Check if session is already processing to prevent duplicate requests
+    if (session.status === 'processing') {
+      throw CodeModeErrorHandler.createError('INVALID_REQUEST', 'Session is already processing a request', sessionId);
+    }
+
     session.status = 'processing';
     session.lastActivity = new Date();
+
+    // Set up timeout for the entire operation
+    const timeoutMs = this.config.sessionTimeoutMs || 120000; // 2 minutes default
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        session.status = 'failed';
+        session.error = 'Request timed out';
+        reject(CodeModeErrorHandler.createError('TIMEOUT_ERROR', 'Code task execution timed out', sessionId));
+      }, timeoutMs);
+    });
 
     try {
       // Prepare files for orchestrator
       const filesToProcess = selectedFiles 
         ? session.files.filter(f => selectedFiles.includes(f.path))
         : session.files;
+
+      if (filesToProcess.length === 0) {
+        throw CodeModeErrorHandler.createError('INVALID_REQUEST', 'No files selected for processing', sessionId);
+      }
 
       const orchestratorFiles = filesToProcess.map(file => ({
         id: file.id,
@@ -264,47 +266,16 @@ export class CodeModeIntegrationService extends EventEmitter {
         lastModified: file.lastModified,
       }));
 
-      // Start orchestrator session
-      const orchestratorSessionId = await this.orchestrator.startSession({
-        task,
-        files: orchestratorFiles,
-        options: {
-          mode: this.config.orchestratorConfig?.mode,
-          requireApproval: true,
-          enableDiffs: true,
-          contextHints: rules ? [rules] : [],
-        },
-      });
+      // Race between orchestrator execution and timeout
+      const result = await Promise.race([
+        this.executeOrchestratorTask(session, task, orchestratorFiles, rules),
+        timeoutPromise
+      ]);
 
-      session.orchestratorSessionId = orchestratorSessionId;
+      session.status = 'completed';
+      session.lastActivity = new Date();
 
-      // For demo purposes, simulate a successful response with mock diffs
-      const mockDiffs: { [filePath: string]: CodeModeDiff[] } = {};
-      if (filesToProcess.length > 0) {
-        const firstFile = filesToProcess[0];
-        mockDiffs[firstFile.path] = [
-          {
-            type: 'add',
-            lineStart: 0,
-            content: `// Enhanced implementation for: ${task}`,
-          },
-          {
-            type: 'modify',
-            lineStart: 1,
-            lineEnd: 1,
-            content: `// Updated with integration layer`,
-            originalContent: '// Original content',
-          }
-        ];
-      }
-
-      return {
-        type: 'diff_preview',
-        diffs: mockDiffs,
-        message: 'Code changes generated successfully',
-        sessionId,
-        success: true,
-      };
+      return result;
 
     } catch (error) {
       session.status = 'failed';
@@ -316,6 +287,181 @@ export class CodeModeIntegrationService extends EventEmitter {
       return {
         type: 'error',
         message: codeModeError.userMessage,
+        sessionId,
+        success: false,
+      };
+    }
+  }
+
+  /**
+   * Execute orchestrator task with proper error handling
+   */
+  private async executeOrchestratorTask(
+    session: CodeModeSession,
+    task: string,
+    files: any[],
+    rules?: string
+  ): Promise<CodeModeResponse> {
+    try {
+      // Prepare request for orchestrator
+      const orchestratorRequest = {
+        id: `request_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        task,
+        files: files.map(file => ({
+          id: file.id,
+          name: file.name,
+          path: file.path,
+          content: file.content,
+          language: file.language,
+          hasEdits: file.hasEdits,
+          lastModified: file.lastModified,
+        })),
+        options: {
+          mode: this.config.orchestratorConfig?.mode,
+          requireApproval: true,
+          enableDiffs: true,
+          contextHints: rules ? [rules] : [],
+          priority: 'medium' as const,
+          timeoutMs: this.config.sessionTimeoutMs,
+          qualityThreshold: this.config.orchestratorConfig?.qualityThreshold,
+        },
+      };
+
+      // Start orchestrator session
+      const orchestratorSessionId = await this.orchestrator.startSession(orchestratorRequest);
+      session.orchestratorSessionId = orchestratorSessionId;
+
+      // Set up event listeners for orchestrator progress
+      const progressHandler = (data: any) => {
+        if (data.sessionId === orchestratorSessionId) {
+          this.emit('session_progress', { 
+            sessionId: session.id, 
+            progress: data.progress,
+            currentStep: data.currentStep 
+          });
+        }
+      };
+
+      const completedHandler = (data: any) => {
+        if (data.sessionId === orchestratorSessionId) {
+          this.orchestrator.off('session_progress', progressHandler);
+          this.orchestrator.off('session_completed', completedHandler);
+          this.orchestrator.off('session_failed', failedHandler);
+        }
+      };
+
+      const failedHandler = (data: any) => {
+        if (data.sessionId === orchestratorSessionId) {
+          this.orchestrator.off('session_progress', progressHandler);
+          this.orchestrator.off('session_completed', completedHandler);
+          this.orchestrator.off('session_failed', failedHandler);
+        }
+      };
+
+      this.orchestrator.on('session_progress', progressHandler);
+      this.orchestrator.on('session_completed', completedHandler);
+      this.orchestrator.on('session_failed', failedHandler);
+
+      // Wait for orchestrator completion with timeout
+      const result = await this.waitForOrchestratorCompletion(orchestratorSessionId, session.id);
+
+      // Convert orchestrator response to CodeModeResponse
+      return this.convertOrchestratorResponse(result, session.id);
+
+    } catch (error) {
+      // Cancel orchestrator session if it was started
+      if (session.orchestratorSessionId) {
+        try {
+          await this.orchestrator.cancelSession(session.orchestratorSessionId);
+        } catch (cancelError) {
+          console.warn('Failed to cancel orchestrator session:', cancelError);
+        }
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Wait for orchestrator completion
+   */
+  private async waitForOrchestratorCompletion(
+    orchestratorSessionId: string, 
+    sessionId: string
+  ): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Orchestrator session timed out'));
+      }, this.config.sessionTimeoutMs);
+
+      const completedHandler = (data: any) => {
+        if (data.sessionId === orchestratorSessionId) {
+          clearTimeout(timeout);
+          this.orchestrator.off('session_completed', completedHandler);
+          this.orchestrator.off('session_failed', failedHandler);
+          resolve(data);
+        }
+      };
+
+      const failedHandler = (data: any) => {
+        if (data.sessionId === orchestratorSessionId) {
+          clearTimeout(timeout);
+          this.orchestrator.off('session_completed', completedHandler);
+          this.orchestrator.off('session_failed', failedHandler);
+          reject(new Error(data.error || 'Orchestrator session failed'));
+        }
+      };
+
+      this.orchestrator.on('session_completed', completedHandler);
+      this.orchestrator.on('session_failed', failedHandler);
+    });
+  }
+
+  /**
+   * Convert orchestrator response to CodeModeResponse
+   */
+  private convertOrchestratorResponse(orchestratorResult: any, sessionId: string): CodeModeResponse {
+    try {
+      const { results } = orchestratorResult;
+      
+      if (!results || !results.responses || results.responses.length === 0) {
+        return {
+          type: 'error',
+          message: 'No response from orchestrator',
+          sessionId,
+          success: false,
+        };
+      }
+
+      const response = results.responses[0]; // Use the first/primary response
+      const diffs: { [filePath: string]: CodeModeDiff[] } = {};
+
+      // Convert orchestrator diffs to CodeModeDiff format
+      if (response.diffs && response.diffs.length > 0) {
+        const filePath = response.file_context?.file_name || 'unknown';
+        diffs[filePath] = response.diffs.map((diff: any) => ({
+          type: diff.type,
+          lineStart: diff.lineRange[0],
+          lineEnd: diff.lineRange[1],
+          content: diff.newContent,
+          originalContent: diff.originalContent,
+          confidence: diff.confidence,
+        }));
+      }
+
+      return {
+        type: 'diff_preview',
+        diffs,
+        message: 'Code changes generated successfully by enhanced orchestrator',
+        nextFiles: response.next_file_request ? [response.next_file_request] : undefined,
+        sessionId,
+        success: true,
+      };
+
+    } catch (error) {
+      console.error('Failed to convert orchestrator response:', error);
+      return {
+        type: 'error',
+        message: 'Failed to process orchestrator response',
         sessionId,
         success: false,
       };
@@ -405,6 +551,51 @@ export class CodeModeIntegrationService extends EventEmitter {
   }
 
   /**
+   * Get orchestrator session status
+   */
+  getOrchestratorSessionInfo(sessionId: string): any {
+    const session = this.sessions.get(sessionId);
+    if (!session || !session.orchestratorSessionId) {
+      return null;
+    }
+
+    // In a real implementation, this would query the orchestrator for session info
+    // For now, return basic session information
+    return {
+      orchestratorSessionId: session.orchestratorSessionId,
+      status: session.status,
+      lastActivity: session.lastActivity,
+    };
+  }
+
+  /**
+   * Update session files and sync with orchestrator
+   */
+  async updateSessionFiles(sessionId: string, files: CodeModeFile[]): Promise<boolean> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return false;
+    }
+
+    session.files = [...files];
+    session.lastActivity = new Date();
+
+    // If orchestrator session is active, update it with new files
+    if (session.orchestratorSessionId && session.status === 'processing') {
+      try {
+        // In a real implementation, this would update the orchestrator session
+        // For now, just log the update
+        console.log(`Updated orchestrator session ${session.orchestratorSessionId} with ${files.length} files`);
+      } catch (error) {
+        console.warn('Failed to update orchestrator session files:', error);
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
    * Cancel a session
    */
   async cancelSession(sessionId: string): Promise<void> {
@@ -413,19 +604,39 @@ export class CodeModeIntegrationService extends EventEmitter {
       return;
     }
 
+    const previousStatus = session.status;
     session.status = 'cancelled';
     session.lastActivity = new Date();
 
     // Cancel orchestrator session if active
     if (session.orchestratorSessionId) {
       try {
-        await this.orchestrator.cancelSession(session.orchestratorSessionId);
+        // Set timeout for cancellation to prevent hanging
+        const cancelTimeout = new Promise<void>((resolve) => {
+          setTimeout(() => {
+            console.warn('Orchestrator cancellation timed out, forcing session cleanup');
+            resolve();
+          }, 5000); // 5 second timeout for cancellation
+        });
+
+        await Promise.race([
+          this.orchestrator.cancelSession(session.orchestratorSessionId),
+          cancelTimeout
+        ]);
       } catch (error) {
         console.warn(`Failed to cancel orchestrator session: ${error}`);
       }
     }
 
-    this.emit('session_cancelled', { sessionId });
+    // Clear any pending operations
+    session.pendingDiffs = [];
+    session.error = undefined;
+
+    this.emit('session_cancelled', { 
+      sessionId, 
+      previousStatus,
+      forced: previousStatus === 'processing' 
+    });
   }
 
   /**
@@ -443,11 +654,25 @@ export class CodeModeIntegrationService extends EventEmitter {
 
     this.sessions.clear();
     this.removeAllListeners();
+
+    // Clean up orchestrator
+    if (this.orchestrator) {
+      this.orchestrator.removeAllListeners();
+    }
   }
 
   // Private methods
 
   private setupOrchestratorEventHandlers(): void {
+    this.orchestrator.on('session_started', (data) => {
+      const session = this.findSessionByOrchestratorId(data.sessionId);
+      if (session) {
+        session.status = 'processing';
+        session.lastActivity = new Date();
+        this.emit('session_started', { sessionId: session.id, data });
+      }
+    });
+
     this.orchestrator.on('session_completed', (data) => {
       const session = this.findSessionByOrchestratorId(data.sessionId);
       if (session) {
@@ -472,6 +697,15 @@ export class CodeModeIntegrationService extends EventEmitter {
       if (session) {
         session.lastActivity = new Date();
         this.emit('session_progress', { sessionId: session.id, progress: data });
+      }
+    });
+
+    this.orchestrator.on('session_cancelled', (data) => {
+      const session = this.findSessionByOrchestratorId(data.sessionId);
+      if (session) {
+        session.status = 'cancelled';
+        session.lastActivity = new Date();
+        this.emit('session_cancelled', { sessionId: session.id });
       }
     });
   }

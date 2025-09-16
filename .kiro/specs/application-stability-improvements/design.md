@@ -2,7 +2,9 @@
 
 ## Overview
 
-This design addresses critical stability and functionality issues across the application by implementing robust error handling, enhanced streaming capabilities, responsive UI components, integrated code orchestration, complete authentication flows, and resilient plugin architecture. The solution focuses on creating a seamless user experience with proper fallbacks and consistent behavior across all components.
+This design addresses critical stability and functionality issues in the application through a systematic approach that reorganizes the UI, implements proper authentication, fixes code mode functionality, enables stop button functionality, and resolves TypeScript compilation errors and infinite render loops.
+
+The solution focuses on maintaining existing functionality while improving stability, user experience, and code quality through targeted fixes and enhancements.
 
 ## Architecture
 
@@ -10,28 +12,28 @@ This design addresses critical stability and functionality issues across the app
 
 ```mermaid
 graph TB
-    UI[User Interface Layer] --> API[API Layer]
-    UI --> Stream[Streaming Layer]
-    UI --> Auth[Authentication Layer]
-    UI --> Plugin[Plugin System]
-    
-    API --> Fallback[Fallback Handler]
-    Stream --> Buffer[Buffer Manager]
-    Stream --> Render[Render Engine]
-    Auth --> JWT[JWT Service]
-    Plugin --> Manager[Plugin Manager]
-    
-    subgraph "Enhanced Code System"
-        Orchestrator[Code Orchestrator]
-        PromptEngine[Prompt Engine]
-        FileManager[File Manager]
-        StreamManager[Stream Manager]
+    subgraph "UI Layer"
+        A[InteractionPanel] --> B[Plugins Tab]
+        A --> C[Extra Tab - Images + AI Plugins]
+        D[AccessibilityControls] --> E[Auth System]
+        F[ConversationInterface] --> G[Stop Button]
     end
     
-    UI --> Orchestrator
-    Orchestrator --> PromptEngine
-    Orchestrator --> FileManager
-    Orchestrator --> StreamManager
+    subgraph "Service Layer"
+        H[AuthService] --> I[Database]
+        J[CodeModeService] --> K[Enhanced Code Orchestrator]
+        L[StreamingService] --> M[Stop Handler]
+    end
+    
+    subgraph "Data Layer"
+        I[User Database]
+        N[Session Storage]
+        O[File System]
+    end
+    
+    A --> J
+    F --> L
+    E --> H
 ```
 
 ### Component Integration Strategy
@@ -40,139 +42,49 @@ The design integrates the existing enhanced-code-orchestrator.ts with the code-m
 
 ## Components and Interfaces
 
-### 1. API Reliability System
+### 1. UI Reorganization System
 
-#### Enhanced API Client
+**Purpose**: Reorganize plugin interface for better user experience
+
+**Key Components**:
+- `InteractionPanel` modification for tab restructuring
+- Plugin categorization system
+- Tab content migration utilities
+
+**Interface Design**:
 ```typescript
-interface APIClient {
-  request<T>(config: RequestConfig): Promise<APIResponse<T>>;
-  withFallback<T>(primary: () => Promise<T>, fallback: () => Promise<T>): Promise<T>;
-  withRetry<T>(operation: () => Promise<T>, options: RetryOptions): Promise<T>;
+interface PluginTabConfig {
+  id: string;
+  name: string;
+  plugins: Plugin[];
+  categories: string[];
 }
 
-interface RequestConfig {
-  url: string;
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
-  data?: any;
-  timeout?: number;
-  retries?: number;
-  fallbackEndpoints?: string[];
-}
-
-interface RetryOptions {
-  maxAttempts: number;
-  backoffStrategy: 'exponential' | 'linear' | 'fixed';
-  baseDelay: number;
-  maxDelay: number;
-  jitter: boolean;
+interface PluginMigrationService {
+  movePluginsToTab(pluginIds: string[], targetTab: string): void;
+  renameTab(oldName: string, newName: string): void;
+  validateTabStructure(): boolean;
 }
 ```
 
-#### Fallback Management
-- Primary/secondary endpoint routing
-- Circuit breaker pattern implementation
-- Health check monitoring
-- Graceful degradation strategies
+### 2. Authentication System
 
-### 2. Enhanced Streaming System
+**Purpose**: Replace mock authentication with real user registration and persistent login
 
-#### Streaming Architecture
+**Key Components**:
+- User registration service
+- Email validation system
+- Session management
+- Database integration
+
+**Interface Design**:
 ```typescript
-interface StreamingManager {
-  startStream(config: StreamConfig): Promise<StreamSession>;
-  processChunk(sessionId: string, chunk: StreamChunk): void;
-  handleError(sessionId: string, error: StreamError): void;
-  completeStream(sessionId: string): Promise<StreamResult>;
-}
-
-interface StreamConfig {
-  sessionId: string;
-  bufferSize: number;
-  chunkSize: number;
-  renderThrottle: number;
-  errorRecovery: boolean;
-}
-
-interface StreamChunk {
-  content: string;
-  metadata: ChunkMetadata;
-  timestamp: number;
-  sequence: number;
-}
-```
-
-#### Rendering Pipeline
-- Chunk buffering and coalescing
-- Smooth animation transitions
-- Backpressure handling
-- Error recovery mechanisms
-
-### 3. Responsive UI System
-
-#### Message Bubble Component
-```typescript
-interface MessageBubbleProps {
-  message: Message;
-  maxWidth?: number;
-  responsive?: boolean;
-  overflow?: 'wrap' | 'scroll' | 'ellipsis';
-}
-
-interface ResponsiveConfig {
-  breakpoints: {
-    mobile: number;
-    tablet: number;
-    desktop: number;
-  };
-  sizing: {
-    mobile: BubbleSizing;
-    tablet: BubbleSizing;
-    desktop: BubbleSizing;
-  };
-}
-```
-
-#### Layout Management
-- Dynamic width calculation
-- Content overflow handling
-- Mobile-first responsive design
-- Accessibility compliance
-
-### 4. Code Integration System
-
-#### Enhanced Code Orchestrator Integration
-```typescript
-interface CodeModeIntegration {
-  orchestrator: EnhancedCodeOrchestrator;
-  sessionManager: CodeSessionManager;
-  diffHandler: DiffOperationHandler;
-  safetyValidator: CodeSafetyValidator;
-}
-
-interface CodeSessionManager {
-  createSession(config: CodeSessionConfig): Promise<string>;
-  executeOperation(sessionId: string, operation: CodeOperation): Promise<CodeResult>;
-  validateChanges(sessionId: string, changes: DiffOperation[]): Promise<ValidationResult>;
-  applyChanges(sessionId: string, changes: DiffOperation[]): Promise<ApplyResult>;
-}
-```
-
-#### Safety and Consistency
-- Pre-execution validation
-- Rollback mechanisms
-- Change tracking
-- Conflict resolution
-
-### 5. Authentication System
-
-#### Complete Auth Flow
-```typescript
-interface AuthenticationService {
-  login(credentials: LoginCredentials): Promise<AuthResult>;
-  register(userData: RegistrationData): Promise<AuthResult>;
+interface AuthService {
+  register(email: string, password: string): Promise<AuthResult>;
+  login(email: string, password: string): Promise<AuthResult>;
   logout(): Promise<void>;
-  refreshToken(): Promise<TokenResult>;
   validateSession(): Promise<boolean>;
+  checkEmailExists(email: string): Promise<boolean>;
 }
 
 interface AuthResult {
@@ -181,222 +93,277 @@ interface AuthResult {
   token?: string;
   error?: string;
 }
-```
 
-#### UI Integration
-- Modal-based auth forms
-- State management
-- Error handling
-- Accessibility features
-
-### 6. Plugin Architecture
-
-#### Robust Plugin System
-```typescript
-interface PluginSystem {
-  loadPlugin(pluginId: string): Promise<Plugin>;
-  executePlugin(pluginId: string, input: any): Promise<PluginResult>;
-  handlePluginError(pluginId: string, error: Error): Promise<void>;
-  isolatePlugin(pluginId: string): void;
-}
-
-interface Plugin {
+interface User {
   id: string;
-  name: string;
-  version: string;
-  dependencies: PluginDependency[];
-  execute(input: any): Promise<any>;
-  cleanup(): Promise<void>;
+  email: string;
+  createdAt: Date;
+  lastLogin: Date;
 }
 ```
 
-#### Error Isolation
-- Plugin sandboxing
-- Resource management
-- Dependency validation
-- Graceful failure handling
+**Database Schema**:
+```sql
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  last_login TIMESTAMP,
+  is_active BOOLEAN DEFAULT true
+);
+
+CREATE TABLE user_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  token VARCHAR(255) UNIQUE NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### 3. Code Mode Integration System
+
+**Purpose**: Fix code mode functionality and integrate with enhanced orchestrator
+
+**Key Components**:
+- Code mode request handler
+- Enhanced orchestrator integration
+- Streaming response manager
+- Error handling system
+
+**Interface Design**:
+```typescript
+interface CodeModeIntegration {
+  processCodeRequest(request: CodeRequest): Promise<CodeResponse>;
+  handleStreamingResponse(sessionId: string): AsyncGenerator<CodeChunk>;
+  cancelOperation(sessionId: string): Promise<void>;
+}
+
+interface CodeRequest {
+  prompt: string;
+  files: ProjectFile[];
+  options: CodeModeOptions;
+}
+
+interface CodeResponse {
+  sessionId: string;
+  status: 'processing' | 'completed' | 'error';
+  result?: EnhancedResponse;
+  error?: string;
+}
+```
+
+### 4. Stop Button System
+
+**Purpose**: Enable proper cancellation of ongoing operations
+
+**Key Components**:
+- Operation cancellation manager
+- Streaming abort controller
+- UI state synchronization
+- Cleanup handlers
+
+**Interface Design**:
+```typescript
+interface StopButtonManager {
+  registerOperation(operationId: string, abortController: AbortController): void;
+  stopOperation(operationId: string): Promise<void>;
+  stopAllOperations(): Promise<void>;
+  isOperationActive(operationId: string): boolean;
+}
+
+interface OperationState {
+  id: string;
+  type: 'chat' | 'code' | 'streaming';
+  abortController: AbortController;
+  startTime: Date;
+  onStop?: () => void;
+}
+```
+
+### 5. Render Loop Prevention System
+
+**Purpose**: Fix infinite render loops and TypeScript errors
+
+**Key Components**:
+- Dependency optimization
+- State management fixes
+- Effect cleanup handlers
+- Performance monitoring
+
+**Interface Design**:
+```typescript
+interface RenderOptimizer {
+  validateDependencies(component: string, deps: any[]): ValidationResult;
+  optimizeEffects(effects: EffectConfig[]): EffectConfig[];
+  detectRenderLoops(): RenderLoopReport[];
+}
+
+interface EffectConfig {
+  id: string;
+  dependencies: any[];
+  cleanup?: () => void;
+  skipConditions?: () => boolean;
+}
+```
 
 ## Data Models
 
-### Stream State Management
+### User Management
 ```typescript
-interface StreamState {
-  sessionId: string;
-  status: 'initializing' | 'streaming' | 'paused' | 'completed' | 'error';
-  buffer: StreamChunk[];
-  renderQueue: string[];
-  metrics: StreamMetrics;
-  error?: StreamError;
-}
-
-interface StreamMetrics {
-  totalChunks: number;
-  averageChunkSize: number;
-  renderLatency: number;
-  errorCount: number;
-  throughput: number;
-}
-```
-
-### Code Operation Models
-```typescript
-interface CodeOperation {
-  type: 'read' | 'write' | 'diff' | 'validate';
-  files: FileReference[];
-  changes?: DiffOperation[];
-  options: OperationOptions;
-}
-
-interface DiffOperation {
-  type: 'add' | 'remove' | 'modify';
-  file: string;
-  lineStart: number;
-  lineEnd?: number;
-  content: string;
-  originalContent?: string;
-  confidence: number;
-}
-```
-
-### Plugin Data Models
-```typescript
-interface PluginState {
+interface UserProfile {
   id: string;
-  status: 'loaded' | 'running' | 'error' | 'disabled';
-  resources: ResourceUsage;
-  dependencies: DependencyStatus[];
-  lastError?: Error;
+  email: string;
+  preferences: UserPreferences;
+  subscription: SubscriptionInfo;
 }
 
-interface ResourceUsage {
-  memory: number;
-  cpu: number;
-  networkRequests: number;
-  storageUsed: number;
+interface UserPreferences {
+  theme: string;
+  notifications: boolean;
+  autoSave: boolean;
+}
+```
+
+### Code Mode Session
+```typescript
+interface CodeModeSession {
+  id: string;
+  userId?: string;
+  files: ProjectFile[];
+  status: SessionStatus;
+  orchestratorSession?: string;
+  createdAt: Date;
+  lastActivity: Date;
+}
+```
+
+### Operation Tracking
+```typescript
+interface ActiveOperation {
+  id: string;
+  type: OperationType;
+  status: OperationStatus;
+  abortController: AbortController;
+  metadata: OperationMetadata;
 }
 ```
 
 ## Error Handling
 
-### Centralized Error Management
-```typescript
-interface ErrorHandler {
-  handleAPIError(error: APIError): Promise<ErrorResponse>;
-  handleStreamError(error: StreamError): Promise<void>;
-  handlePluginError(pluginId: string, error: Error): Promise<void>;
-  handleUIError(component: string, error: Error): void;
-}
+### Authentication Errors
+- Email validation errors
+- Password strength validation
+- Database connection errors
+- Session expiration handling
 
-interface ErrorResponse {
-  handled: boolean;
-  fallbackAction?: () => Promise<void>;
-  userMessage?: string;
-  retryable: boolean;
-}
-```
+### Code Mode Errors
+- Orchestrator integration failures
+- File processing errors
+- Streaming interruption handling
+- Timeout management
 
-### Error Recovery Strategies
-- Automatic retry with exponential backoff
-- Fallback endpoint switching
-- Graceful degradation
-- User notification system
-- State recovery mechanisms
+### UI Errors
+- Render loop detection and prevention
+- Component state corruption recovery
+- Event handler cleanup
+- Memory leak prevention
 
 ## Testing Strategy
 
-### Unit Testing
-- Component isolation testing
-- API client testing with mocks
-- Streaming buffer management testing
-- Plugin system testing
-- Authentication flow testing
+### Unit Tests
+- Authentication service functions
+- Code mode integration logic
+- Stop button functionality
+- Render optimization utilities
 
-### Integration Testing
-- End-to-end streaming scenarios
-- Code orchestrator integration
-- Plugin interaction testing
-- Authentication state management
-- UI responsiveness testing
+### Integration Tests
+- End-to-end authentication flow
+- Code mode with orchestrator integration
+- UI component interactions
+- Database operations
 
-### Performance Testing
-- Streaming throughput benchmarks
+### Performance Tests
+- Render loop prevention
 - Memory usage monitoring
-- Plugin resource consumption
-- UI rendering performance
-- Mobile device testing
+- Operation cancellation timing
+- Streaming performance
 
-### Error Scenario Testing
-- Network failure simulation
-- API timeout handling
-- Plugin crash recovery
-- Authentication token expiry
-- Memory pressure testing
+### Error Recovery Tests
+- Network failure scenarios
+- Database unavailability
+- Component crash recovery
+- Session restoration
+
+## Implementation Phases
+
+### Phase 1: UI Reorganization
+1. Modify InteractionPanel component
+2. Implement plugin migration
+3. Update tab structure
+4. Test UI changes
+
+### Phase 2: Authentication System
+1. Create database schema
+2. Implement auth service
+3. Update accessibility controls
+4. Add session management
+
+### Phase 3: Code Mode Fixes
+1. Fix infinite render loops
+2. Integrate enhanced orchestrator
+3. Implement proper error handling
+4. Add streaming support
+
+### Phase 4: Stop Button Implementation
+1. Create operation manager
+2. Implement abort controllers
+3. Update UI components
+4. Add cleanup handlers
+
+### Phase 5: TypeScript and Stability
+1. Fix compilation errors
+2. Optimize component dependencies
+3. Add performance monitoring
+4. Implement error boundaries
 
 ## Security Considerations
 
 ### Authentication Security
+- Password hashing with bcrypt
 - JWT token management
-- Secure storage practices
 - Session timeout handling
 - CSRF protection
-- Input validation
+
+### Data Protection
+- Input validation and sanitization
+- SQL injection prevention
+- XSS protection
+- Secure session storage
 
 ### Code Execution Safety
-- Sandbox execution environment
-- Input sanitization
-- File system access controls
+- Sandboxed code processing
+- File access restrictions
 - Resource usage limits
-- Audit logging
+- Error information filtering
 
-### Plugin Security
-- Plugin signature verification
-- Resource access controls
-- Network request filtering
-- Data isolation
-- Permission management
+## Performance Optimization
 
-## Performance Optimizations
+### Render Performance
+- Memoization of expensive computations
+- Proper dependency arrays
+- Component splitting
+- Lazy loading
 
-### Streaming Optimizations
-- Adaptive chunk sizing
-- Intelligent buffering
-- Render throttling
-- Memory management
+### Memory Management
+- Cleanup of event listeners
+- Abort controller disposal
+- Cache size limits
+- Garbage collection optimization
+
+### Network Efficiency
+- Request deduplication
+- Response caching
+- Streaming optimization
 - Connection pooling
-
-### UI Performance
-- Virtual scrolling for long conversations
-- Lazy loading of components
-- Memoization strategies
-- Bundle size optimization
-- Image optimization
-
-### Plugin Performance
-- Lazy plugin loading
-- Resource pooling
-- Caching strategies
-- Background processing
-- Memory cleanup
-
-## Accessibility Features
-
-### Screen Reader Support
-- ARIA labels and descriptions
-- Semantic HTML structure
-- Keyboard navigation
-- Focus management
-- Live region updates
-
-### Visual Accessibility
-- High contrast mode
-- Scalable text sizing
-- Color blind friendly palettes
-- Reduced motion options
-- Clear visual hierarchy
-
-### Motor Accessibility
-- Large touch targets
-- Keyboard shortcuts
-- Voice input support
-- Gesture alternatives
-- Timeout extensions

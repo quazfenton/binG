@@ -1,38 +1,61 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { authService } from '@/lib/auth/auth-service';
 import { verifyAuth, generateToken } from '@/lib/auth/jwt';
-import { initializeDatabase } from '@/lib/database/db';
 
 export async function POST(request: NextRequest) {
   try {
+    // Try session-based refresh first
+    const sessionId = request.cookies.get('session_id')?.value;
+    
+    if (sessionId) {
+      const sessionResult = await authService.validateSession(sessionId);
+      
+      if (sessionResult.success) {
+        // Session is valid, generate new token
+        const newToken = generateToken({
+          userId: sessionResult.user!.id.toString(),
+          email: sessionResult.user!.email
+        });
+
+        return NextResponse.json({
+          success: true,
+          token: newToken,
+          user: sessionResult.user
+        });
+      }
+    }
+
+    // Fallback to JWT-based refresh
     const authResult = await verifyAuth(request);
     
     if (!authResult.success) {
-      return NextResponse.json({ error: authResult.error }, { status: 401 });
-    }
-
-    // Get user data from database to ensure user still exists
-    const db = await initializeDatabase();
-    const user = db.prepare('SELECT id, email FROM users WHERE id = ?').get(authResult.userId);
-
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 401 });
+      return NextResponse.json(
+        { error: 'Invalid or expired token' },
+        { status: 401 }
+      );
     }
 
     // Generate new token
     const newToken = generateToken({
-      userId: user.id.toString(),
-      email: user.email
+      userId: authResult.userId!,
+      email: authResult.email!
     });
 
+    // Get user details
+    const userId = parseInt(authResult.userId || '0');
+    const user = await authService.getUserById(userId);
+
     return NextResponse.json({
+      success: true,
       token: newToken,
-      user: {
-        id: user.id,
-        email: user.email
-      }
+      user: user
     });
+
   } catch (error) {
     console.error('Token refresh error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
   }
 }

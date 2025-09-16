@@ -19,7 +19,7 @@ export default function RegisterForm({ onSwitchMode }: { onSwitchMode: () => voi
     }
     
     try {
-      await register(email); // Removed password from register call
+      await register(email, password); // Fixed register call with email and password
     } catch (err) {
       setError('Registration failed');
     }

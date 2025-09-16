@@ -36,7 +36,7 @@ export interface CodeModeIntegrationActions {
   applyDiffs: (diffs: { [filePath: string]: CodeModeDiff[] }) => Promise<CodeModeResponse>;
   cancelSession: () => Promise<void>;
   clearError: () => void;
-  updateSessionFiles: (files: CodeModeFile[]) => void;
+  updateSessionFiles: (files: CodeModeFile[]) => Promise<void>;
 }
 
 export function useCodeModeIntegration(
@@ -233,6 +233,16 @@ export function useCodeModeIntegration(
 
     setState(prev => ({ ...prev, isProcessing: true, error: null }));
 
+    // Set up a safety timeout to prevent stuck processing states
+    const safetyTimeout = setTimeout(() => {
+      console.warn('Code task execution taking too long, resetting processing state');
+      setState(prev => ({ 
+        ...prev, 
+        isProcessing: false, 
+        error: 'Request timed out - please try again' 
+      }));
+    }, 150000); // 2.5 minute safety timeout
+
     try {
       const response = await serviceRef.current.executeCodeTask(
         currentSessionIdRef.current,
@@ -240,6 +250,8 @@ export function useCodeModeIntegration(
         rules,
         selectedFiles
       );
+
+      clearTimeout(safetyTimeout);
 
       setState(prev => {
         const newState = { ...prev, isProcessing: false, lastResponse: response };
@@ -263,6 +275,8 @@ export function useCodeModeIntegration(
 
       return response;
     } catch (error) {
+      clearTimeout(safetyTimeout);
+      
       const errorMessage = error instanceof Error ? error.message : 'Code task execution failed';
       setState(prev => ({
         ...prev,
@@ -314,6 +328,13 @@ export function useCodeModeIntegration(
       return;
     }
 
+    // Immediately reset processing state to prevent UI from being stuck
+    setState(prev => ({
+      ...prev,
+      isProcessing: false,
+      error: null,
+    }));
+
     try {
       await serviceRef.current.cancelSession(currentSessionIdRef.current);
       
@@ -323,29 +344,54 @@ export function useCodeModeIntegration(
           ...prev.currentSession,
           status: 'cancelled',
         } : null,
-        isProcessing: false,
         pendingDiffs: {},
       }));
 
       currentSessionIdRef.current = null;
     } catch (error) {
       console.error('Failed to cancel session:', error);
+      // Even if cancellation fails, ensure state is reset
+      setState(prev => ({
+        ...prev,
+        isProcessing: false,
+        error: 'Session cancellation failed, but state has been reset',
+        currentSession: null,
+        pendingDiffs: {},
+      }));
+      currentSessionIdRef.current = null;
     }
   }, []);
 
   const clearError = useCallback(() => {
-    setState(prev => ({ ...prev, error: null }));
+    setState(prev => ({ 
+      ...prev, 
+      error: null,
+      // Also reset processing state if it's stuck
+      isProcessing: false 
+    }));
   }, []);
 
-  const updateSessionFiles = useCallback((files: CodeModeFile[]) => {
-    setState(prev => ({
-      ...prev,
-      currentSession: prev.currentSession ? {
-        ...prev.currentSession,
-        files: [...files],
-        lastActivity: new Date(),
-      } : null,
-    }));
+  const updateSessionFiles = useCallback(async (files: CodeModeFile[]): Promise<void> => {
+    if (!serviceRef.current || !currentSessionIdRef.current) {
+      return;
+    }
+
+    try {
+      const success = await serviceRef.current.updateSessionFiles(currentSessionIdRef.current, files);
+      
+      if (success) {
+        setState(prev => ({
+          ...prev,
+          currentSession: prev.currentSession ? {
+            ...prev.currentSession,
+            files: [...files],
+            lastActivity: new Date(),
+          } : null,
+        }));
+      }
+    } catch (error) {
+      console.error('Failed to update session files:', error);
+    }
   }, []);
 
   const actions: CodeModeIntegrationActions = {
