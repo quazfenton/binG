@@ -22,7 +22,6 @@ import {
 import { parseCodeBlocksFromMessages } from "@/lib/code-parser";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
-import { performanceManager } from "@/lib/performance/performance-manager";
 
 // Main component wrapped with CodeServiceProvider
 export default function ConversationInterface() {
