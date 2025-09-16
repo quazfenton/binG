@@ -443,7 +443,7 @@ class EnhancedCodeSystemDemo {
         files: [], // No files to simulate an error condition
         options: {
           mode: 'agentic',
-          timeoutMs: 5000, // Very short timeout to force timeout error
+          timeoutMs: 10000, // Short but valid timeout to force timeout error
           qualityThreshold: 0.99 // Impossibly high threshold
         }
       });
