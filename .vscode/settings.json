@@ -1,7 +1,8 @@
 {
-    "workbench.colorTheme": "Kiro Light",
+    "workbench.colorTheme": "3. NIGHT (Lynx Theme Pro)",
     "editor.language.colorizedBracketPairs": [
         
     ],
-    "kiroAgent.configureMCP": "Disabled"
+    "kiroAgent.configureMCP": "Disabled",
+    "typescript.autoClosingTags": false
 }

@@ -271,7 +271,7 @@ export default function CodeMode({
 
 
   const handleSendMessage = async () => {
-    if (!prompt.trim() || !currentSession) return;
+    if (!prompt.trim() || !currentSession || isProcessing) return;
     
     try {
       // Clear any previous errors
@@ -279,11 +279,20 @@ export default function CodeMode({
 
       // Execute code task using the integration service
       const selectedFilePaths = Array.from(selectedFiles);
-      const response = await integrationActions.executeCodeTask(
+      
+      // Start the task execution
+      const taskPromise = integrationActions.executeCodeTask(
         prompt,
         rules || undefined,
         selectedFilePaths.length > 0 ? selectedFilePaths : undefined
       );
+      
+      // Clear prompt immediately to show it's being processed
+      setPrompt('');
+      setActiveTab('diff'); // Switch to diff tab to show results
+      
+      // Wait for the response
+      const response = await taskPromise;
       
       // Also send message to parent for compatibility with existing chat system
       if (onSendMessage) {
@@ -296,11 +305,19 @@ export default function CodeMode({
         onSendMessage(prompt, contextData);
       }
       
-      setPrompt('');
-      setActiveTab('diff'); // Switch to diff tab to show results
     } catch (error) {
       console.error('Failed to execute code task:', error);
       // Error is handled by the integration hook
+      // Restore prompt if there was an error
+      if (error instanceof Error && error.message !== 'Operation cancelled') {
+        // Don't restore prompt if it was cancelled
+      }
+    }
+  };
+
+  const handleStopGeneration = () => {
+    if (currentSession && isProcessing) {
+      integrationActions.cancelSession().catch(console.error);
     }
   };
 
@@ -661,8 +678,8 @@ export default function CodeMode({
                 <span className="text-yellow-400">Initializing...</span>
               )}
             </div>
-            <Button
-              onClick={handleSendMessage}
+            <div className="flex gap-2">
+              {isProcessindleSendMessage}
               disabled={!prompt.trim() || selectedFiles.size === 0 || isProcessing || !sessionInitialized}
               className="bg-blue-600 hover:bg-blue-700"
             >

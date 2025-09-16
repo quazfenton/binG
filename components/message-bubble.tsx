@@ -85,18 +85,6 @@ export default function MessageBubble({
     layout.screenHeight
   )
   
-  // Touch and keyboard handlers for mobile interaction
-  const { touchHandlers } = useTouchHandler({
-    onTap: handleCopy,
-    onLongPress: () => {
-      if (layout.isMobile) {
-        setShowStreamingControls(!showStreamingControls)
-      }
-    }
-  })
-  
-  const { handleKeyDown } = useKeyboardHandler()
-  
   // Use enhanced streaming display for non-user messages
   const streamingDisplay = useEnhancedStreamingDisplay({
     messageId: message.id,
@@ -113,6 +101,18 @@ export default function MessageBubble({
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
+
+  // Touch and keyboard handlers for mobile interaction
+  const { touchHandlers } = useTouchHandler({
+    onTap: handleCopy,
+    onLongPress: () => {
+      if (layout.isMobile) {
+        setShowStreamingControls(!showStreamingControls)
+      }
+    }
+  })
+  
+  const { handleKeyDown } = useKeyboardHandler()
 
   // Parse reasoning/thinking content from models like DeepSeek R1
   const parseReasoningContent = (content: string) => {
