@@ -62,42 +62,7 @@ const nextConfig = {
       "@google/generative-ai",
       "portkey-ai",
     ],
-    webpack: (config, { isServer, dev }) => {
-    // Performance optimizations for production
-    if (!dev) {
-      // Enable tree shaking
-      config.optimization.usedExports = true;
-      config.optimization.sideEffects = false;
-      
-      // Optimize chunks
-      config.optimization.splitChunks = {
-        ...config.optimization.splitChunks,
-        chunks: 'all',
-        cacheGroups: {
-          ...config.optimization.splitChunks.cacheGroups,
-          vendor: {
-            test: /[\\/]node_modules[\\/]/,
-            name: 'vendors',
-            chunks: 'all',
-            priority: 10,
-          },
-          common: {
-            name: 'common',
-            minChunks: 2,
-            chunks: 'all',
-            priority: 5,
-            reuseExistingChunk: true,
-          },
-          performance: {
-            test: /[\\/]lib[\\/]performance[\\/]/,
-            name: 'performance',
-            chunks: 'all',
-            priority: 15,
-          },
-        },
-      };
-    }
-
+    webpack: (config, { isServer }) => {
     // Handle ESM modules
     config.resolve.extensionAlias = {
       ".js": [".ts", ".tsx", ".js", ".jsx"],
