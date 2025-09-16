@@ -93,7 +93,7 @@ export class CodeModeIntegrationService extends EventEmitter {
     
     this.config = {
       maxConcurrentSessions: 5,
-      sessionTimeoutMs: 30 * 60 * 1000, // 30 minutes
+      sessionTimeoutMs: 10 * 60 * 1000, // 10 minutes
       enableAutoValidation: true,
       enableSafetyChecks: true,
       orchestratorConfig: {
