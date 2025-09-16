@@ -1,6 +1,7 @@
 "use client";
 
 import { EventEmitter } from 'events';
+import { streamingErrorHandler } from './streaming-error-handler';
 
 // Enhanced streaming interfaces
 export interface StreamChunk {
@@ -106,24 +107,68 @@ export class EnhancedBufferManager extends EventEmitter {
   }
 
   /**
-   * Process incoming chunk for a session
+   * Process incoming chunk for a session with enhanced error handling
    */
   processChunk(sessionId: string, content: string, metadata?: StreamChunk['metadata']): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
+    try {
+      const session = this.sessions.get(sessionId);
+      if (!session) {
+        console.warn(`Session ${sessionId} not found for chunk processing`);
+        return;
+      }
+
+      // Validate content
+      if (typeof content !== 'string') {
+        console.warn(`Invalid content type for session ${sessionId}:`, typeof content);
+        return;
+      }
+
+      // Skip empty content unless it's explicitly marked as complete
+      if (!content.trim() && !metadata?.isPartial) {
+        return;
+      }
+
+      const chunk: StreamChunk = {
+        id: `${sessionId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        content,
+        timestamp: Date.now(),
+        sequenceNumber: session.getNextSequenceNumber(),
+        isComplete: false,
+        metadata: {
+          ...metadata,
+          tokens: Math.ceil(content.length / 4), // Estimate token count
+          chunkType: metadata?.chunkType || this.inferChunkType(content)
+        }
+      };
+
+      session.addChunk(chunk);
+    } catch (error) {
+      console.error(`Error processing chunk for session ${sessionId}:`, error);
+      this.emit('session-error', { sessionId, error });
+    }
+  }
+
+  /**
+   * Infer chunk type from content
+   */
+  private inferChunkType(content: string): StreamChunk['metadata']['chunkType'] {
+    if (!content || typeof content !== 'string') {
+      return 'text';
     }
 
-    const chunk: StreamChunk = {
-      id: `${sessionId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      content,
-      timestamp: Date.now(),
-      sequenceNumber: session.getNextSequenceNumber(),
-      isComplete: false,
-      metadata
-    };
-
-    session.addChunk(chunk);
+    const lowerContent = content.toLowerCase();
+    
+    if (content.includes('```') || lowerContent.includes('code')) {
+      return 'code';
+    }
+    if (content.includes('COMMANDS_START') || lowerContent.includes('command')) {
+      return 'command';
+    }
+    if (lowerContent.includes('error') || lowerContent.includes('failed')) {
+      return 'error';
+    }
+    
+    return 'text';
   }
 
   /**
@@ -193,28 +238,79 @@ export class EnhancedBufferManager extends EventEmitter {
   }
 
   /**
-   * Handle session error
+   * Handle session error with enhanced recovery
    */
   private handleSessionError(sessionId: string, error: Error): void {
     const session = this.sessions.get(sessionId);
     if (!session) {
+      console.warn(`Cannot handle error for non-existent session: ${sessionId}`);
       return;
     }
 
-    // Attempt recovery
-    this.recoveryManager.attemptRecovery(sessionId, error)
-      .then((recovered) => {
+    // Process error through centralized error handler
+    const streamingError = streamingErrorHandler.processError(error, {
+      sessionId,
+      requestId: sessionId
+    });
+
+    // Log error details for debugging
+    console.warn(`Session error for ${sessionId}:`, {
+      type: streamingError.type,
+      message: streamingError.message,
+      recoverable: streamingError.recoverable,
+      sessionState: session.getState()
+    });
+
+    // Attempt recovery for recoverable errors
+    if (streamingError.recoverable) {
+      streamingErrorHandler.attemptRecovery(
+        streamingError,
+        async () => {
+          // Recovery function - reset session state
+          session.setState('streaming');
+        }
+      ).then((recovered) => {
         if (recovered) {
-          this.emit('recovery-success', { sessionId, error });
+          console.log(`Successfully recovered session ${sessionId}`);
+          this.emit('recovery-success', { sessionId, error: streamingError });
         } else {
           session.setState('error', error);
-          this.emit('session-error', { sessionId, error });
+          // Only emit error if it should be shown to user
+          if (streamingErrorHandler.shouldShowToUser(streamingError)) {
+            const userMessage = streamingErrorHandler.getUserMessage(streamingError);
+            this.emit('session-error', { sessionId, error: new Error(userMessage) });
+          }
         }
-      })
-      .catch((recoveryError) => {
+      }).catch((recoveryError) => {
+        console.error(`Recovery failed for session ${sessionId}:`, recoveryError);
         session.setState('error', recoveryError);
         this.emit('session-error', { sessionId, error: recoveryError });
       });
+    } else {
+      // Non-recoverable error - set error state immediately
+      session.setState('error', error);
+      if (streamingErrorHandler.shouldShowToUser(streamingError)) {
+        const userMessage = streamingErrorHandler.getUserMessage(streamingError);
+        this.emit('session-error', { sessionId, error: new Error(userMessage) });
+      }
+    }
+  }
+
+  /**
+   * Check if an error is recoverable
+   */
+  private isRecoverableError(error: Error): boolean {
+    const recoverablePatterns = [
+      /network/i,
+      /timeout/i,
+      /connection/i,
+      /fetch/i,
+      /abort/i,
+      /parse.*stream/i,
+      /invalid.*event/i
+    ];
+
+    return recoverablePatterns.some(pattern => pattern.test(error.message));
   }
 
   /**
@@ -298,6 +394,12 @@ class StreamSession extends EventEmitter {
       return;
     }
 
+    // Validate chunk data
+    if (!chunk || typeof chunk.content !== 'string') {
+      console.warn(`Invalid chunk for session ${this.sessionId}:`, chunk);
+      return;
+    }
+
     this.state.status = 'streaming';
     this.state.lastChunkTime = chunk.timestamp;
     this.state.totalChunks++;
@@ -310,7 +412,17 @@ class StreamSession extends EventEmitter {
         (this.state.processedChunks + 1);
     }
 
-    this.buffer.push(chunk);
+    // Sanitize chunk content
+    const sanitizedChunk: StreamChunk = {
+      ...chunk,
+      content: this.sanitizeContent(chunk.content),
+      metadata: {
+        ...chunk.metadata,
+        tokens: chunk.metadata?.tokens || Math.ceil(chunk.content.length / 4)
+      }
+    };
+
+    this.buffer.push(sanitizedChunk);
     this.state.bufferedChunks = this.buffer.length;
 
     // Clear existing coalescing timer
@@ -327,6 +439,21 @@ class StreamSession extends EventEmitter {
         this.processBuffer();
       }, this.config.renderThrottleMs);
     }
+  }
+
+  /**
+   * Sanitize chunk content to prevent rendering issues
+   */
+  private sanitizeContent(content: string): string {
+    if (typeof content !== 'string') {
+      return '';
+    }
+
+    // Remove null bytes and other problematic characters
+    return content
+      .replace(/\0/g, '') // Remove null bytes
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control characters except \t, \n, \r
+      .trim();
   }
 
   private shouldProcessBuffer(): boolean {
@@ -561,12 +688,16 @@ class RecoveryManager {
       'timeout',
       'connection',
       'fetch',
-      'abort'
+      'abort',
+      'parse',
+      'invalid',
+      'malformed',
+      'stream',
+      'event'
     ];
 
-    return recoverableErrors.some(keyword => 
-      error.message.toLowerCase().includes(keyword)
-    );
+    const errorMessage = error.message.toLowerCase();
+    return recoverableErrors.some(keyword => errorMessage.includes(keyword));
   }
 }
 

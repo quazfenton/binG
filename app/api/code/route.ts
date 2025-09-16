@@ -31,8 +31,45 @@ function generateSessionId(): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    // Validate content type
+    const contentType = request.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      return NextResponse.json(
+        { 
+          error: "Content-Type must be application/json",
+          received: contentType
+        },
+        { status: 400 }
+      );
+    }
+
+    let body: any;
+    try {
+      body = await request.json();
+    } catch (parseError) {
+      return NextResponse.json(
+        { 
+          error: "Invalid JSON in request body",
+          details: parseError instanceof Error ? parseError.message : 'JSON parse error'
+        },
+        { status: 400 }
+      );
+    }
+
+    // Validate action field
     const { action } = body;
+    if (!action || typeof action !== 'string') {
+      return NextResponse.json(
+        { 
+          error: "Action is required and must be a string",
+          received: {
+            action: action,
+            type: typeof action
+          }
+        },
+        { status: 400 }
+      );
+    }
 
     switch (action) {
       case "start_session":
@@ -48,12 +85,22 @@ export async function POST(request: NextRequest) {
         return handleCancelSession(body);
 
       default:
-        return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+        return NextResponse.json(
+          { 
+            error: "Invalid action",
+            received: action,
+            validActions: ["start_session", "get_session_status", "apply_diffs", "cancel_session"]
+          },
+          { status: 400 }
+        );
     }
   } catch (error) {
     console.error("API Error:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { 
+        error: "Internal server error",
+        message: error instanceof Error ? error.message : 'Unknown error'
+      },
       { status: 500 },
     );
   }
@@ -61,6 +108,14 @@ export async function POST(request: NextRequest) {
 
 async function handleStartSession(body: any) {
   try {
+    // Validate request body structure
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json(
+        { error: "Invalid request body" },
+        { status: 400 },
+      );
+    }
+
     const {
       prompt,
       selectedFiles = {},
@@ -69,9 +124,58 @@ async function handleStartSession(body: any) {
       context = {},
     } = body;
 
-    if (!prompt) {
+    // Enhanced validation with detailed error messages
+    if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
       return NextResponse.json(
-        { error: "Prompt is required" },
+        { 
+          error: "Prompt is required and must be a non-empty string",
+          received: {
+            prompt: prompt,
+            type: typeof prompt,
+            length: typeof prompt === 'string' ? prompt.length : 'N/A'
+          }
+        },
+        { status: 400 },
+      );
+    }
+
+    // Validate selectedFiles format
+    if (selectedFiles && typeof selectedFiles !== 'object') {
+      return NextResponse.json(
+        { 
+          error: "selectedFiles must be an object",
+          received: {
+            selectedFiles: selectedFiles,
+            type: typeof selectedFiles
+          }
+        },
+        { status: 400 },
+      );
+    }
+
+    // Validate rules format
+    if (rules && !Array.isArray(rules)) {
+      return NextResponse.json(
+        { 
+          error: "rules must be an array",
+          received: {
+            rules: rules,
+            type: typeof rules
+          }
+        },
+        { status: 400 },
+      );
+    }
+
+    // Validate mode
+    const validModes = ["streaming", "agentic", "hybrid", "standard"];
+    if (mode && !validModes.includes(mode)) {
+      return NextResponse.json(
+        { 
+          error: "Invalid mode",
+          received: mode,
+          validModes: validModes
+        },
         { status: 400 },
       );
     }
@@ -111,9 +215,15 @@ async function handleGetSessionStatus(body: any) {
   try {
     const { sessionId } = body;
 
-    if (!sessionId) {
+    if (!sessionId || typeof sessionId !== 'string' || sessionId.trim().length === 0) {
       return NextResponse.json(
-        { error: "Session ID is required" },
+        { 
+          error: "Session ID is required and must be a non-empty string",
+          received: {
+            sessionId: sessionId,
+            type: typeof sessionId
+          }
+        },
         { status: 400 },
       );
     }
@@ -150,9 +260,28 @@ async function handleApplyDiffs(body: any) {
   try {
     const { sessionId, diffPaths } = body;
 
-    if (!sessionId) {
+    if (!sessionId || typeof sessionId !== 'string' || sessionId.trim().length === 0) {
       return NextResponse.json(
-        { error: "Session ID is required" },
+        { 
+          error: "Session ID is required and must be a non-empty string",
+          received: {
+            sessionId: sessionId,
+            type: typeof sessionId
+          }
+        },
+        { status: 400 },
+      );
+    }
+
+    if (diffPaths && !Array.isArray(diffPaths)) {
+      return NextResponse.json(
+        { 
+          error: "diffPaths must be an array if provided",
+          received: {
+            diffPaths: diffPaths,
+            type: typeof diffPaths
+          }
+        },
         { status: 400 },
       );
     }
@@ -201,9 +330,15 @@ async function handleCancelSession(body: any) {
   try {
     const { sessionId } = body;
 
-    if (!sessionId) {
+    if (!sessionId || typeof sessionId !== 'string' || sessionId.trim().length === 0) {
       return NextResponse.json(
-        { error: "Session ID is required" },
+        { 
+          error: "Session ID is required and must be a non-empty string",
+          received: {
+            sessionId: sessionId,
+            type: typeof sessionId
+          }
+        },
         { status: 400 },
       );
     }

@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { getCurrentMode } from '../lib/mode-manager';
 import { 
   CodeModeIntegrationService, 
   CodeModeSession, 
@@ -152,6 +153,12 @@ export function useCodeModeIntegration(
       throw new Error('Code mode integration service not initialized');
     }
 
+    // Check if we're in the correct mode
+    const currentMode = getCurrentMode();
+    if (currentMode !== 'code') {
+      throw new Error('Code mode integration can only be used in Code mode');
+    }
+
     setState(prev => ({ ...prev, isProcessing: true, error: null }));
 
     try {
@@ -231,6 +238,18 @@ export function useCodeModeIntegration(
       throw new Error('No active session');
     }
 
+    // Check if we're in the correct mode
+    const currentMode = getCurrentMode();
+    if (currentMode !== 'code') {
+      throw new Error('Code tasks can only be executed in Code mode');
+    }
+
+    // Prevent duplicate execution if already processing
+    if (state.isProcessing) {
+      console.log('Code task already in progress, skipping duplicate request');
+      throw new Error('Operation cancelled');
+    }
+
     setState(prev => ({ ...prev, isProcessing: true, error: null }));
 
     // Set up a safety timeout to prevent stuck processing states
@@ -285,11 +304,18 @@ export function useCodeModeIntegration(
       }));
       throw error;
     }
-  }, []);
+  }, [state.isProcessing]);
 
   const applyDiffs = useCallback(async (diffs: { [filePath: string]: CodeModeDiff[] }): Promise<CodeModeResponse> => {
     if (!serviceRef.current || !currentSessionIdRef.current) {
       throw new Error('No active session');
+    }
+
+    // Check if we're in the correct mode
+    const currentMode = getCurrentMode();
+    if (currentMode !== 'code') {
+      console.warn('Diff operations are only allowed in Code mode');
+      return { success: false, message: 'Diff operations are only allowed in Code mode' };
     }
 
     setState(prev => ({ ...prev, isProcessing: true, error: null }));

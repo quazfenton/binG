@@ -7,6 +7,7 @@
  */
 
 import type { Message } from "../types/index";
+import { createInputContext, processSafeContent } from "./input-response-separator";
 
 export interface CodeBlock {
   language: string;
@@ -224,7 +225,7 @@ export function getFileExtension(language: string): string {
 }
 
 /**
- * Extract code blocks from messages with enhanced parsing
+ * Extract code blocks from messages with enhanced parsing (respects input/response context)
  */
 export function extractCodeBlocksFromMessages(
   messages: Message[],
@@ -233,45 +234,51 @@ export function extractCodeBlocksFromMessages(
   let globalIndex = 0;
 
   messages.forEach((message) => {
-    if (message.role === "assistant" && message.content) {
-      // Enhanced regex to capture code blocks with optional language and filename
-      const codeBlockRegex =
-        /```(?:([a-zA-Z0-9+\-_.]+)(?:\s+(.+?))?)?\n([\s\S]*?)```/g;
-      let match;
+    if (message.content) {
+      // Create context for the message
+      const messageContext = createInputContext(message.role);
+      
+      // Only process code blocks from assistant messages for file operations
+      if (message.role === "assistant") {
+        // Enhanced regex to capture code blocks with optional language and filename
+        const codeBlockRegex =
+          /```(?:([a-zA-Z0-9+\-_.]+)(?:\s+(.+?))?)?\n([\s\S]*?)```/g;
+        let match;
 
-      while ((match = codeBlockRegex.exec(message.content)) !== null) {
-        const [, detectedLanguage = "text", possibleFilename, code] = match;
-        const language = detectedLanguage.toLowerCase();
+        while ((match = codeBlockRegex.exec(message.content)) !== null) {
+          const [, detectedLanguage = "text", possibleFilename, code] = match;
+          const language = detectedLanguage.toLowerCase();
 
-        // Try to extract filename from various sources
-        let filename = possibleFilename
-          ? cleanFilename(possibleFilename)
-          : undefined;
+          // Try to extract filename from various sources
+          let filename = possibleFilename
+            ? cleanFilename(possibleFilename)
+            : undefined;
 
-        if (!filename) {
-          filename = extractFilenameFromContext(code, language);
+          if (!filename) {
+            filename = extractFilenameFromContext(code, language);
+          }
+
+          if (!filename) {
+            filename = generateSmartFilename(code, language, globalIndex);
+          }
+
+          // Check if this might be an error block
+          const isError =
+            code.toLowerCase().includes("error") ||
+            code.toLowerCase().includes("exception") ||
+            language === "error";
+
+          codeBlocks.push({
+            language,
+            code: code.trim(),
+            filename,
+            index: globalIndex,
+            messageId: message.id,
+            isError,
+          });
+
+          globalIndex++;
         }
-
-        if (!filename) {
-          filename = generateSmartFilename(code, language, globalIndex);
-        }
-
-        // Check if this might be an error block
-        const isError =
-          code.toLowerCase().includes("error") ||
-          code.toLowerCase().includes("exception") ||
-          language === "error";
-
-        codeBlocks.push({
-          language,
-          code: code.trim(),
-          filename,
-          index: globalIndex,
-          messageId: message.id,
-          isError,
-        });
-
-        globalIndex++;
       }
     }
   });

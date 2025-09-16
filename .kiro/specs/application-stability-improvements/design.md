@@ -122,63 +122,131 @@ CREATE TABLE user_sessions (
 );
 ```
 
-### 3. Code Mode Integration System
+### 3. Streaming API System
 
-**Purpose**: Fix code mode functionality and integrate with enhanced orchestrator
+**Purpose**: Fix streaming response parsing and eliminate duplicate API calls
 
 **Key Components**:
-- Code mode request handler
+- Streaming response parser with proper error handling
+- API call deduplication system
+- Chat vs Code mode response routing
+- Stream event validation and recovery
+
+**Interface Design**:
+```typescript
+interface StreamingManager {
+  parseStreamResponse(response: ReadableStream): AsyncGenerator<StreamChunk>;
+  handleStreamError(error: StreamError): void;
+  validateStreamEvent(event: string): boolean;
+  recoverFromInvalidEvent(event: string): StreamChunk | null;
+}
+
+interface StreamChunk {
+  type: 'text' | 'code' | 'error' | 'complete';
+  content: string;
+  metadata?: Record<string, any>;
+}
+
+interface StreamError {
+  type: 'parse_error' | 'connection_error' | 'invalid_event';
+  message: string;
+  recoverable: boolean;
+}
+```
+
+### 4. Code Mode Integration System
+
+**Purpose**: Fix code mode functionality and prevent duplicate API calls
+
+**Key Components**:
+- Code mode request handler with deduplication
 - Enhanced orchestrator integration
-- Streaming response manager
-- Error handling system
+- Proper session management
+- HTTP 400 error prevention
 
 **Interface Design**:
 ```typescript
 interface CodeModeIntegration {
   processCodeRequest(request: CodeRequest): Promise<CodeResponse>;
-  handleStreamingResponse(sessionId: string): AsyncGenerator<CodeChunk>;
-  cancelOperation(sessionId: string): Promise<void>;
+  preventDuplicateRequests(requestId: string): boolean;
+  validateSessionStart(sessionData: any): ValidationResult;
+  handleSessionError(error: SessionError): void;
 }
 
 interface CodeRequest {
+  id: string;
   prompt: string;
   files: ProjectFile[];
   options: CodeModeOptions;
+  timestamp: number;
 }
 
-interface CodeResponse {
-  sessionId: string;
-  status: 'processing' | 'completed' | 'error';
-  result?: EnhancedResponse;
-  error?: string;
+interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  sanitizedData?: any;
 }
 ```
 
-### 4. Stop Button System
+### 5. Mode Separation System
 
-**Purpose**: Enable proper cancellation of ongoing operations
+**Purpose**: Ensure proper separation between Chat and Code modes
 
 **Key Components**:
-- Operation cancellation manager
-- Streaming abort controller
-- UI state synchronization
-- Cleanup handlers
+- Mode-aware response routing
+- Conditional diff generation
+- Code preview panel control
+- Input vs response parsing separation
 
 **Interface Design**:
 ```typescript
-interface StopButtonManager {
-  registerOperation(operationId: string, abortController: AbortController): void;
-  stopOperation(operationId: string): Promise<void>;
-  stopAllOperations(): Promise<void>;
-  isOperationActive(operationId: string): boolean;
+interface ModeManager {
+  getCurrentMode(): 'chat' | 'code';
+  routeResponse(response: string, mode: string): ProcessedResponse;
+  shouldGenerateDiffs(response: string, mode: string): boolean;
+  shouldOpenCodePreview(response: string, mode: string): boolean;
 }
 
-interface OperationState {
+interface ProcessedResponse {
+  mode: 'chat' | 'code';
+  content: string;
+  codeBlocks?: CodeBlock[];
+  fileDiffs?: FileDiff[];
+  shouldShowDiffs: boolean;
+}
+
+interface DiffDetector {
+  detectFileDiffs(response: string): FileDiff[];
+  isFileEdit(codeBlock: CodeBlock): boolean;
+  extractFileOperations(response: string): FileOperation[];
+}
+```
+
+### 6. Request Deduplication System
+
+**Purpose**: Prevent duplicate API calls and ensure single request processing
+
+**Key Components**:
+- Request fingerprinting
+- In-flight request tracking
+- Timeout-based cleanup
+- Error state management
+
+**Interface Design**:
+```typescript
+interface RequestDeduplicator {
+  generateRequestId(request: any): string;
+  isRequestInFlight(requestId: string): boolean;
+  registerRequest(requestId: string): void;
+  completeRequest(requestId: string): void;
+  cleanupExpiredRequests(): void;
+}
+
+interface RequestState {
   id: string;
-  type: 'chat' | 'code' | 'streaming';
-  abortController: AbortController;
-  startTime: Date;
-  onStop?: () => void;
+  timestamp: number;
+  status: 'pending' | 'completed' | 'error';
+  abortController?: AbortController;
 }
 ```
 
@@ -252,6 +320,24 @@ interface ActiveOperation {
 
 ## Error Handling
 
+### Streaming Response Errors
+- Invalid stream event parsing with graceful recovery
+- Connection interruption handling
+- Malformed JSON event recovery
+- Stream timeout and reconnection logic
+
+### API Request Errors
+- Duplicate request prevention and handling
+- HTTP 400 error root cause analysis and prevention
+- Request validation before sending
+- Proper error message display without exposing internal errors
+
+### Mode Separation Errors
+- Incorrect diff generation prevention
+- Code preview panel false triggers
+- Cross-mode contamination prevention
+- Input parsing vs response parsing separation
+
 ### Authentication Errors
 - Email validation errors
 - Password strength validation
@@ -259,9 +345,9 @@ interface ActiveOperation {
 - Session expiration handling
 
 ### Code Mode Errors
-- Orchestrator integration failures
+- Session initialization validation
 - File processing errors
-- Streaming interruption handling
+- Enhanced orchestrator communication failures
 - Timeout management
 
 ### UI Errors

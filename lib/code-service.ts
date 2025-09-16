@@ -7,6 +7,8 @@
  */
 
 import { EventEmitter } from 'events';
+import { codeRequestDeduplicator } from './utils/request-deduplicator';
+import { getCurrentMode } from './mode-manager';
 import type { Message } from '../types/index';
 
 export interface CodeSession {
@@ -42,34 +44,65 @@ export interface CodeServiceEvents {
 class CodeServiceClass extends EventEmitter {
   private sessions: Map<string, CodeSession> = new Map();
   private baseUrl = '/api/code';
+  private pollingIntervals: Map<string, NodeJS.Timeout> = new Map();
 
   /**
-   * Start a new code generation session
+   * Start a new code generation session with deduplication (mode-aware)
    */
   async startSession(options: StartSessionOptions): Promise<string> {
     try {
-      const response = await fetch(this.baseUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'start_session',
-          ...options,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      // Check if we're in the correct mode for code operations
+      const currentMode = getCurrentMode();
+      if (currentMode !== 'code') {
+        throw new Error('Code sessions can only be started in Code mode');
       }
 
-      const data = await response.json();
+      // Validate options before sending
+      this.validateStartSessionOptions(options);
 
-      if (data.error) {
-        throw new Error(data.error);
-      }
+      // Use request deduplicator to prevent duplicate session starts
+      const requestBody = {
+        action: 'start_session',
+        mode: currentMode, // Include current mode in request
+        ...options,
+      };
+
+      const data = await codeRequestDeduplicator.executeRequest(
+        this.baseUrl,
+        'POST',
+        requestBody,
+        async (abortController) => {
+          const response = await fetch(this.baseUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+            signal: abortController.signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const result = await response.json();
+
+          if (result.error) {
+            throw new Error(result.error);
+          }
+
+          return result;
+        }
+      );
 
       const sessionId = data.sessionId;
+      
+      // Check if session already exists (from deduplicated request)
+      if (this.sessions.has(sessionId)) {
+        console.log('Session already exists from deduplicated request:', sessionId);
+        return sessionId;
+      }
+
       const session: CodeSession = {
         id: sessionId,
         status: 'pending',
@@ -94,30 +127,47 @@ class CodeServiceClass extends EventEmitter {
   }
 
   /**
-   * Get the current status of a session
+   * Get the current status of a session with deduplication
    */
   async getSessionStatus(sessionId: string): Promise<CodeSession | null> {
     try {
-      const response = await fetch(this.baseUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'get_session_status',
-          sessionId,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      // Validate sessionId
+      if (!sessionId || typeof sessionId !== 'string' || sessionId.trim().length === 0) {
+        throw new Error('Session ID is required and must be a non-empty string');
       }
 
-      const data = await response.json();
+      const requestBody = {
+        action: 'get_session_status',
+        sessionId,
+      };
 
-      if (data.error) {
-        throw new Error(data.error);
-      }
+      const data = await codeRequestDeduplicator.executeRequest(
+        this.baseUrl,
+        'POST',
+        requestBody,
+        async (abortController) => {
+          const response = await fetch(this.baseUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+            signal: abortController.signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const result = await response.json();
+
+          if (result.error) {
+            throw new Error(result.error);
+          }
+
+          return result;
+        }
+      );
 
       if (data.session) {
         const session = {
@@ -138,31 +188,60 @@ class CodeServiceClass extends EventEmitter {
   }
 
   /**
-   * Apply pending diffs for a session
+   * Apply pending diffs for a session with deduplication (mode-aware)
    */
   async applyDiffs(sessionId: string, diffPaths?: string[]): Promise<boolean> {
     try {
-      const response = await fetch(this.baseUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'apply_diffs',
-          sessionId,
-          diffPaths,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      // Check if we're in the correct mode for diff operations
+      const currentMode = getCurrentMode();
+      if (currentMode !== 'code') {
+        console.warn('Diff operations are only allowed in Code mode');
+        return false;
       }
 
-      const data = await response.json();
-
-      if (data.error) {
-        throw new Error(data.error);
+      // Validate sessionId
+      if (!sessionId || typeof sessionId !== 'string' || sessionId.trim().length === 0) {
+        throw new Error('Session ID is required and must be a non-empty string');
       }
+
+      // Validate diffPaths if provided
+      if (diffPaths && !Array.isArray(diffPaths)) {
+        throw new Error('diffPaths must be an array if provided');
+      }
+
+      const requestBody = {
+        action: 'apply_diffs',
+        sessionId,
+        diffPaths,
+      };
+
+      const data = await codeRequestDeduplicator.executeRequest(
+        this.baseUrl,
+        'POST',
+        requestBody,
+        async (abortController) => {
+          const response = await fetch(this.baseUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+            signal: abortController.signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const result = await response.json();
+
+          if (result.error) {
+            throw new Error(result.error);
+          }
+
+          return result;
+        }
+      );
 
       return data.success || false;
     } catch (error) {
@@ -172,28 +251,44 @@ class CodeServiceClass extends EventEmitter {
   }
 
   /**
-   * Cancel a running session
+   * Cancel a running session with deduplication
    */
   async cancelSession(sessionId: string): Promise<boolean> {
     try {
-      const response = await fetch(this.baseUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'cancel_session',
-          sessionId,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      // Validate sessionId
+      if (!sessionId || typeof sessionId !== 'string' || sessionId.trim().length === 0) {
+        throw new Error('Session ID is required and must be a non-empty string');
       }
 
-      const data = await response.json();
-      this.sessions.delete(sessionId);
+      const requestBody = {
+        action: 'cancel_session',
+        sessionId,
+      };
 
+      const data = await codeRequestDeduplicator.executeRequest(
+        this.baseUrl,
+        'POST',
+        requestBody,
+        async (abortController) => {
+          const response = await fetch(this.baseUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+            signal: abortController.signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+
+          const result = await response.json();
+          return result;
+        }
+      );
+
+      this.sessions.delete(sessionId);
       return data.success || false;
     } catch (error) {
       console.error('Error canceling session:', error);
@@ -202,9 +297,16 @@ class CodeServiceClass extends EventEmitter {
   }
 
   /**
-   * Get all active sessions
+   * Get all active sessions (mode-aware)
    */
   getActiveSessions(): CodeSession[] {
+    const currentMode = getCurrentMode();
+    
+    // Only return sessions if we're in code mode
+    if (currentMode !== 'code') {
+      return [];
+    }
+    
     return Array.from(this.sessions.values()).filter(
       session => session.status === 'pending' || session.status === 'processing'
     );
@@ -229,10 +331,16 @@ class CodeServiceClass extends EventEmitter {
   }
 
   /**
-   * Poll session status for updates
+   * Poll session status for updates with duplicate prevention
    */
   private async pollSessionStatus(sessionId: string): Promise<void> {
-    const pollInterval = 1000; // 1 second
+    // Prevent duplicate polling for the same session
+    if (this.pollingIntervals.has(sessionId)) {
+      console.log(`Polling already active for session ${sessionId}`);
+      return;
+    }
+
+    const pollInterval = 2000; // 2 seconds to reduce server load
     let retryCount = 0;
     const maxRetries = 3;
 
@@ -242,6 +350,7 @@ class CodeServiceClass extends EventEmitter {
 
         if (!session) {
           console.warn(`Session ${sessionId} not found`);
+          this.stopPolling(sessionId);
           return;
         }
 
@@ -264,34 +373,85 @@ class CodeServiceClass extends EventEmitter {
         // Check if session is completed
         if (session.status === 'completed') {
           this.emit('session-completed', sessionId, session);
+          this.stopPolling(sessionId);
           return;
         }
 
         // Check if session errored
         if (session.status === 'error') {
           this.emit('session-error', sessionId, session.error || 'Unknown error');
+          this.stopPolling(sessionId);
           return;
         }
 
         // Continue polling if still processing
         if (session.status === 'pending' || session.status === 'processing') {
           retryCount = 0; // Reset retry count on successful poll
-          setTimeout(poll, pollInterval);
+          const timeoutId = setTimeout(poll, pollInterval);
+          this.pollingIntervals.set(sessionId, timeoutId);
+        } else {
+          this.stopPolling(sessionId);
         }
       } catch (error) {
         console.error(`Error polling session ${sessionId}:`, error);
         retryCount++;
 
         if (retryCount < maxRetries) {
-          setTimeout(poll, pollInterval * retryCount);
+          const timeoutId = setTimeout(poll, pollInterval * retryCount);
+          this.pollingIntervals.set(sessionId, timeoutId);
         } else {
           this.emit('session-error', sessionId, 'Failed to poll session status');
+          this.stopPolling(sessionId);
         }
       }
     };
 
     // Start polling
-    setTimeout(poll, pollInterval);
+    const initialTimeoutId = setTimeout(poll, pollInterval);
+    this.pollingIntervals.set(sessionId, initialTimeoutId);
+  }
+
+  /**
+   * Stop polling for a specific session
+   */
+  private stopPolling(sessionId: string): void {
+    const timeoutId = this.pollingIntervals.get(sessionId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      this.pollingIntervals.delete(sessionId);
+    }
+  }
+
+  /**
+   * Validate start session options
+   */
+  private validateStartSessionOptions(options: StartSessionOptions): void {
+    if (!options) {
+      throw new Error('StartSessionOptions is required');
+    }
+
+    if (!options.prompt || typeof options.prompt !== 'string' || options.prompt.trim().length === 0) {
+      throw new Error('Prompt is required and must be a non-empty string');
+    }
+
+    if (options.selectedFiles && typeof options.selectedFiles !== 'object') {
+      throw new Error('selectedFiles must be an object');
+    }
+
+    if (options.rules && !Array.isArray(options.rules)) {
+      throw new Error('rules must be an array');
+    }
+
+    if (options.mode) {
+      const validModes = ['streaming', 'agentic', 'hybrid', 'standard'];
+      if (!validModes.includes(options.mode)) {
+        throw new Error(`Invalid mode: ${options.mode}. Valid modes: ${validModes.join(', ')}`);
+      }
+    }
+
+    if (options.context && typeof options.context !== 'object') {
+      throw new Error('context must be an object');
+    }
   }
 
   /**

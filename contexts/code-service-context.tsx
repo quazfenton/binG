@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useReducer, useEffect, useCallback, ReactNode } from 'react';
 import { codeService, type CodeSession, type StartSessionOptions } from '../lib/code-service';
+import { processResponse, getCurrentMode } from '../lib/mode-manager';
 import type { Message } from '../types/index';
 
 // State interface
@@ -182,10 +183,14 @@ export function CodeServiceProvider({ children }: CodeServiceProviderProps) {
     const handleSessionCompleted = (sessionId: string, session: CodeSession) => {
       dispatch({ type: 'UPDATE_SESSION', payload: session });
       dispatch({ type: 'SET_PROCESSING', payload: false });
-      dispatch({ type: 'SET_LAST_RESULT', payload: {
-        files: session.files,
-        diffs: session.pendingDiffs,
-      }});
+      
+      // Only set result if we're in code mode
+      if (getCurrentMode() === 'code') {
+        dispatch({ type: 'SET_LAST_RESULT', payload: {
+          files: session.files,
+          diffs: session.pendingDiffs,
+        }});
+      }
     };
 
     const handleSessionError = (sessionId: string, error: string) => {

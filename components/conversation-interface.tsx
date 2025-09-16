@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react"; // Import useCallback and useMemo
-import { useChat } from "ai/react"; // Import useChat
+import { useEnhancedChat } from "@/hooks/use-enhanced-chat"; // Import enhanced chat hook
 import type { ChatHistory } from "@/types";
 
 import InteractionPanel from "@/components/interaction-panel";
@@ -22,6 +22,13 @@ import {
 import { parseCodeBlocksFromMessages } from "@/lib/code-parser";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
+import { modeManager, setCurrentMode, processResponse } from "@/lib/mode-manager";
+import { 
+  createInputContext, 
+  processSafeContent, 
+  shouldGenerateDiffsForContext,
+  debugContentProcessing 
+} from "@/lib/input-response-separator";
 
 // Main component wrapped with CodeServiceProvider
 export default function ConversationInterface() {
@@ -61,6 +68,16 @@ function ConversationInterfaceContent() {
   // Enhanced code system integration
   const [activeTab, setActiveTab] = useState<"chat" | "code">("chat");
   const codeServiceContext = useCodeService();
+
+  // Update mode manager when active tab changes
+  useEffect(() => {
+    setCurrentMode(activeTab);
+    
+    // Close code preview panel when switching to chat mode
+    if (activeTab === 'chat' && showCodePreview) {
+      setShowCodePreview(false);
+    }
+  }, [activeTab, showCodePreview]);
 
   // Enhanced streaming state management
   const streamingState = useStreamingState({
@@ -113,8 +130,8 @@ function ConversationInterfaceContent() {
     error,
     setMessages,
     stop,
-    setInput, // Destructure setInput from useChat
-  } = useChat({
+    setInput, // Destructure setInput from enhanced chat hook
+  } = useEnhancedChat({
     api: "/api/chat",
     body: {
       provider: currentProvider,
@@ -127,14 +144,14 @@ function ConversationInterfaceContent() {
           "You are not authorized to perform this action. Please log in.",
         );
       }
-      // We rely on useChat for token streaming; commands are extracted from message content via effects below.
+      // Enhanced chat hook handles streaming properly
     },
     onError: (error) => {
       toast.error(error.message);
       // Clean up any active streaming sessions on error
       enhancedBufferManager.cleanup();
     },
-    onFinish: () => {
+    onFinish: (message) => {
       if (messages.length > 0) {
         const savedChatId = saveCurrentChat(
           messages,
@@ -176,8 +193,8 @@ function ConversationInterfaceContent() {
           // Clear input after starting session
           setInput("");
 
-          // Show code preview panel if not already visible
-          if (!showCodePreview) {
+          // Show code preview panel if not already visible and in code mode
+          if (!showCodePreview && activeTab === 'code') {
             setShowCodePreview(true);
           }
         } catch (error) {
@@ -211,24 +228,26 @@ function ConversationInterfaceContent() {
         setProjectFiles((prevFiles) => ({ ...prevFiles, ...files }));
       }
 
-      // Update pending diffs
-      if (diffs) {
+      // Update pending diffs only in code mode
+      if (diffs && activeTab === 'code') {
         setPendingDiffs(diffs);
       }
 
-      // Parse code blocks from messages and add to project files
-      const parsedData = parseCodeBlocksFromMessages(messages);
-      if (parsedData.codeBlocks.length > 0) {
-        const newFiles: { [key: string]: string } = {};
-        parsedData.codeBlocks.forEach((block) => {
-          if (block.filename && !block.isError) {
-            newFiles[block.filename] = block.code;
-          }
-        });
-        setProjectFiles((prevFiles) => ({ ...prevFiles, ...newFiles }));
+      // Parse code blocks from messages and add to project files only in code mode
+      if (activeTab === 'code') {
+        const parsedData = parseCodeBlocksFromMessages(messages);
+        if (parsedData.codeBlocks.length > 0) {
+          const newFiles: { [key: string]: string } = {};
+          parsedData.codeBlocks.forEach((block) => {
+            if (block.filename && !block.isError) {
+              newFiles[block.filename] = block.code;
+            }
+          });
+          setProjectFiles((prevFiles) => ({ ...prevFiles, ...newFiles }));
+        }
       }
     }
-  }, [codeServiceContext.state.lastSessionResult, messages]);
+  }, [codeServiceContext.state.lastSessionResult, messages, activeTab]);
 
   const {
     saveCurrentChat,
@@ -268,46 +287,30 @@ function ConversationInterfaceContent() {
     isVoiceEnabled,
   ]);
 
-  // Extract and persist streamed COMMANDS blocks into a per-file map
+  // Extract and persist streamed COMMANDS blocks into a per-file map (only in code mode)
   useEffect(() => {
-    if (messages.length === 0) return;
+    if (messages.length === 0 || activeTab !== 'code') return;
+    
     const lastAssistant = [...messages]
       .reverse()
       .find((m) => m.role === "assistant");
     if (!lastAssistant || typeof lastAssistant.content !== "string") return;
-    const content = lastAssistant.content;
-    const blocks = [
-      ...content.matchAll(
-        /=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/g,
-      ),
-    ];
-    if (blocks.length === 0) return;
+    
+    // Create context for API response processing
+    const responseContext = createInputContext('assistant');
+    const processedResponse = processSafeContent(lastAssistant.content, responseContext);
+    
+    // Debug content processing in development
+    debugContentProcessing(lastAssistant.content, responseContext, processedResponse);
+    
+    // Only process diffs if context allows it
+    if (!shouldGenerateDiffsForContext(lastAssistant.content, responseContext) || !processedResponse.fileDiffs) return;
 
-    const newEntries: { path: string; diff: string }[] = [];
-    for (const match of blocks) {
-      const block = match[1];
-      try {
-        const diffsMatch = block.match(/write_diffs:\s*\[([\s\S]*?)\]/);
-        if (diffsMatch) {
-          const items = diffsMatch[1]
-            .split(/},/)
-            .map((s) => (s.endsWith("}") ? s : s + "}"))
-            .map((s) => s.trim())
-            .filter(Boolean);
-          const write_diffs = items.map((raw) => {
-            const pathMatch = raw.match(/path:\s*"([^"]+)"/);
-            const diffMatch = raw.match(/diff:\s*"([\s\S]*)"/);
-            return {
-              path: pathMatch?.[1] || "",
-              diff: (diffMatch?.[1] || "").replace(/\\n/g, "\n"),
-            };
-          });
-          newEntries.push(...write_diffs);
-        }
-      } catch {
-        // ignore parse errors per block
-      }
-    }
+    const newEntries: { path: string; diff: string }[] = processedResponse.fileDiffs.map(fileDiff => ({
+      path: fileDiff.path,
+      diff: fileDiff.diff,
+    }));
+
     if (newEntries.length === 0) return;
 
     setCommandsByFile((prev) => {
@@ -323,7 +326,7 @@ function ConversationInterfaceContent() {
       }
       return next;
     });
-  }, [messages]);
+  }, [messages, activeTab]);
 
   // Persist commands map by conversation id
   useEffect(() => {
@@ -578,19 +581,28 @@ function ConversationInterfaceContent() {
     }
   };
 
-  // Check if there are code blocks in messages for preview button glow
+  // Check if there are code blocks in messages for preview button glow (mode-aware)
   const hasCodeBlocks = useMemo(() => {
-    return messages.some(
-      (message) =>
-        message.role === "assistant" && message.content.includes("```"),
-    );
-  }, [messages]);
+    if (activeTab !== 'code') return false;
+    
+    return messages.some((message) => {
+      if (message.role === "assistant" && message.content.includes("```")) {
+        const messageContext = createInputContext(message.role);
+        const processedResponse = processSafeContent(message.content, messageContext);
+        return processedResponse.shouldOpenCodePreview;
+      }
+      return false;
+    });
+  }, [messages, activeTab]);
 
   const handleToggleCodePreview = () => {
-    setShowCodePreview((prevShowCodePreview) => {
-      const newState = !prevShowCodePreview;
-      return newState;
-    });
+    // Only allow code preview in code mode
+    if (activeTab === 'code') {
+      setShowCodePreview((prevShowCodePreview) => {
+        const newState = !prevShowCodePreview;
+        return newState;
+      });
+    }
   };
 
   const handleToggleCodeMode = () => {
@@ -614,6 +626,12 @@ function ConversationInterfaceContent() {
   };
 
   const acceptPendingDiffs = () => {
+    // Only allow accepting diffs in code mode
+    if (activeTab !== 'code') {
+      toast.error("Diffs can only be applied in Code mode");
+      return;
+    }
+    
     if (pendingDiffs.length === 0) return;
     const diffMessages = pendingDiffs.map((d, idx) => ({
       id: `diff-${Date.now()}-${idx}`,
@@ -842,6 +860,78 @@ function ConversationInterfaceContent() {
           onClose={() => setShowHistory(false)}
           onLoadChat={handleLoadChat}
           onDeleteChat={handleDeleteChat}
+          onDownloadHistory={downloadAllHistory}
+          chatHistory={chatHistory}
+        />
+      )}
+
+      {/* Accessibility Controls Modal */}
+      {showAccessibility && (
+        <AccessibilityControls
+          onClose={() => setShowAccessibility(false)}
+          onLogin={setIsLoggedIn}
+        />
+      )}
+
+      {/* Code Preview Panel */}
+      {showCodePreview && activeTab === 'code' && (
+        <CodePreviewPanel
+          onClose={() => setShowCodePreview(false)}
+          projectFiles={projectFiles}
+          onUpdateFiles={handleUpdateProjectFiles}
+          pendingDiffs={pendingDiffs}
+          onAcceptDiffs={acceptPendingDiffs}
+          onDismissDiffs={dismissPendingDiffs}
+          commandsByFile={commandsByFile}
+          onApplyAllCommandDiffs={applyAllCommandDiffs}
+          onApplyDiffsForFile={applyDiffsForFile}
+          onClearAllCommandDiffs={clearAllCommandDiffs}
+          onClearCommandDiffsForFile={clearCommandDiffsForFile}
+          onSquashCommandDiffsForFile={squashCommandDiffsForFile}
+        />
+      )}
+
+      {/* Code Mode Panel */}
+      {showCodeMode && (
+        <CodeMode
+          onClose={() => setShowCodeMode(false)}
+          onSendMessage={handleCodeModeMessage}
+          projectFiles={projectFiles}
+          onUpdateFiles={handleUpdateProjectFiles}
+        />
+      )}
+
+      {/* Advertisement Modal */}
+      {showAd && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg max-w-md mx-4">
+            <h3 className="text-lg font-semibold mb-4">Support Our Service</h3>
+            <p className="text-gray-600 mb-4">
+              You've used 3 prompts. Consider creating an account for unlimited access!
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setShowAd(false);
+                  setShowAccessibility(true);
+                }}
+                className="flex-1 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+              >
+                Sign Up
+              </button>
+              <button
+                onClick={() => setShowAd(false)}
+                className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded hover:bg-gray-400"
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}t}
           onDownloadAll={downloadAllHistory}
           chats={chatHistory}
         />

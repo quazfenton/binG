@@ -84,6 +84,7 @@ import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
 import { useInteractionCodeMode } from "../hooks/use-interaction-code-mode";
 import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
+import { processResponse } from "../lib/mode-manager";
 
 interface InteractionPanelProps {
   onSubmit: (content: string) => void;
@@ -1019,10 +1020,11 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
     }
   };
 
-  // Keyboard handling for accepting/dismissing pending diffs
+  // Keyboard handling for accepting/dismissing pending diffs (only in code mode)
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
-      if (!pendingDiffs || pendingDiffs.length === 0) return;
+      // Only handle pending diffs keyboard shortcuts in code mode
+      if (!pendingDiffs || pendingDiffs.length === 0 || activeTab !== "code") return;
       if (ev.key === "Enter" && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
         onAcceptPendingDiffs?.();
       } else if (ev.key === "Escape") {
@@ -1031,7 +1033,7 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [pendingDiffs, onAcceptPendingDiffs, onDismissPendingDiffs]);
+  }, [pendingDiffs, onAcceptPendingDiffs, onDismissPendingDiffs, activeTab]);
 
   const handleSuggestionClick = (suggestion: string) => {
     if (!isProcessing) {
@@ -1425,7 +1427,7 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
 
               {/* Input Section - Always at bottom */}
               <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-2 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
-                {pendingDiffs && pendingDiffs.length > 0 && (
+                {pendingDiffs && pendingDiffs.length > 0 && activeTab === "code" && (
                   <div className="mb-3 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-200">
                     <div className="flex items-center justify-between">
                       <span>

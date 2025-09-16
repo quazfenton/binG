@@ -8,6 +8,7 @@
 
 import { EventEmitter } from 'events';
 import { CodeModeErrorHandler, CodeModeError } from './code-mode-error-handler';
+import { codeRequestDeduplicator } from '../utils/request-deduplicator';
 
 // Import the actual enhanced code orchestrator
 import { EnhancedCodeOrchestrator } from '../../enhanced-code-system/enhanced-code-orchestrator';
@@ -87,6 +88,7 @@ export class CodeModeIntegrationService extends EventEmitter {
   private sessions: Map<string, CodeModeSession> = new Map();
   private config: CodeModeConfig;
   private sessionCleanupInterval: NodeJS.Timeout;
+  private activeRequests: Map<string, Promise<any>> = new Map();
 
   constructor(config?: Partial<CodeModeConfig>) {
     super();
@@ -125,7 +127,7 @@ export class CodeModeIntegrationService extends EventEmitter {
   }
 
   /**
-   * Create a new code mode session
+   * Create a new code mode session with duplicate prevention
    */
   async createSession(files: CodeModeFile[]): Promise<string> {
     try {
@@ -136,6 +138,21 @@ export class CodeModeIntegrationService extends EventEmitter {
 
       if (activeSessions.length >= this.config.maxConcurrentSessions) {
         throw CodeModeErrorHandler.createError('SESSION_LIMIT_EXCEEDED');
+      }
+
+      // Create session fingerprint to prevent duplicates
+      const filesHash = this.hashFiles(files);
+      const sessionKey = `session_${filesHash}`;
+      
+      // Check if identical session already exists
+      const existingSession = Array.from(this.sessions.values()).find(
+        s => s.status !== 'failed' && s.status !== 'cancelled' && 
+        this.hashFiles(s.files) === filesHash
+      );
+
+      if (existingSession) {
+        console.log('Reusing existing session:', existingSession.id);
+        return existingSession.id;
       }
 
       const sessionId = `code_session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -163,7 +180,21 @@ export class CodeModeIntegrationService extends EventEmitter {
   }
 
   /**
-   * Process a code mode request
+   * Create a hash of files for deduplication
+   */
+  private hashFiles(files: CodeModeFile[]): string {
+    const fileData = files.map(f => `${f.path}:${f.content.length}`).sort().join('|');
+    let hash = 0;
+    for (let i = 0; i < fileData.length; i++) {
+      const char = fileData.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return Math.abs(hash).toString(36);
+  }
+
+  /**
+   * Process a code mode request with deduplication
    */
   async processRequest(sessionId: string, request: CodeModeRequest): Promise<CodeModeResponse> {
     const session = this.sessions.get(sessionId);
@@ -173,9 +204,36 @@ export class CodeModeIntegrationService extends EventEmitter {
       throw error;
     }
 
+    // Create request fingerprint for deduplication
+    const requestKey = `${sessionId}-${request.type}-${JSON.stringify(request.data)}`;
+    
+    // Check if identical request is already in progress
+    if (this.activeRequests.has(requestKey)) {
+      console.log('Deduplicating code mode request:', requestKey);
+      return this.activeRequests.get(requestKey)!;
+    }
+
     session.lastActivity = new Date();
     session.status = 'processing';
 
+    // Create the request promise
+    const requestPromise = this.executeRequest(session, request);
+    
+    // Track the active request
+    this.activeRequests.set(requestKey, requestPromise);
+    
+    // Clean up when request completes
+    requestPromise.finally(() => {
+      this.activeRequests.delete(requestKey);
+    });
+
+    return requestPromise;
+  }
+
+  /**
+   * Execute the actual request
+   */
+  private async executeRequest(session: CodeModeSession, request: CodeModeRequest): Promise<CodeModeResponse> {
     try {
       switch (request.type) {
         case 'read_file':
@@ -194,7 +252,7 @@ export class CodeModeIntegrationService extends EventEmitter {
           return await this.handleDeleteFileRequest(session, request);
         
         default:
-          throw CodeModeErrorHandler.createError('INVALID_REQUEST', `Unsupported request type: ${request.type}`, sessionId);
+          throw CodeModeErrorHandler.createError('INVALID_REQUEST', `Unsupported request type: ${request.type}`, session.id);
       }
     } catch (error) {
       session.status = 'failed';
@@ -651,6 +709,9 @@ export class CodeModeIntegrationService extends EventEmitter {
     Array.from(this.sessions.keys()).forEach(sessionId => {
       this.cancelSession(sessionId).catch(console.error);
     });
+
+    // Clear active requests
+    this.activeRequests.clear();
 
     this.sessions.clear();
     this.removeAllListeners();

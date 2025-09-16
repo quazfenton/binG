@@ -33,26 +33,31 @@ This feature addresses critical stability and functionality issues in the applic
 
 ### Requirement 3
 
-**User Story:** As a developer, I want the code mode functionality to work properly so that I can send prompts and receive responses without the system getting stuck.
+**User Story:** As a developer, I want the chat and code mode functionality to work properly so that I can send prompts and receive responses without streaming errors or incorrect diff handling.
 
 #### Acceptance Criteria
 
-1. WHEN I select the "code" section and send a prompt THEN the system SHALL process the request properly
-2. WHEN a code mode request is sent THEN the system SHALL NOT get stuck in an indefinite generating state
-3. WHEN the API processes a code request THEN it SHALL return a proper response or error
-4. WHEN there are issues with code mode requests THEN appropriate error handling SHALL be implemented
-5. WHEN code mode is active THEN all related components SHALL function without blocking the UI
+1. WHEN I send a prompt in Chat tab THEN the system SHALL NOT show "failed to parse stream string. invalid code event" errors
+2. WHEN I send a prompt in Chat tab THEN the API response SHALL be properly displayed and streamed to the user
+3. WHEN I send a prompt in Chat tab THEN the system SHALL NOT incorrectly trigger diff proposals for non-code responses
+4. WHEN I send a prompt in Code tab THEN the system SHALL NOT make duplicate API calls (POST /api/code)
+5. WHEN I send a prompt in Code tab THEN the system SHALL NOT return HTTP 400 errors from startSession
+6. WHEN I send a prompt in Code tab THEN the code-preview-panel SHALL NOT automatically open unless there is actual code to preview
+7. WHEN diff proposals are shown THEN they SHALL only appear for Code tab responses that contain actual file edits
+8. WHEN input is processed THEN the system SHALL NOT parse the input prompt, only parse API responses for code extraction
 
 ### Requirement 4
 
-**User Story:** As a user, I want the stop button to work properly so that I can cancel ongoing operations when needed.
+**User Story:** As a user, I want proper separation between Chat and Code modes so that each mode handles responses appropriately without interference.
 
 #### Acceptance Criteria
 
-1. WHEN I click the stop button during an ongoing operation THEN the operation SHALL be cancelled
-2. WHEN an operation is cancelled THEN the UI SHALL return to its ready state
-3. WHEN the stop button is pressed THEN any streaming responses SHALL be terminated
-4. WHEN cancellation occurs THEN appropriate cleanup SHALL be performed to prevent memory leaks
+1. WHEN I am in Chat tab THEN responses SHALL not ask to accept pending diffs unneccesarily 
+2. WHEN I am in Code tab THEN responses SHALL be processed for code extraction and diff generation only if they contain file edits
+3. WHEN I switch between tabs THEN the enhanced-code-system SHALL only be active for Code tab interactions
+4. WHEN a response contains code blocks THEN they SHALL be displayed as formatted code, not treated as file diffs
+5. WHEN a response contains actual file edits to existing files THEN diff proposals SHALL be generated only in Code tab
+6. WHEN I am in Chat tab THEN the code-preview-panel SHALL never be triggered or opened
 
 ### Requirement 5
 
@@ -66,6 +71,19 @@ This feature addresses critical stability and functionality issues in the applic
 5. IF user is already logged in THEN the system SHALL show logout option instead
 
 ### Requirement 6
+
+**User Story:** As a user, I want the streaming API responses to work correctly so that I can see responses in real-time without parsing errors.
+
+#### Acceptance Criteria
+
+1. WHEN the system receives streaming responses THEN it SHALL properly parse and display the content
+2. WHEN streaming encounters invalid events THEN the system SHALL handle them gracefully without showing error messages to users
+3. WHEN API calls are made THEN there SHALL be no duplicate requests for the same user action
+4. WHEN the /api/chat endpoint responds THEN the response SHALL be properly streamed and displayed in the UI
+5. WHEN the /api/code endpoint is called THEN it SHALL not return 400 errors for valid requests
+6. WHEN streaming is active THEN the system SHALL maintain proper connection state and error recovery
+
+### Requirement 7
 
 **User Story:** As a user, I want robust plugins that enhance my workflow, so that I can extend the application's functionality reliably.
 

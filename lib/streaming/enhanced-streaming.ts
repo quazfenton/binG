@@ -1,6 +1,7 @@
 "use client";
 
 import { EventEmitter } from 'events';
+import { streamingErrorHandler, type StreamingError } from './streaming-error-handler';
 
 // Types for streaming events
 export interface StreamingEvent {
@@ -169,12 +170,28 @@ export class EnhancedStreamingService extends EventEmitter {
                 }
               }
 
-              // Process the event
-              await this.processStreamEvent(requestId, eventData, startTime);
+              // Process the event with error recovery
+              await this.processStreamEventSafely(requestId, eventData, startTime);
               tokenCount++;
 
             } catch (parseError) {
-              console.warn('Failed to parse SSE line:', line, parseError);
+              // Handle parsing errors gracefully without exposing to user
+              console.warn('SSE parsing error (recovered):', {
+                line: line.substring(0, 100) + (line.length > 100 ? '...' : ''),
+                error: parseError instanceof Error ? parseError.message : String(parseError),
+                requestId
+              });
+              
+              // Update error metrics but continue processing
+              if (this.config.enableMetrics) {
+                const metrics = this.streamMetrics.get(requestId);
+                if (metrics) {
+                  metrics.errorCount++;
+                }
+              }
+              
+              // Continue processing other lines instead of failing
+              continue;
             }
           }
         }
@@ -204,34 +221,157 @@ export class EnhancedStreamingService extends EventEmitter {
   }
 
   /**
-   * Parse Server-Sent Events format
+   * Parse Server-Sent Events format with enhanced validation and error recovery
    */
   private parseSSELine(line: string): StreamingEvent | null {
+    // Skip empty lines and comments
+    if (!line.trim() || line.startsWith(':')) {
+      return null;
+    }
+
+    // Parse data events
     if (line.startsWith('data: ')) {
       try {
-        const data = JSON.parse(line.slice(6));
+        const dataString = line.slice(6).trim();
+        
+        // Handle empty data
+        if (!dataString) {
+          return null;
+        }
+
+        // Try to parse as JSON
+        let data: any;
+        try {
+          data = JSON.parse(dataString);
+        } catch (jsonError) {
+          // If JSON parsing fails, treat as plain text content
+          console.warn('Failed to parse SSE data as JSON, treating as text:', dataString);
+          data = {
+            type: 'token',
+            content: dataString,
+            timestamp: Date.now()
+          };
+        }
+
+        // Validate and normalize the event type
+        const eventType = this.validateEventType(data.type);
+        
         return {
-          type: data.type || 'token',
+          type: eventType,
           data: data,
           timestamp: Date.now(),
           requestId: data.requestId || '',
         };
-      } catch {
+      } catch (error) {
+        console.warn('Failed to process SSE data line:', line, error);
         return null;
       }
     }
 
+    // Parse event type declarations
     if (line.startsWith('event: ')) {
       const eventType = line.slice(7).trim();
+      const validatedType = this.validateEventType(eventType);
+      
       return {
-        type: eventType as any,
+        type: validatedType,
         data: {},
         timestamp: Date.now(),
         requestId: '',
       };
     }
 
+    // Parse id field (for event stream resumption)
+    if (line.startsWith('id: ')) {
+      // Store the ID for potential resumption, but don't create an event
+      return null;
+    }
+
+    // Parse retry field
+    if (line.startsWith('retry: ')) {
+      // Handle retry directive, but don't create an event
+      return null;
+    }
+
+    // Unknown SSE field - log warning but don't fail
+    console.warn('Unknown SSE field encountered:', line);
     return null;
+  }
+
+  /**
+   * Validate and normalize event types to prevent invalid event errors
+   */
+  private validateEventType(eventType: string | undefined): StreamingEvent['type'] {
+    if (!eventType || typeof eventType !== 'string') {
+      return 'token';
+    }
+
+    const normalizedType = eventType.toLowerCase().trim();
+    
+    // Map of valid event types
+    const validEventTypes: Record<string, StreamingEvent['type']> = {
+      'token': 'token',
+      'data': 'token',
+      'text': 'token',
+      'content': 'token',
+      'chunk': 'token',
+      'error': 'error',
+      'done': 'done',
+      'complete': 'done',
+      'finished': 'done',
+      'end': 'done',
+      'heartbeat': 'heartbeat',
+      'ping': 'heartbeat',
+      'keepalive': 'heartbeat',
+      'commands': 'commands',
+      'command': 'commands',
+      'action': 'commands',
+      'init': 'token',
+      'start': 'token',
+      'metrics': 'token',
+      'progress': 'token',
+      'softtimeout': 'heartbeat',
+      'timeout': 'error'
+    };
+
+    // Return validated type or default to 'token'
+    const validatedType = validEventTypes[normalizedType];
+    if (validatedType) {
+      return validatedType;
+    }
+
+    // Handle unknown event types gracefully
+    console.warn(`Unknown event type "${eventType}" normalized to "token"`);
+    return 'token';
+  }
+
+  /**
+   * Process a streaming event with enhanced error recovery
+   */
+  private async processStreamEventSafely(
+    requestId: string,
+    event: StreamingEvent,
+    startTime: number
+  ): Promise<void> {
+    try {
+      await this.processStreamEvent(requestId, event, startTime);
+    } catch (error) {
+      console.warn('Stream event processing error (recovered):', {
+        eventType: event.type,
+        error: error instanceof Error ? error.message : String(error),
+        requestId
+      });
+      
+      // Update error metrics
+      if (this.config.enableMetrics) {
+        const metrics = this.streamMetrics.get(requestId);
+        if (metrics) {
+          metrics.errorCount++;
+        }
+      }
+      
+      // Don't propagate the error - continue processing
+    }
   }
 
   /**
@@ -247,10 +387,12 @@ export class EnhancedStreamingService extends EventEmitter {
 
     switch (event.type) {
       case 'token':
-        if (event.data.content) {
+        // Safely extract content from event data
+        const content = this.extractContentFromEvent(event);
+        if (content) {
           // Create chunk
           const chunk: StreamChunk = {
-            content: event.data.content,
+            content,
             timestamp: event.timestamp,
             chunkId: `${requestId}-${Date.now()}-${Math.random()}`,
           };
@@ -281,11 +423,17 @@ export class EnhancedStreamingService extends EventEmitter {
         break;
 
       case 'commands':
-        this.emit('commands', { requestId, commands: event.data });
+        // Safely extract commands from event data
+        const commands = this.extractCommandsFromEvent(event);
+        if (commands) {
+          this.emit('commands', { requestId, commands });
+        }
         break;
 
       case 'error':
-        this.handleStreamError(requestId, new Error(event.data.message), startTime);
+        // Safely extract error message from event data
+        const errorMessage = this.extractErrorFromEvent(event);
+        this.handleStreamError(requestId, new Error(errorMessage), startTime);
         break;
 
       case 'done':
@@ -301,6 +449,22 @@ export class EnhancedStreamingService extends EventEmitter {
       case 'heartbeat':
         // Reset heartbeat timer
         this.resetHeartbeat(requestId);
+        break;
+
+      default:
+        // Handle unknown event types gracefully
+        console.warn(`Unknown event type "${event.type}" - treating as token`);
+        const unknownContent = this.extractContentFromEvent(event);
+        if (unknownContent) {
+          const chunk: StreamChunk = {
+            content: unknownContent,
+            timestamp: event.timestamp,
+            chunkId: `${requestId}-${Date.now()}-${Math.random()}`,
+          };
+          buffer.push(chunk);
+          this.buffers.set(requestId, buffer);
+          this.updateMetrics(requestId, chunk.content);
+        }
         break;
     }
   }
@@ -384,13 +548,20 @@ export class EnhancedStreamingService extends EventEmitter {
   }
 
   /**
-   * Handle streaming errors with retry logic
+   * Handle streaming errors with enhanced error processing and recovery
    */
   private async handleStreamError(
     requestId: string,
     error: Error,
     startTime: number
   ): Promise<void> {
+    // Process error through error handler
+    const streamingError = streamingErrorHandler.processError(error, {
+      requestId,
+      sessionId: requestId
+    });
+
+    // Update metrics
     if (this.config.enableMetrics) {
       const metrics = this.streamMetrics.get(requestId);
       if (metrics) {
@@ -398,18 +569,45 @@ export class EnhancedStreamingService extends EventEmitter {
       }
     }
 
-    this.emit('error', { requestId, error, canRetry: true });
+    // Only emit error to UI if it should be shown to user
+    if (streamingErrorHandler.shouldShowToUser(streamingError)) {
+      const userMessage = streamingErrorHandler.getUserMessage(streamingError);
+      this.emit('error', { 
+        requestId, 
+        error: new Error(userMessage), 
+        canRetry: streamingError.recoverable 
+      });
+    } else {
+      // Log error for debugging but don't show to user
+      console.warn('Streaming error (handled silently):', {
+        type: streamingError.type,
+        message: streamingError.message,
+        requestId
+      });
+    }
 
-    // Implement retry logic with exponential backoff
-    const metrics = this.streamMetrics.get(requestId);
-    if (metrics && metrics.reconnectCount < this.config.maxRetries) {
-      const delay = Math.min(1000 * Math.pow(2, metrics.reconnectCount), 10000);
-      const jitter = Math.random() * 1000;
+    // Attempt recovery if error is recoverable
+    if (streamingError.recoverable) {
+      const recovered = await streamingErrorHandler.attemptRecovery(
+        streamingError,
+        async () => {
+          // Recovery function - could restart stream or reconnect
+          const metrics = this.streamMetrics.get(requestId);
+          if (metrics) {
+            metrics.reconnectCount++;
+            this.emit('retry', { requestId, attempt: metrics.reconnectCount });
+          }
+        }
+      );
 
-      setTimeout(() => {
-        metrics.reconnectCount++;
-        this.emit('retry', { requestId, attempt: metrics.reconnectCount });
-      }, delay + jitter);
+      if (!recovered) {
+        // Recovery failed - emit final error
+        this.emit('error', { 
+          requestId, 
+          error: new Error('Connection could not be restored. Please try again.'), 
+          canRetry: false 
+        });
+      }
     }
   }
 
@@ -490,6 +688,112 @@ export class EnhancedStreamingService extends EventEmitter {
    */
   getActiveStreams(): string[] {
     return Array.from(this.activeStreams.keys());
+  }
+
+  /**
+   * Safely extract content from event data
+   */
+  private extractContentFromEvent(event: StreamingEvent): string {
+    try {
+      // Try multiple possible content fields
+      const data = event.data;
+      if (!data || typeof data !== 'object') {
+        return '';
+      }
+
+      // Check common content field names
+      if (typeof data.content === 'string') {
+        return data.content;
+      }
+      if (typeof data.text === 'string') {
+        return data.text;
+      }
+      if (typeof data.data === 'string') {
+        return data.data;
+      }
+      if (typeof data.chunk === 'string') {
+        return data.chunk;
+      }
+      if (typeof data.token === 'string') {
+        return data.token;
+      }
+
+      // If data itself is a string, use it
+      if (typeof data === 'string') {
+        return data;
+      }
+
+      return '';
+    } catch (error) {
+      console.warn('Failed to extract content from event:', error);
+      return '';
+    }
+  }
+
+  /**
+   * Safely extract commands from event data
+   */
+  private extractCommandsFromEvent(event: StreamingEvent): any {
+    try {
+      const data = event.data;
+      if (!data || typeof data !== 'object') {
+        return null;
+      }
+
+      // Check for commands field
+      if (data.commands) {
+        return data.commands;
+      }
+      if (data.command) {
+        return data.command;
+      }
+      if (data.actions) {
+        return data.actions;
+      }
+
+      // Return the data itself if it looks like commands
+      if (data.request_files || data.write_diffs) {
+        return data;
+      }
+
+      return null;
+    } catch (error) {
+      console.warn('Failed to extract commands from event:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Safely extract error message from event data
+   */
+  private extractErrorFromEvent(event: StreamingEvent): string {
+    try {
+      const data = event.data;
+      if (!data) {
+        return 'Unknown streaming error';
+      }
+
+      // Check for error message fields
+      if (typeof data.message === 'string') {
+        return data.message;
+      }
+      if (typeof data.error === 'string') {
+        return data.error;
+      }
+      if (typeof data.description === 'string') {
+        return data.description;
+      }
+
+      // If data itself is a string, use it
+      if (typeof data === 'string') {
+        return data;
+      }
+
+      return 'Unknown streaming error';
+    } catch (error) {
+      console.warn('Failed to extract error from event:', error);
+      return 'Failed to parse error message';
+    }
   }
 }
 
