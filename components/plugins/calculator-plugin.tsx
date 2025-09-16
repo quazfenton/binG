@@ -49,36 +49,63 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
   };
 
   const calculate = (firstValue: number, secondValue: number, operation: string): number => {
-    switch (operation) {
-      case '+':
-        return firstValue + secondValue;
-      case '-':
-        return firstValue - secondValue;
-      case '×':
-        return firstValue * secondValue;
-      case '÷':
-        return firstValue / secondValue;
-      case '=':
-        return secondValue;
-      default:
-        return secondValue;
+    try {
+      switch (operation) {
+        case '+':
+          return firstValue + secondValue;
+        case '-':
+          return firstValue - secondValue;
+        case '×':
+          return firstValue * secondValue;
+        case '÷':
+          if (secondValue === 0) {
+            throw new Error('Division by zero is not allowed');
+          }
+          return firstValue / secondValue;
+        case '=':
+          return secondValue;
+        default:
+          return secondValue;
+      }
+    } catch (error) {
+      console.error('Calculator error:', error);
+      throw error;
     }
   };
 
   const performCalculation = () => {
-    const inputValue = parseFloat(display);
+    try {
+      const inputValue = parseFloat(display);
 
-    if (previousValue !== null && operation) {
-      const newValue = calculate(previousValue, inputValue, operation);
-      const calculation = `${previousValue} ${operation} ${inputValue} = ${newValue}`;
-      
-      setDisplay(String(newValue));
+      if (isNaN(inputValue)) {
+        throw new Error('Invalid number input');
+      }
+
+      if (previousValue !== null && operation) {
+        const newValue = calculate(previousValue, inputValue, operation);
+        const calculation = `${previousValue} ${operation} ${inputValue} = ${newValue}`;
+        
+        if (!isFinite(newValue)) {
+          throw new Error('Result is not a finite number');
+        }
+        
+        setDisplay(String(newValue));
+        setPreviousValue(null);
+        setOperation(null);
+        setWaitingForOperand(true);
+        setHistory(prev => [calculation, ...prev.slice(0, 9)]);
+        
+        onResult?.(newValue);
+      }
+    } catch (error) {
+      console.error('Calculation error:', error);
+      setDisplay('Error');
       setPreviousValue(null);
       setOperation(null);
       setWaitingForOperand(true);
-      setHistory(prev => [calculation, ...prev.slice(0, 9)]);
       
-      onResult?.(newValue);
+      // In enhanced mode, this error will be caught by the isolation system
+      throw error;
     }
   };
 

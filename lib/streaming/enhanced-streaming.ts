@@ -1,6 +1,7 @@
 "use client";
 
 import { EventEmitter } from 'events';
+import { performanceManager } from '../performance/performance-manager';
 
 // Types for streaming events
 export interface StreamingEvent {
@@ -87,6 +88,9 @@ export class EnhancedStreamingService extends EventEmitter {
           errorCount: 0,
           reconnectCount: 0,
         });
+        
+        // Track streaming session in performance manager
+        performanceManager.trackStreamingSession(requestId);
       }
 
       // Initialize buffers
@@ -260,6 +264,7 @@ export class EnhancedStreamingService extends EventEmitter {
           // Check if we should coalesce small chunks
           const shouldRender = this.shouldRenderChunk(buffer);
           if (shouldRender) {
+            const renderStartTime = performance.now();
             const coalescedContent = this.coalesceChunks(buffer);
             if (coalescedContent) {
               renderQueue.push(coalescedContent);
@@ -267,6 +272,10 @@ export class EnhancedStreamingService extends EventEmitter {
 
               // Schedule render with backpressure
               this.scheduleRender(requestId);
+              
+              // Record performance metrics
+              const renderTime = performance.now() - renderStartTime;
+              performanceManager.recordStreamingChunk(chunk.content.length, renderTime);
 
               // Clear processed chunks from buffer
               buffer.length = 0;
@@ -283,6 +292,7 @@ export class EnhancedStreamingService extends EventEmitter {
         break;
 
       case 'error':
+        performanceManager.recordStreamingError();
         this.handleStreamError(requestId, new Error(event.data.message), startTime);
         break;
 
@@ -395,6 +405,9 @@ export class EnhancedStreamingService extends EventEmitter {
         metrics.errorCount++;
       }
     }
+
+    // Record error in performance manager
+    performanceManager.recordStreamingError();
 
     this.emit('error', { requestId, error, canRetry: true });
 

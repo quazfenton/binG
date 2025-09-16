@@ -31,11 +31,16 @@ import {
   Diff,
   ArrowRight,
   Copy,
-  Download
+  Download,
+  AlertCircle,
+  Loader2
 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
+import { useCodeModeIntegration } from '../hooks/use-code-mode-integration';
+import { CodeModeFile, CodeModeDiff } from '../lib/services/code-mode-integration';
 
+// Legacy interfaces for backward compatibility
 interface ProjectFile {
   path: string;
   content: string;
@@ -50,22 +55,6 @@ interface DiffOperation {
   lineEnd?: number;
   content: string;
   originalContent?: string;
-}
-
-interface CodeModeRequest {
-  type: 'read_file' | 'write_diff' | 'list_files' | 'create_file' | 'delete_file';
-  files?: string[];
-  diffs?: { [filePath: string]: DiffOperation[] };
-  content?: string;
-  path?: string;
-}
-
-interface CodeModeResponse {
-  type: 'file_content' | 'diff_preview' | 'file_list' | 'confirmation' | 'error';
-  files?: { [path: string]: string };
-  diffs?: { [filePath: string]: DiffOperation[] };
-  message?: string;
-  nextFiles?: string[];
 }
 
 interface CodeModeProps {
@@ -83,30 +72,83 @@ export default function CodeMode({
   isVisible, 
   onClose 
 }: CodeModeProps) {
+  // Integration hook
+  const [integrationState, integrationActions] = useCodeModeIntegration({
+    autoCleanup: true,
+    enableRealTimeUpdates: true,
+  });
+
+  // Local state
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['src']));
   const [prompt, setPrompt] = useState('');
   const [rules, setRules] = useState('');
-  const [pendingDiffs, setPendingDiffs] = useState<{ [filePath: string]: DiffOperation[] }>({});
-  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
-  const [lastResponse, setLastResponse] = useState<CodeModeResponse | null>(null);
   const [fileContents, setFileContents] = useState<{ [path: string]: ProjectFile }>({});
   const [activeTab, setActiveTab] = useState<'files' | 'diff' | 'output'>('files');
+  const [sessionInitialized, setSessionInitialized] = useState(false);
 
-  // Initialize file contents from project files
+  // Derived state from integration
+  const { 
+    currentSession, 
+    isProcessing, 
+    error: integrationError, 
+    pendingDiffs, 
+    lastResponse 
+  } = integrationState;
+
+  // Initialize file contents from project files and create session
   useEffect(() => {
     const contents: { [path: string]: ProjectFile } = {};
+    const codeModeFiles: CodeModeFile[] = [];
+
     Object.entries(projectFiles).forEach(([path, content]) => {
       const language = getLanguageFromPath(path);
-      contents[path] = {
+      const projectFile = {
         path,
         content,
         language,
         hasEdits: false
       };
+      contents[path] = projectFile;
+
+      // Convert to CodeModeFile format
+      codeModeFiles.push({
+        id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        name: path.split('/').pop() || path,
+        path,
+        content,
+        language,
+        hasEdits: false,
+        lastModified: new Date(),
+      });
     });
+
     setFileContents(contents);
-  }, [projectFiles]);
+
+    // Initialize session if not already done and files are available
+    if (!sessionInitialized && codeModeFiles.length > 0 && isVisible) {
+      integrationActions.createSession(codeModeFiles)
+        .then(() => setSessionInitialized(true))
+        .catch(console.error);
+    }
+  }, [projectFiles, sessionInitialized, isVisible, integrationActions]);
+
+  // Update session files when file contents change
+  useEffect(() => {
+    if (currentSession && sessionInitialized) {
+      const updatedFiles: CodeModeFile[] = Object.values(fileContents).map(file => ({
+        id: currentSession.files.find(f => f.path === file.path)?.id || `file_${Date.now()}`,
+        name: file.path.split('/').pop() || file.path,
+        path: file.path,
+        content: file.content,
+        language: file.language,
+        hasEdits: file.hasEdits || false,
+        lastModified: new Date(),
+      }));
+      
+      integrationActions.updateSessionFiles(updatedFiles);
+    }
+  }, [fileContents, currentSession, sessionInitialized, integrationActions]);
 
   const getLanguageFromPath = (path: string): string => {
     const ext = path.split('.').pop()?.toLowerCase();
@@ -226,120 +268,98 @@ export default function CodeMode({
     });
   };
 
-  const formatCodeModeMessage = (): string => {
-    const selectedFilePaths = Array.from(selectedFiles);
-    const contextFiles = selectedFilePaths.map(path => ({
-      path,
-      content: fileContents[path]?.content || ''
-    }));
 
-    const message = {
-      mode: 'code_editing',
-      task: prompt,
-      rules: rules || 'Follow standard coding practices and maintain code quality.',
-      context_files: contextFiles,
-      schema: {
-        response_format: {
-          type: 'code_mode_response',
-          properties: {
-            type: { enum: ['file_content', 'diff_preview', 'file_list', 'confirmation', 'error'] },
-            files: { type: 'object', description: 'File contents keyed by path' },
-            diffs: { 
-              type: 'object', 
-              description: 'Diff operations keyed by file path',
-              properties: {
-                type: { enum: ['add', 'remove', 'modify'] },
-                lineStart: { type: 'number' },
-                lineEnd: { type: 'number' },
-                content: { type: 'string' },
-                originalContent: { type: 'string' }
-              }
-            },
-            message: { type: 'string' },
-            nextFiles: { 
-              type: 'array', 
-              items: { type: 'string' },
-              description: 'List of files to read in next request'
-            }
-          }
-        }
-      },
-      commands: {
-        read_file: 'Request to read specific files: { "type": "read_file", "files": ["path1", "path2"] }',
-        write_diff: 'Apply diff changes: { "type": "write_diff", "diffs": { "file_path": [diff_operations] } }',
-        list_files: 'List project files: { "type": "list_files" }',
-        create_file: 'Create new file: { "type": "create_file", "path": "file_path", "content": "file_content" }',
-        delete_file: 'Delete file: { "type": "delete_file", "path": "file_path" }'
+
+  const handleSendMessage = async () => {
+    if (!prompt.trim() || !currentSession) return;
+    
+    try {
+      // Clear any previous errors
+      integrationActions.clearError();
+
+      // Execute code task using the integration service
+      const selectedFilePaths = Array.from(selectedFiles);
+      const response = await integrationActions.executeCodeTask(
+        prompt,
+        rules || undefined,
+        selectedFilePaths.length > 0 ? selectedFilePaths : undefined
+      );
+      
+      // Also send message to parent for compatibility with existing chat system
+      if (onSendMessage) {
+        const contextData = {
+          mode: 'code_editing',
+          sessionId: currentSession.id,
+          selectedFiles: selectedFilePaths,
+          integrationResponse: response,
+        };
+        onSendMessage(prompt, contextData);
       }
-    };
-
-    return JSON.stringify(message, null, 2);
+      
+      setPrompt('');
+      setActiveTab('diff'); // Switch to diff tab to show results
+    } catch (error) {
+      console.error('Failed to execute code task:', error);
+      // Error is handled by the integration hook
+    }
   };
 
-  const handleSendMessage = () => {
-    if (!prompt.trim()) return;
-    
-    const formattedMessage = formatCodeModeMessage();
-    onSendMessage(formattedMessage, {
-      mode: 'code_editing',
-      selectedFiles: Array.from(selectedFiles),
-      fileContents: Object.fromEntries(
-        Array.from(selectedFiles).map(path => [path, fileContents[path]?.content || ''])
-      )
-    });
-    
-    setPrompt('');
-  };
+  const applyDiffs = async () => {
+    if (!currentSession || Object.keys(pendingDiffs).length === 0) return;
 
-  const applyDiffs = (diffs: { [filePath: string]: DiffOperation[] }) => {
-    const updatedContents = { ...fileContents };
-    const updatedProjectFiles = { ...projectFiles };
-
-    Object.entries(diffs).forEach(([filePath, operations]) => {
-      if (!updatedContents[filePath]) return;
-
-      let content = updatedContents[filePath].content;
-      const lines = content.split('\n');
-
-      // Sort operations by line number (descending) to avoid index shifting
-      const sortedOps = [...operations].sort((a, b) => b.lineStart - a.lineStart);
-
-      sortedOps.forEach(op => {
-        switch (op.type) {
-          case 'add':
-            lines.splice(op.lineStart, 0, op.content);
-            break;
-          case 'remove':
-            lines.splice(op.lineStart, (op.lineEnd || op.lineStart) - op.lineStart + 1);
-            break;
-          case 'modify':
-            const endLine = op.lineEnd || op.lineStart;
-            lines.splice(op.lineStart, endLine - op.lineStart + 1, op.content);
-            break;
-        }
+    try {
+      // Convert DiffOperation to CodeModeDiff format
+      const codeDiffs: { [filePath: string]: CodeModeDiff[] } = {};
+      Object.entries(pendingDiffs).forEach(([filePath, diffs]) => {
+        codeDiffs[filePath] = diffs.map(diff => ({
+          type: diff.type,
+          lineStart: diff.lineStart,
+          lineEnd: diff.lineEnd,
+          content: diff.content,
+          originalContent: diff.originalContent,
+        }));
       });
 
-      const newContent = lines.join('\n');
-      updatedContents[filePath] = {
-        ...updatedContents[filePath],
-        content: newContent,
-        hasEdits: true
-      };
-      updatedProjectFiles[filePath] = newContent;
-    });
+      const response = await integrationActions.applyDiffs(codeDiffs);
+      
+      if (response.success && response.files) {
+        // Update local file contents
+        const updatedContents = { ...fileContents };
+        const updatedProjectFiles = { ...projectFiles };
 
-    setFileContents(updatedContents);
-    onUpdateFiles(updatedProjectFiles);
-    setPendingDiffs({});
-    setAwaitingConfirmation(false);
+        Object.entries(response.files).forEach(([filePath, content]) => {
+          if (updatedContents[filePath]) {
+            updatedContents[filePath] = {
+              ...updatedContents[filePath],
+              content,
+              hasEdits: true
+            };
+            updatedProjectFiles[filePath] = content;
+          }
+        });
+
+        setFileContents(updatedContents);
+        onUpdateFiles(updatedProjectFiles);
+        setActiveTab('files'); // Switch back to files tab
+      }
+    } catch (error) {
+      console.error('Failed to apply diffs:', error);
+      // Error is handled by the integration hook
+    }
   };
 
   const renderDiffPreview = () => {
-    if (Object.keys(pendingDiffs).length === 0) {
+    const hasPendingDiffs = Object.keys(pendingDiffs).length > 0;
+    const awaitingConfirmation = hasPendingDiffs && !isProcessing;
+
+    if (!hasPendingDiffs) {
       return (
         <div className="text-center text-gray-400 py-8">
           <Diff className="h-12 w-12 mx-auto mb-4 opacity-50" />
           <p>No pending diffs</p>
+          {lastResponse?.message && (
+            <p className="text-sm mt-2 text-gray-500">{lastResponse.message}</p>
+          )}
         </div>
       );
     }
@@ -393,21 +413,41 @@ export default function CodeMode({
         {awaitingConfirmation && (
           <div className="flex gap-2 justify-center pt-4">
             <Button 
-              onClick={() => applyDiffs(pendingDiffs)}
+              onClick={applyDiffs}
+              disabled={isProcessing}
               className="bg-green-600 hover:bg-green-700"
             >
-              <Check className="h-4 w-4 mr-2" />
+              {isProcessing ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4 mr-2" />
+              )}
               Apply Changes (Enter)
             </Button>
             <Button 
               variant="outline" 
+              disabled={isProcessing}
               onClick={() => {
-                setPendingDiffs({});
-                setAwaitingConfirmation(false);
+                integrationActions.clearError();
               }}
             >
               <X className="h-4 w-4 mr-2" />
               Cancel (Esc)
+            </Button>
+          </div>
+        )}
+
+        {integrationError && (
+          <div className="flex items-center gap-2 p-3 bg-red-900/20 border border-red-700 rounded text-red-300">
+            <AlertCircle className="h-4 w-4" />
+            <span className="text-sm">{integrationError}</span>
+            <Button 
+              size="sm" 
+              variant="ghost" 
+              onClick={integrationActions.clearError}
+              className="ml-auto"
+            >
+              <X className="h-3 w-3" />
             </Button>
           </div>
         )}
@@ -420,21 +460,33 @@ export default function CodeMode({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!isVisible) return;
       
+      const hasPendingDiffs = Object.keys(pendingDiffs).length > 0;
+      const awaitingConfirmation = hasPendingDiffs && !isProcessing;
+      
       if (awaitingConfirmation) {
         if (e.key === 'Enter') {
           e.preventDefault();
-          applyDiffs(pendingDiffs);
+          applyDiffs();
         } else if (e.key === 'Escape') {
           e.preventDefault();
-          setPendingDiffs({});
-          setAwaitingConfirmation(false);
+          integrationActions.clearError();
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isVisible, awaitingConfirmation, pendingDiffs]);
+  }, [isVisible, pendingDiffs, isProcessing, integrationActions]);
+
+  // Cleanup session when component unmounts or becomes invisible
+  useEffect(() => {
+    return () => {
+      if (currentSession && !isVisible) {
+        integrationActions.cancelSession().catch(console.error);
+        setSessionInitialized(false);
+      }
+    };
+  }, [isVisible, currentSession, integrationActions]);
 
   if (!isVisible) return null;
 
@@ -598,16 +650,28 @@ export default function CodeMode({
           </div>
           
           <div className="flex justify-between items-center">
-            <div className="text-sm text-gray-400">
-              {selectedFiles.size} files selected • Schema-based editing enabled
+            <div className="text-sm text-gray-400 flex items-center gap-2">
+              {selectedFiles.size} files selected • Enhanced orchestrator integration
+              {currentSession && (
+                <Badge variant="outline" className="text-xs">
+                  Session: {currentSession.status}
+                </Badge>
+              )}
+              {!sessionInitialized && (
+                <span className="text-yellow-400">Initializing...</span>
+              )}
             </div>
             <Button
               onClick={handleSendMessage}
-              disabled={!prompt.trim() || selectedFiles.size === 0}
+              disabled={!prompt.trim() || selectedFiles.size === 0 || isProcessing || !sessionInitialized}
               className="bg-blue-600 hover:bg-blue-700"
             >
-              <Send className="h-4 w-4 mr-2" />
-              Send Request
+              {isProcessing ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4 mr-2" />
+              )}
+              {isProcessing ? 'Processing...' : 'Send Request'}
             </Button>
           </div>
         </div>

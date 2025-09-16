@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { llmService } from "@/lib/api/llm-providers";
+import { enhancedLLMService } from "@/lib/api/enhanced-llm-service";
+import { errorHandler } from "@/lib/api/error-handler";
 import type { LLMRequest, LLMMessage } from "@/lib/api/llm-providers";
+import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 
 export async function POST(request: NextRequest) {
   try {
@@ -67,7 +70,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const llmRequest: LLMRequest = {
+    const llmRequest: EnhancedLLMRequest = {
       messages,
       provider,
       model,
@@ -75,6 +78,13 @@ export async function POST(request: NextRequest) {
       maxTokens,
       stream,
       apiKeys,
+      enableCircuitBreaker: true,
+      retryOptions: {
+        maxAttempts: 3,
+        backoffStrategy: 'exponential',
+        baseDelay: 1000,
+        maxDelay: 10000
+      }
     };
 
     // Handle streaming response with enhanced features
@@ -97,7 +107,7 @@ export async function POST(request: NextRequest) {
         hardTimeoutMs: 120000, // 2 minutes
       };
 
-      const llmStream = llmService.generateStreamingResponse(llmRequest);
+      const llmStream = enhancedLLMService.generateStreamingResponse(llmRequest);
       let buffer = "";
       let aborted = false;
 
@@ -328,7 +338,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Handle non-streaming response
-    const response = await llmService.generateResponse(llmRequest);
+    const response = await enhancedLLMService.generateResponse(llmRequest);
 
     // Post-process assistant content to extract COMMANDS block for the client
     let commands: {
@@ -384,36 +394,64 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error("Chat API error:", error);
 
-    // Handle specific error types
-    if (error instanceof Error) {
-      if (error.message.includes("API key")) {
-        return NextResponse.json(
-          { error: "Invalid or missing API key for the selected provider" },
-          { status: 401 },
-        );
+    // Process error with enhanced error handler
+    const processedError = errorHandler.processError(
+      error instanceof Error ? error : new Error(String(error)),
+      {
+        component: 'chat-api',
+        operation: 'generateResponse',
+        provider,
+        model,
+        requestId,
+        timestamp: Date.now()
       }
+    );
 
-      if (error.message.includes("rate limit")) {
-        return NextResponse.json(
-          { error: "Rate limit exceeded. Please try again later." },
-          { status: 429 },
-        );
-      }
+    // Create user notification data
+    const notification = errorHandler.createUserNotification(processedError);
 
-      if (error.message.includes("quota")) {
-        return NextResponse.json(
-          { error: "API quota exceeded for this provider" },
-          { status: 429 },
-        );
-      }
+    // Determine HTTP status code based on error type
+    let statusCode = 500;
+    switch (processedError.code) {
+      case 'AUTH_ERROR':
+        statusCode = 401;
+        break;
+      case 'RATE_LIMIT_ERROR':
+      case 'QUOTA_ERROR':
+        statusCode = 429;
+        break;
+      case 'VALIDATION_ERROR':
+        statusCode = 400;
+        break;
+      case 'TIMEOUT_ERROR':
+        statusCode = 408;
+        break;
+      case 'NETWORK_ERROR':
+      case 'SERVER_ERROR':
+        statusCode = 503;
+        break;
+      case 'CIRCUIT_BREAKER_ERROR':
+        statusCode = 503;
+        break;
+      default:
+        statusCode = 500;
     }
 
     return NextResponse.json(
       {
-        error: "Internal server error",
-        message: error instanceof Error ? error.message : "Unknown error",
+        error: processedError.userMessage,
+        code: processedError.code,
+        isRetryable: processedError.isRetryable,
+        suggestedAction: processedError.suggestedAction,
+        notification,
+        context: {
+          provider,
+          model,
+          requestId,
+          timestamp: new Date().toISOString()
+        }
       },
-      { status: 500 },
+      { status: statusCode },
     );
   }
 }

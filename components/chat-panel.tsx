@@ -8,6 +8,8 @@ import MessageBubble from "@/components/message-bubble";
 import AccessibilityControls from "@/components/accessibility-controls";
 import CodePreviewPanel from "@/components/code-preview-panel";
 import { LLMProvider } from "@/types";
+import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
+import { GlobalStreamingState } from "@/hooks/use-streaming-state";
 
 interface ChatPanelProps {
   // Props from useChat in parent (ConversationInterface)
@@ -30,6 +32,7 @@ interface ChatPanelProps {
   voiceEnabled: boolean;
   onVoiceToggle: (enabled: boolean) => void;
   onProviderChange: (provider: string, model: string) => void;
+  streamingState?: GlobalStreamingState;
 }
 
 export function ChatPanel({
@@ -51,6 +54,7 @@ export function ChatPanel({
   onVoiceToggle,
   setInput, // Destructure setInput
   onProviderChange,
+  streamingState,
 }: ChatPanelProps) {
   const { isListening, startListening, stopListening, transcript } =
     useVoiceInput();
@@ -59,6 +63,7 @@ export function ChatPanel({
   const [isAccessibilityOptionsOpen, setIsAccessibilityOptionsOpen] = useState(false); // State to control accessibility options visibility
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [streamingStates, setStreamingStates] = useState<Map<string, any>>(new Map());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -72,6 +77,36 @@ export function ChatPanel({
     
     setIsUserScrolledUp(!isAtBottom);
     setShowJumpToLatest(!isAtBottom);
+  }, []);
+
+  // Set up enhanced streaming event listeners
+  useEffect(() => {
+    const handleStreamingStateChange = ({ sessionId, ...state }: any) => {
+      setStreamingStates(prev => new Map(prev.set(sessionId, state)));
+    };
+
+    const handleStreamingError = ({ sessionId, error }: any) => {
+      console.error(`Streaming error for session ${sessionId}:`, error);
+      toast.error(`Streaming error: ${error.message}`);
+    };
+
+    const handleBackpressure = ({ sessionId, active }: any) => {
+      if (active) {
+        toast.info("Streaming slowed due to high load", { duration: 2000 });
+      }
+    };
+
+    enhancedBufferManager.on('session-created', handleStreamingStateChange);
+    enhancedBufferManager.on('session-completed', handleStreamingStateChange);
+    enhancedBufferManager.on('session-error', handleStreamingError);
+    enhancedBufferManager.on('backpressure', handleBackpressure);
+
+    return () => {
+      enhancedBufferManager.off('session-created', handleStreamingStateChange);
+      enhancedBufferManager.off('session-completed', handleStreamingStateChange);
+      enhancedBufferManager.off('session-error', handleStreamingError);
+      enhancedBufferManager.off('backpressure', handleBackpressure);
+    };
   }, []);
 
   // Auto-scroll only if user is at bottom or it's a new conversation
@@ -132,13 +167,21 @@ export function ChatPanel({
           </div>
         )}
 
-        {messages.map((m: Message) => (
-          <MessageBubble
-            key={m.id}
-            message={m}
-            isStreaming={isLoading && m.id === messages[messages.length - 1]?.id}
-          />
-        ))}
+        {messages.map((m: Message) => {
+          const isCurrentlyStreaming = isLoading && m.id === messages[messages.length - 1]?.id;
+          return (
+            <MessageBubble
+              key={m.id}
+              message={m}
+              isStreaming={isCurrentlyStreaming}
+              onStreamingComplete={() => {
+                // Clean up streaming state when complete
+                const sessionId = `display-${m.id}-*`;
+                enhancedBufferManager.cleanup();
+              }}
+            />
+          );
+        })}
         {isLoading && (
           <MessageBubble
             message={{ id: "loading", role: "assistant", content: "..." }}

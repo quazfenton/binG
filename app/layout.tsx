@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { AuthProvider } from '@/contexts/auth-context'; // Import AuthProvider
+import '@/lib/performance/init'; // Initialize performance system
 
 export const metadata: Metadata = {
   title: 'app',

@@ -13,8 +13,16 @@ export async function POST(req: Request) {
     const hashedPassword = await hashPassword(password);
 
     try {
-      const result = await db.run('INSERT INTO users (email, password) VALUES (?, ?)', [email, hashedPassword]);
-      return NextResponse.json({ message: 'User registered successfully', userId: result.lastID });
+      const result = db.prepare('INSERT INTO users (email, password) VALUES (?, ?)').run(email, hashedPassword);
+      
+      return NextResponse.json({ 
+        message: 'User registered successfully', 
+        userId: result.lastInsertRowid,
+        user: {
+          id: result.lastInsertRowid,
+          email: email
+        }
+      });
     } catch (error: any) {
       if (error.message.includes('UNIQUE constraint failed')) {
         return NextResponse.json({ error: 'User with this email already exists' }, { status: 409 });

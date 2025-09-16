@@ -14,6 +14,7 @@ import { EventEmitter } from 'events';
 import { diff_match_patch, patch_obj } from 'diff-match-patch';
 import { z } from 'zod';
 import { EnhancedResponse, ProjectItem } from '../core/enhanced-prompt-engine';
+import { SafeDiffOperations, ValidationResult, BackupState, Conflict } from './safe-diff-operations';
 
 // File operation schemas
 const FileOperationSchema = z.object({
@@ -114,11 +115,22 @@ class AdvancedFileManager extends EventEmitter {
     operation: string;
     changes: any;
   }> = [];
+  private safeDiffOperations: SafeDiffOperations;
 
   constructor(options: {
     autoSaveInterval?: number;
     maxHistoryEntries?: number;
     enableRealTimeSync?: boolean;
+    safeDiffOptions?: {
+      enablePreValidation?: boolean;
+      enableSyntaxValidation?: boolean;
+      enableConflictDetection?: boolean;
+      enableAutoBackup?: boolean;
+      enableRollback?: boolean;
+      maxBackupHistory?: number;
+      validationTimeout?: number;
+      conflictResolutionStrategy?: 'manual' | 'auto' | 'hybrid';
+    };
   } = {}) {
     super();
 
@@ -137,6 +149,12 @@ class AdvancedFileManager extends EventEmitter {
       currentTheme: 'dark',
       readOnly: false
     };
+
+    // Initialize safe diff operations
+    this.safeDiffOperations = new SafeDiffOperations(options.safeDiffOptions);
+
+    // Set up safe diff event handlers
+    this.setupSafeDiffEventHandlers();
 
     // Initialize auto-trigger rules
     this.initializeAutoTriggerRules();
@@ -174,9 +192,89 @@ class AdvancedFileManager extends EventEmitter {
   }
 
   /**
-   * Apply diff operations to a file with precise change tracking
+   * Apply diff operations to a file with comprehensive safety mechanisms
    */
   async applyDiffs(fileId: string, diffs: DiffOperation[], options: {
+    requireApproval?: boolean;
+    autoSync?: boolean;
+    validateSyntax?: boolean;
+    useSafeDiffOperations?: boolean;
+  } = {}): Promise<{
+    success: boolean;
+    updatedContent: string;
+    appliedDiffs: DiffOperation[];
+    errors: string[];
+    validationResult?: ValidationResult;
+    backupId?: string;
+    conflicts?: Conflict[];
+  }> {
+    const { 
+      requireApproval = true, 
+      autoSync = true, 
+      validateSyntax = true,
+      useSafeDiffOperations = true 
+    } = options;
+
+    const fileState = this.fileStates.get(fileId);
+    if (!fileState) {
+      throw new Error(`File ${fileId} not found`);
+    }
+
+    if (fileState.isLocked) {
+      throw new Error(`File ${fileId} is locked and cannot be modified`);
+    }
+
+    // Use safe diff operations if enabled
+    if (useSafeDiffOperations) {
+      const safeResult = await this.safeDiffOperations.safelyApplyDiffs(
+        fileId,
+        fileState.content,
+        diffs,
+        fileState
+      );
+
+      if (safeResult.success) {
+        // Update file state with safe result
+        await this.updateFileContent(fileId, safeResult.updatedContent, {
+          incrementVersion: true,
+          trackChanges: true,
+          syncStates: autoSync
+        });
+
+        this.emit('safe_diffs_applied', {
+          fileId,
+          appliedDiffs: safeResult.appliedDiffs,
+          validationResult: safeResult.validationResult,
+          backupId: safeResult.backupId
+        });
+      } else {
+        this.emit('safe_diffs_failed', {
+          fileId,
+          errors: safeResult.errors,
+          conflicts: safeResult.conflicts,
+          validationResult: safeResult.validationResult
+        });
+      }
+
+      return {
+        success: safeResult.success,
+        updatedContent: safeResult.updatedContent,
+        appliedDiffs: safeResult.appliedDiffs,
+        errors: safeResult.errors,
+        validationResult: safeResult.validationResult,
+        backupId: safeResult.backupId,
+        conflicts: safeResult.conflicts
+      };
+    }
+
+    // Fallback to original implementation for backward compatibility
+    return this.applyDiffsLegacy(fileId, diffs, { requireApproval, autoSync, validateSyntax });
+  }
+
+  /**
+   * Legacy diff application method (for backward compatibility)
+   */
+  private async applyDiffsLegacy(fileId: string, diffs: DiffOperation[], options: {
     requireApproval?: boolean;
     autoSync?: boolean;
     validateSyntax?: boolean;
@@ -188,15 +286,7 @@ class AdvancedFileManager extends EventEmitter {
   }> {
     const { requireApproval = true, autoSync = true, validateSyntax = true } = options;
 
-    const fileState = this.fileStates.get(fileId);
-    if (!fileState) {
-      throw new Error(`File ${fileId} not found`);
-    }
-
-    if (fileState.isLocked) {
-      throw new Error(`File ${fileId} is locked and cannot be modified`);
-    }
-
+    const fileState = this.fileStates.get(fileId)!;
     const errors: string[] = [];
     const appliedDiffs: DiffOperation[] = [];
     let updatedContent = fileState.content;
@@ -893,6 +983,150 @@ class AdvancedFileManager extends EventEmitter {
 
   getPendingWorkflowSteps(): WorkflowStep[] {
     return [...this.workflowQueue];
+  }
+
+  /**
+   * Set up event handlers for safe diff operations
+   */
+  private setupSafeDiffEventHandlers(): void {
+    this.safeDiffOperations.on('backup_created', (data) => {
+      this.emit('safe_diff_backup_created', data);
+    });
+
+    this.safeDiffOperations.on('conflicts_detected', (data) => {
+      this.emit('safe_diff_conflicts_detected', data);
+    });
+
+    this.safeDiffOperations.on('rollback_completed', (data) => {
+      this.emit('safe_diff_rollback_completed', data);
+    });
+
+    this.safeDiffOperations.on('change_tracked', (data) => {
+      this.emit('safe_diff_change_tracked', data);
+    });
+
+    this.safeDiffOperations.on('conflict_resolved', (data) => {
+      this.emit('safe_diff_conflict_resolved', data);
+    });
+
+    this.safeDiffOperations.on('syntax_validation_failed_rollback', (data) => {
+      this.emit('safe_diff_syntax_validation_failed_rollback', data);
+    });
+
+    this.safeDiffOperations.on('emergency_rollback', (data) => {
+      this.emit('safe_diff_emergency_rollback', data);
+    });
+  }
+
+  /**
+   * Get backup history for a file
+   */
+  getBackupHistory(fileId: string): BackupState[] {
+    return this.safeDiffOperations.getBackupHistory(fileId);
+  }
+
+  /**
+   * Get change history for a file
+   */
+  getSafeDiffChangeHistory(fileId: string) {
+    return this.safeDiffOperations.getChangeHistory(fileId);
+  }
+
+  /**
+   * Get active conflicts for a file
+   */
+  getActiveConflicts(fileId: string): Conflict[] {
+    return this.safeDiffOperations.getActiveConflicts(fileId);
+  }
+
+  /**
+   * Get all active conflicts across all files
+   */
+  getAllActiveConflicts(): Map<string, Conflict[]> {
+    return this.safeDiffOperations.getAllActiveConflicts();
+  }
+
+  /**
+   * Rollback a file to a previous backup
+   */
+  async rollbackToBackup(fileId: string, backupId: string): Promise<{
+    success: boolean;
+    restoredContent: string;
+    errors: string[];
+  }> {
+    const rollbackResult = await this.safeDiffOperations.rollbackToBackup(fileId, backupId);
+    
+    if (rollbackResult.success) {
+      // Update file state with restored content
+      await this.updateFileContent(fileId, rollbackResult.restoredContent, {
+        incrementVersion: true,
+        trackChanges: true,
+        syncStates: true
+      });
+
+      this.emit('file_rolled_back', {
+        fileId,
+        backupId,
+        restoredContent: rollbackResult.restoredContent
+      });
+    }
+
+    return {
+      success: rollbackResult.success,
+      restoredContent: rollbackResult.restoredContent,
+      errors: rollbackResult.errors
+    };
+  }
+
+  /**
+   * Resolve conflicts for a file
+   */
+  async resolveConflicts(fileId: string, resolutions: Array<{
+    conflictId: string;
+    resolution: 'accept_current' | 'accept_incoming' | 'merge' | 'manual';
+    mergedContent?: string;
+    selectedDiffs?: DiffOperation[];
+  }>): Promise<{
+    success: boolean;
+    resolvedConflicts: string[];
+    remainingConflicts: Conflict[];
+    errors: string[];
+  }> {
+    const result = await this.safeDiffOperations.resolveConflicts(fileId, resolutions);
+
+    if (result.success && result.resolvedConflicts.length > 0) {
+      this.emit('conflicts_resolved', {
+        fileId,
+        resolvedConflicts: result.resolvedConflicts,
+        remainingConflicts: result.remainingConflicts
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Update safe diff operations options
+   */
+  updateSafeDiffOptions(options: {
+    enablePreValidation?: boolean;
+    enableSyntaxValidation?: boolean;
+    enableConflictDetection?: boolean;
+    enableAutoBackup?: boolean;
+    enableRollback?: boolean;
+    maxBackupHistory?: number;
+    validationTimeout?: number;
+    conflictResolutionStrategy?: 'manual' | 'auto' | 'hybrid';
+  }): void {
+    this.safeDiffOperations.updateOptions(options);
+    this.emit('safe_diff_options_updated', options);
+  }
+
+  /**
+   * Get current safe diff operations options
+   */
+  getSafeDiffOptions() {
+    return this.safeDiffOperations.getOptions();
   }
 }
 

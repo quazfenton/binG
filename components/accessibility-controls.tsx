@@ -26,9 +26,9 @@ import {
   Crown,
   Mail,
 } from "lucide-react";
-import LoginForm from "@/components/auth/login-form"; // Import LoginForm
-import SignupForm from "@/components/auth/signup-form"; // Import SignupForm (to be created)
-import { useAuth } from "@/contexts/auth-context"; // Import useAuth
+import ModalLoginForm from "@/components/auth/modal-login-form";
+import ModalSignupForm from "@/components/auth/modal-signup-form";
+import { useAuth } from "@/contexts/auth-context";
 
 interface AccessibilityControlsProps {
   onClose: () => void;
@@ -57,7 +57,8 @@ export default function AccessibilityControls({
   // State for managing auth modal visibility and mode
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
-  const { isAuthenticated, user, login, logout, register, getApiKeys, setApiKeys } = useAuth();
+  const [authError, setAuthError] = useState<string>('');
+  const { isAuthenticated, user, login, logout, register, getApiKeys, setApiKeys, isLoading } = useAuth();
   const [currentTheme, setCurrentTheme] = useState('default'); // Keep theme state local for now
 
   // Theme definitions
@@ -206,13 +207,32 @@ export default function AccessibilityControls({
   // Function to handle switching between login and signup forms
   const handleAuthSwitch = (mode: 'login' | 'signup') => {
     setAuthMode(mode);
+    setAuthError('');
     setShowAuthModal(true);
   };
 
   // Function to close the auth modal
   const handleCloseAuthModal = () => {
     setShowAuthModal(false);
+    setAuthError('');
     // Optionally reset authMode to 'login' when closing
+    setAuthMode('login');
+  };
+
+  // Enhanced logout with confirmation
+  const handleLogout = async () => {
+    try {
+      logout();
+      setShowAuthModal(false);
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  };
+
+  // Handle successful authentication
+  const handleAuthSuccess = () => {
+    setShowAuthModal(false);
+    setAuthError('');
     setAuthMode('login');
   };
 
@@ -296,61 +316,84 @@ export default function AccessibilityControls({
                   <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
                     <User className="h-4 w-4 text-white" />
                   </div>
-                  <div>
-                    <p className="text-sm font-medium">{user?.email || 'N/A'}</p>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate" title={user?.email}>
+                      {user?.email || 'N/A'}
+                    </p>
                     <div className="flex items-center gap-1">
-                      <Crown className="h-3 w-3 text-yellow-400" />
-                      <span className="text-xs text-yellow-400">Premium</span>
+                      <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                      <span className="text-xs text-green-400">Online</span>
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                   <Button
                     size="sm"
                     variant="outline"
                     asChild
-                    className="text-xs"
+                    className="text-xs px-2"
+                    title="User Settings"
                   >
-                    <a href="/settings">Settings</a>
+                    <a href="/settings">
+                      <SettingsIcon className="h-3 w-3" />
+                    </a>
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={logout}
-                    className="text-xs"
+                    onClick={handleLogout}
+                    className="text-xs px-2"
+                    disabled={isLoading}
+                    title="Sign Out"
                   >
-                    <LogOut className="h-3 w-3 mr-1" />
-                    Sign Out
+                    <LogOut className="h-3 w-3" />
                   </Button>
                 </div>
               </div>
-              <div className="text-xs text-gray-400">
-                Unlimited prompts • Custom themes • Prompt history
+              <div className="text-xs text-gray-400 flex items-center justify-between">
+                <span>Premium Account</span>
+                <div className="flex items-center gap-1">
+                  <Crown className="h-3 w-3 text-yellow-400" />
+                  <span className="text-yellow-400">Active</span>
+                </div>
+              </div>
+              <div className="text-xs text-gray-500">
+                Unlimited prompts • Custom themes • Priority support
               </div>
             </div>
           ) : (
             <div className="space-y-3">
               <div className="text-sm text-gray-300">
-                Sign up for unlimited prompts and exclusive features
+                {isLoading ? 'Checking authentication...' : 'Sign up for unlimited prompts and exclusive features'}
               </div>
+              {authError && (
+                <div className="text-xs text-red-400 p-2 bg-red-500/10 rounded border border-red-500/20">
+                  {authError}
+                </div>
+              )}
               <div className="flex gap-2">
                 <Button
                   size="sm"
                   className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
                   onClick={() => handleAuthSwitch('signup')}
+                  disabled={isLoading}
                 >
                   <LogIn className="h-3 w-3 mr-1" />
-                  Sign Up
+                  {isLoading ? 'Loading...' : 'Sign Up'}
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
                   className="flex-1"
                   onClick={() => handleAuthSwitch('login')}
+                  disabled={isLoading}
                 >
                   <Mail className="h-3 w-3 mr-1" />
-                  Sign In
+                  {isLoading ? 'Loading...' : 'Sign In'}
                 </Button>
+              </div>
+              <div className="text-xs text-center text-gray-500">
+                Free: 10 prompts/day • Premium: Unlimited
               </div>
             </div>
           )}
@@ -665,15 +708,24 @@ export default function AccessibilityControls({
             <Button
               variant="ghost"
               size="icon"
-              className="absolute top-2 right-2 text-white/70 hover:text-white"
+              className="absolute top-2 right-2 text-white/70 hover:text-white z-10"
               onClick={handleCloseAuthModal}
+              aria-label="Close authentication modal"
             >
               <X className="h-5 w-5" />
             </Button>
             {authMode === 'login' ? (
-              <LoginForm onSwitchMode={() => setAuthMode('signup')} />
+              <ModalLoginForm 
+                onSwitchMode={() => setAuthMode('signup')} 
+                onSuccess={handleAuthSuccess}
+                onError={setAuthError}
+              />
             ) : (
-              <SignupForm onSwitchMode={() => setAuthMode('login')} />
+              <ModalSignupForm 
+                onSwitchMode={() => setAuthMode('login')} 
+                onSuccess={handleAuthSuccess}
+                onError={setAuthError}
+              />
             )}
           </div>
         </div>

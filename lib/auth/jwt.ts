@@ -34,6 +34,7 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
   }
 }
 
-export function generateToken(payload: { userId: string; email: string }): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+export function generateToken(payload: { userId: string; email: string; type?: string }): string {
+  const expiresIn = payload.type === 'password_reset' ? '1h' : '7d';
+  return jwt.sign(payload, JWT_SECRET, { expiresIn });
 }

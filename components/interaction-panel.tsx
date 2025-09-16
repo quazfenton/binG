@@ -82,6 +82,7 @@ import GitHubExplorerPlugin from "./plugins/github-explorer-plugin";
 import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
+import { useInteractionCodeMode } from "../hooks/use-interaction-code-mode";
 
 interface InteractionPanelProps {
   onSubmit: (content: string) => void;
@@ -291,12 +292,8 @@ export default function InteractionPanel({
       }, 400);
     }
   }, []);
-  // Advanced Code Mode State
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-  const [attachedFiles, setAttachedFiles] = useState<
-    Record<string, { content: string; version: number }>
-  >({});
-  const [projectStructure, setProjectStructure] = useState<any[]>([]);
+  // Code Mode Integration
+  const [codeModeState, codeModeActions] = useInteractionCodeMode();
   // pending diffs come from parent via props now
 
   // Plugin System
@@ -435,7 +432,6 @@ export default function InteractionPanel({
     }
   };
   const [showFileSelector, setShowFileSelector] = useState(false);
-  const [codeMode, setCodeMode] = useState<"basic" | "advanced">("basic");
   const [showMultiModelComparison, setShowMultiModelComparison] =
     useState(false);
   const [pluginToOpen, setPluginToOpen] = useState<string | null>(null);
@@ -903,67 +899,88 @@ export default function InteractionPanel({
     if (input.trim() && !isProcessing) {
       let enhancedInput = input;
 
-      // Prepend command schema/rules section (parseable by the model)
-      const rulesHeader = [
-        "=== TASK_RULES_START ===",
-        "You can ask for project context using command lines:",
-        "@list_project                       # get project file list",
-        '@read_file("path")                 # request file content',
-        '@write_diff("path")\n*** Begin Diff\n...\n*** End Diff   # unified diff, minimal context',
-        '@next_file("path")                 # ask the app to attach this file next',
-        "",
-        "When proposing edits, respond with a dedicated section:",
-        "=== COMMANDS_START ===",
-        'request_files: ["optional/next/file1", "optional/next/file2"]',
-        "write_diffs: [",
-        '  { path: "file", diff: "*** Begin Diff\\n...\\n*** End Diff" }',
-        "]\n=== COMMANDS_END ===",
-        "Do not mix prose inside the command block.",
-        "=== TASK_RULES_END ===",
-        "",
-      ].join("\n");
-      enhancedInput = `${rulesHeader}${enhancedInput}`;
+      // Check if we're in code mode and should use the enhanced orchestrator
+      if (activeTab === "code" && codeModeState.mode === "advanced") {
+        try {
+          // Use the enhanced code mode integration
+          const codeResponse = await codeModeActions.processCodePrompt(input, {
+            selectedFiles: codeModeState.selectedFiles,
+            attachedFiles: codeModeState.attachedFiles,
+            mode: codeModeState.mode,
+          });
 
-      // Detect @next_file("path") commands to auto-attach requested files
-      const nextFileRegex = /@next_file\(["']([^"']+)["']\)/g;
-      const autoFiles: string[] = [];
-      let m: RegExpExecArray | null;
-      while ((m = nextFileRegex.exec(input)) !== null) {
-        autoFiles.push(m[1]);
+          // Submit the enhanced response to the chat
+          onSubmit(codeResponse);
+          setInput("");
+          setGhostSuffix("");
+          return;
+        } catch (error) {
+          console.error('Code mode processing failed:', error);
+          // Fall back to regular processing
+        }
       }
 
-      const allFilesToAttach = Array.from(
-        new Set([...(selectedFiles || []), ...autoFiles]),
-      );
-
-      // Attach selected files to context
-      if (allFilesToAttach.length > 0) {
-        const filesContent: string[] = [];
-        const newAttachedFiles = { ...attachedFiles };
-        let cacheUpdated = false;
-
-        for (const file of allFilesToAttach) {
-          if (!newAttachedFiles[file]) {
-            newAttachedFiles[file] = await getFileContent(file);
-            cacheUpdated = true;
-          }
-          filesContent.push(
-            `File: ${file} (v${newAttachedFiles[file].version})\n\`\`\`\n${newAttachedFiles[file].content}\n\`\`\``,
-          );
-        }
-
-        if (cacheUpdated) {
-          setAttachedFiles(newAttachedFiles);
-        }
-
-        enhancedInput +=
-          "\n\n=== CONTEXT_FILES_START ===\n" +
-          filesContent.join("\n\n") +
-          "\n=== CONTEXT_FILES_END ===\n";
-      }
-
-      // Auto-enhance prompts when in Code tab
+      // Legacy code mode processing for basic mode or fallback
       if (activeTab === "code") {
+        // Prepend command schema/rules section (parseable by the model)
+        const rulesHeader = [
+          "=== TASK_RULES_START ===",
+          "You can ask for project context using command lines:",
+          "@list_project                       # get project file list",
+          '@read_file("path")                 # request file content',
+          '@write_diff("path")\n*** Begin Diff\n...\n*** End Diff   # unified diff, minimal context',
+          '@next_file("path")                 # ask the app to attach this file next',
+          "",
+          "When proposing edits, respond with a dedicated section:",
+          "=== COMMANDS_START ===",
+          'request_files: ["optional/next/file1", "optional/next/file2"]',
+          "write_diffs: [",
+          '  { path: "file", diff: "*** Begin Diff\\n...\\n*** End Diff" }',
+          "]\n=== COMMANDS_END ===",
+          "Do not mix prose inside the command block.",
+          "=== TASK_RULES_END ===",
+          "",
+        ].join("\n");
+        enhancedInput = `${rulesHeader}${enhancedInput}`;
+
+        // Detect @next_file("path") commands to auto-attach requested files
+        const nextFileRegex = /@next_file\(["']([^"']+)["']\)/g;
+        const autoFiles: string[] = [];
+        let m: RegExpExecArray | null;
+        while ((m = nextFileRegex.exec(input)) !== null) {
+          autoFiles.push(m[1]);
+        }
+
+        const allFilesToAttach = Array.from(
+          new Set([...codeModeState.selectedFiles, ...autoFiles]),
+        );
+
+        // Attach selected files to context
+        if (allFilesToAttach.length > 0) {
+          const filesContent: string[] = [];
+          let cacheUpdated = false;
+
+          for (const file of allFilesToAttach) {
+            if (!codeModeState.attachedFiles[file]) {
+              const fileContent = await getFileContent(file);
+              codeModeActions.attachFile(file, fileContent.content);
+              cacheUpdated = true;
+            }
+            const fileData = codeModeState.attachedFiles[file];
+            if (fileData) {
+              filesContent.push(
+                `File: ${file} (v${fileData.version})\n\`\`\`\n${fileData.content}\n\`\`\``,
+              );
+            }
+          }
+
+          enhancedInput +=
+            "\n\n=== CONTEXT_FILES_START ===\n" +
+            filesContent.join("\n\n") +
+            "\n=== CONTEXT_FILES_END ===\n";
+        }
+
+        // Auto-enhance prompts when in Code tab
         enhancedInput = `As an expert developer, please help with this coding request. Provide detailed, production-ready code with explanations:
 
 ${enhancedInput}
@@ -973,7 +990,9 @@ Please include:
 - Best practices and patterns
 - Error handling where appropriate
 - Comments explaining key concepts
-- Any necessary dependencies or setup instructions`;
+- Any necessary dependencies or setup instructions
+
+${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integration is available for advanced operations." : ""}`;
       }
 
       onSubmit(enhancedInput);
@@ -1612,75 +1631,122 @@ Please include:
                 <div className="flex items-center gap-2">
                   <Button
                     size="sm"
-                    variant={codeMode === "advanced" ? "default" : "outline"}
+                    variant={codeModeState.mode === "advanced" ? "default" : "outline"}
                     onClick={() =>
-                      setCodeMode(codeMode === "basic" ? "advanced" : "basic")
+                      codeModeActions.setMode(codeModeState.mode === "basic" ? "advanced" : "basic")
                     }
                     className="text-xs"
                   >
-                    {codeMode === "advanced" ? "🔧 Advanced" : "📝 Basic"}
+                    {codeModeState.mode === "advanced" ? "🔧 Advanced" : "📝 Basic"}
                   </Button>
                   <Badge variant="outline" className="text-xs">
-                    {codeMode === "advanced"
-                      ? "IDE Mode"
+                    {codeModeState.mode === "advanced"
+                      ? "Enhanced Orchestrator"
                       : "Enhanced Prompting"}
                   </Badge>
+                  {codeModeState.sessionActive && (
+                    <Badge variant="outline" className="text-xs bg-green-900/20 text-green-400">
+                      Session Active
+                    </Badge>
+                  )}
+                  {codeModeState.isProcessing && (
+                    <Badge variant="outline" className="text-xs bg-blue-900/20 text-blue-400">
+                      Processing...
+                    </Badge>
+                  )}
                 </div>
               </div>
 
               {/* Advanced Code Mode - File Selector */}
-              {codeMode === "advanced" && (
+              {codeModeState.mode === "advanced" && (
                 <div className="mb-4 p-3 bg-black/30 rounded-lg border border-white/10">
                   <div className="flex items-center justify-between mb-2">
                     <h4 className="text-xs font-medium text-white/80">
                       Project Files
                     </h4>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setShowFileSelector(!showFileSelector)}
-                      className="text-xs"
-                    >
-                      {showFileSelector ? "Hide" : "Select Files"}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setShowFileSelector(!showFileSelector)}
+                        className="text-xs"
+                      >
+                        {showFileSelector ? "Hide" : "Select Files"}
+                      </Button>
+                      {codeModeState.selectedFiles.length > 0 && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => codeModeActions.setSelectedFiles([])}
+                          className="text-xs text-red-400 hover:text-red-300"
+                        >
+                          Clear
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
                   {showFileSelector && (
                     <div className="space-y-2 max-h-32 overflow-y-auto">
-                      {[
-                        "src/components/App.tsx",
-                        "src/utils/helpers.ts",
-                        "package.json",
-                        "README.md",
-                        "src/styles/globals.css",
-                      ].map((file) => (
+                      {codeModeState.projectStructure.map((file) => (
                         <label
                           key={file}
                           className="flex items-center gap-2 text-xs cursor-pointer hover:bg-white/5 p-1 rounded"
                         >
                           <input
                             type="checkbox"
-                            checked={selectedFiles.includes(file)}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedFiles([...selectedFiles, file]);
-                              } else {
-                                setSelectedFiles(
-                                  selectedFiles.filter((f) => f !== file),
-                                );
-                              }
-                            }}
+                            checked={codeModeState.selectedFiles.includes(file)}
+                            onChange={() => codeModeActions.toggleFileSelection(file)}
                             className="rounded"
                           />
                           <span className="text-white/70">{file}</span>
+                          {Object.keys(codeModeState.attachedFiles).includes(file) && (
+                            <Badge variant="outline" className="text-xs bg-blue-900/20 text-blue-400">
+                              Attached
+                            </Badge>
+                          )}
                         </label>
                       ))}
                     </div>
                   )}
 
-                  {selectedFiles.length > 0 && (
-                    <div className="mt-2 text-xs text-green-400">
-                      ✓ {selectedFiles.length} file(s) selected for context
+                  {codeModeState.selectedFiles.length > 0 && (
+                    <div className="mt-2 flex items-center justify-between">
+                      <div className="text-xs text-green-400">
+                        ✓ {codeModeState.selectedFiles.length} file(s) selected for context
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          // Simulate attaching files with mock content
+                          codeModeState.selectedFiles.forEach(file => {
+                            if (!codeModeState.attachedFiles[file]) {
+                              codeModeActions.attachFile(file, `// Mock content for ${file}\n// This would be the actual file content in a real implementation`);
+                            }
+                          });
+                        }}
+                        className="text-xs"
+                        disabled={codeModeState.selectedFiles.every(f => codeModeState.attachedFiles[f])}
+                      >
+                        Attach Selected
+                      </Button>
+                    </div>
+                  )}
+
+                  {codeModeState.error && (
+                    <div className="mt-2 p-2 bg-red-900/20 border border-red-700 rounded text-red-300 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span>{codeModeState.error}</span>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={codeModeActions.clearError}
+                          className="text-red-400 hover:text-red-300"
+                        >
+                          ×
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1737,10 +1803,10 @@ Please include:
 
                 {/* Enhanced Code Input */}
                 <form onSubmit={handleSubmit} className="space-y-3">
-                  {codeMode === "advanced" && (
+                  {codeModeState.mode === "advanced" && (
                     <div className="bg-black/20 rounded-lg p-3 border border-white/10 mb-3">
                       <h4 className="text-xs font-medium text-white/80 mb-2">
-                        IDE Command Schema
+                        Enhanced Code Orchestrator
                       </h4>
                       <div className="text-xs text-white/60 space-y-1">
                         <div>
@@ -1753,19 +1819,38 @@ Please include:
                           <code className="bg-white/10 px-1 rounded">
                             @write_diff(file, changes)
                           </code>{" "}
-                          - Apply changes
-                        </div>
-                        <div>
-                          <code className="bg-white/10 px-1 rounded">
-                            @list_project
-                          </code>{" "}
-                          - Show project structure
+                          - Apply safe diff operations
                         </div>
                         <div>
                           <code className="bg-white/10 px-1 rounded">
                             @analyze_code(file)
                           </code>{" "}
-                          - Code analysis
+                          - Deep code analysis with AI agents
+                        </div>
+                        <div>
+                          <code className="bg-white/10 px-1 rounded">
+                            @orchestrate(task)
+                          </code>{" "}
+                          - Multi-agent collaboration
+                        </div>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between">
+                        <div className="text-xs text-blue-400">
+                          🚀 Enhanced Code Orchestrator
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {codeModeState.sessionActive && (
+                            <div className="flex items-center gap-1 text-xs text-green-400">
+                              <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                              Active
+                            </div>
+                          )}
+                          {codeModeState.isProcessing && (
+                            <div className="flex items-center gap-1 text-xs text-blue-400">
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              Processing
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>

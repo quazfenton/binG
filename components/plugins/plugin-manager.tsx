@@ -17,8 +17,13 @@ import {
   Calculator,
   Globe,
   Database,
-  Zap
+  Zap,
+  Shield,
+  AlertTriangle
 } from 'lucide-react';
+import { EnhancedPluginWrapper } from './enhanced-plugin-wrapper';
+import { enhancedPluginManager, EnhancedPlugin } from '../../lib/plugins/enhanced-plugin-manager';
+import { PluginError } from '../../lib/plugins/plugin-isolation';
 
 export interface Plugin {
   id: string;
@@ -30,6 +35,16 @@ export interface Plugin {
   defaultSize: { width: number; height: number };
   minSize: { width: number; height: number };
   maxSize?: { width: number; height: number };
+  
+  // Enhanced properties for error isolation
+  enhanced?: boolean;
+  resourceLimits?: {
+    maxMemoryMB?: number;
+    maxCpuPercent?: number;
+    maxNetworkRequests?: number;
+    maxStorageKB?: number;
+    timeoutMs?: number;
+  };
 }
 
 export interface PluginProps {
@@ -47,6 +62,8 @@ interface PluginWindow {
   isMaximized: boolean;
   zIndex: number;
   data?: any;
+  status?: 'running' | 'error' | 'paused';
+  errorCount?: number;
 }
 
 interface PluginManagerProps {
@@ -54,16 +71,19 @@ interface PluginManagerProps {
   onPluginResult?: (pluginId: string, result: any) => void;
   openPluginId?: string | null;
   onOpenComplete?: () => void;
+  enableEnhancedMode?: boolean;
 }
 
 export const PluginManager: React.FC<PluginManagerProps> = ({
   availablePlugins,
   onPluginResult,
   openPluginId,
-  onOpenComplete
+  onOpenComplete,
+  enableEnhancedMode = true
 }) => {
   const [openWindows, setOpenWindows] = useState<PluginWindow[]>([]);
   const [nextZIndex, setNextZIndex] = useState(1000);
+  const [pluginErrors, setPluginErrors] = useState<Map<string, PluginError[]>>(new Map());
   const [dragState, setDragState] = useState<{
     windowId: string | null;
     isDragging: boolean;
@@ -79,6 +99,34 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
     startSize: { width: 0, height: 0 },
     startWindowPos: { x: 0, y: 0 }
   });
+
+  // Register enhanced plugins
+  useEffect(() => {
+    if (enableEnhancedMode) {
+      availablePlugins.forEach(plugin => {
+        if (plugin.enhanced) {
+          const enhancedPlugin: EnhancedPlugin = {
+            ...plugin,
+            version: '1.0.0',
+            resourceLimits: plugin.resourceLimits,
+            isolationConfig: {
+              sandboxed: true,
+              errorRecovery: true,
+              autoRestart: true,
+              maxRestarts: 3,
+              restartCooldownMs: 5000
+            }
+          };
+          
+          try {
+            enhancedPluginManager.registerPlugin(enhancedPlugin);
+          } catch (error) {
+            console.warn(`Failed to register enhanced plugin ${plugin.id}:`, error);
+          }
+        }
+      });
+    }
+  }, [availablePlugins, enableEnhancedMode]);
 
   useEffect(() => {
     if (openPluginId) {
@@ -105,11 +153,40 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
       isMinimized: false,
       isMaximized: false,
       zIndex: nextZIndex,
-      data: initialData
+      data: initialData,
+      status: 'running',
+      errorCount: 0
     };
 
     setOpenWindows(prev => [...prev, newWindow]);
     setNextZIndex(prev => prev + 1);
+  };
+
+  const handlePluginError = (windowId: string, error: PluginError) => {
+    setOpenWindows(prev => prev.map(window => 
+      window.id === windowId 
+        ? { 
+            ...window, 
+            status: 'error',
+            errorCount: (window.errorCount || 0) + 1
+          }
+        : window
+    ));
+
+    setPluginErrors(prev => {
+      const newErrors = new Map(prev);
+      const windowErrors = newErrors.get(windowId) || [];
+      newErrors.set(windowId, [...windowErrors, error]);
+      return newErrors;
+    });
+  };
+
+  const handlePluginStatusChange = (windowId: string, status: string) => {
+    setOpenWindows(prev => prev.map(window => 
+      window.id === windowId 
+        ? { ...window, status: status as any }
+        : window
+    ));
   };
 
   const closeWindow = (windowId: string) => {
@@ -228,16 +305,23 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
       <div className="flex flex-wrap gap-2 mb-4">
         {availablePlugins.map(plugin => {
           const IconComponent = plugin.icon;
+          const isEnhanced = enableEnhancedMode && plugin.enhanced;
+          
           return (
             <Button
               key={plugin.id}
               variant="secondary"
               size="sm"
-              className="flex items-center gap-2 bg-black/20 hover:bg-black/40 border border-white/10"
+              className={`flex items-center gap-2 bg-black/20 hover:bg-black/40 border border-white/10 ${
+                isEnhanced ? 'ring-1 ring-green-500/30' : ''
+              }`}
               onClick={() => openPlugin(plugin)}
             >
               <IconComponent className="w-4 h-4" />
               <span className="hidden sm:inline">{plugin.name}</span>
+              {isEnhanced && (
+                <Shield className="w-3 h-3 text-green-400" title="Enhanced Mode" />
+              )}
             </Button>
           );
         })}
@@ -247,6 +331,7 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
       <AnimatePresence>
         {openWindows.map(window => {
           const PluginComponent = window.plugin.component;
+          const useEnhanced = enableEnhancedMode && window.plugin.enhanced;
           
           return (
             <motion.div
@@ -277,6 +362,21 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
                   <span className="text-sm font-medium text-white">
                     {window.plugin.name}
                   </span>
+                  
+                  {/* Status indicators */}
+                  {useEnhanced && (
+                    <div className="flex items-center gap-1">
+                      <Shield className="w-3 h-3 text-green-400" title="Enhanced Mode" />
+                      {window.status === 'error' && (
+                        <AlertTriangle className="w-3 h-3 text-red-400" title="Plugin Error" />
+                      )}
+                      {window.errorCount && window.errorCount > 0 && (
+                        <span className="text-xs bg-red-500/20 text-red-300 px-1 rounded">
+                          {window.errorCount}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 
                 <div className="flex items-center gap-1">
@@ -310,11 +410,23 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
               {/* Window Content */}
               {!window.isMinimized && (
                 <div className="h-full overflow-hidden">
-                  <PluginComponent
-                    onClose={() => closeWindow(window.id)}
-                    onResult={(result) => onPluginResult?.(window.plugin.id, result)}
-                    initialData={window.data}
-                  />
+                  {useEnhanced ? (
+                    <EnhancedPluginWrapper
+                      pluginId={window.plugin.id}
+                      component={PluginComponent}
+                      onClose={() => closeWindow(window.id)}
+                      onResult={(result) => onPluginResult?.(window.plugin.id, result)}
+                      initialData={window.data}
+                      onError={(error) => handlePluginError(window.id, error)}
+                      onStatusChange={(status) => handlePluginStatusChange(window.id, status)}
+                    />
+                  ) : (
+                    <PluginComponent
+                      onClose={() => closeWindow(window.id)}
+                      onResult={(result) => onPluginResult?.(window.plugin.id, result)}
+                      initialData={window.data}
+                    />
+                  )}
                 </div>
               )}
 

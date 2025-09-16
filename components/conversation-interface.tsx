@@ -20,6 +20,9 @@ import {
   useCodeService,
 } from "@/contexts/code-service-context";
 import { parseCodeBlocksFromMessages } from "@/lib/code-parser";
+import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
+import { useStreamingState } from "@/hooks/use-streaming-state";
+import { performanceManager } from "@/lib/performance/performance-manager";
 
 // Main component wrapped with CodeServiceProvider
 export default function ConversationInterface() {
@@ -59,6 +62,22 @@ function ConversationInterfaceContent() {
   // Enhanced code system integration
   const [activeTab, setActiveTab] = useState<"chat" | "code">("chat");
   const codeServiceContext = useCodeService();
+
+  // Enhanced streaming state management
+  const streamingState = useStreamingState({
+    onSessionComplete: (sessionId) => {
+      console.log(`Streaming session ${sessionId} completed`);
+    },
+    onSessionError: (sessionId, error) => {
+      console.error(`Streaming session ${sessionId} error:`, error);
+      toast.error(`Streaming error: ${error.message}`);
+    },
+    onBackpressureChange: (active) => {
+      if (active) {
+        toast.info("Streaming slowed due to high load", { duration: 2000 });
+      }
+    }
+  });
 
   // Advertisement system
   const [promptCount, setPromptCount] = useState(0);
@@ -113,6 +132,8 @@ function ConversationInterfaceContent() {
     },
     onError: (error) => {
       toast.error(error.message);
+      // Clean up any active streaming sessions on error
+      enhancedBufferManager.cleanup();
     },
     onFinish: () => {
       if (messages.length > 0) {
@@ -125,6 +146,8 @@ function ConversationInterfaceContent() {
         }
         setPromptCount((prev) => prev + 1);
       }
+      // Clean up completed streaming sessions
+      enhancedBufferManager.cleanup();
     },
   });
 
@@ -446,6 +469,10 @@ function ConversationInterfaceContent() {
       saveCurrentChat(messages, currentConversationId || undefined);
       setChatHistory(getAllChats());
     }
+    
+    // Clean up any active streaming sessions
+    streamingState.cleanupCompletedSessions();
+    
     setMessages([]);
     setCurrentConversationId(null); // Ensure current conversation ID is reset for a new chat
     toast.success("New chat started");
@@ -776,6 +803,7 @@ function ConversationInterfaceContent() {
             onVoiceToggle={handleVoiceToggle}
             setInput={setInput} // Pass setInput to ChatPanel
             onProviderChange={handleProviderChange}
+            streamingState={streamingState}
           />
         </div>
       </div>
@@ -806,6 +834,7 @@ function ConversationInterfaceContent() {
         onDismissPendingDiffs={dismissPendingDiffs}
         activeTab={activeTab}
         onActiveTabChange={setActiveTab}
+        streamingState={streamingState}
       />
 
       {/* Chat History Modal */}

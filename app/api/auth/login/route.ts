@@ -13,7 +13,7 @@ export async function POST(req: Request) {
     }
 
     const db = await initializeDatabase();
-    const user = await db.get('SELECT * FROM users WHERE email = ?', [email]);
+    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
 
     if (!user) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
@@ -25,9 +25,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 
-    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '1h' });
+    const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
 
-    return NextResponse.json({ message: 'Login successful', token });
+    return NextResponse.json({ 
+      message: 'Login successful', 
+      token,
+      user: {
+        id: user.id,
+        email: user.email
+      }
+    });
   } catch (error) {
     console.error('Login API error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

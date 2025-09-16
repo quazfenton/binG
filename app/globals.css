@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Import responsive utilities */
+@import '../styles/responsive.css';
+
 /* Mobile-first CSS optimizations and safe area support */
 
 /* iOS safe area support */
@@ -624,6 +627,95 @@ body {
     .min-h-[60px] {
         min-height: 50px;
     }
+}
+
+/* Enhanced streaming animations */
+@keyframes pulse-subtle {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.95;
+        transform: scale(1.005);
+    }
+}
+
+@keyframes streaming-glow {
+    0%, 100% {
+        box-shadow: 0 0 5px rgba(147, 51, 234, 0.3);
+    }
+    50% {
+        box-shadow: 0 0 20px rgba(147, 51, 234, 0.6);
+    }
+}
+
+@keyframes typing-cursor {
+    0%, 50% {
+        opacity: 1;
+    }
+    51%, 100% {
+        opacity: 0;
+    }
+}
+
+.animate-pulse-subtle {
+    animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+.animate-streaming-glow {
+    animation: streaming-glow 2s ease-in-out infinite;
+}
+
+.animate-typing-cursor {
+    animation: typing-cursor 1s infinite;
+}
+
+/* Progressive text reveal animation */
+.streaming-text-reveal {
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.streaming-text-reveal::after {
+    content: '';
+    display: inline-block;
+    width: 2px;
+    height: 1.2em;
+    background: linear-gradient(to bottom, transparent 0%, currentColor 20%, currentColor 80%, transparent 100%);
+    margin-left: 2px;
+    animation: typing-cursor 1s infinite;
+    vertical-align: text-bottom;
+}
+
+/* Smooth content transitions */
+.content-transition {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Loading state animations */
+.loading-dots::after {
+    content: '';
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: dot-bounce 1.4s infinite ease-in-out both;
+    margin-left: 4px;
+}
+
+.loading-dots::before {
+    content: '';
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: dot-bounce 1.4s infinite ease-in-out both;
+    animation-delay: -0.32s;
+    margin-right: 4px;
 }
 
 /* Smooth transitions for all interactive elements */
