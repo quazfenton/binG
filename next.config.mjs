@@ -63,12 +63,15 @@ const nextConfig = {
       "portkey-ai",
     ],
     webpack: (config, { isServer }) => {
-    // Handle ESM modules
+    // Handle ESM modules with proper extension priority
     config.resolve.extensionAlias = {
-      ".js": [".ts", ".tsx", ".js", ".jsx"],
-      ".mjs": [".mts", ".mjs"],
-      ".cjs": [".cts", ".cjs"],
+      ".js": [".js", ".ts", ".tsx", ".jsx"], // Prioritize .js over .ts
+      ".mjs": [".mjs", ".mts"],
+      ".cjs": [".cjs", ".cts"]
     };
+    
+    // Explicitly define main fields for ESM/CJS resolution
+    config.resolve.mainFields = ['module', 'main'];
 
     // Fix for canvas and other node-specific modules
     if (!isServer) {
@@ -81,6 +84,8 @@ const nextConfig = {
         stream: false,
         url: false,
         zlib: false,
+        sharp: false,
+        canvas: false,
         http: false,
         https: false,
         assert: false,
