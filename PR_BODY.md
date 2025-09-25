@@ -1,33 +1,44 @@
-```markdown
-Title: feat(puter): add Puter integration, streaming parsing, server proxy, UI wiring, visual editor fixes
+# feat(embed): embed mode for Conversation + /embed routes + plugin upgrades
 
-Summary
-- Add Puter adapter (client + server-proxy pattern) with streaming and non-streaming adapters.
-- Merge Puter model listing into the searchable model selector; external Puter models are marked with a dot symbol.
-- Add streaming normalization and code parsing logic (parsing JSON file arrays, unified diffs, fallback).
-- Add enhanced-code-system adapter to run models and apply edits to in-memory ProjectStructure.
-- Add mock account/auth service and client-side credential storage for user-supplied model keys.
-- Add Composio plugin skeleton for tool integration.
-- Add server-side Puter proxy with default server key usage (env DEFAULT_PUTER_KEY) to avoid shipping real keys in client bundles.
-- UI: LLM selector that surfaces external models and prompts to save user API keys when external models are selected.
-- Visual editor made functional and wired to ProjectStructure updates.
+## Summary
+Adds a robust embed mode for the chat UI and dedicated `/embed/*` pages for plugin mini-apps. Upgrades multiple plugins to production‑ready functionality and UI. Enables parent→iframe auth via postMessage.
 
-How to test locally
-1. Create branch: feature/puter-integration (already created)
-2. Add the files provided in the branch.
-3. Start the server proxy for dev:
-   - export DEFAULT_PUTER_KEY="<your-limited-server-key>"
-   - node server/puter-proxy.js
-4. In Vite config, proxy /api/puter -> http://localhost:8787/api/puter
-5. Start the frontend dev server and open the app. Use the model selector to choose an external Puter model.
-6. If no user key exists for that model, the UI will prompt to paste a key and save it locally.
-7. Test code-run flow in streaming mode and check that the code preview / Sandpack updates incrementally.
+### New /embed routes
+- `/embed/notes`: NoteTakerPlugin
+- `/embed/hf-spaces`: HuggingFaceSpacesPlugin
+- `/embed/network`: NetworkRequestBuilderPlugin
+- `/embed/github`: GitHubExplorerPlugin
 
-Security notes
-- Do not store production API keys in client bundles. Use server proxy and per-user keys stored securely on the server.
-- The local storage patterns here are for demo/dev only.
+## Conversation embed mode
+- Detects `embed=1` or if iframed
+- Hides provider/model header when embedded
+- Disables ad gating in embed mode
+- Sends `{ type: 'bing:ready' }` to parent on load
+- Listens for `{ type: 'bing:auth', token }` and stores `localStorage('token')`
 
-Follow-ups
-- I can open a PR from feature/puter-integration -> master with these changes.
-- I can also convert local storage auth to a real backend integration (optional).
-```
+## Plugin upgrades
+- Notes: markdown edit/preview, categories, search, local persistence, export
+- Hugging Face Spaces: multi-tab (Image Gen, Spaces iframe, API stub), model controls, init image URL, download results
+- GitHub Explorer: repo load, metadata/stats, file tree, view file content, clone link
+- Network Request Builder: headers/body builder, response viewer, mock encryption, new Presets tab for common APIs
+
+## Files touched (high-level)
+- `components/conversation-interface.tsx`: embed detection, postMessage listener, header visibility
+- `app/embed/*`: four new pages wrapping plugins
+- `components/plugins/*`: upgraded plugin UIs/logic
+- `next.config.mjs`: no change required, API headers permissive for embedding
+
+## Testing
+- Open each `/embed/*` route directly and verify functionality
+- When embedded in `www.quazfenton.xyz`, verify iframe UX and postMessage auth reception
+- Confirm Notes save to localStorage; HF generate works via `/api/image/generate`; GitHub explorer fetches with PAT; Request Builder sends and displays responses
+
+## Rollout notes
+- Ensure deployment allows embedding from the main domain (`frame-ancestors` or similar CSP)
+- If needed, add CORS exceptions or API proxies for external API tests in Request Builder
+
+## Checklist
+- [ ] Verify `/embed` routes reachable in production
+- [ ] Confirm Conversation embed behavior in iframe
+- [ ] Validate plugin functionality on mobile
+- [ ] (Optional) Add lightweight `/embed` layouts with reduced padding if desired

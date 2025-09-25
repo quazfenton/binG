@@ -41,6 +41,48 @@ export default function ConversationInterface() {
 
 // Main component content
 function ConversationInterfaceContent() {
+  const [embedMode, setEmbedMode] = useState(false);
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('embed') === '1' || window.self !== window.top) {
+        setEmbedMode(true);
+        // Mark as logged in to avoid ads in embed mode
+        setIsLoggedIn(true);
+        // Notify parent that embed is ready
+        window.parent?.postMessage({ type: 'bing:ready' }, '*');
+      }
+    } catch {}
+
+    const handler = (e: MessageEvent) => {
+      if (e?.data?.type === 'bing:auth' && e.data.token) {
+        try { localStorage.setItem('token', e.data.token); } catch {}
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
+  const [embedMode, setEmbedMode] = useState(false);
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('embed') === '1' || window.self !== window.top) {
+        setEmbedMode(true);
+        // Notify parent that embed is ready
+        window.parent?.postMessage({ type: 'bing:ready' }, '*');
+      }
+    } catch {}
+
+    const handler = (e: MessageEvent) => {
+      if (e?.data?.type === 'bing:auth' && e.data.token) {
+        try { localStorage.setItem('token', e.data.token); } catch {}
+      }
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
   const [showAccessibility, setShowAccessibility] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showCodePreview, setShowCodePreview] = useState(false);
@@ -781,7 +823,9 @@ function ConversationInterfaceContent() {
         {/* Chat Panel - full width on mobile */}
         <div className="flex-1 md:flex-initial md:border-l md:border-white/10 relative z-10 flex flex-col min-h-0">
           {/* Header showing current provider/model */}
-          <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-black/30">
+          {!embedMode && (
+            <div className=\"flex items-center justify-between px-3 py-2 border-b border-white/10 bg-black/30\">
+              <div className=\"text-xs text-white/70 truncate\">
             <div className="text-xs text-white/70 truncate">
               <span className="mr-2">Provider:</span>
               <span className="font-medium text-white">
