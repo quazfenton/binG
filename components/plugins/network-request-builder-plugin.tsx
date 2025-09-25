@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { Switch } from '../ui/switch';
 import { Label } from '../ui/label';
-import { XCircle, Send, Plus, Trash2, Loader2, Shield, Lock } from 'lucide-react';
+import { XCircle, Send, Plus, Trash2, Loader2, Shield, Lock, Library } from 'lucide-react';
 import { toast } from 'sonner';
 import type { PluginProps } from './plugin-manager';
 
@@ -170,6 +170,7 @@ export const NetworkRequestBuilderPlugin: React.FC<PluginProps> = ({ onClose, on
           <TabsTrigger value="body">Body</TabsTrigger>
           <TabsTrigger value="encryption">Encryption</TabsTrigger>
           <TabsTrigger value="response">Response</TabsTrigger>
+          <TabsTrigger value="presets" className="flex items-center gap-1"><Library className="w-4 h-4" /> Presets</TabsTrigger>
         </TabsList>
 
         <TabsContent value="headers" className="flex-1 overflow-y-auto p-2 space-y-2">
@@ -237,6 +238,31 @@ export const NetworkRequestBuilderPlugin: React.FC<PluginProps> = ({ onClose, on
               <p className="text-xs mt-2 text-center">Note: Requests are sent from your browser and are subject to CORS policies of the destination server.</p>
             </div>
           }
+        </TabsContent>
+
+        <TabsContent value="presets" className="flex-1 min-h-0 p-4 space-y-4 bg-black/20 rounded-b-md">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {[
+              { name: 'GET JSON Placeholder Posts', method: 'GET', url: 'https://jsonplaceholder.typicode.com/posts' },
+              { name: 'GET Star Wars People', method: 'GET', url: 'https://swapi.dev/api/people' },
+              { name: 'GET Open-Meteo Forecast', method: 'GET', url: 'https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=temperature_2m' },
+              { name: 'GET Public IP', method: 'GET', url: 'https://api.ipify.org?format=json' },
+              { name: 'POST Echo HTTPBin', method: 'POST', url: 'https://httpbin.org/post', headers: [{ key: 'Content-Type', value: 'application/json' }], body: '{"hello":"world"}' },
+              { name: 'GET GitHub Zen', method: 'GET', url: 'https://api.github.com/zen', headers: [{ key: 'User-Agent', value: 'binG-Request-Builder' }] }
+            ].map((preset, idx) => (
+              <button key={idx} className="text-left p-3 bg-white/5 border border-white/10 rounded hover:bg-white/10 transition" onClick={() => {
+                setMethod(preset.method as HttpMethod);
+                setUrl(preset.url);
+                setHeaders((preset.headers || []).map((h, i) => ({ id: Date.now() + i, key: h.key, value: h.value })));
+                setBody(preset.body || '');
+                toast.success(`Loaded preset: ${preset.name}`);
+              }}>
+                <div className="text-sm font-medium">{preset.name}</div>
+                <div className="text-xs text-white/60 mt-1">{preset.method} {preset.url}</div>
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-white/60">Tip: Many public APIs support CORS and can be tested directly. For others, use a server proxy.</p>
         </TabsContent>
       </Tabs>
     </div>
