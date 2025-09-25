@@ -1,31 +1,39 @@
-import React, { useState, useEffect } from 'react'
-import { saveUserApiKeyForModel, getUserApiKeyForModel } from '../../lib/auth-keys'
+import React, { useEffect, useState } from 'react'
 
-type Props = {
-  onClose?: () => void
-  selectedModelId?: string
-  isExternal?: boolean
-}
-
-export const UserSettingsForm: React.FC<Props> = ({ onClose, selectedModelId, isExternal }) => {
-  const [apiKey, setApiKey] = useState<string>('')
-  const [saving, setSaving] = useState(false)
+export const UserSettingsForm: React.FC<{ selectedModelId?: string; onClose?: () => void }> = ({ selectedModelId, onClose }) => {
+  const [userInfo, setUserInfo] = useState<any>(null)
+  const [authing, setAuthing] = useState(false)
 
   useEffect(() => {
-    if (selectedModelId) {
-      setApiKey(getUserApiKeyForModel(selectedModelId))
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore
+    const puter = typeof window !== 'undefined' ? (window as any).puter : undefined
+    if (puter?.auth?.getUser) {
+      puter.auth.getUser().then((u: any) => setUserInfo(u)).catch(() => setUserInfo(null))
     }
   }, [selectedModelId])
 
-  const handleSave = async () => {
-    if (!selectedModelId) return
-    setSaving(true)
+  const handleAuthenticate = async () => {
+    setAuthing(true)
     try {
-      await saveUserApiKeyForModel(selectedModelId, apiKey)
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore
+      const puter = (window as any).puter
+      if (!puter) throw new Error('Puter SDK not loaded')
+      if (puter.ui && typeof puter.ui.authenticateWithPuter === 'function') {
+        await puter.ui.authenticateWithPuter()
+      } else if (puter.auth && typeof puter.auth.signIn === 'function') {
+        await puter.auth.signIn({ attempt_temp_user_creation: true })
+      } else {
+        throw new Error('No supported Puter auth method found')
+      }
+      const u = await puter.auth.getUser()
+      setUserInfo(u)
     } catch (e) {
-      console.error('failed save', e)
+      console.error('Puter auth failed', e)
+      alert('Authentication failed: ' + String((e as Error).message ?? e))
     } finally {
-      setSaving(false)
+      setAuthing(false)
       onClose?.()
     }
   }
@@ -33,23 +41,15 @@ export const UserSettingsForm: React.FC<Props> = ({ onClose, selectedModelId, is
   return (
     <div>
       <h3>User settings</h3>
-      {isExternal && (
-        <>
-          <p>
-            You selected an external model ({selectedModelId}). To use it in the browser, paste your API key below. Keys are stored locally in the browser for this demo.
-          </p>
-          <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Paste model API key (kept locally)" />
-        </>
-      )}
-
-      <div style={{ marginTop: 12 }}>
-        <button onClick={handleSave} disabled={saving || (isExternal && !apiKey)}>
-          Save
-        </button>
-        <button onClick={() => onClose?.()}>
-          Cancel
+      <p>
+        If you choose a Puter model, Puter manages authentication and storage for you — there is no API key to paste. Click Authenticate to sign in with Puter.
+      </p>
+      <div>
+        <button onClick={handleAuthenticate} disabled={authing}>
+          {authing ? 'Authenticating…' : 'Authenticate with Puter'}
         </button>
       </div>
+      {userInfo ? <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(userInfo, null, 2)}</pre> : <div>Not signed in</div>}
     </div>
   )
 }
