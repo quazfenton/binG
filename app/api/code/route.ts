@@ -30,10 +30,15 @@ function generateSessionId(): string {
 }
 
 export async function POST(request: NextRequest) {
+  console.log('[DEBUG] Code API: Incoming request');
+  
   try {
     // Validate content type
     const contentType = request.headers.get('content-type');
+    console.log('[DEBUG] Code API: Content-Type:', contentType);
+    
     if (!contentType || !contentType.includes('application/json')) {
+      console.error('[DEBUG] Code API: Invalid content type');
       return NextResponse.json(
         { 
           error: "Content-Type must be application/json",
@@ -46,7 +51,14 @@ export async function POST(request: NextRequest) {
     let body: any;
     try {
       body = await request.json();
+      console.log('[DEBUG] Code API: Request body parsed:', {
+        action: body.action,
+        hasPrompt: !!body.prompt,
+        hasSelectedFiles: !!body.selectedFiles,
+        bodyKeys: Object.keys(body)
+      });
     } catch (parseError) {
+      console.error('[DEBUG] Code API: JSON parse error:', parseError);
       return NextResponse.json(
         { 
           error: "Invalid JSON in request body",
@@ -59,6 +71,7 @@ export async function POST(request: NextRequest) {
     // Validate action field
     const { action } = body;
     if (!action || typeof action !== 'string') {
+      console.error('[DEBUG] Code API: Invalid action field:', action, typeof action);
       return NextResponse.json(
         { 
           error: "Action is required and must be a string",
@@ -71,20 +84,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log('[DEBUG] Code API: Processing action:', action);
+    
     switch (action) {
       case "start_session":
+        console.log('[DEBUG] Code API: Handling start_session');
         return handleStartSession(body);
 
       case "get_session_status":
+        console.log('[DEBUG] Code API: Handling get_session_status');
         return handleGetSessionStatus(body);
 
       case "apply_diffs":
+        console.log('[DEBUG] Code API: Handling apply_diffs');
         return handleApplyDiffs(body);
 
       case "cancel_session":
+        console.log('[DEBUG] Code API: Handling cancel_session');
         return handleCancelSession(body);
 
       default:
+        console.error('[DEBUG] Code API: Unknown action:', action);
         return NextResponse.json(
           { 
             error: "Invalid action",

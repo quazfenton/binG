@@ -6,8 +6,19 @@ import type { LLMRequest, LLMMessage } from "@/lib/api/llm-providers";
 import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 
 export async function POST(request: NextRequest) {
+  console.log('[DEBUG] Chat API: Incoming request');
+  
   try {
     const body = await request.json();
+    console.log('[DEBUG] Chat API: Request body parsed:', {
+      hasMessages: !!body.messages,
+      messageCount: body.messages?.length,
+      provider: body.provider,
+      model: body.model,
+      stream: body.stream,
+      bodyKeys: Object.keys(body)
+    });
+    
     const {
       messages,
       provider,
@@ -32,6 +43,7 @@ export async function POST(request: NextRequest) {
 
     // Validate required fields
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      console.error('[DEBUG] Chat API: Validation failed - missing or empty messages');
       return NextResponse.json(
         { error: "Messages array is required and cannot be empty" },
         { status: 400 },
@@ -39,6 +51,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!provider || !model) {
+      console.error('[DEBUG] Chat API: Validation failed - missing provider or model', { provider, model });
       return NextResponse.json(
         { error: "Provider and model are required" },
         { status: 400 },
@@ -47,9 +60,12 @@ export async function POST(request: NextRequest) {
 
     // Check if provider is available
     const availableProviders = llmService.getAvailableProviders();
+    console.log('[DEBUG] Chat API: Available providers:', availableProviders.map(p => p.id));
+    
     const selectedProvider = availableProviders.find((p) => p.id === provider);
 
     if (!selectedProvider) {
+      console.error('[DEBUG] Chat API: Provider not available:', provider);
       return NextResponse.json(
         {
           error: `Provider ${provider} is not available. Check your API keys.`,
@@ -59,8 +75,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log('[DEBUG] Chat API: Selected provider:', provider, 'supports streaming:', selectedProvider.supportsStreaming);
+
     // Check if model is supported by the provider
     if (!selectedProvider.models.includes(model)) {
+      console.error('[DEBUG] Chat API: Model not supported:', model, 'Available:', selectedProvider.models);
       return NextResponse.json(
         {
           error: `Model ${model} is not supported by ${provider}`,
@@ -69,6 +88,8 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
+    
+    console.log('[DEBUG] Chat API: Validation passed, starting response generation');
 
     const llmRequest: EnhancedLLMRequest = {
       messages,
@@ -165,6 +186,7 @@ export async function POST(request: NextRequest) {
               provider,
               model,
             })}\n\n`;
+            console.log('[DEBUG] Chat API: Sending init event');
             controller.enqueue(encoder.encode(initEvent));
 
             for await (const chunk of llmStream) {
