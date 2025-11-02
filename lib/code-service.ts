@@ -50,14 +50,24 @@ class CodeServiceClass extends EventEmitter {
    * Start a new code generation session with deduplication (mode-aware)
    */
   async startSession(options: StartSessionOptions): Promise<string> {
+    console.log('[DEBUG] CodeService: startSession called', {
+      hasPrompt: !!options.prompt,
+      selectedFilesCount: Object.keys(options.selectedFiles || {}).length,
+      mode: options.mode
+    });
+    
     try {
       // Check if we're in the correct mode for code operations
       const currentMode = getCurrentMode();
+      console.log('[DEBUG] CodeService: Current mode:', currentMode);
+      
       if (currentMode !== 'code') {
+        console.error('[DEBUG] CodeService: Not in code mode');
         throw new Error('Code sessions can only be started in Code mode');
       }
 
       // Validate options before sending
+      console.log('[DEBUG] CodeService: Validating options');
       this.validateStartSessionOptions(options);
 
       // Use request deduplicator to prevent duplicate session starts
