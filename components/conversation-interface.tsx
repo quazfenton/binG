@@ -824,9 +824,8 @@ function ConversationInterfaceContent() {
         <div className="flex-1 md:flex-initial md:border-l md:border-white/10 relative z-10 flex flex-col min-h-0">
           {/* Header showing current provider/model */}
           {!embedMode && (
-            <div className=\"flex items-center justify-between px-3 py-2 border-b border-white/10 bg-black/30\">
-              <div className=\"text-xs text-white/70 truncate\">
-            <div className="text-xs text-white/70 truncate">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-black/30">
+              <div className="text-xs text-white/70 truncate">
               <span className="mr-2">Provider:</span>
               <span className="font-medium text-white">
                 {currentProvider || "—"}
