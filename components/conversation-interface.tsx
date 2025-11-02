@@ -63,26 +63,6 @@ function ConversationInterfaceContent() {
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
   }, []);
-  const [embedMode, setEmbedMode] = useState(false);
-
-  useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('embed') === '1' || window.self !== window.top) {
-        setEmbedMode(true);
-        // Notify parent that embed is ready
-        window.parent?.postMessage({ type: 'bing:ready' }, '*');
-      }
-    } catch {}
-
-    const handler = (e: MessageEvent) => {
-      if (e?.data?.type === 'bing:auth' && e.data.token) {
-        try { localStorage.setItem('token', e.data.token); } catch {}
-      }
-    };
-    window.addEventListener('message', handler);
-    return () => window.removeEventListener('message', handler);
-  }, []);
   const [showAccessibility, setShowAccessibility] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showCodePreview, setShowCodePreview] = useState(false);
@@ -826,24 +806,24 @@ function ConversationInterfaceContent() {
           {!embedMode && (
             <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-black/30">
               <div className="text-xs text-white/70 truncate">
-              <span className="mr-2">Provider:</span>
-              <span className="font-medium text-white">
-                {currentProvider || "—"}
-              </span>
-              <span className="mx-2 text-white/40">|</span>
-              <span className="mr-2">Model:</span>
-              <span className="font-medium text-white truncate inline-block max-w-[60%] align-bottom">
-                {currentModel || "—"}
-              </span>
+                <span className="mr-2">Provider:</span>
+                <span className="font-medium text-white">
+                  {currentProvider || "—"}
+                </span>
+                <span className="mx-2 text-white/40">|</span>
+                <span className="mr-2">Model:</span>
+                <span className="font-medium text-white truncate inline-block max-w-[60%] align-bottom">
+                  {currentModel || "—"}
+                </span>
+              </div>
+              {/* Quick open history */}
+              <button
+                onClick={() => setShowHistory(true)}
+                className="text-xs px-2 py-1 border border-white/20 rounded text-white/70 hover:bg-white/10"
+              >
+                History
+              </button>
             </div>
-            {/* Quick open history */}
-            <button
-              onClick={() => setShowHistory(true)}
-              className="text-xs px-2 py-1 border border-white/20 rounded text-white/70 hover:bg-white/10"
-            >
-              History
-            </button>
-          </div>
           <ChatPanel
             messages={messages} // Pass messages from useChat
             input={input} // Pass input from useChat
@@ -969,41 +949,6 @@ function ConversationInterfaceContent() {
                 Continue
               </button>
             </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-                        "submit",
-                      ) as unknown as React.FormEvent<HTMLFormElement>,
-                    );
-                  }}
-                  className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white px-4 py-2 rounded-lg font-medium transition-all duration-200"
-                >
-                  Sign Up Free
-                </button>
-                <button
-                  onClick={() => {
-                    setShowAd(false);
-                    // Continue with the original submission after ad
-                    setTimeout(() => {
-                      handleSubmit(
-                        new Event(
-                          "submit",
-                        ) as unknown as React.FormEvent<HTMLFormElement>,
-                      );
-                    }, 100);
-                  }}
-                  className="flex-1 border border-white/20 text-white px-4 py-2 rounded-lg hover:bg-white/5 transition-all duration-200"
-                >
-                  Continue
-                </button>
-              </div>
-
-              <p className="text-xs text-gray-500">
-                Free users see ads every 3 prompts
-              </p>
             </div>
           </div>
         </div>
@@ -1011,3 +956,4 @@ function ConversationInterfaceContent() {
     </div>
   );
 }
+
