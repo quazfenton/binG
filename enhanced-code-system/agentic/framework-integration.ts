@@ -160,7 +160,12 @@ class AgenticFrameworkManager extends EventEmitter {
           adapter = new CustomFrameworkAdapter(config as CustomFrameworkConfig);
           break;
         default:
-          throw new Error(`Unsupported framework: ${(config as any).framework}`);
+          throw createAgenticError(`Unsupported framework: ${(config as any).framework}`, {
+            code: ERROR_CODES.AGENTIC.FRAMEWORK_NOT_CONFIGURED,
+            severity: 'high',
+            recoverable: false,
+            context: { framework: (config as any).framework }
+          });
       }
 
       this.frameworks.set(config.framework, adapter);
