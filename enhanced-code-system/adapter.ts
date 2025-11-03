@@ -1,6 +1,7 @@
 import { getProvidersWithPuter } from '../lib/api/llm-providers'
 import { normalizeStream, collectNonStream } from '../lib/streaming'
 import { streamPartsToEdits, applyEditsToProject } from '../lib/code-parser'
+import { llmService } from '../lib/api/llm-providers' // Import the main LLM service
 
 export async function runModelAndApply(
   project: any,
@@ -14,8 +15,8 @@ export async function runModelAndApply(
   if (isExternalModel(modelId)) {
     adapter = getPuterAdapterFor(modelId, opts.defaultKey)
   } else {
-    // TODO: plug into your existing local provider invocation path
-    adapter = getPuterAdapterFor(modelId, opts.defaultKey) // fallback to Puter adapter
+    // Plug into existing local provider invocation path
+    adapter = await llmService.getAdapterFor(modelId, opts.defaultKey)
   }
 
   if (opts.stream && adapter.stream) {

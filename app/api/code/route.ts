@@ -6,14 +6,22 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-// import { EnhancedCodeOrchestrator } from '../../../enhanced-code-system/enhanced-code-orchestrator';
-// import type { Message } from '../../../types/index';
+import { EnhancedCodeOrchestrator } from '../../../enhanced-code-system/enhanced-code-orchestrator';
+import { AdvancedFileManager, FileState, DiffOperation } from '../../../enhanced-code-system/file-management/advanced-file-manager';
+import { 
+  createOrchestratorError,
+  createFileManagementError,
+  createStreamError,
+  createCodeManagementError,
+  ERROR_CODES 
+} from '../../../enhanced-code-system/core/error-types';
+import type { Message } from '../../../types/index';
 
 // Session storage (in production, use Redis or database)
 const activeSessions = new Map<
   string,
   {
-    // orchestrator: EnhancedCodeOrchestrator;
+    orchestrator: EnhancedCodeOrchestrator;
     status: "pending" | "processing" | "completed" | "error";
     progress: number;
     files: { [key: string]: string };
@@ -202,9 +210,41 @@ async function handleStartSession(body: any) {
 
     const sessionId = generateSessionId();
 
-    // Create session record (mock implementation)
+    // Initialize the enhanced code orchestrator
+    const orchestrator = new EnhancedCodeOrchestrator({
+      mode: "hybrid",
+      enableStreaming: true,
+      enableAgenticFrameworks: true,
+      enableFileManagement: true,
+      enableAutoWorkflows: true,
+      maxConcurrentSessions: 3,
+      defaultTimeoutMs: 120000,
+      qualityThreshold: 0.8,
+      maxIterations: 5,
+      contextOptimization: true,
+      errorRecovery: true,
+      promptEngineering: {
+        depthLevel: 8,
+        verbosityLevel: "verbose",
+        includeDocumentation: true,
+        includeTestCases: false,
+        includeOptimization: true,
+      },
+      streamingConfig: {
+        chunkSize: 1000,
+        maxTokens: 32000,
+        enablePartialValidation: true,
+      },
+      agenticConfig: {
+        defaultFramework: "crewai",
+        maxAgents: 5,
+        collaborationMode: "sequential",
+      },
+    });
+
+    // Create session record with real orchestrator
     const session = {
-      // orchestrator,
+      orchestrator,
       status: "pending" as const,
       progress: 0,
       files: selectedFiles,
@@ -317,13 +357,85 @@ async function handleApplyDiffs(body: any) {
       ? session.pendingDiffs.filter((diff) => diffPaths.includes(diff.path))
       : session.pendingDiffs;
 
-    // Here we would integrate with the file management system
-    // For now, we'll simulate the application
-    for (const diff of diffsToApply) {
-      // Apply diff to session.files
-      // This is a placeholder - in the real implementation,
-      // we'd use the AdvancedFileManager to apply patches
-      console.log(`Applying diff for ${diff.path}`);
+    // Integrate with the AdvancedFileManager to apply diffs
+    try {
+      // Create file manager instance
+      const fileManager = new AdvancedFileManager({
+        autoSaveInterval: 30000,
+        maxHistoryEntries: 100,
+        enableRealTimeSync: true,
+        enableSyntaxValidation: true,
+        enableAutoBackup: true,
+        enableConflictDetection: true,
+        enableRollback: true,
+        maxBackupHistory: 10,
+        validationTimeout: 5000,
+        conflictResolutionStrategy: 'hybrid',
+        enableErrorRecovery: true,
+        enableAutoWorkflows: true,
+        contextWindowSize: 32000,
+        chunkSize: 1000,
+        maxTokens: 32000,
+        enablePartialValidation: true,
+        progressUpdateInterval: 500,
+        timeoutMs: 60000,
+        retryAttempts: 3,
+        streamingStrategy: 'semantic_chunks',
+      });
+
+      // Apply diffs using the file manager
+      for (const diff of diffsToApply) {
+        // Register file with file manager
+        const fileState: FileState = {
+          id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          name: diff.path.split('/').pop() || diff.path,
+          path: diff.path,
+          content: session.files[diff.path] || '',
+          language: detectLanguageFromPath(diff.path),
+          hasEdits: true,
+          lastModified: new Date(),
+          version: 1,
+          originalContent: session.files[diff.path] || '',
+          pendingDiffs: [diff],
+          changeHistory: [],
+          isLocked: false,
+          metadata: {},
+        };
+
+        await fileManager.registerFile(fileState);
+
+        // Apply the diff with validation
+        const result = await fileManager.safelyApplyDiffs(
+          fileState.id,
+          fileState.content,
+          [diff],
+          fileState,
+          {
+            enableSyntaxValidation: true,
+            enableConflictDetection: true,
+            enableAutoBackup: true,
+            enableRollback: true,
+            maxBackupHistory: 5,
+            validationTimeout: 3000,
+            conflictResolutionStrategy: 'hybrid',
+            enableErrorRecovery: true,
+          }
+        );
+
+        if (result.success) {
+          // Update session with applied content
+          session.files[diff.path] = result.updatedContent;
+          console.log(`Successfully applied diff for ${diff.path}`);
+        } else {
+          console.error(`Failed to apply diff for ${diff.path}:`, result.errors);
+          session.errors = session.errors || [];
+          session.errors.push(...result.errors);
+        }
+      }
+    } catch (error) {
+      console.error('File manager diff application failed:', error);
+      session.errors = session.errors || [];
+      session.errors.push(`File manager error: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     // Remove applied diffs
@@ -407,71 +519,133 @@ async function processSessionAsync(
     session.progress = 10;
     session.updatedAt = new Date();
 
-    // Mock processing delay
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    session.progress = 50;
-    session.updatedAt = new Date();
+    // Use the orchestrator from the session
+    const orchestrator = session.orchestrator;
 
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    session.progress = 80;
-    session.updatedAt = new Date();
+    // Convert selectedFiles to ProjectItem array for orchestrator
+    const projectFiles: ProjectItem[] = Object.entries(selectedFiles).map(([path, content]) => ({
+      id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: path.split('/').pop() || path,
+      path,
+      content,
+      language: detectLanguageFromPath(path),
+      hasEdits: content.length > 0,
+      lastModified: new Date(),
+    }));
 
-    // Mock response generation
-    const mockFiles: { [key: string]: string } = {};
-
-    // Generate a simple response based on the prompt
-    if (prompt.toLowerCase().includes("react")) {
-      mockFiles["src/App.jsx"] = `import React from 'react';
-
-function App() {
-  return (
-    <div className="App">
-      <h1>Generated React App</h1>
-      <p>This is a mock response based on your request: ${prompt.substring(0, 100)}...</p>
-    </div>
-  );
-}
-
-export default App;`;
-
-      mockFiles["src/index.js"] = `import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App';
-
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<App />);`;
-    } else {
-      mockFiles["index.html"] = `<!DOCTYPE html>
-<html>
-<head>
-    <title>Generated Code</title>
-</head>
-<body>
-    <h1>Mock Generated Content</h1>
-    <p>Based on prompt: ${prompt.substring(0, 100)}...</p>
-</body>
-</html>`;
-    }
-
-    session.files = { ...session.files, ...mockFiles };
-
-    // Mock diff generation
-    session.pendingDiffs = [
-      {
-        path: Object.keys(mockFiles)[0] || "index.html",
-        diff: `+ // Generated based on: ${prompt.substring(0, 50)}...`,
+    // Start orchestrator session
+    const requestId = await orchestrator.startSession({
+      id: sessionId,
+      task: prompt,
+      files: projectFiles,
+      options: {
+        mode: "hybrid",
+        priority: "medium",
+        expectedOutputSize: 8000,
+        contextHints: rules,
+        requireApproval: true,
+        enableDiffs: true,
+        timeoutMs: 120000,
+        qualityThreshold: 0.8,
       },
-    ];
+    });
 
-    session.progress = 100;
-    session.status = "completed";
-    session.updatedAt = new Date();
+    // Track session progress
+    orchestrator.on('session_progress', (progress) => {
+      session.progress = Math.min(95, Math.max(10, progress.progressPercentage || session.progress));
+      session.updatedAt = new Date();
+    });
+
+    // Wait for session completion
+    const result = await new Promise<{ success: boolean; response?: any; error?: string }>((resolve) => {
+      const timeout = setTimeout(() => {
+        resolve({ success: false, error: "Session timeout after 120 seconds" });
+      }, 120000);
+
+      orchestrator.on('session_completed', (data) => {
+        clearTimeout(timeout);
+        resolve({ success: true, response: data });
+      });
+
+      orchestrator.on('session_failed', (data) => {
+        clearTimeout(timeout);
+        resolve({ success: false, error: data.error });
+      });
+    });
+
+    if (result.success && result.response) {
+      // Process successful response
+      const response = result.response;
+      
+      // Extract generated files from response
+      const generatedFiles: { [key: string]: string } = {};
+      
+      if (response.file_context?.content) {
+        const fileName = response.file_context.file_name || "generated-code.ts";
+        generatedFiles[fileName] = response.file_context.content;
+      }
+      
+      // Add any additional files from diffs
+      if (response.diffs && response.diffs.length > 0) {
+        for (const diff of response.diffs) {
+          if (diff.content) {
+            const diffFileName = `modified-${Date.now()}.ts`;
+            generatedFiles[diffFileName] = diff.content;
+          }
+        }
+      }
+      
+      session.files = { ...session.files, ...generatedFiles };
+      session.pendingDiffs = response.diffs || [];
+      
+      session.progress = 100;
+      session.status = "completed";
+      session.updatedAt = new Date();
+    } else {
+      // Handle error case
+      session.status = "error";
+      session.error = result.error || "Unknown error during code generation";
+      session.updatedAt = new Date();
+    }
   } catch (error) {
     console.error(`Error processing session ${sessionId}:`, error);
     session.status = "error";
     session.error = error instanceof Error ? error.message : "Unknown error";
     session.updatedAt = new Date();
   }
+}
+
+// Helper function to detect language from file path
+function detectLanguageFromPath(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase();
+  const langMap: { [key: string]: string } = {
+    'js': 'javascript',
+    'jsx': 'jsx',
+    'ts': 'typescript',
+    'tsx': 'tsx',
+    'py': 'python',
+    'java': 'java',
+    'cpp': 'cpp',
+    'c': 'c',
+    'html': 'html',
+    'css': 'css',
+    'scss': 'scss',
+    'json': 'json',
+    'md': 'markdown',
+    'yml': 'yaml',
+    'yaml': 'yaml',
+    'xml': 'xml',
+    'php': 'php',
+    'rb': 'ruby',
+    'go': 'go',
+    'rs': 'rust',
+    'swift': 'swift',
+    'kt': 'kotlin',
+    'dart': 'dart',
+    'vue': 'vue',
+    'svelte': 'svelte'
+  };
+  return langMap[ext || ''] || 'text';
 }
 
 // Cleanup old sessions periodically

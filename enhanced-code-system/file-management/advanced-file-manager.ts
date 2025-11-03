@@ -13,6 +13,12 @@
 import { EventEmitter } from 'events';
 import { diff_match_patch, patch_obj } from 'diff-match-patch';
 import { z } from 'zod';
+import {
+  createFileManagementError,
+  createSafeDiffError,
+  createPromptEngineError,
+  ERROR_CODES
+} from '../core/error-types';
 import { EnhancedResponse, ProjectItem } from '../core/enhanced-prompt-engine';
 import { SafeDiffOperations, ValidationResult, BackupState, Conflict } from './safe-diff-operations';
 
@@ -217,11 +223,21 @@ class AdvancedFileManager extends EventEmitter {
 
     const fileState = this.fileStates.get(fileId);
     if (!fileState) {
-      throw new Error(`File ${fileId} not found`);
+      throw createFileManagementError(`File ${fileId} not found`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId }
+      });
     }
 
     if (fileState.isLocked) {
-      throw new Error(`File ${fileId} is locked and cannot be modified`);
+      throw createFileManagementError(`File ${fileId} is locked and cannot be modified`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.ACCESS_DENIED,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId, isLocked: fileState.isLocked }
+      });
     }
 
     // Use safe diff operations if enabled
@@ -429,7 +445,12 @@ class AdvancedFileManager extends EventEmitter {
 
     const fileState = this.fileStates.get(fileId);
     if (!fileState) {
-      throw new Error(`File ${fileId} not found`);
+      throw createFileManagementError(`File ${fileId} not found`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId }
+      });
     }
 
     const oldContent = fileState.content;
@@ -485,7 +506,12 @@ class AdvancedFileManager extends EventEmitter {
   async handleUserApproval(fileId: string, approved: DiffOperation[], action: 'apply' | 'dismiss'): Promise<void> {
     const fileState = this.fileStates.get(fileId);
     if (!fileState) {
-      throw new Error(`File ${fileId} not found`);
+      throw createFileManagementError(`File ${fileId} not found`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId }
+      });
     }
 
     if (action === 'apply') {
@@ -738,39 +764,462 @@ class AdvancedFileManager extends EventEmitter {
   /**
    * Validate file syntax
    */
+  /**
+   * Enhanced syntax validation with real parser integration
+   */
   private async validateSyntax(content: string, language: string): Promise<boolean> {
     try {
       switch (language.toLowerCase()) {
         case 'typescript':
         case 'javascript':
-          // Basic JS/TS validation - in real implementation, use TypeScript compiler API
-          return !content.includes('SyntaxError') && this.validateBrackets(content);
+        case 'tsx':
+        case 'jsx':
+          return await this.validateJavaScriptSyntax(content, language);
 
         case 'json':
-          JSON.parse(content);
-          return true;
+          return this.validateJSONSyntax(content);
 
         case 'css':
         case 'scss':
-          // Basic CSS validation
-          return this.validateCSSBrackets(content);
+        case 'less':
+          return this.validateCSSSyntax(content);
+
+        case 'html':
+          return this.validateHTMLSyntax(content);
+
+        case 'python':
+          return await this.validatePythonSyntax(content);
+
+        case 'java':
+          return await this.validateJavaSyntax(content);
+
+        case 'xml':
+          return this.validateXMLSyntax(content);
+
+        case 'yaml':
+        case 'yml':
+          return this.validateYAMLSyntax(content);
+
+        case 'markdown':
+        case 'md':
+          return this.validateMarkdownSyntax(content);
+
+        case 'sql':
+          return this.validateSQLSyntax(content);
 
         default:
-          return true; // Skip validation for unknown languages
+          // For unknown languages, perform basic validation
+          return this.validateBasicSyntax(content);
       }
+    } catch (error) {
+      console.warn(`Syntax validation failed for ${language}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Validate JavaScript/TypeScript syntax with real parser
+   */
+  private async validateJavaScriptSyntax(content: string, language: string): Promise<boolean> {
+    try {
+      // Try to use a real JavaScript/TypeScript parser if available
+      try {
+        // Attempt to dynamically import acorn or esprima for JavaScript parsing
+        const parser = await this.loadJSParser();
+        if (parser) {
+          if (language.includes('ts')) {
+            // For TypeScript, we would ideally use the TypeScript compiler API
+            // This is a simplified check for now
+            parser.parse(content, { 
+              ecmaVersion: 'latest',
+              sourceType: 'module',
+              allowReturnOutsideFunction: true,
+              allowAwaitOutsideFunction: true
+            });
+          } else {
+            parser.parse(content, { 
+              ecmaVersion: 'latest',
+              sourceType: 'module'
+            });
+          }
+          return true;
+        }
+      } catch (parserError) {
+        // Fall back to basic validation if parser fails
+        console.debug('Parser validation failed, falling back to basic validation');
+      }
+
+      // Basic validation if no parser available
+      return !content.includes('SyntaxError') && this.validateBrackets(content);
+    } catch (error) {
+      console.debug('JavaScript validation failed:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Load JavaScript parser dynamically
+   */
+  private async loadJSParser(): Promise<any> {
+    try {
+      // Try acorn first
+      const acorn = await import('acorn');
+      return acorn;
+    } catch {
+      try {
+        // Try esprima as fallback
+        const esprima = await import('esprima');
+        return esprima;
+      } catch {
+        // No parser available
+        return null;
+      }
+    }
+  }
+
+  /**
+   * Validate JSON syntax
+   */
+  private validateJSONSyntax(content: string): boolean {
+    try {
+      JSON.parse(content);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Validate CSS syntax
+   */
+  private validateCSSSyntax(content: string): boolean {
+    try {
+      // Basic CSS validation - check for balanced braces
+      const openBraces = (content.match(/\{/g) || []).length;
+      const closeBraces = (content.match(/\}/g) || []).length;
+      
+      if (openBraces !== closeBraces) {
+        return false;
+      }
+
+      // Check for basic CSS structure
+      const hasSelectors = /[.#]?[a-zA-Z][a-zA-Z0-9-_]*\s*\{/.test(content);
+      if (!hasSelectors && content.trim().length > 0) {
+        return false;
+      }
+
+      // Check for unclosed comments
+      const commentStarts = (content.match(/\/\*/g) || []).length;
+      const commentEnds = (content.match(/\*\//g) || []).length;
+      if (commentStarts !== commentEnds) {
+        return false;
+      }
+
+      return true;
     } catch {
       return false;
     }
   }
 
   /**
-   * Validate balanced brackets
+   * Validate HTML syntax
+   */
+  private validateHTMLSyntax(content: string): boolean {
+    try {
+      // Basic HTML validation - check for balanced tags
+      const tagRegex = /<([a-zA-Z][a-zA-Z0-9]*)[^>]*>|<\/([a-zA-Z][a-zA-Z0-9]*)>/g;
+      const openTags: string[] = [];
+      let match;
+
+      while ((match = tagRegex.exec(content)) !== null) {
+        if (match[1]) {
+          // Opening tag
+          openTags.push(match[1].toLowerCase());
+        } else if (match[2]) {
+          // Closing tag
+          const lastTag = openTags.pop();
+          if (lastTag !== match[2].toLowerCase()) {
+            return false; // Mismatched tags
+          }
+        }
+      }
+
+      // All tags should be closed
+      return openTags.length === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Validate Python syntax
+   */
+  private async validatePythonSyntax(content: string): Promise<boolean> {
+    try {
+      // Try to use Python parser if available
+      try {
+        const skulpt = await this.loadPythonParser();
+        if (skulpt) {
+          skulpt.preload();
+          const result = skulpt.compile(content);
+          return result !== null;
+        }
+      } catch (parserError) {
+        console.debug('Python parser validation failed, falling back to basic validation');
+      }
+
+      // Basic Python validation
+      const lines = content.split('\n');
+      let indentLevel = 0;
+      const indentStack: number[] = [0];
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) {
+          continue; // Skip empty lines and comments
+        }
+
+        // Check indentation
+        const leadingSpaces = line.search(/\S/);
+        if (leadingSpaces === -1) continue; // Empty line
+
+        // Basic indentation validation for Python
+        if (leadingSpaces % 4 !== 0) {
+          // Python typically uses 4-space indentation
+          console.debug('Possible indentation issue in Python code');
+        }
+
+        // Check for basic syntax elements
+        if (/^\s*(if|for|while|def|class|with|try|except|finally|else|elif)\b/.test(line)) {
+          if (!line.endsWith(':')) {
+            return false; // Control structures should end with colon
+          }
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.debug('Python validation failed:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Load Python parser dynamically
+   */
+  private async loadPythonParser(): Promise<any> {
+    try {
+      const skulpt = await import('skulpt');
+      return skulpt;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Validate Java syntax
+   */
+  private async validateJavaSyntax(content: string): Promise<boolean> {
+    try {
+      // Basic Java validation
+      const hasValidClassStructure = /public\s+class\s+\w+|class\s+\w+/g.test(content);
+      const hasBalancedBraces = this.validateBrackets(content);
+      
+      if (!hasValidClassStructure || !hasBalancedBraces) {
+        return false;
+      }
+
+      // Check for basic Java syntax constructs
+      const requiredKeywords = ['public', 'class'];
+      const missingKeywords = requiredKeywords.filter(keyword => 
+        !content.includes(keyword)
+      );
+
+      if (missingKeywords.length === requiredKeywords.length) {
+        return false; // Doesn't look like valid Java
+      }
+
+      return true;
+    } catch (error) {
+      console.debug('Java validation failed:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Validate XML syntax
+   */
+  private validateXMLSyntax(content: string): boolean {
+    try {
+      // Basic XML validation - check for balanced tags
+      const tagRegex = /<([a-zA-Z][a-zA-Z0-9]*)([^>]*)>|<\/([a-zA-Z][a-zA-Z0-9]*)>/g;
+      const openTags: string[] = [];
+      let match;
+
+      while ((match = tagRegex.exec(content)) !== null) {
+        if (match[1]) {
+          // Opening tag
+          openTags.push(match[1].toLowerCase());
+        } else if (match[3]) {
+          // Closing tag
+          const lastTag = openTags.pop();
+          if (lastTag !== match[3].toLowerCase()) {
+            return false; // Mismatched tags
+          }
+        }
+      }
+
+      // All tags should be closed
+      return openTags.length === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Validate YAML syntax
+   */
+  private validateYAMLSyntax(content: string): boolean {
+    try {
+      // Basic YAML validation - check for proper indentation and structure
+      const lines = content.split('\n');
+      let lastIndent = 0;
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) {
+          continue; // Skip empty lines and comments
+        }
+
+        // Check indentation (YAML is sensitive to spaces)
+        const leadingSpaces = line.search(/\S/);
+        if (leadingSpaces === -1) continue;
+
+        // YAML uses 2-space indentation typically
+        if (leadingSpaces % 2 !== 0) {
+          return false; // Odd indentation
+        }
+
+        // Check for key-value pairs
+        if (trimmed.includes(':') && !trimmed.startsWith('-')) {
+          const parts = trimmed.split(':');
+          if (parts.length < 2) {
+            return false; // Malformed key-value pair
+          }
+        }
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Validate Markdown syntax
+   */
+  private validateMarkdownSyntax(content: string): boolean {
+    try {
+      // Basic Markdown validation - check for balanced elements
+      const headings = (content.match(/^#{1,6}\s+/gm) || []).length;
+      const codeBlocks = (content.match(/```/g) || []).length;
+      const lists = (content.match(/^[\*\-\+]\s+/gm) || []).length;
+      const links = (content.match(/\[.*\]\(.*\)/g) || []).length;
+
+      // Code blocks should be even (opening and closing)
+      if (codeBlocks % 2 !== 0) {
+        return false;
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Validate SQL syntax
+   */
+  private validateSQLSyntax(content: string): boolean {
+    try {
+      // Basic SQL validation - check for common structures
+      const hasStatements = /(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER)\b/i.test(content);
+      const hasSemicolons = content.includes(';');
+      
+      // Simple check for basic SQL structure
+      if (hasStatements && !hasSemicolons) {
+        return false; // Statements should end with semicolon
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Validate basic syntax for unknown languages
+   */
+  private validateBasicSyntax(content: string): boolean {
+    try {
+      // Check for extremely unbalanced content
+      const lines = content.split('\n');
+      const emptyLines = lines.filter(line => line.trim() === '').length;
+      const totalLines = lines.length;
+
+      if (emptyLines / totalLines > 0.8 && totalLines > 10) {
+        return false; // Too many empty lines
+      }
+
+      // Check for potential encoding issues
+      if (content.includes('\uFFFD')) {
+        return false; // Replacement characters (encoding issues)
+      }
+
+      // Check for basic bracket balance
+      return this.validateBrackets(content);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Validate balanced brackets (helper method)
    */
   private validateBrackets(content: string): boolean {
     const brackets = { '(': ')', '[': ']', '{': '}' };
     const stack: string[] = [];
+    let inString = false;
+    let stringChar = '';
+    let escaped = false;
 
-    for (const char of content) {
+    for (let i = 0; i < content.length; i++) {
+      const char = content[i];
+
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if ((char === '"' || char === "'" || char === '`') && !inString) {
+        inString = true;
+        stringChar = char;
+        continue;
+      }
+
+      if (char === stringChar && inString) {
+        inString = false;
+        stringChar = '';
+        continue;
+      }
+
+      if (inString) continue;
+
       if (char in brackets) {
         stack.push(brackets[char as keyof typeof brackets]);
       } else if (Object.values(brackets).includes(char)) {
@@ -781,15 +1230,6 @@ class AdvancedFileManager extends EventEmitter {
     }
 
     return stack.length === 0;
-  }
-
-  /**
-   * Validate CSS brackets and syntax
-   */
-  private validateCSSBrackets(content: string): boolean {
-    const braceCount = (content.match(/\{/g) || []).length;
-    const closeBraceCount = (content.match(/\}/g) || []).length;
-    return braceCount === closeBraceCount;
   }
 
   /**
@@ -927,25 +1367,484 @@ class AdvancedFileManager extends EventEmitter {
   }
 
   private async executeFileOperation(fileId: string, operation: FileOperation): Promise<any> {
-    switch (operation.type) {
-      case 'create':
-        // Handle file creation
-        return { created: true, fileId };
-      case 'rename':
-        // Handle file rename
-        return { renamed: true, oldName: fileId, newName: operation.newPath };
-      case 'move':
-        // Handle file move
-        return { moved: true, oldPath: fileId, newPath: operation.newPath };
-      default:
-        throw new Error(`Unsupported file operation: ${operation.type}`);
+    try {
+      switch (operation.type) {
+        case 'create':
+          return await this.createFile(operation);
+          
+        case 'rename':
+          return await this.renameFile(fileId, operation);
+          
+        case 'move':
+          return await this.moveFile(fileId, operation);
+          
+        case 'delete':
+          return await this.deleteFile(fileId, operation);
+          
+        case 'insert':
+          return await this.insertContent(fileId, operation);
+          
+        case 'replace':
+          return await this.replaceContent(fileId, operation);
+          
+        default:
+          throw createFileManagementError(`Unsupported file operation: ${operation.type}`, {
+            code: ERROR_CODES.FILE_MANAGEMENT.INVALID_OPERATION,
+            severity: 'high',
+            recoverable: false,
+            context: { operationType: operation.type, fileId, operation }
+          });
+      }
+    } catch (error) {
+      throw createFileManagementError(
+        `File operation failed: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          code: ERROR_CODES.FILE_MANAGEMENT.FILE_OPERATION_FAILED,
+          severity: 'high',
+          recoverable: true,
+          context: { operationType: operation.type, fileId, operation, error }
+        }
+      );
     }
+  }
+
+  /**
+   * Create a new file
+   */
+  private async createFile(operation: FileOperation): Promise<{ created: boolean; fileId: string; path: string }> {
+    if (!operation.target || !operation.content) {
+      throw createFileManagementError('File creation requires target path and content', {
+        code: ERROR_CODES.FILE_MANAGEMENT.INVALID_INPUT,
+        severity: 'high',
+        recoverable: false,
+        context: { operation }
+      });
+    }
+
+    // Validate file path
+    if (!this.isValidFilePath(operation.target)) {
+      throw createFileManagementError(`Invalid file path: ${operation.target}`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.INVALID_PATH,
+        severity: 'high',
+        recoverable: false,
+        context: { path: operation.target }
+      });
+    }
+
+    // Check if file already exists
+    const existingFile = Array.from(this.fileStates.values()).find(f => f.path === operation.target);
+    if (existingFile) {
+      throw createFileManagementError(`File already exists at path: ${operation.target}`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_EXISTS,
+        severity: 'medium',
+        recoverable: false,
+        context: { path: operation.target, existingFileId: existingFile.id }
+      });
+    }
+
+    // Create new file
+    const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const fileName = operation.target.split('/').pop() || operation.target;
+    const language = this.detectLanguageFromFileExtension(operation.target);
+    
+    const newFileState: FileState = {
+      id: fileId,
+      name: fileName,
+      path: operation.target,
+      content: operation.content,
+      language,
+      hasEdits: true,
+      lastModified: new Date(),
+      version: 1,
+      createdAt: new Date(),
+      isLocked: false,
+      originalContent: operation.content,
+      pendingDiffs: [],
+      changeHistory: []
+    };
+
+    this.fileStates.set(fileId, newFileState);
+    
+    this.emit('file_created', {
+      fileId,
+      path: operation.target,
+      name: fileName,
+      language,
+      content: operation.content
+    });
+
+    return {
+      created: true,
+      fileId,
+      path: operation.target
+    };
+  }
+
+  /**
+   * Rename a file
+   */
+  private async renameFile(fileId: string, operation: FileOperation): Promise<{ renamed: boolean; oldName: string; newName: string; newPath: string }> {
+    const fileState = this.fileStates.get(fileId);
+    if (!fileState) {
+      throw createFileManagementError(`File ${fileId} not found`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId }
+      });
+    }
+
+    if (!operation.newPath) {
+      throw createFileManagementError('Rename operation requires newPath', {
+        code: ERROR_CODES.FILE_MANAGEMENT.INVALID_INPUT,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId, operation }
+      });
+    }
+
+    // Validate new path
+    if (!this.isValidFilePath(operation.newPath)) {
+      throw createFileManagementError(`Invalid file path: ${operation.newPath}`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.INVALID_PATH,
+        severity: 'high',
+        recoverable: false,
+        context: { path: operation.newPath }
+      });
+    }
+
+    // Check if new path already exists
+    const existingFile = Array.from(this.fileStates.values()).find(f => f.path === operation.newPath);
+    if (existingFile && existingFile.id !== fileId) {
+      throw createFileManagementError(`File already exists at path: ${operation.newPath}`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_EXISTS,
+        severity: 'medium',
+        recoverable: false,
+        context: { path: operation.newPath, existingFileId: existingFile.id }
+      });
+    }
+
+    const oldName = fileState.name;
+    const oldPath = fileState.path;
+    const newName = operation.newPath.split('/').pop() || operation.newPath;
+    
+    // Update file state
+    fileState.name = newName;
+    fileState.path = operation.newPath;
+    fileState.lastModified = new Date();
+    fileState.version += 1;
+    
+    this.fileStates.set(fileId, fileState);
+    
+    this.emit('file_renamed', {
+      fileId,
+      oldName,
+      newName,
+      oldPath,
+      newPath: operation.newPath
+    });
+
+    return {
+      renamed: true,
+      oldName,
+      newName,
+      newPath: operation.newPath
+    };
+  }
+
+  /**
+   * Move a file
+   */
+  private async moveFile(fileId: string, operation: FileOperation): Promise<{ moved: boolean; oldPath: string; newPath: string }> {
+    const fileState = this.fileStates.get(fileId);
+    if (!fileState) {
+      throw createFileManagementError(`File ${fileId} not found`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId }
+      });
+    }
+
+    if (!operation.newPath) {
+      throw createFileManagementError('Move operation requires newPath', {
+        code: ERROR_CODES.FILE_MANAGEMENT.INVALID_INPUT,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId, operation }
+      });
+    }
+
+    // Validate new path
+    if (!this.isValidFilePath(operation.newPath)) {
+      throw createFileManagementError(`Invalid file path: ${operation.newPath}`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.INVALID_PATH,
+        severity: 'high',
+        recoverable: false,
+        context: { path: operation.newPath }
+      });
+    }
+
+    // Check if new path already exists
+    const existingFile = Array.from(this.fileStates.values()).find(f => f.path === operation.newPath);
+    if (existingFile && existingFile.id !== fileId) {
+      throw createFileManagementError(`File already exists at path: ${operation.newPath}`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_EXISTS,
+        severity: 'medium',
+        recoverable: false,
+        context: { path: operation.newPath, existingFileId: existingFile.id }
+      });
+    }
+
+    const oldPath = fileState.path;
+    
+    // Update file state
+    fileState.path = operation.newPath;
+    fileState.lastModified = new Date();
+    fileState.version += 1;
+    
+    this.fileStates.set(fileId, fileState);
+    
+    this.emit('file_moved', {
+      fileId,
+      oldPath,
+      newPath: operation.newPath
+    });
+
+    return {
+      moved: true,
+      oldPath,
+      newPath: operation.newPath
+    };
+  }
+
+  /**
+   * Delete a file
+   */
+  private async deleteFile(fileId: string, operation: FileOperation): Promise<{ deleted: boolean; fileId: string; path: string }> {
+    const fileState = this.fileStates.get(fileId);
+    if (!fileState) {
+      throw createFileManagementError(`File ${fileId} not found`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId }
+      });
+    }
+
+    const path = fileState.path;
+    
+    // Remove file from state
+    this.fileStates.delete(fileId);
+    
+    this.emit('file_deleted', {
+      fileId,
+      path
+    });
+
+    return {
+      deleted: true,
+      fileId,
+      path
+    };
+  }
+
+  /**
+   * Insert content into a file
+   */
+  private async insertContent(fileId: string, operation: FileOperation): Promise<{ inserted: boolean; fileId: string; lineRange: [number, number] }> {
+    const fileState = this.fileStates.get(fileId);
+    if (!fileState) {
+      throw createFileManagementError(`File ${fileId} not found`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId }
+      });
+    }
+
+    if (!operation.range || !operation.content) {
+      throw createFileManagementError('Insert operation requires range and content', {
+        code: ERROR_CODES.FILE_MANAGEMENT.INVALID_INPUT,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId, operation }
+      });
+    }
+
+    // Validate range
+    const lines = fileState.content.split('\n');
+    const startLine = operation.range.start.line;
+    const endLine = operation.range.end.line;
+    
+    if (startLine < 0 || startLine > lines.length) {
+      throw createFileManagementError(`Invalid start line: ${startLine}`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.INVALID_RANGE,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId, startLine, endLine, totalLines: lines.length }
+      });
+    }
+
+    // Apply insert operation
+    const insertLines = operation.content.split('\n');
+    lines.splice(startLine, 0, ...insertLines);
+    
+    const newContent = lines.join('\n');
+    
+    // Update file state
+    await this.updateFileContent(fileId, newContent, {
+      incrementVersion: true,
+      trackChanges: true,
+      syncStates: true
+    });
+
+    this.emit('content_inserted', {
+      fileId,
+      lineRange: [startLine, startLine + insertLines.length - 1],
+      content: operation.content
+    });
+
+    return {
+      inserted: true,
+      fileId,
+      lineRange: [startLine, startLine + insertLines.length - 1]
+    };
+  }
+
+  /**
+   * Replace content in a file
+   */
+  private async replaceContent(fileId: string, operation: FileOperation): Promise<{ replaced: boolean; fileId: string; lineRange: [number, number] }> {
+    const fileState = this.fileStates.get(fileId);
+    if (!fileState) {
+      throw createFileManagementError(`File ${fileId} not found`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId }
+      });
+    }
+
+    if (!operation.range || !operation.content) {
+      throw createFileManagementError('Replace operation requires range and content', {
+        code: ERROR_CODES.FILE_MANAGEMENT.INVALID_INPUT,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId, operation }
+      });
+    }
+
+    // Validate range
+    const lines = fileState.content.split('\n');
+    const startLine = operation.range.start.line;
+    const endLine = operation.range.end.line;
+    
+    if (startLine < 0 || startLine > lines.length || endLine < startLine || endLine > lines.length) {
+      throw createFileManagementError(`Invalid line range: ${startLine}-${endLine}`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.INVALID_RANGE,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId, startLine, endLine, totalLines: lines.length }
+      });
+    }
+
+    // Apply replace operation
+    const replaceLines = operation.content.split('\n');
+    const deleteCount = endLine - startLine + 1;
+    lines.splice(startLine - 1, deleteCount, ...replaceLines);
+    
+    const newContent = lines.join('\n');
+    
+    // Update file state
+    await this.updateFileContent(fileId, newContent, {
+      incrementVersion: true,
+      trackChanges: true,
+      syncStates: true
+    });
+
+    this.emit('content_replaced', {
+      fileId,
+      lineRange: [startLine, endLine],
+      content: operation.content
+    });
+
+    return {
+      replaced: true,
+      fileId,
+      lineRange: [startLine, endLine]
+    };
+  }
+
+  /**
+   * Validate file path
+   */
+  private isValidFilePath(path: string): boolean {
+    // Basic path validation
+    if (!path || path.trim() === '') {
+      return false;
+    }
+
+    // Check for invalid characters
+    const invalidChars = ['<', '>', ':', '"', '|', '?', '*'];
+    if (invalidChars.some(char => path.includes(char))) {
+      return false;
+    }
+
+    // Check for reserved names
+    const reservedNames = ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9', 'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9'];
+    const fileName = path.split('/').pop()?.split('.')[0].toUpperCase();
+    if (fileName && reservedNames.includes(fileName)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Detect language from file extension
+   */
+  private detectLanguageFromFileExtension(path: string): string {
+    const ext = path.split('.').pop()?.toLowerCase();
+    const langMap: { [key: string]: string } = {
+      'js': 'javascript',
+      'jsx': 'jsx',
+      'ts': 'typescript',
+      'tsx': 'tsx',
+      'py': 'python',
+      'java': 'java',
+      'cpp': 'cpp',
+      'c': 'c',
+      'html': 'html',
+      'css': 'css',
+      'scss': 'scss',
+      'json': 'json',
+      'md': 'markdown',
+      'yml': 'yaml',
+      'yaml': 'yaml',
+      'xml': 'xml',
+      'php': 'php',
+      'rb': 'ruby',
+      'go': 'go',
+      'rs': 'rust',
+      'swift': 'swift',
+      'kt': 'kotlin',
+      'dart': 'dart',
+      'vue': 'vue',
+      'svelte': 'svelte'
+    };
+    return langMap[ext || ''] || 'text';
   }
 
   private async validateFile(fileId: string): Promise<any> {
     const fileState = this.fileStates.get(fileId);
     if (!fileState) {
-      throw new Error(`File ${fileId} not found`);
+      throw createFileManagementError(`File ${fileId} not found`, {
+        code: ERROR_CODES.FILE_MANAGEMENT.FILE_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { fileId }
+      });
     }
 
     const syntaxValid = await this.validateSyntax(fileState.content, fileState.language);

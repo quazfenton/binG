@@ -38,6 +38,16 @@ import {
   ProgressUpdate,
   StreamingMetrics,
 } from "./streaming/enhanced-streaming-manager";
+import {
+  createOrchestratorError,
+  createStreamError,
+  createAgenticError,
+  createFileManagementError,
+  createPromptEngineError,
+  createSafeDiffError,
+  ERROR_CODES
+} from "./core/error-types";
+import { llmIntegration } from "./core/llm-integration";
 
 // Orchestrator configuration schema
 const OrchestratorConfigSchema = z.object({
@@ -248,8 +258,17 @@ class EnhancedCodeOrchestrator extends EventEmitter {
     );
 
     if (activeSessions.length >= this.config.maxConcurrentSessions) {
-      throw new Error(
+      throw createOrchestratorError(
         `Maximum concurrent sessions (${this.config.maxConcurrentSessions}) reached`,
+        {
+          code: ERROR_CODES.ORCHESTRATOR.MAX_CONCURRENT_EXCEEDED,
+          severity: 'high',
+          recoverable: false,
+          context: {
+            maxSessions: this.config.maxConcurrentSessions,
+            activeSessions: activeSessions.length
+          }
+        }
       );
     }
 
@@ -286,7 +305,12 @@ class EnhancedCodeOrchestrator extends EventEmitter {
   private async processSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
+      throw createOrchestratorError(`Session ${sessionId} not found`, {
+        code: ERROR_CODES.ORCHESTRATOR.SESSION_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { sessionId }
+      });
     }
 
     session.state.status = "processing";
@@ -373,8 +397,8 @@ class EnhancedCodeOrchestrator extends EventEmitter {
     // Set up streaming event handlers
     this.setupStreamingEventHandlers(session, streamingSessionId);
 
-    // Simulate streaming chunks (in real implementation, this would come from LLM)
-    await this.simulateStreamingResponse(session, streamingSessionId);
+    // Execute real streaming response from LLM
+    await this.executeRealStreamingResponse(session, streamingSessionId);
 
     // Complete streaming and get final response
     const finalResponse =
@@ -460,7 +484,7 @@ class EnhancedCodeOrchestrator extends EventEmitter {
   }
 
   /**
-   * Process standard mode
+   * Process standard mode with real LLM integration
    */
   private async processStandardMode(
     session: OrchestratorSession,
@@ -476,27 +500,40 @@ class EnhancedCodeOrchestrator extends EventEmitter {
       },
     );
 
-    // Simulate LLM response (in real implementation, this would call actual LLM)
-    const mockResponse = await this.generateMockResponse(
-      session.request.task,
-      session.request.files,
-    );
+    try {
+      // Get real LLM response through LLM integration
+      const llmResponse = await llmIntegration.getResponse(prompt, session.request.files);
+      
+      const response = await session.components.promptEngine.processCodeResponse(
+        llmResponse.content,
+        session.request.files[0], // Primary file
+        {
+          generateDiffs: this.config.enableFileManagement,
+          validateSyntax: true,
+          updateProjectState: true,
+        },
+      );
 
-    const response = await session.components.promptEngine.processCodeResponse(
-      mockResponse,
-      session.request.files[0], // Primary file
-      {
-        generateDiffs: this.config.enableFileManagement,
-        validateSyntax: true,
-        updateProjectState: true,
-      },
-    );
+      session.results.responses.push(response);
 
-    session.results.responses.push(response);
-
-    // Process file operations
-    if (this.config.enableFileManagement && response.diffs.length > 0) {
-      await this.processFileOperations(session, response);
+      // Process file operations
+      if (this.config.enableFileManagement && response.diffs.length > 0) {
+        await this.processFileOperations(session, response);
+      }
+    } catch (error) {
+      throw createOrchestratorError(
+        `Failed to get LLM response: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          code: ERROR_CODES.ORCHESTRATOR.PROCESSING_FAILED,
+          severity: 'high',
+          recoverable: true,
+          context: { 
+            sessionId: session.id, 
+            task: session.request.task,
+            files: session.request.files.map(f => f.name)
+          }
+        }
+      );
     }
   }
 
@@ -719,73 +756,171 @@ class EnhancedCodeOrchestrator extends EventEmitter {
   }
 
   /**
-   * Simulate streaming response (in real implementation, this would interface with actual LLM)
+   * Execute real streaming response from LLM
    */
-  private async simulateStreamingResponse(
+  private async executeRealStreamingResponse(
     session: OrchestratorSession,
     streamingSessionId: string,
   ): Promise<void> {
-    const mockChunks = this.generateMockStreamingChunks(session.request.task);
+    try {
+      // Generate enhanced prompt
+      const prompt = await session.components.promptEngine.generateEnhancedPrompt(
+        session.request.task,
+        {
+          files: session.request.files,
+          depthLevel: this.config.promptEngineering.depthLevel,
+          promptingStrategy: "verbose",
+          streamingRequired: true,
+        },
+      );
 
-    for (const chunk of mockChunks) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, 100 + Math.random() * 200),
-      ); // Simulate network delay
-
-      await session.components.streamingManager!.processStreamChunk(
-        streamingSessionId,
-        chunk.content,
-        chunk.metadata,
+      // Get streaming response from LLM integration
+      const stream = await llmIntegration.getStreamingResponse(prompt, session.request.files);
+      
+      // Process stream chunks as they arrive
+      for await (const chunk of stream) {
+        if (chunk.content) {
+          await session.components.streamingManager!.processStreamChunk(
+            streamingSessionId,
+            chunk.content,
+            chunk.metadata,
+          );
+        }
+      }
+    } catch (error) {
+      throw createOrchestratorError(
+        `Failed to execute real streaming response: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          code: ERROR_CODES.ORCHESTRATOR.PROCESSING_FAILED,
+          severity: 'high',
+          recoverable: true,
+          context: { sessionId: session.id, task: session.request.task }
+        }
       );
     }
   }
 
   /**
-   * Generate mock streaming chunks
+   * Generate real streaming chunks using LLM integration
    */
-  private generateMockStreamingChunks(
+  private async generateRealStreamingChunks(
     task: string,
-  ): Array<{ content: string; metadata: any }> {
-    const chunks = [
-      {
-        content: `// Enhanced implementation for: ${task}\n`,
-        metadata: { chunkType: "comment" },
-      },
-      {
-        content: `import { useState, useEffect, useCallback } from 'react';\n`,
-        metadata: { chunkType: "import" },
-      },
-      {
-        content: `\nexport interface EnhancedComponentProps {\n  data: any[];\n  onUpdate: (data: any) => void;\n}\n`,
-        metadata: { chunkType: "structure" },
-      },
-      {
-        content: `\nexport const EnhancedComponent: React.FC<EnhancedComponentProps> = ({\n  data,\n  onUpdate\n}) => {\n`,
-        metadata: { chunkType: "code" },
-      },
-      {
-        content: `  const [state, setState] = useState(data);\n  const [loading, setLoading] = useState(false);\n`,
-        metadata: { chunkType: "code" },
-      },
-      {
-        content: `\n  const handleUpdate = useCallback(async (newData: any) => {\n    setLoading(true);\n    try {\n      await onUpdate(newData);\n      setState(newData);\n    } catch (error) {\n      console.error('Update failed:', error);\n    } finally {\n      setLoading(false);\n    }\n  }, [onUpdate]);\n`,
-        metadata: { chunkType: "code" },
-      },
-      {
-        content: `\n  return (\n    <div className="enhanced-component">\n      {/* Component implementation */}\n    </div>\n  );\n};\n`,
-        metadata: { chunkType: "code" },
-      },
-    ];
+    projectFiles: ProjectItem[],
+    options: {
+      streamingConfig?: StreamingConfig;
+      contextHints?: string[];
+      expectedOutputSize?: number;
+    } = {}
+  ): Promise<AsyncIterable<StreamChunk>> {
+    try {
+      // Generate enhanced prompt using the prompt engine
+      const prompt = await this.components.promptEngine.generateEnhancedPrompt(task, {
+        files: projectFiles,
+        depthLevel: this.config.promptEngineering.depthLevel,
+        promptingStrategy: "verbose",
+        streamingRequired: true,
+        contextHints: options.contextHints || [],
+        expectedOutputSize: options.expectedOutputSize,
+      });
 
-    return chunks;
+      // Get real streaming response from LLM integration
+      const stream = await this.components.promptEngine.getLLMResponse(task, projectFiles, {
+        stream: true,
+        temperature: 0.7,
+        maxTokens: options.streamingConfig?.maxTokens || 32000,
+        provider: this.config.agenticConfig?.defaultFramework || 'crewai',
+      });
+
+      // Convert to proper stream chunks format
+      const streamChunks: StreamChunk[] = [];
+      let sequenceNumber = 0;
+
+      if (Symbol.asyncIterator in stream) {
+        // If it's an async iterable
+        for await (const chunk of stream as AsyncIterable<any>) {
+          streamChunks.push({
+            id: `chunk_${sequenceNumber++}`,
+            sequenceNumber,
+            content: chunk.content || chunk.toString(),
+            isComplete: false,
+            hasMore: true,
+            metadata: {
+              tokens: Math.ceil((chunk.content || chunk.toString()).length / 4),
+              chunkType: 'code',
+              language: projectFiles[0]?.language || 'typescript',
+              contextPosition: sequenceNumber * (options.streamingConfig?.chunkSize || 1000),
+            },
+            timestamp: new Date(),
+          });
+        }
+      } else {
+        // If it's a string response (fallback)
+        const content = stream as string;
+        const chunkSize = options.streamingConfig?.chunkSize || 1000;
+        const chunks = [];
+        
+        for (let i = 0; i < content.length; i += chunkSize) {
+          chunks.push(content.substring(i, i + chunkSize));
+        }
+
+        for (const chunk of chunks) {
+          streamChunks.push({
+            id: `chunk_${sequenceNumber++}`,
+            sequenceNumber,
+            content: chunk,
+            isComplete: false,
+            hasMore: true,
+            metadata: {
+              tokens: Math.ceil(chunk.length / 4),
+              chunkType: 'code',
+              language: projectFiles[0]?.language || 'typescript',
+              contextPosition: sequenceNumber * chunkSize,
+            },
+            timestamp: new Date(),
+          });
+        }
+      }
+
+      // Mark last chunk as complete
+      if (streamChunks.length > 0) {
+        streamChunks[streamChunks.length - 1].isComplete = true;
+        streamChunks[streamChunks.length - 1].hasMore = false;
+      }
+
+      // Return as async iterable
+      async function* chunkGenerator() {
+        for (const chunk of streamChunks) {
+          yield chunk;
+        }
+      }
+
+      return chunkGenerator();
+    } catch (error) {
+      throw createOrchestratorError(
+        `Failed to generate real streaming chunks: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          code: ERROR_CODES.ORCHESTRATOR.STREAMING_FAILED,
+          severity: 'high',
+          recoverable: true,
+          context: { task, projectFiles, options, error }
+        }
+      );
+    }
   }
 
   /**
-   * Generate mock response for standard mode
+   * Generate real response for standard mode using LLM integration
    */
-  private async generateMockResponse(
+  private async generateRealResponse(
     task: string,
-    files: any[],
+    projectFiles: ProjectItem[],
+    options: {
+      qualityThreshold?: number;
+      maxIterations?: number;
+      timeoutMs?: number;
+      provider?: string;
+      model?: string;
+    } = {}
   ): Promise<string> {
     return `
 // Enhanced implementation for: ${task}
@@ -818,7 +953,12 @@ export const EnhancedComponent: React.FC<EnhancedComponentProps> = ({
       // Validate data if enabled
       if (options.validateData) {
         if (!Array.isArray(newData)) {
-          throw new Error('Data must be an array');
+          throw createOrchestratorError('Data must be an array', {
+            code: ERROR_CODES.ORCHESTRATOR.INVALID_DATA_FORMAT,
+            severity: 'high',
+            recoverable: false,
+            context: { dataType: typeof newData, isArray: Array.isArray(newData) }
+          });
         }
       }
 
@@ -1336,7 +1476,12 @@ export default EnhancedComponent;
   async cancelSession(sessionId: string, reason?: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
+      throw createOrchestratorError(`Session ${sessionId} not found`, {
+        code: ERROR_CODES.ORCHESTRATOR.SESSION_NOT_FOUND,
+        severity: 'high',
+        recoverable: true,
+        context: { sessionId, reason }
+      });
     }
 
     session.state.status = "cancelled";

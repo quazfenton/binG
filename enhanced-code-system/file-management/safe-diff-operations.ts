@@ -12,6 +12,11 @@
 
 import { EventEmitter } from 'events';
 import { z } from 'zod';
+import { 
+  createSafeDiffError,
+  createFileManagementError,
+  ERROR_CODES 
+} from '../core/error-types';
 import { DiffOperation, FileState } from './advanced-file-manager';
 
 // Validation schemas
@@ -222,7 +227,39 @@ class SafeDiffOperations extends EventEmitter {
         };
       }
 
-      // Step 5: Post-execution syntax validation
+      // Step 5: Semantic impact analysis
+      let semanticValidation: ValidationResult = { isValid: true, errors: [], warnings: [], confidence: 1 };
+      
+      if (this.options.enableSyntaxValidation) {
+        semanticValidation = await this.analyzeSemanticImpact(
+          applyResult.updatedContent,
+          fileState.language,
+          diffs
+        );
+
+        if (!semanticValidation.isValid) {
+          errors.push(...(semanticValidation.errors || []));
+          
+          // Rollback on semantic validation failure
+          if (this.options.enableRollback && backupId) {
+            const rollbackResult = await this.rollbackToBackup(fileId, backupId);
+            if (rollbackResult.success) {
+              this.emit('semantic_validation_failed_rollback', { fileId, backupId, errors: semanticValidation.errors });
+              return {
+                success: false,
+                updatedContent: currentContent,
+                appliedDiffs: [],
+                validationResult: semanticValidation,
+                backupId,
+                conflicts,
+                errors
+              };
+            }
+          }
+        }
+      }
+
+      // Step 6: Post-execution syntax validation
       let syntaxValidation: ValidationResult = { isValid: true, errors: [], warnings: [], confidence: 1 };
       
       if (this.options.enableSyntaxValidation) {
@@ -253,6 +290,14 @@ class SafeDiffOperations extends EventEmitter {
         }
       }
 
+      // Combine validation results
+      const combinedValidation: ValidationResult = {
+        isValid: syntaxValidation.isValid && semanticValidation.isValid,
+        errors: [...syntaxValidation.errors, ...semanticValidation.errors],
+        warnings: [...syntaxValidation.warnings, ...semanticValidation.warnings],
+        confidence: Math.min(syntaxValidation.confidence, semanticValidation.confidence)
+      };
+
       // Success - clean up resolved conflicts
       if (conflicts.length > 0) {
         this.activeConflicts.delete(fileId);
@@ -262,17 +307,17 @@ class SafeDiffOperations extends EventEmitter {
         fileId,
         appliedDiffs: applyResult.appliedDiffs,
         backupId,
-        validationResult: syntaxValidation
+        validationResult: combinedValidation
       });
 
       return {
-        success: true,
+        success: combinedValidation.isValid,
         updatedContent: applyResult.updatedContent,
         appliedDiffs: applyResult.appliedDiffs,
-        validationResult: syntaxValidation,
+        validationResult: combinedValidation,
         backupId,
         conflicts: [],
-        errors: []
+        errors: combinedValidation.errors
       };
 
     } catch (error) {
@@ -929,6 +974,381 @@ class SafeDiffOperations extends EventEmitter {
   }
 
   /**
+   * Analyze semantic impact of code changes
+   */
+  private async analyzeSemanticImpact(
+    content: string,
+    language: string,
+    diffs: DiffOperation[]
+  ): Promise<ValidationResult> {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    let confidence = 1.0;
+
+    try {
+      // Extract semantic information based on language
+      const semanticInfo = await this.extractSemanticInfo(content, language);
+      
+      // Analyze each diff for semantic impact
+      for (const diff of diffs) {
+        const impact = await this.analyzeDiffSemanticImpact(diff, semanticInfo, language);
+        if (impact.hasSemanticIssues) {
+          if (impact.severity === 'critical' || impact.severity === 'high') {
+            errors.push(impact.description);
+            confidence = Math.min(confidence, 0.3);
+          } else {
+            warnings.push(impact.description);
+            confidence = Math.min(confidence, 0.7);
+          }
+        }
+      }
+
+      return {
+        isValid: errors.length === 0,
+        errors,
+        warnings,
+        confidence
+      };
+
+    } catch (error) {
+      throw createSafeDiffError(
+        `Semantic analysis failed: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          code: ERROR_CODES.SAFE_DIFF.SEMANTIC_ANALYSIS_FAILED,
+          severity: 'high',
+          recoverable: true,
+          context: { language, error }
+        }
+      );
+    }
+  }
+
+  /**
+   * Extract semantic information from content
+   */
+  private async extractSemanticInfo(content: string, language: string): Promise<any> {
+    // Extract symbols, dependencies, and structure information
+    const symbols = this.extractSymbols(content);
+    const dependencies = this.extractDependencies(content, language);
+    const structure = this.analyzeStructure(content, language);
+    
+    return {
+      symbols,
+      dependencies,
+      structure,
+      exports: symbols.filter(s => s.scope === 'global')
+    };
+  }
+
+  /**
+   * Analyze semantic impact of a single diff operation
+   */
+  private async analyzeDiffSemanticImpact(
+    diff: DiffOperation,
+    semanticInfo: any,
+    language: string
+  ): Promise<{
+    hasSemanticIssues: boolean;
+    description: string;
+    severity: 'low' | 'medium' | 'high' | 'critical';
+  }> {
+    // Get affected lines and content
+    const affectedLines = this.getAffectedLines(diff);
+    const affectedContent = this.extractContentByLines(
+      diff.operation === 'insert' ? '' : diff.content, // Simplified for example
+      affectedLines
+    );
+
+    // Check for breaking changes in exported symbols
+    if (diff.operation === 'delete' || diff.operation === 'replace') {
+      const deletedExports = this.findDeletedExportsInDiff(affectedContent, semanticInfo.exports);
+      if (deletedExports.length > 0) {
+        return {
+          hasSemanticIssues: true,
+          description: `Breaking change: Removing exported symbols ${deletedExports.join(', ')}`,
+          severity: 'critical'
+        };
+      }
+    }
+
+    // Check for function signature changes
+    if (diff.operation === 'replace' || diff.operation === 'modify') {
+      const signatureChanges = this.analyzeSignatureChangesInDiff(affectedContent, semanticInfo.symbols);
+      if (signatureChanges.hasBreakingChanges) {
+        return {
+          hasSemanticIssues: true,
+          description: `Breaking function signature change: ${signatureChanges.description}`,
+          severity: signatureChanges.severity
+        };
+      }
+    }
+
+    // Check for type/interface modifications that would break consumers
+    const typeChanges = this.analyzeTypeChangesInDiff(affectedContent, semanticInfo.symbols, language);
+    if (typeChanges.hasBreakingChanges) {
+      return {
+        hasSemanticIssues: true,
+        description: `Breaking type change: ${typeChanges.description}`,
+        severity: typeChanges.severity
+      };
+    }
+
+    // Check for state management changes that could cause runtime errors
+    const stateChanges = this.analyzeStateChangesInDiff(affectedContent, language);
+    if (stateChanges.hasBreakingChanges) {
+      return {
+        hasSemanticIssues: true,
+        description: `Potential runtime error: ${stateChanges.description}`,
+        severity: stateChanges.severity
+      };
+    }
+
+    return {
+      hasSemanticIssues: false,
+      description: '',
+      severity: 'low'
+    };
+  }
+
+  /**
+   * Find deleted exported symbols in a diff
+   */
+  private findDeletedExportsInDiff(
+    affectedContent: string,
+    exportedSymbols: Array<{ name: string; type: string; line: number; scope: string }>
+  ): string[] {
+    const deleted: string[] = [];
+    
+    for (const symbol of exportedSymbols) {
+      // Check if exported symbol is being removed
+      const symbolPattern = new RegExp(
+        `(export\\s+(async\\s+)?(function|class|interface|type|const)\\s+${symbol.name}|${symbol.name}\\s*=)`,
+        'g'
+      );
+      
+      if (!symbolPattern.test(affectedContent) && affectedContent.includes(symbol.name)) {
+        deleted.push(`${symbol.type} ${symbol.name}`);
+      }
+    }
+    
+    return deleted;
+  }
+
+  /**
+   * Analyze function signature changes in a diff
+   */
+  private analyzeSignatureChangesInDiff(
+    affectedContent: string,
+    symbols: Array<{ name: string; type: string; line: number; scope: string }>
+  ): { 
+    hasBreakingChanges: boolean; 
+    description: string; 
+    severity: 'low' | 'medium' | 'high' | 'critical' 
+  } {
+    // Look for function definitions with parameter changes
+    const funcDefPattern = /\b(function|const\s+[a-zA-Z_$][a-zA-Z0-9_$]*\s*=\s*\([^)]*\)|[a-zA-Z_$][a-zA-Z0-9_$]*\s*:\s*\([^)]*\))/g;
+    const matches = [...affectedContent.matchAll(funcDefPattern)];
+    
+    if (matches.length > 0) {
+      // Check for potentially breaking changes
+      for (const match of matches) {
+        const funcSignature = match[0];
+        
+        // Look for changes that remove required parameters
+        if (funcSignature.includes('=') && !funcSignature.includes('?')) {
+          // Adding required parameters to existing functions is breaking
+          return {
+            hasBreakingChanges: true,
+            description: 'Adding required parameters to existing function signatures',
+            severity: 'high'
+          };
+        }
+        
+        // Look for changes that modify return types in a breaking way
+        if (funcSignature.includes('return') && funcSignature.includes(':')) {
+          // Changing return types can be breaking
+          return {
+            hasBreakingChanges: true,
+            description: 'Changing function return types',
+            severity: 'medium'
+          };
+        }
+      }
+    }
+    
+    return {
+      hasBreakingChanges: false,
+      description: '',
+      severity: 'low'
+    };
+  }
+
+  /**
+   * Analyze type/interface changes in a diff
+   */
+  private analyzeTypeChangesInDiff(
+    affectedContent: string,
+    symbols: Array<{ name: string; type: string; line: number; scope: string }>,
+    language: string
+  ): { 
+    hasBreakingChanges: boolean; 
+    description: string; 
+    severity: 'low' | 'medium' | 'high' | 'critical' 
+  } {
+    // Look for type/interface definitions
+    const typePattern = /\b(interface|type)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\b/g;
+    const typeMatches = [...affectedContent.matchAll(typePattern)];
+    
+    if (typeMatches.length > 0) {
+      // Check for potentially breaking changes to existing types
+      for (const match of typeMatches) {
+        const typeName = match[2];
+        const existingType = symbols.find(s => 
+          s.name === typeName && (s.type === 'interface' || s.type === 'type')
+        );
+        
+        if (existingType) {
+          // Modifying existing types can be breaking
+          if (affectedContent.includes('extends') && !affectedContent.includes('{')) {
+            return {
+              hasBreakingChanges: true,
+              description: `Incomplete type definition for ${typeName}`,
+              severity: 'high'
+            };
+          }
+          
+          // Removing required properties from interfaces
+          if (affectedContent.includes(';') && !affectedContent.includes('?')) {
+            return {
+              hasBreakingChanges: true,
+              description: `Removing or modifying required properties in ${typeName}`,
+              severity: 'high'
+            };
+          }
+        }
+      }
+    }
+    
+    return {
+      hasBreakingChanges: false,
+      description: '',
+      severity: 'low'
+    };
+  }
+
+  /**
+   * Analyze state management changes in a diff
+   */
+  private analyzeStateChangesInDiff(
+    affectedContent: string,
+    language: string
+  ): { 
+    hasBreakingChanges: boolean; 
+    description: string; 
+    severity: 'low' | 'medium' | 'high' | 'critical' 
+  } {
+    // Look for state mutation patterns
+    const statePatterns = [
+      { pattern: /\bthis\.state\s*=/, description: 'Direct state mutation' },
+      { pattern: /\bsetState\s*\(/, description: 'State setter usage' },
+      { pattern: /\buseState\s*\(/, description: 'React useState hook' }
+    ];
+    
+    for (const { pattern, description } of statePatterns) {
+      if (pattern.test(affectedContent)) {
+        // Check for potentially unsafe state mutations
+        if (affectedContent.includes('this.state') && !affectedContent.includes('setState')) {
+          return {
+            hasBreakingChanges: true,
+            description: `Unsafe direct state mutation detected: ${description}`,
+            severity: 'medium'
+          };
+        }
+      }
+    }
+    
+    return {
+      hasBreakingChanges: false,
+      description: '',
+      severity: 'low'
+    };
+  }
+
+  /**
+   * Extract dependencies from content
+   */
+  private extractDependencies(content: string, language: string): string[] {
+    const dependencies: string[] = [];
+    
+    switch (language.toLowerCase()) {
+      case 'typescript':
+      case 'javascript':
+        // Extract ES6 imports
+        const es6ImportPattern = /import\s+(?:{[^}]+}|[\w$]+|\*\s+as\s+[\w$]+)\s+from\s+['"`]([^'"`]+)['"`]/g;
+        let match;
+        while ((match = es6ImportPattern.exec(content)) !== null) {
+          dependencies.push(match[1]);
+        }
+        
+        // Extract CommonJS requires
+        const cjsRequirePattern = /require\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g;
+        while ((match = cjsRequirePattern.exec(content)) !== null) {
+          dependencies.push(match[1]);
+        }
+        break;
+        
+      case 'python':
+        // Extract Python imports
+        const pythonImportPattern = /(?:^|\n)(?:import\s+([a-zA-Z_.][a-zA-Z0-9_.]*)|from\s+([a-zA-Z_.][a-zA-Z0-9_.]*)\s+import)/g;
+        while ((match = pythonImportPattern.exec(content)) !== null) {
+          dependencies.push(match[1] || match[2]);
+        }
+        break;
+    }
+    
+    return [...new Set(dependencies)]; // Remove duplicates
+  }
+
+  /**
+   * Analyze code structure
+   */
+  private analyzeStructure(content: string, language: string): any {
+    const lines = content.split('\n');
+    const structure: any = {
+      lineCount: lines.length,
+      blankLineCount: lines.filter(line => line.trim() === '').length,
+      commentLineCount: 0,
+      functionCount: 0,
+      classCount: 0,
+      complexityScore: 0
+    };
+    
+    switch (language.toLowerCase()) {
+      case 'typescript':
+      case 'javascript':
+        structure.commentLineCount = lines.filter(line => 
+          line.trim().startsWith('//') || 
+          line.trim().startsWith('/**') || 
+          line.trim().startsWith('/*')
+        ).length;
+        
+        structure.functionCount = (content.match(/\bfunction\b/g) || []).length + 
+                                  (content.match(/const\s+[a-zA-Z_$][a-zA-Z0-9_$]*\s*=\s*\([^)]*\)\s*=>/g) || []).length;
+        
+        structure.classCount = (content.match(/\bclass\b/g) || []).length;
+        break;
+    }
+    
+    // Calculate complexity based on nesting and control structures
+    const complexityKeywords = ['if', 'for', 'while', 'switch', 'try', 'catch', 'finally'];
+    for (const keyword of complexityKeywords) {
+      structure.complexityScore += (content.match(new RegExp(`\\b${keyword}\\b`, 'g')) || []).length;
+    }
+    
+    return structure;
+  }
+
+  /**
    * Detect conflicts between diffs and existing content
    */
   private async detectConflicts(
@@ -950,6 +1370,10 @@ class SafeDiffOperations extends EventEmitter {
       // Check for syntax conflicts
       const syntaxConflicts = await this.detectSyntaxConflicts(fileId, content, diffs);
       conflicts.push(...syntaxConflicts);
+
+      // Check for semantic conflicts
+      const semanticConflicts = await this.detectSemanticConflicts(fileId, content, diffs);
+      conflicts.push(...semanticConflicts);
 
       return conflicts;
 
@@ -973,6 +1397,458 @@ class SafeDiffOperations extends EventEmitter {
         ]
       }];
     }
+  }
+
+  /**
+   * Detect semantic conflicts between diffs and existing content
+   */
+  private async detectSemanticConflicts(
+    fileId: string,
+    content: string,
+    diffs: DiffOperation[]
+  ): Promise<Conflict[]> {
+    const conflicts: Conflict[] = [];
+
+    try {
+      // Extract symbols from current content
+      const currentSymbols = this.extractSymbols(content);
+      
+      // Analyze each diff for semantic impact
+      for (const diff of diffs) {
+        const semanticImpact = await this.analyzeSemanticImpact(content, diff, currentSymbols);
+        
+        if (semanticImpact.hasBreakingChanges) {
+          conflicts.push({
+            id: `semantic_conflict_${fileId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            fileId,
+            type: 'semantic_conflict',
+            description: semanticImpact.description,
+            affectedLines: semanticImpact.affectedLines,
+            conflictingDiffs: [diff],
+            severity: semanticImpact.severity,
+            resolutionOptions: semanticImpact.resolutionOptions
+          });
+        }
+      }
+
+      return conflicts;
+
+    } catch (error) {
+      throw createSafeDiffError(
+        `Semantic conflict detection failed: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          code: ERROR_CODES.SAFE_DIFF.SEMANTIC_ANALYSIS_FAILED,
+          severity: 'high',
+          recoverable: true,
+          context: { fileId, error }
+        }
+      );
+    }
+  }
+
+  /**
+   * Analyze the semantic impact of a diff operation
+   */
+  private async analyzeSemanticImpact(
+    content: string,
+    diff: DiffOperation,
+    currentSymbols: Array<{ name: string; type: string; line: number; scope: string }>
+  ): Promise<{
+    hasBreakingChanges: boolean;
+    description: string;
+    affectedLines: number[];
+    severity: 'low' | 'medium' | 'high' | 'critical';
+    resolutionOptions: Array<{ id: string; description: string; action: string; confidence: number }>;
+  }> {
+    const affectedLines = this.getAffectedLines(diff);
+    const affectedContent = this.extractContentByLines(content, affectedLines);
+    
+    // Check for breaking changes
+    let hasBreakingChanges = false;
+    let description = '';
+    let severity: 'low' | 'medium' | 'high' | 'critical' = 'low';
+    const resolutionOptions: Array<{ id: string; description: string; action: string; confidence: number }> = [];
+
+    // Check for exported symbol removal
+    if (diff.operation === 'delete' || diff.operation === 'replace') {
+      const deletedExports = this.findDeletedExports(affectedContent, currentSymbols);
+      if (deletedExports.length > 0) {
+        hasBreakingChanges = true;
+        description = `Removing exported symbols: ${deletedExports.join(', ')}`;
+        severity = 'critical';
+        resolutionOptions.push({
+          id: 'preserve_exports',
+          description: 'Preserve exported symbols to maintain API compatibility',
+          action: 'modify',
+          confidence: 0.9
+        });
+      }
+    }
+
+    // Check for function signature changes
+    if (diff.operation === 'replace' || diff.operation === 'modify') {
+      const signatureChanges = this.analyzeSignatureChanges(affectedContent, currentSymbols);
+      if (signatureChanges.breaking) {
+        hasBreakingChanges = true;
+        description = `Breaking signature changes detected: ${signatureChanges.description}`;
+        severity = signatureChanges.severity;
+        resolutionOptions.push({
+          id: 'backward_compatible_signature',
+          description: 'Modify to maintain backward compatibility',
+          action: 'modify',
+          confidence: 0.8
+        });
+      }
+    }
+
+    // Check for type/interface changes
+    const typeChanges = this.analyzeTypeChanges(affectedContent, currentSymbols);
+    if (typeChanges.hasBreakingChanges) {
+      hasBreakingChanges = true;
+      description = description ? `${description}; ${typeChanges.description}` : typeChanges.description;
+      severity = this.getHigherSeverity(severity, typeChanges.severity);
+      
+      if (typeChanges.resolution) {
+        resolutionOptions.push(typeChanges.resolution);
+      }
+    }
+
+    // Check for state mutation changes
+    const stateChanges = this.analyzeStateChanges(affectedContent);
+    if (stateChanges.hasBreakingChanges) {
+      hasBreakingChanges = true;
+      description = description ? `${description}; ${stateChanges.description}` : stateChanges.description;
+      severity = this.getHigherSeverity(severity, stateChanges.severity);
+      
+      if (stateChanges.resolution) {
+        resolutionOptions.push(stateChanges.resolution);
+      }
+    }
+
+    // If no specific breaking changes found but content is complex, flag for review
+    if (!hasBreakingChanges && affectedContent.length > 500) {
+      // For large changes, recommend review even if no obvious breaking changes
+      return {
+        hasBreakingChanges: false,
+        description: 'Large-scale changes detected, recommend review',
+        affectedLines,
+        severity: 'medium',
+        resolutionOptions: [
+          {
+            id: 'review_changes',
+            description: 'Review changes for potential side effects',
+            action: 'manual',
+            confidence: 0.7
+          }
+        ]
+      };
+    }
+
+    return {
+      hasBreakingChanges,
+      description: description || 'No significant semantic conflicts detected',
+      affectedLines,
+      severity,
+      resolutionOptions: resolutionOptions.length > 0 ? resolutionOptions : [
+        {
+          id: 'accept_changes',
+          description: 'Accept changes as semantically safe',
+          action: 'accept',
+          confidence: 0.9
+        }
+      ]
+    };
+  }
+
+  /**
+   * Extract symbols (variables, functions, classes, etc.) from content
+   */
+  private extractSymbols(content: string): Array<{ name: string; type: string; line: number; scope: string }> {
+    const symbols: Array<{ name: string; type: string; line: number; scope: string }> = [];
+    const lines = content.split('\n');
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      const lineNumber = i + 1;
+
+      // Match exported functions
+      const exportFuncMatch = line.match(/export\s+(async\s+)?function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/);
+      if (exportFuncMatch) {
+        symbols.push({
+          name: exportFuncMatch[2],
+          type: 'function',
+          line: lineNumber,
+          scope: 'global'
+        });
+        continue;
+      }
+
+      // Match exported classes
+      const exportClassMatch = line.match(/export\s+class\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/);
+      if (exportClassMatch) {
+        symbols.push({
+          name: exportClassMatch[1],
+          type: 'class',
+          line: lineNumber,
+          scope: 'global'
+        });
+        continue;
+      }
+
+      // Match exported interfaces
+      const exportInterfaceMatch = line.match(/export\s+interface\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/);
+      if (exportInterfaceMatch) {
+        symbols.push({
+          name: exportInterfaceMatch[1],
+          type: 'interface',
+          line: lineNumber,
+          scope: 'global'
+        });
+        continue;
+      }
+
+      // Match exported types
+      const exportTypeMatch = line.match(/export\s+type\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/);
+      if (exportTypeMatch) {
+        symbols.push({
+          name: exportTypeMatch[1],
+          type: 'type',
+          line: lineNumber,
+          scope: 'global'
+        });
+        continue;
+      }
+
+      // Match exported constants
+      const exportConstMatch = line.match(/export\s+const\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/);
+      if (exportConstMatch) {
+        symbols.push({
+          name: exportConstMatch[1],
+          type: 'constant',
+          line: lineNumber,
+          scope: 'global'
+        });
+        continue;
+      }
+
+      // Match regular functions (non-exported)
+      const funcMatch = line.match(/(async\s+)?function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/);
+      if (funcMatch) {
+        symbols.push({
+          name: funcMatch[2],
+          type: 'function',
+          line: lineNumber,
+          scope: 'local'
+        });
+        continue;
+      }
+
+      // Match class definitions
+      const classMatch = line.match(/class\s+([a-zA-Z_$][a-zA-Z0-9_$]*)/);
+      if (classMatch) {
+        symbols.push({
+          name: classMatch[1],
+          type: 'class',
+          line: lineNumber,
+          scope: 'local'
+        });
+        continue;
+      }
+    }
+
+    return symbols;
+  }
+
+  /**
+   * Find deleted exported symbols
+   */
+  private findDeletedExports(
+    affectedContent: string,
+    currentSymbols: Array<{ name: string; type: string; line: number; scope: string }>
+  ): string[] {
+    const deletedExports: string[] = [];
+    
+    // Check for exported symbols in the current content
+    for (const symbol of currentSymbols) {
+      if (symbol.scope === 'global') {
+        // Check if this exported symbol is being removed
+        const exportPattern = new RegExp(`export\\s+(async\\s+)?(${symbol.type === 'function' ? 'function' : symbol.type})\\s+${symbol.name}`, 'g');
+        if (!exportPattern.test(affectedContent) && affectedContent.includes(symbol.name)) {
+          // If the symbol is mentioned but not exported, it might be removed
+          deletedExports.push(`${symbol.type} ${symbol.name}`);
+        }
+      }
+    }
+
+    return deletedExports;
+  }
+
+  /**
+   * Analyze function signature changes for breaking changes
+   */
+  private analyzeSignatureChanges(
+    affectedContent: string,
+    currentSymbols: Array<{ name: string; type: string; line: number; scope: string }>
+  ): { breaking: boolean; description: string; severity: 'low' | 'medium' | 'high' | 'critical' } {
+    // Look for function signature changes
+    const funcSignaturePattern = /\bfunction\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(([^)]*)\)/g;
+    let match;
+    const breakingChanges: string[] = [];
+
+    while ((match = funcSignaturePattern.exec(affectedContent)) !== null) {
+      const functionName = match[1];
+      const parameters = match[2];
+
+      // Check if this is a known function that's being modified
+      const existingFunction = currentSymbols.find(s => s.name === functionName && s.type === 'function');
+      if (existingFunction) {
+        // For now, we'll do a simple check - in a real implementation, this would compare signatures
+        if (parameters.includes('required') && !parameters.includes('?')) {
+          // Adding required parameters to existing functions is breaking
+          breakingChanges.push(`Adding required parameter to existing function ${functionName}`);
+        }
+      }
+    }
+
+    return {
+      breaking: breakingChanges.length > 0,
+      description: breakingChanges.join('; '),
+      severity: breakingChanges.length > 0 ? 'high' : 'low'
+    };
+  }
+
+  /**
+   * Analyze type/interface changes for breaking changes
+   */
+  private analyzeTypeChanges(
+    affectedContent: string,
+    currentSymbols: Array<{ name: string; type: string; line: number; scope: string }>
+  ): { 
+    hasBreakingChanges: boolean; 
+    description: string; 
+    severity: 'low' | 'medium' | 'high' | 'critical';
+    resolution?: { id: string; description: string; action: string; confidence: number };
+  } {
+    // Look for type/interface changes
+    const interfacePattern = /\binterface\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\b/g;
+    const typePattern = /\btype\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\b/g;
+    
+    const interfaceMatches = [...affectedContent.matchAll(interfacePattern)];
+    const typeMatches = [...affectedContent.matchAll(typePattern)];
+    
+    if (interfaceMatches.length > 0 || typeMatches.length > 0) {
+      // Check if existing types are being modified in breaking ways
+      for (const match of interfaceMatches) {
+        const typeName = match[1];
+        const existingType = currentSymbols.find(s => s.name === typeName && (s.type === 'interface' || s.type === 'type'));
+        if (existingType) {
+          // Removing required properties or changing types is breaking
+          if (affectedContent.includes('extends') && affectedContent.includes('{') && !affectedContent.includes('}')) {
+            return {
+              hasBreakingChanges: true,
+              description: `Incomplete interface ${typeName} definition`,
+              severity: 'high',
+              resolution: {
+                id: 'fix_interface_definition',
+                description: 'Complete the interface definition',
+                action: 'modify',
+                confidence: 0.8
+              }
+            };
+          }
+        }
+      }
+    }
+
+    return {
+      hasBreakingChanges: false,
+      description: 'No breaking type changes detected',
+      severity: 'low'
+    };
+  }
+
+  /**
+   * Analyze state changes for breaking impacts
+   */
+  private analyzeStateChanges(affectedContent: string): { 
+    hasBreakingChanges: boolean; 
+    description: string; 
+    severity: 'low' | 'medium' | 'high' | 'critical';
+    resolution?: { id: string; description: string; action: string; confidence: number };
+  } {
+    // Look for state mutation patterns
+    const stateMutationPatterns = [
+      { pattern: /\bthis\.state\s*=\s*[^;]+/, description: 'Direct state assignment' },
+      { pattern: /\bsetState\s*\([^)]*\)/, description: 'State setter usage' },
+      { pattern: /\buseState\s*\([^)]*\)/, description: 'React useState hook' }
+    ];
+
+    for (const { pattern, description } of stateMutationPatterns) {
+      if (pattern.test(affectedContent)) {
+        // Check for potentially breaking state changes
+        if (affectedContent.includes('this.state') && !affectedContent.includes('setState')) {
+          return {
+            hasBreakingChanges: true,
+            description: `Direct state mutation detected: ${description}`,
+            severity: 'medium',
+            resolution: {
+              id: 'use_setter_pattern',
+              description: 'Use proper state setter pattern',
+              action: 'modify',
+              confidence: 0.7
+            }
+          };
+        }
+      }
+    }
+
+    return {
+      hasBreakingChanges: false,
+      description: 'No breaking state changes detected',
+      severity: 'low'
+    };
+  }
+
+  /**
+   * Get affected lines from diff operation
+   */
+  private getAffectedLines(diff: DiffOperation): number[] {
+    const [startLine, endLine] = diff.lineRange;
+    const lines: number[] = [];
+    
+    for (let i = startLine; i <= endLine; i++) {
+      lines.push(i);
+    }
+    
+    return lines;
+  }
+
+  /**
+   * Extract content by specific line numbers
+   */
+  private extractContentByLines(content: string, lines: number[]): string {
+    const contentLines = content.split('\n');
+    return lines
+      .filter(line => line > 0 && line <= contentLines.length)
+      .map(line => contentLines[line - 1])
+      .join('\n');
+  }
+
+  /**
+   * Get higher severity level between two severities
+   */
+  private getHigherSeverity(
+    a: 'low' | 'medium' | 'high' | 'critical',
+    b: 'low' | 'medium' | 'high' | 'critical'
+  ): 'low' | 'medium' | 'high' | 'critical' {
+    const severityLevels = {
+      'low': 1,
+      'medium': 2,
+      'high': 3,
+      'critical': 4
+    };
+    
+    return severityLevels[a] >= severityLevels[b] ? a : b;
   }
 
   /**
@@ -1326,7 +2202,12 @@ class SafeDiffOperations extends EventEmitter {
         break;
 
       default:
-        throw new Error(`Unknown resolution type: ${resolution.resolution}`);
+        throw createSafeDiffError(`Unknown resolution type: ${resolution.resolution}`, {
+          code: ERROR_CODES.SAFE_DIFF.UNKNOWN_RESOLUTION_TYPE,
+          severity: 'high',
+          recoverable: false,
+          context: { resolutionType: resolution.resolution }
+        });
     }
   }
 

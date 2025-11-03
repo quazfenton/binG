@@ -13,6 +13,11 @@
 
 import { EventEmitter } from "events";
 import { z } from "zod";
+import { llmIntegration } from "../core/llm-integration";
+import {
+  createStreamError,
+  ERROR_CODES
+} from "../core/error-types";
 import { EnhancedResponse, ProjectItem } from "../core/enhanced-prompt-engine";
 
 // Streaming configuration schema
@@ -234,7 +239,12 @@ class EnhancedStreamingManager extends EventEmitter {
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      throw new Error(`Streaming session ${sessionId} not found`);
+      throw createStreamError(`Streaming session ${sessionId} not found`, {
+        code: ERROR_CODES.STREAMING.CHUNK_PROCESSING_FAILED,
+        severity: 'high',
+        recoverable: false,
+        context: { sessionId }
+      });
     }
 
     if (
@@ -344,7 +354,12 @@ class EnhancedStreamingManager extends EventEmitter {
   async completeStreamingSession(sessionId: string): Promise<EnhancedResponse> {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      throw new Error(`Streaming session ${sessionId} not found`);
+      throw createStreamError(`Streaming session ${sessionId} not found`, {
+        code: ERROR_CODES.STREAMING.COMPLETION_FAILED,
+        severity: 'high',
+        recoverable: false,
+        context: { sessionId }
+      });
     }
 
     try {
@@ -514,57 +529,73 @@ class EnhancedStreamingManager extends EventEmitter {
   ): Promise<ContextWindow[]> {
     const windows: ContextWindow[] = [];
 
-    // System context
+    // System context with enhanced guidance
     windows.push({
       id: "system",
       content:
-        "You are an expert software engineer generating high-quality, production-ready code.",
-      tokenCount: 20,
+        "You are an expert software engineer generating high-quality, production-ready code with:\n" +
+        "- Comprehensive error handling and validation\n" +
+        "- Detailed comments explaining complex logic\n" +
+        "- Performance considerations and optimization notes\n" +
+        "- Security best practices where applicable\n" +
+        "- Type safety and strict typing\n" +
+        "- Extensible and maintainable architecture",
+      tokenCount: 80, // More detailed system prompt
       priority: 10,
       timestamp: new Date(),
       type: "system",
-      metadata: {},
+      metadata: { guidanceLevel: "expert" },
     });
 
-    // Task context
+    // Task context with enhanced structure
     windows.push({
       id: "task",
-      content: task,
-      tokenCount: Math.ceil(task.length / 4),
+      content: `PRIMARY TASK:\n${task}\n\nTASK REQUIREMENTS:\n- Generate clean, maintainable code\n- Include comprehensive error handling\n- Add detailed inline documentation\n- Consider performance and security implications`,
+      tokenCount: Math.ceil((task.length + 200) / 4), // Account for structure
       priority: 9,
       timestamp: new Date(),
       type: "user",
-      metadata: { type: "task" },
+      metadata: { type: "task", structure: "enhanced" },
     });
 
-    // Project files context
-    for (const file of projectFiles.slice(0, 5)) {
-      // Limit to top 5 files
+    // Project files context with intelligent selection
+    const relevantFiles = this.selectRelevantFiles(projectFiles, task, contextHints);
+    
+    for (const file of relevantFiles) {
+      // Calculate content relevance score
+      const relevanceScore = this.calculateFileRelevance(file, task, contextHints);
+      
+      // Extract key sections for context efficiency
+      const filePreview = this.extractFilePreview(file.content, 500); // Limit preview size
+      
       windows.push({
         id: `file_${file.id}`,
-        content: `File: ${file.name}\n${file.content}`,
-        tokenCount: Math.ceil((file.name.length + file.content.length) / 4),
-        priority: file.hasEdits ? 8 : 6,
+        content: `FILE: ${file.path}\nLANGUAGE: ${file.language}\nMODIFIED: ${file.hasEdits ? 'Yes' : 'No'}\nCONTENT:\n${filePreview}`,
+        tokenCount: Math.ceil((file.path.length + file.language.length + filePreview.length + 100) / 4),
+        priority: file.hasEdits ? 8 : (relevanceScore > 0.7 ? 7 : 5), // Higher priority for edited/relevant files
         timestamp: file.lastModified,
         type: "context",
         metadata: {
           fileId: file.id,
           language: file.language,
           hasEdits: file.hasEdits,
+          relevanceScore: relevanceScore,
+          contentLength: file.content.length
         },
       });
     }
 
-    // Context hints
+    // Context hints with enhanced processing
     if (contextHints.length > 0) {
+      const processedHints = this.processContextHints(contextHints, task);
       windows.push({
         id: "hints",
-        content: `Context hints: ${contextHints.join(", ")}`,
-        tokenCount: Math.ceil(contextHints.join(", ").length / 4),
+        content: `CONTEXTUAL HINTS FOR THIS TASK:\n${processedHints.join('\n- ')}`,
+        tokenCount: Math.ceil((processedHints.join('\n- ').length + 50) / 4),
         priority: 7,
         timestamp: new Date(),
         type: "context",
-        metadata: { type: "hints" },
+        metadata: { type: "hints", hintCount: processedHints.length },
       });
     }
 
@@ -572,27 +603,205 @@ class EnhancedStreamingManager extends EventEmitter {
   }
 
   /**
-   * Optimize context windows to fit within token limits
+   * Optimize context windows to fit within token limits with enhanced strategies
    */
   private async optimizeContextWindows(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
-    const optimizedWindows = await this.contextOptimizer.optimize(
-      session.contextWindows,
-      session.config.contextWindowSize * 0.8, // Leave 20% buffer
-    );
+    try {
+      // Calculate current token usage
+      const currentTokens = this.calculateTotalTokens(session.contextWindows);
+      const maxTokens = session.config.contextWindowSize;
+      const bufferTokens = Math.floor(maxTokens * 0.15); // 15% buffer
+      const targetTokens = maxTokens - bufferTokens;
 
-    session.contextWindows = optimizedWindows;
-    session.state.contextTokensUsed =
-      this.calculateTotalTokens(optimizedWindows);
+      // If already within limits, no optimization needed
+      if (currentTokens <= targetTokens) {
+        return;
+      }
 
-    this.emit("context_optimized", {
-      sessionId,
-      originalTokens: this.calculateTotalTokens(session.contextWindows),
-      optimizedTokens: session.state.contextTokensUsed,
-      windowsRemoved: session.contextWindows.length - optimizedWindows.length,
+      // Apply multi-stage optimization
+      let optimizedWindows = [...session.contextWindows];
+      
+      // Stage 1: Remove low-priority windows
+      optimizedWindows = this.removeLowPriorityWindows(optimizedWindows, targetTokens);
+      
+      // Recalculate after stage 1
+      let currentUsage = this.calculateTotalTokens(optimizedWindows);
+      
+      // Stage 2: Smart truncation for remaining windows
+      if (currentUsage > targetTokens) {
+        optimizedWindows = await this.smartTruncateWindows(optimizedWindows, targetTokens);
+        currentUsage = this.calculateTotalTokens(optimizedWindows);
+      }
+      
+      // Stage 3: Aggressive compression for critical situations
+      if (currentUsage > targetTokens) {
+        optimizedWindows = await this.compressWindows(optimizedWindows, targetTokens);
+      }
+
+      // Update session with optimized windows
+      session.contextWindows = optimizedWindows;
+      session.state.contextTokensUsed = this.calculateTotalTokens(optimizedWindows);
+
+      this.emit("context_optimized", {
+        sessionId,
+        originalTokens: currentTokens,
+        optimizedTokens: session.state.contextTokensUsed,
+        windowsRemoved: session.contextWindows.length - optimizedWindows.length,
+        strategyUsed: currentTokens > session.state.contextTokensUsed ? "multi_stage" : "none"
+      });
+
+    } catch (error) {
+      throw createStreamError(
+        `Context optimization failed: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          code: ERROR_CODES.STREAMING.CONTEXT_WINDOW_EXCEEDED,
+          severity: 'high',
+          recoverable: true,
+          context: { sessionId, error }
+        }
+      );
+    }
+  }
+
+  /**
+   * Remove low-priority context windows to reduce token usage
+   */
+  private removeLowPriorityWindows(
+    windows: ContextWindow[],
+    targetTokens: number
+  ): ContextWindow[] {
+    // Sort by priority (descending) and then by token count (ascending)
+    const sortedWindows = [...windows].sort((a, b) => {
+      if (b.priority !== a.priority) {
+        return b.priority - a.priority; // Higher priority first
+      }
+      return a.tokenCount - b.tokenCount; // Lower token count first
     });
+
+    let currentTokens = this.calculateTotalTokens(sortedWindows);
+    const result = [...sortedWindows];
+
+    // Remove lowest priority windows that are over the target
+    while (result.length > 1 && currentTokens > targetTokens) {
+      // Find the lowest priority window that isn't critical
+      const lowestPriorityIndex = result.findIndex(window => 
+        window.priority < 7 && // Don't remove high-priority windows
+        window.metadata?.type !== 'system' && // Don't remove system context
+        window.metadata?.type !== 'task' // Don't remove task context
+      );
+
+      if (lowestPriorityIndex === -1) {
+        break; // No more removable windows
+      }
+
+      const removedWindow = result.splice(lowestPriorityIndex, 1)[0];
+      currentTokens -= removedWindow.tokenCount;
+    }
+
+    return result;
+  }
+
+  /**
+   * Smart truncate context windows to reduce token usage while preserving information
+   */
+  private async smartTruncateWindows(
+    windows: ContextWindow[],
+    targetTokens: number
+  ): Promise<ContextWindow[]> {
+    let currentTokens = this.calculateTotalTokens(windows);
+    const result = [...windows];
+    
+    if (currentTokens <= targetTokens) {
+      return result;
+    }
+
+    // Calculate excess tokens
+    const excessTokens = currentTokens - targetTokens;
+    
+    // Sort windows by truncatability (lower priority and higher token count first)
+    const truncatableWindows = result
+      .filter(window => 
+        window.priority < 9 && // Don't truncate system/task windows
+        window.tokenCount > 100 // Only truncate substantial content
+      )
+      .sort((a, b) => {
+        // Prioritize truncating larger windows first
+        if (b.tokenCount !== a.tokenCount) {
+          return b.tokenCount - a.tokenCount;
+        }
+        return a.priority - b.priority; // Lower priority first
+      });
+
+    // Truncate windows proportionally
+    let tokensReduced = 0;
+    for (const window of truncatableWindows) {
+      if (tokensReduced >= excessTokens * 0.8) { // Aim for 80% of excess
+        break;
+      }
+
+      const targetReduction = Math.min(
+        Math.floor(excessTokens * 0.3), // Reduce by up to 30% of excess
+        Math.floor(window.tokenCount * 0.5) // But no more than 50% of window
+      );
+
+      if (targetReduction > 20) { // Only truncate if meaningful reduction
+        const truncated = await this.contextOptimizer.truncateWindow(window, window.tokenCount - targetReduction);
+        const reduction = window.tokenCount - truncated.tokenCount;
+        
+        // Update the window in result
+        const index = result.findIndex(w => w.id === window.id);
+        if (index !== -1) {
+          result[index] = truncated;
+          tokensReduced += reduction;
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Compress context windows using advanced techniques for extreme token reduction
+   */
+  private async compressWindows(
+    windows: ContextWindow[],
+    targetTokens: number
+  ): Promise<ContextWindow[]> {
+    let currentTokens = this.calculateTotalTokens(windows);
+    const result = [...windows];
+    
+    if (currentTokens <= targetTokens) {
+      return result;
+    }
+
+    // Extreme compression strategy
+    const compressionRatio = targetTokens / currentTokens;
+    
+    // Apply aggressive truncation to all non-critical windows
+    for (let i = 0; i < result.length; i++) {
+      const window = result[i];
+      
+      // Skip critical windows
+      if (window.priority >= 9 || window.metadata?.type === 'system' || window.metadata?.type === 'task') {
+        continue;
+      }
+      
+      // Calculate target token count
+      const targetTokenCount = Math.max(
+        50, // Minimum size
+        Math.floor(window.tokenCount * compressionRatio * 0.7) // Apply slightly more aggressive compression
+      );
+      
+      if (targetTokenCount < window.tokenCount) {
+        const compressed = await this.contextOptimizer.truncateWindow(window, targetTokenCount);
+        result[i] = compressed;
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -647,6 +856,99 @@ class EnhancedStreamingManager extends EventEmitter {
    */
   private calculateTotalTokens(windows: ContextWindow[]): number {
     return windows.reduce((sum, window) => sum + window.tokenCount, 0);
+  }
+
+  /**
+   * Calculate file relevance score for context selection
+   */
+  private calculateFileRelevance(
+    file: ProjectItem,
+    task: string,
+    contextHints: string[]
+  ): number {
+    let score = 0;
+    
+    // Boost for recently modified files
+    if (file.hasEdits) {
+      score += 0.3;
+    }
+    
+    // Boost for files matching task keywords
+    const taskKeywords = this.extractKeywords(task);
+    const fileContentLower = file.content.toLowerCase();
+    const fileMatches = taskKeywords.filter(keyword => 
+      fileContentLower.includes(keyword.toLowerCase())
+    );
+    score += (fileMatches.length / Math.max(1, taskKeywords.length)) * 0.4;
+    
+    // Boost for files matching context hints
+    if (contextHints.length > 0) {
+      const hintMatches = contextHints.filter(hint => 
+        file.content.toLowerCase().includes(hint.toLowerCase())
+      );
+      score += (hintMatches.length / contextHints.length) * 0.3;
+    }
+    
+    // Boost for certain file types
+    const importantExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.java'];
+    if (importantExtensions.some(ext => file.path.endsWith(ext))) {
+      score += 0.1;
+    }
+    
+    return Math.min(1.0, score);
+  }
+
+  /**
+   * Extract keywords from text for relevance scoring
+   */
+  private extractKeywords(text: string): string[] {
+    // Simple keyword extraction (in practice, this would be more sophisticated)
+    const commonWords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'it', 'we', 'you', 'i', 'he', 'she', 'they', 'them', 'their', 'there', 'here', 'when', 'where', 'why', 'how', 'what', 'which', 'who', 'whom'];
+    const words = text.toLowerCase().match(/\b\w{3,}\b/g) || [];
+    return [...new Set(words.filter(word => 
+      !commonWords.includes(word)
+    ))].slice(0, 50); // Limit to top 50 keywords
+  }
+
+  /**
+   * Extract preview of file content for context efficiency
+   */
+  private extractFilePreview(content: string, maxLength: number): string {
+    if (content.length <= maxLength) {
+      return content;
+    }
+    
+    // Extract beginning and end with indication of truncation
+    const previewLength = Math.floor((maxLength - 50) / 2); // Leave room for truncation indicator
+    const beginning = content.substring(0, previewLength);
+    const ending = content.substring(content.length - previewLength);
+    
+    return `${beginning}\n// ... [${content.length - (previewLength * 2)} characters truncated] ...\n${ending}`;
+  }
+
+  /**
+   * Process context hints with enhanced understanding
+   */
+  private processContextHints(hints: string[], task: string): string[] {
+    // Filter and enhance hints
+    return hints
+      .filter(hint => hint.trim().length > 0)
+      .map(hint => {
+        // Add context to vague hints
+        if (hint.toLowerCase().includes('security')) {
+          return `${hint} - Follow OWASP security guidelines and implement proper input validation`;
+        }
+        if (hint.toLowerCase().includes('performance')) {
+          return `${hint} - Optimize for efficiency and consider caching strategies`;
+        }
+        if (hint.toLowerCase().includes('accessibility')) {
+          return `${hint} - Ensure WCAG 2.1 AA compliance and proper ARIA attributes`;
+        }
+        if (hint.toLowerCase().includes('test')) {
+          return `${hint} - Include comprehensive unit tests and integration tests`;
+        }
+        return hint;
+      });
   }
 
   /**
@@ -809,12 +1111,9 @@ class ContextOptimizer {
     window: ContextWindow,
     maxTokens: number,
   ): Promise<ContextWindow> {
-    const maxChars = maxTokens * 4; // Rough approximation
-    const truncatedContent =
-      window.content.length > maxChars
-        ? window.content.substring(0, maxChars) + "...[truncated]"
-        : window.content;
-
+    // Use more intelligent truncation based on content type
+    const truncatedContent = this.intelligentTruncate(window.content, window.type, maxTokens);
+    
     return {
       ...window,
       content: truncatedContent,
@@ -823,8 +1122,63 @@ class ContextOptimizer {
         ...window.metadata,
         truncated: true,
         originalLength: window.content.length,
+        truncationMethod: 'intelligent'
       },
     };
+  }
+
+  /**
+   * Intelligent truncation based on content type
+   */
+  private intelligentTruncate(content: string, type: string, maxTokens: number): string {
+    const maxChars = maxTokens * 4; // Rough approximation
+    
+    if (content.length <= maxChars) {
+      return content;
+    }
+
+    // Different truncation strategies based on content type
+    switch (type) {
+      case 'system':
+        // Keep beginning and end for system context
+        const keepRatio = 0.4; // Keep 40% at beginning and 40% at end
+        const keepChars = Math.floor(maxChars * keepRatio);
+        const header = content.substring(0, keepChars);
+        const footer = content.substring(content.length - keepChars);
+        return `${header}\n// ... [${content.length - (keepChars * 2)} characters truncated] ...\n${footer}`;
+        
+      case 'user':
+        // Keep the beginning for user instructions
+        return content.substring(0, maxChars - 20) + "\n// ... [truncated]";
+        
+      case 'context':
+        // For file context, keep important parts
+        if (content.includes('File:')) {
+          // Extract file header and beginning content
+          const lines = content.split('\n');
+          const headerLines = lines.slice(0, Math.min(5, lines.length));
+          const remainingLines = lines.slice(5);
+          const maxRemainingChars = maxChars - headerLines.join('\n').length - 50;
+          
+          if (remainingLines.length > 0 && maxRemainingChars > 100) {
+            const contentToShow = remainingLines.join('\n').substring(0, maxRemainingChars);
+            return `${headerLines.join('\n')}\n${contentToShow}\n// ... [truncated]`;
+          } else {
+            return `${headerLines.join('\n')}\n// ... [truncated]`;
+          }
+        }
+        // Fall through to default
+        
+      default:
+        // Smart truncation keeping beginning and some ending
+        if (maxChars > 200) {
+          const beginning = content.substring(0, Math.floor(maxChars * 0.7));
+          const ending = content.substring(content.length - Math.floor(maxChars * 0.2));
+          return `${beginning}\n// ... [middle truncated] ...\n${ending}`;
+        } else {
+          return content.substring(0, maxChars - 20) + "\n// ... [truncated]";
+        }
+    }
   }
 }
 
@@ -1070,15 +1424,289 @@ class ErrorHandler {
     return false;
   }
 
-  private async recoverFromCompletionError(error: Error): Promise<boolean> {
-    // Recovery strategies for session completion errors
-    if (error.message.includes("validation")) {
-      // Could implement validation bypass or correction
-      return false;
+  /**
+   * Process real streaming response from LLM integration
+   */
+  async processRealStreamingResponse(
+    sessionId: string,
+    stream: AsyncIterable<string>,
+    onProgress?: (progress: ProgressUpdate) => void
+  ): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw createStreamError(`Streaming session ${sessionId} not found`, {
+        code: ERROR_CODES.STREAMING.SESSION_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { sessionId }
+      });
     }
 
-    return false;
+    try {
+      session.state.status = "streaming";
+      session.state.startTime = new Date();
+
+      let chunkSequence = 0;
+      let accumulatedContent = "";
+
+      for await (const chunk of stream) {
+        if (session.state.status === "cancelled") {
+          break;
+        }
+
+        accumulatedContent += chunk;
+        chunkSequence++;
+
+        // Process chunk with metadata
+        const metadata = {
+          tokens: Math.ceil(chunk.length / 4),
+          chunkType: this.detectChunkType(chunk),
+          contextPosition: session.state.contextTokensUsed + Math.ceil(accumulatedContent.length / 4),
+        };
+
+        await this.processStreamChunk(sessionId, chunk, metadata);
+
+        // Update progress if callback provided
+        if (onProgress && session.state.progressPercentage !== undefined) {
+          onProgress({
+            sessionId,
+            progress: session.state.progressPercentage,
+            currentChunk: chunkSequence,
+            estimatedTimeRemaining: session.state.estimatedTimeRemaining,
+            currentContent: accumulatedContent.substring(0, 100) + "...",
+            errors: session.state.errors,
+            status: session.state.status,
+          });
+        }
+
+        // Small delay to simulate real-world processing
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+
+      session.state.status = "completed";
+      this.emit("streaming_completed", { sessionId, content: accumulatedContent });
+
+    } catch (error) {
+      session.state.status = "error";
+      session.state.errors.push(`Streaming failed: ${error instanceof Error ? error.message : String(error)}`);
+      
+      this.emit("streaming_error", {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+        context: "real_streaming"
+      });
+
+      throw createStreamError(
+        `Failed to process real streaming response: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          code: ERROR_CODES.STREAMING.CHUNK_PROCESSING_FAILED,
+          severity: 'high',
+          recoverable: true,
+          context: { sessionId, error }
+        }
+      );
+    }
   }
+
+  /**
+   * Detect chunk type based on content
+   */
+  private detectChunkType(content: string): StreamChunk["metadata"]["chunkType"] {
+    if (content.includes("import ") || content.includes("export ")) {
+      return "import";
+    }
+    
+    if (content.includes("//") || content.includes("/**") || content.includes("/*")) {
+      return "comment";
+    }
+    
+    if (content.includes("interface ") || content.includes("type ")) {
+      return "structure";
+    }
+    
+    if (content.includes("class ") || content.includes("function ") || content.includes("const ")) {
+      return "code";
+    }
+    
+    return "code";
+  }
+
+  /**
+   * Cancel streaming session
+   */
+  async cancelStreamingSession(sessionId: string, reason?: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw createStreamError(`Streaming session ${sessionId} not found`, {
+        code: ERROR_CODES.STREAMING.SESSION_NOT_FOUND,
+        severity: 'high',
+        recoverable: false,
+        context: { sessionId }
+      });
+    }
+
+    const previousStatus = session.state.status;
+    session.state.status = "cancelled";
+    session.state.errors.push(`Session cancelled: ${reason || "User request"}`);
+
+    this.emit("streaming_session_cancelled", {
+      sessionId,
+      reason,
+      previousStatus,
+      duration: session.state.startTime ? Date.now() - session.state.startTime.getTime() : 0,
+    });
+  }
+
+  /**
+   * Select relevant files based on task and context hints
+   */
+  private selectRelevantFiles(
+    projectFiles: ProjectItem[],
+    task: string,
+    contextHints: string[]
+  ): ProjectItem[] {
+    // Limit to top 10 files to avoid token explosion
+    const candidateFiles = projectFiles.slice(0, 10);
+    
+    // Score files by relevance
+    const scoredFiles = candidateFiles.map(file => ({
+      file,
+      score: this.calculateFileRelevance(file, task, contextHints)
+    }));
+    
+    // Sort by relevance score (descending) and take top 5
+    return scoredFiles
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5)
+      .map(item => item.file);
+  }
+
+  /**
+   * Calculate file relevance score based on task and context hints
+   */
+  private calculateFileRelevance(
+    file: ProjectItem,
+    task: string,
+    contextHints: string[]
+  ): number {
+    let score = 0;
+    
+    // Boost for recently modified files
+    if (file.hasEdits) {
+      score += 0.3;
+    }
+    
+    // Boost for files matching task keywords
+    const taskKeywords = this.extractKeywords(task);
+    const fileContentLower = file.content.toLowerCase();
+    const fileMatches = taskKeywords.filter(keyword => 
+      fileContentLower.includes(keyword.toLowerCase())
+    );
+    score += (fileMatches.length / taskKeywords.length) * 0.4;
+    
+    // Boost for files matching context hints
+    if (contextHints.length > 0) {
+      const hintMatches = contextHints.filter(hint => 
+        file.content.toLowerCase().includes(hint.toLowerCase())
+      );
+      score += (hintMatches.length / contextHints.length) * 0.3;
+    }
+    
+    // Boost for certain file types
+    const importantExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py', '.java'];
+    if (importantExtensions.some(ext => file.path.endsWith(ext))) {
+      score += 0.1;
+    }
+    
+    return Math.min(1.0, score);
+  }
+
+  /**
+   * Extract keywords from text
+   */
+  private extractKeywords(text: string): string[] {
+    // Simple keyword extraction (in practice, this would be more sophisticated)
+    const commonWords = ['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those'];
+    const words = text.toLowerCase().match(/\b\w+\b/g) || [];
+    return [...new Set(words.filter(word => 
+      word.length > 3 && !commonWords.includes(word)
+    ))];
+  }
+
+  /**
+   * Extract preview of file content
+   */
+  private extractFilePreview(content: string, maxLength: number): string {
+    if (content.length <= maxLength) {
+      return content;
+    }
+    
+    // Extract beginning and end with indication of truncation
+    const previewLength = Math.floor((maxLength - 50) / 2); // Leave room for truncation indicator
+    const beginning = content.substring(0, previewLength);
+    const ending = content.substring(content.length - previewLength);
+    
+    return `${beginning}\n// ... [${content.length - (previewLength * 2)} characters truncated] ...\n${ending}`;
+  }
+
+  /**
+   * Process context hints with enhanced logic
+   */
+  private processContextHints(hints: string[], task: string): string[] {
+    // Filter and enhance hints
+    return hints
+      .filter(hint => hint.trim().length > 0)
+      .map(hint => {
+        // Add context to vague hints
+        if (hint.toLowerCase().includes('security')) {
+          return `${hint} - Follow OWASP security guidelines and implement proper input validation`;
+        }
+        if (hint.toLowerCase().includes('performance')) {
+          return `${hint} - Optimize for efficiency and consider caching strategies`;
+        }
+        if (hint.toLowerCase().includes('accessibility')) {
+          return `${hint} - Ensure WCAG 2.1 AA compliance and proper ARIA attributes`;
+        }
+        return hint;
+      });
+  }
+
+  /**
+   * Execute real streaming with LLM integration
+   */
+  async executeRealStreaming(
+    sessionId: string,
+    prompt: string,
+    projectFiles: ProjectItem[],
+    options: {
+      onProgress?: (progress: ProgressUpdate) => void;
+      temperature?: number;
+      maxTokens?: number;
+      provider?: string;
+      model?: string;
+    } = {}
+  ): Promise<AsyncIterable<string>> {
+    try {
+      // Get streaming response from LLM integration
+      const stream = await llmIntegration.getStreamingResponse(prompt, projectFiles);
+      
+      // Process the real streaming response
+      await this.processRealStreamingResponse(sessionId, stream, options.onProgress);
+      
+      return stream;
+    } catch (error) {
+      throw createStreamError(
+        `Failed to execute real streaming: ${error instanceof Error ? error.message : String(error)}`,
+        {
+          code: ERROR_CODES.STREAMING.STREAMING_FAILED,
+          severity: 'high',
+          recoverable: true,
+          context: { sessionId, prompt, error }
+        }
+      );
+    }
+  }
+
 }
 
 export {
