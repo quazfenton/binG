@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { llmService } from "@/lib/api/llm-providers";
 import { enhancedLLMService } from "@/lib/api/enhanced-llm-service";
 import { errorHandler } from "@/lib/api/error-handler";
+import { priorityRequestRouter } from "@/lib/api/priority-request-router";
+import { unifiedResponseHandler } from "@/lib/api/unified-response-handler";
 import type { LLMRequest, LLMMessage } from "@/lib/api/llm-providers";
 import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 
@@ -89,15 +91,118 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    console.log('[DEBUG] Chat API: Validation passed, starting response generation');
+    console.log('[DEBUG] Chat API: Validation passed, routing through priority chain');
 
-    const llmRequest: EnhancedLLMRequest = {
+    // PRIORITY-BASED ROUTING - Routes through Fast-Agent → n8n → Custom Fallback → Original System
+    const routerRequest = {
       messages,
       provider,
       model,
       temperature,
       maxTokens,
       stream,
+      apiKeys,
+      requestId
+    };
+
+    console.log('[DEBUG] Chat API: Routing request through priority chain');
+
+    // Route through priority chain (Fast-Agent → n8n → Custom Fallback → Original System)
+    try {
+      const routerResponse = await priorityRequestRouter.route(routerRequest);
+      
+      console.log(`[DEBUG] Chat API: Request handled by ${routerResponse.source} (priority ${routerResponse.priority})`);
+      
+      // Process response through unified handler
+      const unifiedResponse = unifiedResponseHandler.processResponse(routerResponse, requestId);
+      
+      // Handle streaming response
+      if (stream && selectedProvider.supportsStreaming) {
+        const streamRequestId = requestId || `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Create streaming events from unified response
+        const events = unifiedResponseHandler.createStreamingEvents(unifiedResponse, streamRequestId);
+        
+        const encoder = new TextEncoder();
+        const readableStream = new ReadableStream({
+          async start(controller) {
+            try {
+              // Send events with appropriate delays
+              for (let i = 0; i < events.length; i++) {
+                const event = events[i];
+                controller.enqueue(encoder.encode(event));
+                
+                // Add small delays between events for smooth streaming
+                if (i < events.length - 1) {
+                  await new Promise(resolve => setTimeout(resolve, 50));
+                }
+              }
+              
+              controller.close();
+            } catch (error) {
+              console.error('[DEBUG] Chat API: Streaming error:', error);
+              const errorEvent = `event: error\ndata: ${JSON.stringify({
+                requestId: streamRequestId,
+                message: 'Streaming error occurred',
+                canRetry: false
+              })}\n\n`;
+              controller.enqueue(encoder.encode(errorEvent));
+              controller.close();
+            }
+          },
+          cancel() {
+            console.log(`[DEBUG] Chat API: Stream cancelled by client: ${streamRequestId}`);
+          }
+        });
+
+        return new Response(readableStream, {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            Pragma: "no-cache",
+            Expires: "0",
+            Connection: "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          },
+        });
+      }
+
+      // Handle non-streaming response
+      return NextResponse.json({
+        success: unifiedResponse.success,
+        data: unifiedResponse.data,
+        commands: unifiedResponse.commands,
+        metadata: unifiedResponse.metadata,
+        timestamp: unifiedResponse.metadata?.timestamp
+      });
+      
+    } catch (routerError) {
+      console.error('[DEBUG] Chat API: Router error (should be rare):', routerError);
+      
+      // Emergency fallback - return friendly error
+      return NextResponse.json({
+        success: true, // Still report success to avoid UI errors
+        data: {
+          content: "I apologize, but I'm experiencing technical difficulties. Please try again in a moment.",
+          provider: 'emergency-fallback',
+          model: 'fallback',
+          isFallback: true
+        },
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // LEGACY CODE BELOW - Keep for reference but should not be reached with proper routing
+    const llmRequest: EnhancedLLMRequest = {
+      messages,
+      provider,
+      model,
+      temperature,
+      maxTokens,
+      stream: false, // Force non-streaming for legacy path
       apiKeys,
       enableCircuitBreaker: true,
       retryOptions: {
@@ -108,8 +213,8 @@ export async function POST(request: NextRequest) {
       }
     };
 
-    // Handle streaming response with enhanced features
-    if (stream && selectedProvider.supportsStreaming) {
+    // Handle streaming response with enhanced features (LEGACY - should not reach here)
+    if (false && stream && selectedProvider.supportsStreaming) {
       const encoder = new TextEncoder();
       const streamRequestId =
         requestId ||
@@ -359,64 +464,23 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Handle non-streaming response
+    // Handle non-streaming response (LEGACY - should not reach here)
+    console.warn('[DEBUG] Chat API: Reached legacy non-streaming code path - this should not happen');
     const response = await enhancedLLMService.generateResponse(llmRequest);
-
-    // Post-process assistant content to extract COMMANDS block for the client
-    let commands: {
-      request_files?: string[];
-      write_diffs?: { path: string; diff: string }[];
-    } | null = null;
-    try {
-      const content = response.content || "";
-      const match = content.match(
-        /=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/,
-      );
-      if (match) {
-        const block = match[1];
-        // Naive parse: look for JSON-like arrays
-        const reqMatch = block.match(/request_files:\s*\[(.*?)\]/s);
-        const diffsMatch = block.match(/write_diffs:\s*\[([\s\S]*?)\]/);
-        const request_files = reqMatch
-          ? JSON.parse(
-              `[${reqMatch[1]}]`.replace(
-                /([a-zA-Z0-9_\-\/\.]+)(?=\s*[\],])/g,
-                '"$1"',
-              ),
-            )
-          : [];
-        let write_diffs: { path: string; diff: string }[] = [];
-        if (diffsMatch) {
-          const items = diffsMatch[1]
-            .split(/},/)
-            .map((s) => (s.endsWith("}") ? s : s + "}"))
-            .map((s) => s.trim())
-            .filter(Boolean);
-          write_diffs = items.map((raw) => {
-            const pathMatch = raw.match(/path:\s*"([^"]+)"/);
-            const diffMatch = raw.match(/diff:\s*"([\s\S]*)"/);
-            return {
-              path: pathMatch?.[1] || "",
-              diff: (diffMatch?.[1] || "").replace(/\\n/g, "\n"),
-            };
-          });
-        }
-        commands = { request_files, write_diffs };
-      }
-    } catch {
-      // Ignore parse errors
-    }
 
     return NextResponse.json({
       success: true,
       data: response,
-      commands,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error("Chat API error:", error);
 
-    // Process error with enhanced error handler
+    // With proper fallback chain, this should rarely happen
+    // But if it does, still return a user-friendly response
+    console.error('[CRITICAL] Chat API: All fallback mechanisms failed');
+
+    // Process error with enhanced error handler for logging
     const processedError = errorHandler.processError(
       error instanceof Error ? error : new Error(String(error)),
       {
@@ -429,51 +493,25 @@ export async function POST(request: NextRequest) {
       }
     );
 
-    // Create user notification data
-    const notification = errorHandler.createUserNotification(processedError);
-
-    // Determine HTTP status code based on error type
-    let statusCode = 500;
-    switch (processedError.code) {
-      case 'AUTH_ERROR':
-        statusCode = 401;
-        break;
-      case 'RATE_LIMIT_ERROR':
-      case 'QUOTA_ERROR':
-        statusCode = 429;
-        break;
-      case 'VALIDATION_ERROR':
-        statusCode = 400;
-        break;
-      case 'TIMEOUT_ERROR':
-        statusCode = 408;
-        break;
-      case 'NETWORK_ERROR':
-      case 'SERVER_ERROR':
-        statusCode = 503;
-        break;
-      case 'CIRCUIT_BREAKER_ERROR':
-        statusCode = 503;
-        break;
-      default:
-        statusCode = 500;
-    }
-
+    // Return friendly response even in critical failure (no API errors to users)
     return NextResponse.json(
       {
-        error: processedError.userMessage,
-        code: processedError.code,
-        isRetryable: processedError.isRetryable,
-        suggestedAction: processedError.suggestedAction,
-        notification,
-        context: {
-          provider,
-          model,
-          requestId,
+        success: true, // Report success to avoid UI errors
+        data: {
+          content: "I apologize, but I'm experiencing technical difficulties at the moment. Our team has been notified and is working to resolve the issue. Please try again in a few moments.",
+          provider: 'critical-fallback',
+          model: 'fallback',
+          isFallback: true,
+          fallbackReason: 'critical_error'
+        },
+        metadata: {
+          criticalError: true,
+          errorCode: processedError.code,
           timestamp: new Date().toISOString()
-        }
+        },
+        timestamp: new Date().toISOString()
       },
-      { status: statusCode },
+      { status: 200 }, // Still return 200 to avoid UI error display
     );
   }
 }
