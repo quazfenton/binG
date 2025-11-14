@@ -17,7 +17,10 @@ fast = FastAgent("Orchestrator-Workers")
     writing short stories, but the narrative doesn't always make sense""",
     servers=["filesystem"],
 )
-# Define worker agents
+async def author_agent():
+    """Author agent placeholder"""
+    pass
+
 @fast.agent(
     name="finder",
     instruction="""You are an agent with access to the filesystem, 

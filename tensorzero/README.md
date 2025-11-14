@@ -1,6 +1,6 @@
 # About the tensorzero / fast-agent integration
 
-[TensorZero](https://www.tensorzero.com/) is an open source project designed to help LLM application developers rapidly improve their inference calls. Its core features include:
+[TensorZero](https://www.tensorzero.com/) is an open-source project designed to help LLM application developers rapidly improve their inference calls. Its core features include:
 
 - A uniform inference interface to all leading LLM platforms.
 - The ability to dynamic route to different platforms and program failovers.
@@ -9,7 +9,7 @@
 - Organization of LLM inference data into a Clickhouse DB allowing for sophisticated downstream analytics
 - A bunch of other good stuff is always in development
 
-`tensorzero` is powerful heavy, so we provide here a quickstart example that combines the basic components of `fast-agent`, an MCP server, `tensorzero`, and other supporting services into a cohesive whole.
+`tensorzero` is powerful but heavy, so we provide here a quickstart example that combines the basic components of `fast-agent`, an MCP server, `tensorzero`, and other supporting services into a cohesive whole.
 
 ## Quickstart guide
 

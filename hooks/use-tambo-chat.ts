@@ -9,10 +9,6 @@ export function useTamboChat() {
   const [error, setError] = useState<string | null>(null);
 
   const sendMessage = useCallback(async (message: string, options?: any) => {
-    if (!enabled || !apiKey) {
-      return sendStandardMessage(message, options);
-    }
-
     setIsLoading(true);
     setError(null);
 
