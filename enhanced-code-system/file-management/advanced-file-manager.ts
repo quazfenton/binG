@@ -956,17 +956,9 @@ class AdvancedFileManager extends EventEmitter {
    */
   private async validatePythonSyntax(content: string): Promise<boolean> {
     try {
-      // Try to use Python parser if available
-      try {
-        const skulpt = await this.loadPythonParser();
-        if (skulpt) {
-          skulpt.preload();
-          const result = skulpt.compile(content);
-          return result !== null;
-        }
-      } catch (parserError) {
-        console.debug('Python parser validation failed, falling back to basic validation');
-      }
+      // Skulpt is a python library and cannot be imported in node.
+      // The dynamic import would fail at build time.
+      console.debug('Python parser (skulpt) not available, falling back to basic validation');
 
       // Basic Python validation
       const lines = content.split('\n');
@@ -1001,18 +993,6 @@ class AdvancedFileManager extends EventEmitter {
     } catch (error) {
       console.debug('Python validation failed:', error);
       return false;
-    }
-  }
-
-  /**
-   * Load Python parser dynamically
-   */
-  private async loadPythonParser(): Promise<any> {
-    try {
-      const skulpt = await import('skulpt');
-      return skulpt;
-    } catch {
-      return null;
     }
   }
 
