@@ -951,8 +951,8 @@ function ConversationInterfaceContent() {
               </button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
