@@ -18,6 +18,9 @@ yarn-error.log*
 
 # env files
 .env*
+fastagent.secrets.yaml
+venv/
+.venv/
 
 # vercel
 .vercel

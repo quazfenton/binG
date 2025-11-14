@@ -824,6 +824,7 @@ function ConversationInterfaceContent() {
                 History
               </button>
             </div>
+          )}
           <ChatPanel
             messages={messages} // Pass messages from useChat
             input={input} // Pass input from useChat
@@ -949,10 +950,9 @@ function ConversationInterfaceContent() {
                 Continue
               </button>
             </div>
-            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

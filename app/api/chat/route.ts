@@ -7,6 +7,9 @@ import { unifiedResponseHandler } from "@/lib/api/unified-response-handler";
 import type { LLMRequest, LLMMessage } from "@/lib/api/llm-providers";
 import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 
+// Note: Fast-Agent now has dedicated endpoint at /api/agent
+// This route uses priority router which includes Fast-Agent as Priority 1
+
 export async function POST(request: NextRequest) {
   console.log('[DEBUG] Chat API: Incoming request');
   
