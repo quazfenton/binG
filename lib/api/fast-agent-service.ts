@@ -101,10 +101,15 @@ class FastAgentService {
   constructor() {
     // Support both localhost and subdomain configurations
     const endpoint = process.env.FAST_AGENT_ENDPOINT || 'http://localhost:8080/api/chat';
-    const isSubdomain = endpoint.includes('fast-agent.') || endpoint.includes('//agent.');
     
-    if (isSubdomain) {
-      console.log('[FastAgent] Using subdomain configuration:', endpoint);
+    // Optional: detect and log subdomain usage without exposing URL
+    try {
+      const url = new URL(endpoint);
+      if (url.hostname.includes('fast-agent') || url.hostname.includes('agent')) {
+        console.log('[FastAgent] Using subdomain-based configuration');
+      }
+    } catch {
+      // Invalid URL format, continue with endpoint as-is
     }
     
     this.config = {

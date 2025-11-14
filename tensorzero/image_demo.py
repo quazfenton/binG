@@ -41,21 +41,31 @@ async def main():
     content_parts.append(TextContent(type="text", text=TEXT_PROMPT))
 
     for file_path in LOCAL_IMAGE_FILES:
-        mime_type, _ = mimetypes.guess_type(file_path)
-        if not mime_type or not mime_type.startswith("image/"):
-            ext = file_path.suffix.lower()
-            if ext == ".jpg" or ext == ".jpeg":
-                mime_type = "image/jpeg"
-            elif ext == ".png":
-                mime_type = "image/png"
-        if mime_type is None:
-            mime_type = "image/png"  # Default fallback if still None
+        try:
+            mime_type, _ = mimetypes.guess_type(file_path)
+            if not mime_type or not mime_type.startswith("image/"):
+                ext = file_path.suffix.lower()
+                if ext == ".jpg" or ext == ".jpeg":
+                    mime_type = "image/jpeg"
+                elif ext == ".png":
+                    mime_type = "image/png"
+            if mime_type is None:
+                mime_type = "image/png"  # Default fallback if still None
 
-        with open(file_path, "rb") as image_file:
-            image_bytes = image_file.read()
+            with open(file_path, "rb") as image_file:
+                image_bytes = image_file.read()
 
-        encoded_data = base64.b64encode(image_bytes).decode("utf-8")
-        content_parts.append(ImageContent(type="image", mimeType=mime_type, data=encoded_data))
+            encoded_data = base64.b64encode(image_bytes).decode("utf-8")
+            content_parts.append(ImageContent(type="image", mimeType=mime_type, data=encoded_data))
+        except FileNotFoundError:
+            print(f"Error: Image file not found: {file_path}")
+            return
+        except PermissionError:
+            print(f"Error: Permission denied reading: {file_path}")
+            return
+        except Exception as e:
+            print(f"Error processing {file_path}: {e}")
+            return
 
     message = Prompt.user(*content_parts)
     async with fast.run() as agent_app:

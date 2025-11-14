@@ -30,6 +30,6 @@ mc --insecure ls local/tensorzero > /dev/null 2>&1 || mc --insecure mb local/ten
 
 echo "Entrypoint: Bucket 'tensorzero' check/creation complete."
 
-echo "Entrypoint: Executing the main container command: $@"
+echo "Entrypoint: Executing the main container command:" "$@"
 
 exec "$@"
