@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { llmService } from "@/lib/api/llm-providers";
+import { llmService, PROVIDERS } from "@/lib/api/llm-providers";
 import { enhancedLLMService } from "@/lib/api/enhanced-llm-service";
 import { errorHandler } from "@/lib/api/error-handler";
 import { priorityRequestRouter } from "@/lib/api/priority-request-router";
@@ -63,23 +63,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if provider is available
-    const availableProviders = llmService.getAvailableProviders();
-    console.log('[DEBUG] Chat API: Available providers:', availableProviders.map(p => p.id));
+    // Check if provider is valid (exists in our PROVIDERS constant)
+    const isValidProvider = provider in PROVIDERS;
     
-    const selectedProvider = availableProviders.find((p) => p.id === provider);
-
-    if (!selectedProvider) {
-      console.error('[DEBUG] Chat API: Provider not available:', provider);
+    if (!isValidProvider) {
+      console.error('[DEBUG] Chat API: Invalid provider:', provider);
       return NextResponse.json(
         {
-          error: `Provider ${provider} is not available. Check your API keys.`,
-          availableProviders: availableProviders.map((p) => p.id),
+          error: `Provider ${provider} is not supported.`,
+          availableProviders: Object.keys(PROVIDERS),
         },
         { status: 400 },
       );
     }
 
+    // Get provider info from PROVIDERS constant
+    const selectedProvider = PROVIDERS[provider as keyof typeof PROVIDERS];
     console.log('[DEBUG] Chat API: Selected provider:', provider, 'supports streaming:', selectedProvider.supportsStreaming);
 
     // Check if model is supported by the provider
@@ -525,26 +524,31 @@ export async function GET() {
     const providerHealth = enhancedLLMService.getProviderHealth();
     const availableProviderIds = enhancedLLMService.getAvailableProviders();
     
-    // Convert to the format expected by LLMProvider interface
-    const providers: LLMProvider[] = availableProviderIds.map(providerId => {
-      const healthInfo = providerHealth[providerId];
-      if (healthInfo) {
+    // Return all providers from the PROVIDERS constant, but mark which ones are available
+    const allProviders = Object.values(PROVIDERS)
+      .filter(provider => {
+        // Only include providers that are configured in enhancedLLMService
+        return provider.id in providerHealth;
+      })
+      .map(provider => {
+        // Check if this provider has API keys configured (is available)
+        const isAvailable = availableProviderIds.includes(provider.id);
+        
         return {
-          id: providerId,
-          name: healthInfo.name || providerId,
-          models: healthInfo.models || [],
-          supportsStreaming: healthInfo.supportsStreaming || true,
-          maxTokens: healthInfo.maxTokens || 128000,
-          description: healthInfo.description || ''
+          id: provider.id,
+          name: provider.name,
+          models: provider.models,
+          supportsStreaming: provider.supportsStreaming,
+          maxTokens: provider.maxTokens,
+          description: provider.description,
+          isAvailable // Add availability status for UI
         };
-      }
-      return null;
-    }).filter((provider): provider is LLMProvider => provider !== null);
+      }) as LLMProvider[];
 
     return NextResponse.json({
       success: true,
       data: {
-        providers,
+        providers: allProviders,
         defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "openrouter",
         defaultModel:
           process.env.DEFAULT_MODEL || "deepseek/deepseek-r1-0528:free",
