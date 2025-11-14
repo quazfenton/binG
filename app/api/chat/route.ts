@@ -4,7 +4,7 @@ import { enhancedLLMService } from "@/lib/api/enhanced-llm-service";
 import { errorHandler } from "@/lib/api/error-handler";
 import { priorityRequestRouter } from "@/lib/api/priority-request-router";
 import { unifiedResponseHandler } from "@/lib/api/unified-response-handler";
-import type { LLMRequest, LLMMessage } from "@/lib/api/llm-providers";
+import type { LLMRequest, LLMMessage, LLMProvider } from "@/lib/api/llm-providers";
 import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 
 // Note: Fast-Agent now has dedicated endpoint at /api/agent
@@ -521,12 +521,30 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   try {
-    const availableProviders = llmService.getAvailableProviders();
+    // Use enhancedLLMService to get health information
+    const providerHealth = enhancedLLMService.getProviderHealth();
+    const availableProviderIds = enhancedLLMService.getAvailableProviders();
+    
+    // Convert to the format expected by LLMProvider interface
+    const providers: LLMProvider[] = availableProviderIds.map(providerId => {
+      const healthInfo = providerHealth[providerId];
+      if (healthInfo) {
+        return {
+          id: providerId,
+          name: healthInfo.name || providerId,
+          models: healthInfo.models || [],
+          supportsStreaming: healthInfo.supportsStreaming || true,
+          maxTokens: healthInfo.maxTokens || 128000,
+          description: healthInfo.description || ''
+        };
+      }
+      return null;
+    }).filter((provider): provider is LLMProvider => provider !== null);
 
     return NextResponse.json({
       success: true,
       data: {
-        providers: availableProviders,
+        providers,
         defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "openrouter",
         defaultModel:
           process.env.DEFAULT_MODEL || "deepseek/deepseek-r1-0528:free",

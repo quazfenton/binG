@@ -97,6 +97,22 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     maxTokens: 128000,
     description: 'OpenAI GPT models'
   },
+  openrouter: {
+    id: 'openrouter',
+    name: 'OpenRouter',
+        models: ['deepseek/deepseek-r1-0528:free', 'deepseek/deepseek-chat-v3-0324:free', 'meta-llama/llama-4-maverick:free', 'gemma-3-27b-it:free', 'meta-llama/llama-3.3-70b-instruct:free', 'meta-llama/llama-3.2-11b-vision-instruct:free'],
+    supportsStreaming: true,
+    maxTokens: 128000, // OpenRouter models can vary, setting a common high limit
+    description: 'OpenRouter gateway models'
+  },
+  chutes: {
+    id: 'chutes',
+    name: 'Chutes',
+    models: ['deepseek-ai/DeepSeek-R1-0528', 'deepseek-ai/DeepSeek-Chat-V3-0324', 'tngtech/DeepSeek-TNG-R1T2-Chimera', 'gemma-3-27b-it', 'meta-llama/Llama-4-Maverick', 'meta-llama/Llama-3.3-70B-Instruct'],
+    supportsStreaming: true,
+    maxTokens: 10096,
+    description: 'Chutes AI with high-performance models'
+  },
   anthropic: {
     id: 'anthropic',
     name: 'Anthropic',
@@ -114,14 +130,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   google: {
     id: 'google',
     name: 'Google',
-    models: [
-      'gemini-1.5-pro-latest',
-      'gemini-1.5-pro-exp-0801',
-      'gemini-1.5-pro-exp-0827',
-      'gemini-1.5-flash-latest',
-      'gemini-1.5-flash-exp-0827',
-      'gemini-1.5-flash-8b-exp-0827'
-    ],
+    models: ['gemini-2.5-flash-preview-05-20', 'gemini-pro', 'gemini-pro-vision', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-vision'],
     supportsStreaming: true,
     maxTokens: 2000000,
     description: 'Google Gemini models'

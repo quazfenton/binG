@@ -31,3 +31,7 @@ next-env.d.ts
 .aider*
 
 node_modules*
+
+.amazonq/
+.vscode/
+.kiro/
