@@ -575,13 +575,9 @@ class CrewAIAdapter extends FrameworkAdapter {
    * Load CrewAI dynamically
    */
   private async loadCrewAI(): Promise<any> {
-    try {
-      const crewai = await import('crewai');
-      return crewai;
-    } catch (error) {
-      console.warn('CrewAI not available, using simulation:', error);
-      return null;
-    }
+    // This is a python library and cannot be imported in node.
+    console.warn('CrewAI not available, using simulation.');
+    return null;
   }
 
   private async simulateAgentExecution(agent: BaseAgent, task: string, files: ProjectItem[]): Promise<string> {
@@ -734,13 +730,9 @@ class PraisonAIAdapter extends FrameworkAdapter {
    * Load PraisonAI dynamically
    */
   private async loadPraisonAI(): Promise<any> {
-    try {
-      const praisonai = await import('praisonai');
-      return praisonai;
-    } catch (error) {
-      console.warn('PraisonAI not available, using simulation:', error);
-      return null;
-    }
+    // This is a python library and cannot be imported in node.
+    console.warn('PraisonAI not available, using simulation.');
+    return null;
   }
 
   private async executeWorkflowStep(
@@ -791,7 +783,7 @@ class AG2Adapter extends FrameworkAdapter {
           const manager = autogen.GroupChatManager({ groupchat: groupchat });
           
           // Initiate conversation
-          const result = await agents[0].initiate_chat(manager, message: task);
+          const result = await agents[0].initiate_chat(manager, { message: task });
           const executionTime = Date.now() - startTime;
 
           results.push({
@@ -813,7 +805,7 @@ class AG2Adapter extends FrameworkAdapter {
             is_termination_msg: (x) => x.get("content", "").indexOf("TERMINATE") >= 0,
           });
 
-          const result = await user_proxy.initiate_chat(agents[0], message: task);
+          const result = await user_proxy.initiate_chat(agents[0], { message: task });
           const executionTime = Date.now() - startTime;
 
           results.push({
@@ -869,13 +861,9 @@ class AG2Adapter extends FrameworkAdapter {
    * Load AG2 (autogen) dynamically
    */
   private async loadAG2(): Promise<any> {
-    try {
-      const autogen = await import('pyautogen');
-      return autogen;
-    } catch (error) {
-      console.warn('AG2 (autogen) not available, using simulation:', error);
-      return null;
-    }
+    // This is a python library and cannot be imported in node.
+    console.warn('AG2 (pyautogen) not available, using simulation.');
+    return null;
   }
 
   private async simulateGroupChatResponse(agent: BaseAgent, task: string, files: ProjectItem[]): Promise<string> {

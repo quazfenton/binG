@@ -6,7 +6,6 @@ import Together from 'together-ai'
 import Replicate from 'replicate'
 import { Portkey } from 'portkey-ai'
 import {
-  createLLMError,
   createOrchestratorError,
   createStreamError,
   ERROR_CODES
@@ -298,12 +297,7 @@ class LLMService {
           yield* this.streamPortkey(model, messages, temperature, maxTokens)
           break
         default:
-          throw createLLMError(`Unsupported provider: ${provider}`, {
-            code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
-            severity: 'high',
-            recoverable: false,
-            context: { provider }
-          });
+          throw new Error(`Streaming is not supported for provider: ${provider}`);
       }
     } catch (error) {
       throw createStreamError(`Streaming LLM request failed: ${error instanceof Error ? error.message : String(error)}`, {
@@ -321,12 +315,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    if (!this.openai) throw createLLMError('OpenAI not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'openai' }
-    });
+    if (!this.openai) throw new Error('OpenAI not initialized');
 
     const response = await this.openai.chat.completions.create({
       model,
@@ -350,12 +339,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    if (!this.anthropic) throw createLLMError('Anthropic not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'anthropic' }
-    });
+    if (!this.anthropic) throw new Error('Anthropic not initialized');
 
     // Convert messages to Anthropic format
     const anthropicMessages = messages
@@ -395,12 +379,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    if (!this.google) throw createLLMError('Google not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'google' }
-    });
+    if (!this.google) throw new Error('Google not initialized');
 
     const geminiModel = this.google.getGenerativeModel({ model, generationConfig: { maxOutputTokens: maxTokens, temperature } })
 
@@ -439,12 +418,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    if (!this.cohere) throw createLLMError('Cohere not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'cohere' }
-    });
+    if (!this.cohere) throw new Error('Cohere not initialized');
 
     // Convert messages to Cohere format
     const chatHistory = messages.slice(0, -1).map(msg => ({
@@ -483,12 +457,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    if (!this.together) throw createLLMError('Together AI not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'together' }
-    });
+    if (!this.together) throw new Error('Together AI not initialized');
 
     const response = await this.together.chat.completions.create({
       model,
@@ -512,12 +481,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    if (!this.replicate) throw createLLMError('Replicate not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'replicate' }
-    });
+    if (!this.replicate) throw new Error('Replicate not initialized');
 
     // Convert messages to Replicate format
     const prompt = messages.map(msg => 
@@ -542,12 +506,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    if (!this.portkey) throw createLLMError('Portkey not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'portkey' }
-    });
+    if (!this.portkey) throw new Error('Portkey not initialized');
 
     const response = await this.portkey.chatCompletions.create({
       model,
@@ -571,12 +530,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    if (!this.openai) throw createStreamError('OpenAI not initialized', {
-      code: ERROR_CODES.STREAMING.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'openai' }
-    });
+    if (!this.openai) throw new Error('OpenAI not initialized');
 
     const stream = await this.openai.chat.completions.create({
       model,
@@ -601,12 +555,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    if (!this.anthropic) throw createLLMError('Anthropic not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'anthropic' }
-    });
+    if (!this.anthropic) throw new Error('Anthropic not initialized');
 
     // Convert messages to Anthropic format
     const anthropicMessages = messages
@@ -641,12 +590,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    if (!this.google) throw createLLMError('Google not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'google' }
-    });
+    if (!this.google) throw new Error('Google not initialized');
 
     const geminiModel = this.google.getGenerativeModel({ model, generationConfig: { maxOutputTokens: maxTokens, temperature } })
 
@@ -679,12 +623,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    if (!this.cohere) throw createLLMError('Cohere not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'cohere' }
-    });
+    if (!this.cohere) throw new Error('Cohere not initialized');
 
     // Convert messages to Cohere format
     const chatHistory = messages.slice(0, -1).map(msg => ({
@@ -718,12 +657,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    if (!this.together) throw createLLMError('Together AI not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'together' }
-    });
+    if (!this.together) throw new Error('Together AI not initialized');
 
     const stream = await this.together.chat.completions.create({
       model,
@@ -748,12 +682,7 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    if (!this.portkey) throw createLLMError('Portkey not initialized', {
-      code: ERROR_CODES.LLM.SERVICE_NOT_INITIALIZED,
-      severity: 'high',
-      recoverable: false,
-      context: { service: 'portkey' }
-    });
+    if (!this.portkey) throw new Error('Portkey not initialized');
 
     const stream = await this.portkey.chatCompletions.create({
       model,
@@ -815,6 +744,5 @@ export {
   type LLMRequest,
   type LLMResponse,
   type StreamingResponse,
-  type ProviderConfig,
-  PROVIDERS
+  type ProviderConfig
 }
