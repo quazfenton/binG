@@ -99,9 +99,22 @@ class FastAgentService {
   private readonly HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
 
   constructor() {
+    // Support both localhost and subdomain configurations
+    const endpoint = process.env.FAST_AGENT_ENDPOINT || 'http://localhost:8080/api/chat';
+    
+    // Optional: detect and log subdomain usage without exposing URL
+    try {
+      const url = new URL(endpoint);
+      if (url.hostname.includes('fast-agent') || url.hostname.includes('agent')) {
+        console.log('[FastAgent] Using subdomain-based configuration');
+      }
+    } catch {
+      // Invalid URL format, continue with endpoint as-is
+    }
+    
     this.config = {
       enabled: process.env.FAST_AGENT_ENABLED === 'true',
-      endpoint: process.env.FAST_AGENT_ENDPOINT || 'http://localhost:8080/api/chat',
+      endpoint,
       timeout: parseInt(process.env.FAST_AGENT_TIMEOUT || '30000'),
       apiKey: process.env.FAST_AGENT_API_KEY,
       fallbackOnError: process.env.FAST_AGENT_FALLBACK !== 'false',
