@@ -115,15 +115,15 @@ export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData
     
     const content = typeof message.content === 'string' ? message.content : ''
     
-    // Extract code blocks using regex
-    const codeBlockRegex = /```(\w+)?\s*(?:\/\/\s*(.+?))?\n([\s\S]*?)```/g
+    // Extract code blocks using regex - makes newline optional and captures optional info string without requiring //
+    const codeBlockRegex = /```(\w+)?\s*([^\n]*?)(?:\n([\s\S]*?))?```/g
     let match
     
     while ((match = codeBlockRegex.exec(content)) !== null) {
-      const [, language = 'text', filenameComment, code] = match
+      const [, language = 'text', infoString, rawCode = ''] = match
       
-      // Clean filename from comment or infer from language
-      let filename = filenameComment?.trim() || ''
+      // Use infoString as filename when present (without requiring //), otherwise fall back to language extension
+      let filename = infoString?.trim() || ''
       if (!filename) {
         const ext = getExtensionForLanguage(language)
         filename = `file-${blockIndex}.${ext}`
@@ -131,7 +131,7 @@ export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData
       
       codeBlocks.push({
         language: language.toLowerCase(),
-        code: code.trim(),
+        code: rawCode?.trim() || '',
         filename: cleanFilename(filename),
         index: blockIndex++,
         isError: false
@@ -139,7 +139,7 @@ export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData
       
       // Collect shell commands
       if (language.toLowerCase() === 'bash' || language.toLowerCase() === 'sh' || language.toLowerCase() === 'shell') {
-        shellCommands += code.trim() + '\n\n'
+        shellCommands += rawCode?.trim() + '\n\n'
       }
     }
     

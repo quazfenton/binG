@@ -82,8 +82,18 @@ import GitHubExplorerPlugin from "./plugins/github-explorer-plugin";
 import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
+import MCPConnectorPlugin from "./plugins/mcp-connector-plugin";
+import HyperagentScraperPlugin from "./plugins/hyperagent-scraper-plugin";
+import WebhookDebuggerPlugin from "./plugins/webhook-debugger-plugin";
+import AIAgentOrchestratorPlugin from "./plugins/ai-agent-orchestrator-plugin";
+import RegexPatternLabPlugin from "./plugins/regex-pattern-lab-plugin";
+import CodeTranspilerPlugin from "./plugins/code-transpiler-plugin";
+import WebSocketTesterPlugin from "./plugins/websocket-tester-plugin";
 import { useInteractionCodeMode } from "../hooks/use-interaction-code-mode";
-import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
+import {
+  pluginMigrationService,
+  PluginCategorizer,
+} from "../lib/plugins/plugin-migration";
 import { processResponse } from "../lib/mode-manager";
 
 interface InteractionPanelProps {
@@ -301,17 +311,17 @@ export default function InteractionPanel({
   // Initialize plugin migration service
   useEffect(() => {
     // Perform the migration: move Advanced AI Plugins to Extra tab
-    const advancedAIPluginIds = ['advanced-ai-plugins'];
-    const modularToolsIds = ['modular-tools'];
-    
+    const advancedAIPluginIds = ["advanced-ai-plugins"];
+    const modularToolsIds = ["modular-tools"];
+
     // Update tab configurations
-    pluginMigrationService.movePluginsToTab(advancedAIPluginIds, 'extra');
-    pluginMigrationService.movePluginsToTab(modularToolsIds, 'plugins');
-    
+    pluginMigrationService.movePluginsToTab(advancedAIPluginIds, "extra");
+    pluginMigrationService.movePluginsToTab(modularToolsIds, "plugins");
+
     // Validate the structure
     const isValid = pluginMigrationService.validateTabStructure();
     if (!isValid) {
-      console.warn('Plugin tab structure validation failed');
+      console.warn("Plugin tab structure validation failed");
     }
   }, []);
 
@@ -437,6 +447,78 @@ export default function InteractionPanel({
       defaultSize: { width: 800, height: 600 },
       minSize: { width: 600, height: 400 },
     },
+    {
+      id: "mcp-connector",
+      name: "MCP Connector",
+      description:
+        "Connect to Model Context Protocol servers for extended capabilities",
+      icon: Server,
+      component: MCPConnectorPlugin,
+      category: "ai",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "hyperagent-scraper",
+      name: "Hyperagent Scraper",
+      description: "Advanced web scraping with AI-powered content extraction",
+      icon: Globe,
+      component: HyperagentScraperPlugin,
+      category: "utility",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "webhook-debugger",
+      name: "Webhook Debugger",
+      description: "Capture, inspect, and debug webhook requests in real-time",
+      icon: Zap,
+      component: WebhookDebuggerPlugin,
+      category: "utility",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "ai-agent-orchestrator",
+      name: "AI Agent Orchestrator",
+      description: "Coordinate multiple AI agents for complex workflows",
+      icon: Brain,
+      component: AIAgentOrchestratorPlugin,
+      category: "ai",
+      defaultSize: { width: 1000, height: 750 },
+      minSize: { width: 800, height: 600 },
+    },
+    {
+      id: "regex-pattern-lab",
+      name: "Regex Pattern Lab",
+      description:
+        "Visual regex testing with AI explanations and pattern library",
+      icon: Hash,
+      component: RegexPatternLabPlugin,
+      category: "code",
+      defaultSize: { width: 850, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "code-transpiler",
+      name: "Code Transpiler",
+      description: "Translate code between programming languages with AI",
+      icon: Code,
+      component: CodeTranspilerPlugin,
+      category: "code",
+      defaultSize: { width: 1000, height: 750 },
+      minSize: { width: 800, height: 600 },
+    },
+    {
+      id: "websocket-tester",
+      name: "WebSocket Tester",
+      description: "Test and monitor WebSocket connections in real-time",
+      icon: Zap,
+      component: WebSocketTesterPlugin,
+      category: "utility",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
   ];
 
   const handlePluginResult = (pluginId: string, result: any) => {
@@ -492,7 +574,7 @@ export default function InteractionPanel({
       },
       {
         id: "document-analyzer",
-        name: "Document Analyzer",
+        name: "Document Analyzeh out the ",
         description: "Analyze and summarize documents, extract key insights",
         icon: FileText,
         color: "text-green-400",
@@ -934,7 +1016,7 @@ export default function InteractionPanel({
           setGhostSuffix("");
           return;
         } catch (error) {
-          console.error('Code mode processing failed:', error);
+          console.error("Code mode processing failed:", error);
           // Fall back to regular processing
         }
       }
@@ -1024,7 +1106,8 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       // Only handle pending diffs keyboard shortcuts in code mode
-      if (!pendingDiffs || pendingDiffs.length === 0 || activeTab !== "code") return;
+      if (!pendingDiffs || pendingDiffs.length === 0 || activeTab !== "code")
+        return;
       if (ev.key === "Enter" && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
         onAcceptPendingDiffs?.();
       } else if (ev.key === "Escape") {
@@ -1427,34 +1510,36 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
 
               {/* Input Section - Always at bottom */}
               <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-2 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
-                {pendingDiffs && pendingDiffs.length > 0 && activeTab === "code" && (
-                  <div className="mb-3 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-200">
-                    <div className="flex items-center justify-between">
-                      <span>
-                        {pendingDiffs.length} diff(s) proposed. Press Enter to
-                        apply to preview, Esc to dismiss.
-                      </span>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={onAcceptPendingDiffs}
-                          className="h-6 px-2"
-                        >
-                          Apply
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={onDismissPendingDiffs}
-                          className="h-6 px-2"
-                        >
-                          Dismiss
-                        </Button>
+                {pendingDiffs &&
+                  pendingDiffs.length > 0 &&
+                  activeTab === "code" && (
+                    <div className="mb-3 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-200">
+                      <div className="flex items-center justify-between">
+                        <span>
+                          {pendingDiffs.length} diff(s) proposed. Press Enter to
+                          apply to preview, Esc to dismiss.
+                        </span>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={onAcceptPendingDiffs}
+                            className="h-6 px-2"
+                          >
+                            Apply
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={onDismissPendingDiffs}
+                            className="h-6 px-2"
+                          >
+                            Dismiss
+                          </Button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
                 {/* Suggestions */}
                 <div className="flex flex-wrap gap-2">
                   {chatSuggestions.map((suggestion, index) => (
@@ -1651,13 +1736,19 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                 <div className="flex items-center gap-2">
                   <Button
                     size="sm"
-                    variant={codeModeState.mode === "advanced" ? "default" : "outline"}
+                    variant={
+                      codeModeState.mode === "advanced" ? "default" : "outline"
+                    }
                     onClick={() =>
-                      codeModeActions.setMode(codeModeState.mode === "basic" ? "advanced" : "basic")
+                      codeModeActions.setMode(
+                        codeModeState.mode === "basic" ? "advanced" : "basic",
+                      )
                     }
                     className="text-xs"
                   >
-                    {codeModeState.mode === "advanced" ? "🔧 Advanced" : "📝 Basic"}
+                    {codeModeState.mode === "advanced"
+                      ? "🔧 Advanced"
+                      : "📝 Basic"}
                   </Button>
                   <Badge variant="outline" className="text-xs">
                     {codeModeState.mode === "advanced"
@@ -1665,12 +1756,18 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                       : "Enhanced Prompting"}
                   </Badge>
                   {codeModeState.sessionActive && (
-                    <Badge variant="outline" className="text-xs bg-green-900/20 text-green-400">
+                    <Badge
+                      variant="outline"
+                      className="text-xs bg-green-900/20 text-green-400"
+                    >
                       Session Active
                     </Badge>
                   )}
                   {codeModeState.isProcessing && (
-                    <Badge variant="outline" className="text-xs bg-blue-900/20 text-blue-400">
+                    <Badge
+                      variant="outline"
+                      className="text-xs bg-blue-900/20 text-blue-400"
+                    >
                       Processing...
                     </Badge>
                   )}
@@ -1716,12 +1813,19 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                           <input
                             type="checkbox"
                             checked={codeModeState.selectedFiles.includes(file)}
-                            onChange={() => codeModeActions.toggleFileSelection(file)}
+                            onChange={() =>
+                              codeModeActions.toggleFileSelection(file)
+                            }
                             className="rounded"
                           />
                           <span className="text-white/70">{file}</span>
-                          {Object.keys(codeModeState.attachedFiles).includes(file) && (
-                            <Badge variant="outline" className="text-xs bg-blue-900/20 text-blue-400">
+                          {Object.keys(codeModeState.attachedFiles).includes(
+                            file,
+                          ) && (
+                            <Badge
+                              variant="outline"
+                              className="text-xs bg-blue-900/20 text-blue-400"
+                            >
                               Attached
                             </Badge>
                           )}
@@ -1733,21 +1837,27 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                   {codeModeState.selectedFiles.length > 0 && (
                     <div className="mt-2 flex items-center justify-between">
                       <div className="text-xs text-green-400">
-                        ✓ {codeModeState.selectedFiles.length} file(s) selected for context
+                        ✓ {codeModeState.selectedFiles.length} file(s) selected
+                        for context
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={() => {
                           // Simulate attaching files with mock content
-                          codeModeState.selectedFiles.forEach(file => {
+                          codeModeState.selectedFiles.forEach((file) => {
                             if (!codeModeState.attachedFiles[file]) {
-                              codeModeActions.attachFile(file, `// Mock content for ${file}\n// This would be the actual file content in a real implementation`);
+                              codeModeActions.attachFile(
+                                file,
+                                `// Mock content for ${file}\n// This would be the actual file content in a real implementation`,
+                              );
                             }
                           });
                         }}
                         className="text-xs"
-                        disabled={codeModeState.selectedFiles.every(f => codeModeState.attachedFiles[f])}
+                        disabled={codeModeState.selectedFiles.every(
+                          (f) => codeModeState.attachedFiles[f],
+                        )}
                       >
                         Attach Selected
                       </Button>
@@ -2072,9 +2182,7 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                   <div className="space-y-3">
                     <div className="flex items-center gap-2 mb-2">
                       <Zap className="h-4 w-4 text-yellow-400" />
-                      <span className="text-sm font-medium">
-                        Modular Tools
-                      </span>
+                      <span className="text-sm font-medium">Modular Tools</span>
                     </div>
                     <div className="mb-3">
                       <p className="text-xs text-white/60 mb-2">

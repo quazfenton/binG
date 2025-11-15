@@ -1,481 +1,284 @@
-"use client"
+"use client";
 
 import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
-import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/card';
+import { Badge } from '../ui/badge';
 import { Input } from '../ui/input';
-import { Alert, AlertDescription } from '../ui/alert';
+import { ScrollArea } from '../ui/scroll-area';
 import { 
-  Store, 
   Search, 
-  Download, 
-  Star, 
-  Shield, 
-  Zap,
-  Users,
-  Calendar,
+  Grid3X3, 
+  List, 
   Filter,
-  TrendingUp,
-  CheckCircle,
-  AlertTriangle,
-  ExternalLink
+  Code,
+  Database,
+  Brain,
+  Wrench,
+  Layout,
+  FileText,
+  Globe,
+  Cpu,
+  Github,
+  Cog,
+  Zap,
+  Star,
+  Download,
+  ExternalLink,
+  Plus,
+  XCircle
 } from 'lucide-react';
+import { Tabs, TabsList, TabsTrigger } from '../ui/tabs';
+import type { Plugin } from './plugin-manager';
 import { enhancedPluginRegistry } from '../../lib/plugins/enhanced-plugin-registry';
-import { enhancedPluginManager } from '../../lib/plugins/enhanced-plugin-manager';
-
-interface MarketplacePlugin {
-  id: string;
-  name: string;
-  description: string;
-  version: string;
-  author: string;
-  category: string;
-  rating: number;
-  downloads: number;
-  size: string;
-  lastUpdated: string;
-  verified: boolean;
-  featured: boolean;
-  tags: string[];
-  screenshots: string[];
-  dependencies: string[];
-  permissions: string[];
-  price: number; // 0 for free
-  installed: boolean;
-  compatible: boolean;
-}
+import { toast } from 'sonner';
 
 interface PluginMarketplaceProps {
-  onClose?: () => void;
-  onInstall?: (pluginId: string) => void;
+  onPluginLaunch?: (pluginId: string) => void;
+  onPluginClose?: () => void;
+  viewMode?: 'grid' | 'list';
 }
 
-export const PluginMarketplace: React.FC<PluginMarketplaceProps> = ({
-  onClose,
-  onInstall
-}) => {
-  const [plugins, setPlugins] = useState<MarketplacePlugin[]>([]);
-  const [filteredPlugins, setFilteredPlugins] = useState<MarketplacePlugin[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('all');
-  const [sortBy, setSortBy] = useState<'name' | 'rating' | 'downloads' | 'updated'>('rating');
-  const [showOnlyFree, setShowOnlyFree] = useState(false);
-  const [showOnlyCompatible, setShowOnlyCompatible] = useState(true);
-  const [selectedPlugin, setSelectedPlugin] = useState<MarketplacePlugin | null>(null);
+// Map categories to icons
+const categoryIcons: Record<string, React.ComponentType<any>> = {
+  ai: Brain,
+  code: Code,
+  data: Database,
+  utility: Wrench,
+  design: Layout,
+  media: Layout,
+  default: Cog
+};
 
+const PluginMarketplace: React.FC<PluginMarketplaceProps> = ({ 
+  onPluginLaunch,
+  onPluginClose,
+  viewMode = 'grid'
+}) => {
+  const [plugins, setPlugins] = useState<Plugin[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [isLoading, setIsLoading] = useState(true);
+  const [displayMode, setDisplayMode] = useState<'grid' | 'list'>(viewMode);
+
+  // Load plugins
   useEffect(() => {
-    loadMarketplacePlugins();
+    const loadPlugins = async () => {
+      setIsLoading(true);
+      try {
+        const allPlugins = await enhancedPluginRegistry.getAllPlugins();
+        setPlugins(allPlugins);
+      } catch (error) {
+        console.error('Failed to load plugins:', error);
+        toast.error('Failed to load plugins');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadPlugins();
   }, []);
 
-  useEffect(() => {
-    filterAndSortPlugins();
-  }, [plugins, searchTerm, selectedCategory, sortBy, showOnlyFree, showOnlyCompatible]);
-
-  const loadMarketplacePlugins = () => {
-    // Simulate marketplace data - in real implementation, this would fetch from an API
-    const installedPlugins = enhancedPluginManager.getAllPlugins().map(p => p.id);
+  // Filter plugins based on search and category
+  const filteredPlugins = plugins.filter(plugin => {
+    const matchesSearch = plugin.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          plugin.description.toLowerCase().includes(searchQuery.toLowerCase());
     
-    const marketplaceData: MarketplacePlugin[] = [
-      {
-        id: 'calculator',
-        name: 'Calculator',
-        description: 'A powerful calculator with history and memory functions',
-        version: '1.0.0',
-        author: 'Kiro Team',
-        category: 'utility',
-        rating: 4.8,
-        downloads: 15420,
-        size: '2.1 MB',
-        lastUpdated: '2024-01-15',
-        verified: true,
-        featured: true,
-        tags: ['math', 'calculator', 'utility'],
-        screenshots: [],
-        dependencies: [],
-        permissions: ['storage'],
-        price: 0,
-        installed: installedPlugins.includes('calculator'),
-        compatible: true
-      },
-      {
-        id: 'json-validator',
-        name: 'JSON Validator',
-        description: 'Validate, format, and analyze JSON data with advanced features',
-        version: '1.0.0',
-        author: 'Kiro Team',
-        category: 'utility',
-        rating: 4.6,
-        downloads: 8930,
-        size: '1.8 MB',
-        lastUpdated: '2024-01-10',
-        verified: true,
-        featured: false,
-        tags: ['json', 'validator', 'formatter', 'developer'],
-        screenshots: [],
-        dependencies: [],
-        permissions: ['clipboard'],
-        price: 0,
-        installed: installedPlugins.includes('json-validator'),
-        compatible: true
-      },
-      {
-        id: 'url-utilities',
-        name: 'URL Utilities',
-        description: 'Comprehensive URL validation, shortening, and analysis tools',
-        version: '1.0.0',
-        author: 'Kiro Team',
-        category: 'utility',
-        rating: 4.4,
-        downloads: 6750,
-        size: '2.3 MB',
-        lastUpdated: '2024-01-08',
-        verified: true,
-        featured: false,
-        tags: ['url', 'validator', 'shortener', 'web'],
-        screenshots: [],
-        dependencies: [],
-        permissions: ['network', 'clipboard'],
-        price: 0,
-        installed: installedPlugins.includes('url-utilities'),
-        compatible: true
-      },
-      // Simulated third-party plugins
-      {
-        id: 'password-generator',
-        name: 'Password Generator Pro',
-        description: 'Generate secure passwords with customizable options and strength analysis',
-        version: '2.1.0',
-        author: 'SecureTools Inc.',
-        category: 'security',
-        rating: 4.9,
-        downloads: 23450,
-        size: '1.5 MB',
-        lastUpdated: '2024-01-20',
-        verified: true,
-        featured: true,
-        tags: ['password', 'security', 'generator'],
-        screenshots: [],
-        dependencies: [],
-        permissions: ['clipboard'],
-        price: 4.99,
-        installed: false,
-        compatible: true
-      },
-      {
-        id: 'color-picker',
-        name: 'Advanced Color Picker',
-        description: 'Professional color picker with palette management and format conversion',
-        version: '1.3.2',
-        author: 'DesignTools',
-        category: 'design',
-        rating: 4.7,
-        downloads: 12340,
-        size: '3.2 MB',
-        lastUpdated: '2024-01-12',
-        verified: false,
-        featured: false,
-        tags: ['color', 'design', 'picker', 'palette'],
-        screenshots: [],
-        dependencies: ['canvas-api'],
-        permissions: ['clipboard', 'storage'],
-        price: 0,
-        installed: false,
-        compatible: false // Simulated incompatibility
-      },
-      {
-        id: 'markdown-editor',
-        name: 'Markdown Editor Plus',
-        description: 'Feature-rich markdown editor with live preview and export options',
-        version: '3.0.1',
-        author: 'TextTools',
-        category: 'utility',
-        rating: 4.5,
-        downloads: 18920,
-        size: '4.1 MB',
-        lastUpdated: '2024-01-18',
-        verified: true,
-        featured: false,
-        tags: ['markdown', 'editor', 'text', 'preview'],
-        screenshots: [],
-        dependencies: ['note-taker'],
-        permissions: ['storage', 'filesystem'],
-        price: 2.99,
-        installed: false,
-        compatible: true
-      }
-    ];
+    const matchesCategory = selectedCategory === 'all' || plugin.category === selectedCategory;
+    
+    return matchesSearch && matchesCategory;
+  });
 
-    setPlugins(marketplaceData);
+  // Get unique categories
+  const categories = ['all', ...enhancedPluginRegistry.getCategories()];
+
+  const handleLaunch = (pluginId: string) => {
+    if (onPluginLaunch) {
+      onPluginLaunch(pluginId);
+    }
+    toast.success(`Launching ${pluginId}...`);
   };
 
-  const filterAndSortPlugins = () => {
-    let filtered = [...plugins];
-
-    // Apply search filter
-    if (searchTerm) {
-      filtered = filtered.filter(plugin =>
-        plugin.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        plugin.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        plugin.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase()))
-      );
-    }
-
-    // Apply category filter
-    if (selectedCategory !== 'all') {
-      filtered = filtered.filter(plugin => plugin.category === selectedCategory);
-    }
-
-    // Apply price filter
-    if (showOnlyFree) {
-      filtered = filtered.filter(plugin => plugin.price === 0);
-    }
-
-    // Apply compatibility filter
-    if (showOnlyCompatible) {
-      filtered = filtered.filter(plugin => plugin.compatible);
-    }
-
-    // Apply sorting
-    filtered.sort((a, b) => {
-      switch (sortBy) {
-        case 'name':
-          return a.name.localeCompare(b.name);
-        case 'rating':
-          return b.rating - a.rating;
-        case 'downloads':
-          return b.downloads - a.downloads;
-        case 'updated':
-          return new Date(b.lastUpdated).getTime() - new Date(a.lastUpdated).getTime();
-        default:
-          return 0;
-      }
-    });
-
-    setFilteredPlugins(filtered);
+  const renderPluginCard = (plugin: Plugin) => {
+    const IconComponent = categoryIcons[plugin.category] || categoryIcons.default;
+    
+    return (
+      <Card 
+        key={plugin.id} 
+        className="overflow-hidden hover:shadow-lg transition-shadow cursor-pointer border-white/10 hover:border-white/30"
+        onClick={() => handleLaunch(plugin.id)}
+      >
+        <CardHeader className="pb-3">
+          <div className="flex items-start justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-black/40">
+                <IconComponent className="w-5 h-5 text-blue-400" />
+              </div>
+              <div>
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  {plugin.name}
+                  {plugin.enhanced && (
+                    <Badge variant="secondary" className="text-xs">Enhanced</Badge>
+                  )}
+                </CardTitle>
+                <CardDescription className="text-xs mt-1">
+                  {plugin.description}
+                </CardDescription>
+              </div>
+            </div>
+            <Badge variant="outline" className="text-xs">
+              {plugin.category}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="px-6 pb-4">
+          <div className="flex items-center justify-between">
+            <div className="flex gap-1">
+              <Badge variant="secondary" className="text-xs">v1.0</Badge>
+              <Badge variant="outline" className="text-xs">Utility</Badge>
+            </div>
+            <Button size="sm" variant="outline" className="text-xs">
+              <Plus className="w-3 h-3 mr-1" />
+              Launch
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
   };
 
-  const handleInstall = async (plugin: MarketplacePlugin) => {
-    try {
-      // Simulate installation process
-      console.log(`Installing plugin: ${plugin.name}`);
-      
-      // Update plugin status
-      setPlugins(prev => prev.map(p => 
-        p.id === plugin.id ? { ...p, installed: true } : p
-      ));
-
-      onInstall?.(plugin.id);
-    } catch (error) {
-      console.error('Installation failed:', error);
-    }
-  };
-
-  const getCategories = () => {
-    const categories = [...new Set(plugins.map(p => p.category))];
-    return categories.sort();
-  };
-
-  const formatNumber = (num: number): string => {
-    if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
-    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
-    return num.toString();
-  };
-
-  const getCategoryIcon = (category: string) => {
-    switch (category) {
-      case 'utility': return <Zap className="w-4 h-4" />;
-      case 'security': return <Shield className="w-4 h-4" />;
-      case 'design': return <Star className="w-4 h-4" />;
-      default: return <Store className="w-4 h-4" />;
-    }
+  const renderPluginListItem = (plugin: Plugin) => {
+    const IconComponent = categoryIcons[plugin.category] || categoryIcons.default;
+    
+    return (
+      <Card 
+        key={plugin.id} 
+        className="overflow-hidden hover:shadow-lg transition-shadow cursor-pointer border-white/10 hover:border-white/30 mb-2"
+        onClick={() => handleLaunch(plugin.id)}
+      >
+        <CardContent className="p-4 flex items-center gap-4">
+          <div className="p-2 rounded-lg bg-black/40">
+            <IconComponent className="w-5 h-5 text-blue-400" />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <h3 className="font-medium">{plugin.name}</h3>
+              {plugin.enhanced && (
+                <Badge variant="secondary" className="text-xs">Enhanced</Badge>
+              )}
+            </div>
+            <p className="text-sm text-white/70 mt-1">{plugin.description}</p>
+            <div className="flex items-center gap-2 mt-2">
+              <Badge variant="outline" className="text-xs">
+                {plugin.category}
+              </Badge>
+              <Badge variant="secondary" className="text-xs">
+                v1.0
+              </Badge>
+            </div>
+          </div>
+          <Button size="sm">
+            <Plus className="w-3 h-3 mr-1" />
+            Launch
+          </Button>
+        </CardContent>
+      </Card>
+    );
   };
 
   return (
-    <div className="w-full max-w-7xl bg-black/90 backdrop-blur-xl border border-white/20 rounded-lg text-white overflow-hidden">
-      {/* Header */}
-      <div className="p-6 border-b border-white/20">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Store className="w-8 h-8 text-purple-400" />
-            <div>
-              <h1 className="text-2xl font-bold">Plugin Marketplace</h1>
-              <p className="text-white/60">Discover and install plugins to extend functionality</p>
-            </div>
+    <div className="h-full flex flex-col bg-black text-white">
+      <div className="p-4 border-b border-white/10">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Grid3X3 className="w-5 h-5 text-blue-400" />
+            <h2 className="text-lg font-semibold">Plugin Marketplace</h2>
+          </div>
+          <Button variant="ghost" size="icon" onClick={onPluginClose}>
+            <XCircle className="w-4 h-4" />
+          </Button>
+        </div>
+        
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <Input
+              placeholder="Search plugins..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10 bg-black/40 border-white/20"
+            />
           </div>
           
-          {onClose && (
-            <Button size="sm" variant="ghost" onClick={onClose}>
-              ×
-            </Button>
-          )}
-        </div>
-
-        {/* Search and Filters */}
-        <div className="mt-6 space-y-4">
-          <div className="flex gap-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
-              <Input
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search plugins..."
-                className="pl-10 bg-black/40 border-white/20"
-              />
-            </div>
-            
-            <select
-              value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value)}
-              className="bg-black/40 border border-white/20 rounded px-3 py-2 text-white"
-            >
-              <option value="all">All Categories</option>
-              {getCategories().map(category => (
-                <option key={category} value={category}>
+          <Tabs 
+            value={selectedCategory} 
+            onValueChange={setSelectedCategory}
+            className="w-full sm:w-auto"
+          >
+            <TabsList className="bg-black/40 flex flex-wrap sm:flex-nowrap">
+              {categories.map(category => (
+                <TabsTrigger 
+                  key={category} 
+                  value={category} 
+                  className="data-[state=active]:bg-blue-500/20 text-xs"
+                >
                   {category.charAt(0).toUpperCase() + category.slice(1)}
-                </option>
+                </TabsTrigger>
               ))}
-            </select>
-            
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as any)}
-              className="bg-black/40 border border-white/20 rounded px-3 py-2 text-white"
-            >
-              <option value="rating">Sort by Rating</option>
-              <option value="downloads">Sort by Downloads</option>
-              <option value="name">Sort by Name</option>
-              <option value="updated">Sort by Updated</option>
-            </select>
-          </div>
-
-          <div className="flex gap-4 text-sm">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showOnlyFree}
-                onChange={(e) => setShowOnlyFree(e.target.checked)}
-                className="rounded"
-              />
-              <span>Free only</span>
-            </label>
-            
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showOnlyCompatible}
-                onChange={(e) => setShowOnlyCompatible(e.target.checked)}
-                className="rounded"
-              />
-              <span>Compatible only</span>
-            </label>
-          </div>
+            </TabsList>
+          </Tabs>
         </div>
       </div>
 
-      {/* Plugin Grid */}
-      <div className="p-6">
-        {filteredPlugins.length === 0 ? (
-          <div className="text-center py-12 text-white/60">
-            <Store className="w-16 h-16 mx-auto mb-4 opacity-50" />
-            <h3 className="text-lg font-medium mb-2">No plugins found</h3>
-            <p>Try adjusting your search or filters</p>
+      <div className="p-4 flex items-center justify-between">
+        <div className="text-sm text-white/60">
+          {filteredPlugins.length} of {plugins.length} plugins
+        </div>
+        <div className="flex gap-2">
+          <Button 
+            size="sm" 
+            variant={displayMode === 'grid' ? 'default' : 'outline'}
+            onClick={() => setDisplayMode('grid')}
+          >
+            <Grid3X3 className="w-4 h-4" />
+          </Button>
+          <Button 
+            size="sm" 
+            variant={displayMode === 'list' ? 'default' : 'outline'}
+            onClick={() => setDisplayMode('list')}
+          >
+            <List className="w-4 h-4" />
+          </Button>
+        </div>
+      </div>
+
+      <ScrollArea className="flex-1 p-4">
+        {isLoading ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+          </div>
+        ) : filteredPlugins.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-center py-12 text-white/60">
+            <Search className="w-12 h-12 mb-4 opacity-50" />
+            <h3 className="text-lg font-medium mb-1">No plugins found</h3>
+            <p className="text-sm">Try a different search term or category</p>
+          </div>
+        ) : displayMode === 'grid' ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredPlugins.map(renderPluginCard)}
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredPlugins.map(plugin => (
-              <Card key={plugin.id} className="bg-black/40 border-white/20 hover:border-white/30 transition-colors">
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2">
-                      {getCategoryIcon(plugin.category)}
-                      <div>
-                        <CardTitle className="text-lg flex items-center gap-2">
-                          {plugin.name}
-                          {plugin.verified && (
-                            <CheckCircle className="w-4 h-4 text-blue-400" title="Verified" />
-                          )}
-                          {plugin.featured && (
-                            <Star className="w-4 h-4 text-yellow-400" title="Featured" />
-                          )}
-                        </CardTitle>
-                        <p className="text-sm text-white/60">by {plugin.author}</p>
-                      </div>
-                    </div>
-                    
-                    <div className="text-right">
-                      <div className="flex items-center gap-1 text-sm">
-                        <Star className="w-3 h-3 text-yellow-400" />
-                        <span>{plugin.rating}</span>
-                      </div>
-                      <div className="text-xs text-white/60">
-                        {formatNumber(plugin.downloads)} downloads
-                      </div>
-                    </div>
-                  </div>
-                </CardHeader>
-                
-                <CardContent className="space-y-4">
-                  <p className="text-sm text-white/80 line-clamp-2">
-                    {plugin.description}
-                  </p>
-                  
-                  <div className="flex flex-wrap gap-1">
-                    {plugin.tags.slice(0, 3).map(tag => (
-                      <Badge key={tag} variant="outline" className="text-xs">
-                        {tag}
-                      </Badge>
-                    ))}
-                  </div>
-                  
-                  <div className="flex items-center justify-between text-xs text-white/60">
-                    <span>v{plugin.version}</span>
-                    <span>{plugin.size}</span>
-                    <span>{new Date(plugin.lastUpdated).toLocaleDateString()}</span>
-                  </div>
-                  
-                  {!plugin.compatible && (
-                    <Alert className="border-yellow-500/50 bg-yellow-500/10">
-                      <AlertTriangle className="h-4 w-4" />
-                      <AlertDescription className="text-xs">
-                        This plugin may not be compatible with your current setup
-                      </AlertDescription>
-                    </Alert>
-                  )}
-                  
-                  <div className="flex gap-2">
-                    {plugin.installed ? (
-                      <Button size="sm" disabled className="flex-1">
-                        <CheckCircle className="w-4 h-4 mr-2" />
-                        Installed
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        onClick={() => handleInstall(plugin)}
-                        disabled={!plugin.compatible}
-                        className="flex-1 bg-purple-600 hover:bg-purple-700"
-                      >
-                        <Download className="w-4 h-4 mr-2" />
-                        {plugin.price > 0 ? `$${plugin.price}` : 'Install'}
-                      </Button>
-                    )}
-                    
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setSelectedPlugin(plugin)}
-                      className="border-white/20"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+          <div>
+            {filteredPlugins.map(renderPluginListItem)}
           </div>
         )}
-      </div>
+      </ScrollArea>
+
+      {plugins.length > 0 && (
+        <div className="p-4 border-t border-white/10 text-center text-xs text-white/60">
+          {enhancedPluginRegistry.getPluginStats().enhanced} enhanced plugins available
+        </div>
+      )}
     </div>
   );
 };

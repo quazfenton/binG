@@ -1,5 +1,5 @@
 import uvicorn
-from mcp.server.fastmcp.server import FastMCP
+from fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.routing import Mount
 

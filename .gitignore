@@ -35,3 +35,6 @@ node_modules*
 .amazonq/
 .vscode/
 .kiro/
+
+.gemini/
+gha-creds-*.json

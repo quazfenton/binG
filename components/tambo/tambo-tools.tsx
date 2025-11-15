@@ -4,6 +4,7 @@
  * Tambo Tools Registry
  * Define functions/tools that Tambo can call during response generation
  */
+import { evaluate } from 'mathjs';
 
 // Example: Format code tool
 async function formatCode({ code, language }: { code: string; language: string }) {
@@ -65,9 +66,7 @@ async function getFileInfo({ path }: { path: string }) {
 // Example: Calculate tool
 async function calculate({ expression }: { expression: string }) {
   try {
-    // Simple safe evaluation for basic math
-    // In production, use a proper math parser library
-    const result = Function(`'use strict'; return (${expression})`)();
+    const result = evaluate(expression);
     return {
       result: String(result),
       expression,
