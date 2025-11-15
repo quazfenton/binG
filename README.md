@@ -1,3 +1,4 @@
+![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/quazfenton/binG?utm_source=oss&utm_medium=github&utm_campaign=quazfenton%2FbinG&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 # binG - Advanced LLM Chat Interface
 
 A spatial interface for AI interactions that combines traditional chat functionality with immersive  visualization, voice integration, and multi-provider LLM support.

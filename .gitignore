@@ -18,6 +18,9 @@ yarn-error.log*
 
 # env files
 .env*
+fastagent.secrets.yaml
+venv/
+.venv/
 
 # vercel
 .vercel
@@ -28,3 +31,7 @@ next-env.d.ts
 .aider*
 
 node_modules*
+
+.amazonq/
+.vscode/
+.kiro/

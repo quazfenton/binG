@@ -377,7 +377,7 @@ function ConversationInterfaceContent() {
 
   // Fetch available providers on mount and align defaults with server config
   useEffect(() => {
-    fetch("/api/chat")
+    fetch("/api/providers")
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
@@ -824,6 +824,7 @@ function ConversationInterfaceContent() {
                 History
               </button>
             </div>
+          )}
           <ChatPanel
             messages={messages} // Pass messages from useChat
             input={input} // Pass input from useChat
@@ -852,7 +853,7 @@ function ConversationInterfaceContent() {
       <InteractionPanel
         onSubmit={handleChatSubmit} // Pass the intermediary function
         onNewChat={handleNewChat}
-        isProcessing={isLoading || codeServiceContext.state.isProcessing}
+        isProcessing={isLoading || codeServiceContext.state.isProcessing || !currentProvider}
         toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
         toggleHistory={() => setShowHistory(!showHistory)}
         toggleCodePreview={() => {
@@ -948,7 +949,6 @@ function ConversationInterfaceContent() {
               >
                 Continue
               </button>
-            </div>
             </div>
           </div>
         </div>

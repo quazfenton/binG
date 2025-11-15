@@ -196,9 +196,9 @@ export default function AccessibilityControls({
 
   // Auto-read new messages when screen reader is enabled
   useEffect(() => {
-    if (screenReader && messages.length > 0) {
-      const lastMessage = messages[messages.length - 1];
-      if (lastMessage.role === 'assistant') {
+    if (screenReader && (messages?.length ?? 0) > 0) {
+      const lastMessage = messages?.[messages.length - 1];
+      if (lastMessage?.role === 'assistant') {
         speakText(lastMessage.content);
       }
     }
@@ -672,10 +672,10 @@ export default function AccessibilityControls({
             )}
           </div>
           <div className="bg-black/40 rounded-lg p-4 max-h-96 overflow-y-auto custom-scrollbar">
-            {messages.length === 0 ? (
+            {(messages?.length ?? 0) === 0 ? (
               <p className="text-white/50 italic">No messages yet</p>
             ) : (
-              messages.map((message, index) => (
+              (messages || []).map((message, index) => (
                 <div key={index} className="mb-4 group">
                   <div className="flex items-center justify-between">
                     <p className="font-bold">

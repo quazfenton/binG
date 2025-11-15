@@ -1,0 +1,97 @@
+╔══════════════════════════════════════════════════════════════════╗
+║               YOUR API ENDPOINTS - QUICK REFERENCE               ║
+╚══════════════════════════════════════════════════════════════════╝
+
+🔐 AUTHENTICATION (7 endpoints)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   POST   /api/auth/register         Register new user
+   POST   /api/auth/login            User login
+   POST   /api/auth/logout           User logout
+   POST   /api/auth/refresh          Refresh JWT token
+   GET    /api/auth/validate         Validate token
+   POST   /api/auth/reset-password   Reset password
+   POST   /api/auth/check-email      Check if email exists
+
+💬 CHAT (2 endpoints)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   POST   /api/chat                  Main chat with priority routing
+   POST   /api/chat-with-context     Chat with file context
+
+🚀 ADVANCED AI (3 endpoints - NEW!)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   POST   /api/ai/advanced           Start advanced orchestration
+   GET    /api/ai/status/{jobId}     Get job status
+   GET    /api/ai/stream/{jobId}     Stream job progress (SSE)
+
+💻 CODE (1 endpoint)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   POST   /api/code                  Code operations
+
+🖼️  IMAGE (1 endpoint)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   POST   /api/image/generate        Generate images
+
+🎙️  VOICE/LIVEKIT (1 endpoint)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   POST   /api/livekit/token         Get LiveKit token
+
+💡 SUGGESTIONS (1 endpoint)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   POST   /api/suggest               Get AI suggestions
+
+☁️  CLOUD STORAGE (6 endpoints)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   POST   /api/storage/upload        Upload file
+   POST   /api/storage/download      Download file
+   GET    /api/storage/list          List files
+   DELETE /api/storage/delete        Delete file
+   POST   /api/storage/signed-url    Get signed URL
+   GET    /api/storage/usage         Storage usage stats
+
+👤 USER (3 endpoints)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   GET    /api/user/profile          Get user profile
+   PUT    /api/user/profile          Update profile
+   GET    /api/user/keys             Get API keys
+   POST   /api/user/keys             Add/update API key
+
+🏥 HEALTH (1 endpoint)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   GET    /api/health                API health check
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TOTAL NEXT.JS ENDPOINTS: 26 ✅
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🌩️  CLOUDFLARE WORKER (When Deployed)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   POST   /session/start             Start orchestration
+   GET    /session/{id}/status       Get session status
+   GET    /session/{id}/stream       Stream session (SSE)
+   POST   /session/{id}/cancel       Cancel session
+   POST   /proxy                     Simple Fast-Agent proxy
+   GET    /health                    Worker health check
+   GET    /config                    Get configuration
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CLOUDFLARE WORKER ENDPOINTS: 7 (Ready to Deploy)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 MAIN ENDPOINTS FOR CHAT:
+
+   Simple Chat:
+   POST /api/chat
+   
+   Advanced Quality Mode:
+   POST /api/ai/advanced
+
+   With File Context:
+   POST /api/chat-with-context
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📖 Full Documentation: API_ENDPOINTS_REFERENCE.md
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

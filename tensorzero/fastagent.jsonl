@@ -1,0 +1,5 @@
+{"level":"INFO","timestamp":"2025-11-13T13:51:00.197360","namespace":"fast_agent.context","message":"Configuring logger with level: info"}
+{"level":"INFO","timestamp":"2025-11-13T13:51:00.198590","namespace":"fast_agent.fast-agent example","message":"fast-agent initialized","data":{"data":{"progress_action":"Running","target":"fast-agent example","agent_name":"fast-agent example"}}}
+{"level":"INFO","timestamp":"2025-11-13T13:51:00.657798","namespace":"fast_agent.mcp.mcp_aggregator.default","message":"Creating persistent connection to server: tester","data":{"data":{"progress_action":"Starting","server_name":"tester","agent_name":"default"}}}
+{"level":"INFO","timestamp":"2025-11-13T13:51:00.658862","namespace":"fast_agent.mcp.mcp_connection_manager","message":"tester: Up and running with a persistent connection!"}
+{"level":"ERROR","timestamp":"2025-11-13T13:51:07.704331","namespace":"fast_agent.mcp.mcp_connection_manager","message":"tester: Lifecycle task encountered an error: unhandled errors in a TaskGroup (1 sub-exception)","data":{"exc_info":true,"data":{"progress_action":"Error","server_name":"tester"}}}

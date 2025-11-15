@@ -25,7 +25,7 @@ export default function ChatHistoryModal({
   console.log(`[ChatHistoryModal] Raw chats data:`, chats); // Log the raw chats prop
   const [searchTerm, setSearchTerm] = useState("")
 
-  const filteredChatsWithDebug = chats.filter((chat) => {
+  const filteredChatsWithDebug = (chats || []).filter((chat) => {
     const title = chat.title || ""; // Default to empty string if title is null/undefined
     const messages = chat.messages || []; // Default to empty array if messages is null/undefined
 
@@ -47,7 +47,7 @@ export default function ChatHistoryModal({
 
   const handleCopyChat = (chat: ChatHistory) => {
     // add Log details about the chat object being processed by the filter
-    const chatText = chat.messages.map((msg) => `${msg.role === "user" ? "You" : "AI"}: ${msg.content}`).join("\n\n")
+    const chatText = (chat.messages || []).map((msg) => `${msg.role === "user" ? "You" : "AI"}: ${msg.content}`).join("\n\n")
 
     navigator.clipboard.writeText(chatText)
   }
@@ -69,7 +69,7 @@ export default function ChatHistoryModal({
           <div className="flex items-center gap-3">
             <MessageSquare className="h-5 w-5 text-purple-400" />
             <h2 className="text-xl font-bold">Chat History</h2>
-            <span className="text-sm text-white/60">({chats.length} chats)</span>
+            <span className="text-sm text-white/60">({chats?.length ?? 0} chats)</span>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={onDownloadAll}>
@@ -118,7 +118,7 @@ export default function ChatHistoryModal({
                         <Calendar className="h-3 w-3 text-white/40" />
                         <span className="text-xs text-white/60">{formatDate(chat.timestamp)}</span>
                         <span className="text-xs text-white/40">•</span>
-                        <span className="text-xs text-white/60">{chat.messages.length} messages</span>
+                        <span className="text-xs text-white/60">{chat.messages?.length ?? 0} messages</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">

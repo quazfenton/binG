@@ -3,6 +3,7 @@
 */
 
 import { StreamPart } from './streaming'
+import type { Message } from '../types/index'
 
 export type CodeEdit = {
   filePath: string
@@ -13,6 +14,21 @@ export type CodeEdit = {
 
 export type ProjectStructure = {
   files: Record<string, { content: string }>
+}
+
+export type CodeBlock = {
+  language: string
+  code: string
+  filename: string
+  index: number
+  isError?: boolean
+}
+
+export type ParsedCodeData = {
+  codeBlocks: CodeBlock[]
+  projectStructure?: any
+  nonCodeText?: string
+  shellCommands?: string
 }
 
 export function parseTextToEdits(text: string): CodeEdit[] {
@@ -83,4 +99,121 @@ export async function* streamPartsToEdits(parts: AsyncIterable<StreamPart>, curr
       yield { project: currentProject, edits }
     }
   }
+}
+
+/**
+ * Parse code blocks from chat messages
+ */
+export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData {
+  const codeBlocks: CodeBlock[] = []
+  let nonCodeText = ''
+  let shellCommands = ''
+  let blockIndex = 0
+
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+    
+    const content = typeof message.content === 'string' ? message.content : ''
+    
+    // Extract code blocks using regex
+    const codeBlockRegex = /```(\w+)?\s*(?:\/\/\s*(.+?))?\n([\s\S]*?)```/g
+    let match
+    
+    while ((match = codeBlockRegex.exec(content)) !== null) {
+      const [, language = 'text', filenameComment, code] = match
+      
+      // Clean filename from comment or infer from language
+      let filename = filenameComment?.trim() || ''
+      if (!filename) {
+        const ext = getExtensionForLanguage(language)
+        filename = `file-${blockIndex}.${ext}`
+      }
+      
+      codeBlocks.push({
+        language: language.toLowerCase(),
+        code: code.trim(),
+        filename: cleanFilename(filename),
+        index: blockIndex++,
+        isError: false
+      })
+      
+      // Collect shell commands
+      if (language.toLowerCase() === 'bash' || language.toLowerCase() === 'sh' || language.toLowerCase() === 'shell') {
+        shellCommands += code.trim() + '\n\n'
+      }
+    }
+    
+    // Extract non-code text
+    const textWithoutCode = content.replace(/```[\s\S]*?```/g, '').trim()
+    if (textWithoutCode) {
+      nonCodeText += textWithoutCode + '\n\n'
+    }
+  }
+  
+  return {
+    codeBlocks,
+    nonCodeText: nonCodeText.trim(),
+    shellCommands: shellCommands.trim()
+  }
+}
+
+/**
+ * Get file extension for a language
+ */
+function getExtensionForLanguage(language: string): string {
+  const extensions: Record<string, string> = {
+    javascript: 'js',
+    typescript: 'ts',
+    python: 'py',
+    java: 'java',
+    cpp: 'cpp',
+    c: 'c',
+    html: 'html',
+    css: 'css',
+    json: 'json',
+    xml: 'xml',
+    sql: 'sql',
+    jsx: 'jsx',
+    tsx: 'tsx',
+    php: 'php',
+    vue: 'vue',
+    svelte: 'svelte',
+    astro: 'astro',
+    ruby: 'rb',
+    go: 'go',
+    rust: 'rs',
+    swift: 'swift',
+    kotlin: 'kt',
+    scala: 'scala',
+    r: 'r',
+    shell: 'sh',
+    bash: 'sh',
+    yaml: 'yml',
+    yml: 'yml',
+    markdown: 'md',
+    md: 'md',
+  }
+  return extensions[language.toLowerCase()] || 'txt'
+}
+
+/**
+ * Clean and normalize filename
+ */
+function cleanFilename(filename: string): string {
+  // Remove leading/trailing whitespace
+  let cleaned = filename.trim()
+  
+  // Remove common prefixes
+  cleaned = cleaned.replace(/^(file:|path:|filename:)\s*/i, '')
+  
+  // Remove quotes
+  cleaned = cleaned.replace(/^["']|["']$/g, '')
+  
+  // Ensure no leading slash (for sandpack compatibility)
+  cleaned = cleaned.replace(/^\/+/, '')
+  
+  // Replace backslashes with forward slashes
+  cleaned = cleaned.replace(/\\/g, '/')
+  
+  return cleaned || 'untitled.txt'
 }
