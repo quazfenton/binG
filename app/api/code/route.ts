@@ -8,12 +8,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { EnhancedCodeOrchestrator } from '../../../enhanced-code-system/enhanced-code-orchestrator';
 import { AdvancedFileManager, FileState, DiffOperation } from '../../../enhanced-code-system/file-management/advanced-file-manager';
-import { 
+import { ProjectItem } from '../../../enhanced-code-system/core/enhanced-prompt-engine';
+import {
   createOrchestratorError,
   createFileManagementError,
   createStreamError,
   createCodeManagementError,
-  ERROR_CODES 
+  ERROR_CODES
 } from '../../../enhanced-code-system/core/error-types';
 import type { Message } from '../../../types/index';
 
@@ -136,8 +137,11 @@ export async function POST(request: NextRequest) {
 
 async function handleStartSession(body: any) {
   try {
+    console.log('[DEBUG] Code API: Validating start_session request');
+
     // Validate request body structure
     if (!body || typeof body !== 'object') {
+      console.error('[DEBUG] Code API: Invalid request body structure');
       return NextResponse.json(
         { error: "Invalid request body" },
         { status: 400 },
@@ -152,10 +156,25 @@ async function handleStartSession(body: any) {
       context = {},
     } = body;
 
+    console.log('[DEBUG] Code API: Extracted request fields:', {
+      hasPrompt: !!prompt,
+      promptType: typeof prompt,
+      promptLength: typeof prompt === 'string' ? prompt.length : 'N/A',
+      hasSelectedFiles: !!selectedFiles,
+      selectedFilesType: typeof selectedFiles,
+      mode: mode
+    });
+
     // Enhanced validation with detailed error messages
     if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+      console.error('[DEBUG] Code API: Prompt validation failed:', {
+        prompt: prompt,
+        type: typeof prompt,
+        length: typeof prompt === 'string' ? prompt.length : 'N/A',
+        isTrimmedEmpty: typeof prompt === 'string' ? prompt.trim().length === 0 : false
+      });
       return NextResponse.json(
-        { 
+        {
           error: "Prompt is required and must be a non-empty string",
           received: {
             prompt: prompt,
@@ -169,8 +188,12 @@ async function handleStartSession(body: any) {
 
     // Validate selectedFiles format
     if (selectedFiles && typeof selectedFiles !== 'object') {
+      console.error('[DEBUG] Code API: selectedFiles validation failed:', {
+        selectedFiles: selectedFiles,
+        type: typeof selectedFiles
+      });
       return NextResponse.json(
-        { 
+        {
           error: "selectedFiles must be an object",
           received: {
             selectedFiles: selectedFiles,
@@ -183,64 +206,92 @@ async function handleStartSession(body: any) {
 
     // Validate rules format
     if (rules && !Array.isArray(rules)) {
+      console.error('[DEBUG] Code API: rules validation failed:', {
+        rules: rules,
+        type: typeof rules,
+        isArray: Array.isArray(rules)
+      });
       return NextResponse.json(
-        { 
+        {
           error: "rules must be an array",
           received: {
             rules: rules,
-            type: typeof rules
+            type: typeof rules,
+            isArray: Array.isArray(rules)
           }
         },
         { status: 400 },
       );
     }
 
-    // Validate mode
+    // Validate mode - if invalid, default to "hybrid"
     const validModes = ["streaming", "agentic", "hybrid", "standard"];
+    const effectiveMode = validModes.includes(mode) ? mode : "hybrid";
     if (mode && !validModes.includes(mode)) {
-      return NextResponse.json(
-        { 
-          error: "Invalid mode",
-          received: mode,
-          validModes: validModes
-        },
-        { status: 400 },
-      );
+      console.warn('[DEBUG] Code API: Invalid mode provided, defaulting to hybrid:', {
+        received: mode,
+        using: effectiveMode,
+        validModes: validModes
+      });
     }
+
+    console.log('[DEBUG] Code API: All validations passed, creating session');
 
     const sessionId = generateSessionId();
 
-    // Initialize the enhanced code orchestrator
-    const orchestrator = new EnhancedCodeOrchestrator({
-      mode: "hybrid",
-      enableStreaming: true,
-      enableAgenticFrameworks: true,
-      enableFileManagement: true,
-      enableAutoWorkflows: true,
-      maxConcurrentSessions: 3,
-      defaultTimeoutMs: 120000,
-      qualityThreshold: 0.8,
-      maxIterations: 5,
-      contextOptimization: true,
-      errorRecovery: true,
-      promptEngineering: {
-        depthLevel: 8,
-        verbosityLevel: "verbose",
-        includeDocumentation: true,
-        includeTestCases: false,
-        includeOptimization: true,
-      },
-      streamingConfig: {
-        chunkSize: 1000,
-        maxTokens: 32000,
-        enablePartialValidation: true,
-      },
-      agenticConfig: {
-        defaultFramework: "crewai",
-        maxAgents: 5,
-        collaborationMode: "sequential",
-      },
-    });
+    // Initialize the enhanced code orchestrator with error handling
+    let orchestrator: EnhancedCodeOrchestrator;
+    try {
+      console.log('[DEBUG] Code API: Initializing EnhancedCodeOrchestrator');
+
+      const config = {
+        mode: effectiveMode as "streaming" | "agentic" | "hybrid" | "standard",
+        enableStreaming: true,
+        enableAgenticFrameworks: true,
+        enableFileManagement: true,
+        enableAutoWorkflows: true,
+        maxConcurrentSessions: 3,
+        defaultTimeoutMs: 120000,
+        qualityThreshold: 0.8,
+        maxIterations: 5,
+        contextOptimization: true,
+        errorRecovery: true,
+        promptEngineering: {
+          depthLevel: 8,
+          verbosityLevel: "verbose" as const,
+          includeDocumentation: true,
+          includeTestCases: false,
+          includeOptimization: true,
+        },
+        streamingConfig: {
+          chunkSize: 1000,
+          maxTokens: 32000,
+          enablePartialValidation: true,
+        },
+        agenticConfig: {
+          defaultFramework: "crewai",
+          maxAgents: 5,
+          collaborationMode: "sequential" as const,
+        },
+      };
+
+      console.log('[DEBUG] Code API: Using config:', { mode: config.mode });
+      orchestrator = new EnhancedCodeOrchestrator(config);
+      console.log('[DEBUG] Code API: EnhancedCodeOrchestrator initialized successfully');
+    } catch (initError) {
+      console.error("Failed to initialize EnhancedCodeOrchestrator:", initError);
+      console.error("Error details:", {
+        message: initError instanceof Error ? initError.message : 'Unknown error',
+        stack: initError instanceof Error ? initError.stack : 'No stack trace'
+      });
+      return NextResponse.json(
+        {
+          error: "Failed to initialize code orchestrator",
+          details: initError instanceof Error ? initError.message : 'Unknown error during initialization'
+        },
+        { status: 500 },
+      );
+    }
 
     // Create session record with real orchestrator
     const session = {
@@ -255,6 +306,7 @@ async function handleStartSession(body: any) {
 
     activeSessions.set(sessionId, session);
 
+    console.log('[DEBUG] Code API: Starting async processing for session:', sessionId);
     // Start processing asynchronously
     processSessionAsync(sessionId, prompt, selectedFiles, rules, context);
 
