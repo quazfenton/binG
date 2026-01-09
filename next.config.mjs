@@ -9,6 +9,15 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  allowedDevOrigins: [
+    'localhost:3000',
+    'localhost:3001',
+    'localhost:3002',
+    'localhost:3003',
+    'localhost:3004',
+    'localhost:3005',
+    'ddhhst-3000.csb.app', // For CodeSandbox environment
+  ],
   // Performance optimizations
   compress: true,
   poweredByHeader: false,
