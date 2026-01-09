@@ -295,6 +295,9 @@ function ConversationInterfaceContent() {
           setCurrentConversationId(savedChatId);
         }
 
+        // Update chat history state to reflect the saved chat
+        setChatHistory(getAllChats());
+
         // Auto-speak AI responses if voice is enabled
         if (isVoiceEnabled && voiceService.getSettings().autoSpeak) {
           voiceService.speak(lastMessage.content).catch(console.error);
@@ -307,6 +310,7 @@ function ConversationInterfaceContent() {
     saveCurrentChat,
     currentConversationId,
     isVoiceEnabled,
+    getAllChats, // Added dependency
   ]);
 
   // Extract and persist streamed COMMANDS blocks into a per-file map (only in code mode)
@@ -445,6 +449,12 @@ function ConversationInterfaceContent() {
       });
   }, []); // initial load only
 
+  // Effect to fetch chat history on mount to ensure it's available
+  useEffect(() => {
+    const fetchedChats = getAllChats();
+    setChatHistory(fetchedChats);
+  }, []); // Only run on mount
+
   // Effect to fetch chat history when the history modal is shown
   useEffect(() => {
     if (showHistory) {
@@ -491,29 +501,41 @@ function ConversationInterfaceContent() {
     if (!isEmpty) {
       // Save the current chat before starting a new one, if there are messages
       saveCurrentChat(messages, currentConversationId || undefined);
-      setChatHistory(getAllChats());
     }
-    
+
     // Clean up any active streaming sessions
     streamingState.cleanupCompletedSessions();
-    
+
     setMessages([]);
     setCurrentConversationId(null); // Ensure current conversation ID is reset for a new chat
+
+    // Update chat history to reflect the saved chat
+    setChatHistory(getAllChats());
+
     toast.success("New chat started");
   };
 
   const handleDeleteChat = (chatId: string) => {
     deleteChat(chatId);
+    // Update chat history to reflect the deletion
     setChatHistory(getAllChats());
   };
 
   const handleLoadChat = (chatId: string) => {
+    // Save current chat before loading a different one
+    if (messages.length > 0) {
+      saveCurrentChat(messages, currentConversationId || undefined);
+    }
+
     const chat = loadChat(chatId);
     if (chat) {
       setMessages(chat.messages); // Load messages using useChat's setMessages
       setCurrentConversationId(chatId);
       toast.success("Chat loaded");
     }
+
+    // Update chat history to reflect any changes
+    setChatHistory(getAllChats());
     setShowHistory(false);
   };
 
@@ -618,13 +640,16 @@ function ConversationInterfaceContent() {
   }, [messages, activeTab]);
 
   const handleToggleCodePreview = () => {
-    // Only allow code preview in code mode
-    if (activeTab === 'code') {
-      setShowCodePreview((prevShowCodePreview) => {
-        const newState = !prevShowCodePreview;
-        return newState;
-      });
+    // Allow code preview in both chat and code modes
+    // If switching from chat to code preview, also switch to code tab
+    if (activeTab !== 'code') {
+      setActiveTab('code');
     }
+
+    setShowCodePreview((prevShowCodePreview) => {
+      const newState = !prevShowCodePreview;
+      return newState;
+    });
   };
 
   const handleToggleCodeMode = () => {
@@ -884,8 +909,8 @@ function ConversationInterfaceContent() {
           onClose={() => setShowHistory(false)}
           onLoadChat={handleLoadChat}
           onDeleteChat={handleDeleteChat}
-          onDownloadHistory={downloadAllHistory}
-          chatHistory={chatHistory}
+          onDownloadAll={downloadAllHistory}
+          chats={chatHistory}
         />
       )}
 
@@ -900,6 +925,7 @@ function ConversationInterfaceContent() {
       {/* Code Preview Panel */}
       {showCodePreview && activeTab === 'code' && (
         <CodePreviewPanel
+          messages={messages}
           onClose={() => setShowCodePreview(false)}
           projectFiles={projectFiles}
           onUpdateFiles={handleUpdateProjectFiles}

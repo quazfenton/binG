@@ -8,6 +8,7 @@ import { Portkey } from 'portkey-ai'
 import {
   createOrchestratorError,
   createStreamError,
+  createLLMError,
   ERROR_CODES
 } from '../../enhanced-code-system/core/error-types'
 
@@ -744,7 +745,31 @@ class LLMService {
   }
 }
 
-export const llmService = new LLMService()
+export const llmService = new LLMService({
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY,
+    baseURL: process.env.OPENAI_BASE_URL
+  },
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    baseURL: process.env.ANTHROPIC_BASE_URL
+  },
+  google: {
+    apiKey: process.env.GOOGLE_API_KEY
+  },
+  cohere: {
+    apiKey: process.env.COHERE_API_KEY
+  },
+  together: {
+    apiKey: process.env.TOGETHER_API_KEY
+  },
+  replicate: {
+    apiKey: process.env.REPLICATE_API_TOKEN
+  },
+  portkey: {
+    apiKey: process.env.PORTKEY_API_KEY
+  }
+})
 
 export {
   LLMService,

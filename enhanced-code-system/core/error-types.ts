@@ -201,6 +201,37 @@ export class SafeDiffError extends Error implements SystemError {
   }
 }
 
+export class LLMError extends Error implements SystemError {
+  code: string;
+  component: string;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  recoverable: boolean;
+  timestamp: Date;
+  context?: any;
+  suggestion?: string;
+
+  constructor(
+    message: string,
+    options: {
+      code?: string;
+      severity?: 'low' | 'medium' | 'high' | 'critical';
+      recoverable?: boolean;
+      context?: any;
+      suggestion?: string;
+    } = {}
+  ) {
+    super(message);
+    this.name = 'LLMError';
+    this.code = options.code || 'LLM_001';
+    this.component = 'llm';
+    this.severity = options.severity || 'high';
+    this.recoverable = options.recoverable ?? true;
+    this.timestamp = new Date();
+    this.context = options.context;
+    this.suggestion = options.suggestion;
+  }
+}
+
 // Error factory functions for consistency
 export const createOrchestratorError = (
   message: string,
@@ -231,6 +262,11 @@ export const createSafeDiffError = (
   message: string,
   options: Parameters<typeof SafeDiffError>[1] = {}
 ): SafeDiffError => new SafeDiffError(message, options);
+
+export const createLLMError = (
+  message: string,
+  options: Parameters<typeof LLMError>[1] = {}
+): LLMError => new LLMError(message, options);
 
 // Error code constants for consistency
 export const ERROR_CODES = {
@@ -281,5 +317,16 @@ export const ERROR_CODES = {
     BACKUP_FAILED: 'DIFF_004',
     SYNTAX_VALIDATION_FAILED: 'DIFF_005',
     CHANGE_TRACKING_FAILED: 'DIFF_006'
+  },
+  LLM: {
+    REQUEST_FAILED: 'LLM_001',
+    UNSUPPORTED_PROVIDER: 'LLM_002',
+    INVALID_MODEL: 'LLM_003',
+    AUTHENTICATION_FAILED: 'LLM_004',
+    RATE_LIMIT_EXCEEDED: 'LLM_005',
+    TIMEOUT: 'LLM_006',
+    NETWORK_ERROR: 'LLM_007',
+    RESPONSE_PARSING_FAILED: 'LLM_008',
+    PROVIDER_UNAVAILABLE: 'LLM_009'
   }
 } as const;
