@@ -39,7 +39,13 @@ export default function ConversationInterface() {
   );
 }
 
-// Main component content
+/**
+ * Render the main conversation interface with chat and code-mode features, providers/models selection, history, voice integration, streaming, code previews, and advertisement flow.
+ *
+ * This component manages UI state, event handlers, and side-effect wiring for embedding, provider initialization, chat history persistence, code-service integration (project files, diffs, and commands), voice events, streaming state, and modal/panel visibility. It composes ChatPanel, InteractionPanel, CodePreviewPanel, CodeMode, ChatHistoryModal, and AccessibilityControls and exposes handlers for chat submission, code actions, provider rotation, and history management.
+ *
+ * @returns A JSX element that renders the conversation interface and its associated panels and controls.
+ */
 function ConversationInterfaceContent() {
   const [embedMode, setEmbedMode] = useState(false);
 
@@ -982,4 +988,3 @@ function ConversationInterfaceContent() {
     </div>
   );
 }
-
