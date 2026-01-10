@@ -135,6 +135,17 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/**
+ * Starts a new code generation session: validates the request body, initializes an EnhancedCodeOrchestrator,
+ * stores a session in the in-memory session store, and begins asynchronous processing.
+ *
+ * @param body - Request payload expected to contain:
+ *   - `prompt` (string): non-empty task description to drive generation (required).
+ *   - `selectedFiles` (object): mapping of file paths to contents (optional, default {}).
+ *   - `rules` (array): rule or hint items to influence generation (optional, default []).
+ *   - `mode` (string): one of "streaming", "agentic", "hybrid", or "standard" (optional, defaults to "hybrid" when invalid).
+ *   - `context` (object): additional contextual information (optional).
+ * @returns On success, a JSON response with `{ success: true, sessionId }`. On validation or internal failure, a JSON error object with an appropriate HTTP status code describing the failure. */
 async function handleStartSession(body: any) {
   try {
     console.log('[DEBUG] Code API: Validating start_session request');
