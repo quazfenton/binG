@@ -459,7 +459,7 @@ function ConversationInterfaceContent() {
   useEffect(() => {
     const fetchedChats = getAllChats();
     setChatHistory(fetchedChats);
-  }, []); // Only run on mount
+  }, [getAllChats]); // Run on mount; getAllChats should be stable from useChatHistory
 
   // Effect to fetch chat history when the history modal is shown
   useEffect(() => {
