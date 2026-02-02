@@ -17,6 +17,69 @@ import {
   ERROR_CODES
 } from '../../../enhanced-code-system/core/error-types';
 import type { Message } from '../../../types/index';
+import { randomBytes } from 'crypto';
+
+// Configuration constants
+const CONFIG_CONSTANTS = {
+  MAX_CONCURRENT_SESSIONS: 3,
+  DEFAULT_TIMEOUT_MS: 120000,
+  QUALITY_THRESHOLD: 0.8,
+  MAX_ITERATIONS: 5,
+  PROMPT_DEPTH_LEVEL: 8,
+  CHUNK_SIZE: 1000,
+  MAX_TOKENS: 32000,
+  MAX_AGENTS: 5
+};
+
+// Function to get orchestrator configuration with validation
+function getOrchestratorConfig(mode: "streaming" | "agentic" | "hybrid" | "standard" = "hybrid") {
+  const config = {
+    mode,
+    enableStreaming: true,
+    enableAgenticFrameworks: true,
+    enableFileManagement: true,
+    enableAutoWorkflows: true,
+    maxConcurrentSessions: CONFIG_CONSTANTS.MAX_CONCURRENT_SESSIONS,
+    defaultTimeoutMs: CONFIG_CONSTANTS.DEFAULT_TIMEOUT_MS,
+    qualityThreshold: CONFIG_CONSTANTS.QUALITY_THRESHOLD,
+    maxIterations: CONFIG_CONSTANTS.MAX_ITERATIONS,
+    contextOptimization: true,
+    errorRecovery: true,
+    promptEngineering: {
+      depthLevel: CONFIG_CONSTANTS.PROMPT_DEPTH_LEVEL,
+      verbosityLevel: "verbose" as const,
+      includeDocumentation: true,
+      includeTestCases: false,
+      includeOptimization: true,
+    },
+    streamingConfig: {
+      chunkSize: CONFIG_CONSTANTS.CHUNK_SIZE,
+      maxTokens: CONFIG_CONSTANTS.MAX_TOKENS,
+      enablePartialValidation: true,
+    },
+    agenticConfig: {
+      defaultFramework: "crewai",
+      maxAgents: CONFIG_CONSTANTS.MAX_AGENTS,
+      collaborationMode: "sequential" as const,
+    },
+  };
+
+  // Validate configuration values
+  if (config.maxConcurrentSessions <= 0) {
+    throw new Error(`Invalid maxConcurrentSessions: ${config.maxConcurrentSessions}`);
+  }
+  if (config.defaultTimeoutMs <= 0) {
+    throw new Error(`Invalid defaultTimeoutMs: ${config.defaultTimeoutMs}`);
+  }
+  if (config.qualityThreshold < 0 || config.qualityThreshold > 1) {
+    throw new Error(`Invalid qualityThreshold: ${config.qualityThreshold}`);
+  }
+  if (config.maxIterations <= 0) {
+    throw new Error(`Invalid maxIterations: ${config.maxIterations}`);
+  }
+
+  return config;
+}
 
 // Session storage (in production, use Redis or database)
 const activeSessions = new Map<
@@ -33,23 +96,30 @@ const activeSessions = new Map<
   }
 >();
 
-// Generate unique session ID
+// Generate unique session ID using cryptographically secure random generation
 function generateSessionId(): string {
-  return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const randomPart = randomBytes(9).toString('hex'); // 18 hex characters
+  return `session_${Date.now()}_${randomPart}`;
 }
 
 export async function POST(request: NextRequest) {
-  console.log('[DEBUG] Code API: Incoming request');
-  
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[DEBUG] Code API: Incoming request');
+  }
+
   try {
     // Validate content type
     const contentType = request.headers.get('content-type');
-    console.log('[DEBUG] Code API: Content-Type:', contentType);
-    
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[DEBUG] Code API: Content-Type:', contentType);
+    }
+
     if (!contentType || !contentType.includes('application/json')) {
-      console.error('[DEBUG] Code API: Invalid content type');
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[DEBUG] Code API: Invalid content type');
+      }
       return NextResponse.json(
-        { 
+        {
           error: "Content-Type must be application/json",
           received: contentType
         },
@@ -60,16 +130,19 @@ export async function POST(request: NextRequest) {
     let body: any;
     try {
       body = await request.json();
-      console.log('[DEBUG] Code API: Request body parsed:', {
-        action: body.action,
-        hasPrompt: !!body.prompt,
-        hasSelectedFiles: !!body.selectedFiles,
-        bodyKeys: Object.keys(body)
-      });
+      // Only log minimal information about the request body to avoid sensitive data exposure
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[DEBUG] Code API: Request body parsed:', {
+          action: body.action,
+          hasPrompt: !!body.prompt,
+          hasSelectedFiles: !!body.selectedFiles,
+          bodyKeys: Object.keys(body)
+        });
+      }
     } catch (parseError) {
-      console.error('[DEBUG] Code API: JSON parse error:', parseError);
+      console.error('[ERROR] Code API: JSON parse error:', parseError instanceof Error ? parseError.message : String(parseError));
       return NextResponse.json(
-        { 
+        {
           error: "Invalid JSON in request body",
           details: parseError instanceof Error ? parseError.message : 'JSON parse error'
         },
@@ -80,12 +153,12 @@ export async function POST(request: NextRequest) {
     // Validate action field
     const { action } = body;
     if (!action || typeof action !== 'string') {
-      console.error('[DEBUG] Code API: Invalid action field:', action, typeof action);
+      console.error('[ERROR] Code API: Invalid action field:', typeof action);
       return NextResponse.json(
-        { 
+        {
           error: "Action is required and must be a string",
           received: {
-            action: action,
+            action: action ? typeof action : 'undefined',
             type: typeof action
           }
         },
@@ -93,29 +166,39 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log('[DEBUG] Code API: Processing action:', action);
-    
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[DEBUG] Code API: Processing action:', action);
+    }
+
     switch (action) {
       case "start_session":
-        console.log('[DEBUG] Code API: Handling start_session');
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[DEBUG] Code API: Handling start_session');
+        }
         return handleStartSession(body);
 
       case "get_session_status":
-        console.log('[DEBUG] Code API: Handling get_session_status');
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[DEBUG] Code API: Handling get_session_status');
+        }
         return handleGetSessionStatus(body);
 
       case "apply_diffs":
-        console.log('[DEBUG] Code API: Handling apply_diffs');
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[DEBUG] Code API: Handling apply_diffs');
+        }
         return handleApplyDiffs(body);
 
       case "cancel_session":
-        console.log('[DEBUG] Code API: Handling cancel_session');
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[DEBUG] Code API: Handling cancel_session');
+        }
         return handleCancelSession(body);
 
       default:
-        console.error('[DEBUG] Code API: Unknown action:', action);
+        console.error('[ERROR] Code API: Unknown action:', action);
         return NextResponse.json(
-          { 
+          {
             error: "Invalid action",
             received: action,
             validActions: ["start_session", "get_session_status", "apply_diffs", "cancel_session"]
@@ -124,9 +207,9 @@ export async function POST(request: NextRequest) {
         );
     }
   } catch (error) {
-    console.error("API Error:", error);
+    console.error("API Error:", error instanceof Error ? error.message : String(error));
     return NextResponse.json(
-      { 
+      {
         error: "Internal server error",
         message: error instanceof Error ? error.message : 'Unknown error'
       },
@@ -135,13 +218,28 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/**
+ * Starts a new code generation session: validates the request body, initializes an EnhancedCodeOrchestrator,
+ * stores a session in the in-memory session store, and begins asynchronous processing.
+ *
+ * @param body - Request payload expected to contain:
+ *   - `prompt` (string): non-empty task description to drive generation (required).
+ *   - `selectedFiles` (object): mapping of file paths to contents (optional, default {}).
+ *   - `rules` (array): rule or hint items to influence generation (optional, default []).
+ *   - `mode` (string): one of "streaming", "agentic", "hybrid", or "standard" (optional, defaults to "hybrid" when invalid).
+ *   - `context` (object): additional contextual information (optional).
+ * @returns On success, a JSON response with `{ success: true, sessionId }`. On validation or internal failure, a JSON error object with an appropriate HTTP status code describing the failure. */
 async function handleStartSession(body: any) {
   try {
-    console.log('[DEBUG] Code API: Validating start_session request');
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[DEBUG] Code API: Validating start_session request');
+    }
 
     // Validate request body structure
     if (!body || typeof body !== 'object') {
-      console.error('[DEBUG] Code API: Invalid request body structure');
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[DEBUG] Code API: Invalid request body structure');
+      }
       return NextResponse.json(
         { error: "Invalid request body" },
         { status: 400 },
@@ -156,30 +254,34 @@ async function handleStartSession(body: any) {
       context = {},
     } = body;
 
-    console.log('[DEBUG] Code API: Extracted request fields:', {
-      hasPrompt: !!prompt,
-      promptType: typeof prompt,
-      promptLength: typeof prompt === 'string' ? prompt.length : 'N/A',
-      hasSelectedFiles: !!selectedFiles,
-      selectedFilesType: typeof selectedFiles,
-      mode: mode
-    });
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[DEBUG] Code API: Extracted request fields:', {
+        hasPrompt: !!prompt,
+        promptType: typeof prompt,
+        promptLength: typeof prompt === 'string' ? prompt.length : 'N/A',
+        hasSelectedFiles: !!selectedFiles,
+        selectedFilesCount: selectedFiles ? Object.keys(selectedFiles).length : 0,
+        mode: mode
+      });
+    }
 
     // Enhanced validation with detailed error messages
     if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
-      console.error('[DEBUG] Code API: Prompt validation failed:', {
-        prompt: prompt,
-        type: typeof prompt,
-        length: typeof prompt === 'string' ? prompt.length : 'N/A',
-        isTrimmedEmpty: typeof prompt === 'string' ? prompt.trim().length === 0 : false
-      });
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[DEBUG] Code API: Prompt validation failed:', {
+          hasPrompt: !!prompt,
+          promptType: typeof prompt,
+          promptLength: typeof prompt === 'string' ? prompt.length : 'N/A',
+          isTrimmedEmpty: typeof prompt === 'string' ? prompt.trim().length === 0 : false
+        });
+      }
       return NextResponse.json(
         {
           error: "Prompt is required and must be a non-empty string",
           received: {
-            prompt: prompt,
-            type: typeof prompt,
-            length: typeof prompt === 'string' ? prompt.length : 'N/A'
+            hasPrompt: !!prompt,
+            promptType: typeof prompt,
+            promptLength: typeof prompt === 'string' ? prompt.length : 'N/A'
           }
         },
         { status: 400 },
@@ -188,15 +290,17 @@ async function handleStartSession(body: any) {
 
     // Validate selectedFiles format
     if (selectedFiles && typeof selectedFiles !== 'object') {
-      console.error('[DEBUG] Code API: selectedFiles validation failed:', {
-        selectedFiles: selectedFiles,
-        type: typeof selectedFiles
-      });
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[DEBUG] Code API: selectedFiles validation failed:', {
+          selectedFilesCount: selectedFiles ? Object.keys(selectedFiles).length : 0,
+          type: typeof selectedFiles
+        });
+      }
       return NextResponse.json(
         {
           error: "selectedFiles must be an object",
           received: {
-            selectedFiles: selectedFiles,
+            selectedFilesCount: selectedFiles ? Object.keys(selectedFiles).length : 0,
             type: typeof selectedFiles
           }
         },
@@ -206,16 +310,18 @@ async function handleStartSession(body: any) {
 
     // Validate rules format
     if (rules && !Array.isArray(rules)) {
-      console.error('[DEBUG] Code API: rules validation failed:', {
-        rules: rules,
-        type: typeof rules,
-        isArray: Array.isArray(rules)
-      });
+      if (process.env.NODE_ENV === 'development') {
+        console.error('[DEBUG] Code API: rules validation failed:', {
+          rulesCount: Array.isArray(rules) ? rules.length : 'Not an array',
+          type: typeof rules,
+          isArray: Array.isArray(rules)
+        });
+      }
       return NextResponse.json(
         {
           error: "rules must be an array",
           received: {
-            rules: rules,
+            rulesCount: Array.isArray(rules) ? rules.length : 'Not an array',
             type: typeof rules,
             isArray: Array.isArray(rules)
           }
@@ -226,13 +332,21 @@ async function handleStartSession(body: any) {
 
     // Validate mode - if invalid, default to "hybrid"
     const validModes = ["streaming", "agentic", "hybrid", "standard"];
+    let modeAdjusted = false;
     const effectiveMode = validModes.includes(mode) ? mode : "hybrid";
     if (mode && !validModes.includes(mode)) {
-      console.warn('[DEBUG] Code API: Invalid mode provided, defaulting to hybrid:', {
-        received: mode,
-        using: effectiveMode,
-        validModes: validModes
-      });
+      modeAdjusted = true;
+      if (process.env.NODE_ENV === 'development') {
+        console.warn('[DEBUG] Code API: Invalid mode provided, defaulting to hybrid:', {
+          received: mode,
+          using: effectiveMode,
+          validModes: validModes
+        });
+      }
+    }
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[DEBUG] Code API: All validations passed, creating session');
     }
 
     console.log('[DEBUG] Code API: All validations passed, creating session');
@@ -242,48 +356,27 @@ async function handleStartSession(body: any) {
     // Initialize the enhanced code orchestrator with error handling
     let orchestrator: EnhancedCodeOrchestrator;
     try {
-      console.log('[DEBUG] Code API: Initializing EnhancedCodeOrchestrator');
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[DEBUG] Code API: Initializing EnhancedCodeOrchestrator');
+      }
 
-      const config = {
-        mode: effectiveMode as "streaming" | "agentic" | "hybrid" | "standard",
-        enableStreaming: true,
-        enableAgenticFrameworks: true,
-        enableFileManagement: true,
-        enableAutoWorkflows: true,
-        maxConcurrentSessions: 3,
-        defaultTimeoutMs: 120000,
-        qualityThreshold: 0.8,
-        maxIterations: 5,
-        contextOptimization: true,
-        errorRecovery: true,
-        promptEngineering: {
-          depthLevel: 8,
-          verbosityLevel: "verbose" as const,
-          includeDocumentation: true,
-          includeTestCases: false,
-          includeOptimization: true,
-        },
-        streamingConfig: {
-          chunkSize: 1000,
-          maxTokens: 32000,
-          enablePartialValidation: true,
-        },
-        agenticConfig: {
-          defaultFramework: "crewai",
-          maxAgents: 5,
-          collaborationMode: "sequential" as const,
-        },
-      };
+      const config = getOrchestratorConfig(effectiveMode as "streaming" | "agentic" | "hybrid" | "standard");
 
-      console.log('[DEBUG] Code API: Using config:', { mode: config.mode });
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[DEBUG] Code API: Using config:', { mode: config.mode });
+      }
       orchestrator = new EnhancedCodeOrchestrator(config);
-      console.log('[DEBUG] Code API: EnhancedCodeOrchestrator initialized successfully');
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[DEBUG] Code API: EnhancedCodeOrchestrator initialized successfully');
+      }
     } catch (initError) {
-      console.error("Failed to initialize EnhancedCodeOrchestrator:", initError);
-      console.error("Error details:", {
-        message: initError instanceof Error ? initError.message : 'Unknown error',
-        stack: initError instanceof Error ? initError.stack : 'No stack trace'
-      });
+      if (process.env.NODE_ENV === 'development') {
+        console.error("Failed to initialize EnhancedCodeOrchestrator:", initError);
+        console.error("Error details:", {
+          message: initError instanceof Error ? initError.message : 'Unknown error',
+          stack: initError instanceof Error ? initError.stack : 'No stack trace'
+        });
+      }
       return NextResponse.json(
         {
           error: "Failed to initialize code orchestrator",
@@ -306,16 +399,32 @@ async function handleStartSession(body: any) {
 
     activeSessions.set(sessionId, session);
 
-    console.log('[DEBUG] Code API: Starting async processing for session:', sessionId);
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[DEBUG] Code API: Starting async processing for session:', sessionId);
+    }
     // Start processing asynchronously
     processSessionAsync(sessionId, prompt, selectedFiles, rules, context);
 
-    return NextResponse.json({
+    // Prepare response with mode adjustment info if needed
+    const responsePayload: any = {
       success: true,
       sessionId,
-    });
+    };
+
+    if (modeAdjusted) {
+      responsePayload.warning = {
+        message: "Invalid mode provided, defaulted to hybrid mode",
+        originalMode: mode,
+        effectiveMode: effectiveMode,
+        validModes: validModes
+      };
+    }
+
+    return NextResponse.json(responsePayload);
   } catch (error) {
-    console.error("Error starting session:", error);
+    if (process.env.NODE_ENV === 'development') {
+      console.error("Error starting session:", error);
+    }
     return NextResponse.json(
       { error: "Failed to start session" },
       { status: 500 },
