@@ -265,6 +265,10 @@ class LLMService {
           return await this.generateReplicateResponse(model, messages, temperature, maxTokens)
         case 'portkey':
           return await this.generatePortkeyResponse(model, messages, temperature, maxTokens)
+        case 'openrouter':
+          return await this.generateOpenRouterResponse(model, messages, temperature, maxTokens)
+        case 'chutes':
+          return await this.generateChutesResponse(model, messages, temperature, maxTokens)
         default:
           throw createLLMError(`Unsupported provider: ${provider}`, {
             code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
@@ -274,11 +278,16 @@ class LLMService {
           });
       }
     } catch (error) {
+      // If it's already an LLMError, re-throw it instead of wrapping it again
+      if (error instanceof LLMError) {
+        throw error;
+      }
+
       throw createLLMError(`LLM request failed: ${error instanceof Error ? error.message : String(error)}`, {
         code: ERROR_CODES.LLM.REQUEST_FAILED,
         severity: 'high',
         recoverable: true,
-        context: { provider, error }
+        context: { provider, error: error instanceof Error ? { message: error.message, name: error.name } : error }
       });
     }
   }
@@ -306,6 +315,12 @@ class LLMService {
         case 'portkey':
           yield* this.streamPortkey(model, messages, temperature, maxTokens)
           break
+        case 'openrouter':
+          yield* this.streamOpenRouterResponse(model, messages, temperature, maxTokens)
+          break
+        case 'chutes':
+          yield* this.streamChutesResponse(model, messages, temperature, maxTokens)
+          break
         default:
           throw new Error(`Streaming is not supported for provider: ${provider}`);
       }
@@ -314,7 +329,7 @@ class LLMService {
         code: ERROR_CODES.STREAMING.REQUEST_FAILED,
         severity: 'high',
         recoverable: true,
-        context: { provider, error }
+        context: { provider, error: error instanceof Error ? { message: error.message, name: error.name } : error }
       });
     }
   }
@@ -510,6 +525,62 @@ class LLMService {
     }
   }
 
+  private async generateOpenRouterResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): Promise<LLMResponse> {
+    // OpenRouter is OpenAI-compatible, so we can use the OpenAI client with their base URL
+    const openrouter = new OpenAI({
+      apiKey: process.env.OPENROUTER_API_KEY || '',
+      baseURL: 'https://openrouter.ai/api/v1',
+    });
+
+    const response = await openrouter.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    })
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      usage: response.usage
+    }
+  }
+
+  private async generateChutesResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): Promise<LLMResponse> {
+    // Chutes is OpenAI-compatible, so we can use the OpenAI client with their base URL
+    const chutes = new OpenAI({
+      apiKey: process.env.CHUTES_API_KEY || '',
+      baseURL: process.env.CHUTES_BASE_URL || 'https://api.chutes.ai/v1', // Using a hypothetical URL
+    });
+
+    const response = await chutes.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    })
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      usage: response.usage
+    }
+  }
+
   private async generatePortkeyResponse(
     model: string,
     messages: LLMMessage[],
@@ -532,6 +603,64 @@ class LLMService {
       timestamp: new Date(),
       usage: response.usage
     }
+  }
+
+  private async *streamOpenRouterResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    // OpenRouter is OpenAI-compatible, so we can use the OpenAI client with their base URL
+    const openrouter = new OpenAI({
+      apiKey: process.env.OPENROUTER_API_KEY || '',
+      baseURL: 'https://openrouter.ai/api/v1',
+    });
+
+    const stream = await openrouter.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content || ''
+      if (delta) {
+        yield { content: delta, isComplete: false }
+      }
+    }
+    yield { content: '', isComplete: true }
+  }
+
+  private async *streamChutesResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    // Chutes is OpenAI-compatible, so we can use the OpenAI client with their base URL
+    const chutes = new OpenAI({
+      apiKey: process.env.CHUTES_API_KEY || '',
+      baseURL: process.env.CHUTES_BASE_URL || 'https://api.chutes.ai/v1', // Using a hypothetical URL
+    });
+
+    const stream = await chutes.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content || ''
+      if (delta) {
+        yield { content: delta, isComplete: false }
+      }
+    }
+    yield { content: '', isComplete: true }
   }
 
   private async *streamOpenAIResponse(
@@ -729,6 +858,10 @@ class LLMService {
           return !!this.replicate
         case 'portkey':
           return !!this.portkey
+        case 'openrouter':
+          return !!process.env.OPENROUTER_API_KEY
+        case 'chutes':
+          return !!process.env.CHUTES_API_KEY
         default:
           return false
       }
@@ -768,6 +901,10 @@ export const llmService = new LLMService({
   },
   portkey: {
     apiKey: process.env.PORTKEY_API_KEY
+  },
+  chutes: {
+    apiKey: process.env.CHUTES_API_KEY,
+    baseURL: process.env.CHUTES_BASE_URL
   }
 })
 
