@@ -349,6 +349,8 @@ async function handleStartSession(body: any) {
       console.log('[DEBUG] Code API: All validations passed, creating session');
     }
 
+    console.log('[DEBUG] Code API: All validations passed, creating session');
+
     const sessionId = generateSessionId();
 
     // Initialize the enhanced code orchestrator with error handling
