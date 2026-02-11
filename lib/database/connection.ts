@@ -17,33 +17,72 @@ let dbInitialized = false;
 
 export function getDatabase(): Database.Database {
   if (!db) {
+    // Skip database initialization during build process
+    if (process.env.SKIP_DB_INIT) {
+      // Return a mock database object during build time
+      // This allows the build to proceed without requiring the native module
+      console.log('Skipping database initialization during build');
+      
+      // Create a mock database object that implements the necessary methods
+      const mockDb: Partial<Database.Database> = {
+        prepare: () => {
+          return {
+            run: () => ({ lastInsertRowid: 1, changes: 1 }),
+            get: () => null,
+            all: () => [],
+            bind: () => null,
+            columns: () => [],
+            finalize: () => {},
+            iterate: () => [],
+            raw: () => []
+          } as any;
+        },
+        exec: () => mockDb as Database.Database,
+        pragma: () => {},
+        transaction: (fn: any) => fn,
+        close: () => {},
+        backup: () => Promise.resolve({ progress: () => {} }),
+        defaultSafeIntegers: () => mockDb as Database.Database,
+        register: () => mockDb as Database.Database,
+        loadExtension: () => mockDb as Database.Database,
+        serialize: () => Buffer.alloc(0),
+        table: () => null,
+        function: () => mockDb as Database.Database,
+        aggregate: () => mockDb as Database.Database,
+        backup: () => Promise.resolve({ progress: () => {} }),
+        unsafeMode: () => mockDb as Database.Database,
+      };
+      
+      return mockDb as Database.Database;
+    }
+
     try {
       // Create data directory if it doesn't exist
       const { mkdirSync } = require('fs');
       const { dirname } = require('path');
       mkdirSync(dirname(DB_PATH), { recursive: true });
-      
+
       db = new Database(DB_PATH);
-      
+
       // Enable WAL mode for better performance
       db.pragma('journal_mode = WAL');
       db.pragma('synchronous = NORMAL');
       db.pragma('cache_size = 1000');
       db.pragma('temp_store = memory');
-      
+
       // Initialize schema synchronously first time
       if (!dbInitialized) {
         initializeSchemaSync();
         dbInitialized = true;
       }
-      
+
       console.log('Database initialized successfully');
     } catch (error) {
       console.error('Failed to initialize database:', error);
       throw error;
     }
   }
-  
+
   return db;
 }
 

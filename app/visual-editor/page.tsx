@@ -1,6 +1,6 @@
 "use client"
 
-import VisualEditor from "@/components/visual_editor_components";
+import { VisualEditor } from "@/components/visual_editor_components";
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 
