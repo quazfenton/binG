@@ -357,8 +357,8 @@ export default function AIPromptLibraryPlugin({ onClose }: PluginProps) {
 
             <Card className="bg-white/5">
               <CardContent className="p-3 text-xs text-gray-400">
-                <p>💡 Tip: Use {{'{'}}{'{'}variable{'}'}{'}'}  syntax to create reusable variables</p>
-                <p className="mt-1">Example: "Explain {{'{'}}{'{'}concept{'}'}{'}'}} in simple terms"</p>
+                <p>💡 Tip: Use {'{{'}variable{'}}'}  syntax to create reusable variables</p>
+                <p className="mt-1">Example: "Explain {'{{'}concept{'}}'} in simple terms"</p>
               </CardContent>
             </Card>
 
