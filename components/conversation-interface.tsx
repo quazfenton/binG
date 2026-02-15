@@ -907,6 +907,7 @@ function ConversationInterfaceContent() {
         activeTab={activeTab}
         onActiveTabChange={setActiveTab}
         streamingState={streamingState}
+        userId={currentConversationId || undefined} // Pass user/conversation ID for integrations
       />
 
       {/* Chat History Modal */}

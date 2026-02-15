@@ -104,6 +104,9 @@ export async function POST(request: NextRequest) {
     
     console.log('[DEBUG] Chat API: Validation passed, routing through priority chain');
 
+    // NEW: Add tool/sandbox detection
+    const requestType = detectRequestType(messages);
+
     // PRIORITY-BASED ROUTING - Routes through Fast-Agent → n8n → Custom Fallback → Original System
     const routerRequest = {
       messages,
@@ -114,7 +117,9 @@ export async function POST(request: NextRequest) {
       stream,
       apiKeys,
       requestId,
-      userId: authResult.userId // Include userId for tool and sandbox authorization
+      userId: authResult.userId, // Include userId for tool and sandbox authorization
+      enableTools: requestType === 'tool' && !!authResult.userId,
+      enableSandbox: requestType === 'sandbox' && !!authResult.userId,
     };
 
     console.log('[DEBUG] Chat API: Routing request through priority chain');
@@ -125,9 +130,33 @@ export async function POST(request: NextRequest) {
       
       console.log(`[DEBUG] Chat API: Request handled by ${routerResponse.source} (priority ${routerResponse.priority})`);
       
+      // Check for auth_required in response
+      if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
+        return NextResponse.json({
+          status: 'auth_required',
+          authUrl: routerResponse.data.authUrl,
+          toolName: routerResponse.data.toolName,
+          provider: routerResponse.data.provider || 'unknown',
+          message: `Please authorize ${routerResponse.data.toolName} to continue`
+        });
+      }
+      
       // Process response through unified handler
       const unifiedResponse = unifiedResponseHandler.processResponse(routerResponse, requestId);
-      
+
+      // Check if the response contains authorization requirements
+      if (unifiedResponse.content?.includes('AUTH_REQUIRED:')) {
+        const authParts = unifiedResponse.content.split(':');
+        if (authParts.length >= 3) {
+          return NextResponse.json({
+            status: 'auth_required',
+            authUrl: authParts[1],
+            toolName: authParts[2],
+            message: `Please authorize the ${authParts[2]} tool to continue`
+          });
+        }
+      }
+
       // Handle streaming response
       if (stream && selectedProvider.supportsStreaming) {
         const streamRequestId = requestId || `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -180,6 +209,19 @@ export async function POST(request: NextRequest) {
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
           },
         });
+      }
+
+      // Check for auth required in non-streaming response as well
+      if (unifiedResponse.content?.includes('AUTH_REQUIRED:')) {
+        const authParts = unifiedResponse.content.split(':');
+        if (authParts.length >= 3) {
+          return NextResponse.json({
+            status: 'auth_required',
+            authUrl: authParts[1],
+            toolName: authParts[2],
+            message: `Please authorize the ${authParts[2]} tool to continue`
+          });
+        }
       }
 
       // Handle non-streaming response
@@ -593,4 +635,40 @@ export async function OPTIONS() {
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
     },
   });
+}
+
+// Helper function to detect request type
+function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 'chat' {
+  const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content;
+  if (!lastUserMsg || typeof lastUserMsg !== 'string') return 'chat';
+
+  const text = lastUserMsg.toLowerCase();
+
+  // Tool intent patterns (third-party service actions)
+  const TOOL_PATTERNS = [
+    /send\s+(an?\s+)?email/i, /read\s+(my\s+)?emails?/i,
+    /create\s+(a\s+)?calendar\s+event/i, /add\s+to\s+(my\s+)?calendar/i,
+    /post\s+(to|on)\s+(twitter|x|reddit|slack|discord)/i,
+    /send\s+(a\s+)?(text|sms|message)/i, /make\s+a\s+call/i,
+    /create\s+(a\s+)?(github|git)\s+(issue|pr|pull)/i,
+    /search\s+(with\s+)?exa/i, /play\s+(on\s+)?spotify/i,
+    /upload\s+to\s+(drive|dropbox)/i, /create\s+(a\s+)?notion/i,
+    /deploy\s+(to|on)\s+(vercel|railway)/i,
+    /create\s+(a\s+)?google\s+(doc|sheet|slide)/i,
+  ];
+
+  // Sandbox intent patterns (code execution, file operations)
+  const SANDBOX_PATTERNS = [
+    /\b(run|execute|compile)\s+(this|the|my)?\s*(code|script|program)/i,
+    /\b(build|create|write)\s+(a\s+)?(server|api|app|script|program)\s+(and|then)\s+(run|execute|start)/i,
+    /\bnpm\s+(install|init|run|start)/i, /\bpip\s+install/i,
+    /\b(install|setup)\s+(packages?|dependencies)/i,
+    /\brun\s+.*\.(py|js|ts|sh|rb)/i,
+    /\b(open|start|launch)\s+(a\s+)?(terminal|shell|sandbox)/i,
+    /\b(write|create|edit)\s+(a\s+)?file\s+.*\.(py|js|ts|html|css|json)/i,
+  ];
+
+  if (TOOL_PATTERNS.some(p => p.test(text))) return 'tool';
+  if (SANDBOX_PATTERNS.some(p => p.test(text))) return 'sandbox';
+  return 'chat';
 }
