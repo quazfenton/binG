@@ -8,6 +8,8 @@ import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from './
 import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from './custom-fallback-service';
 import { enhancedLLMService, type EnhancedLLMRequest } from './enhanced-llm-service';
 import { getToolManager } from '../tools';
+import { toolAuthManager } from '../services/tool-authorization-manager';
+import { toolContextManager } from '../services/tool-context-manager';
 import { sandboxBridge } from '../sandbox';
 import type { LLMMessage } from './llm-providers';
 
@@ -20,7 +22,9 @@ export interface RouterRequest {
   stream?: boolean;
   apiKeys?: Record<string, string>;
   requestId?: string;
-  userId?: string; // For tool and sandbox authorization
+  userId?: string;
+  enableTools?: boolean;
+  enableSandbox?: boolean;
 }
 
 export interface RouterResponse {
@@ -69,7 +73,7 @@ class PriorityRequestRouter {
         },
         canHandle: (req) => {
           // Check if request contains tool intent and has user context
-          return detectRequestType(req.messages) === 'tool' && !!req.userId;
+          return detectRequestType(req.messages) === 'tool' && !!req.userId && req.enableTools !== false;
         },
         processRequest: async (req) => {
           // Process tool request with authorization
@@ -88,7 +92,7 @@ class PriorityRequestRouter {
         },
         canHandle: (req) => {
           // Check if request contains code execution intent and has user context
-          return detectRequestType(req.messages) === 'sandbox' && !!req.userId;
+          return detectRequestType(req.messages) === 'sandbox' && !!req.userId && req.enableSandbox !== false;
         },
         processRequest: async (req) => {
           // Process sandbox request
@@ -419,6 +423,129 @@ class PriorityRequestRouter {
   resetStats(): void {
     this.routingStats.clear();
   }
+
+  /**
+   * Process tool request with authorization
+   */
+  private async processToolRequest(request: RouterRequest): Promise<any> {
+    if (!request.userId) {
+      return {
+        content: 'User authentication required for tool access',
+        data: {
+          source: 'tool-execution',
+          requiresAuth: true,
+          error: 'User ID not provided'
+        }
+      };
+    }
+
+    try {
+      const result = await toolContextManager.processToolRequest(
+        request.messages,
+        request.userId,
+        request.requestId || `conv_${Date.now()}`
+      );
+
+      if (result.requiresAuth && result.authUrl) {
+        return {
+          content: `I need authorization to use ${result.toolName}. Please connect your account to proceed.`,
+          data: {
+            source: 'tool-execution',
+            requiresAuth: true,
+            authUrl: result.authUrl,
+            toolName: result.toolName,
+            type: 'auth_required'
+          }
+        };
+      }
+
+      if (result.toolCalls && result.toolCalls.length > 0) {
+        return {
+          content: result.content,
+          data: {
+            source: 'tool-execution',
+            toolCalls: result.toolCalls,
+            toolResults: result.toolResults,
+            type: 'tool_execution'
+          }
+        };
+      }
+
+      return {
+        content: result.content,
+        data: {
+          source: 'tool-execution',
+          type: 'no_tools_detected'
+        }
+      };
+    } catch (error: any) {
+      console.error('[Router] Tool processing error:', error);
+      return {
+        content: `I encountered an error while processing your tool request: ${error.message}`,
+        data: {
+          source: 'tool-execution',
+          error: error.message,
+          type: 'error'
+        }
+      };
+    }
+  }
+
+  /**
+   * Process sandbox request
+   */
+  private async processSandboxRequest(request: RouterRequest): Promise<any> {
+    if (!request.userId) {
+      return {
+        content: 'User authentication required for sandbox access',
+        data: {
+          source: 'sandbox-agent',
+          requiresAuth: true,
+          error: 'User ID not provided'
+        }
+      };
+    }
+
+    try {
+      const session = await sandboxBridge.getOrCreateSession(request.userId);
+      
+      const lastUserMessage = request.messages
+        .filter(m => m.role === 'user')
+        .pop()?.content;
+
+      if (!lastUserMessage) {
+        return {
+          content: 'No user message found to process',
+          data: {
+            source: 'sandbox-agent',
+            error: 'No message content'
+          }
+        };
+      }
+
+      const result = await sandboxBridge.executeCommand(session.sandboxId, lastUserMessage);
+
+      return {
+        content: `Sandbox execution completed.\n\nOutput:\n${result.stdout || 'No output'}\n${result.stderr ? `\nErrors:\n${result.stderr}` : ''}`,
+        data: {
+          source: 'sandbox-agent',
+          sandboxId: session.sandboxId,
+          exitCode: result.exitCode,
+          type: 'sandbox_execution'
+        }
+      };
+    } catch (error: any) {
+      console.error('[Router] Sandbox processing error:', error);
+      return {
+        content: `I encountered an error while executing in the sandbox: ${error.message}`,
+        data: {
+          source: 'sandbox-agent',
+          error: error.message,
+          type: 'error'
+        }
+      };
+    }
+  }
 }
 
 // Helper function to detect request type
@@ -431,31 +558,3 @@ function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 'chat' 
   // Tool intent patterns (third-party service actions)
   const TOOL_PATTERNS = [
     /send\s+(an?\s+)?email/i, /read\s+(my\s+)?emails?/i,
-    /create\s+(a\s+)?calendar\s+event/i, /add\s+to\s+(my\s+)?calendar/i,
-    /post\s+(to|on)\s+(twitter|x|reddit|slack|discord)/i,
-    /send\s+(a\s+)?(text|sms|message)/i, /make\s+a\s+call/i,
-    /create\s+(a\s+)?(github|git)\s+(issue|pr|pull)/i,
-    /search\s+(with\s+)?exa/i, /play\s+(on\s+)?spotify/i,
-    /upload\s+to\s+(drive|dropbox)/i, /create\s+(a\s+)?notion/i,
-    /deploy\s+(to|on)\s+(vercel|railway)/i,
-    /create\s+(a\s+)?google\s+(doc|sheet|slide)/i,
-  ];
-
-  // Sandbox intent patterns (code execution, file operations)
-  const SANDBOX_PATTERNS = [
-    /\b(run|execute|compile)\s+(this|the|my)?\s*(code|script|program)/i,
-    /\b(build|create|write)\s+(a\s+)?(server|api|app|script|program)\s+(and|then)\s+(run|execute|start)/i,
-    /\bnpm\s+(install|init|run|start)/i, /\bpip\s+install/i,
-    /\b(install|setup)\s+(packages?|dependencies)/i,
-    /\brun\s+.*\.(py|js|ts|sh|rb)/i,
-    /\b(open|start|launch)\s+(a\s+)?(terminal|shell|sandbox)/i,
-    /\b(write|create|edit)\s+(a\s+)?file\s+.*\.(py|js|ts|html|css|json)/i,
-  ];
-
-  if (TOOL_PATTERNS.some(p => p.test(text))) return 'tool';
-  if (SANDBOX_PATTERNS.some(p => p.test(text))) return 'sandbox';
-  return 'chat';
-}
-
-// Export singleton instance
-export const priorityRequestRouter = new PriorityRequestRouter();

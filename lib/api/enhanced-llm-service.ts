@@ -7,6 +7,8 @@
 
 import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhanced-api-client';
 import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, PROVIDERS } from './llm-providers';
+import { toolContextManager } from '../services/tool-context-manager';
+import { sandboxBridge } from '../sandbox';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -17,6 +19,10 @@ export interface EnhancedLLMRequest extends LLMRequest {
     maxDelay?: number;
   };
   enableCircuitBreaker?: boolean;
+  enableTools?: boolean;
+  enableSandbox?: boolean;
+  userId?: string;
+  conversationId?: string;
 }
 
 export interface LLMEndpointConfig {
@@ -38,7 +44,6 @@ export class EnhancedLLMService {
   }
 
   private initializeEndpointConfigs(): void {
-    // Configure endpoint mappings for different providers
     const configs: LLMEndpointConfig[] = [
       {
         provider: 'openrouter',
@@ -85,7 +90,6 @@ export class EnhancedLLMService {
   }
 
   private setupFallbackChains(): void {
-    // Define fallback chains for different providers
     this.fallbackChains.set('openrouter', ['chutes', 'anthropic', 'google']);
     this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google']);
     this.fallbackChains.set('anthropic', ['openrouter', 'chutes', 'google']);
@@ -95,23 +99,61 @@ export class EnhancedLLMService {
 
   private startHealthMonitoring(): void {
     const endpoints = Array.from(this.endpointConfigs.values()).map(config => config.baseUrl);
-    enhancedAPIClient.startHealthMonitoring(endpoints, 60000); // Check every minute
+    enhancedAPIClient.startHealthMonitoring(endpoints, 60000);
   }
 
   async generateResponse(request: EnhancedLLMRequest): Promise<LLMResponse> {
-    const { provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, ...llmRequest } = request;
+    const { enableTools, enableSandbox, userId, conversationId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, ...llmRequest } = request;
 
+    // If tools are enabled and user ID is provided, process tools
+    if (enableTools && userId && conversationId) {
+      const toolResult = await this.processToolRequest(
+        llmRequest.messages,
+        userId,
+        conversationId
+      );
+
+      if (toolResult.requiresAuth && toolResult.authUrl) {
+        return {
+          content: `AUTH_REQUIRED:${toolResult.authUrl}:${toolResult.toolName}`,
+          tokensUsed: 0,
+          finishReason: 'tool_auth_required',
+          timestamp: new Date(),
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+        };
+      }
+
+      if (toolResult.toolCalls && toolResult.toolCalls.length > 0) {
+        const updatedMessages = [
+          ...llmRequest.messages,
+          { role: 'assistant' as const, content: JSON.stringify(toolResult.toolCalls) },
+          { role: 'tool' as const, content: JSON.stringify(toolResult.toolResults) }
+        ];
+
+        const updatedRequest = {
+          ...llmRequest,
+          messages: updatedMessages
+        };
+
+        return await this.callProviderWithEnhancedClient(provider, updatedRequest, retryOptions, enableCircuitBreaker);
+      }
+    }
+
+    // If sandbox is enabled, process sandbox request
+    if (enableSandbox && userId && conversationId) {
+      return await this.processSandboxRequest(request, userId, conversationId);
+    }
+
+    // Try primary provider first
     try {
-      // Try primary provider first
       const fullRequest = { ...llmRequest, provider };
       return await this.callProviderWithEnhancedClient(provider, fullRequest, retryOptions, enableCircuitBreaker);
     } catch (primaryError) {
       console.warn(`Primary provider ${provider} failed:`, primaryError);
 
-      // Determine fallback providers
       const fallbacks = fallbackProviders || this.fallbackChains.get(provider) || [];
-      const availableFallbacks = fallbacks.filter(fallbackProvider => 
-        this.endpointConfigs.has(fallbackProvider) && 
+      const availableFallbacks = fallbacks.filter(fallbackProvider =>
+        this.endpointConfigs.has(fallbackProvider) &&
         this.isProviderHealthy(fallbackProvider)
       );
 
@@ -123,15 +165,13 @@ export class EnhancedLLMService {
         );
       }
 
-      // Try fallback providers
       for (const fallbackProvider of availableFallbacks) {
         try {
           console.log(`Trying fallback provider: ${fallbackProvider}`);
-          
-          // Check if the model is supported by the fallback provider
+
           const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
           const supportedModel = this.findCompatibleModel(llmRequest.model, fallbackConfig.models);
-          
+
           if (!supportedModel) {
             console.warn(`Model ${llmRequest.model} not supported by ${fallbackProvider}, skipping`);
             continue;
@@ -144,16 +184,15 @@ export class EnhancedLLMService {
           };
 
           const response = await this.callProviderWithEnhancedClient(
-            fallbackProvider, 
-            fallbackRequest, 
-            retryOptions, 
+            fallbackProvider,
+            fallbackRequest,
+            retryOptions,
             enableCircuitBreaker
           );
 
-          // Add fallback information to response
           return {
             ...response,
-            provider: `${provider} -> ${fallbackProvider}` // Indicate fallback was used
+            provider: `${provider} -> ${fallbackProvider}`
           };
         } catch (fallbackError) {
           console.warn(`Fallback provider ${fallbackProvider} failed:`, fallbackError);
@@ -161,7 +200,6 @@ export class EnhancedLLMService {
         }
       }
 
-      // All providers failed
       throw this.createEnhancedError(
         'All providers failed to generate response',
         'ALL_PROVIDERS_FAILED',
@@ -174,13 +212,11 @@ export class EnhancedLLMService {
     const { provider, fallbackProviders, ...llmRequest } = request;
 
     try {
-      // For streaming, we'll use the original service but with enhanced error handling
       const fullRequest = { ...llmRequest, provider };
       yield* llmService.generateStreamingResponse(fullRequest);
     } catch (error) {
       console.warn(`Streaming failed for ${provider}:`, error);
       
-      // For streaming fallback, we need to restart the stream with a different provider
       const fallbacks = fallbackProviders || this.fallbackChains.get(provider) || [];
       const availableFallbacks = fallbacks.filter(fallbackProvider => 
         this.endpointConfigs.has(fallbackProvider) && 
@@ -196,7 +232,6 @@ export class EnhancedLLMService {
         );
       }
 
-      // Try first available streaming fallback
       const fallbackProvider = availableFallbacks[0];
       const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
       const supportedModel = this.findCompatibleModel(llmRequest.model, fallbackConfig.models);
@@ -231,33 +266,27 @@ export class EnhancedLLMService {
       throw new Error(`Provider ${provider} not configured`);
     }
 
-    // For now, we'll use the original LLM service but wrap it with enhanced error handling
-    // In a full implementation, we would refactor the LLM service to use the enhanced client
     try {
       return await llmService.generateResponse(request);
     } catch (error) {
-      // Enhance the error with better user messages
       throw this.enhanceError(error as Error, provider);
     }
   }
 
   private findCompatibleModel(requestedModel: string, availableModels: string[]): string | null {
-    // Direct match
     if (availableModels.includes(requestedModel)) {
       return requestedModel;
     }
 
-    // Try to find similar models based on naming patterns
     const modelFamily = this.extractModelFamily(requestedModel);
     const compatibleModel = availableModels.find(model => 
       this.extractModelFamily(model) === modelFamily
     );
 
-    return compatibleModel || availableModels[0] || null; // Return first available as last resort
+    return compatibleModel || availableModels[0] || null;
   }
 
   private extractModelFamily(model: string): string {
-    // Extract model family from model name (e.g., "gpt-4" from "gpt-4-turbo")
     const patterns = [
       /^(gpt-[34])/i,
       /^(claude-[23])/i,
@@ -282,13 +311,12 @@ export class EnhancedLLMService {
     if (!config) return false;
 
     const health = enhancedAPIClient.getEndpointHealth(config.baseUrl) as any;
-    return health.isHealthy !== false; // Default to healthy if no health data
+    return health.isHealthy !== false;
   }
 
   private enhanceError(error: Error, provider: string): Error {
     const enhancedError = new Error(error.message);
     
-    // Add user-friendly messages based on error patterns
     if (error.message.includes('API key')) {
       enhancedError.message = `Authentication failed for ${provider}. Please check your API key configuration.`;
     } else if (error.message.includes('rate limit')) {
@@ -313,7 +341,6 @@ export class EnhancedLLMService {
     return error;
   }
 
-  // Health and monitoring methods
   getProviderHealth(): Record<string, any> {
     const health: Record<string, any> = {};
     
@@ -346,11 +373,75 @@ export class EnhancedLLMService {
     }
   }
 
-  // Cleanup
+  async processToolRequest(messages: LLMMessage[], userId: string, conversationId: string) {
+    try {
+      const result = await toolContextManager.processToolRequest(
+        messages,
+        userId,
+        conversationId
+      );
+
+      return {
+        requiresAuth: result.requiresAuth,
+        authUrl: result.authUrl,
+        toolName: result.toolName,
+        toolCalls: result.toolCalls,
+        toolResults: result.toolResults,
+        content: result.content
+      };
+    } catch (error: any) {
+      console.error('Tool request processing error:', error);
+      return {
+        requiresAuth: false,
+        toolCalls: [],
+        toolResults: [],
+        content: `Error processing tool request: ${error.message}`
+      };
+    }
+  }
+
+  async processSandboxRequest(request: EnhancedLLMRequest, userId: string, conversationId: string): Promise<LLMResponse> {
+    try {
+      const session = await sandboxBridge.getOrCreateSession(userId);
+      
+      const lastUserMessage = request.messages
+        .filter(m => m.role === 'user')
+        .pop()?.content;
+
+      if (!lastUserMessage) {
+        return {
+          content: 'No user message found to process in sandbox',
+          tokensUsed: 0,
+          finishReason: 'error',
+          timestamp: new Date(),
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+        };
+      }
+
+      const result = await sandboxBridge.executeCommand(session.sandboxId, lastUserMessage);
+
+      return {
+        content: `Sandbox execution completed.\n\nOutput:\n${result.stdout || 'No output'}\n${result.stderr ? `\nErrors:\n${result.stderr}` : ''}`,
+        tokensUsed: 0,
+        finishReason: 'stop',
+        timestamp: new Date(),
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      };
+    } catch (error: any) {
+      console.error('Sandbox request processing error:', error);
+      return {
+        content: `Error executing in sandbox: ${error.message}`,
+        tokensUsed: 0,
+        finishReason: 'error',
+        timestamp: new Date(),
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      };
+    }
+  }
+
   destroy(): void {
     enhancedAPIClient.destroy();
   }
 }
 
-// Export singleton instance
 export const enhancedLLMService = new EnhancedLLMService();

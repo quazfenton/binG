@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Check authorization
-    const authorized = await toolAuthManager.isAuthorized(parseInt(userId, 10), toolKey);
+    const authorized = await toolAuthManager.isAuthorized(userId, toolKey);
     if (!authorized) {
       const provider = toolAuthManager.getRequiredProvider(toolKey);
       if (provider) {
@@ -67,8 +67,8 @@ export async function GET(req: NextRequest) {
     }
 
     if (userId) {
-      const available = await toolAuthManager.getAvailableTools(parseInt(userId, 10));
-      const providers = await toolAuthManager.getConnectedProviders(parseInt(userId, 10));
+      const available = await toolAuthManager.getAvailableTools(userId);
+      const providers = await toolAuthManager.getConnectedProviders(userId);
       return NextResponse.json({ availableTools: available, connectedProviders: providers });
     }
 
