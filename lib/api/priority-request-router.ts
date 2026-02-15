@@ -7,6 +7,8 @@ import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from 
 import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from './n8n-agent-service';
 import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from './custom-fallback-service';
 import { enhancedLLMService, type EnhancedLLMRequest } from './enhanced-llm-service';
+import { getToolManager } from '../tools';
+import { sandboxBridge } from '../sandbox';
 import type { LLMMessage } from './llm-providers';
 
 export interface RouterRequest {
@@ -18,6 +20,7 @@ export interface RouterRequest {
   stream?: boolean;
   apiKeys?: Record<string, string>;
   requestId?: string;
+  userId?: string; // For tool and sandbox authorization
 }
 
 export interface RouterResponse {
@@ -54,10 +57,48 @@ class PriorityRequestRouter {
    */
   private initializeEndpoints(): EndpointConfig[] {
     const endpoints: EndpointConfig[] = [
-      // Priority 1: Fast-Agent (Most capable - tools, MCP, file handling)
+      // Priority 1: Tool Execution (Handle tool requests with authorization)
+      {
+        name: 'tool-execution',
+        priority: 1,
+        enabled: true,
+        service: getToolManager(),
+        healthCheck: async () => {
+          // Check if Arcade/Nango are configured
+          return !!(process.env.ARCADE_API_KEY || process.env.NANGO_API_KEY);
+        },
+        canHandle: (req) => {
+          // Check if request contains tool intent and has user context
+          return detectRequestType(req.messages) === 'tool' && !!req.userId;
+        },
+        processRequest: async (req) => {
+          // Process tool request with authorization
+          return await this.processToolRequest(req);
+        }
+      },
+      // Priority 2: Sandbox Agent (Handle code execution requests)
+      {
+        name: 'sandbox-agent',
+        priority: 2,
+        enabled: true,
+        service: sandboxBridge,
+        healthCheck: async () => {
+          // Check if sandbox provider is configured
+          return !!(process.env.SANDBOX_PROVIDER);
+        },
+        canHandle: (req) => {
+          // Check if request contains code execution intent and has user context
+          return detectRequestType(req.messages) === 'sandbox' && !!req.userId;
+        },
+        processRequest: async (req) => {
+          // Process sandbox request
+          return await this.processSandboxRequest(req);
+        }
+      },
+      // Priority 3: Fast-Agent (Most capable - tools, MCP, file handling)
       {
         name: 'fast-agent',
-        priority: 1,
+        priority: 3,
         enabled: process.env.FAST_AGENT_ENABLED === 'true',
         service: fastAgentService,
         healthCheck: () => fastAgentService.healthCheck(),
@@ -67,10 +108,10 @@ class PriorityRequestRouter {
           return this.normalizeFastAgentResponse(response);
         }
       },
-      // Priority 2: n8n Agent Chaining (Complex workflows and external integrations)
+      // Priority 4: n8n Agent Chaining (Complex workflows and external integrations)
       {
         name: 'n8n-agents',
-        priority: 2,
+        priority: 4,
         enabled: process.env.N8N_ENABLED === 'true',
         service: n8nAgentService,
         healthCheck: () => n8nAgentService.healthCheck(),
@@ -80,10 +121,10 @@ class PriorityRequestRouter {
           return this.normalizeN8nResponse(response);
         }
       },
-      // Priority 3: Custom Fallback (Last resort before original system)
+      // Priority 5: Custom Fallback (Last resort before original system)
       {
         name: 'custom-fallback',
-        priority: 3,
+        priority: 5,
         enabled: process.env.CUSTOM_FALLBACK_ENABLED === 'true',
         service: customFallbackService,
         healthCheck: () => customFallbackService.healthCheck(),
@@ -93,10 +134,10 @@ class PriorityRequestRouter {
           return this.normalizeCustomFallbackResponse(response);
         }
       },
-      // Priority 4: Original Enhanced LLM Service (Built-in system)
+      // Priority 6: Original Enhanced LLM Service (Built-in system)
       {
         name: 'original-system',
-        priority: 4,
+        priority: 6,
         enabled: true,
         service: enhancedLLMService,
         healthCheck: async () => true, // Always available
@@ -378,6 +419,42 @@ class PriorityRequestRouter {
   resetStats(): void {
     this.routingStats.clear();
   }
+}
+
+// Helper function to detect request type
+function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 'chat' {
+  const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content;
+  if (!lastUserMsg || typeof lastUserMsg !== 'string') return 'chat';
+
+  const text = lastUserMsg.toLowerCase();
+
+  // Tool intent patterns (third-party service actions)
+  const TOOL_PATTERNS = [
+    /send\s+(an?\s+)?email/i, /read\s+(my\s+)?emails?/i,
+    /create\s+(a\s+)?calendar\s+event/i, /add\s+to\s+(my\s+)?calendar/i,
+    /post\s+(to|on)\s+(twitter|x|reddit|slack|discord)/i,
+    /send\s+(a\s+)?(text|sms|message)/i, /make\s+a\s+call/i,
+    /create\s+(a\s+)?(github|git)\s+(issue|pr|pull)/i,
+    /search\s+(with\s+)?exa/i, /play\s+(on\s+)?spotify/i,
+    /upload\s+to\s+(drive|dropbox)/i, /create\s+(a\s+)?notion/i,
+    /deploy\s+(to|on)\s+(vercel|railway)/i,
+    /create\s+(a\s+)?google\s+(doc|sheet|slide)/i,
+  ];
+
+  // Sandbox intent patterns (code execution, file operations)
+  const SANDBOX_PATTERNS = [
+    /\b(run|execute|compile)\s+(this|the|my)?\s*(code|script|program)/i,
+    /\b(build|create|write)\s+(a\s+)?(server|api|app|script|program)\s+(and|then)\s+(run|execute|start)/i,
+    /\bnpm\s+(install|init|run|start)/i, /\bpip\s+install/i,
+    /\b(install|setup)\s+(packages?|dependencies)/i,
+    /\brun\s+.*\.(py|js|ts|sh|rb)/i,
+    /\b(open|start|launch)\s+(a\s+)?(terminal|shell|sandbox)/i,
+    /\b(write|create|edit)\s+(a\s+)?file\s+.*\.(py|js|ts|html|css|json)/i,
+  ];
+
+  if (TOOL_PATTERNS.some(p => p.test(text))) return 'tool';
+  if (SANDBOX_PATTERNS.some(p => p.test(text))) return 'sandbox';
+  return 'chat';
 }
 
 // Export singleton instance
