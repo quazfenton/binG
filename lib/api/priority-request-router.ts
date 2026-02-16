@@ -548,13 +548,5 @@ class PriorityRequestRouter {
   }
 }
 
-// Helper function to detect request type
-function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 'chat' {
-  const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content;
-  if (!lastUserMsg || typeof lastUserMsg !== 'string') return 'chat';
-
-  const text = lastUserMsg.toLowerCase();
-
-  // Tool intent patterns (third-party service actions)
-  const TOOL_PATTERNS = [
-    /send\s+(an?\s+)?email/i, /read\s+(my\s+)?emails?/i,
+// Export singleton instance
+export const priorityRequestRouter = new PriorityRequestRouter();
