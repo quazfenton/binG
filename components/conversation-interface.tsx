@@ -646,12 +646,6 @@ function ConversationInterfaceContent() {
   }, [messages, activeTab]);
 
   const handleToggleCodePreview = () => {
-    // Allow code preview in both chat and code modes
-    // If switching from chat to code preview, also switch to code tab
-    if (activeTab !== 'code') {
-      setActiveTab('code');
-    }
-
     setShowCodePreview((prevShowCodePreview) => {
       const newState = !prevShowCodePreview;
       return newState;
@@ -930,7 +924,7 @@ function ConversationInterfaceContent() {
       )}
 
       {/* Code Preview Panel */}
-      {showCodePreview && activeTab === 'code' && (
+      {showCodePreview && (
         <CodePreviewPanel
           messages={messages}
           onClose={() => setShowCodePreview(false)}
