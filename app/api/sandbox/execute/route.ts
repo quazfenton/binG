@@ -13,6 +13,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Verify sandbox ownership — check that this user has an active session with this sandboxId
+    const userSession = sandboxBridge.getSessionByUserId(userId);
+    if (!userSession || userSession.sandboxId !== sandboxId) {
+      return NextResponse.json(
+        { error: 'Unauthorized: sandbox does not belong to this user' },
+        { status: 403 }
+      );
+    }
+
     // Execute the command in the sandbox
     const result = await sandboxBridge.executeCommand(sandboxId, command);
 

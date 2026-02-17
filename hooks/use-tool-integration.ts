@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 
 interface ToolExecutionState {
   loading: boolean;
@@ -31,10 +31,15 @@ export function useToolIntegration(options: UseToolIntegrationOptions) {
     provider: null,
   });
 
+  // Use refs for callbacks and values that change every render
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
   const executeTool = useCallback(
     async (toolKey: string, input: any) => {
-      if (!options.userId) {
-        options.onError?.('User not authenticated');
+      const opts = optionsRef.current;
+      if (!opts.userId) {
+        opts.onError?.('User not authenticated');
         return null;
       }
 
@@ -47,8 +52,8 @@ export function useToolIntegration(options: UseToolIntegrationOptions) {
           body: JSON.stringify({
             toolKey,
             input,
-            userId: String(options.userId),
-            conversationId: options.conversationId,
+            userId: String(opts.userId),
+            conversationId: opts.conversationId,
           }),
         });
 
@@ -60,27 +65,27 @@ export function useToolIntegration(options: UseToolIntegrationOptions) {
             authRequired: true, authUrl: data.authUrl,
             toolName: data.toolName, provider: data.provider,
           });
-          options.onAuthRequired?.(data.authUrl, data.toolName, data.provider);
+          opts.onAuthRequired?.(data.authUrl, data.toolName, data.provider);
           return null;
         }
 
         if (data.error) {
           setState({ loading: false, error: data.error, output: null, authRequired: false, authUrl: null, toolName: toolKey, provider: null });
-          options.onError?.(data.error);
+          opts.onError?.(data.error);
           return null;
         }
 
         setState({ loading: false, error: null, output: data.output, authRequired: false, authUrl: null, toolName: toolKey, provider: null });
-        options.onSuccess?.(data.output, toolKey);
+        opts.onSuccess?.(data.output, toolKey);
         return data.output;
       } catch (err: any) {
         const msg = err.message || 'Tool execution failed';
         setState({ loading: false, error: msg, output: null, authRequired: false, authUrl: null, toolName: toolKey, provider: null });
-        options.onError?.(msg);
+        opts.onError?.(msg);
         return null;
       }
     },
-    [options],
+    [],
   );
 
   const dismissAuth = useCallback(() => {

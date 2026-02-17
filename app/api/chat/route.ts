@@ -145,19 +145,6 @@ export async function POST(request: NextRequest) {
       // Process response through unified handler
       const unifiedResponse = unifiedResponseHandler.processResponse(routerResponse, requestId);
 
-      // Check if the response contains authorization requirements
-      if (unifiedResponse.content?.includes('AUTH_REQUIRED:')) {
-        const authParts = unifiedResponse.content.split(':');
-        if (authParts.length >= 3) {
-          return NextResponse.json({
-            status: 'auth_required',
-            authUrl: authParts[1],
-            toolName: authParts[2],
-            message: `Please authorize the ${authParts[2]} tool to continue`
-          });
-        }
-      }
-
       // Handle streaming response
       if (stream && selectedProvider.supportsStreaming) {
         const streamRequestId = requestId || `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -210,19 +197,6 @@ export async function POST(request: NextRequest) {
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
           },
         });
-      }
-
-      // Check for auth required in non-streaming response as well
-      if (unifiedResponse.content?.includes('AUTH_REQUIRED:')) {
-        const authParts = unifiedResponse.content.split(':');
-        if (authParts.length >= 3) {
-          return NextResponse.json({
-            status: 'auth_required',
-            authUrl: authParts[1],
-            toolName: authParts[2],
-            message: `Please authorize the ${authParts[2]} tool to continue`
-          });
-        }
       }
 
       // Handle non-streaming response

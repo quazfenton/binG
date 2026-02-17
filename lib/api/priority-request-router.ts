@@ -12,6 +12,7 @@ import { toolAuthManager } from '../services/tool-authorization-manager';
 import { toolContextManager } from '../services/tool-context-manager';
 import { sandboxBridge } from '../sandbox';
 import type { LLMMessage } from './llm-providers';
+import { detectRequestType } from '../utils/request-type-detector';
 
 export interface RouterRequest {
   messages: LLMMessage[];
@@ -513,7 +514,7 @@ class PriorityRequestRouter {
         .filter(m => m.role === 'user')
         .pop()?.content;
 
-      if (!lastUserMessage) {
+      if (!lastUserMessage || typeof lastUserMessage !== 'string') {
         return {
           content: 'No user message found to process',
           data: {
@@ -523,17 +524,37 @@ class PriorityRequestRouter {
         };
       }
 
-      const result = await sandboxBridge.executeCommand(session.sandboxId, lastUserMessage);
-
-      return {
-        content: `Sandbox execution completed.\n\nOutput:\n${result.stdout || 'No output'}\n${result.stderr ? `\nErrors:\n${result.stderr}` : ''}`,
-        data: {
-          source: 'sandbox-agent',
+      // Use the agent loop (LLM-driven tool calling), NOT raw command execution
+      try {
+        const { runAgentLoop } = await import('../sandbox/agent-loop');
+        const result = await runAgentLoop({
+          userMessage: lastUserMessage,
           sandboxId: session.sandboxId,
-          exitCode: result.exitCode,
-          type: 'sandbox_execution'
-        }
-      };
+          conversationHistory: request.messages,
+        });
+
+        return {
+          content: result.response,
+          data: {
+            source: 'sandbox-agent',
+            sandboxId: session.sandboxId,
+            steps: result.steps,
+            totalSteps: result.totalSteps,
+            type: 'sandbox_execution'
+          }
+        };
+      } catch (agentError: any) {
+        // If the agent loop module is not available, fall back to informing the user
+        console.warn('[Router] Sandbox agent loop not available:', agentError.message);
+        return {
+          content: 'The sandbox code execution module is not configured. Please set SANDBOX_PROVIDER and install the required SDK.',
+          data: {
+            source: 'sandbox-agent',
+            error: 'sandbox_not_configured',
+            type: 'error'
+          }
+        };
+      }
     } catch (error: any) {
       console.error('[Router] Sandbox processing error:', error);
       return {
