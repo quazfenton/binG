@@ -5,7 +5,7 @@
  * and rollback capabilities for safe file modifications.
  */
 
-import { EventEmitter } from 'node:events';
+import { EventEmitter } from 'events';
 import { DiffOperation } from './advanced-file-manager';
 
 // Core interfaces
