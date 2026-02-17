@@ -1,17 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createHmac } from 'crypto';
 import { oauthService } from '@/lib/auth/oauth-service';
+
+function verifyWebhookSignature(body: string, signature: string | null, secret: string | undefined): boolean {
+  if (!secret || !signature) return false;
+  const expected = createHmac('sha256', secret).update(body).digest('hex');
+  return signature === expected || signature === `sha256=${expected}`;
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const rawBody = await req.text();
     const provider = req.nextUrl.searchParams.get('provider');
 
     if (provider === 'arcade') {
-      return await handleArcadeWebhook(body);
+      const signature = req.headers.get('x-arcade-signature');
+      if (!verifyWebhookSignature(rawBody, signature, process.env.ARCADE_WEBHOOK_SECRET)) {
+        console.warn('[Webhook/Arcade] Invalid signature');
+        return NextResponse.json({ error: 'Invalid webhook signature' }, { status: 401 });
+      }
+      return await handleArcadeWebhook(JSON.parse(rawBody));
     }
 
     if (provider === 'nango') {
-      return await handleNangoWebhook(body);
+      const signature = req.headers.get('x-nango-signature');
+      if (!verifyWebhookSignature(rawBody, signature, process.env.NANGO_WEBHOOK_SECRET)) {
+        console.warn('[Webhook/Nango] Invalid signature');
+        return NextResponse.json({ error: 'Invalid webhook signature' }, { status: 401 });
+      }
+      return await handleNangoWebhook(JSON.parse(rawBody));
     }
 
     return NextResponse.json({ error: 'Unknown webhook provider' }, { status: 400 });
