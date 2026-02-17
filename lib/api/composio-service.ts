@@ -93,8 +93,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
       try {
         const { Composio } = await import('@composio/core');
         const composio = new Composio({ apiKey: config.apiKey });
-        // Verify API connectivity by creating a test session
-        await composio.create('health_check_user');
+        // Verify API connectivity with read-only call (no side effects)
+        await composio.toolkits.list();
         return true;
       } catch (error) {
         console.error('[ComposioService] Health check failed:', error);
@@ -112,8 +112,18 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         // Create session for user (create() only takes userId)
         const session = await composio.create(request.userId);
 
-        // Get available tools via low-level API (session.tools() returns framework-specific tools)
-        const tools = await composio.tools.list();
+        // Get available tools - filter by requested toolkits if specified
+        let tools;
+        if (request.toolkits && request.toolkits.length > 0) {
+          // Filter tools by requested apps/toolkits
+          tools = await composio.tools.list({ apps: request.toolkits.join(',') });
+        } else if (config.restrictedToolkits && config.restrictedToolkits.length > 0) {
+          // Use configured restricted toolkits
+          tools = await composio.tools.list({ apps: config.restrictedToolkits.join(',') });
+        } else {
+          // No restrictions - get all tools (use with caution)
+          tools = await composio.tools.list();
+        }
 
         // Extract the last user message
         const lastMessage = request.messages

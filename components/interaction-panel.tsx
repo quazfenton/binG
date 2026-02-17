@@ -147,13 +147,6 @@ export default function InteractionPanel({
   const [showTerminal, setShowTerminal] = useState(false);
   const [terminalMinimized, setTerminalMinimized] = useState(false);
 
-  // Autosuggest state
-  const [autosuggestEnabled, setAutosuggestEnabled] = useState(true);
-  const [ghostSuffix, setGhostSuffix] = useState("");
-  const suggestCache = useRef(new Map<string, string>());
-  const debounceTimerRef = useRef<number | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-
   // Panel state
   const [panelHeight, setPanelHeight] = useState(() => {
     if (typeof window !== "undefined" && window.innerWidth <= 768) {
@@ -230,69 +223,6 @@ export default function InteractionPanel({
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
-
-  // Debounced suggest fetcher
-  useEffect(() => {
-    if (!autosuggestEnabled) {
-      setGhostSuffix("");
-      return;
-    }
-
-    const q = input;
-    if (!q || !q.trim()) {
-      setGhostSuffix("");
-      return;
-    }
-
-    // Try cache by prefix: find longest cached key K where K is prefix of q and (K+suffix) startsWith q
-    let usedFromCache = false;
-    let bestKey = "";
-    let bestFull = "";
-    for (const [k, s] of suggestCache.current.entries()) {
-      if (q.startsWith(k)) {
-        const full = k + s;
-        if (full.toLowerCase().startsWith(q.toLowerCase())) {
-          if (k.length > bestKey.length) {
-            bestKey = k;
-            bestFull = full;
-          }
-        }
-      }
-    }
-    if (bestKey) {
-      setGhostSuffix(bestFull.slice(q.length));
-      usedFromCache = true;
-    }
-
-    if (usedFromCache) return;
-
-    if (debounceTimerRef.current) window.clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = window.setTimeout(async () => {
-      try {
-        abortRef.current?.abort();
-        abortRef.current = new AbortController();
-        const res = await fetch(`/api/suggest?q=${encodeURIComponent(q)}`, {
-          signal: abortRef.current.signal,
-        });
-        if (!res.ok) throw new Error("suggest failed");
-        const data = await res.json();
-        const suffix = (data?.suggestion as string) || "";
-        suggestCache.current.set(q, suffix);
-        // Only apply if input hasn't changed significantly
-        if (input === q) {
-          setGhostSuffix(suffix);
-        }
-      } catch (e) {
-        if ((e as any)?.name === "AbortError") return;
-        // ignore errors silently
-      }
-    }, 300); // 250–400 ms debounce; we use ~300ms
-
-    return () => {
-      if (debounceTimerRef.current)
-        window.clearTimeout(debounceTimerRef.current);
-    };
-  }, [input, autosuggestEnabled]);
 
   // Mobile: Focus input on mount and when tapping the panel background
   useEffect(() => {
@@ -989,16 +919,6 @@ export default function InteractionPanel({
                       className="min-h-[60px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
                       rows={3}
                       onKeyDown={(e) => {
-                        if (
-                          e.key === "Tab" &&
-                          autosuggestEnabled &&
-                          ghostSuffix
-                        ) {
-                          e.preventDefault();
-                          setInput(input + ghostSuffix);
-                          setGhostSuffix("");
-                          return;
-                        }
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
                           onSubmit(input);
@@ -1018,12 +938,6 @@ export default function InteractionPanel({
                       }}
                       disabled={isProcessing}
                     />
-                    {autosuggestEnabled && !!ghostSuffix && (
-                      <div className="pointer-events-none absolute left-3 right-12 top-3 whitespace-pre-wrap text-white/40 text-base sm:text-sm">
-                        <span className="invisible">{input}</span>
-                        <span>{ghostSuffix}</span>
-                      </div>
-                    )}
                     <div className="absolute right-3 top-3 flex gap-1">
                       <button
                         type="button"
@@ -1154,16 +1068,6 @@ export default function InteractionPanel({
                       className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
                       rows={6}
                     onKeyDown={(e) => {
-                      if (
-                        e.key === "Tab" &&
-                        autosuggestEnabled &&
-                        ghostSuffix
-                      ) {
-                        e.preventDefault();
-                        setInput(input + ghostSuffix);
-                        setGhostSuffix("");
-                        return;
-                      }
                       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                         e.preventDefault();
                         onSubmit(input);
@@ -1186,12 +1090,6 @@ export default function InteractionPanel({
                     }}
                     disabled={isProcessing}
                   />
-                  {autosuggestEnabled && !!ghostSuffix && (
-                    <div className="pointer-events-none absolute left-3 right-12 top-3 whitespace-pre-wrap text-white/40 text-base sm:text-sm">
-                      <span className="invisible">{input}</span>
-                      <span>{ghostSuffix}</span>
-                    </div>
-                  )}
                   <button
                     type="button"
                     onClick={() => {

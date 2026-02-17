@@ -69,7 +69,7 @@ export type ToolName = (typeof SANDBOX_TOOLS)[number]['name']
 const BLOCKED_PATTERNS = [
   // rm commands - block recursive delete with force flag in any order
   // Matches: rm -rf /, rm -fr /, rm -r -f /, rm --recursive --force /, etc.
-  /rm\s+(?:(?:-[^\s]*[rR][^\s]*\s+[^\s]*[fF]|[^\s]*[fF][^\s]*\s+[^\s]*[rR])|(?:--recursive\s+--force|--force\s+--recursive))\s+(?:\/|\*)/i,
+  /rm\s+(?:-[^\s]*[rR][^\s]*[fF][^\s]*|-[^\s]*[fF][^\s]*[rR][^\s]*|-[^\s]*[rR][^\s]*\s+-[^\s]*[fF][^\s]*|-[^\s]*[fF][^\s]*\s+-[^\s]*[rR][^\s]*|--recursive\s+--force|--force\s+--recursive)\s+(?:\/|\*)/i,
   /rm\s+-rf\s+\/(?:\s|$)/,      // rm -rf / with whitespace or end-of-line
   /rm\s+-rf\s+\/\S*/,           // rm -rf /anything (any path starting with /)
   /rm\s+-rf\s+\*\s*/,           // rm -rf *
