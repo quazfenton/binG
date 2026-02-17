@@ -64,6 +64,22 @@ class PriorityRequestRouter {
   }
 
   /**
+   * Map endpoint name to quota provider key
+   */
+  private mapEndpointToProvider(endpointName: string): string | null {
+    const mapping: Record<string, string> = {
+      'composio-tools': 'composio',
+      'tool-execution': 'arcade',  // Default to arcade for tool execution
+      'sandbox-agent': 'daytona',  // Default to daytona for sandbox
+      'fast-agent': 'daytona',
+      'n8n-agents': 'nango',
+      'custom-fallback': 'microsandbox',
+      'original-system': 'microsandbox',
+    };
+    return mapping[endpointName] || null;
+  }
+
+  /**
    * Initialize endpoint configurations in priority order
    */
   private initializeEndpoints(): EndpointConfig[] {
@@ -222,13 +238,16 @@ class PriorityRequestRouter {
         // Process request
         console.log(`[Router] Routing to ${endpoint.name}`);
         const response = await endpoint.processRequest(request);
-        
+
         // Track success
         this.updateStats(endpoint.name, true);
 
-        // Track quota usage
-        quotaManager.recordUsage(endpoint.name);
-        
+        // Map endpoint name to quota provider key
+        const quotaProvider = this.mapEndpointToProvider(endpoint.name);
+        if (quotaProvider) {
+          quotaManager.recordUsage(quotaProvider);
+        }
+
         const duration = Date.now() - startTime;
         console.log(`[Router] Request successfully handled by ${endpoint.name} in ${duration}ms`);
 
@@ -243,7 +262,7 @@ class PriorityRequestRouter {
             duration,
             routedThrough: endpoint.name,
             triedEndpoints: fallbackChain.length + 1,
-            quotaRemaining: quotaManager.getRemainingCalls(endpoint.name),
+            quotaRemaining: quotaProvider ? quotaManager.getRemainingCalls(quotaProvider) : Infinity,
           }
         };
 

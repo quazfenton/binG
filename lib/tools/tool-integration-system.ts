@@ -638,8 +638,9 @@ export class ToolIntegrationManager {
       const host = this.nangoConfig.host || "https://api.nango.dev";
       const connectionId = this.nangoConfig.connectionId || context.userId;
 
-      // Extract the integration/provider from the tool name (e.g., "github" from "github.create_issue")
-      const integrationId = toolConfig.toolName.split('.')[0];
+      // Extract the integration/provider from the tool name
+      // Nango uses hyphenated names (e.g., "github-create-issue"), so split on '-'
+      const integrationId = toolConfig.toolName.split('-')[0];
       const actionName = toolConfig.toolName;
 
       const response = await fetch(

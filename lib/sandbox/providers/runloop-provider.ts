@@ -162,7 +162,11 @@ class RunloopSandboxHandle implements SandboxHandle {
     
     // Create directory - bypass sanitizeCommand since we control the paths
     const mkdirCmd = `mkdir -p '${escapedDir}'`;
-    const mkdirResult = await this.devbox.cmd.exec({ command: mkdirCmd, shell: "/bin/bash" });
+    const mkdirResult = await this.devbox.cmd.exec({ 
+      command: mkdirCmd, 
+      shell: "/bin/bash",
+      timeout: MAX_COMMAND_TIMEOUT * 1000,
+    });
     const mkdirStderr = await mkdirResult.stderr();
     if (mkdirResult.exit_code !== 0) {
       return { success: false, output: mkdirStderr || 'Failed to create directory', exitCode: mkdirResult.exit_code };
@@ -171,7 +175,11 @@ class RunloopSandboxHandle implements SandboxHandle {
     // Write file content - bypass sanitizeCommand since we control the paths
     const escaped = content.replace(/'/g, "'\\''");
     const writeCmd = `printf '%s' '${escaped}' > '${escapedPath}'`;
-    const writeResult = await this.devbox.cmd.exec({ command: writeCmd, shell: "/bin/bash" });
+    const writeResult = await this.devbox.cmd.exec({ 
+      command: writeCmd, 
+      shell: "/bin/bash",
+      timeout: MAX_COMMAND_TIMEOUT * 1000,
+    });
     const writeStderr = await writeResult.stderr();
     return { 
       success: writeResult.exit_code === 0, 
@@ -185,7 +193,8 @@ class RunloopSandboxHandle implements SandboxHandle {
     const escapedPath = resolved.replace(/'/g, "'\\''");
     const result = await this.devbox.cmd.exec({ 
       command: `cat '${escapedPath}'`, 
-      shell: "/bin/bash" 
+      shell: "/bin/bash",
+      timeout: MAX_COMMAND_TIMEOUT * 1000,
     });
     const stdout = await result.stdout();
     const stderr = await result.stderr();
@@ -201,7 +210,8 @@ class RunloopSandboxHandle implements SandboxHandle {
     const escapedPath = resolved.replace(/'/g, "'\\''");
     const result = await this.devbox.cmd.exec({ 
       command: `ls -la '${escapedPath}'`, 
-      shell: "/bin/bash" 
+      shell: "/bin/bash",
+      timeout: MAX_COMMAND_TIMEOUT * 1000,
     });
     const stdout = await result.stdout();
     const stderr = await result.stderr();

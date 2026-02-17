@@ -234,6 +234,7 @@ export class OpencodeProvider implements LLMProvider {
           language: 'typescript',
           envVars: {
             OPENCODE_MODEL: process.env.OPENCODE_MODEL || '',
+            OPENCODE_SYSTEM_PROMPT: systemPrompt || '',
             TERM: 'xterm-256color',
           },
           resources: { cpu: 2, memory: 4 },
@@ -258,7 +259,8 @@ export class OpencodeProvider implements LLMProvider {
 
       // Execute opencode in the sandbox
       const model = process.env.OPENCODE_MODEL || ''
-      const modelFlag = model ? `--model ${model}` : ''
+      // Properly quote model flag to prevent shell injection
+      const modelFlag = model ? `--model '${model.replace(/'/g, "'\\''")}'` : ''
       const result = await sandbox.executeCommand(
         `cat /tmp/agent-prompt.json | opencode chat --json ${modelFlag}`.trim(),
         sandbox.workspaceDir,

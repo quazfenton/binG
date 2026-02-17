@@ -538,6 +538,53 @@ export class EnhancedLLMService {
   private validateSandboxCommand(command: string): { isValid: boolean; command: string; reason?: string } {
     return validateSandboxCommand(command);
   }
+
+  /**
+   * Extracts shell commands from natural language input.
+   * Converts phrases like "please run ls -la" to "ls -la".
+   */
+  private extractCommandFromNaturalLanguage(input: string): string {
+    const trimmedInput = input.trim();
+
+    // Common natural language prefixes to strip
+    const commandPrefixes = [
+      /^(?:please\s+)?(?:run|execute|exec)\s+/i,
+      /^(?:please\s+)?(?:can\s+you\s+)?(?:run|execute)\s+/i,
+      /^(?:could\s+you\s+)?(?:please\s+)?(?:run|execute)\s+/i,
+      /^(?:i\s+want\s+to\s+)?(?:run|execute)\s+/i,
+      /^(?:i\s+need\s+to\s+)?(?:run|execute)\s+/i,
+      /^(?:let['']s\s+)?(?:run|execute)\s+/i,
+      /^(?:just\s+)?(?:run|execute)\s+/i,
+      /^(?:show\s+me\s+)/i,
+      /^(?:check\s+)/i,
+      /^(?:list\s+)/i,
+      /^(?:display\s+)/i,
+    ];
+
+    let command = trimmedInput;
+    for (const prefix of commandPrefixes) {
+      const match = command.match(prefix);
+      if (match) {
+        command = command.replace(prefix, '');
+        break;
+      }
+    }
+
+    // Remove trailing punctuation that's common in natural language
+    command = command.replace(/[.!?,;]+$/, '').trim();
+
+    // Remove quote wrappers if present
+    const quoteMatch = command.match(/^["'](.+)["']$/);
+    if (quoteMatch) {
+      command = quoteMatch[1];
+    }
+
+    return command.trim() || trimmedInput;
+  }
+
+  destroy(): void {
+    enhancedAPIClient.destroy();
+  }
 }
 
 /**
@@ -588,22 +635,22 @@ export function validateSandboxCommand(command: string): { isValid: boolean; com
     /\bexec\s*\(/i,
     // Netcat with exec flag
     /\bnc\s+-e\b/i,
-      /\bnetcat\s+-e\b/i,
-      // Additional dangerous patterns for common attack vectors
-      /\bnode\s+-e\b/i,
-      /\bphp\s+-r\b/i,
-      /\bbash\s+-c\b/i,
-      /\bzsh\s+-c\b/i,
-      /\bsh\s+-c\b/i,
-      // Piping to any shell variant
-      /\|\s*(ba)?sh\b/i,
-      /\|\s*bash\b/i,
-      /\|\s*zsh\b/i,
-      /\|\s*ash\b/i,
-      // Command substitution
-      /\$\([^)]+\)/,
-      /`[^`]+`/,
-    ];
+    /\bnetcat\s+-e\b/i,
+    // Additional dangerous patterns for common attack vectors
+    /\bnode\s+-e\b/i,
+    /\bphp\s+-r\b/i,
+    /\bbash\s+-c\b/i,
+    /\bzsh\s+-c\b/i,
+    /\bsh\s+-c\b/i,
+    // Piping to any shell variant
+    /\|\s*(ba)?sh\b/i,
+    /\|\s*bash\b/i,
+    /\|\s*zsh\b/i,
+    /\|\s*ash\b/i,
+    // Command substitution
+    /\$\([^)]+\)/,
+    /`[^`]+`/,
+  ];
 
     for (const pattern of dangerousPatterns) {
       if (pattern.test(trimmedCommand)) {
@@ -698,53 +745,6 @@ export function validateSandboxCommand(command: string): { isValid: boolean; com
     }
 
     return { isValid: true, command: trimmedCommand };
-  }
-
-  /**
-   * Extracts shell commands from natural language input.
-   * Converts phrases like "please run ls -la" to "ls -la".
-   */
-  private extractCommandFromNaturalLanguage(input: string): string {
-    const trimmedInput = input.trim();
-
-    // Common natural language prefixes to strip
-    const commandPrefixes = [
-      /^(?:please\s+)?(?:run|execute|exec)\s+/i,
-      /^(?:please\s+)?(?:can\s+you\s+)?(?:run|execute)\s+/i,
-      /^(?:could\s+you\s+)?(?:please\s+)?(?:run|execute)\s+/i,
-      /^(?:i\s+want\s+to\s+)?(?:run|execute)\s+/i,
-      /^(?:i\s+need\s+to\s+)?(?:run|execute)\s+/i,
-      /^(?:let['']s\s+)?(?:run|execute)\s+/i,
-      /^(?:just\s+)?(?:run|execute)\s+/i,
-      /^(?:show\s+me\s+)/i,
-      /^(?:check\s+)/i,
-      /^(?:list\s+)/i,
-      /^(?:display\s+)/i,
-    ];
-
-    let command = trimmedInput;
-    for (const prefix of commandPrefixes) {
-      const match = command.match(prefix);
-      if (match) {
-        command = command.replace(prefix, '');
-        break;
-      }
-    }
-
-    // Remove trailing punctuation that's common in natural language
-    command = command.replace(/[.!?,;]+$/, '').trim();
-
-    // Remove quote wrappers if present
-    const quoteMatch = command.match(/^["'](.+)["']$/);
-    if (quoteMatch) {
-      command = quoteMatch[1];
-    }
-
-    return command.trim() || trimmedInput;
-  }
-
-  destroy(): void {
-    enhancedAPIClient.destroy();
   }
 }
 

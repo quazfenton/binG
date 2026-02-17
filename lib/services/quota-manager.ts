@@ -31,8 +31,18 @@ class QuotaManager {
   private initializeQuotas(): void {
     for (const [provider, defaultLimit] of Object.entries(DEFAULT_QUOTAS)) {
       const envKey = `QUOTA_${provider.toUpperCase()}_MONTHLY`;
-      const limit = process.env[envKey] ? parseInt(process.env[envKey]!, 10) : defaultLimit;
-      
+      let limit = defaultLimit;
+
+      if (process.env[envKey]) {
+        const parsed = parseInt(process.env[envKey]!, 10);
+        // Validate parsed value to prevent NaN limits
+        if (!isNaN(parsed) && parsed > 0) {
+          limit = parsed;
+        } else {
+          console.warn(`[QuotaManager] Invalid ${envKey} value: "${process.env[envKey]}". Using default limit: ${defaultLimit}`);
+        }
+      }
+
       this.quotas.set(provider, {
         provider,
         monthlyLimit: limit,
@@ -66,6 +76,12 @@ class QuotaManager {
   recordUsage(provider: string, count: number = 1): boolean {
     const quota = this.quotas.get(provider);
     if (!quota) return true; // Unknown provider, allow
+
+    // Reject negative counts to prevent quota bypass
+    if (count < 0) {
+      console.warn(`[QuotaManager] Attempted to record negative usage for provider '${provider}': ${count}`);
+      return true;
+    }
 
     this.checkAndResetIfNeeded(quota);
 

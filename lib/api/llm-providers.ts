@@ -115,7 +115,18 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   openrouter: {
     id: 'openrouter',
     name: 'OpenRouter',
-        models: ['deepseek/deepseek-r1-0528:free', 'deepseek/deepseek-chat-v3-0324:free', 'meta-llama/llama-4-maverick:free', 'gemma-3-27b-it:free', 'meta-llama/llama-3.3-70b-instruct:free', 'meta-llama/llama-3.2-11b-vision-instruct:free'],
+    models: [
+      'openai/gpt-oss-120b:free',
+      'deepseek/deepseek-r1-0528:free',
+      'qwen/qwen3-coder:free',
+      'z-ai/glm-4.5-air:free',
+      'nvidia/nemotron-3-nano-30b-a3b:free',
+      'nvidia/nemotron-nano-12b-v2-vl:free',
+      'mistralai/mistral-small-3.1-24b-instruct:free',
+      'liquid/lfm-2.5-1.2b-instruct:free',
+      'arcee-ai/trinity-large-preview:free',
+      'meta-llama/llama-3.3-70b-instruct:free'
+    ],
     supportsStreaming: true,
     maxTokens: 128000, // OpenRouter models can vary, setting a common high limit
     description: 'OpenRouter gateway models'
@@ -145,7 +156,14 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   google: {
     id: 'google',
     name: 'Google',
-    models: ['gemini-2.5-flash-preview-05-20', 'gemini-pro', 'gemini-pro-vision', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-vision'],
+    models: [
+      'google/gemini-3-flash-preview',
+      'google/gemini-2.5-pro',
+      'google/gemini-2.5-flash',
+      'google/gemini-2.5-flash-preview-09-2025',
+      'google/gemini-2.5-flash-lite',
+      'google/gemini-2.5-flash-lite-preview-09-2025'
+    ],
     supportsStreaming: true,
     maxTokens: 2000000,
     description: 'Google Gemini models'

@@ -215,15 +215,24 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
    * Execute a trusted internal command (bypasses sanitization)
    * Used only for internal file operations with validated paths
    */
-  private async executeTrustedCommand(command: string): Promise<ToolResult> {
-    const result = await this.sb.command.run('bash', ['-c', command]);
-    const output = result.success ? await result.output() : await result.error();
+  private async executeTrustedCommand(command: string, timeoutMs: number = 60_000): Promise<ToolResult> {
+    const cmdPromise = this.sb.command.run('bash', ['-c', command]);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Command timed out after ${timeoutMs}ms`)), timeoutMs)
+    );
 
-    return {
-      success: result.exitCode === 0,
-      output: output || '',
-      exitCode: result.exitCode,
-    };
+    try {
+      const result = await Promise.race([cmdPromise, timeoutPromise]);
+      const output = result.success ? await result.output() : await result.error();
+
+      return {
+        success: result.exitCode === 0,
+        output: output || '',
+        exitCode: result.exitCode,
+      };
+    } finally {
+      // Note: Can't cancel the command, but at least we stop waiting
+    }
   }
 
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
