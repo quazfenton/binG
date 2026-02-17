@@ -12,6 +12,8 @@ import {
   ERROR_CODES
 } from '../../enhanced-code-system/core/error-types'
 
+import { initializeComposioService, getComposioService, type ComposioService } from './composio-service'
+
 export interface LLMProvider {
   id: string
   name: string
@@ -22,7 +24,7 @@ export interface LLMProvider {
 }
 
 export interface LLMMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string | Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }>
 }
 
@@ -42,6 +44,7 @@ export interface LLMResponse {
   tokensUsed: number
   finishReason: string
   timestamp: Date
+  provider?: string
   usage?: {
     prompt_tokens: number
     completion_tokens: number
@@ -79,6 +82,17 @@ export interface ProviderConfig {
   }
   portkey?: {
     apiKey?: string
+  }
+  composio?: {
+    apiKey?: string
+    llmProvider?: 'openrouter' | 'google' | 'openai'
+    llmModel?: string
+    enableAllTools?: boolean
+    restrictedToolkits?: string[]
+  }
+  chutes?: {
+    apiKey?: string
+    baseURL?: string
   }
 }
 
@@ -177,18 +191,29 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   portkey: {
     id: 'portkey',
     name: 'Portkey AI Gateway',
-    models: [
-      'openrouter/auto',
+    models: ['openrouter/auto',
       'deepseek/deepseek-r1-0528:free',
       'chutes/gemini-1.5-flash:free',
       'chutes/openrouter-auto:free',
       'chutes/grok-beta:free',
       'chutes/flux-dev:free',
-      'chutes/flux-schnell:free'
-    ],
+      'chutes/flux-schnell:free'],
     supportsStreaming: true,
     maxTokens: 32000,
     description: 'Portkey AI Gateway with free models'
+  },
+  composio: {
+    id: 'composio',
+    name: 'Composio (800+ Tools)',
+    models: [
+      'openai/gpt-oss-120b:free',
+      'google/gemini-2.5-flash',
+      'gpt-4o-mini',
+      'claude-3-haiku-20240307'
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Composio with 800+ toolkits and tool execution'
   }
 }
 
@@ -200,6 +225,7 @@ class LLMService {
   private together: Together | null = null
   private replicate: Replicate | null = null
   private portkey: Portkey | null = null
+  private composioService: ComposioService | null = null
 
   constructor(config: ProviderConfig = {}) {
     // Initialize providers with API keys
@@ -448,12 +474,13 @@ class LLMService {
     // Convert messages to Cohere format
     const chatHistory = messages.slice(0, -1).map(msg => ({
       role: msg.role === 'user' ? 'USER' : 'CHATBOT',
-      message: typeof msg.content === 'string' ? msg.content : msg.content.map(c => c.text || '').join('')
+      message: typeof msg.content === 'string' ? msg.content : (Array.isArray(msg.content) ? msg.content.map(c => c.text || '').join('') : '')
     }))
 
-    const message = typeof messages[messages.length - 1].content === 'string' 
-      ? messages[messages.length - 1].content 
-      : messages[messages.length - 1].content.map(c => c.text || '').join('')
+    const lastMessageContent = messages[messages.length - 1].content;
+    const message = typeof lastMessageContent === 'string'
+      ? lastMessageContent
+      : (Array.isArray(lastMessageContent) ? lastMessageContent.map(c => c.text || '').join('') : '')
 
     const response = await this.cohere.chat({
       model,
@@ -767,12 +794,13 @@ class LLMService {
     // Convert messages to Cohere format
     const chatHistory = messages.slice(0, -1).map(msg => ({
       role: msg.role === 'user' ? 'USER' : 'CHATBOT',
-      message: typeof msg.content === 'string' ? msg.content : msg.content.map(c => c.text || '').join('')
+      message: typeof msg.content === 'string' ? msg.content : (Array.isArray(msg.content) ? msg.content.map(c => c.text || '').join('') : '')
     }))
 
-    const message = typeof messages[messages.length - 1].content === 'string' 
-      ? messages[messages.length - 1].content 
-      : messages[messages.length - 1].content.map(c => c.text || '').join('')
+    const lastMessageContent = messages[messages.length - 1].content;
+    const message = typeof lastMessageContent === 'string'
+      ? lastMessageContent
+      : (Array.isArray(lastMessageContent) ? lastMessageContent.map(c => c.text || '').join('') : '')
 
     const stream = await this.cohere.chatStream({
       model,
@@ -862,6 +890,8 @@ class LLMService {
           return !!process.env.OPENROUTER_API_KEY
         case 'chutes':
           return !!process.env.CHUTES_API_KEY
+        case 'composio':
+          return !!this.composioService
         default:
           return false
       }
@@ -909,11 +939,5 @@ export const llmService = new LLMService({
 })
 
 export {
-  LLMService,
-  type LLMProvider,
-  type LLMMessage,
-  type LLMRequest,
-  type LLMResponse,
-  type StreamingResponse,
-  type ProviderConfig
+  LLMService
 }
