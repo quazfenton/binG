@@ -121,7 +121,7 @@ export class ToolContextManager {
       toolInput = {
         to: emailMatch ? emailMatch[1] : '',
         subject: subjectMatch ? subjectMatch[1].trim() : 'No Subject',
-        body: bodyMatch ? bodyMatch[1].trim() : text
+        body: bodyMatch ? bodyMatch[1].trim() : lastUserMsg
       };
     } else if (text.includes('read') && (text.includes('email') || text.includes('gmail'))) {
       detectedTool = 'gmail.read';
