@@ -4,12 +4,14 @@ import { SANDBOX_TOOLS, validateCommand, type ToolName } from './sandbox-tools'
 import type { ToolResult } from './types'
 import type { SandboxHandle } from './providers/sandbox-provider'
 
-const SYSTEM_PROMPT = `You are an expert software engineer with access to a Linux sandbox workspace.
+function getSystemPrompt(workspaceDir: string): string {
+  return `You are an expert software engineer with access to a Linux sandbox workspace.
 You can execute shell commands, write files, read files, and list directories.
-The workspace is at /workspace/.
+The workspace is at ${workspaceDir}/.
 Always write files before trying to run them.
 When installing packages, use the appropriate package manager (npm, pip, etc.).
 Report results clearly and concisely.`
+}
 
 interface AgentLoopOptions {
   userMessage: string
@@ -31,12 +33,13 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   const llm = getLLMProvider()
 
   const sandboxHandle = await provider.getSandbox(sandboxId)
+  const systemPrompt = getSystemPrompt(sandboxHandle.workspaceDir)
 
   return llm.runAgentLoop({
     userMessage,
     conversationHistory,
     tools: [...SANDBOX_TOOLS],
-    systemPrompt: SYSTEM_PROMPT,
+    systemPrompt,
     maxSteps: 15,
     onToolExecution,
     onStreamChunk,

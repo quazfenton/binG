@@ -23,7 +23,7 @@ export const SANDBOX_TOOLS = [
       properties: {
         path: {
           type: 'string',
-          description: 'File path relative to /home/daytona/workspace/',
+          description: 'File path relative to the sandbox workspace root',
         },
         content: {
           type: 'string',
@@ -41,7 +41,7 @@ export const SANDBOX_TOOLS = [
       properties: {
         path: {
           type: 'string',
-          description: 'File path relative to /home/daytona/workspace/',
+          description: 'File path relative to the sandbox workspace root',
         },
       },
       required: ['path'],
@@ -56,7 +56,7 @@ export const SANDBOX_TOOLS = [
         path: {
           type: 'string',
           description:
-            'Directory path relative to /home/daytona/workspace/. Defaults to workspace root.',
+            'Directory path relative to the sandbox workspace root. Defaults to workspace root.',
         },
       },
       required: [],
@@ -67,7 +67,9 @@ export const SANDBOX_TOOLS = [
 export type ToolName = (typeof SANDBOX_TOOLS)[number]['name']
 
 const BLOCKED_PATTERNS = [
-  // rm commands - block recursive delete of root or any path starting with /
+  // rm commands - block recursive delete with force flag in any order
+  // Matches: rm -rf /, rm -fr /, rm -r -f /, rm --recursive --force /, etc.
+  /rm\s+(?:(?:-[^\s]*[rR][^\s]*\s+[^\s]*[fF]|[^\s]*[fF][^\s]*\s+[^\s]*[rR])|(?:--recursive\s+--force|--force\s+--recursive))\s+(?:\/|\*)/i,
   /rm\s+-rf\s+\/(?:\s|$)/,      // rm -rf / with whitespace or end-of-line
   /rm\s+-rf\s+\/\S*/,           // rm -rf /anything (any path starting with /)
   /rm\s+-rf\s+\*\s*/,           // rm -rf *
@@ -122,9 +124,10 @@ export function resolvePath(filePath: string, sandboxRoot: string = '/workspace'
     return { valid: false, reason: 'Invalid path: null byte detected' };
   }
   
-  // For absolute paths, ensure they're within sandbox root
+  // For absolute paths, ensure they're within sandbox root (check directory boundary)
   if (filePath.startsWith('/')) {
-    if (!normalized.startsWith(sandboxRoot)) {
+    // Path must either equal sandboxRoot exactly or be within sandboxRoot directory
+    if (normalized !== sandboxRoot && !normalized.startsWith(sandboxRoot + '/')) {
       return { valid: false, reason: `Path must be within ${sandboxRoot}` };
     }
     return { valid: true, resolvedPath: normalized };

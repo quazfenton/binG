@@ -14,6 +14,7 @@ import { sandboxBridge } from '../sandbox';
 import type { LLMMessage } from './llm-providers';
 import { detectRequestType } from '../utils/request-type-detector';
 import { initializeComposioService, getComposioService, type ComposioToolRequest } from './composio-service';
+import { quotaManager } from '../services/quota-manager';
 
 export interface RouterRequest {
   messages: LLMMessage[];
@@ -78,10 +79,9 @@ class PriorityRequestRouter {
           return this.composioService.healthCheck();
         },
         canHandle: (req) => {
-          // Check if Composio is available, request has user context, AND is a tool request
-          // This prevents Composio from intercepting all authenticated requests
           return !!this.composioService && !!req.userId && req.enableComposio !== false
-            && detectRequestType(req.messages) === 'tool';
+            && detectRequestType(req.messages) === 'tool'
+            && quotaManager.isAvailable('composio');
         },
         processRequest: async (req) => {
           return await this.processComposioRequest(req);
@@ -103,8 +103,8 @@ class PriorityRequestRouter {
           }
         },
         canHandle: (req) => {
-          // Check if request contains tool intent and has user context
-          return detectRequestType(req.messages) === 'tool' && !!req.userId && req.enableTools !== false;
+          return detectRequestType(req.messages) === 'tool' && !!req.userId && req.enableTools !== false
+            && (quotaManager.isAvailable('arcade') || quotaManager.isAvailable('nango'));
         },
         processRequest: async (req) => {
           // Process tool request with authorization
@@ -122,8 +122,9 @@ class PriorityRequestRouter {
           return !!(process.env.SANDBOX_PROVIDER);
         },
         canHandle: (req) => {
-          // Check if request contains code execution intent and has user context
-          return detectRequestType(req.messages) === 'sandbox' && !!req.userId && req.enableSandbox !== false;
+          const sandboxProvider = (process.env.SANDBOX_PROVIDER || 'daytona') as string;
+          return detectRequestType(req.messages) === 'sandbox' && !!req.userId && req.enableSandbox !== false
+            && quotaManager.isAvailable(sandboxProvider);
         },
         processRequest: async (req) => {
           // Process sandbox request
@@ -224,6 +225,9 @@ class PriorityRequestRouter {
         
         // Track success
         this.updateStats(endpoint.name, true);
+
+        // Track quota usage
+        quotaManager.recordUsage(endpoint.name);
         
         const duration = Date.now() - startTime;
         console.log(`[Router] Request successfully handled by ${endpoint.name} in ${duration}ms`);
@@ -238,7 +242,8 @@ class PriorityRequestRouter {
             ...response.metadata,
             duration,
             routedThrough: endpoint.name,
-            triedEndpoints: fallbackChain.length + 1
+            triedEndpoints: fallbackChain.length + 1,
+            quotaRemaining: quotaManager.getRemainingCalls(endpoint.name),
           }
         };
 
@@ -524,6 +529,13 @@ class PriorityRequestRouter {
    */
   getAvailableEndpoints(): string[] {
     return this.endpoints.map(e => e.name);
+  }
+
+  /**
+   * Get quota status for all providers
+   */
+  getQuotaStatus() {
+    return quotaManager.getAllQuotas();
   }
 
   /**

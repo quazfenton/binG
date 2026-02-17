@@ -9,6 +9,7 @@ export interface ToolDetectionResult {
   requiresAuth: boolean;
   authUrl?: string;
   toolName?: string;
+  error?: string;  // Error message for missing parameters
 }
 
 export interface ToolProcessingResult {
@@ -114,9 +115,19 @@ export class ToolContextManager {
       const emailMatch = text.match(/to\s+([^\s,]+)/i);
       const subjectMatch = text.match(/subject[:\s]+([^\.]+)/i);
       const bodyMatch = text.match(/body[:\s]+(.+)/i);
-      
+
+      // Require recipient email - don't proceed with empty 'to' field
+      if (!emailMatch) {
+        return {
+          detectedTool: null,
+          toolInput: {},
+          requiresAuth: false,
+          error: 'Missing recipient email address. Please specify who to send the email to.'
+        };
+      }
+
       toolInput = {
-        to: emailMatch ? emailMatch[1] : '',
+        to: emailMatch[1],
         subject: subjectMatch ? subjectMatch[1].trim() : 'No Subject',
         body: bodyMatch ? bodyMatch[1].trim() : lastUserMsg
       };
@@ -129,7 +140,7 @@ export class ToolContextManager {
       const titleMatch = text.match(/(?:create|schedule|add)\s+(?:a\s+)?(.+?)\s+(?:event|meeting)/i);
       const dateMatch = text.match(/\b(\d{4}-\d{2}-\d{2})\b/i);
       const timeMatch = text.match(/\b(\d{1,2}:\d{2}(?:\s*(?:am|pm))?)\b/i);
-      
+
       toolInput = {
         title: titleMatch ? titleMatch[1].trim() : 'New Event',
         date: dateMatch ? dateMatch[1] : new Date().toISOString().split('T')[0],
@@ -142,18 +153,38 @@ export class ToolContextManager {
       detectedTool = 'twilio.send_sms';
       const phoneMatch = text.match(/(?:to|phone|number)\s+([+]?[\d\s\-\(\)]+)/i);
       const messageMatch = text.match(/(?:message|sms|text)[:\s]+(.+)/i);
-      
+
+      // Require phone number - don't proceed with empty 'to' field
+      if (!phoneMatch) {
+        return {
+          detectedTool: null,
+          toolInput: {},
+          requiresAuth: false,
+          error: 'Missing phone number. Please specify the recipient\'s phone number.'
+        };
+      }
+
       toolInput = {
-        to: phoneMatch ? phoneMatch[1].replace(/[\s\-\(\)]/g, '') : '',
+        to: phoneMatch[1].replace(/[\s\-\(\)]/g, ''),
         body: messageMatch ? messageMatch[1].trim() : text
       };
     } else if (text.includes('create') && text.includes('github') && text.includes('issue')) {
       detectedTool = 'github.create_issue';
       const repoMatch = text.match(/(?:in|for)\s+(?:repository|repo)\s+([^\s,]+)/i);
       const titleMatch = text.match(/(?:create|make|open)\s+(?:an?\s+)?(.+?)\s+issue/i);
-      
+
+      // Require repository - don't proceed with placeholder
+      if (!repoMatch) {
+        return {
+          detectedTool: null,
+          toolInput: {},
+          requiresAuth: false,
+          error: 'Missing repository name. Please specify which repository to create the issue in (e.g., "in owner/repo").'
+        };
+      }
+
       toolInput = {
-        repo: repoMatch ? repoMatch[1] : 'owner/repo',
+        repo: repoMatch[1],
         title: titleMatch ? titleMatch[1].trim() : 'New Issue',
         body: text
       };

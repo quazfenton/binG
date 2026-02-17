@@ -65,7 +65,12 @@ export async function detectAndInstallDeps(
       ? `${config.installCmd} ${config.cacheFlag}`
       : config.installCmd
 
-    await sandbox.executeCommand(cmd, workspaceDir)
+    const installResult = await sandbox.executeCommand(cmd, workspaceDir)
+    
+    // Only cache hash if install succeeded
+    if (!installResult.success) {
+      throw new Error(`Failed to install dependencies: ${installResult.output}`)
+    }
 
     lockfileHashes.set(cacheKey, { hash: currentHash, timestamp: Date.now() })
 
