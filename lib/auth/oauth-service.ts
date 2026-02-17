@@ -2,13 +2,17 @@ import { randomUUID, createCipheriv, createDecipheriv, randomBytes } from 'crypt
 import { getDatabase } from '../database/connection';
 
 const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 16;
+const IV_LENGTH = 12; // 96-bit IV per NIST SP 800-38D (standard for GCM)
 const AUTH_TAG_LENGTH = 16;
 
 function getEncryptionKey(): Buffer {
   const key = process.env.TOKEN_ENCRYPTION_KEY;
   if (!key) throw new Error('TOKEN_ENCRYPTION_KEY environment variable is required');
-  return Buffer.from(key, 'hex');
+  const buf = Buffer.from(key, 'hex');
+  if (buf.length !== 32) {
+    throw new Error(`TOKEN_ENCRYPTION_KEY must be 64 hex characters (32 bytes), got ${key.length} hex characters`);
+  }
+  return buf;
 }
 
 function encrypt(text: string): string {
@@ -83,7 +87,7 @@ export class OAuthService {
 
   async getOAuthSessionByState(state: string): Promise<OAuthSession | null> {
     const stmt = this.db.prepare(`
-      SELECT * FROM oauth_sessions WHERE state = ? AND is_completed = FALSE AND expires_at > datetime('now')
+      SELECT * FROM oauth_sessions WHERE state = ? AND is_completed = FALSE AND datetime(expires_at) > datetime('now')
     `);
     const row = stmt.get(state) as any;
     if (!row) return null;
@@ -138,7 +142,13 @@ export class OAuthService {
       expiresAt, params.scopes ? JSON.stringify(params.scopes) : null,
     );
 
-    return this.getUserConnections(params.userId, params.provider).then(c => c[0]);
+    // Fetch the saved/updated connection deterministically
+    const connections = await this.getUserConnections(params.userId, params.provider);
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error(`Failed to retrieve saved connection for provider ${params.provider}`);
+    }
+    return connection;
   }
 
   async getUserConnections(userId: number, provider?: string): Promise<OAuthConnection[]> {

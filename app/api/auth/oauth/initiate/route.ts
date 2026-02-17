@@ -86,6 +86,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.redirect(`${config.authUrl}?${params.toString()}`);
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('[OAuth Initiate] Error:', error);
+    return NextResponse.json({ error: 'Failed to initiate OAuth flow' }, { status: 500 });
   }
 }

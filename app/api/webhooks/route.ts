@@ -1,11 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { oauthService } from '@/lib/auth/oauth-service';
 
 function verifyWebhookSignature(body: string, signature: string | null, secret: string | undefined): boolean {
   if (!secret || !signature) return false;
   const expected = createHmac('sha256', secret).update(body).digest('hex');
-  return signature === expected || signature === `sha256=${expected}`;
+  const expectedWithPrefix = `sha256=${expected}`;
+  
+  // Use timing-safe comparison to prevent timing attacks
+  try {
+    const sigBuf = Buffer.from(signature, 'utf8');
+    const expBuf = Buffer.from(expected, 'utf8');
+    const expPrefixBuf = Buffer.from(expectedWithPrefix, 'utf8');
+    
+    // Check both formats: raw hex and sha256=hex prefix
+    if (sigBuf.length === expBuf.length) {
+      return timingSafeEqual(sigBuf, expBuf);
+    }
+    if (sigBuf.length === expPrefixBuf.length) {
+      return timingSafeEqual(sigBuf, expPrefixBuf);
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 export async function POST(req: NextRequest) {

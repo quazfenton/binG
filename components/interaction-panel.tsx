@@ -875,11 +875,9 @@ export default function InteractionPanel({
   ];
 
   // Calculate bottom position based on terminal and panel state
-  const bottomPosition = terminalMinimized
-    ? '60px'
-    : showTerminal
-      ? '400px'
-      : "env(safe-area-inset-bottom, 0px)";
+  const bottomPosition = showTerminal
+    ? (terminalMinimized ? '60px' : '400px')
+    : "env(safe-area-inset-bottom, 0px)";
 
   return (
     <>
