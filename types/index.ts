@@ -87,6 +87,7 @@ export interface LLMResponse {
   usage?: TokenUsage;
   model: string;
   provider: string;
+  metadata?: Record<string, any>;
 }
 
 export interface StreamingChunk {

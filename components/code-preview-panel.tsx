@@ -31,7 +31,7 @@ import {
   X,
 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Sandpack } from "@codesandbox/sandpack-react";
 import JSZip from "jszip";
 import type { Message } from "../types/index";

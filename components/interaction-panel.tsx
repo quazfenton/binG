@@ -850,17 +850,6 @@ export default function InteractionPanel({
     return [...modules].sort(() => Math.random() - 0.5);
   }, [setInput]);
 
-  const [displayedTemplates, setDisplayedTemplates] = useState(() =>
-    getRandomTemplates(),
-  );
-
-  // Refresh templates when switching to code tab
-  useEffect(() => {
-    if (activeTab === "code") {
-      setDisplayedTemplates(getRandomTemplates());
-    }
-  }, [activeTab]);
-
   // Sample images for the images tab
   const sampleImages = [
     {
@@ -1007,7 +996,8 @@ export default function InteractionPanel({
                         }
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
-                          handleSubmit(e);
+                          onSubmit(input);
+                          setInput('');
                         }
                       }}
                       onFocus={() => {
@@ -1170,7 +1160,8 @@ export default function InteractionPanel({
                       }
                       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                         e.preventDefault();
-                        handleSubmit(e);
+                        onSubmit(input);
+                        setInput('');
                       }
                     }}
                     onFocus={() => {

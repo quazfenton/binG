@@ -98,15 +98,15 @@
     "vaul": "^0.9.6",
     "webdav": "^5.8.0",
     "zod": "^3.24.1",
-    "@arcadeai/arcadejs": "^0.3.0",
-    "@nangohq/node": "^0.40.0",
-    "@nangohq/frontend": "^0.37.0",
-    "@composio/core": "latest",
-    "@composio/openai-agents": "latest",
-    "@composio/vercel": "latest",
-    "@composio/anthropic": "latest",
-    "@composio/google": "latest",
-    "@composio/langchain": "latest"
+    "@arcadeai/arcadejs": "^2.2.0",
+    "@nangohq/node": "^0.69.5",
+    "@nangohq/frontend": "^0.69.7",
+    "@composio/core": "^0.6.3",
+    "@composio/openai-agents": "^0.5.5",
+    "@composio/vercel": "^0.5.4",
+    "@composio/anthropic": "^0.2.6",
+    "@composio/google": "^0.5.2",
+    "@composio/langchain": "^0.6.2"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.4.2",
@@ -116,7 +116,7 @@
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.1",
-    "@types/react-syntax-highlighter": "^16.0.0",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "postcss": "^8.5",
     "tailwindcss": "^3.4.17",
     "typescript": "^5"

@@ -583,7 +583,7 @@ class PriorityRequestRouter {
     } catch (error) {
       console.error('[Router] Tool processing error:', error);
       return {
-        content: result instanceof Error ? result.message : String(result),
+        content: error instanceof Error ? error.message : String(error),
         data: {
           source: 'tool-execution',
           error: String(error),

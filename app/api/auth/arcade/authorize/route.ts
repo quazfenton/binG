@@ -7,6 +7,9 @@ const arcade = new Arcade({
 });
 
 export async function GET(req: NextRequest) {
+  // Extract provider before try block so it's accessible in catch
+  const provider = req.nextUrl.searchParams.get('provider');
+
   try {
     // CRITICAL: Authenticate user from JWT token - do NOT trust userId from query string
     const authResult = await verifyAuth(req);
@@ -19,8 +22,6 @@ export async function GET(req: NextRequest) {
 
     // Use authenticated userId from token, ignore query userId
     const authenticatedUserId = authResult.userId;
-
-    const provider = req.nextUrl.searchParams.get('provider');
 
     if (!provider) {
       return NextResponse.json({ error: 'provider is required' }, { status: 400 });

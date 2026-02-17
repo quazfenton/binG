@@ -96,24 +96,27 @@ export function useSandbox(options: UseSandboxOptions) {
             const json = line.slice(6).trim();
             if (!json) continue;
 
+            let event: any;
             try {
-              const event = JSON.parse(json);
-
-              if (event.type === 'tool_execution') {
-                const step: SandboxAgentStep = {
-                  toolName: event.toolName,
-                  args: event.args,
-                  result: event.result,
-                };
-                setSteps(prev => [...prev, step]);
-                options.onStepExecuted?.(step);
-              } else if (event.type === 'complete') {
-                finalResponse = event.response;
-              } else if (event.type === 'error') {
-                throw new Error(event.message);
-              }
+              event = JSON.parse(json);
             } catch {
               // Skip malformed events
+              continue;
+            }
+
+            if (event.type === 'tool_execution') {
+              const step: SandboxAgentStep = {
+                toolName: event.toolName,
+                args: event.args,
+                result: event.result,
+              };
+              setSteps(prev => [...prev, step]);
+              options.onStepExecuted?.(step);
+            } else if (event.type === 'complete') {
+              finalResponse = event.response;
+            } else if (event.type === 'error') {
+              // Let the outer try/catch handle server-sent errors
+              throw new Error(event.message);
             }
           }
         }
