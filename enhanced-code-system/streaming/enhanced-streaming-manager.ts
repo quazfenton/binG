@@ -11,7 +11,7 @@
  * - Partial response assembly and validation
  */
 
-import { EventEmitter } from "node:events";
+import { EventEmitter } from "events";
 import { z } from "zod";
 import { llmIntegration } from "../core/llm-integration";
 import {

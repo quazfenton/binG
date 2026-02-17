@@ -82,9 +82,14 @@ export class DaemonManager {
 
     // Prefer killing by PID if available (more reliable than pkill -f)
     if (daemon.pid) {
+      // Send SIGTERM first for graceful shutdown
       await sandbox.executeCommand(`kill ${daemon.pid} 2>/dev/null || true`)
-      // Also try SIGKILL if SIGTERM doesn't work
-      await sandbox.executeCommand(`kill -9 ${daemon.pid} 2>/dev/null || true`)
+      
+      // Wait briefly for graceful shutdown before escalating to SIGKILL
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      
+      // Check if process is still running, then force kill
+      await sandbox.executeCommand(`kill -0 ${daemon.pid} 2>/dev/null && kill -9 ${daemon.pid} 2>/dev/null || true`)
     } else {
       // Fallback to pkill if PID not available - escape all shell metacharacters
       const escapedCommand = daemon.command

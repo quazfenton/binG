@@ -121,8 +121,11 @@ class RunloopSandboxHandle implements SandboxHandle {
     // Apply timeout - use provided timeout or default to MAX_COMMAND_TIMEOUT
     const effectiveTimeout = timeout ?? MAX_COMMAND_TIMEOUT;
     
+    // Shell-quote safeCwd to handle spaces and special characters
+    const escapedCwd = safeCwd.replace(/'/g, "'\\''");
+    
     // Execute with explicit cwd using sanitized values
-    const fullCommand = `cd ${safeCwd} && ${safeCommand}`;
+    const fullCommand = `cd '${escapedCwd}' && ${safeCommand}`;
     
     const result = await this.devbox.cmd.exec({
       command: fullCommand,
