@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { type Message } from "ai/react"; // Only import Message type, useChat is now in parent
+import { type Message } from "@/types";
 import { toast } from "sonner";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import MessageBubble from "@/components/message-bubble";
