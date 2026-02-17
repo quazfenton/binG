@@ -278,6 +278,19 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       if (popup) {
         setPopupWindow(popup);
         toast.info(`Connecting to ${integration.name}...`);
+        
+        // Poll for popup closure (fallback since noopener prevents postMessage)
+        const checkInterval = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(checkInterval);
+            setLoading(null);
+            // Refresh integrations to check if connection was successful
+            fetchIntegrations();
+          }
+        }, 1000);
+        
+        // Clean up interval on unmount
+        setTimeout(() => clearInterval(checkInterval), 60000); // Stop after 60 seconds
       } else {
         toast.error('Popup blocked. Please allow popups for this site.');
         setLoading(null);

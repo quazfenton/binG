@@ -47,6 +47,7 @@ export class RunloopProvider implements SandboxProvider {
 
 class RunloopSandboxHandle implements SandboxHandle {
   readonly id: string;
+  readonly workspaceDir = '/home/user/workspace';
   private devbox: any;
   private client: any;
 
@@ -155,24 +156,59 @@ class RunloopSandboxHandle implements SandboxHandle {
     const resolved = this.resolvePath(filePath);
     const dir = path.dirname(resolved);
 
-    // Create directory with sanitized path
-    await this.executeCommand(`mkdir -p '${dir.replace(/'/g, "'\\''")}'`);
+    // Shell-quote paths for safety (handle spaces and special characters)
+    const escapedDir = dir.replace(/'/g, "'\\''");
+    const escapedPath = resolved.replace(/'/g, "'\\''");
+    
+    // Create directory - bypass sanitizeCommand since we control the paths
+    const mkdirCmd = `mkdir -p '${escapedDir}'`;
+    const mkdirResult = await this.devbox.cmd.exec({ command: mkdirCmd, shell: "/bin/bash" });
+    const mkdirStderr = await mkdirResult.stderr();
+    if (mkdirResult.exit_code !== 0) {
+      return { success: false, output: mkdirStderr || 'Failed to create directory', exitCode: mkdirResult.exit_code };
+    }
 
-    // Use shell-escaped content for safety
+    // Write file content - bypass sanitizeCommand since we control the paths
     const escaped = content.replace(/'/g, "'\\''");
-    await this.executeCommand(
-      `printf '%s' '${escaped}' > '${resolved.replace(/'/g, "'\\''")}'`
-    );
-    return { success: true, output: `File written: ${resolved}` };
+    const writeCmd = `printf '%s' '${escaped}' > '${escapedPath}'`;
+    const writeResult = await this.devbox.cmd.exec({ command: writeCmd, shell: "/bin/bash" });
+    const writeStderr = await writeResult.stderr();
+    return { 
+      success: writeResult.exit_code === 0, 
+      output: writeResult.exit_code === 0 ? `File written: ${resolved}` : writeStderr,
+      exitCode: writeResult.exit_code 
+    };
   }
 
   async readFile(filePath: string): Promise<ToolResult> {
     const resolved = this.resolvePath(filePath);
-    return this.executeCommand(`cat '${resolved.replace(/'/g, "'\\''")}'`);
+    const escapedPath = resolved.replace(/'/g, "'\\''");
+    const result = await this.devbox.cmd.exec({ 
+      command: `cat '${escapedPath}'`, 
+      shell: "/bin/bash" 
+    });
+    const stdout = await result.stdout();
+    const stderr = await result.stderr();
+    return {
+      success: result.exit_code === 0,
+      output: stdout + (stderr ? `\n${stderr}` : ''),
+      exitCode: result.exit_code,
+    };
   }
 
   async listDirectory(dirPath: string): Promise<ToolResult> {
     const resolved = this.resolvePath(dirPath);
-    return this.executeCommand(`ls -la '${resolved.replace(/'/g, "'\\''")}'`);
+    const escapedPath = resolved.replace(/'/g, "'\\''");
+    const result = await this.devbox.cmd.exec({ 
+      command: `ls -la '${escapedPath}'`, 
+      shell: "/bin/bash" 
+    });
+    const stdout = await result.stdout();
+    const stderr = await result.stderr();
+    return {
+      success: result.exit_code === 0,
+      output: stdout + (stderr ? `\n${stderr}` : ''),
+      exitCode: result.exit_code,
+    };
   }
 }

@@ -53,6 +53,7 @@ export class DaytonaProvider implements SandboxProvider {
 
 class DaytonaSandboxHandle implements SandboxHandle {
   readonly id: string
+  readonly workspaceDir = '/home/daytona/workspace'
   private sandbox: any
   private client: Daytona
 

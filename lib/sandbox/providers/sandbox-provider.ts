@@ -10,6 +10,7 @@ export interface SandboxProvider {
 
 export interface SandboxHandle {
   readonly id: string
+  readonly workspaceDir: string
 
   executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult>
   writeFile(filePath: string, content: string): Promise<ToolResult>

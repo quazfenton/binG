@@ -26,6 +26,8 @@ export function getSessionByUserId(userId: string): WorkspaceSession | undefined
     if (session.userId === userId && session.status === 'active') {
       const elapsed = Date.now() - new Date(session.lastActive).getTime()
       if (elapsed <= SESSION_TTL_MS) return session
+      // Clean up expired session
+      sessions.delete(session.sessionId)
     }
   }
   return undefined

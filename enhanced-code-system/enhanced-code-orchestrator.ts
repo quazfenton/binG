@@ -10,6 +10,7 @@
  * - Multi-modal response handling and validation
  */
 
+import { EventEmitter } from "events";
 import { z } from "zod";
 import {
   EnhancedPromptEngine,

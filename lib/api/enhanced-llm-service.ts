@@ -536,48 +536,58 @@ export class EnhancedLLMService {
    * Prevents command injection attacks by blocking dangerous patterns.
    */
   private validateSandboxCommand(command: string): { isValid: boolean; command: string; reason?: string } {
-    if (!command || typeof command !== 'string') {
-      return { isValid: false, command: '', reason: 'Command is required' };
-    }
+    return validateSandboxCommand(command);
+  }
+}
 
-    // Length limit to prevent resource exhaustion
-    const MAX_COMMAND_LENGTH = 10000;
-    if (command.length > MAX_COMMAND_LENGTH) {
-      return { isValid: false, command: '', reason: `Command exceeds maximum length of ${MAX_COMMAND_LENGTH} characters` };
-    }
+/**
+ * Validates and sanitizes command input before sandbox execution.
+ * Prevents command injection attacks by blocking dangerous patterns.
+ * Exported as standalone function for use in sandbox execute API.
+ */
+export function validateSandboxCommand(command: string): { isValid: boolean; command: string; reason?: string } {
+  if (!command || typeof command !== 'string') {
+    return { isValid: false, command: '', reason: 'Command is required' };
+  }
 
-    const trimmedCommand = command.trim();
+  // Length limit to prevent resource exhaustion
+  const MAX_COMMAND_LENGTH = 10000;
+  if (command.length > MAX_COMMAND_LENGTH) {
+    return { isValid: false, command: '', reason: `Command exceeds maximum length of ${MAX_COMMAND_LENGTH} characters` };
+  }
 
-    // Block dangerous command patterns that could escape sandbox or cause harm
-    const dangerousPatterns = [
-      // Network exfiltration attempts (using [^|]* instead of .* to prevent backtracking)
-      /\bcurl\b[^|]*\|\s*(?:ba)?sh\b/i,
-      /\bwget\b[^|]*\|\s*(?:ba)?sh\b/i,
-      // Privilege escalation
-      /\bsudo\b/i,
-      /\bsu\b\s+/i,
-      // Container escape attempts
-      /\bdocker\b/i,
-      /\bkubectl\b/i,
-      // Filesystem traversal beyond workspace
-      /\.\.\/\.\./,
-      /\/etc\/passwd/,
-      /\/etc\/shadow/,
-      // Process manipulation
-      /\bpkill\b/i,
-      /\bkillall\b/i,
-      // Code execution in other languages (using \s+ instead of .*)
-      /\bpython[3]?\s+-c\b/i,
-      /\bperl\s+-e\b/i,
-      /\bruby\s+-e\b/i,
-      // Base64 decode and execute patterns
-      /\bbase64\b[^|]*\|\s*(?:ba)?sh\b/i,
-      /\bbase64\b[^|]*\|\s*bash\b/i,
-      // Eval patterns
-      /\beval\s*\(/i,
-      /\bexec\s*\(/i,
-      // Netcat with exec flag
-      /\bnc\s+-e\b/i,
+  const trimmedCommand = command.trim();
+
+  // Block dangerous command patterns that could escape sandbox or cause harm
+  const dangerousPatterns = [
+    // Network exfiltration attempts (using [^|]* instead of .* to prevent backtracking)
+    /\bcurl\b[^|]*\|\s*(?:ba)?sh\b/i,
+    /\bwget\b[^|]*\|\s*(?:ba)?sh\b/i,
+    // Privilege escalation
+    /\bsudo\b/i,
+    /\bsu\b\s+/i,
+    // Container escape attempts
+    /\bdocker\b/i,
+    /\bkubectl\b/i,
+    // Filesystem traversal beyond workspace
+    /\.\.\/\.\./,
+    /\/etc\/passwd/,
+    /\/etc\/shadow/,
+    // Process manipulation
+    /\bpkill\b/i,
+    /\bkillall\b/i,
+    // Code execution in other languages (using \s+ instead of .*)
+    /\bpython[3]?\s+-c\b/i,
+    /\bperl\s+-e\b/i,
+    /\bruby\s+-e\b/i,
+    // Base64 decode and execute patterns
+    /\bbase64\b[^|]*\|\s*(?:ba)?sh\b/i,
+    /\bbase64\b[^|]*\|\s*bash\b/i,
+    // Eval patterns
+    /\beval\s*\(/i,
+    /\bexec\s*\(/i,
+    // Netcat with exec flag
+    /\bnc\s+-e\b/i,
       /\bnetcat\s+-e\b/i,
       // Additional dangerous patterns for common attack vectors
       /\bnode\s+-e\b/i,

@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS token_refresh_logs (
     FOREIGN KEY (connection_id) REFERENCES external_connections (id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_token_refresh_connection ON token_refresh_logs(connection_id);
 CREATE INDEX IF NOT EXISTS idx_ext_conn_user_provider ON external_connections(user_id, provider);
 CREATE INDEX IF NOT EXISTS idx_ext_conn_active ON external_connections(is_active);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_sessions_state ON oauth_sessions(state);

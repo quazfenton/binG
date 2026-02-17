@@ -159,14 +159,17 @@ export class ToolUtilities {
         };
       }
       
-      await this.toolManager.executeTool(
-        "twilio.send_sms",
-        {
-          to: validPhoneNumbers[0],
-          body: message,
-        },
-        context
-      );
+      // Send SMS to all validated phone numbers
+      for (const phoneNumber of validPhoneNumbers) {
+        await this.toolManager.executeTool(
+          "twilio.send_sms",
+          {
+            to: phoneNumber,
+            body: message,
+          },
+          context
+        );
+      }
     } else if (params.notifyVia === "slack" && params.notifyChannel) {
       await this.toolManager.executeTool(
         "slack.send_message",
