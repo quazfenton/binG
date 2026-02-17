@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     // Dynamic import to avoid build errors when sandbox module not available
     let runAgentLoop: any;
     try {
-      const mod = await import('../../../../lib/agent-loop');
+      const mod = await import('@/lib/sandbox/agent-loop');
       runAgentLoop = mod.runAgentLoop;
     } catch {
       return NextResponse.json(

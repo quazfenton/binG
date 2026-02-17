@@ -15,16 +15,16 @@ export async function POST(req: NextRequest) {
     const authorized = await toolAuthManager.isAuthorized(userId, toolKey);
     if (!authorized) {
       const provider = toolAuthManager.getRequiredProvider(toolKey);
-      if (provider) {
-        const authUrl = toolAuthManager.getAuthorizationUrl(provider);
-        return NextResponse.json({
-          status: 'auth_required',
-          authUrl: `${authUrl}&userId=${userId}`,
-          provider,
-          toolName: toolKey,
-          message: `Please connect your ${provider} account to use ${toolKey}`,
-        });
-      }
+      const authUrl = provider ? toolAuthManager.getAuthorizationUrl(provider) : null;
+      return NextResponse.json({
+        status: 'auth_required',
+        authUrl: authUrl ? `${authUrl}&userId=${userId}` : null,
+        provider: provider || 'unknown',
+        toolName: toolKey,
+        message: provider
+          ? `Please connect your ${provider} account to use ${toolKey}`
+          : `Authorization required for ${toolKey}`,
+      }, { status: 403 });
     }
 
     const toolManager = getToolManager();
