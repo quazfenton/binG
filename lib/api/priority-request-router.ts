@@ -78,8 +78,10 @@ class PriorityRequestRouter {
           return this.composioService.healthCheck();
         },
         canHandle: (req) => {
-          // Check if Composio is available and request has user context
-          return !!this.composioService && !!req.userId && req.enableComposio !== false;
+          // Check if Composio is available, request has user context, AND is a tool request
+          // This prevents Composio from intercepting all authenticated requests
+          return !!this.composioService && !!req.userId && req.enableComposio !== false
+            && detectRequestType(req.messages) === 'tool';
         },
         processRequest: async (req) => {
           return await this.processComposioRequest(req);

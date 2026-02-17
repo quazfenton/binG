@@ -67,13 +67,33 @@ export const SANDBOX_TOOLS = [
 export type ToolName = (typeof SANDBOX_TOOLS)[number]['name']
 
 const BLOCKED_PATTERNS = [
-  /rm\s+-rf\s+\/(?!\s)/,
+  // rm commands - block recursive delete of root or any path starting with /
+  /rm\s+-rf\s+\/(?:\s|$)/,      // rm -rf / with whitespace or end-of-line
+  /rm\s+-rf\s+\/\S*/,           // rm -rf /anything (any path starting with /)
+  /rm\s+-rf\s+\*\s*/,           // rm -rf *
+  /rm\s+--no-preserve-root/,    // rm --no-preserve-root
   /mkfs\./,
   /dd\s+if=.*of=\/dev/,
-  /:\(\)\s*\{\s*:\|:\s*&\s*\}\s*;/,
+  /:\(\)\s*\{\s*:\|:\s*&\s*\}\s*;/,  // Fork bomb
   /chmod\s+-R\s+777\s+\//,
-  /wget.*\|\s*sh/,
-  /curl.*\|\s*sh/,
+  /chmod\s+000\s+\//,
+  /wget.*\|\s*(ba)?sh/,
+  /curl.*\|\s*(ba)?sh/,
+  // Variable expansion and command substitution
+  /\$\{.*\}/,  // ${VAR}
+  /\$\([^)]+\)/,  // $(command)
+  /`[^`]+`/,  // Backticks
+  // Eval and execution patterns
+  /\beval\b/,
+  /\bexec\b\s*\(/,
+  /base64\s+-d\s*\|\s*(ba)?sh/,
+  /python\s+-c/,
+  /perl\s+-e/,
+  /ruby\s+-e/,
+  /node\s+-e/,
+  /php\s+-r/,
+  // Shell escaping bypasses
+  /\\[;&|]/,  // Escaped special chars
 ]
 
 export function validateCommand(command: string): { valid: boolean; reason?: string } {
@@ -83,4 +103,34 @@ export function validateCommand(command: string): { valid: boolean; reason?: str
     }
   }
   return { valid: true }
+}
+
+/**
+ * Validate and resolve file path to prevent path traversal attacks
+ */
+export function resolvePath(filePath: string, sandboxRoot: string = '/workspace'): { valid: boolean; resolvedPath?: string; reason?: string } {
+  // Normalize path separators
+  const normalized = filePath.replace(/\\/g, '/');
+  
+  // Reject path traversal attempts
+  if (normalized.includes('..')) {
+    return { valid: false, reason: 'Path traversal detected: ".." not allowed' };
+  }
+  
+  // Reject null bytes
+  if (normalized.includes('\0')) {
+    return { valid: false, reason: 'Invalid path: null byte detected' };
+  }
+  
+  // For absolute paths, ensure they're within sandbox root
+  if (filePath.startsWith('/')) {
+    if (!normalized.startsWith(sandboxRoot)) {
+      return { valid: false, reason: `Path must be within ${sandboxRoot}` };
+    }
+    return { valid: true, resolvedPath: normalized };
+  }
+  
+  // For relative paths, resolve within sandbox root
+  const resolved = `${sandboxRoot}/${normalized}`.replace(/\/+/g, '/');
+  return { valid: true, resolvedPath: resolved };
 }

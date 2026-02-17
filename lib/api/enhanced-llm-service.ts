@@ -509,11 +509,15 @@ export class EnhancedLLMService {
       const result = await sandboxBridge.executeCommand(session.sandboxId, validatedCommand.command);
 
       return {
-        content: `Sandbox execution completed.\n\nOutput:\n${result.stdout || 'No output'}\n${result.stderr ? `\nErrors:\n${result.stderr}` : ''}`,
+        content: `Sandbox execution completed.\n\nOutput:\n${result.output || 'No output'}${result.exitCode !== undefined && result.exitCode !== 0 ? `\n\nExit code: ${result.exitCode}` : ''}`,
         tokensUsed: 0,
-        finishReason: 'stop',
+        finishReason: result.success ? 'stop' : 'error',
         timestamp: new Date(),
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        metadata: {
+          success: result.success,
+          exitCode: result.exitCode
+        }
       };
     } catch (error: any) {
       console.error('Sandbox request processing error:', error);
@@ -613,11 +617,12 @@ export class EnhancedLLMService {
     // Allow-list of safe command prefixes for common development tasks
     // NOTE: Container tools and general-purpose interpreters are intentionally excluded
     // as they can be used to escape sandbox or execute arbitrary code
+    // NOTE: Destructive commands (rm, chmod, chown) are excluded to prevent data loss
     const safeCommandPrefixes = [
-      // File operations
+      // File operations (read-only and safe create)
       'ls ', 'cat ', 'head ', 'tail ', 'wc ', 'grep ', 'find ', 'tree ',
-      'pwd ', 'cd ', 'mkdir ', 'rmdir ', 'cp ', 'mv ', 'rm ', 'touch ',
-      'chmod ', 'chown ', 'ln ', 'readlink ',
+      'pwd ', 'cd ', 'mkdir ', 'rmdir ', 'cp ', 'mv ', 'touch ',
+      'ln ', 'readlink ',
       // Text processing
       'sed ', 'awk ', 'cut ', 'sort ', 'uniq ', 'tr ', 'rev ',
       'echo ', 'printf ',
@@ -642,6 +647,25 @@ export class EnhancedLLMService {
       // Documentation
       'man ', 'help ', '--help', '-h ',
     ];
+
+    // Additional blocklist for dangerous argument patterns (defense in depth)
+    const dangerousArgPatterns = [
+      /rm\s+-rf\s/i,          // rm -rf (recursive force delete)
+      /rm\s+--no-preserve-root/i,  // rm --no-preserve-root
+      /chmod\s+(-[aR]*7|000)/i,    // chmod with dangerous permissions
+      /chown\s+.*:.*\//i,     // chown with recursive paths
+      /\s-\w*f\s/i,           // force flag patterns
+    ];
+
+    for (const pattern of dangerousArgPatterns) {
+      if (pattern.test(trimmedCommand)) {
+        return {
+          isValid: false,
+          command: '',
+          reason: 'Command contains dangerous argument pattern'
+        };
+      }
+    }
 
     // Check if command starts with a safe prefix or is a simple command
     const lowerCommand = trimmedCommand.toLowerCase();

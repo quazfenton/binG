@@ -64,52 +64,106 @@ export class OpencodeProvider implements LLMProvider {
         })
       }, PROCESS_TIMEOUT_MS)
 
-      proc.stdout.on('data', async (chunk: Buffer) => {
+      proc.stdout.on('data', (chunk: Buffer) => {
         buffer += chunk.toString()
+        processBuffer()
+      })
 
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
+      // Sequential buffer processor to prevent race conditions
+      let processing = false
+      const processBuffer = async () => {
+        if (processing) return
+        processing = true
 
-        for (const line of lines) {
-          if (!line.trim()) continue
+        try {
+          while (true) {
+            const newlineIdx = buffer.indexOf('\n')
+            if (newlineIdx === -1) break
 
-          let parsed: any
-          try {
-            parsed = JSON.parse(line)
-          } catch {
-            onStreamChunk?.(line)
-            finalResponse += line
-            continue
-          }
+            const line = buffer.slice(0, newlineIdx)
+            buffer = buffer.slice(newlineIdx + 1)
 
-          if (parsed.tool_call && stepCount < maxSteps) {
-            stepCount++
-            const { name, arguments: toolArgs } = parsed.tool_call
+            if (!line.trim()) continue
 
-            const toolResult = await executeTool(name, toolArgs ?? {})
-            steps.push({ toolName: name, args: toolArgs ?? {}, result: toolResult })
-            onToolExecution?.(name, toolArgs ?? {}, toolResult)
-
-            const resultPayload = JSON.stringify({
-              tool_result: {
-                name,
-                result: toolResult.output,
-                exit_code: toolResult.exitCode,
-                success: toolResult.success,
-              },
-            })
-
-            if (!proc.killed) {
-              proc.stdin.write(resultPayload + '\n')
+            let parsed: any
+            try {
+              parsed = JSON.parse(line)
+            } catch {
+              onStreamChunk?.(line)
+              finalResponse += line
+              continue
             }
-          } else if (parsed.text) {
-            onStreamChunk?.(parsed.text)
-            finalResponse += parsed.text
-          } else if (parsed.done || parsed.complete) {
-            finalResponse = parsed.response ?? parsed.text ?? finalResponse
+
+            if (parsed.tool_call && stepCount < maxSteps) {
+              stepCount++
+              const { name, arguments: toolArgs } = parsed.tool_call
+
+              let toolResult: ToolResult
+              try {
+                toolResult = await executeTool(name, toolArgs ?? {})
+              } catch (err) {
+                // Tool execution failed - kill process and reject the promise
+                clearTimeout(timeout)
+                proc.kill('SIGTERM')
+                reject(
+                  err instanceof Error
+                    ? err
+                    : new Error(`Tool execution failed for '${name}': ${String(err)}`),
+                )
+                return
+              }
+              
+              steps.push({ toolName: name, args: toolArgs ?? {}, result: toolResult })
+              onToolExecution?.(name, toolArgs ?? {}, toolResult)
+
+              const resultPayload = JSON.stringify({
+                tool_result: {
+                  name,
+                  result: toolResult.output,
+                  exit_code: toolResult.exitCode,
+                  success: toolResult.success,
+                },
+              })
+
+              if (!proc.killed && !proc.stdin.destroyed) {
+                proc.stdin.write(resultPayload + '\n')
+              }
+            } else if (parsed.tool_call && stepCount >= maxSteps) {
+              // Inform the process we've hit the step limit - prevents hanging
+              const resultPayload = JSON.stringify({
+                tool_result: {
+                  name: parsed.tool_call.name,
+                  result: 'Maximum tool execution steps reached',
+                  exit_code: 1,
+                  success: false,
+                },
+              })
+              
+              if (!proc.killed && !proc.stdin.destroyed) {
+                proc.stdin.write(resultPayload + '\n')
+              }
+              
+              // Add sentinel step for tracking
+              steps.push({ 
+                toolName: parsed.tool_call.name, 
+                args: parsed.tool_call.arguments ?? {}, 
+                result: { success: false, output: 'Maximum steps reached', exitCode: 1 }
+              })
+            } else if (parsed.text) {
+              onStreamChunk?.(parsed.text)
+              finalResponse += parsed.text
+            } else if (parsed.done || parsed.complete) {
+              finalResponse = parsed.response ?? parsed.text ?? finalResponse
+            }
+          }
+        } finally {
+          processing = false
+          // Process any remaining data that arrived while processing
+          if (buffer.includes('\n')) {
+            processBuffer()
           }
         }
-      })
+      }
 
       proc.stderr.on('data', (data: Buffer) => {
         const text = data.toString()

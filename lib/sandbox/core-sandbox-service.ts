@@ -73,8 +73,10 @@ export class SandboxService {
   }
 
   async destroyWorkspace(sessionId: string, sandboxId: string): Promise<void> {
-    updateSession(sessionId, { status: 'destroyed' })
+    // Destroy the sandbox first, then update state
+    // This prevents inconsistent state if provider call fails
     await this.provider.destroySandbox(sandboxId)
+    updateSession(sessionId, { status: 'destroyed' })
     deleteSession(sessionId)
   }
 }

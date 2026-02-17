@@ -183,15 +183,23 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
           // Process tool calls if present
           if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
             toolCalls = choice.message.tool_calls;
-            
+
+            // Work with a copy to avoid mutating the caller's messages
+            const messages = [...request.messages];
+
             // Execute the tool calls via Composio
             for (const toolCall of choice.message.tool_calls) {
               try {
-                const result = await session.executeTool(toolCall.function.name, 
-                  JSON.parse(toolCall.function.arguments));
-                
+                // Use documented API: composio.tools.execute(toolSlug, { userId, arguments })
+                const toolSlug = toolCall.function.name;
+                const toolArgs = JSON.parse(toolCall.function.arguments);
+                const result = await composio.tools.execute(toolSlug, {
+                  userId: request.userId,
+                  arguments: toolArgs,
+                });
+
                 // Add to message history
-                request.messages.push({
+                messages.push({
                   role: 'assistant',
                   content: '',
                   tool_calls: [{
@@ -203,8 +211,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                     },
                   }],
                 });
-                
-                request.messages.push({
+
+                messages.push({
                   role: 'tool',
                   tool_call_id: toolCall.id,
                   content: JSON.stringify(result),
@@ -228,7 +236,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
             // Second call to get final response with tool results
             const finalResponse = await client.chat.completions.create({
               model: selectedModel,
-              messages: request.messages.map((m: any) => ({
+              messages: messages.map((m: any) => ({
                 role: m.role,
                 content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
               })),
@@ -237,16 +245,27 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
             content = finalResponse.choices[0].message.content || content;
           }
         } else if (provider === 'google') {
-          // Use Google Gemini
+          // Use Google Gemini with function calling support
           const { GoogleGenerativeAI } = await import('@google/generative-ai');
           const apiKey = process.env.GOOGLE_API_KEY;
-          
+
           if (!apiKey) {
             throw new Error('GOOGLE_API_KEY not configured');
           }
 
           const genAI = new GoogleGenerativeAI(apiKey);
-          const model = genAI.getGenerativeModel({ model: selectedModel });
+          
+          // Convert tools to Gemini functionDeclarations format
+          const functionDeclarations = tools?.map((tool: any) => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          })) || [];
+
+          const model = genAI.getGenerativeModel({ 
+            model: selectedModel,
+            tools: functionDeclarations.length > 0 ? [{ functionDeclarations }] : undefined,
+          });
 
           // Convert messages to Gemini format
           const geminiHistory = request.messages.map((m: any) => ({
@@ -259,6 +278,19 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
           });
 
           content = result.response.text();
+          
+          // Extract function calls from Gemini response if present
+          const functionCalls = result.response.functionCalls();
+          if (functionCalls && functionCalls.length > 0) {
+            toolCalls = functionCalls.map((call: any) => ({
+              id: `call_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+              type: 'function',
+              function: {
+                name: call.name,
+                arguments: JSON.stringify(call.args),
+              },
+            }));
+          }
         }
 
         // Get connected accounts
@@ -277,22 +309,25 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
 
       } catch (error: any) {
         console.error('[ComposioService] Error processing request:', error);
-        
-        // Check if it's an auth error
-        if (error.message?.includes('auth') || error.message?.includes('connect') || error.message?.includes('authorize')) {
-          const toolkitMatch = error.message.match(/([A-Z_]+)/);
-          const toolkit = toolkitMatch ? toolkitMatch[1] : 'UNKNOWN';
-          const authUrl = await this.getAuthUrl(toolkit, request.userId);
-          
-          return {
-            content: `Authorization required for ${toolkit}. Please connect your account to use this feature.`,
-            requiresAuth: true,
-            authUrl,
-            authToolkit: toolkit,
-            metadata: { executionTime: Date.now() - startTime },
-          };
+
+        // Check if it's an auth error using specific error codes/types
+        // Composio SDK uses specific error codes for auth failures
+        if (error.code === 'AUTH_REQUIRED' || error.name === 'AuthError' || error.authToolkit) {
+          // Use toolkit from error if provided, otherwise extract from message
+          const toolkit = error.authToolkit || error.toolkit;
+          if (toolkit) {
+            const authUrl = await this.getAuthUrl(toolkit, request.userId);
+            return {
+              content: `Authorization required for ${toolkit}. Please connect your account to use this feature.`,
+              requiresAuth: true,
+              authUrl,
+              authToolkit: toolkit,
+              metadata: { executionTime: Date.now() - startTime },
+            };
+          }
         }
 
+        // For other errors, log and rethrow
         throw error;
       }
     },
@@ -318,8 +353,9 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
       try {
         const { Composio } = await import('@composio/core');
         const composio = new Composio({ apiKey: config.apiKey });
-        const accounts = await composio.connectedAccounts.list(userId);
-        return accounts.accounts || [];
+        // Use correct API: connectedAccounts.get for user-scoped listing
+        const accounts = await composio.connectedAccounts.get({ userId });
+        return accounts?.items || accounts?.accounts || [];
       } catch (error: any) {
         console.error('[ComposioService] Failed to get connected accounts:', error.message);
         return [];
@@ -330,20 +366,21 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
       try {
         const { Composio } = await import('@composio/core');
         const composio = new Composio({ apiKey: config.apiKey });
-        
+
         // Check if we have a connected account for this toolkit
-        const accounts = await composio.connectedAccounts.list(userId);
-        const existingAccount = accounts.accounts?.find((a: any) => 
-          a.toolkit.toLowerCase() === toolkit.toLowerCase()
+        const accounts = await composio.connectedAccounts.get({ userId });
+        const existingAccount = accounts?.items?.find((a: any) =>
+          a.toolkit?.toLowerCase() === toolkit.toLowerCase() || a.appName?.toLowerCase() === toolkit.toLowerCase()
         );
 
         if (existingAccount && existingAccount.status === 'active') {
           return ''; // Already connected
         }
 
-        // Initiate connection
-        const connectionRequest = await composio.connectedAccounts.initiate(userId, toolkit);
-        return connectionRequest.redirectUrl || '';
+        // Initiate connection - use authConfigId (from dashboard) or toolkit slug
+        // For dynamic toolkit connections, we use the toolkit slug as authConfigId
+        const connectionRequest = await composio.connectedAccounts.initiate(userId, toolkit.toLowerCase());
+        return connectionRequest.redirectUrl || connectionRequest.connectionRequestUrl || '';
       } catch (error: any) {
         console.error('[ComposioService] Failed to get auth URL:', error.message);
         return '';

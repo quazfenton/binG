@@ -1,4 +1,5 @@
 import { Daytona } from '@daytonaio/sdk'
+import { resolve, relative } from 'node:path'
 import type { ToolResult, PreviewInfo } from '../types'
 import type {
   SandboxProvider,
@@ -124,8 +125,16 @@ class DaytonaSandboxHandle implements SandboxHandle {
   }
 
   private resolvePath(filePath: string): string {
-    if (filePath.startsWith('/')) return filePath
-    return `${WORKSPACE_DIR}/${filePath}`
+    const resolved = filePath.startsWith('/')
+      ? resolve(filePath)
+      : resolve(WORKSPACE_DIR, filePath);
+    
+    // Ensure path stays within workspace
+    const rel = relative(WORKSPACE_DIR, resolved);
+    if (rel.startsWith('..') || resolve(WORKSPACE_DIR, rel) !== resolved || rel === '..') {
+      throw new Error(`Path traversal rejected: ${filePath}`);
+    }
+    return resolved;
   }
 }
 
