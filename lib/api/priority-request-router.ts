@@ -13,6 +13,7 @@ import { toolContextManager } from '../services/tool-context-manager';
 import { sandboxBridge } from '../sandbox';
 import type { LLMMessage } from './llm-providers';
 import { detectRequestType } from '../utils/request-type-detector';
+import { initializeComposioService, getComposioService, type ComposioToolRequest } from './composio-service';
 
 export interface RouterRequest {
   messages: LLMMessage[];
@@ -26,6 +27,7 @@ export interface RouterRequest {
   userId?: string;
   enableTools?: boolean;
   enableSandbox?: boolean;
+  enableComposio?: boolean;
 }
 
 export interface RouterResponse {
@@ -51,9 +53,12 @@ export interface EndpointConfig {
 class PriorityRequestRouter {
   private endpoints: EndpointConfig[];
   private routingStats: Map<string, { success: number; failures: number }>;
+  private composioService: ReturnType<typeof initializeComposioService>;
 
   constructor() {
     this.routingStats = new Map();
+    // Initialize Composio service if available
+    this.composioService = initializeComposioService();
     this.endpoints = this.initializeEndpoints();
   }
 
@@ -62,6 +67,24 @@ class PriorityRequestRouter {
    */
   private initializeEndpoints(): EndpointConfig[] {
     const endpoints: EndpointConfig[] = [
+      // Priority 0: Composio Tools (800+ toolkits with advanced integration)
+      {
+        name: 'composio-tools',
+        priority: 0,
+        enabled: !!this.composioService && process.env.COMPOSIO_ENABLED !== 'false',
+        service: this.composioService,
+        healthCheck: async () => {
+          if (!this.composioService) return false;
+          return this.composioService.healthCheck();
+        },
+        canHandle: (req) => {
+          // Check if Composio is available and request has user context
+          return !!this.composioService && !!req.userId && req.enableComposio !== false;
+        },
+        processRequest: async (req) => {
+          return await this.processComposioRequest(req);
+        }
+      },
       // Priority 1: Tool Execution (Handle tool requests with authorization)
       {
         name: 'tool-execution',
@@ -246,13 +269,91 @@ class PriorityRequestRouter {
   }
 
   /**
+   * Process Composio tool request with 800+ toolkits
+   */
+  private async processComposioRequest(request: RouterRequest): Promise<any> {
+    if (!this.composioService) {
+      return {
+        content: 'Composio service not available',
+        data: {
+          source: 'composio-tools',
+          error: 'Service not initialized'
+        }
+      };
+    }
+
+    if (!request.userId) {
+      return {
+        content: 'User ID required for Composio tool access',
+        data: {
+          source: 'composio-tools',
+          requiresAuth: true,
+          error: 'User ID not provided'
+        }
+      };
+    }
+
+    try {
+      const composioRequest: ComposioToolRequest = {
+        messages: request.messages,
+        userId: request.userId,
+        stream: request.stream,
+        requestId: request.requestId || `comp_${Date.now()}`,
+        // Enable all toolkits by default for maximum capability
+        enableAllTools: true
+      };
+
+      const result = await this.composioService.processToolRequest(composioRequest);
+
+      // Handle authentication required
+      if (result.requiresAuth && result.authUrl) {
+        return {
+          content: `I need authorization to use ${result.authToolkit || 'the requested service'} through Composio. Please connect your account to proceed.`,
+          data: {
+            source: 'composio-tools',
+            requiresAuth: true,
+            authUrl: result.authUrl,
+            toolkit: result.authToolkit,
+            type: 'auth_required',
+            composioSessionId: result.metadata?.sessionId
+          }
+        };
+      }
+
+      // Success response
+      return {
+        content: result.content,
+        data: {
+          source: 'composio-tools',
+          type: 'composio_execution',
+          toolCalls: result.toolCalls,
+          connectedAccounts: result.connectedAccounts,
+          composioSessionId: result.metadata?.sessionId,
+          toolsUsed: result.metadata?.toolsUsed,
+          executionTime: result.metadata?.executionTime
+        }
+      };
+    } catch (error: any) {
+      console.error('[Router] Composio processing error:', error);
+      return {
+        content: `I encountered an error while processing your request with Composio: ${error.message}`,
+        data: {
+          source: 'composio-tools',
+          error: error.message,
+          type: 'error'
+        }
+      };
+    }
+  }
+
+  /**
    * Convert router request to Fast-Agent format
    */
   private convertToFastAgentRequest(request: RouterRequest): FastAgentRequest {
     return {
       messages: request.messages.map(msg => ({
         role: msg.role as 'user' | 'assistant' | 'system',
-        content: msg.content
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
       })),
       provider: request.provider,
       model: request.model,
@@ -269,7 +370,7 @@ class PriorityRequestRouter {
     return {
       messages: request.messages.map(msg => ({
         role: msg.role as 'user' | 'assistant' | 'system',
-        content: msg.content
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
       })),
       provider: request.provider,
       model: request.model,
@@ -286,7 +387,7 @@ class PriorityRequestRouter {
     return {
       messages: request.messages.map(msg => ({
         role: msg.role as 'user' | 'assistant' | 'system',
-        content: msg.content
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
       })),
       provider: request.provider,
       model: request.model,
@@ -479,13 +580,13 @@ class PriorityRequestRouter {
           type: 'no_tools_detected'
         }
       };
-    } catch (error: any) {
+    } catch (error) {
       console.error('[Router] Tool processing error:', error);
       return {
-        content: `I encountered an error while processing your tool request: ${error.message}`,
+        content: result instanceof Error ? result.message : String(result),
         data: {
           source: 'tool-execution',
-          error: error.message,
+          error: String(error),
           type: 'error'
         }
       };

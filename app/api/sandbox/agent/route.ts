@@ -1,20 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
+import { verifyAuth } from '@/lib/auth/jwt';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { userId, message, history } = body;
-
-    if (!userId || !message) {
-      return NextResponse.json({ error: 'userId and message are required' }, { status: 400 });
+    // CRITICAL: Authenticate user from JWT token - do NOT trust userId from request body
+    const authResult = await verifyAuth(req);
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Unauthorized: valid authentication token required' },
+        { status: 401 }
+      );
     }
 
-    // Get or create sandbox session
-    const session = await sandboxBridge.getOrCreateSession(userId);
+    // Use authenticated userId from token, ignore body userId
+    const authenticatedUserId = authResult.userId;
+
+    const body = await req.json();
+    const { message, history } = body;
+
+    if (!message) {
+      return NextResponse.json({ error: 'message is required' }, { status: 400 });
+    }
+
+    // Get or create sandbox session for the authenticated user
+    const session = await sandboxBridge.getOrCreateSession(authenticatedUserId);
 
     // Dynamic import to avoid build errors when sandbox module not available
     let runAgentLoop: any;

@@ -88,7 +88,7 @@ async function handleArcadeWebhook(body: any): Promise<NextResponse> {
       });
 
       console.log(`[Webhook/Arcade] Authorization recorded for user ${user_id}, provider ${provider}`);
-    } catch (saveError) {
+    } catch (saveError: any) {
       console.error('[Webhook/Arcade] Error recording authorization:', saveError);
       return NextResponse.json({ error: 'Failed to record authorization', details: saveError.message }, { status: 500 });
     }
@@ -160,7 +160,7 @@ async function handleNangoWebhook(body: any): Promise<NextResponse> {
       });
 
       console.log(`[Webhook/Nango] Connection saved for user ${userId}, provider ${provider}, connectionId ${connectionId}`);
-    } catch (saveError) {
+    } catch (saveError: any) {
       console.error('[Webhook/Nango] Error saving connection:', saveError);
       return NextResponse.json({ error: 'Failed to save connection', details: saveError.message }, { status: 500 });
     }
