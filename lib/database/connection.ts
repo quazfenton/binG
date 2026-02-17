@@ -49,7 +49,6 @@ export function getDatabase(): Database.Database {
         table: () => null,
         function: () => mockDb as Database.Database,
         aggregate: () => mockDb as Database.Database,
-        backup: () => Promise.resolve({ progress: () => {} }),
         unsafeMode: () => mockDb as Database.Database,
       };
       
