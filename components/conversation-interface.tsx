@@ -94,7 +94,7 @@ function ConversationInterfaceContent() {
   >(null);
 
   // Enhanced code system integration
-  const [activeTab, setActiveTab] = useState<"chat" | "code">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "code" | "extras" | "integrations" | "shell">("chat");
   const codeServiceContext = useCodeService();
 
   // Update mode manager when active tab changes
@@ -907,6 +907,7 @@ function ConversationInterfaceContent() {
         activeTab={activeTab}
         onActiveTabChange={setActiveTab}
         streamingState={streamingState}
+        userId={currentConversationId || undefined} // Pass user/conversation ID for integrations
       />
 
       {/* Chat History Modal */}

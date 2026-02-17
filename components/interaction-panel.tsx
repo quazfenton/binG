@@ -66,6 +66,7 @@ import Key from "lucide-react/dist/esm/icons/key";
 import Cloud from "lucide-react/dist/esm/icons/cloud";
 import Server from "lucide-react/dist/esm/icons/server";
 import Scale from "lucide-react/dist/esm/icons/scale";
+import Terminal from "lucide-react/dist/esm/icons/terminal";
 import type { LLMProvider } from "../lib/api/llm-providers";
 import { templateCache, cacheKey } from "../lib/cache";
 import MultiModelComparison from "./multi-model-comparison";
@@ -82,6 +83,8 @@ import GitHubExplorerPlugin from "./plugins/github-explorer-plugin";
 import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
+import IntegrationPanel from "./integrations/IntegrationPanel";
+import TerminalPanel from "./terminal/TerminalPanel";
 import { useInteractionCodeMode } from "../hooks/use-interaction-code-mode";
 import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
 import { processResponse } from "../lib/mode-manager";
@@ -90,42 +93,43 @@ interface InteractionPanelProps {
   onSubmit: (content: string) => void;
   onNewChat: () => void;
   isProcessing: boolean;
-  toggleAccessibility: () => void; // This prop is expected to be a function that toggles accessibility options
+  toggleAccessibility: () => void;
   toggleHistory: () => void;
-  toggleCodePreview: () => void; // This prop is expected to be a function
-  toggleCodeMode?: () => void; // This prop is expected to be a function that toggles code mode
+  toggleCodePreview: () => void;
+  toggleCodeMode?: () => void;
   onAcceptPendingDiffs?: () => void;
   onDismissPendingDiffs?: () => void;
   onStopGeneration?: () => void;
-  onRetry?: () => void; // Add retry function prop
+  onRetry?: () => void;
   currentProvider?: string;
   currentModel?: string;
   error?: string | null;
-  input: string; // Add input prop
-  setInput: (value: string) => void; // Add setInput prop
+  input: string;
+  setInput: (value: string) => void;
   availableProviders: LLMProvider[];
   onProviderChange: (provider: string, model: string) => void;
-  hasCodeBlocks?: boolean; // Add code blocks detection
+  hasCodeBlocks?: boolean;
   pendingDiffs?: { path: string; diff: string }[];
-  activeTab?: "chat" | "code"; // Add activeTab prop
-  onActiveTabChange?: (tab: "chat" | "code") => void; // Add activeTab change handler
+  activeTab?: "chat" | "code" | "extras" | "integrations" | "shell";
+  onActiveTabChange?: (tab: "chat" | "code" | "extras" | "integrations" | "shell") => void;
+  userId?: string;
 }
 
 export default function InteractionPanel({
   onSubmit,
   onNewChat,
   isProcessing,
-  toggleAccessibility, // Receive the prop
+  toggleAccessibility,
   toggleHistory,
-  toggleCodePreview, // Receive the prop
+  toggleCodePreview,
   toggleCodeMode,
   onStopGeneration,
   onRetry,
   currentProvider = "openrouter",
   currentModel = "deepseek/deepseek-r1-0528:free",
   error,
-  input, // Destructure input
-  setInput, // Destructure setInput
+  input,
+  setInput,
   availableProviders,
   onProviderChange,
   hasCodeBlocks = false,
@@ -134,9 +138,14 @@ export default function InteractionPanel({
   onDismissPendingDiffs,
   activeTab = "chat",
   onActiveTabChange,
+  userId,
 }: InteractionPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const codeTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Terminal panel state
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [terminalMinimized, setTerminalMinimized] = useState(false);
 
   // Autosuggest state
   const [autosuggestEnabled, setAutosuggestEnabled] = useState(true);
@@ -147,12 +156,11 @@ export default function InteractionPanel({
 
   // Panel state
   const [panelHeight, setPanelHeight] = useState(() => {
-    // Use smaller height on mobile devices
     if (typeof window !== "undefined" && window.innerWidth <= 768) {
-      return Math.min(250, window.innerHeight * 0.4); // Max 40% of screen height on mobile
+      return Math.min(250, window.innerHeight * 0.4);
     }
     return 280;
-  }); // Default height - lowered for better mobile experience
+  });
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -498,7 +506,7 @@ export default function InteractionPanel({
         color: "text-green-400",
         action: () =>
           setInput(
-            "Analyze this document and provide: 1) Executive summary 2) Key points 3) Action items 4) Questions for clarification:\n\n",
+            "Analyze this document and provide: 1) Executive summary 2) Key findings 3) Different perspectives 4) Recent developments 5) Reliable sources. Topic: ",
           ),
       },
       {
@@ -841,319 +849,7 @@ export default function InteractionPanel({
     // Randomize order using the same approach as template suggestions
     return [...modules].sort(() => Math.random() - 0.5);
   }, [setInput]);
-  const dragStartY = useRef(0);
-  const dragStartHeight = useRef(0);
 
-  // Simplified drag handlers for vertical resizing only
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      setIsDragging(true);
-      dragStartY.current = e.clientY;
-      dragStartHeight.current = panelHeight;
-      e.preventDefault();
-    },
-    [panelHeight],
-  );
-
-  const handleMouseMove = useCallback(
-    (e: MouseEvent) => {
-      if (!isDragging) return;
-
-      const deltaY = dragStartY.current - e.clientY;
-      const newHeight = Math.max(
-        200,
-        Math.min(800, dragStartHeight.current + deltaY),
-      );
-      setPanelHeight(newHeight);
-    },
-    [isDragging],
-  );
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
-
-  useEffect(() => {
-    if (isDragging) {
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", handleMouseUp);
-      return () => {
-        document.removeEventListener("mousemove", handleMouseMove);
-        document.removeEventListener("mouseup", handleMouseUp);
-      };
-    }
-  }, [isDragging, handleMouseMove, handleMouseUp]);
-
-  const mockFileContents: Record<string, { content: string; version: number }> =
-    {
-      "src/components/App.tsx": {
-        content: `import React from 'react';\n\nconst App = () => (\n  <div>Hello World</div>\n);\n\nexport default App;`,
-        version: 1,
-      },
-      "src/utils/helpers.ts": {
-        content: `export function formatDate(date: Date) {\n  return date.toISOString().split('T')[0];\n}`,
-        version: 1,
-      },
-      "package.json": {
-        content: `{\n  "name": "my-app",\n  "version": "1.0.0",\n  "dependencies": {}\n}`,
-        version: 1,
-      },
-      "README.md": { content: `# My App\n\nA sample application`, version: 1 },
-      "src/styles/globals.css": {
-        content: `body {\n  margin: 0;\n  padding: 0;\n}`,
-        version: 1,
-      },
-    };
-
-  const getFileContent = async (
-    path: string,
-  ): Promise<{ content: string; version: number }> => {
-    return (
-      mockFileContents[path] || { content: `Content of ${path}`, version: 1 }
-    );
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (input.trim() && !isProcessing) {
-      let enhancedInput = input;
-
-      // Check if we're in code mode and should use the enhanced orchestrator
-      if (activeTab === "code" && codeModeState.mode === "advanced") {
-        try {
-          // Use the enhanced code mode integration
-          const codeResponse = await codeModeActions.processCodePrompt(input, {
-            selectedFiles: codeModeState.selectedFiles,
-            attachedFiles: codeModeState.attachedFiles,
-            mode: codeModeState.mode,
-          });
-
-          // Submit the enhanced response to the chat
-          onSubmit(codeResponse);
-          setInput("");
-          setGhostSuffix("");
-          return;
-        } catch (error) {
-          console.error('Code mode processing failed:', error);
-          // Fall back to regular processing
-        }
-      }
-
-      // Legacy code mode processing for basic mode or fallback
-      if (activeTab === "code") {
-        // Prepend command schema/rules section (parseable by the model)
-        const rulesHeader = [
-          "=== TASK_RULES_START ===",
-          "You can ask for project context using command lines:",
-          "@list_project                       # get project file list",
-          '@read_file("path")                 # request file content',
-          '@write_diff("path")\n*** Begin Diff\n...\n*** End Diff   # unified diff, minimal context',
-          '@next_file("path")                 # ask the app to attach this file next',
-          "",
-          "When proposing edits, respond with a dedicated section:",
-          "=== COMMANDS_START ===",
-          'request_files: ["optional/next/file1", "optional/next/file2"]',
-          "write_diffs: [",
-          '  { path: "file", diff: "*** Begin Diff\\n...\\n*** End Diff" }',
-          "]\n=== COMMANDS_END ===",
-          "Do not mix prose inside the command block.",
-          "=== TASK_RULES_END ===",
-          "",
-        ].join("\n");
-        enhancedInput = `${rulesHeader}${enhancedInput}`;
-
-        // Detect @next_file("path") commands to auto-attach requested files
-        const nextFileRegex = /@next_file\(["']([^"']+)["']\)/g;
-        const autoFiles: string[] = [];
-        let m: RegExpExecArray | null;
-        while ((m = nextFileRegex.exec(input)) !== null) {
-          autoFiles.push(m[1]);
-        }
-
-        const allFilesToAttach = Array.from(
-          new Set([...codeModeState.selectedFiles, ...autoFiles]),
-        );
-
-        // Attach selected files to context
-        if (allFilesToAttach.length > 0) {
-          const filesContent: string[] = [];
-          let cacheUpdated = false;
-
-          for (const file of allFilesToAttach) {
-            if (!codeModeState.attachedFiles[file]) {
-              const fileContent = await getFileContent(file);
-              codeModeActions.attachFile(file, fileContent.content);
-              cacheUpdated = true;
-            }
-            const fileData = codeModeState.attachedFiles[file];
-            if (fileData) {
-              filesContent.push(
-                `File: ${file} (v${fileData.version})\n\`\`\`\n${fileData.content}\n\`\`\``,
-              );
-            }
-          }
-
-          enhancedInput +=
-            "\n\n=== CONTEXT_FILES_START ===\n" +
-            filesContent.join("\n\n") +
-            "\n=== CONTEXT_FILES_END ===\n";
-        }
-
-        // Auto-enhance prompts when in Code tab
-        enhancedInput = `As an expert developer, please help with this coding request. Provide detailed, production-ready code with explanations:
-
-${enhancedInput}
-
-Please include:
-- Complete, working code examples
-- Best practices and patterns
-- Error handling where appropriate
-- Comments explaining key concepts
-- Any necessary dependencies or setup instructions
-
-${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integration is available for advanced operations." : ""}`;
-      }
-
-      onSubmit(enhancedInput);
-      setInput("");
-      setGhostSuffix("");
-    }
-  };
-
-  // Keyboard handling for accepting/dismissing pending diffs (only in code mode)
-  useEffect(() => {
-    const onKey = (ev: KeyboardEvent) => {
-      // Only handle pending diffs keyboard shortcuts in code mode
-      if (!pendingDiffs || pendingDiffs.length === 0 || activeTab !== "code") return;
-      if (ev.key === "Enter" && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
-        onAcceptPendingDiffs?.();
-      } else if (ev.key === "Escape") {
-        onDismissPendingDiffs?.();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [pendingDiffs, onAcceptPendingDiffs, onDismissPendingDiffs, activeTab]);
-
-  const handleSuggestionClick = (suggestion: string) => {
-    if (!isProcessing) {
-      onSubmit(suggestion);
-    }
-  };
-
-  const chatSuggestions = useMemo(() => {
-    const suggestions = [
-      "unique app ideas",
-      "code a basic web app",
-      "make an addicting web game",
-      "show me sum interesting",
-      "explain quantum computing simply",
-      "create a business plan",
-      "write a short story",
-      "design a logo concept",
-      "plan a workout routine",
-      "suggest healthy recipes",
-      "debug this error",
-      "optimize my workflow",
-    ];
-
-    // Randomize order and return first 4
-    return [...suggestions].sort(() => Math.random() - 0.5).slice(0, 4);
-  }, []);
-
-  const codeSuggestions = [
-    "Create a React component with TypeScript",
-    "Build a REST API with Node.js and Express",
-    "Design a responsive CSS layout with Flexbox",
-    "Implement authentication with JWT tokens",
-    "Create a database schema for an e-commerce app",
-    "Build a real-time chat application with WebSockets",
-    "Optimize performance for a large dataset",
-    "Set up CI/CD pipeline with GitHub Actions",
-  ];
-
-  const allCodePromptTemplates = [
-    {
-      title: "Component Creation",
-      template:
-        "Create a [framework] component that [functionality]. Include:\n- TypeScript types\n- Props interface\n- Error handling\n- Unit tests\n- Documentation",
-    },
-    {
-      title: "API Development",
-      template:
-        "Build a [language] API for [purpose] with:\n- RESTful endpoints\n- Input validation\n- Error handling\n- Authentication\n- Database integration\n- API documentation",
-    },
-    {
-      title: "Full Stack App",
-      template:
-        "Create a full-stack [type] application with:\n- Frontend: [frontend-tech]\n- Backend: [backend-tech]\n- Database: [database]\n- Authentication\n- Responsive design\n- Deployment configuration",
-    },
-    {
-      title: "Code Review",
-      template:
-        "Review this code for:\n- Performance optimizations\n- Security vulnerabilities\n- Best practices\n- Code quality\n- Potential bugs\n- Refactoring suggestions\n\n[paste your code here]",
-    },
-    {
-      title: "Database Design",
-      template:
-        "Design a database schema for [application type] with:\n- Entity relationships\n- Primary/Foreign keys\n- Indexes for performance\n- Data validation rules\n- Migration scripts\n- Sample queries",
-    },
-    {
-      title: "Testing Strategy",
-      template:
-        "Create a comprehensive testing strategy for [project] including:\n- Unit tests\n- Integration tests\n- E2E tests\n- Performance tests\n- Test data setup\n- CI/CD integration",
-    },
-    {
-      title: "Performance Optimization",
-      template:
-        "Optimize [application/code] for better performance:\n- Identify bottlenecks\n- Memory usage optimization\n- Database query optimization\n- Caching strategies\n- Load balancing\n- Monitoring setup",
-    },
-    {
-      title: "Security Implementation",
-      template:
-        "Implement security measures for [application] including:\n- Authentication & Authorization\n- Input validation & sanitization\n- SQL injection prevention\n- XSS protection\n- CSRF protection\n- Security headers",
-    },
-    {
-      title: "Microservices Architecture",
-      template:
-        "Design a microservices architecture for [system] with:\n- Service boundaries\n- Communication patterns\n- Data consistency\n- Service discovery\n- Load balancing\n- Monitoring & logging",
-    },
-    {
-      title: "Mobile App Development",
-      template:
-        "Create a [platform] mobile app for [purpose] with:\n- Native/Cross-platform approach\n- UI/UX design\n- State management\n- API integration\n- Offline functionality\n- App store deployment",
-    },
-    {
-      title: "DevOps Pipeline",
-      template:
-        "Set up a DevOps pipeline for [project] including:\n- Version control workflow\n- Automated testing\n- Build automation\n- Deployment strategies\n- Infrastructure as Code\n- Monitoring & alerting",
-    },
-  ];
-
-  // Function to get random templates with caching
-  const getRandomTemplates = (count: number = 4) => {
-    const cacheKeyStr = cacheKey.codeTemplate("all", `random_${count}`);
-
-    // Try to get from cache first
-    const cached =
-      templateCache.get<typeof allCodePromptTemplates>(cacheKeyStr);
-    if (cached) {
-      return cached;
-    }
-
-    // Generate new random templates
-    const shuffled = [...allCodePromptTemplates].sort(
-      () => 0.5 - Math.random(),
-    );
-    const result = shuffled.slice(0, count);
-
-    // Cache for 10 minutes
-    templateCache.set(cacheKeyStr, result, 10 * 60 * 1000);
-
-    return result;
-  };
-
-  // Get random templates on component mount and when activeTab changes
   const [displayedTemplates, setDisplayedTemplates] = useState(() =>
     getRandomTemplates(),
   );
@@ -1165,6 +861,7 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
     }
   }, [activeTab]);
 
+  // Sample images for the images tab
   const sampleImages = [
     {
       id: 1,
@@ -1189,294 +886,111 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
   ];
 
   return (
-    <div
-      className={`fixed bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 border-t`}
-      style={{
-        bottom: "env(safe-area-inset-bottom, 0px)",
-        height: isMinimized
-          ? "60px"
-          : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
-        maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)",
-      }}
-      onClick={(e) => {
-        // Tap anywhere on the panel background to focus the textarea on mobile
-        if (
-          window.innerWidth <= 768 &&
-          textareaRef.current &&
-          e.target instanceof HTMLElement &&
-          !["TEXTAREA", "INPUT", "BUTTON", "SELECT"].includes(e.target.tagName)
-        ) {
-          textareaRef.current.focus();
-        }
-      }}
-    >
-      {/* Drag Handle - Only vertical resizing */}
+    <>
       <div
-        className={`absolute top-0 left-0 right-0 h-1 bg-white/20 hover:bg-white/30 cursor-ns-resize transition-all duration-200 ${
-          isDragging ? "bg-white/40" : ""
-        }`}
-        onMouseDown={handleMouseDown}
-      />
+        className={`fixed bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 border-t`}
+        style={{
+          bottom: terminalMinimized ? '60px' : showTerminal ? '400px' : "env(safe-area-inset-bottom, 0px)",
+          height: isMinimized
+            ? "60px"
+            : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
+          maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)",
+        }}
+        onClick={(e) => {
+          if (
+            window.innerWidth <= 768 &&
+            textareaRef.current &&
+            e.target instanceof HTMLElement &&
+            !["TEXTAREA", "INPUT", "BUTTON", "SELECT"].includes(e.target.tagName)
+          ) {
+            textareaRef.current.focus();
+          }
+        }}
+      >
+        {/* Drag Handle */}
+        <div
+          className={`absolute top-0 left-0 right-0 h-1 bg-white/20 hover:bg-white/30 cursor-ns-resize transition-all duration-200 ${
+            isDragging ? "bg-white/40" : ""
+          }`}
+          onMouseDown={(e) => {
+            setIsDragging(true);
+            const startY = e.clientY;
+            const startHeight = panelHeight;
 
-      <div className="p-2 sm:p-4 h-full overflow-hidden max-w-4xl mx-auto flex flex-col">
-        {/* Minimize/Maximize Controls */}
-        <div className="absolute top-2 right-4 flex items-center gap-2">
-          {/* Minimize toggle */}
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setIsMinimized(!isMinimized)}
-            className="w-6 h-6 p-0 text-gray-400 hover:text-white"
-            title={isMinimized ? "Restore" : "Minimize"}
-          >
-            {isMinimized ? (
-              <Maximize2 className="w-3 h-3" />
-            ) : (
-              <Minimize2 className="w-3 h-3" />
-            )}
-          </Button>
-          {/* Expand to ~60% viewport toggle */}
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              if (!isExpanded) {
-                prevPanelHeightRef.current = panelHeight;
-                const vv =
-                  typeof window !== "undefined" &&
-                  (window as any).visualViewport
-                    ? ((window as any).visualViewport as VisualViewport)
-                    : null;
-                const viewportH =
-                  vv?.height ??
-                  (typeof window !== "undefined" ? window.innerHeight : 0);
-                const target = Math.max(200, Math.round(viewportH * 0.6));
-                setPanelHeight(target);
-                setIsExpanded(true);
-              } else {
-                const restore = prevPanelHeightRef.current ?? 280;
-                setPanelHeight(restore);
-                setIsExpanded(false);
-              }
-            }}
-            className="w-6 h-6 p-0 text-gray-400 hover:text-white"
-            title={isExpanded ? "Collapse height" : "Expand height"}
-            disabled={isMinimized}
-          >
-            {isExpanded ? (
-              <Minimize2 className="w-3 h-3" />
-            ) : (
-              <Maximize2 className="w-3 h-3" />
-            )}
-          </Button>
-          <div className="flex items-center gap-1">
-            <GripHorizontal className="w-4 h-4 text-gray-500" />
-          </div>
-        </div>
-        {!isMinimized && (
-          <Tabs
-            value={activeTab}
-            onValueChange={(value) =>
-              onActiveTabChange?.(value as "chat" | "code")
-            }
-            className="flex-1 flex flex-col min-h-0"
-          >
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
-              <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <div className="">
-                    <Sparkles className="h-3 w-3 text-white" />
-                  </div>
-                  <span className="text-sm font-medium text-white/80">
-                    compute
-                  </span>
-                </div>
-                <TabsList className="bg-black/40">
-                  <TabsTrigger value="chat" className="text-xs sm:text-sm">
-                    <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                    <span className="hidden sm:inline">Chat</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="code" className="text-xs sm:text-sm">
-                    <Code className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                    <span className="hidden sm:inline">Code</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="images" className="text-xs sm:text-sm">
-                    <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                    <span className="hidden sm:inline">Extra</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="plugins" className="text-xs sm:text-sm">
-                    <Zap className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                    <span className="hidden sm:inline">Plugins</span>
-                  </TabsTrigger>
-                </TabsList>
-              </div>
+            const handleMouseMove = (e: MouseEvent) => {
+              const delta = startY - e.clientY;
+              setPanelHeight(Math.max(200, Math.min(600, startHeight + delta)));
+            };
 
-              <div className="flex space-x-1 sm:space-x-2 flex-shrink-0">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={onNewChat}
-                  title="New Chat"
-                  className="h-8 w-8 sm:h-10 sm:w-10 p-0"
-                >
-                  <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={toggleHistory}
-                  title="Chat History"
-                  className="h-8 w-8 sm:h-10 sm:w-10 p-0"
-                >
-                  <History className="h-3 w-3 sm:h-4 sm:w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={toggleAccessibility} // Call the passed prop
-                  title="Accessibility Options"
-                  className="h-8 w-8 sm:h-10 sm:w-10 p-0"
-                >
-                  <Accessibility className="h-3 w-3 sm:h-4 sm:w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={toggleCodePreview} // Simplified onClick handler
-                  title="Code Preview"
-                  className={`h-8 w-8 sm:h-10 sm:w-10 p-0 ${
-                    hasCodeBlocks
-                      ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse"
-                      : ""
-                  }`}
-                >
-                  <Code
-                    className={`h-3 w-3 sm:h-4 sm:w-4 ${
-                      hasCodeBlocks ? "text-white" : ""
-                    }`}
-                  />
-                </Button>
-              </div>
+            const handleMouseUp = () => {
+              setIsDragging(false);
+              document.removeEventListener("mousemove", handleMouseMove);
+              document.removeEventListener("mouseup", handleMouseUp);
+            };
+
+            document.addEventListener("mousemove", handleMouseMove);
+            document.addEventListener("mouseup", handleMouseUp);
+          }}
+        />
+
+        <div className="p-2 sm:p-4 h-full overflow-hidden max-w-4xl mx-auto flex flex-col">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onNewChat}
+                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+                title="New Chat"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+              <button
+                onClick={toggleHistory}
+                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+                title="Chat History"
+              >
+                <History className="w-4 h-4" />
+              </button>
+              <button
+                onClick={toggleAccessibility}
+                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+                title="Accessibility"
+              >
+                <Accessibility className="w-4 h-4" />
+              </button>
             </div>
 
-            <TabsContent value="chat" className="m-0 flex flex-col h-full">
-              {/* Provider Status and Selection */}
-              <div className="flex items-center justify-between mb-3 text-xs text-white/60">
-                <div className="flex items-center gap-2">
-                  <Select
-                    value={`${currentProvider}:${currentModel}`}
-                    onValueChange={(value) => {
-                      const [provider, model] = value.split(":");
-                      onProviderChange(provider, model);
-                    }}
-                  >
-                    <SelectTrigger className="w-[280px] bg-black/40 border-white/20">
-                      <SelectValue placeholder="Select a model" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableProviders.map((provider) => (
-                        <SelectGroup key={provider.id}>
-                          <SelectLabel>{provider.name}</SelectLabel>
-                          {provider.models.map((model) => (
-                            <SelectItem
-                              key={model}
-                              value={`${provider.id}:${model}`}
-                            >
-                              {model}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs">Suggest</span>
-                    <Switch
-                      checked={autosuggestEnabled}
-                      onCheckedChange={(v) => setAutosuggestEnabled(!!v)}
-                    />
-                  </div>
-                  {isProcessing && (
-                    <div className="flex items-center gap-2">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      <span>Generating...</span>
-                    </div>
-                  )}
-                </div>
-              </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsMinimized(!isMinimized)}
+                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+              >
+                {isMinimized ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
 
-              {/* Error Display */}
-              {error && (
-                <div className="flex items-center justify-between gap-2 mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-xs">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                    <span>{error}</span>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => (onRetry ? onRetry() : onSubmit(input))}
-                    className="ml-2"
-                  >
-                    Retry
-                  </Button>
-                </div>
-              )}
+          {!isMinimized && (
+            <Tabs value={activeTab} onValueChange={(v) => onActiveTabChange?.(v as typeof activeTab)} className="flex-1 flex flex-col">
+              <TabsList className="grid w-full grid-cols-5 bg-black/40 mb-2">
+                <TabsTrigger value="chat" className="text-xs">Chat</TabsTrigger>
+                <TabsTrigger value="code" className="text-xs">Code</TabsTrigger>
+                <TabsTrigger value="extras" className="text-xs">Extras</TabsTrigger>
+                <TabsTrigger value="integrations" className="text-xs">Integrations</TabsTrigger>
+                <TabsTrigger value="shell" className="text-xs flex items-center gap-1">
+                  <Terminal className="w-3 h-3" />
+                  Shell
+                </TabsTrigger>
+              </TabsList>
 
-              {/* Input Section - Always at bottom */}
-              <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-2 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
-                {pendingDiffs && pendingDiffs.length > 0 && activeTab === "code" && (
-                  <div className="mb-3 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-200">
-                    <div className="flex items-center justify-between">
-                      <span>
-                        {pendingDiffs.length} diff(s) proposed. Press Enter to
-                        apply to preview, Esc to dismiss.
-                      </span>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={onAcceptPendingDiffs}
-                          className="h-6 px-2"
-                        >
-                          Apply
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={onDismissPendingDiffs}
-                          className="h-6 px-2"
-                        >
-                          Dismiss
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {/* Suggestions */}
-                <div className="flex flex-wrap gap-2">
-                  {chatSuggestions.map((suggestion, index) => (
-                    <Button
-                      key={index}
-                      variant="secondary"
-                      size="sm"
-                      className="text-xs bg-black/20 hover:bg-black/40 transition-all duration-200"
-                      onClick={() => handleSuggestionClick(suggestion)}
-                      disabled={isProcessing}
-                    >
-                      {suggestion}
-                    </Button>
-                  ))}
-                </div>
-
-                <form onSubmit={handleSubmit} className="flex space-x-2">
+              {/* Chat Tab Content */}
+              <TabsContent value="chat" className="m-0 flex-1 flex flex-col">
+                <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1">
                   <div className="relative flex-1">
                     <Textarea
                       ref={textareaRef}
                       value={input}
-                      onChange={(e) => setInput(e.target.value)} // Use the passed setInput
+                      onChange={(e) => setInput(e.target.value)}
                       placeholder="Type your message..."
                       className="min-h-[60px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
                       rows={3}
@@ -1525,33 +1039,28 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                         title="Attach Files"
                         disabled={isProcessing}
                       >
-                        <FolderPlus className="h-4 w-4 text-blue-400" />
+                        <FolderPlus className="w-4 h-4 text-blue-400" />
                       </button>
                       <button
                         type="button"
                         onClick={() => {
                           onActiveTabChange?.("chat");
+                          setPluginToOpen("cloud-storage");
                         }}
                         className="p-1 rounded hover:bg-white/10 transition-colors"
-                        title="Open AI Enhancer Plugin"
+                        title="Open Cloud Storage Plugin"
                         disabled={isProcessing}
                       >
-                        <Zap
-                          className={`h-4 w-4 ${
-                            !isProcessing
-                              ? "text-white-400 hover:text-yellow-300"
-                              : "text-gray-500"
-                          }`}
-                        />
+                        <Cloud className="w-4 h-4 text-blue-400" />
                       </button>
                     </div>
 
                     {showFileSelector && (
                       <div className="absolute right-0 top-10 w-64 bg-black/90 border border-white/20 rounded-lg shadow-lg z-10 p-2">
-                        <h4 className="text-sm font-medium mb-2">
+                        <h4 className="text-sm font-medium text-white/80">
                           Attach Files
                         </h4>
-                        <div className="max-h-60 overflow-y-auto">
+                        <div className="max-h-32 overflow-y-auto">
                           <div className="mb-3">
                             <h5 className="text-xs font-medium mb-1">
                               Project Files
@@ -1636,559 +1145,161 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                     </Button>
                   )}
                 </form>
-              </div>
-            </TabsContent>
+              </TabsContent>
 
-            <TabsContent value="code" className="m-0 flex flex-col h-full">
-              {/* Code Mode Header */}
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Code className="h-4 w-4 text-blue-400" />
-                  <span className="text-sm font-medium text-white">
-                    Code Assistant
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant={codeModeState.mode === "advanced" ? "default" : "outline"}
-                    onClick={() =>
-                      codeModeActions.setMode(codeModeState.mode === "basic" ? "advanced" : "basic")
-                    }
-                    className="text-xs"
-                  >
-                    {codeModeState.mode === "advanced" ? "🔧 Advanced" : "📝 Basic"}
-                  </Button>
-                  <Badge variant="outline" className="text-xs">
-                    {codeModeState.mode === "advanced"
-                      ? "Enhanced Orchestrator"
-                      : "Enhanced Prompting"}
-                  </Badge>
-                  {codeModeState.sessionActive && (
-                    <Badge variant="outline" className="text-xs bg-green-900/20 text-green-400">
-                      Session Active
-                    </Badge>
-                  )}
-                  {codeModeState.isProcessing && (
-                    <Badge variant="outline" className="text-xs bg-blue-900/20 text-blue-400">
-                      Processing...
-                    </Badge>
-                  )}
-                </div>
-              </div>
-
-              {/* Advanced Code Mode - File Selector */}
-              {codeModeState.mode === "advanced" && (
-                <div className="mb-4 p-3 bg-black/30 rounded-lg border border-white/10">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-xs font-medium text-white/80">
-                      Project Files
-                    </h4>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setShowFileSelector(!showFileSelector)}
-                        className="text-xs"
-                      >
-                        {showFileSelector ? "Hide" : "Select Files"}
-                      </Button>
-                      {codeModeState.selectedFiles.length > 0 && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => codeModeActions.setSelectedFiles([])}
-                          className="text-xs text-red-400 hover:text-red-300"
-                        >
-                          Clear
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-
-                  {showFileSelector && (
-                    <div className="space-y-2 max-h-32 overflow-y-auto">
-                      {codeModeState.projectStructure.map((file) => (
-                        <label
-                          key={file}
-                          className="flex items-center gap-2 text-xs cursor-pointer hover:bg-white/5 p-1 rounded"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={codeModeState.selectedFiles.includes(file)}
-                            onChange={() => codeModeActions.toggleFileSelection(file)}
-                            className="rounded"
-                          />
-                          <span className="text-white/70">{file}</span>
-                          {Object.keys(codeModeState.attachedFiles).includes(file) && (
-                            <Badge variant="outline" className="text-xs bg-blue-900/20 text-blue-400">
-                              Attached
-                            </Badge>
-                          )}
-                        </label>
-                      ))}
-                    </div>
-                  )}
-
-                  {codeModeState.selectedFiles.length > 0 && (
-                    <div className="mt-2 flex items-center justify-between">
-                      <div className="text-xs text-green-400">
-                        ✓ {codeModeState.selectedFiles.length} file(s) selected for context
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          // Simulate attaching files with mock content
-                          codeModeState.selectedFiles.forEach(file => {
-                            if (!codeModeState.attachedFiles[file]) {
-                              codeModeActions.attachFile(file, `// Mock content for ${file}\n// This would be the actual file content in a real implementation`);
-                            }
+              {/* Code Tab Content */}
+              <TabsContent value="code" className="m-0 flex-1 flex flex-col">
+                <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1">
+                  <Textarea
+                    ref={codeTextareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
+                    className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
+                    rows={6}
+                    onKeyDown={(e) => {
+                      if (
+                        e.key === "Tab" &&
+                        autosuggestEnabled &&
+                        ghostSuffix
+                      ) {
+                        e.preventDefault();
+                        setInput(input + ghostSuffix);
+                        setGhostSuffix("");
+                        return;
+                      }
+                      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        handleSubmit(e);
+                      }
+                    }}
+                    onFocus={() => {
+                      // Scroll to input on mobile when focused
+                      if (
+                        window.innerWidth <= 768 &&
+                        codeTextareaRef.current
+                      ) {
+                        setTimeout(() => {
+                          codeTextareaRef.current?.scrollIntoView({
+                            behavior: "smooth",
+                            block: "center",
                           });
-                        }}
-                        className="text-xs"
-                        disabled={codeModeState.selectedFiles.every(f => codeModeState.attachedFiles[f])}
-                      >
-                        Attach Selected
-                      </Button>
+                        }, 300); // Delay to allow keyboard to appear
+                      }
+                    }}
+                    disabled={isProcessing}
+                  />
+                  {autosuggestEnabled && !!ghostSuffix && (
+                    <div className="pointer-events-none absolute left-3 right-12 top-3 whitespace-pre-wrap text-white/40 text-base sm:text-sm">
+                      <span className="invisible">{input}</span>
+                      <span>{ghostSuffix}</span>
                     </div>
                   )}
-
-                  {codeModeState.error && (
-                    <div className="mt-2 p-2 bg-red-900/20 border border-red-700 rounded text-red-300 text-xs">
-                      <div className="flex items-center justify-between">
-                        <span>{codeModeState.error}</span>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={codeModeActions.clearError}
-                          className="text-red-400 hover:text-red-300"
-                        >
-                          ×
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Quick Templates */}
-              <div className="mb-4">
-                <h4 className="text-xs font-medium text-white/80 mb-2">
-                  Quick Templates
-                </h4>
-                <div className="grid grid-cols-2 gap-2">
-                  {displayedTemplates.map((template, index) => (
-                    <Button
-                      key={index}
-                      variant="outline"
-                      size="sm"
-                      className="text-xs bg-black/20 hover:bg-black/40 border-white/20 text-left justify-start h-auto p-2"
-                      onClick={() => setInput(template.template)}
-                      disabled={isProcessing}
-                    >
-                      <div>
-                        <div className="font-medium">{template.title}</div>
-                        <div className="text-xs text-white/60 mt-1 line-clamp-2">
-                          {template.template.split("\n")[0]}
-                        </div>
-                      </div>
-                    </Button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Input Section - Always at bottom */}
-              <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-2 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
-                {/* Code Suggestions */}
-                <div>
-                  <h4 className="text-xs font-medium text-white/80 mb-2">
-                    Popular Requests
-                  </h4>
-                  <div className="flex flex-wrap gap-2">
-                    {codeSuggestions.slice(0, 4).map((suggestion, index) => (
-                      <Button
-                        key={index}
-                        variant="secondary"
-                        size="sm"
-                        className="text-xs bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/20 transition-all duration-200"
-                        onClick={() => handleSuggestionClick(suggestion)}
-                        disabled={isProcessing}
-                      >
-                        {suggestion}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Enhanced Code Input */}
-                <form onSubmit={handleSubmit} className="space-y-3">
-                  {codeModeState.mode === "advanced" && (
-                    <div className="bg-black/20 rounded-lg p-3 border border-white/10 mb-3">
-                      <h4 className="text-xs font-medium text-white/80 mb-2">
-                        Enhanced Code Orchestrator
-                      </h4>
-                      <div className="text-xs text-white/60 space-y-1">
-                        <div>
-                          <code className="bg-white/10 px-1 rounded">
-                            @read_file(path)
-                          </code>{" "}
-                          - Request file content
-                        </div>
-                        <div>
-                          <code className="bg-white/10 px-1 rounded">
-                            @write_diff(file, changes)
-                          </code>{" "}
-                          - Apply safe diff operations
-                        </div>
-                        <div>
-                          <code className="bg-white/10 px-1 rounded">
-                            @analyze_code(file)
-                          </code>{" "}
-                          - Deep code analysis with AI agents
-                        </div>
-                        <div>
-                          <code className="bg-white/10 px-1 rounded">
-                            @orchestrate(task)
-                          </code>{" "}
-                          - Multi-agent collaboration
-                        </div>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        <div className="text-xs text-blue-400">
-                          🚀 Enhanced Code Orchestrator
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {codeModeState.sessionActive && (
-                            <div className="flex items-center gap-1 text-xs text-green-400">
-                              <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                              Active
-                            </div>
-                          )}
-                          {codeModeState.isProcessing && (
-                            <div className="flex items-center gap-1 text-xs text-blue-400">
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                              Processing
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="relative">
-                    <Textarea
-                      ref={codeTextareaRef}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
-                      className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
-                      rows={6}
-                      onKeyDown={(e) => {
-                        if (
-                          e.key === "Tab" &&
-                          autosuggestEnabled &&
-                          ghostSuffix
-                        ) {
-                          e.preventDefault();
-                          setInput(input + ghostSuffix);
-                          setGhostSuffix("");
-                          return;
-                        }
-                        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                          e.preventDefault();
-                          handleSubmit(e);
-                        }
-                      }}
-                      onFocus={() => {
-                        // Scroll to input on mobile when focused
-                        if (
-                          window.innerWidth <= 768 &&
-                          codeTextareaRef.current
-                        ) {
-                          setTimeout(() => {
-                            codeTextareaRef.current?.scrollIntoView({
-                              behavior: "smooth",
-                              block: "center",
-                            });
-                          }, 300); // Delay to allow keyboard to appear
-                        }
-                      }}
-                      disabled={isProcessing}
-                    />
-                    {autosuggestEnabled && !!ghostSuffix && (
-                      <div className="pointer-events-none absolute left-3 right-12 top-3 whitespace-pre-wrap text-white/40 text-base sm:text-sm">
-                        <span className="invisible">{input}</span>
-                        <span>{ghostSuffix}</span>
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const enhancePrompt = `Please enhance and improve this coding request to be more detailed and specific:\n\n"${input}"\n\nProvide an enhanced version that includes:
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const enhancePrompt = `Please enhance and improve this coding request to be more detailed and specific:\n\n"${input}"\n\nProvide an enhanced version that includes:
 - Specific framework/language requirements
 - Detailed feature specifications
 - Performance and security considerations
 - Code structure and architecture preferences
 - Testing and documentation requirements`;
-                        setInput(enhancePrompt);
-                      }}
-                      className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
-                      title="Enhance this coding request"
-                      disabled={!input.trim() || isProcessing}
-                    >
-                      <Code
-                        className={`h-4 w-4 ${
-                          input.trim() && !isProcessing
-                            ? "text-blue-400 hover:text-blue-300"
-                            : "text-gray-500"
-                        }`}
-                      />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs text-white/60">
-                      Tip: Use Ctrl+Enter to submit, Enter for new line
-                    </div>
-                    {isProcessing && onStopGeneration ? (
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="sm"
-                        onClick={onStopGeneration}
-                      >
-                        <Square className="h-4 w-4 mr-2" />
-                        Stop
-                      </Button>
-                    ) : (
-                      <Button
-                        type="submit"
-                        size="sm"
-                        className="bg-blue-600 hover:bg-blue-700"
-                        disabled={isProcessing || !input.trim()}
-                      >
-                        {isProcessing ? (
-                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                        ) : (
-                          <Code className="h-4 w-4 mr-2" />
-                        )}
-                        {isProcessing ? "Generating..." : "Generate Code"}
-                      </Button>
-                    )}
-                  </div>
+                      setInput(enhancePrompt);
+                    }}
+                    className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
+                    title="Enhance this coding request"
+                    disabled={!input.trim() || isProcessing}
+                  >
+                    <Code
+                      className={`h-4 w-4 ${
+                        input.trim() && !isProcessing
+                          ? "text-blue-400 hover:text-blue-300"
+                          : "text-gray-500"
+                      }`}
+                    />
+                  </button>
                 </form>
-              </div>
-            </TabsContent>
+              </TabsContent>
 
-            <TabsContent value="images" className="m-0">
-              <Card className="bg-black/40 border-white/10">
-                <CardContent className="pt-6">
-                  <div className="space-y-4">
-                    {/* Advanced AI Plugins Section */}
-                    <div className="text-center mb-4">
-                      <h3 className="font-medium text-white mb-2">
-                        Advanced AI Plugins
-                      </h3>
-                      <p className="text-xs text-white/60">
-                        Click any plugin to load its specialized prompt and
-                        switch to chat
-                      </p>
+              {/* Extras Tab Content */}
+              <TabsContent value="extras" className="m-0 flex-1 overflow-auto">
+                <Card className="bg-black/40 border-white/10">
+                  <CardContent className="pt-4">
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Zap className="h-4 w-4 text-yellow-400" />
+                        <span className="text-sm font-medium">Extras</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={() => setShowTerminal(true)}
+                          className="justify-start bg-black/20 border-white/20"
+                        >
+                          <Terminal className="w-4 h-4 mr-2 text-green-400" />
+                          Open Terminal
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={toggleCodePreview}
+                          className="justify-start bg-black/20 border-white/20"
+                        >
+                          <FileCode className="w-4 h-4 mr-2 text-blue-400" />
+                          Code Preview
+                        </Button>
+                      </div>
                     </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
 
-                    <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
-                      {pluginModules.map((plugin) => {
-                        const IconComponent = plugin.icon;
-                        return (
-                          <button
-                            key={plugin.id}
-                            onClick={() => {
-                              plugin.action();
-                              onActiveTabChange?.("chat"); // Switch to chat tab to show the input
-                              toast.success(
-                                `${plugin.name} plugin activated! Check the chat input.`,
-                              );
-                            }}
-                            className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
-                          >
-                            <div className="flex items-center gap-2 w-full">
-                              <IconComponent
-                                className={`h-4 w-4 ${plugin.color} group-hover:scale-110 transition-transform`}
-                              />
-                              <span className="font-medium text-sm text-white truncate">
-                                {plugin.name}
-                              </span>
-                            </div>
-                            <p className="text-xs text-white/60 line-clamp-2 w-full">
-                              {plugin.description}
-                            </p>
-                          </button>
-                        );
-                      })}
-                    </div>
+              {/* Integrations Tab Content */}
+              <TabsContent value="integrations" className="m-0 flex-1 overflow-auto">
+                <IntegrationPanel userId={userId} />
+              </TabsContent>
 
-                    {/* Images Section */}
-                    <div className="mt-6 pt-4 border-t border-white/10">
-                      <div className="flex items-center gap-2 mb-3">
-                        <ImageIcon className="h-4 w-4 text-blue-400" />
-                        <span className="text-sm font-medium">
-                          Sample Images
-                        </span>
+              {/* Shell Tab Content */}
+              <TabsContent value="shell" className="m-0 flex-1 overflow-auto">
+                <Card className="bg-black/40 border-white/10 h-full">
+                  <CardContent className="pt-4 h-full flex flex-col">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <Terminal className="h-4 w-4 text-green-400" />
+                        <span className="text-sm font-medium">Sandbox Terminal</span>
                       </div>
-                      <div className="max-h-64 overflow-y-auto space-y-3">
-                        {sampleImages.map((image) => (
-                          <div
-                            key={image.id}
-                            className="flex items-center gap-3 p-3 bg-black/20 rounded-lg hover:bg-black/30 transition-colors"
-                          >
-                            <img
-                              src={image.url || "/placeholder.svg"}
-                              alt={image.title}
-                              className="w-16 h-12 object-cover rounded"
-                            />
-                            <div className="flex-1">
-                              <h4 className="text-sm font-medium text-white">
-                                {image.title}
-                              </h4>
-                              <p className="text-xs text-white/60">
-                                Click to use in conversation
-                              </p>
-                            </div>
-                            <Button size="sm" variant="ghost">
-                              <ImageIcon className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setShowTerminal(true);
+                          setTerminalMinimized(false);
+                        }}
+                        className="bg-green-600/20 hover:bg-green-600/30 border-green-600/30 text-green-400"
+                      >
+                        <Terminal className="w-4 h-4 mr-2" />
+                        Open Full Terminal
+                      </Button>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="plugins" className="m-0">
-              <Card className="bg-black/40 border-white/10">
-                <CardContent className="pt-6">
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Zap className="h-4 w-4 text-yellow-400" />
-                      <span className="text-sm font-medium">
-                        Modular Tools
-                      </span>
+                    <div className="flex-1 bg-black/60 rounded-lg p-4 font-mono text-sm text-white/80 overflow-auto">
+                      <p className="text-white/50">Terminal ready. Click "Open Full Terminal" to start.</p>
+                      <p className="text-white/30 text-xs mt-2">Execute commands in an isolated sandbox environment.</p>
                     </div>
-                    <div className="mb-3">
-                      <p className="text-xs text-white/60 mb-2">
-                        Pop-out plugin windows for advanced functionality:
-                      </p>
-                      <PluginManager
-                        availablePlugins={availablePlugins}
-                        onPluginResult={handlePluginResult}
-                        openPluginId={pluginToOpen}
-                        onOpenComplete={() => setPluginToOpen(null)}
-                      />
-                    </div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <Settings className="h-4 w-4 text-green-400" />
-                      <span className="text-sm font-medium">
-                        Quick Shortcuts
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1 text-xs text-white/60">
-                      <div>
-                        <kbd className="bg-black/40 px-1 rounded">
-                          Ctrl+Enter
-                        </kbd>{" "}
-                        Submit
-                      </div>
-                      <div>
-                        <kbd className="bg-black/40 px-1 rounded">
-                          Shift+Enter
-                        </kbd>{" "}
-                        New line
-                      </div>
-                      <div>
-                        <kbd className="bg-black/40 px-1 rounded">Ctrl+K</kbd>{" "}
-                        Focus input
-                      </div>
-                      <div>
-                        <kbd className="bg-black/40 px-1 rounded">Esc</kbd>{" "}
-                        Clear input
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="help" className="m-0">
-              <Card className="bg-black/40 border-white/10">
-                <CardContent className="pt-6">
-                  <div className="space-y-4">
-                    <div className="flex items-start gap-3">
-                      <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
-                      <div>
-                        <h3 className="font-medium">Navigation</h3>
-                        <p className="text-sm text-white/70">
-                          Click and drag to rotate the view. Scroll to zoom
-                          in/out.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-start gap-3">
-                      <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
-                      <div>
-                        <h3 className="font-medium">Interaction</h3>
-                        <p className="text-sm text-white/70">
-                          Click on message nodes to expand and view their
-                          content.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-start gap-3">
-                      <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
-                      <div>
-                        <h3 className="font-medium">Chat History</h3>
-                        <p className="text-sm text-white/70">
-                          Use the + button for new chats and history button to
-                          view past conversations.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
-        )}
-        {/* Floating "Jump to input" FAB */}
-        {!isMinimized && (
-          <button
-            type="button"
-            onClick={() => {
-              textareaRef.current?.scrollIntoView({
-                behavior: "smooth",
-                block: "center",
-              });
-              setTimeout(() => textareaRef.current?.focus(), 250);
-            }}
-            className="fixed bottom-24 right-4 z-[60] bg-black/70 hover:bg-black/80 backdrop-blur-sm border border-white/20 text-white p-3 rounded-full shadow-lg transition-all duration-200"
-            title="Jump to input"
-          >
-            <ArrowDownToLine className="w-4 h-4" />
-          </button>
-        )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
+          )}
+        </div>
       </div>
 
-      {/* Multi-Model Comparison Modal */}
-      <MultiModelComparison
-        isOpen={showMultiModelComparison}
-        onClose={() => setShowMultiModelComparison(false)}
-        availableProviders={availableProviders}
-        currentProvider={currentProvider}
-        currentModel={currentModel}
+      {/* Terminal Panel */}
+      <TerminalPanel
+        userId={userId}
+        isOpen={showTerminal}
+        onClose={() => setShowTerminal(false)}
+        onMinimize={() => setTerminalMinimized(!terminalMinimized)}
+        isMinimized={terminalMinimized}
       />
-    </div>
+    </>
   );
 }

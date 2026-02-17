@@ -4,6 +4,8 @@ import { enhancedLLMService } from "@/lib/api/enhanced-llm-service";
 import { errorHandler } from "@/lib/api/error-handler";
 import { priorityRequestRouter } from "@/lib/api/priority-request-router";
 import { unifiedResponseHandler } from "@/lib/api/unified-response-handler";
+import { verifyAuth } from "@/lib/auth/jwt";
+import { detectRequestType } from "@/lib/utils/request-type-detector";
 import type { LLMRequest, LLMMessage, LLMProvider } from "@/lib/api/llm-providers";
 import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 
@@ -12,7 +14,14 @@ import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 
 export async function POST(request: NextRequest) {
   console.log('[DEBUG] Chat API: Incoming request');
-  
+
+  // Extract user authentication
+  const authResult = await verifyAuth(request);
+  if (!authResult.success) {
+    console.log('[DEBUG] Chat API: Authentication failed:', authResult.error);
+    // Continue without user context for now (some features may be limited)
+  }
+
   try {
     const body = await request.json();
     console.log('[DEBUG] Chat API: Request body parsed:', {
@@ -21,9 +30,10 @@ export async function POST(request: NextRequest) {
       provider: body.provider,
       model: body.model,
       stream: body.stream,
-      bodyKeys: Object.keys(body)
+      bodyKeys: Object.keys(body),
+      userId: authResult.userId // Log the extracted userId
     });
-    
+
     const {
       messages,
       provider,
@@ -95,6 +105,9 @@ export async function POST(request: NextRequest) {
     
     console.log('[DEBUG] Chat API: Validation passed, routing through priority chain');
 
+    // NEW: Add tool/sandbox detection
+    const requestType = detectRequestType(messages);
+
     // PRIORITY-BASED ROUTING - Routes through Fast-Agent → n8n → Custom Fallback → Original System
     const routerRequest = {
       messages,
@@ -104,7 +117,10 @@ export async function POST(request: NextRequest) {
       maxTokens,
       stream,
       apiKeys,
-      requestId
+      requestId,
+      userId: authResult.userId, // Include userId for tool and sandbox authorization
+      enableTools: requestType === 'tool' && !!authResult.userId,
+      enableSandbox: requestType === 'sandbox' && !!authResult.userId,
     };
 
     console.log('[DEBUG] Chat API: Routing request through priority chain');
@@ -115,9 +131,20 @@ export async function POST(request: NextRequest) {
       
       console.log(`[DEBUG] Chat API: Request handled by ${routerResponse.source} (priority ${routerResponse.priority})`);
       
+      // Check for auth_required in response
+      if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
+        return NextResponse.json({
+          status: 'auth_required',
+          authUrl: routerResponse.data.authUrl,
+          toolName: routerResponse.data.toolName,
+          provider: routerResponse.data.provider || 'unknown',
+          message: `Please authorize ${routerResponse.data.toolName} to continue`
+        });
+      }
+      
       // Process response through unified handler
       const unifiedResponse = unifiedResponseHandler.processResponse(routerResponse, requestId);
-      
+
       // Handle streaming response
       if (stream && selectedProvider.supportsStreaming) {
         const streamRequestId = requestId || `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -584,3 +611,4 @@ export async function OPTIONS() {
     },
   });
 }
+

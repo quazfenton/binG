@@ -6,7 +6,7 @@
  * and code preview panel triggers.
  */
 
-export type AppMode = 'chat' | 'code';
+export type AppMode = 'chat' | 'code' | 'extras' | 'integrations' | 'shell';
 
 export interface ProcessedResponse {
   mode: AppMode;

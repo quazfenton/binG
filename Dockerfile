@@ -4,6 +4,9 @@ WORKDIR /app
 RUN corepack enable
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Install build dependencies for native modules
+RUN apt-get update && apt-get install -y python3 make g++ build-essential
+
 # Builder stage
 FROM base AS builder
 # Install build dependencies for native modules

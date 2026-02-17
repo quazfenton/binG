@@ -7,7 +7,13 @@ import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from 
 import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from './n8n-agent-service';
 import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from './custom-fallback-service';
 import { enhancedLLMService, type EnhancedLLMRequest } from './enhanced-llm-service';
+import { getToolManager } from '../tools';
+import { toolAuthManager } from '../services/tool-authorization-manager';
+import { toolContextManager } from '../services/tool-context-manager';
+import { sandboxBridge } from '../sandbox';
 import type { LLMMessage } from './llm-providers';
+import { detectRequestType } from '../utils/request-type-detector';
+import { initializeComposioService, getComposioService, type ComposioToolRequest } from './composio-service';
 
 export interface RouterRequest {
   messages: LLMMessage[];
@@ -18,6 +24,10 @@ export interface RouterRequest {
   stream?: boolean;
   apiKeys?: Record<string, string>;
   requestId?: string;
+  userId?: string;
+  enableTools?: boolean;
+  enableSandbox?: boolean;
+  enableComposio?: boolean;
 }
 
 export interface RouterResponse {
@@ -43,9 +53,12 @@ export interface EndpointConfig {
 class PriorityRequestRouter {
   private endpoints: EndpointConfig[];
   private routingStats: Map<string, { success: number; failures: number }>;
+  private composioService: ReturnType<typeof initializeComposioService>;
 
   constructor() {
     this.routingStats = new Map();
+    // Initialize Composio service if available
+    this.composioService = initializeComposioService();
     this.endpoints = this.initializeEndpoints();
   }
 
@@ -54,10 +67,66 @@ class PriorityRequestRouter {
    */
   private initializeEndpoints(): EndpointConfig[] {
     const endpoints: EndpointConfig[] = [
-      // Priority 1: Fast-Agent (Most capable - tools, MCP, file handling)
+      // Priority 0: Composio Tools (800+ toolkits with advanced integration)
+      {
+        name: 'composio-tools',
+        priority: 0,
+        enabled: !!this.composioService && process.env.COMPOSIO_ENABLED !== 'false',
+        service: this.composioService,
+        healthCheck: async () => {
+          if (!this.composioService) return false;
+          return this.composioService.healthCheck();
+        },
+        canHandle: (req) => {
+          // Check if Composio is available and request has user context
+          return !!this.composioService && !!req.userId && req.enableComposio !== false;
+        },
+        processRequest: async (req) => {
+          return await this.processComposioRequest(req);
+        }
+      },
+      // Priority 1: Tool Execution (Handle tool requests with authorization)
+      {
+        name: 'tool-execution',
+        priority: 1,
+        enabled: true,
+        service: getToolManager(),
+        healthCheck: async () => {
+          // Check if Arcade/Nango are configured
+          return !!(process.env.ARCADE_API_KEY || process.env.NANGO_API_KEY);
+        },
+        canHandle: (req) => {
+          // Check if request contains tool intent and has user context
+          return detectRequestType(req.messages) === 'tool' && !!req.userId && req.enableTools !== false;
+        },
+        processRequest: async (req) => {
+          // Process tool request with authorization
+          return await this.processToolRequest(req);
+        }
+      },
+      // Priority 2: Sandbox Agent (Handle code execution requests)
+      {
+        name: 'sandbox-agent',
+        priority: 2,
+        enabled: true,
+        service: sandboxBridge,
+        healthCheck: async () => {
+          // Check if sandbox provider is configured
+          return !!(process.env.SANDBOX_PROVIDER);
+        },
+        canHandle: (req) => {
+          // Check if request contains code execution intent and has user context
+          return detectRequestType(req.messages) === 'sandbox' && !!req.userId && req.enableSandbox !== false;
+        },
+        processRequest: async (req) => {
+          // Process sandbox request
+          return await this.processSandboxRequest(req);
+        }
+      },
+      // Priority 3: Fast-Agent (Most capable - tools, MCP, file handling)
       {
         name: 'fast-agent',
-        priority: 1,
+        priority: 3,
         enabled: process.env.FAST_AGENT_ENABLED === 'true',
         service: fastAgentService,
         healthCheck: () => fastAgentService.healthCheck(),
@@ -67,10 +136,10 @@ class PriorityRequestRouter {
           return this.normalizeFastAgentResponse(response);
         }
       },
-      // Priority 2: n8n Agent Chaining (Complex workflows and external integrations)
+      // Priority 4: n8n Agent Chaining (Complex workflows and external integrations)
       {
         name: 'n8n-agents',
-        priority: 2,
+        priority: 4,
         enabled: process.env.N8N_ENABLED === 'true',
         service: n8nAgentService,
         healthCheck: () => n8nAgentService.healthCheck(),
@@ -80,10 +149,10 @@ class PriorityRequestRouter {
           return this.normalizeN8nResponse(response);
         }
       },
-      // Priority 3: Custom Fallback (Last resort before original system)
+      // Priority 5: Custom Fallback (Last resort before original system)
       {
         name: 'custom-fallback',
-        priority: 3,
+        priority: 5,
         enabled: process.env.CUSTOM_FALLBACK_ENABLED === 'true',
         service: customFallbackService,
         healthCheck: () => customFallbackService.healthCheck(),
@@ -93,10 +162,10 @@ class PriorityRequestRouter {
           return this.normalizeCustomFallbackResponse(response);
         }
       },
-      // Priority 4: Original Enhanced LLM Service (Built-in system)
+      // Priority 6: Original Enhanced LLM Service (Built-in system)
       {
         name: 'original-system',
-        priority: 4,
+        priority: 6,
         enabled: true,
         service: enhancedLLMService,
         healthCheck: async () => true, // Always available
@@ -200,13 +269,91 @@ class PriorityRequestRouter {
   }
 
   /**
+   * Process Composio tool request with 800+ toolkits
+   */
+  private async processComposioRequest(request: RouterRequest): Promise<any> {
+    if (!this.composioService) {
+      return {
+        content: 'Composio service not available',
+        data: {
+          source: 'composio-tools',
+          error: 'Service not initialized'
+        }
+      };
+    }
+
+    if (!request.userId) {
+      return {
+        content: 'User ID required for Composio tool access',
+        data: {
+          source: 'composio-tools',
+          requiresAuth: true,
+          error: 'User ID not provided'
+        }
+      };
+    }
+
+    try {
+      const composioRequest: ComposioToolRequest = {
+        messages: request.messages,
+        userId: request.userId,
+        stream: request.stream,
+        requestId: request.requestId || `comp_${Date.now()}`,
+        // Enable all toolkits by default for maximum capability
+        enableAllTools: true
+      };
+
+      const result = await this.composioService.processToolRequest(composioRequest);
+
+      // Handle authentication required
+      if (result.requiresAuth && result.authUrl) {
+        return {
+          content: `I need authorization to use ${result.authToolkit || 'the requested service'} through Composio. Please connect your account to proceed.`,
+          data: {
+            source: 'composio-tools',
+            requiresAuth: true,
+            authUrl: result.authUrl,
+            toolkit: result.authToolkit,
+            type: 'auth_required',
+            composioSessionId: result.metadata?.sessionId
+          }
+        };
+      }
+
+      // Success response
+      return {
+        content: result.content,
+        data: {
+          source: 'composio-tools',
+          type: 'composio_execution',
+          toolCalls: result.toolCalls,
+          connectedAccounts: result.connectedAccounts,
+          composioSessionId: result.metadata?.sessionId,
+          toolsUsed: result.metadata?.toolsUsed,
+          executionTime: result.metadata?.executionTime
+        }
+      };
+    } catch (error: any) {
+      console.error('[Router] Composio processing error:', error);
+      return {
+        content: `I encountered an error while processing your request with Composio: ${error.message}`,
+        data: {
+          source: 'composio-tools',
+          error: error.message,
+          type: 'error'
+        }
+      };
+    }
+  }
+
+  /**
    * Convert router request to Fast-Agent format
    */
   private convertToFastAgentRequest(request: RouterRequest): FastAgentRequest {
     return {
       messages: request.messages.map(msg => ({
         role: msg.role as 'user' | 'assistant' | 'system',
-        content: msg.content
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
       })),
       provider: request.provider,
       model: request.model,
@@ -223,7 +370,7 @@ class PriorityRequestRouter {
     return {
       messages: request.messages.map(msg => ({
         role: msg.role as 'user' | 'assistant' | 'system',
-        content: msg.content
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
       })),
       provider: request.provider,
       model: request.model,
@@ -240,7 +387,7 @@ class PriorityRequestRouter {
     return {
       messages: request.messages.map(msg => ({
         role: msg.role as 'user' | 'assistant' | 'system',
-        content: msg.content
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
       })),
       provider: request.provider,
       model: request.model,
@@ -377,6 +524,149 @@ class PriorityRequestRouter {
    */
   resetStats(): void {
     this.routingStats.clear();
+  }
+
+  /**
+   * Process tool request with authorization
+   */
+  private async processToolRequest(request: RouterRequest): Promise<any> {
+    if (!request.userId) {
+      return {
+        content: 'User authentication required for tool access',
+        data: {
+          source: 'tool-execution',
+          requiresAuth: true,
+          error: 'User ID not provided'
+        }
+      };
+    }
+
+    try {
+      const result = await toolContextManager.processToolRequest(
+        request.messages,
+        request.userId,
+        request.requestId || `conv_${Date.now()}`
+      );
+
+      if (result.requiresAuth && result.authUrl) {
+        return {
+          content: `I need authorization to use ${result.toolName}. Please connect your account to proceed.`,
+          data: {
+            source: 'tool-execution',
+            requiresAuth: true,
+            authUrl: result.authUrl,
+            toolName: result.toolName,
+            type: 'auth_required'
+          }
+        };
+      }
+
+      if (result.toolCalls && result.toolCalls.length > 0) {
+        return {
+          content: result.content,
+          data: {
+            source: 'tool-execution',
+            toolCalls: result.toolCalls,
+            toolResults: result.toolResults,
+            type: 'tool_execution'
+          }
+        };
+      }
+
+      return {
+        content: result.content,
+        data: {
+          source: 'tool-execution',
+          type: 'no_tools_detected'
+        }
+      };
+    } catch (error) {
+      console.error('[Router] Tool processing error:', error);
+      return {
+        content: result instanceof Error ? result.message : String(result),
+        data: {
+          source: 'tool-execution',
+          error: String(error),
+          type: 'error'
+        }
+      };
+    }
+  }
+
+  /**
+   * Process sandbox request
+   */
+  private async processSandboxRequest(request: RouterRequest): Promise<any> {
+    if (!request.userId) {
+      return {
+        content: 'User authentication required for sandbox access',
+        data: {
+          source: 'sandbox-agent',
+          requiresAuth: true,
+          error: 'User ID not provided'
+        }
+      };
+    }
+
+    try {
+      const session = await sandboxBridge.getOrCreateSession(request.userId);
+      
+      const lastUserMessage = request.messages
+        .filter(m => m.role === 'user')
+        .pop()?.content;
+
+      if (!lastUserMessage || typeof lastUserMessage !== 'string') {
+        return {
+          content: 'No user message found to process',
+          data: {
+            source: 'sandbox-agent',
+            error: 'No message content'
+          }
+        };
+      }
+
+      // Use the agent loop (LLM-driven tool calling), NOT raw command execution
+      try {
+        const { runAgentLoop } = await import('../sandbox/agent-loop');
+        const result = await runAgentLoop({
+          userMessage: lastUserMessage,
+          sandboxId: session.sandboxId,
+          conversationHistory: request.messages,
+        });
+
+        return {
+          content: result.response,
+          data: {
+            source: 'sandbox-agent',
+            sandboxId: session.sandboxId,
+            steps: result.steps,
+            totalSteps: result.totalSteps,
+            type: 'sandbox_execution'
+          }
+        };
+      } catch (agentError: any) {
+        // If the agent loop module is not available, fall back to informing the user
+        console.warn('[Router] Sandbox agent loop not available:', agentError.message);
+        return {
+          content: 'The sandbox code execution module is not configured. Please set SANDBOX_PROVIDER and install the required SDK.',
+          data: {
+            source: 'sandbox-agent',
+            error: 'sandbox_not_configured',
+            type: 'error'
+          }
+        };
+      }
+    } catch (error: any) {
+      console.error('[Router] Sandbox processing error:', error);
+      return {
+        content: `I encountered an error while executing in the sandbox: ${error.message}`,
+        data: {
+          source: 'sandbox-agent',
+          error: error.message,
+          type: 'error'
+        }
+      };
+    }
   }
 }
 
