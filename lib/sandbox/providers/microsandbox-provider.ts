@@ -72,7 +72,8 @@ export class MicrosandboxProvider implements SandboxProvider {
 
     const sb = await NodeSandbox.create(createOptions)
     const now = Date.now()
-    sandboxInstances.set(sb.id, {
+    const sandboxId = sb.name || sb.id || createOptions.name
+    sandboxInstances.set(sandboxId, {
       sandbox: sb,
       createdAt: now,
       lastActive: now,
@@ -101,11 +102,12 @@ export class MicrosandboxProvider implements SandboxProvider {
 
 class MicrosandboxSandboxHandle implements SandboxHandle {
   readonly id: string
+  readonly workspaceDir = '/workspace'
   private sb: any
 
   constructor(sb: any) {
     this.sb = sb
-    this.id = sb.id
+    this.id = sb.name || sb.id || 'unknown'
   }
 
   /**
@@ -177,19 +179,19 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
     // Enforce timeout - default to 60 seconds if not specified
     const effectiveTimeout = timeout ?? 60_000;
 
-    const execPromise = this.sb.run(fullCommand);
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Command timed out after ${effectiveTimeout}ms`)), effectiveTimeout)
-    );
+    let timeoutId: NodeJS.Timeout | undefined;
+    const execPromise = this.sb.command.run('bash', ['-c', fullCommand], effectiveTimeout);
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(`Command timed out after ${effectiveTimeout}ms`)), effectiveTimeout);
+    });
 
     try {
-      const exec = await Promise.race([execPromise, timeoutPromise]);
-      const output = await exec.output();
+      const result = await Promise.race([execPromise, timeoutPromise]);
 
       return {
-        success: exec.exit_code === 0,
-        output,
-        exitCode: exec.exit_code,
+        success: result.exitCode === 0,
+        output: result.success ? await result.output() : await result.error(),
+        exitCode: result.exitCode,
       };
     } catch (error: any) {
       // Handle timeout or other errors
@@ -201,7 +203,27 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
         };
       }
       throw error;
+    } finally {
+      // Clear timeout to prevent resource leak
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     }
+  }
+
+  /**
+   * Execute a trusted internal command (bypasses sanitization)
+   * Used only for internal file operations with validated paths
+   */
+  private async executeTrustedCommand(command: string): Promise<ToolResult> {
+    const result = await this.sb.command.run('bash', ['-c', command]);
+    const output = result.success ? await result.output() : await result.error();
+
+    return {
+      success: result.exitCode === 0,
+      output: output || '',
+      exitCode: result.exitCode,
+    };
   }
 
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
@@ -213,71 +235,27 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
     const escapedPath = resolved.replace(/'/g, "'\\''")
     
     // Create directory with sanitized path
-    await this.executeCommand(`mkdir -p '${escapedDir}'`)
+    await this.executeTrustedCommand(`mkdir -p '${escapedDir}'`)
 
-    // Use shell-escaped content for safety
+    // Use shell-escaped content for safety - use trusted command for redirection
     const escaped = content.replace(/'/g, "'\\''")
-    await this.executeCommand(`printf '%s' '${escaped}' > '${escapedPath}'`)
+    await this.executeTrustedCommand(`printf '%s' '${escaped}' > '${escapedPath}'`)
     return { success: true, output: `File written: ${resolved}` }
   }
 
   async readFile(filePath: string): Promise<ToolResult> {
     const resolved = this.resolvePath(filePath)
     const escapedPath = resolved.replace(/'/g, "'\\''")
-    return this.executeCommand(`cat '${escapedPath}'`)
+    return this.executeTrustedCommand(`cat '${escapedPath}'`)
   }
 
   async listDirectory(dirPath: string): Promise<ToolResult> {
     const resolved = this.resolvePath(dirPath)
     const escapedPath = resolved.replace(/'/g, "'\\''")
-    return this.executeCommand(`ls -la '${escapedPath}'`)
+    return this.executeTrustedCommand(`ls -la '${escapedPath}'`)
   }
 
-  async createPty(options: PtyOptions): Promise<PtyHandle> {
-    const proc = await this.sb.spawn('/bin/bash')
-
-    proc.stdout.on('data', (data: Buffer) => {
-      options.onData(new Uint8Array(data))
-    })
-    proc.stderr.on('data', (data: Buffer) => {
-      options.onData(new Uint8Array(data))
-    })
-
-    return new MicrosandboxPtyHandle(options.id, proc)
-  }
-
-  private resolvePath(filePath: string): string {
-    if (filePath.startsWith('/')) return filePath
-    return `${WORKSPACE_DIR}/${filePath}`
-  }
-}
-
-class MicrosandboxPtyHandle implements PtyHandle {
-  readonly sessionId: string
-  private proc: any
-
-  constructor(sessionId: string, proc: any) {
-    this.sessionId = sessionId
-    this.proc = proc
-  }
-
-  async sendInput(data: string): Promise<void> {
-    this.proc.stdin.write(data)
-  }
-
-  async resize(_cols: number, _rows: number): Promise<void> {
-    // Microsandbox spawn doesn't support resize natively
-  }
-
-  async waitForConnection(): Promise<void> {
-    // Spawn is immediately connected
-  }
-
-  async disconnect(): Promise<void> {
-    this.proc.kill()
-  }
-
-  async kill(): Promise<void> {
-    this.proc.kill('SIGKILL')
+  async createPty(_options: PtyOptions): Promise<PtyHandle> {
+    throw new Error('Microsandbox does not support PTY sessions. Use Daytona for interactive terminal access.')
   }
 }

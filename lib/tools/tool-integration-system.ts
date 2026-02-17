@@ -581,20 +581,23 @@ export class ToolIntegrationManager {
     }
 
     try {
-      // Step 1: Authorize the tool if needed
-      const authResponse = await this.arcadeClient.tools.authorize({
-        tool_name: toolConfig.toolName,
-        user_id: context.userId,
-      });
+      // Step 1: Authorize the tool only if it requires auth
+      // Skip auth for tools marked as requiresAuth: false (e.g., Google Maps, Google News)
+      if (toolConfig.requiresAuth !== false) {
+        const authResponse = await this.arcadeClient.tools.authorize({
+          tool_name: toolConfig.toolName,
+          user_id: context.userId,
+        });
 
-      // Step 2: If authorization is not completed, return auth URL
-      if (authResponse.status !== "completed") {
-        return {
-          success: false,
-          authRequired: true,
-          authUrl: authResponse.url,
-          error: `Authorization required for ${toolConfig.toolName}`,
-        };
+        // Step 2: If authorization is not completed, return auth URL
+        if (authResponse.status !== "completed") {
+          return {
+            success: false,
+            authRequired: true,
+            authUrl: authResponse.url,
+            error: `Authorization required for ${toolConfig.toolName}`,
+          };
+        }
       }
 
       // Step 3: Execute the tool
@@ -632,24 +635,44 @@ export class ToolIntegrationManager {
     }
 
     try {
+      const host = this.nangoConfig.host || "https://api.nango.dev";
+      const connectionId = this.nangoConfig.connectionId || context.userId;
+
+      // Extract the integration/provider from the tool name (e.g., "github" from "github.create_issue")
+      const integrationId = toolConfig.toolName.split('.')[0];
+      const actionName = toolConfig.toolName;
+
       const response = await fetch(
-        `${this.nangoConfig.host || "https://api.nango.dev"}/action/${toolConfig.toolName}`,
+        `${host}/v1/action/trigger`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${this.nangoConfig.apiKey}`,
-            "Connection-Id": this.nangoConfig.connectionId || context.userId,
+            "Authorization": `Bearer ${this.nangoConfig.apiKey}`,
           },
-          body: JSON.stringify(input),
+          body: JSON.stringify({
+            action_name: actionName,
+            connection_id: connectionId,
+            integration_id: integrationId,
+            input,
+          }),
         }
       );
 
-      if (!response.ok) {
-        const errorData = await response.json();
+      if (response.status === 401 || response.status === 403) {
         return {
           success: false,
-          error: errorData.error || `Nango request failed: ${response.status}`,
+          authRequired: true,
+          authUrl: `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/nango/authorize?provider=${integrationId}`,
+          error: `Authorization required for ${integrationId}`,
+        };
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        return {
+          success: false,
+          error: errorData.error || errorData.message || `Nango request failed: ${response.status}`,
         };
       }
 
