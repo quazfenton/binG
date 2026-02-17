@@ -36,7 +36,7 @@ import {
   Loader2
 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useCodeModeIntegration } from '../hooks/use-code-mode-integration';
 import { CodeModeFile, CodeModeDiff } from '../lib/services/code-mode-integration';
 

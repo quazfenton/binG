@@ -465,8 +465,8 @@ class FastAgentService {
    * Format Fast-Agent response for API consumption
    */
   formatResponse(fastAgentResponse: FastAgentResponse, requestId?: string) {
-    const response = {
-      success: true,
+    const response: any = {
+      success: fastAgentResponse.success,
       data: {
         content: fastAgentResponse.content || '',
         usage: {
@@ -483,17 +483,25 @@ class FastAgentService {
 
     // Add tool calls if present
     if (fastAgentResponse.toolCalls?.length) {
-      (response.data as any).toolCalls = fastAgentResponse.toolCalls;
+      response.data.toolCalls = fastAgentResponse.toolCalls;
     }
 
     // Add file operations if present
     if (fastAgentResponse.files?.length) {
-      (response.data as any).files = fastAgentResponse.files;
+      response.data.files = fastAgentResponse.files;
     }
 
     // Add chained agents if present
     if (fastAgentResponse.chainedAgents?.length) {
-      (response.data as any).chainedAgents = fastAgentResponse.chainedAgents;
+      response.data.chainedAgents = fastAgentResponse.chainedAgents;
+    }
+
+    // Propagate error and fallback metadata on failure
+    if (!fastAgentResponse.success) {
+      response.error = fastAgentResponse.error || 'Fast-Agent request failed';
+      if (fastAgentResponse.fallbackToOriginal !== undefined) {
+        response.fallbackToOriginal = fastAgentResponse.fallbackToOriginal;
+      }
     }
 
     return response;

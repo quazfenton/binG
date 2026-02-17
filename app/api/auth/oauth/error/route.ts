@@ -22,12 +22,24 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"'/]/g, char => escapeMap[char]);
 }
 
+/**
+ * Safely stringify values for embedding in <script> tags
+ * Escapes </script> and other dangerous sequences
+ */
+function safeJsonStringify(value: string): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/\//g, '\\u002f');
+}
+
 export async function GET(req: NextRequest) {
   const error = req.nextUrl.searchParams.get('error') || 'unknown';
   const origin = req.nextUrl.searchParams.get('origin') || '';
 
-  // Validate origin to prevent XSS
-  if (!origin || !origin.startsWith('http')) {
+  // Validate origin against app's own domain to prevent XSS/data leakage
+  const appOrigin = process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin;
+  if (!origin || origin !== appOrigin) {
     return NextResponse.json({ error: 'Invalid origin' }, { status: 400 });
   }
 
@@ -116,7 +128,7 @@ export async function GET(req: NextRequest) {
     (function() {
       const urlParams = new URLSearchParams(window.location.search);
       const origin = urlParams.get('origin');
-      const error = ${JSON.stringify(error)};
+      const error = ${safeJsonStringify(error)};
 
       if (origin && window.opener && !window.opener.closed) {
         // Send cancel message to opener

@@ -149,7 +149,7 @@ export default function MessageBubble({
 
   const { reasoning, mainContent } = parseReasoningContent(getContentToDisplay())
 
-  // Check for auth_required in message metadata or content
+  // Check for auth_required in message metadata
   const authInfo = useMemo(() => {
     if ((message as any).metadata?.requiresAuth) {
       return {
@@ -158,23 +158,8 @@ export default function MessageBubble({
         authUrl: (message as any).metadata.authUrl
       }
     }
-
-    const content = getContentToDisplay()
-    if (content.includes('AUTH_REQUIRED:')) {
-      // Use regex to properly parse AUTH_REQUIRED:url:toolName format
-      // This handles URLs with :// correctly
-      const authRegex = /^AUTH_REQUIRED:(.+):([^:]+)$/
-      const match = content.match(authRegex)
-      if (match && match[1] && match[2]) {
-        return {
-          authUrl: match[1],
-          toolName: match[2],
-          provider: match[2]?.split('.')[0] || 'unknown'
-        }
-      }
-    }
     return null
-  }, [message, getContentToDisplay])
+  }, [message])
 
   const handleAuthDismiss = () => {
     setAuthDismissed(true)
