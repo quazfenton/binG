@@ -94,7 +94,8 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
 
   async listDirectory(dirPath: string): Promise<ToolResult> {
     const resolved = this.resolvePath(dirPath)
-    return this.executeCommand(`ls -la ${resolved}`)
+    const escapedPath = resolved.replace(/'/g, "'\\''")
+    return this.executeCommand(`ls -la '${escapedPath}'`)
   }
 
   async createPty(options: PtyOptions): Promise<PtyHandle> {
