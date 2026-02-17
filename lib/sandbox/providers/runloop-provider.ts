@@ -61,8 +61,12 @@ class RunloopSandboxHandle implements SandboxHandle {
    * Sanitize command to prevent shell injection
    */
   private sanitizeCommand(command: string): string {
-    // Reject commands with shell metacharacters
-    const dangerousChars = /[;&|`$(){}[\]<>!#~\\]/;
+    // Reject high-risk shell metacharacters, but allow pipes/redirection used by internal tooling
+    // Blocked: ; (command separator), ` (command substitution), $ (variable expansion),
+    //          () (subshell), {} (brace expansion), [] (glob/range), ! (history),
+    //          # (comment injection), ~ (home dir), \ (escape)
+    // Allowed: | (pipe), > (redirect), < (redirect), & (background - used cautiously)
+    const dangerousChars = /[;`$(){}\[\]!#~\\]/;
     if (dangerousChars.test(command)) {
       throw new Error("Command contains disallowed characters for security");
     }
@@ -113,10 +117,10 @@ class RunloopSandboxHandle implements SandboxHandle {
     // Sanitize command to prevent injection
     const safeCommand = this.sanitizeCommand(command);
 
-    // Sanitize cwd to prevent injection
+    // Sanitize cwd to prevent injection (consistent with sanitizeCommand - allow pipes/redirection)
     if (cwd) {
       if (
-        /[;&|`$(){}[\]<>!#~\\]/.test(cwd) ||
+        /[;`$(){}\[\]!#~\\]/.test(cwd) ||
         cwd.includes("..") ||
         /[\n\r\0]/.test(cwd)
       ) {

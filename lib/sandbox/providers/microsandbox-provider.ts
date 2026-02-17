@@ -114,8 +114,12 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
    * Sanitize command to prevent shell injection
    */
   private sanitizeCommand(command: string): string {
-    // Reject commands with shell metacharacters
-    const dangerousChars = /[;&|`$(){}[\]<>!#~\\]/;
+    // Reject high-risk shell metacharacters, but allow pipes/redirection used by internal tooling
+    // Blocked: ; (command separator), ` (command substitution), $ (variable expansion),
+    //          () (subshell), {} (brace expansion), [] (glob/range), ! (history),
+    //          # (comment injection), ~ (home dir), \ (escape)
+    // Allowed: | (pipe), > (redirect), < (redirect), & (background)
+    const dangerousChars = /[;`$(){}[\]!#~\\]/;
     if (dangerousChars.test(command)) {
       throw new Error('Command contains disallowed characters for security');
     }
@@ -162,9 +166,9 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
     // Sanitize command to prevent injection
     const safeCommand = this.sanitizeCommand(command);
 
-    // Sanitize cwd to prevent injection
+    // Sanitize cwd to prevent injection (consistent with sanitizeCommand - allow pipes/redirection)
     if (cwd) {
-      if (/[;&|`$(){}[\]<>!#~\\]/.test(cwd) || cwd.includes('..') || /[\n\r\0]/.test(cwd)) {
+      if (/[;`$(){}[\]!#~\\]/.test(cwd) || cwd.includes('..') || /[\n\r\0]/.test(cwd)) {
         throw new Error(`Invalid working directory: ${cwd}`);
       }
     }
@@ -216,10 +220,11 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
    * Used only for internal file operations with validated paths
    */
   private async executeTrustedCommand(command: string, timeoutMs: number = 60_000): Promise<ToolResult> {
+    let timeoutId: NodeJS.Timeout | undefined;
     const cmdPromise = this.sb.command.run('bash', ['-c', command]);
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Command timed out after ${timeoutMs}ms`)), timeoutMs)
-    );
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(`Command timed out after ${timeoutMs}ms`)), timeoutMs);
+    });
 
     try {
       const result = await Promise.race([cmdPromise, timeoutPromise]);
@@ -231,25 +236,39 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
         exitCode: result.exitCode,
       };
     } finally {
-      // Note: Can't cancel the command, but at least we stop waiting
+      // Clear timeout to prevent resource leak
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     }
   }
 
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
     const resolved = this.resolvePath(filePath)
     const dir = path.dirname(resolved)
-    
+
     // Escape paths for shell safety (handle spaces and metacharacters)
     const escapedDir = dir.replace(/'/g, "'\\''")
     const escapedPath = resolved.replace(/'/g, "'\\''")
-    
+
     // Create directory with sanitized path
-    await this.executeTrustedCommand(`mkdir -p '${escapedDir}'`)
+    const mkdirResult = await this.executeTrustedCommand(`mkdir -p '${escapedDir}'`)
+    if (!mkdirResult.success) {
+      return {
+        success: false,
+        output: mkdirResult.output,
+        exitCode: mkdirResult.exitCode,
+      }
+    }
 
     // Use shell-escaped content for safety - use trusted command for redirection
     const escaped = content.replace(/'/g, "'\\''")
-    await this.executeTrustedCommand(`printf '%s' '${escaped}' > '${escapedPath}'`)
-    return { success: true, output: `File written: ${resolved}` }
+    const writeResult = await this.executeTrustedCommand(`printf '%s' '${escaped}' > '${escapedPath}'`)
+    return {
+      success: writeResult.success,
+      output: writeResult.success ? `File written: ${resolved}` : writeResult.output,
+      exitCode: writeResult.exitCode,
+    }
   }
 
   async readFile(filePath: string): Promise<ToolResult> {

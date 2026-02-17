@@ -72,7 +72,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: 'success', output: result.output });
   } catch (error: any) {
     console.error('[Tools] Execution error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    // Don't expose internal error details to clients
+    return NextResponse.json({ error: 'Tool execution failed' }, { status: 500 });
   }
 }
 
@@ -102,6 +103,8 @@ export async function GET(req: NextRequest) {
     const providers = await toolAuthManager.getConnectedProviders(authenticatedUserId);
     return NextResponse.json({ availableTools: available, connectedProviders: providers });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('[Tools] Error fetching tools:', error);
+    // Don't expose internal error details to clients
+    return NextResponse.json({ error: 'Failed to fetch tools' }, { status: 500 });
   }
 }

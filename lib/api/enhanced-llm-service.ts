@@ -746,6 +746,5 @@ export function validateSandboxCommand(command: string): { isValid: boolean; com
 
     return { isValid: true, command: trimmedCommand };
   }
-}
 
 export const enhancedLLMService = new EnhancedLLMService();

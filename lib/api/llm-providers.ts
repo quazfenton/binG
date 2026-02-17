@@ -9,7 +9,8 @@ import {
   createOrchestratorError,
   createStreamError,
   createLLMError,
-  ERROR_CODES
+  ERROR_CODES,
+  LLMError
 } from '../../enhanced-code-system/core/error-types'
 
 import { initializeComposioService, getComposioService, type ComposioService } from './composio-service'
@@ -157,12 +158,12 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'google',
     name: 'Google',
     models: [
-      'google/gemini-3-flash-preview',
-      'google/gemini-2.5-pro',
-      'google/gemini-2.5-flash',
-      'google/gemini-2.5-flash-preview-09-2025',
-      'google/gemini-2.5-flash-lite',
-      'google/gemini-2.5-flash-lite-preview-09-2025'
+      'gemini-3-flash-preview',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-preview-09-2025',
+      'gemini-2.5-flash-lite',
+      'gemini-2.5-flash-lite-preview-09-2025'
     ],
     supportsStreaming: true,
     maxTokens: 2000000,

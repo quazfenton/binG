@@ -73,7 +73,9 @@ export async function POST(req: NextRequest) {
           controller.enqueue(encoder.encode(`data: ${finalEvent}\n\n`));
           controller.close();
         } catch (error: any) {
-          const errorEvent = JSON.stringify({ type: 'error', message: error.message });
+          console.error('[Sandbox Agent] Stream error:', error);
+          // Don't expose internal error details to clients
+          const errorEvent = JSON.stringify({ type: 'error', message: 'Agent execution failed' });
           controller.enqueue(encoder.encode(`data: ${errorEvent}\n\n`));
           controller.close();
         }
@@ -88,6 +90,8 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('[Sandbox Agent] Error:', error);
+    // Don't expose internal error details to clients
+    return NextResponse.json({ error: 'Agent execution failed' }, { status: 500 });
   }
 }

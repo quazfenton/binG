@@ -115,8 +115,11 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         // Get available tools - filter by requested toolkits if specified
         let tools;
         if (request.toolkits && request.toolkits.length > 0) {
-          // Filter tools by requested apps/toolkits
-          tools = await composio.tools.list({ apps: request.toolkits.join(',') });
+          // If restrictedToolkits is configured, intersect with request.toolkits to prevent bypass
+          const allowedToolkits = config.restrictedToolkits && config.restrictedToolkits.length > 0
+            ? request.toolkits.filter((toolkit) => config.restrictedToolkits!.includes(toolkit))
+            : request.toolkits;
+          tools = await composio.tools.list({ apps: allowedToolkits.join(',') });
         } else if (config.restrictedToolkits && config.restrictedToolkits.length > 0) {
           // Use configured restricted toolkits
           tools = await composio.tools.list({ apps: config.restrictedToolkits.join(',') });
@@ -276,10 +279,16 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
           });
 
           content = result.response.text();
-          
+
           // Extract function calls from Gemini response if present
-          const functionCalls = result.response.functionCalls();
-          if (functionCalls && functionCalls.length > 0) {
+          // Gemini SDK doesn't have functionCalls() - extract from candidates[].content.parts[].functionCall
+          const functionCalls =
+            result.response.candidates?.flatMap((candidate: any) =>
+              (candidate.content?.parts || [])
+                .filter((part: any) => part.functionCall)
+                .map((part: any) => part.functionCall)
+            ) || [];
+          if (functionCalls.length > 0) {
             toolCalls = functionCalls.map((call: any) => ({
               id: `call_${Date.now()}_${Math.random().toString(36).slice(2)}`,
               type: 'function',

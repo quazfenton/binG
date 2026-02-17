@@ -547,30 +547,14 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   try {
-    // Use enhancedLLMService to get health information
-    const providerHealth = enhancedLLMService.getProviderHealth();
-    const availableProviderIds = enhancedLLMService.getAvailableProviders();
+    // Get list of configured provider IDs (checks if API keys are set)
+    const configuredProviderIds = llmService.getAvailableProviders().map(p => p.id);
     
-    // Return all providers from the PROVIDERS constant, but mark which ones are available
-    const allProviders = Object.values(PROVIDERS)
-      .filter(provider => {
-        // Only include providers that are configured in enhancedLLMService
-        return provider.id in providerHealth;
-      })
-      .map(provider => {
-        // Check if this provider has API keys configured (is available)
-        const isAvailable = availableProviderIds.includes(provider.id);
-        
-        return {
-          id: provider.id,
-          name: provider.name,
-          models: provider.models,
-          supportsStreaming: provider.supportsStreaming,
-          maxTokens: provider.maxTokens,
-          description: provider.description,
-          isAvailable // Add availability status for UI
-        };
-      }) as LLMProvider[];
+    // Return all providers with availability status (based on API key configuration)
+    const allProviders = Object.values(PROVIDERS).map(provider => ({
+      ...provider,
+      isAvailable: configuredProviderIds.includes(provider.id)
+    }));
 
     return NextResponse.json({
       success: true,
