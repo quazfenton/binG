@@ -110,8 +110,8 @@ interface InteractionPanelProps {
   onProviderChange: (provider: string, model: string) => void;
   hasCodeBlocks?: boolean;
   pendingDiffs?: { path: string; diff: string }[];
-  activeTab?: "chat" | "code";
-  onActiveTabChange?: (tab: "chat" | "code") => void;
+  activeTab?: "chat" | "code" | "extras" | "integrations" | "shell";
+  onActiveTabChange?: (tab: "chat" | "code" | "extras" | "integrations" | "shell") => void;
   userId?: string;
 }
 
@@ -971,7 +971,7 @@ export default function InteractionPanel({
           </div>
 
           {!isMinimized && (
-            <Tabs value={activeTab} onValueChange={(v) => onActiveTabChange?.(v as "chat" | "code")} className="flex-1 flex flex-col">
+            <Tabs value={activeTab} onValueChange={(v) => onActiveTabChange?.(v as typeof activeTab)} className="flex-1 flex flex-col">
               <TabsList className="grid w-full grid-cols-5 bg-black/40 mb-2">
                 <TabsTrigger value="chat" className="text-xs">Chat</TabsTrigger>
                 <TabsTrigger value="code" className="text-xs">Code</TabsTrigger>

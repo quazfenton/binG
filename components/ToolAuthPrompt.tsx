@@ -42,10 +42,12 @@ export default function ToolAuthPrompt({
     const left = window.screenX + (window.outerWidth - width) / 2;
     const top = window.screenY + (window.outerHeight - height) / 2;
 
+    // SECURITY: Add noopener,noreferrer to prevent reverse-tabnabbing attacks
+    // This prevents the OAuth popup from accessing window.opener
     const popup = window.open(
       authUrl,
       'oauth_popup',
-      `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no`,
+      `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,noopener=yes,noreferrer=yes`,
     );
 
     if (popup) {

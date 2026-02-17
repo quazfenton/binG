@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { oauthService } from '@/lib/auth/oauth-service';
+import { verifyAuth } from '@/lib/auth/jwt';
 
 const OAUTH_CONFIGS: Record<string, { authUrl: string; scopes: string; clientIdEnv: string }> = {
   google: {
@@ -36,11 +37,22 @@ const OAUTH_CONFIGS: Record<string, { authUrl: string; scopes: string; clientIdE
 
 export async function GET(req: NextRequest) {
   try {
-    const provider = req.nextUrl.searchParams.get('provider');
-    const userId = req.nextUrl.searchParams.get('userId');
+    // CRITICAL: Authenticate user from JWT token - do NOT trust userId from query string
+    const authResult = await verifyAuth(req);
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Unauthorized: valid authentication token required' },
+        { status: 401 }
+      );
+    }
 
-    if (!provider || !userId) {
-      return NextResponse.json({ error: 'provider and userId are required' }, { status: 400 });
+    // Use authenticated userId from token, ignore query userId
+    const authenticatedUserId = authResult.userId;
+
+    const provider = req.nextUrl.searchParams.get('provider');
+
+    if (!provider) {
+      return NextResponse.json({ error: 'provider is required' }, { status: 400 });
     }
 
     const config = OAUTH_CONFIGS[provider];
@@ -55,8 +67,9 @@ export async function GET(req: NextRequest) {
 
     const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin}/api/auth/oauth/callback`;
 
+    // Create OAuth session with the authenticated user's ID
     const session = await oauthService.createOAuthSession({
-      userId: parseInt(userId, 10),
+      userId: parseInt(authenticatedUserId, 10),
       provider,
       redirectUri,
     });

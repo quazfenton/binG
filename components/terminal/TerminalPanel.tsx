@@ -173,8 +173,13 @@ export default function TerminalPanel({
     if (!sandboxInfo.sessionId || !sandboxInfo.sandboxId) return;
 
     try {
-      await fetch(`/api/sandbox/session?sessionId=${sandboxInfo.sessionId}&sandboxId=${sandboxInfo.sandboxId}`, {
-        method: 'DELETE'
+      await fetch('/api/sandbox/session', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: sandboxInfo.sessionId,
+          sandboxId: sandboxInfo.sandboxId
+        })
       });
       setSandboxInfo({ status: 'none' });
       setOutputs([]);

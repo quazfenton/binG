@@ -94,15 +94,44 @@ export default function IntegrationAuthPrompt({
   const gradientColor = PROVIDER_COLORS[provider] || 'from-purple-500 to-blue-500';
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      if (popupWindow && popupWindow.closed) {
+    // Listen for OAuth success/cancel messages from the popup
+    const handleMessage = (event: MessageEvent) => {
+      // Validate message origin for security
+      if (event.origin !== window.location.origin) return;
+
+      if (event.data?.type === 'oauth_success') {
         setPopupWindow(null);
         setIsConnecting(false);
         onAuthorized?.();
+      } else if (event.data?.type === 'oauth_cancel') {
+        setPopupWindow(null);
+        setIsConnecting(false);
+        // Don't call onAuthorized - user cancelled
       }
-    }, 500);
+    };
 
-    return () => clearInterval(interval);
+    window.addEventListener('message', handleMessage);
+
+    // Fallback: detect if popup was closed without completing OAuth
+    // Only poll if a popup is actually open
+    let interval: number | undefined;
+    if (popupWindow) {
+      interval = setInterval(() => {
+        if (popupWindow.closed) {
+          setPopupWindow(null);
+          setIsConnecting(false);
+          // Popup closed without sending success message - treat as cancel
+          // Don't call onAuthorized to allow retry
+        }
+      }, 500);
+    }
+
+    return () => {
+      if (interval !== undefined) {
+        clearInterval(interval);
+      }
+      window.removeEventListener('message', handleMessage);
+    };
   }, [popupWindow, onAuthorized]);
 
   const handleConnect = useCallback(() => {
@@ -113,8 +142,11 @@ export default function IntegrationAuthPrompt({
     const left = window.screenX + (window.outerWidth - width) / 2;
     const top = window.screenY + (window.outerHeight - height) / 2;
 
+    // Add origin parameter for postMessage security
+    const urlWithOrigin = `${authUrl}${authUrl.includes('?') ? '&' : '?'}origin=${encodeURIComponent(window.location.origin)}`;
+
     const popup = window.open(
-      authUrl,
+      urlWithOrigin,
       'oauth_popup',
       `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`
     );

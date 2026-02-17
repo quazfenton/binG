@@ -1,6 +1,6 @@
 /**
  * Comprehensive Error Types for Enhanced Code System
- * 
+ *
  * Defines specific error types for different parts of the system to enable
  * better error handling, recovery, and monitoring.
  */
@@ -11,6 +11,14 @@ export interface SystemError extends Error {
   severity: 'low' | 'medium' | 'high' | 'critical';
   recoverable: boolean;
   timestamp: Date;
+  context?: any;
+  suggestion?: string;
+}
+
+export interface ErrorOptions {
+  code?: string;
+  severity?: 'low' | 'medium' | 'high' | 'critical';
+  recoverable?: boolean;
   context?: any;
   suggestion?: string;
 }
@@ -235,37 +243,37 @@ export class LLMError extends Error implements SystemError {
 // Error factory functions for consistency
 export const createOrchestratorError = (
   message: string,
-  options: Parameters<typeof OrchestratorError>[1] = {}
+  options: ErrorOptions = {}
 ): OrchestratorError => new OrchestratorError(message, options);
 
 export const createStreamError = (
   message: string,
-  options: Parameters<typeof StreamError>[1] = {}
+  options: ErrorOptions = {}
 ): StreamError => new StreamError(message, options);
 
 export const createAgenticError = (
   message: string,
-  options: Parameters<typeof AgenticError>[1] = {}
+  options: ErrorOptions = {}
 ): AgenticError => new AgenticError(message, options);
 
 export const createFileManagementError = (
   message: string,
-  options: Parameters<typeof FileManagementError>[1] = {}
+  options: ErrorOptions = {}
 ): FileManagementError => new FileManagementError(message, options);
 
 export const createPromptEngineError = (
   message: string,
-  options: Parameters<typeof PromptEngineError>[1] = {}
+  options: ErrorOptions = {}
 ): PromptEngineError => new PromptEngineError(message, options);
 
 export const createSafeDiffError = (
   message: string,
-  options: Parameters<typeof SafeDiffError>[1] = {}
+  options: ErrorOptions = {}
 ): SafeDiffError => new SafeDiffError(message, options);
 
 export const createLLMError = (
   message: string,
-  options: Parameters<typeof LLMError>[1] = {}
+  options: ErrorOptions = {}
 ): LLMError => new LLMError(message, options);
 
 // Error code constants for consistency

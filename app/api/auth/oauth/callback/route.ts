@@ -17,12 +17,18 @@ const USER_INFO_ENDPOINTS: Record<string, string> = {
   discord: 'https://discord.com/api/users/@me',
 };
 
-function getClientCredentials(provider: string): { clientId: string; clientSecret: string } {
+function getClientCredentials(provider: string): { clientId: string; clientSecret: string } | null {
   const prefix = provider.toUpperCase();
-  return {
-    clientId: process.env[`${prefix}_CLIENT_ID`] || '',
-    clientSecret: process.env[`${prefix}_CLIENT_SECRET`] || '',
-  };
+  const clientId = process.env[`${prefix}_CLIENT_ID`];
+  const clientSecret = process.env[`${prefix}_CLIENT_SECRET`];
+  
+  // Validate that credentials are configured for this provider
+  if (!clientId || !clientSecret) {
+    console.error(`[OAuth] Provider '${provider}' not configured - missing environment variables`);
+    return null;
+  }
+  
+  return { clientId, clientSecret };
 }
 
 export async function GET(req: NextRequest) {
@@ -30,26 +36,60 @@ export async function GET(req: NextRequest) {
     const code = req.nextUrl.searchParams.get('code');
     const state = req.nextUrl.searchParams.get('state');
     const error = req.nextUrl.searchParams.get('error');
+    const origin = req.nextUrl.searchParams.get('origin');
 
     if (error) {
-      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=${error}`);
+      // For popup flows, redirect to error page
+      if (origin) {
+        return NextResponse.redirect(
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=${encodeURIComponent(error)}&origin=${encodeURIComponent(origin)}`
+        );
+      }
+      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=${encodeURIComponent(error)}`);
     }
 
     if (!code || !state) {
+      if (origin) {
+        return NextResponse.redirect(
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=missing_params&origin=${encodeURIComponent(origin)}`
+        );
+      }
       return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=missing_params`);
     }
 
     const session = await oauthService.getOAuthSessionByState(state);
     if (!session) {
+      if (origin) {
+        return NextResponse.redirect(
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=invalid_state&origin=${encodeURIComponent(origin)}`
+        );
+      }
       return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=invalid_state`);
     }
 
     const tokenEndpoint = TOKEN_ENDPOINTS[session.provider];
     if (!tokenEndpoint) {
+      if (origin) {
+        return NextResponse.redirect(
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=unsupported_provider&origin=${encodeURIComponent(origin)}`
+        );
+      }
       return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=unsupported_provider`);
     }
 
-    const { clientId, clientSecret } = getClientCredentials(session.provider);
+    // Get and validate provider credentials
+    const credentials = getClientCredentials(session.provider);
+    if (!credentials) {
+      // Provider not configured - return early with clear error
+      if (origin) {
+        return NextResponse.redirect(
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=provider_not_configured&origin=${encodeURIComponent(origin)}`
+        );
+      }
+      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=provider_not_configured`);
+    }
+    
+    const { clientId, clientSecret } = credentials;
     const redirectUri = session.redirectUri || `${req.nextUrl.origin}/api/auth/oauth/callback`;
 
     // Exchange code for tokens
@@ -71,6 +111,11 @@ export async function GET(req: NextRequest) {
     if (!tokenResponse.ok) {
       const errBody = await tokenResponse.text();
       console.error('[OAuth] Token exchange failed:', errBody);
+      if (origin) {
+        return NextResponse.redirect(
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=token_exchange_failed&origin=${encodeURIComponent(origin)}`
+        );
+      }
       return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=token_exchange_failed`);
     }
 
@@ -112,9 +157,23 @@ export async function GET(req: NextRequest) {
 
     await oauthService.completeOAuthSession(state);
 
-    return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_success=${session.provider}`);
+    // Check if this is a popup OAuth flow (origin parameter present)
+    if (origin) {
+      // Redirect to success page which will postMessage to opener and close popup
+      return NextResponse.redirect(
+        `${req.nextUrl.origin}/api/auth/oauth/success?provider=${encodeURIComponent(session.provider)}&origin=${encodeURIComponent(origin)}`
+      );
+    }
+
+    return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_success=${encodeURIComponent(session.provider)}`);
   } catch (error: any) {
     console.error('[OAuth] Callback error:', error);
+    const origin = req.nextUrl.searchParams.get('origin');
+    if (origin) {
+      return NextResponse.redirect(
+        `${req.nextUrl.origin}/api/auth/oauth/error?error=internal&origin=${encodeURIComponent(origin)}`
+      );
+    }
     return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=internal`);
   }
 }
