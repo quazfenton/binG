@@ -1,5 +1,5 @@
 # Base image - Using debian instead of alpine for better compatibility with native modules
-FROM node:18-bullseye AS base
+FROM node:20-bullseye AS base
 WORKDIR /app
 RUN corepack enable
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -35,8 +35,11 @@ COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/components ./components
 COPY --from=builder /app/app ./app
 
-# Create data directory for database
+# Create data directory for database and set ownership
 RUN mkdir -p /app/data && chown -R node:node /app/data
+
+# Switch to non-root user for security
+USER node
 
 EXPOSE 3000
 CMD ["pnpm", "start"]
