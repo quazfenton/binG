@@ -144,9 +144,20 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Validate userId before saving connection
+    if (!session.userId) {
+      console.error('[OAuth] Session has no userId, cannot save connection');
+      if (origin) {
+        return NextResponse.redirect(
+          `${req.nextUrl.origin}/api/auth/oauth/error?error=no_user&origin=${encodeURIComponent(origin)}`
+        );
+      }
+      return NextResponse.redirect(`${req.nextUrl.origin}/settings?oauth_error=no_user`);
+    }
+
     // Save the connection
     await oauthService.saveConnection({
-      userId: session.userId!,
+      userId: session.userId,
       provider: session.provider,
       providerAccountId,
       providerDisplayName,

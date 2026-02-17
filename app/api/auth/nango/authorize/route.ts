@@ -1,9 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { Nango } from '@nangohq/node';
 import { verifyAuth } from '@/lib/auth/jwt';
 
-// Initialize Nango client
-const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+// Lazy-initialize Nango client to avoid crash when env var is missing
+let _nango: any | null = null;
+function getNango() {
+  if (!_nango) {
+    if (!process.env.NANGO_SECRET_KEY) {
+      throw new Error('Nango secret key not configured');
+    }
+    const { Nango } = require('@nangohq/node');
+    _nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY });
+  }
+  return _nango;
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -25,11 +34,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'provider is required' }, { status: 400 });
     }
 
-    if (!process.env.NANGO_SECRET_KEY) {
-      return NextResponse.json({ error: 'Nango secret key not configured' }, { status: 500 });
-    }
-
     // Create a Nango connect session with the authenticated user's ID
+    const nango = getNango();
     const connectSession = await nango.createConnectSession({
       tags: {
         end_user_id: authenticatedUserId,
@@ -48,6 +54,7 @@ export async function GET(req: NextRequest) {
     });
   } catch (error: any) {
     console.error('[Nango Auth] Error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    // Don't expose internal error details to clients
+    return NextResponse.json({ error: 'Authorization failed' }, { status: 500 });
   }
 }

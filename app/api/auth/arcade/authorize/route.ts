@@ -82,6 +82,7 @@ export async function GET(req: NextRequest) {
     if (error.message?.includes('toolkit')) {
       return NextResponse.json({ error: `Unknown provider toolkit: ${provider}` }, { status: 400 });
     }
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    // Don't expose internal error details to clients
+    return NextResponse.json({ error: 'Authorization failed' }, { status: 500 });
   }
 }
