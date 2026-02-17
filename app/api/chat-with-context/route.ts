@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createClient } from 'webdav';
 import { diffLines } from 'diff';
-import fs from 'fs/promises';
-import path from 'path';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { FEATURE_FLAGS } from '@/config/features';
 
 export const dynamic = 'force-dynamic';

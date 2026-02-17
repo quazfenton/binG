@@ -7,8 +7,8 @@
  * for task 7.1 of the application stability improvements.
  */
 
-const fs = require('fs');
-const path = require('path');
+const fs = require('node:fs');
+const path = require('node:path');
 
 console.log('🔍 Validating Integration Test Coverage for Task 7.1...\n');
 

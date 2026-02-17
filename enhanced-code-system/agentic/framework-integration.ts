@@ -10,7 +10,7 @@
  * Supports different collaboration modes and quality-driven iterations
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { EnhancedResponse, ProjectItem } from '../core/enhanced-prompt-engine';
 import { 
   createAgenticError,

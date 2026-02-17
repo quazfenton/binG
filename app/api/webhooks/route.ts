@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createHmac } from 'crypto';
+import { createHmac } from 'node:crypto';
 import { oauthService } from '@/lib/auth/oauth-service';
 
 function verifyWebhookSignature(body: string, signature: string | null, secret: string | undefined): boolean {
@@ -77,7 +77,7 @@ async function handleArcadeWebhook(body: any): Promise<NextResponse> {
       // has authorized this provider/service combination
       // For Arcade, we'll store minimal information since Arcade manages the tokens
       await oauthService.saveConnection({
-        userId: parseInt(user_id, 10),
+        userId: Number.parseInt(user_id, 10),
         provider,
         providerAccountId: `arcade_${user_id}`, // Unique identifier for Arcade connection
         providerDisplayName: `${toolPrefix} via Arcade`,
@@ -140,7 +140,7 @@ async function handleNangoWebhook(body: any): Promise<NextResponse> {
         return NextResponse.json({ error: 'No user ID found in webhook tags' }, { status: 400 });
       }
 
-      const userId = parseInt(userIdStr.toString(), 10);
+      const userId = Number.parseInt(userIdStr.toString(), 10);
       if (isNaN(userId)) {
         console.error('[Webhook/Nango] Invalid user ID:', userIdStr);
         return NextResponse.json({ error: 'Invalid user ID' }, { status: 400 });

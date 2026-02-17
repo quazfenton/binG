@@ -582,7 +582,7 @@ export async function GET() {
         defaultTemperature: parseFloat(
           process.env.DEFAULT_TEMPERATURE || "0.7",
         ),
-        defaultMaxTokens: parseInt(process.env.DEFAULT_MAX_TOKENS || "80000"),
+        defaultMaxTokens: Number.parseInt(process.env.DEFAULT_MAX_TOKENS || "80000"),
         features: {
           voiceEnabled: process.env.ENABLE_VOICE_FEATURES === "true",
           imageGeneration: process.env.ENABLE_IMAGE_GENERATION === "true",

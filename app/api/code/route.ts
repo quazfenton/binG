@@ -17,7 +17,7 @@ import {
   ERROR_CODES
 } from '../../../enhanced-code-system/core/error-types';
 import type { Message } from '../../../types/index';
-import { randomBytes } from 'crypto';
+import { randomBytes } from 'node:crypto';
 
 // Configuration constants
 const CONFIG_CONSTANTS = {

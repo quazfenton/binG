@@ -10,7 +10,7 @@
  * - Iterative workflow management with diff-based updates
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { diff_match_patch } from 'diff-match-patch';
 import { z } from 'zod';
 import { llmIntegration } from './llm-integration';

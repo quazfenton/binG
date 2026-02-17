@@ -7,8 +7,8 @@
  * It can be used to verify that all components work together correctly.
  */
 
-const { execSync } = require('child_process');
-const path = require('path');
+const { execSync } = require('node:child_process');
+const path = require('node:path');
 
 console.log('🧪 Running Application Stability Integration Tests...\n');
 

@@ -28,18 +28,23 @@ RUN pnpm prune --prod
 FROM base AS runner
 ENV NODE_ENV=production
 
-COPY --from=builder --chown=node:node /app/node_modules ./node_modules
-COPY --from=builder --chown=node:node /app/package.json ./package.json
-COPY --from=builder --chown=node:node /app/pnpm-lock.yaml ./pnpm-lock.yaml
-COPY --from=builder --chown=node:node /app/.next ./.next
-COPY --from=builder --chown=node:node /app/public ./public
-COPY --from=builder --chown=node:node /app/lib ./lib
-COPY --from=builder --chown=node:node /app/next.config.mjs ./next.config.mjs
-COPY --from=builder --chown=node:node /app/components ./components
-COPY --from=builder --chown=node:node /app/app ./app
+# Copy only runtime essentials - Next.js standalone mode bundles everything needed
+COPY --from=builder --chown=root:root /app/node_modules ./node_modules
+COPY --from=builder --chown=root:root /app/package.json ./package.json
+COPY --from=builder --chown=root:root /app/pnpm-lock.yaml ./pnpm-lock.yaml
+COPY --from=builder --chown=root:root /app/.next ./.next
+COPY --from=builder --chown=root:root /app/public ./public
+COPY --from=builder --chown=root:root /app/next.config.mjs ./next.config.mjs
 
-# Create data directory for database and set ownership
-RUN mkdir -p /app/data && chown -R node:node /app/data
+# Set restrictive permissions on application files (read-only for non-root users)
+RUN chmod -R 755 /app/node_modules /app/public \
+    && chmod 644 /app/package.json /app/pnpm-lock.yaml /app/next.config.mjs \
+    && chmod -R 755 /app/.next
+
+# Create writable directories for runtime data
+RUN mkdir -p /app/data /app/.next/cache \
+    && chown -R node:node /app/data /app/.next/cache \
+    && chmod -R 755 /app/data /app/.next/cache
 
 # Switch to non-root user for security
 USER node

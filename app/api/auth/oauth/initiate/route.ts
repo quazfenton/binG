@@ -69,7 +69,7 @@ export async function GET(req: NextRequest) {
 
     // Create OAuth session with the authenticated user's ID
     const session = await oauthService.createOAuthSession({
-      userId: parseInt(authenticatedUserId, 10),
+      userId: Number.parseInt(authenticatedUserId, 10),
       provider,
       redirectUri,
     });
