@@ -874,12 +874,19 @@ export default function InteractionPanel({
     },
   ];
 
+  // Calculate bottom position based on terminal and panel state
+  const bottomPosition = terminalMinimized
+    ? '60px'
+    : showTerminal
+      ? '400px'
+      : "env(safe-area-inset-bottom, 0px)";
+
   return (
     <>
       <div
         className={`fixed bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 border-t`}
         style={{
-          bottom: terminalMinimized ? '60px' : showTerminal ? '400px' : "env(safe-area-inset-bottom, 0px)",
+          bottom: bottomPosition,
           height: isMinimized
             ? "60px"
             : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
@@ -1140,13 +1147,14 @@ export default function InteractionPanel({
               {/* Code Tab Content */}
               <TabsContent value="code" className="m-0 flex-1 flex flex-col">
                 <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1">
-                  <Textarea
-                    ref={codeTextareaRef}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
-                    className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
-                    rows={6}
+                  <div className="relative flex-1">
+                    <Textarea
+                      ref={codeTextareaRef}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
+                      className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
+                      rows={6}
                     onKeyDown={(e) => {
                       if (
                         e.key === "Tab" &&
@@ -1209,6 +1217,7 @@ export default function InteractionPanel({
                       }`}
                     />
                   </button>
+                </div>
                 </form>
               </TabsContent>
 

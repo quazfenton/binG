@@ -395,34 +395,35 @@ class FastAgentService {
    * Create streaming response for Fast-Agent
    */
   createStreamingResponse(fastAgentResponse: FastAgentResponse, requestId?: string): ReadableStream {
-    // This method is implemented in the interceptor, but we'll provide a basic implementation
     const encoder = new TextEncoder();
     const content = fastAgentResponse.content || '';
+    let cancelled = false;
+    let timerId: ReturnType<typeof setTimeout> | undefined;
 
     return new ReadableStream({
       start(controller) {
-        try {
-          const streamId = requestId || `fast-agent-${Date.now()}`;
-          
-          // Send initial event
-          const initEvent = `event: init\ndata: ${JSON.stringify({
-            requestId: streamId,
-            startTime: Date.now(),
-            provider: 'fast-agent',
-            model: 'fast-agent',
-            source: 'fast-agent'
-          })}\n\n`;
-          controller.enqueue(encoder.encode(initEvent));
+        const streamId = requestId || `fast-agent-${Date.now()}`;
 
-          // Stream content in chunks
-          const chunkSize = 30;
-          let offset = 0;
+        // Send initial event
+        const initEvent = `event: init\ndata: ${JSON.stringify({
+          requestId: streamId,
+          startTime: Date.now(),
+          provider: 'fast-agent',
+          model: 'fast-agent',
+          source: 'fast-agent'
+        })}\n\n`;
+        controller.enqueue(encoder.encode(initEvent));
 
-          const sendChunk = () => {
+        const chunkSize = 30;
+        let offset = 0;
+
+        const sendChunk = () => {
+          if (cancelled) return;
+          try {
             if (offset < content.length) {
               const endOffset = Math.min(offset + chunkSize, content.length);
               const chunk = content.slice(offset, endOffset);
-              
+
               const tokenEvent = `data: ${JSON.stringify({
                 type: "token",
                 content: chunk,
@@ -433,9 +434,8 @@ class FastAgentService {
               controller.enqueue(encoder.encode(tokenEvent));
 
               offset = endOffset;
-              setTimeout(sendChunk, 80);
+              timerId = setTimeout(sendChunk, 80);
             } else {
-              // Send completion event
               const doneEvent = `event: done\ndata: ${JSON.stringify({
                 requestId: streamId,
                 success: true,
@@ -445,18 +445,22 @@ class FastAgentService {
               controller.enqueue(encoder.encode(doneEvent));
               controller.close();
             }
-          };
+          } catch (error) {
+            const errorEvent = `event: error\ndata: ${JSON.stringify({
+              requestId: streamId,
+              message: error instanceof Error ? error.message : 'Streaming error',
+              source: 'fast-agent'
+            })}\n\n`;
+            controller.enqueue(encoder.encode(errorEvent));
+            controller.close();
+          }
+        };
 
-          setTimeout(sendChunk, 200);
-        } catch (error) {
-          const errorEvent = `event: error\ndata: ${JSON.stringify({
-            requestId,
-            message: error instanceof Error ? error.message : 'Streaming error',
-            source: 'fast-agent'
-          })}\n\n`;
-          controller.enqueue(encoder.encode(errorEvent));
-          controller.close();
-        }
+        timerId = setTimeout(sendChunk, 200);
+      },
+      cancel() {
+        cancelled = true;
+        if (timerId !== undefined) clearTimeout(timerId);
       }
     });
   }
@@ -471,6 +475,8 @@ class FastAgentService {
         content: fastAgentResponse.content || '',
         usage: {
           promptTokens: 0,
+          // Note: These are character counts, not actual token counts
+          // Fast-Agent doesn't provide token usage, so we use character estimates
           completionTokens: fastAgentResponse.content?.length || 0,
           totalTokens: fastAgentResponse.content?.length || 0
         },

@@ -36,18 +36,19 @@ interface SandboxInfo {
   };
 }
 
-export default function TerminalPanel({ 
-  userId, 
-  isOpen, 
-  onClose, 
+export default function TerminalPanel({
+  userId,
+  isOpen,
+  onClose,
   onMinimize,
-  isMinimized = false 
+  isMinimized = false
 }: TerminalPanelProps) {
   const [outputs, setOutputs] = useState<TerminalOutput[]>([]);
   const [input, setInput] = useState('');
   const [isExecuting, setIsExecuting] = useState(false);
   const [sandboxInfo, setSandboxInfo] = useState<SandboxInfo>({ status: 'none' });
   const [isExpanded, setIsExpanded] = useState(false);
+  const [outputCounter, setOutputCounter] = useState(0);
   const terminalRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -109,11 +110,12 @@ export default function TerminalPanel({
 
   const addOutput = (type: TerminalOutput['type'], content: string) => {
     setOutputs(prev => [...prev, {
-      id: `output-${Date.now()}-${Math.random()}`,
+      id: `output-${Date.now()}-${outputCounter}`,
       type,
       content,
       timestamp: new Date()
     }]);
+    setOutputCounter(prev => prev + 1);
   };
 
   const executeCommand = async (command: string) => {

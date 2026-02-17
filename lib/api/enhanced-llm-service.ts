@@ -21,6 +21,7 @@ export interface EnhancedLLMRequest extends LLMRequest {
   enableCircuitBreaker?: boolean;
   enableTools?: boolean;
   enableSandbox?: boolean;
+  isSandboxCommand?: boolean; // Explicit flag for sandbox/command requests
   userId?: string;
   conversationId?: string;
 }
@@ -129,23 +130,21 @@ export class EnhancedLLMService {
       }
 
       if (toolResult.toolCalls && toolResult.toolCalls.length > 0) {
-        const updatedMessages = [
-          ...llmRequest.messages,
-          { role: 'assistant' as const, content: JSON.stringify(toolResult.toolCalls) },
-          { role: 'tool' as const, content: JSON.stringify(toolResult.toolResults) }
-        ];
-
+        // Store tool results in request metadata instead of injecting synthetic messages
+        // This avoids provider compatibility issues (Anthropic rejects 'tool' role, Google maps it incorrectly)
         const updatedRequest = {
           ...llmRequest,
-          messages: updatedMessages
+          toolCalls: toolResult.toolCalls,
+          toolResults: toolResult.toolResults
         };
 
         return await this.callProviderWithEnhancedClient(provider, updatedRequest, retryOptions, enableCircuitBreaker);
       }
     }
 
-    // If sandbox is enabled, process sandbox request
-    if (enableSandbox && userId && conversationId) {
+    // Only process sandbox request if explicitly flagged as a sandbox/command request
+    // This prevents short-circuiting normal LLM flow for all messages when sandbox is enabled
+    if (request.isSandboxCommand && userId && conversationId) {
       return await this.processSandboxRequest(request, userId, conversationId);
     }
 
@@ -262,7 +261,7 @@ export class EnhancedLLMService {
 
   private async callProviderWithEnhancedClient(
     provider: string,
-    request: LLMRequest,
+    request: LLMRequest & { toolCalls?: any[]; toolResults?: any[] },
     retryOptions?: any,
     enableCircuitBreaker: boolean = true
   ): Promise<LLMResponse> {
@@ -271,11 +270,57 @@ export class EnhancedLLMService {
       throw new Error(`Provider ${provider} not configured`);
     }
 
+    // Filter messages for provider compatibility
+    // OpenAI supports 'tool' role, but Anthropic and Google do not
+    const filteredMessages = this.filterMessagesForProvider(request.messages, provider);
+
+    const providerRequest = {
+      ...request,
+      messages: filteredMessages
+    };
+
     try {
-      return await llmService.generateResponse(request);
+      return await llmService.generateResponse(providerRequest);
     } catch (error) {
       throw this.enhanceError(error as Error, provider);
     }
+  }
+
+  /**
+   * Filter messages for provider compatibility.
+   * - OpenAI: Supports 'tool' and 'assistant' roles with tool calls
+   * - Anthropic: Only supports 'user' and 'assistant' roles
+   * - Google: Maps 'tool' to 'user' which is incorrect
+   */
+  private filterMessagesForProvider(
+    messages: Array<{ role: string; content: string }>,
+    provider: string
+  ): Array<{ role: string; content: string }> {
+    // OpenAI-compatible providers can handle tool messages
+    const openAICompatible = ['openrouter', 'chutes', 'portkey'];
+    if (openAICompatible.includes(provider)) {
+      return messages;
+    }
+
+    // For other providers (Anthropic, Google, etc.), filter out synthetic tool messages
+    return messages.filter(msg => {
+      // Remove 'tool' role messages
+      if (msg.role === 'tool') return false;
+
+      // Remove assistant messages that are just JSON-stringified tool calls
+      if (msg.role === 'assistant' && msg.content) {
+        try {
+          const parsed = JSON.parse(msg.content);
+          if (Array.isArray(parsed) && parsed.every(item => item.id && item.type && item.function)) {
+            return false; // This is a synthetic tool call message
+          }
+        } catch {
+          // Not JSON, keep the message
+        }
+      }
+
+      return true;
+    });
   }
 
   private findCompatibleModel(requestedModel: string, availableModels: string[]): string | null {
@@ -501,11 +546,9 @@ export class EnhancedLLMService {
 
     // Block dangerous command patterns that could escape sandbox or cause harm
     const dangerousPatterns = [
-      // Network exfiltration attempts
-      /\bcurl\b.*\|.*\bsh\b/i,
-      /\bwget\b.*\|.*\bsh\b/i,
-      /\bnc\b\s+-e\b/i,
-      /\bnetcat\b.*-e\b/i,
+      // Network exfiltration attempts (using [^|]* instead of .* to prevent backtracking)
+      /\bcurl\b[^|]*\|\s*(?:ba)?sh\b/i,
+      /\bwget\b[^|]*\|\s*(?:ba)?sh\b/i,
       // Privilege escalation
       /\bsudo\b/i,
       /\bsu\b\s+/i,
@@ -519,16 +562,33 @@ export class EnhancedLLMService {
       // Process manipulation
       /\bpkill\b/i,
       /\bkillall\b/i,
-      // Code execution in other languages
-      /\bpython\b.*-c\b/i,
-      /\bperl\b.*-e\b/i,
-      /\bruby\b.*-e\b/i,
+      // Code execution in other languages (using \s+ instead of .*)
+      /\bpython[3]?\s+-c\b/i,
+      /\bperl\s+-e\b/i,
+      /\bruby\s+-e\b/i,
       // Base64 decode and execute patterns
-      /\bbase64\b.*\|.*\bsh\b/i,
-      /\bbase64\b.*\|.*\bbash\b/i,
+      /\bbase64\b[^|]*\|\s*(?:ba)?sh\b/i,
+      /\bbase64\b[^|]*\|\s*bash\b/i,
       // Eval patterns
-      /\beval\b\s*\(/i,
-      /\bexec\b\s*\(/i,
+      /\beval\s*\(/i,
+      /\bexec\s*\(/i,
+      // Netcat with exec flag
+      /\bnc\s+-e\b/i,
+      /\bnetcat\s+-e\b/i,
+      // Additional dangerous patterns for common attack vectors
+      /\bnode\s+-e\b/i,
+      /\bphp\s+-r\b/i,
+      /\bbash\s+-c\b/i,
+      /\bzsh\s+-c\b/i,
+      /\bsh\s+-c\b/i,
+      // Piping to any shell variant
+      /\|\s*(ba)?sh\b/i,
+      /\|\s*bash\b/i,
+      /\|\s*zsh\b/i,
+      /\|\s*ash\b/i,
+      // Command substitution
+      /\$\([^)]+\)/,
+      /`[^`]+`/,
     ];
 
     for (const pattern of dangerousPatterns) {
@@ -537,7 +597,22 @@ export class EnhancedLLMService {
       }
     }
 
+    // Universal shell metacharacter check - applied to ALL commands
+    // These characters can enable command injection or redirection attacks
+    const dangerousChars = [';', '&&', '||', '|', '`', '$', '>', '<', '&', '\n', '\r'];
+    for (const char of dangerousChars) {
+      if (trimmedCommand.includes(char)) {
+        return {
+          isValid: false,
+          command: '',
+          reason: `Command contains unsafe character: ${char}`
+        };
+      }
+    }
+
     // Allow-list of safe command prefixes for common development tasks
+    // NOTE: Container tools and general-purpose interpreters are intentionally excluded
+    // as they can be used to escape sandbox or execute arbitrary code
     const safeCommandPrefixes = [
       // File operations
       'ls ', 'cat ', 'head ', 'tail ', 'wc ', 'grep ', 'find ', 'tree ',
@@ -546,11 +621,11 @@ export class EnhancedLLMService {
       // Text processing
       'sed ', 'awk ', 'cut ', 'sort ', 'uniq ', 'tr ', 'rev ',
       'echo ', 'printf ',
-      // Development tools
-      'npm ', 'yarn ', 'pnpm ', 'bun ', 'pip ', 'pip3 ', 'cargo ', 'go ',
-      'node ', 'python ', 'python3 ', 'ruby ', 'perl ', 'php ',
-      'git ', 'svn ', 'hg ',
+      // Build tools and compilers (safe, produce deterministic output)
+      'npm ', 'yarn ', 'pnpm ', 'bun ', 'cargo ', 'go ',
       'make ', 'cmake ', 'gcc ', 'g++ ', 'clang ', 'rustc ',
+      // Version control
+      'git ', 'svn ', 'hg ',
       // Testing
       'jest ', 'mocha ', 'pytest ', 'cargo test', 'go test ',
       // System info (read-only)
@@ -560,12 +635,11 @@ export class EnhancedLLMService {
       'curl ', 'wget ', 'ping ', 'dig ', 'nslookup ', 'netstat ', 'ss ',
       // Process info (read-only)
       'ps ', 'top ', 'htop ', 'pgrep ', 'pidof ',
-      // Package managers
+      // Package managers (read-only operations)
       'apt ', 'apt-get ', 'apt-cache ', 'yum ', 'dnf ', 'apk ', 'brew ',
-      // Misc development
-      'docker ', 'docker-compose ', 'kubectl ', 'helm ',
-      'terraform ', 'ansible ',
+      // Text editors (interactive, don't execute code)
       'vim ', 'vi ', 'nano ', 'emacs ', 'code ',
+      // Documentation
       'man ', 'help ', '--help', '-h ',
     ];
 
@@ -582,18 +656,11 @@ export class EnhancedLLMService {
     );
 
     if (!isSafePrefix && !isSimpleSafeCommand) {
-      // For commands that don't match safe patterns, apply stricter scrutiny
-      // Block shell metacharacters that could enable injection
-      const dangerousChars = [';', '&&', '||', '|', '`', '$', '>', '<', '&'];
-      for (const char of dangerousChars) {
-        if (trimmedCommand.includes(char)) {
-          return {
-            isValid: false,
-            command: '',
-            reason: `Command contains unsafe character: ${char}`
-          };
-        }
-      }
+      return {
+        isValid: false,
+        command: '',
+        reason: 'Command not in allowed list'
+      };
     }
 
     return { isValid: true, command: trimmedCommand };

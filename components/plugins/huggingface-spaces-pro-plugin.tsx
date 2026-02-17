@@ -197,7 +197,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
           height: imageParams.height,
           num_inference_steps: imageParams.steps,
           guidance_scale: imageParams.guidance,
-          seed: imageParams.seed === '' ? -1 : parseInt(imageParams.seed as string),
+          seed: imageParams.seed === '' ? -1 : Number.parseInt(imageParams.seed as string),
           sampler: imageParams.sampler,
           num_images: imageParams.numImages
         })
@@ -343,12 +343,12 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                 <div>
                   <label className="text-sm mb-1 block">Width</label>
                   <Input type="number" value={imageParams.width} 
-                    onChange={(e) => setImageParams({...imageParams, width: parseInt(e.target.value)})} />
+                    onChange={(e) => setImageParams({...imageParams, width: Number.parseInt(e.target.value)})} />
                 </div>
                 <div>
                   <label className="text-sm mb-1 block">Height</label>
                   <Input type="number" value={imageParams.height}
-                    onChange={(e) => setImageParams({...imageParams, height: parseInt(e.target.value)})} />
+                    onChange={(e) => setImageParams({...imageParams, height: Number.parseInt(e.target.value)})} />
                 </div>
               </div>
 
@@ -395,7 +395,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
               <div>
                 <label className="text-sm mb-1 block">Number of Images</label>
                 <Input type="number" min={1} max={4} value={imageParams.numImages}
-                  onChange={(e) => setImageParams({...imageParams, numImages: parseInt(e.target.value)})} />
+                  onChange={(e) => setImageParams({...imageParams, numImages: Number.parseInt(e.target.value)})} />
               </div>
 
               <Button onClick={generateImage} disabled={!imageParams.prompt || generating} className="w-full">

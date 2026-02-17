@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     const userId = authResult.userId!;
     const { searchParams } = new URL(request.url);
     const path = searchParams.get('path');
-    const expiresIn = parseInt(searchParams.get('expiresIn') || '3600');
+    const expiresIn = Number.parseInt(searchParams.get('expiresIn') || '3600');
 
     if (!path) {
       return NextResponse.json(

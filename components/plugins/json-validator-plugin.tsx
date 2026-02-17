@@ -88,7 +88,7 @@ export const JsonValidatorPlugin: React.FC<PluginProps> = ({
         // Try to extract line and column information
         const match = error.message.match(/at position (\d+)/);
         if (match) {
-          const position = parseInt(match[1]);
+          const position = Number.parseInt(match[1]);
           const lines = input.substring(0, position).split('\n');
           line = lines.length;
           column = lines[lines.length - 1].length + 1;
