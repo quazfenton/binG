@@ -24,9 +24,6 @@ RUN SKIP_DB_INIT=1 pnpm run build
 FROM base AS runner
 ENV NODE_ENV=production
 
-# Install build dependencies in the production image to ensure native modules work
-RUN apt-get update && apt-get install -y python3 make g++ build-essential
-
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/pnpm-lock.yaml ./pnpm-lock.yaml

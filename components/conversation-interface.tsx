@@ -94,7 +94,7 @@ function ConversationInterfaceContent() {
   >(null);
 
   // Enhanced code system integration
-  const [activeTab, setActiveTab] = useState<"chat" | "code">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "code" | "extras" | "integrations" | "shell">("chat");
   const codeServiceContext = useCodeService();
 
   // Update mode manager when active tab changes

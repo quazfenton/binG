@@ -158,15 +158,18 @@ export default function MessageBubble({
         authUrl: (message as any).metadata.authUrl
       }
     }
-    
+
     const content = getContentToDisplay()
     if (content.includes('AUTH_REQUIRED:')) {
-      const parts = content.split(':')
-      if (parts.length >= 3) {
+      // Use regex to properly parse AUTH_REQUIRED:url:toolName format
+      // This handles URLs with :// correctly
+      const authRegex = /^AUTH_REQUIRED:(.+):([^:]+)$/
+      const match = content.match(authRegex)
+      if (match && match[1] && match[2]) {
         return {
-          authUrl: parts[1],
-          toolName: parts[2],
-          provider: parts[2]?.split('.')[0] || 'unknown'
+          authUrl: match[1],
+          toolName: match[2],
+          provider: match[2]?.split('.')[0] || 'unknown'
         }
       }
     }

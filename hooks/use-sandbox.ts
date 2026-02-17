@@ -134,8 +134,13 @@ export function useSandbox(options: UseSandboxOptions) {
   const destroySession = useCallback(async () => {
     if (!session) return;
     try {
-      await fetch(`/api/sandbox/session?sessionId=${session.sessionId}&sandboxId=${session.sandboxId}`, {
+      await fetch('/api/sandbox/session', {
         method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: session.sessionId,
+          sandboxId: session.sandboxId
+        })
       });
     } catch {
       // Best effort

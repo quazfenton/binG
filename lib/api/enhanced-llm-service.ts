@@ -403,7 +403,7 @@ export class EnhancedLLMService {
   async processSandboxRequest(request: EnhancedLLMRequest, userId: string, conversationId: string): Promise<LLMResponse> {
     try {
       const session = await sandboxBridge.getOrCreateSession(userId);
-      
+
       const lastUserMessage = request.messages
         .filter(m => m.role === 'user')
         .pop()?.content;
@@ -418,7 +418,45 @@ export class EnhancedLLMService {
         };
       }
 
-      const result = await sandboxBridge.executeCommand(session.sandboxId, lastUserMessage);
+      // Type guard: Ensure content is a string, not an array of content parts
+      let commandString: string;
+      if (typeof lastUserMessage !== 'string') {
+        // Handle array content by extracting text from parts
+        if (Array.isArray(lastUserMessage)) {
+          commandString = lastUserMessage
+            .filter(part => typeof part === 'string' || (part as any).type === 'text')
+            .map(part => typeof part === 'string' ? part : (part as any).text || '')
+            .join(' ');
+        } else {
+          return {
+            content: 'Invalid message format: expected string or text content',
+            tokensUsed: 0,
+            finishReason: 'error',
+            timestamp: new Date(),
+            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+          };
+        }
+      } else {
+        commandString = lastUserMessage;
+      }
+
+      // Extract command from natural language input
+      // Look for common command patterns and extract the actual shell command
+      const extractedCommand = this.extractCommandFromNaturalLanguage(commandString);
+      
+      // Validate and sanitize command input before execution
+      const validatedCommand = this.validateSandboxCommand(extractedCommand);
+      if (!validatedCommand.isValid) {
+        return {
+          content: `Command rejected: ${validatedCommand.reason}`,
+          tokensUsed: 0,
+          finishReason: 'error',
+          timestamp: new Date(),
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+        };
+      }
+
+      const result = await sandboxBridge.executeCommand(session.sandboxId, validatedCommand.command);
 
       return {
         content: `Sandbox execution completed.\n\nOutput:\n${result.stdout || 'No output'}\n${result.stderr ? `\nErrors:\n${result.stderr}` : ''}`,
@@ -437,6 +475,166 @@ export class EnhancedLLMService {
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
       };
     }
+  }
+
+  /**
+   * Validates and sanitizes command input before sandbox execution.
+   * Prevents command injection attacks by blocking dangerous patterns.
+   */
+  private validateSandboxCommand(command: string): { isValid: boolean; command: string; reason?: string } {
+    if (!command || typeof command !== 'string') {
+      return { isValid: false, command: '', reason: 'Command is required' };
+    }
+
+    // Length limit to prevent resource exhaustion
+    const MAX_COMMAND_LENGTH = 10000;
+    if (command.length > MAX_COMMAND_LENGTH) {
+      return { isValid: false, command: '', reason: `Command exceeds maximum length of ${MAX_COMMAND_LENGTH} characters` };
+    }
+
+    const trimmedCommand = command.trim();
+
+    // Block dangerous command patterns that could escape sandbox or cause harm
+    const dangerousPatterns = [
+      // Network exfiltration attempts
+      /\bcurl\b.*\|.*\bsh\b/i,
+      /\bwget\b.*\|.*\bsh\b/i,
+      /\bnc\b\s+-e\b/i,
+      /\bnetcat\b.*-e\b/i,
+      // Privilege escalation
+      /\bsudo\b/i,
+      /\bsu\b\s+/i,
+      // Container escape attempts
+      /\bdocker\b/i,
+      /\bkubectl\b/i,
+      // Filesystem traversal beyond workspace
+      /\.\.\/\.\./,
+      /\/etc\/passwd/,
+      /\/etc\/shadow/,
+      // Process manipulation
+      /\bpkill\b/i,
+      /\bkillall\b/i,
+      // Code execution in other languages
+      /\bpython\b.*-c\b/i,
+      /\bperl\b.*-e\b/i,
+      /\bruby\b.*-e\b/i,
+      // Base64 decode and execute patterns
+      /\bbase64\b.*\|.*\bsh\b/i,
+      /\bbase64\b.*\|.*\bbash\b/i,
+      // Eval patterns
+      /\beval\b\s*\(/i,
+      /\bexec\b\s*\(/i,
+    ];
+
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(trimmedCommand)) {
+        return { isValid: false, command: '', reason: 'Command contains potentially dangerous pattern' };
+      }
+    }
+
+    // Allow-list of safe command prefixes for common development tasks
+    const safeCommandPrefixes = [
+      // File operations
+      'ls ', 'cat ', 'head ', 'tail ', 'wc ', 'grep ', 'find ', 'tree ',
+      'pwd ', 'cd ', 'mkdir ', 'rmdir ', 'cp ', 'mv ', 'rm ', 'touch ',
+      'chmod ', 'chown ', 'ln ', 'readlink ',
+      // Text processing
+      'sed ', 'awk ', 'cut ', 'sort ', 'uniq ', 'tr ', 'rev ',
+      'echo ', 'printf ',
+      // Development tools
+      'npm ', 'yarn ', 'pnpm ', 'bun ', 'pip ', 'pip3 ', 'cargo ', 'go ',
+      'node ', 'python ', 'python3 ', 'ruby ', 'perl ', 'php ',
+      'git ', 'svn ', 'hg ',
+      'make ', 'cmake ', 'gcc ', 'g++ ', 'clang ', 'rustc ',
+      // Testing
+      'jest ', 'mocha ', 'pytest ', 'cargo test', 'go test ',
+      // System info (read-only)
+      'uname ', 'whoami ', 'id ', 'date ', 'time ', 'uptime ', 'df ', 'du ',
+      'env ', 'printenv ', 'which ', 'whereis ', 'type ',
+      // Network (read-only)
+      'curl ', 'wget ', 'ping ', 'dig ', 'nslookup ', 'netstat ', 'ss ',
+      // Process info (read-only)
+      'ps ', 'top ', 'htop ', 'pgrep ', 'pidof ',
+      // Package managers
+      'apt ', 'apt-get ', 'apt-cache ', 'yum ', 'dnf ', 'apk ', 'brew ',
+      // Misc development
+      'docker ', 'docker-compose ', 'kubectl ', 'helm ',
+      'terraform ', 'ansible ',
+      'vim ', 'vi ', 'nano ', 'emacs ', 'code ',
+      'man ', 'help ', '--help', '-h ',
+    ];
+
+    // Check if command starts with a safe prefix or is a simple command
+    const lowerCommand = trimmedCommand.toLowerCase();
+    const isSafePrefix = safeCommandPrefixes.some(prefix =>
+      lowerCommand.startsWith(prefix.toLowerCase())
+    );
+
+    // Also allow simple commands without arguments (e.g., "ls", "pwd")
+    const simpleCommand = trimmedCommand.split(/\s+/)[0].toLowerCase();
+    const isSimpleSafeCommand = safeCommandPrefixes.some(prefix =>
+      prefix.trim() === simpleCommand
+    );
+
+    if (!isSafePrefix && !isSimpleSafeCommand) {
+      // For commands that don't match safe patterns, apply stricter scrutiny
+      // Block shell metacharacters that could enable injection
+      const dangerousChars = [';', '&&', '||', '|', '`', '$', '>', '<', '&'];
+      for (const char of dangerousChars) {
+        if (trimmedCommand.includes(char)) {
+          return {
+            isValid: false,
+            command: '',
+            reason: `Command contains unsafe character: ${char}`
+          };
+        }
+      }
+    }
+
+    return { isValid: true, command: trimmedCommand };
+  }
+
+  /**
+   * Extracts shell commands from natural language input.
+   * Converts phrases like "please run ls -la" to "ls -la".
+   */
+  private extractCommandFromNaturalLanguage(input: string): string {
+    const trimmedInput = input.trim();
+
+    // Common natural language prefixes to strip
+    const commandPrefixes = [
+      /^(?:please\s+)?(?:run|execute|exec)\s+/i,
+      /^(?:please\s+)?(?:can\s+you\s+)?(?:run|execute)\s+/i,
+      /^(?:could\s+you\s+)?(?:please\s+)?(?:run|execute)\s+/i,
+      /^(?:i\s+want\s+to\s+)?(?:run|execute)\s+/i,
+      /^(?:i\s+need\s+to\s+)?(?:run|execute)\s+/i,
+      /^(?:let['']s\s+)?(?:run|execute)\s+/i,
+      /^(?:just\s+)?(?:run|execute)\s+/i,
+      /^(?:show\s+me\s+)/i,
+      /^(?:check\s+)/i,
+      /^(?:list\s+)/i,
+      /^(?:display\s+)/i,
+    ];
+
+    let command = trimmedInput;
+    for (const prefix of commandPrefixes) {
+      const match = command.match(prefix);
+      if (match) {
+        command = command.replace(prefix, '');
+        break;
+      }
+    }
+
+    // Remove trailing punctuation that's common in natural language
+    command = command.replace(/[.!?,;]+$/, '').trim();
+
+    // Remove quote wrappers if present
+    const quoteMatch = command.match(/^["'](.+)["']$/);
+    if (quoteMatch) {
+      command = quoteMatch[1];
+    }
+
+    return command.trim() || trimmedInput;
   }
 
   destroy(): void {

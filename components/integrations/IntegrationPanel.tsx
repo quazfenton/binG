@@ -166,16 +166,44 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
   }, [userId]);
 
   useEffect(() => {
-    // Check for popup close
-    const interval = setInterval(() => {
-      if (popupWindow && popupWindow.closed) {
+    // Listen for OAuth success/cancel messages from popup
+    const handleMessage = (event: MessageEvent) => {
+      // Validate message origin for security
+      if (event.origin !== window.location.origin) return;
+
+      if (event.data?.type === 'oauth_success') {
         setPopupWindow(null);
         setLoading(null);
         fetchConnectedIntegrations();
+        toast.success('Integration connected successfully');
+      } else if (event.data?.type === 'oauth_cancel') {
+        setPopupWindow(null);
+        setLoading(null);
+        toast.info('Connection cancelled');
       }
-    }, 500);
+    };
 
-    return () => clearInterval(interval);
+    window.addEventListener('message', handleMessage);
+
+    // Only poll for popup close if a popup is actually open
+    let interval: number | undefined;
+    if (popupWindow) {
+      interval = setInterval(() => {
+        if (popupWindow.closed) {
+          setPopupWindow(null);
+          setLoading(null);
+          // Popup closed without sending message - treat as cancel
+          fetchConnectedIntegrations();
+        }
+      }, 500);
+    }
+
+    return () => {
+      if (interval !== undefined) {
+        clearInterval(interval);
+      }
+      window.removeEventListener('message', handleMessage);
+    };
   }, [popupWindow]);
 
   const fetchConnectedIntegrations = async () => {
@@ -219,16 +247,20 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
         }
       }
 
-      // Open OAuth popup
+      // Open OAuth popup with noopener,noreferrer for security
+      // This prevents the third-party auth page from accessing window.opener
       const width = 600;
       const height = 700;
       const left = window.screenX + (window.outerWidth - width) / 2;
       const top = window.screenY + (window.outerHeight - height) / 2;
 
+      // Add origin parameter for postMessage security validation
+      const urlWithOrigin = `${authEndpoint}${authEndpoint.includes('?') ? '&' : '?'}origin=${encodeURIComponent(window.location.origin)}`;
+
       const popup = window.open(
-        authEndpoint,
+        urlWithOrigin,
         'oauth_popup',
-        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes`
+        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes,noopener=yes,noreferrer=yes`
       );
 
       if (popup) {
