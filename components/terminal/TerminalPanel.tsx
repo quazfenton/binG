@@ -163,10 +163,14 @@ export default function TerminalPanel({
     toast.info('Terminal cleared');
   };
 
-  const copyOutput = () => {
+  const copyOutput = async () => {
     const text = outputs.map(o => o.content).join('\n');
-    navigator.clipboard.writeText(text);
-    toast.success('Copied to clipboard');
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success('Copied to clipboard');
+    } catch {
+      toast.error('Failed to copy to clipboard');
+    }
   };
 
   const killSandbox = async () => {

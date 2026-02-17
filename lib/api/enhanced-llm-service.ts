@@ -115,11 +115,16 @@ export class EnhancedLLMService {
 
       if (toolResult.requiresAuth && toolResult.authUrl) {
         return {
-          content: `AUTH_REQUIRED:${toolResult.authUrl}:${toolResult.toolName}`,
+          content: `I need authorization to use ${toolResult.toolName}. Please connect your account to proceed.`,
           tokensUsed: 0,
           finishReason: 'tool_auth_required',
           timestamp: new Date(),
-          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          metadata: {
+            requiresAuth: true,
+            authUrl: toolResult.authUrl,
+            toolName: toolResult.toolName
+          }
         };
       }
 

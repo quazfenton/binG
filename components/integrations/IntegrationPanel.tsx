@@ -247,8 +247,7 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
         }
       }
 
-      // Open OAuth popup with noopener,noreferrer for security
-      // This prevents the third-party auth page from accessing window.opener
+      // Calculate popup position centered on screen
       const width = 600;
       const height = 700;
       const left = window.screenX + (window.outerWidth - width) / 2;
@@ -257,10 +256,11 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       // Add origin parameter for postMessage security validation
       const urlWithOrigin = `${authEndpoint}${authEndpoint.includes('?') ? '&' : '?'}origin=${encodeURIComponent(window.location.origin)}`;
 
+      // Open OAuth popup (without noopener to allow window.opener.postMessage communication)
       const popup = window.open(
         urlWithOrigin,
         'oauth_popup',
-        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes,noopener=yes,noreferrer=yes`
+        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`
       );
 
       if (popup) {
