@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 
 interface SandboxSession {
   sessionId: string;
@@ -26,27 +26,46 @@ export function useSandbox(options: UseSandboxOptions) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [steps, setSteps] = useState<SandboxAgentStep[]>([]);
+  const sessionPromiseRef = useRef<Promise<SandboxSession | null> | null>(null);
 
   const ensureSession = useCallback(async (): Promise<SandboxSession | null> => {
+    // Return existing session if available
     if (session) return session;
-    if (!options.userId) return null;
 
-    try {
-      const res = await fetch('/api/sandbox/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: String(options.userId) }),
-      });
-      const data = await res.json();
-      if (data.session) {
-        setSession(data.session);
-        return data.session;
-      }
-      return null;
-    } catch (err: any) {
-      console.error('[useSandbox] Session creation failed:', err);
+    // Return in-flight promise if session creation is already in progress
+    if (sessionPromiseRef.current) {
+      return await sessionPromiseRef.current;
+    }
+
+    // Validate user ID before starting session creation
+    if (!options.userId) {
       return null;
     }
+
+    // Create session creation promise and store it in ref
+    sessionPromiseRef.current = (async () => {
+      try {
+        const res = await fetch('/api/sandbox/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: String(options.userId) }),
+        });
+        const data = await res.json();
+        if (data.session) {
+          setSession(data.session);
+          return data.session;
+        }
+        return null;
+      } catch (err: any) {
+        console.error('[useSandbox] Session creation failed:', err);
+        return null;
+      } finally {
+        // Clear the ref after completion (success or failure)
+        sessionPromiseRef.current = null;
+      }
+    })();
+
+    return await sessionPromiseRef.current;
   }, [session, options.userId]);
 
   const runAgent = useCallback(

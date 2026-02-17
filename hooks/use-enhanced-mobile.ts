@@ -317,7 +317,7 @@ export function useEnhancedMobile() {
     document.body.style.width = '';
 
     if (scrollY) {
-      window.scrollTo(0, parseInt(scrollY) * -1);
+      window.scrollTo(0, Number.parseInt(scrollY) * -1);
     }
   }, []);
 

@@ -53,7 +53,7 @@ export interface EndpointConfig {
 class PriorityRequestRouter {
   private endpoints: EndpointConfig[];
   private routingStats: Map<string, { success: number; failures: number }>;
-  private composioService: ReturnType<typeof initializeComposioService>;
+  private readonly composioService: ReturnType<typeof initializeComposioService>;
 
   constructor() {
     this.routingStats = new Map();
@@ -90,10 +90,15 @@ class PriorityRequestRouter {
         name: 'tool-execution',
         priority: 1,
         enabled: true,
-        service: getToolManager(),
+        service: null, // Lazily initialized to prevent crashes if ../tools is missing
         healthCheck: async () => {
-          // Check if Arcade/Nango are configured
-          return !!(process.env.ARCADE_API_KEY || process.env.NANGO_API_KEY);
+          try {
+            // Check if tool manager and Arcade/Nango are configured
+            const toolManager = getToolManager();
+            return !!toolManager && !!(process.env.ARCADE_API_KEY || process.env.NANGO_API_KEY);
+          } catch {
+            return false;
+          }
         },
         canHandle: (req) => {
           // Check if request contains tool intent and has user context
@@ -583,10 +588,10 @@ class PriorityRequestRouter {
     } catch (error) {
       console.error('[Router] Tool processing error:', error);
       return {
-        content: error instanceof Error ? error.message : String(error),
+        content: 'Tool execution is currently unavailable. Please try again later.',
         data: {
           source: 'tool-execution',
-          error: String(error),
+          error: error instanceof Error ? error.message : 'Unknown error',
           type: 'error'
         }
       };
@@ -610,12 +615,33 @@ class PriorityRequestRouter {
 
     try {
       const session = await sandboxBridge.getOrCreateSession(request.userId);
-      
+
       const lastUserMessage = request.messages
         .filter(m => m.role === 'user')
         .pop()?.content;
 
-      if (!lastUserMessage || typeof lastUserMessage !== 'string') {
+      // Handle array content (multimodal messages) by extracting text parts
+      let messageContent: string;
+      if (typeof lastUserMessage !== 'string') {
+        if (Array.isArray(lastUserMessage)) {
+          messageContent = lastUserMessage
+            .filter(part => typeof part === 'string' || (part as any).type === 'text')
+            .map(part => typeof part === 'string' ? part : (part as any).text || '')
+            .join(' ');
+        } else {
+          return {
+            content: 'No user message found to process',
+            data: {
+              source: 'sandbox-agent',
+              error: 'Invalid message format'
+            }
+          };
+        }
+      } else {
+        messageContent = lastUserMessage;
+      }
+
+      if (!messageContent || messageContent.trim() === '') {
         return {
           content: 'No user message found to process',
           data: {
@@ -629,7 +655,7 @@ class PriorityRequestRouter {
       try {
         const { runAgentLoop } = await import('../sandbox/agent-loop');
         const result = await runAgentLoop({
-          userMessage: lastUserMessage,
+          userMessage: messageContent,
           sandboxId: session.sandboxId,
           conversationHistory: request.messages,
         });

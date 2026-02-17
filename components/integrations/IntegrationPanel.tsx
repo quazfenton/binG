@@ -236,14 +236,24 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     try {
       // Determine the auth endpoint based on provider
       let authEndpoint = `/api/auth/oauth/initiate?provider=${integration.provider}&userId=${userId}`;
-      
+
       // Check if provider uses Arcade
       const arcadeProviders = ['google', 'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive', 'exa', 'twilio', 'spotify', 'vercel', 'railway'];
       if (arcadeProviders.includes(integration.provider)) {
-        const response = await fetch(`/api/auth/arcade/authorize?provider=${integration.provider}&userId=${userId}`);
-        if (response.ok) {
-          const data = await response.json();
-          authEndpoint = data.authUrl;
+        try {
+          const response = await fetch(`/api/auth/arcade/authorize?provider=${integration.provider}&userId=${userId}`);
+          if (response.ok) {
+            const data = await response.json();
+            authEndpoint = data.authUrl;
+          } else {
+            toast.error(`Failed to initialize ${integration.name} connection`);
+            setLoading(null);
+            return;
+          }
+        } catch {
+          toast.error(`Failed to reach authorization service for ${integration.name}`);
+          setLoading(null);
+          return;
         }
       }
 
