@@ -7,24 +7,45 @@ export interface ToolAuthorizationContext {
 }
 
 const TOOL_PROVIDER_MAP: Record<string, string> = {
+  // Gmail
   'gmail.send': 'google', 'gmail.read': 'google', 'gmail.search': 'google', 'gmail.draft': 'google',
+  // Outlook
   'outlook.send': 'microsoft', 'outlook.read': 'microsoft',
+  // Google Docs
   'googledocs.create': 'google', 'googledocs.read': 'google', 'googledocs.update': 'google',
+  // Google Sheets
   'googlesheets.create': 'google', 'googlesheets.read': 'google', 'googlesheets.write': 'google', 'googlesheets.append': 'google',
+  // Google Calendar
   'googlecalendar.create': 'google', 'googlecalendar.read': 'google', 'googlecalendar.update': 'google', 'googlecalendar.delete': 'google',
+  // Google Drive
   'googledrive.upload': 'google', 'googledrive.download': 'google', 'googledrive.list': 'google', 'googledrive.search': 'google',
+  // Google Maps
   'googlemaps.search': 'google', 'googlemaps.directions': 'google', 'googlemaps.geocode': 'google',
+  // Notion
   'notion.create_page': 'notion', 'notion.read_page': 'notion', 'notion.update_page': 'notion', 'notion.search': 'notion',
+  // Dropbox
   'dropbox.upload': 'dropbox', 'dropbox.download': 'dropbox', 'dropbox.list': 'dropbox',
+  // GitHub
   'github.create_issue': 'github', 'github.list_repos': 'github', 'github.create_pr': 'github', 'github.get_file': 'github', 'github.commit': 'github',
+  // Exa
   'exa.search': 'exa', 'exa.find_similar': 'exa',
+  // Twilio
   'twilio.send_sms': 'twilio', 'twilio.make_call': 'twilio', 'twilio.receive_sms': 'twilio',
+  // Slack
   'slack.send_message': 'slack', 'slack.read_messages': 'slack',
+  // Discord
   'discord.send_message': 'discord', 'discord.read_messages': 'discord',
-  'twitter.post': 'twitter', 'twitter.search': 'twitter',
-  'reddit.post': 'reddit', 'reddit.search': 'reddit',
-  'spotify.play': 'spotify', 'spotify.search': 'spotify', 'spotify.playlist': 'spotify',
-  'vercel.deploy': 'vercel', 'railway.deploy': 'railway',
+  // Twitter/X
+  'twitter.post': 'twitter', 'twitter.read': 'twitter', 'twitter.search': 'twitter',
+  // Reddit
+  'reddit.post': 'reddit', 'reddit.read': 'reddit', 'reddit.comment': 'reddit',
+  // Spotify
+  'spotify.play': 'spotify', 'spotify.search': 'spotify', 'spotify.create_playlist': 'spotify', 'spotify.get_current': 'spotify',
+  // Vercel
+  'vercel.deploy': 'vercel', 'vercel.list_deployments': 'vercel', 'vercel.get_project': 'vercel',
+  // Railway
+  'railway.deploy': 'railway',
+  // Google News
   'googlenews.search': 'google',
 };
 
@@ -39,7 +60,11 @@ export class ToolAuthorizationManager {
     if (NO_AUTH_TOOLS.has(toolName)) return true;
 
     const provider = TOOL_PROVIDER_MAP[toolName];
-    if (!provider) return true; // Unknown tools pass through
+    if (!provider) {
+      // Unknown tool - fail closed and log warning
+      console.warn(`[ToolAuth] Unknown tool requested: ${toolName} by user ${userId}. Denying access.`);
+      return false;
+    }
 
     // Convert string userId to number for database query
     const numericUserId = Number(userId);

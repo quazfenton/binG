@@ -6,10 +6,25 @@ import type { LLMMessage } from '@/lib/api/llm-providers';
  * @returns The detected request type: 'tool', 'sandbox', or 'chat'
  */
 export function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 'chat' {
-  const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content;
-  if (!lastUserMsg || typeof lastUserMsg !== 'string') return 'chat';
-
-  const text = lastUserMsg.toLowerCase();
+  const lastUserContent = messages.filter(m => m.role === 'user').pop()?.content;
+  
+  // Extract text from content (handle both string and multimodal array formats)
+  let text: string;
+  if (typeof lastUserContent === 'string') {
+    text = lastUserContent;
+  } else if (Array.isArray(lastUserContent)) {
+    // Extract text parts from multimodal content
+    text = lastUserContent
+      .filter(part => part && (part.type === 'text' || typeof part === 'string'))
+      .map(part => typeof part === 'string' ? part : (part as any).text || '')
+      .join(' ');
+  } else {
+    return 'chat';
+  }
+  
+  if (!text.trim()) return 'chat';
+  
+  const lowerText = text.toLowerCase();
 
   // Tool intent patterns (third-party service actions)
   const TOOL_PATTERNS = [
@@ -35,7 +50,7 @@ export function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 
     /\b(write|create|edit)\s+(a\s+)?file\s+.*\.(py|js|ts|html|css|json)/i,
   ];
 
-  if (TOOL_PATTERNS.some(p => p.test(text))) return 'tool';
-  if (SANDBOX_PATTERNS.some(p => p.test(text))) return 'sandbox';
+  if (TOOL_PATTERNS.some(p => p.test(lowerText))) return 'tool';
+  if (SANDBOX_PATTERNS.some(p => p.test(lowerText))) return 'sandbox';
   return 'chat';
 }

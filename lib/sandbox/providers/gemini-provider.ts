@@ -46,8 +46,10 @@ export class GeminiProvider implements LLMProvider {
 
       history.push({ role: 'model', parts: content.parts })
 
-      const functionCallPart = content.parts?.find((p: any) => p.functionCall)
-      if (!functionCallPart?.functionCall) {
+      // Handle parallel tool calls - Gemini can return multiple functionCall parts
+      const functionCallParts = content.parts?.filter((p: any) => p.functionCall) ?? []
+      
+      if (functionCallParts.length === 0) {
         const textResponse = content.parts
           ?.filter((p: any) => p.text)
           .map((p: any) => p.text)
@@ -55,26 +57,41 @@ export class GeminiProvider implements LLMProvider {
         return { response: textResponse || '', steps, totalSteps: step + 1 }
       }
 
-      const { name, args } = functionCallPart.functionCall
-      const toolResult = await executeTool(name, args)
+      // Process all function calls sequentially
+      const responseParts = []
+      for (const part of functionCallParts) {
+        const { name, args } = part.functionCall
+        let toolResult: ToolResult
+        
+        try {
+          toolResult = await executeTool(name, args)
+        } catch (err) {
+          // Handle tool execution errors gracefully
+          toolResult = {
+            success: false,
+            output: `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`,
+            exitCode: 1,
+          }
+        }
 
-      steps.push({ toolName: name, args, result: toolResult })
-      onToolExecution?.(name, args, toolResult)
-
-      history.push({
-        role: 'function',
-        parts: [
-          {
-            functionResponse: {
-              name,
-              response: {
-                result: toolResult.output,
-                exitCode: toolResult.exitCode,
-                success: toolResult.success,
-              },
+        steps.push({ toolName: name, args, result: toolResult })
+        onToolExecution?.(name, args, toolResult)
+        
+        responseParts.push({
+          functionResponse: {
+            name,
+            response: {
+              result: toolResult.output,
+              exitCode: toolResult.exitCode,
+              success: toolResult.success,
             },
           },
-        ],
+        })
+      }
+      
+      history.push({
+        role: 'user',  // Gemini SDK requires function responses to be sent as role: "user"
+        parts: responseParts,
       })
     }
 

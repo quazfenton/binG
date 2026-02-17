@@ -2,6 +2,7 @@ import { getLLMProvider } from './providers/llm-factory'
 import { getSandboxProvider } from './providers'
 import { SANDBOX_TOOLS, validateCommand, type ToolName } from './sandbox-tools'
 import type { ToolResult } from './types'
+import type { SandboxHandle } from './providers/sandbox-provider'
 
 const SYSTEM_PROMPT = `You are an expert software engineer with access to a Linux sandbox workspace.
 You can execute shell commands, write files, read files, and list directories.
@@ -46,7 +47,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
 }
 
 async function executeToolOnSandbox(
-  sandbox: any,
+  sandbox: SandboxHandle,
   toolName: ToolName,
   args: Record<string, any>,
 ): Promise<ToolResult> {

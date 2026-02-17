@@ -1,12 +1,7 @@
 import { getToolManager } from '@/lib/tools';
 import { toolAuthManager as toolAuthorizationManager } from '@/lib/services/tool-authorization-manager';
 import type { LLMMessage } from '@/lib/api/llm-providers';
-
-export interface ToolExecutionContext {
-  userId: string;
-  conversationId: string;
-  sessionId: string;
-}
+import type { ToolExecutionContext } from '@/lib/tools';
 
 export interface ToolDetectionResult {
   detectedTool: string | null;
@@ -72,7 +67,9 @@ export class ToolContextManager {
       {
         userId,
         conversationId,
-        sessionId: `session_${conversationId}` // Generate session ID from conversation ID
+        metadata: {
+          sessionId: `session_${conversationId}` // Store session ID in metadata
+        }
       }
     );
 

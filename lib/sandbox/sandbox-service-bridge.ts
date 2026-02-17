@@ -4,26 +4,14 @@
  * Provides sandbox lifecycle, command execution, and file operations.
  */
 
-// Re-use types locally to avoid deep import chains
-export interface WorkspaceSession {
-  sessionId: string;
-  sandboxId: string;
-  userId: string;
-  cwd: string;
-  createdAt: string;
-  lastActive: string;
-  status: 'creating' | 'active' | 'snapshotting' | 'destroyed';
-}
-
-export interface SandboxConfig {
-  language?: string;
-  autoStopInterval?: number;
-  resources?: { cpu?: number; memory?: number };
-  envVars?: Record<string, string>;
-}
+// Import types from canonical source to avoid duplication
+import type { WorkspaceSession, SandboxConfig } from './types';
 
 // In-memory session store for sandbox sessions
 const sandboxSessions = new Map<string, WorkspaceSession>();
+
+// Track pending session creations to prevent race conditions
+const pendingCreations = new Map<string, Promise<WorkspaceSession>>();
 
 export class SandboxServiceBridge {
   private initialized = false;
@@ -56,7 +44,27 @@ export class SandboxServiceBridge {
         return session;
       }
     }
-    return this.createWorkspace(userId, config);
+
+    // Check if a session is already being created for this user (prevent race condition)
+    const pendingKey = `user:${userId}`;
+    const pendingCreation = pendingCreations.get(pendingKey);
+    if (pendingCreation) {
+      return pendingCreation;
+    }
+
+    // Create a new workspace and track it as pending
+    const creationPromise = this.createWorkspace(userId, config)
+      .then((session) => {
+        pendingCreations.delete(pendingKey);
+        return session;
+      })
+      .catch((error) => {
+        pendingCreations.delete(pendingKey);
+        throw error;
+      });
+
+    pendingCreations.set(pendingKey, creationPromise);
+    return creationPromise;
   }
 
   async executeCommand(sandboxId: string, command: string, cwd?: string) {

@@ -266,11 +266,13 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       // Add origin parameter for postMessage security validation
       const urlWithOrigin = `${authEndpoint}${authEndpoint.includes('?') ? '&' : '?'}origin=${encodeURIComponent(window.location.origin)}`;
 
-      // Open OAuth popup (without noopener to allow window.opener.postMessage communication)
+      // Open OAuth popup with noopener,noreferrer for security
+      // This prevents the third-party auth page from accessing window.opener (mitigates tabnabbing)
+      // Note: We use interval-based fallback to detect popup closure instead of window.opener
       const popup = window.open(
         urlWithOrigin,
         'oauth_popup',
-        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`
+        `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes,noopener=yes,noreferrer=yes`
       );
 
       if (popup) {

@@ -98,6 +98,7 @@ export class ToolUtilities {
       startTime: Date;
       endTime: Date;
       attendees: string[];
+      phoneNumbers?: string[];  // Separate field for SMS recipients
       location?: string;
       notifyVia?: "email" | "sms" | "slack";
       notifyChannel?: string;
@@ -138,11 +139,30 @@ export class ToolUtilities {
           )
         )
       );
-    } else if (params.notifyVia === "sms" && params.attendees.length > 0) {
+    } else if (params.notifyVia === "sms") {
+      // Validate phone numbers exist
+      if (!params.phoneNumbers || params.phoneNumbers.length === 0) {
+        return {
+          success: false,
+          output: 'SMS notification requested but no phoneNumbers provided',
+        };
+      }
+      
+      // Validate phone number format (basic E.164 format check)
+      const phoneRegex = /^\+?[1-9]\d{1,14}$/;
+      const validPhoneNumbers = params.phoneNumbers.filter(num => phoneRegex.test(num.replace(/[\s\-()]/g, '')));
+      
+      if (validPhoneNumbers.length === 0) {
+        return {
+          success: false,
+          output: 'No valid phone numbers provided for SMS notification',
+        };
+      }
+      
       await this.toolManager.executeTool(
         "twilio.send_sms",
         {
-          to: params.attendees[0], // Assuming phone number
+          to: validPhoneNumbers[0],
           body: message,
         },
         context
@@ -244,19 +264,19 @@ export class ToolUtilities {
         context
       );
       results.notion = notionResult;
+    }
 
-      // Create tasks as issues
-      if (params.tasks) {
-        for (const task of params.tasks) {
-          await this.toolManager.executeTool(
-            "github.create_issue",
-            {
-              title: task.title,
-              body: task.description,
-            },
-            context
-          );
-        }
+    // Create tasks as GitHub issues (if GitHub is configured)
+    if (params.githubOrg && params.tasks) {
+      for (const task of params.tasks) {
+        await this.toolManager.executeTool(
+          "github.create_issue",
+          {
+            title: task.title,
+            body: task.description,
+          },
+          context
+        );
       }
     }
 

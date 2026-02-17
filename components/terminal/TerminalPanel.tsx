@@ -110,12 +110,11 @@ export default function TerminalPanel({
 
   const addOutput = (type: TerminalOutput['type'], content: string) => {
     setOutputs(prev => [...prev, {
-      id: `output-${Date.now()}-${outputCounter}`,
+      id: `output-${Date.now()}-${prev.length}`,
       type,
       content,
       timestamp: new Date()
     }]);
-    setOutputCounter(prev => prev + 1);
   };
 
   const executeCommand = async (command: string) => {

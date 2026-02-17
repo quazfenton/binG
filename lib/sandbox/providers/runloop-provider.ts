@@ -4,6 +4,7 @@ import type {
   SandboxHandle,
   SandboxCreateConfig,
 } from './sandbox-provider'
+import * as path from 'node:path';
 
 const WORKSPACE_DIR = '/home/user/workspace'
 const MAX_COMMAND_TIMEOUT = 120
@@ -14,8 +15,12 @@ export class RunloopProvider implements SandboxProvider {
 
   constructor() {
     const { RunloopSDK } = require('@runloop/runloop-sdk')
+    const apiKey = process.env.RUNLOOP_API_KEY
+    if (!apiKey) {
+      throw new Error('RUNLOOP_API_KEY environment variable is required')
+    }
     this.client = new RunloopSDK({
-      apiKey: process.env.RUNLOOP_API_KEY!,
+      apiKey,
     })
   }
 
@@ -51,11 +56,78 @@ class RunloopSandboxHandle implements SandboxHandle {
     this.client = client
   }
 
+  /**
+   * Sanitize command to prevent shell injection
+   */
+  private sanitizeCommand(command: string): string {
+    // Reject commands with shell metacharacters
+    const dangerousChars = /[;&|`$(){}[\]<>!#~\\]/;
+    if (dangerousChars.test(command)) {
+      throw new Error('Command contains disallowed characters for security');
+    }
+    if (/[\n\r\0]/.test(command)) {
+      throw new Error('Command contains invalid control characters');
+    }
+    return command;
+  }
+
+  /**
+   * Resolve and validate path to prevent path traversal attacks
+   */
+  private resolvePath(filePath: string): string {
+    // Normalize path separators
+    const normalized = filePath.replace(/\\/g, '/');
+    
+    // Reject path traversal attempts
+    if (normalized.includes('..') || normalized.includes('\0')) {
+      throw new Error(`Invalid file path: ${filePath}`);
+    }
+    
+    // Reject absolute paths that aren't already in workspace
+    if (filePath.startsWith('/')) {
+      // Ensure it's within workspace
+      const resolved = path.resolve(normalized);
+      if (!resolved.startsWith(WORKSPACE_DIR)) {
+        throw new Error(`Path traversal detected: ${filePath}`);
+      }
+      return resolved;
+    }
+    
+    // For relative paths, resolve within workspace
+    const resolved = path.resolve(WORKSPACE_DIR, normalized);
+    
+    // Double-check the resolved path is within workspace
+    if (!resolved.startsWith(WORKSPACE_DIR)) {
+      throw new Error(`Path traversal detected: ${filePath}`);
+    }
+    
+    return resolved;
+  }
+
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
-    const fullCommand = cwd ? `cd ${cwd} && ${command}` : `cd ${WORKSPACE_DIR} && ${command}`
+    // Sanitize command to prevent injection
+    const safeCommand = this.sanitizeCommand(command);
+    
+    // Sanitize cwd to prevent injection
+    if (cwd) {
+      if (/[;&|`$(){}[\]<>!#~\\]/.test(cwd) || cwd.includes('..') || /[\n\r\0]/.test(cwd)) {
+        throw new Error(`Invalid working directory: ${cwd}`);
+      }
+    }
+    
+    // Use resolved safe path instead of shell string interpolation
+    const safeCwd = cwd ? this.resolvePath(cwd) : WORKSPACE_DIR;
+    
+    // Apply timeout - use provided timeout or default to MAX_COMMAND_TIMEOUT
+    const effectiveTimeout = timeout ?? MAX_COMMAND_TIMEOUT;
+    
+    // Execute with explicit cwd using sanitized values
+    const fullCommand = `cd ${safeCwd} && ${safeCommand}`;
+    
     const result = await this.devbox.cmd.exec({
       command: fullCommand,
       shell: '/bin/bash',
+      timeout: effectiveTimeout * 1000, // Convert to milliseconds
     })
 
     const stdout = await result.stdout()
@@ -70,26 +142,24 @@ class RunloopSandboxHandle implements SandboxHandle {
 
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
     const resolved = this.resolvePath(filePath)
-    const dir = resolved.substring(0, resolved.lastIndexOf('/'))
-    await this.executeCommand(`mkdir -p ${dir}`)
+    const dir = path.dirname(resolved)
+    
+    // Create directory with sanitized path
+    await this.executeCommand(`mkdir -p '${dir.replace(/'/g, "'\\''")}'`)
 
+    // Use shell-escaped content for safety
     const escaped = content.replace(/'/g, "'\\''")
-    await this.executeCommand(`printf '%s' '${escaped}' > ${resolved}`)
+    await this.executeCommand(`printf '%s' '${escaped}' > '${resolved.replace(/'/g, "'\\''")}'`)
     return { success: true, output: `File written: ${resolved}` }
   }
 
   async readFile(filePath: string): Promise<ToolResult> {
     const resolved = this.resolvePath(filePath)
-    return this.executeCommand(`cat ${resolved}`)
+    return this.executeCommand(`cat '${resolved.replace(/'/g, "'\\''")}'`)
   }
 
   async listDirectory(dirPath: string): Promise<ToolResult> {
     const resolved = this.resolvePath(dirPath)
-    return this.executeCommand(`ls -la ${resolved}`)
-  }
-
-  private resolvePath(filePath: string): string {
-    if (filePath.startsWith('/')) return filePath
-    return `${WORKSPACE_DIR}/${filePath}`
+    return this.executeCommand(`ls -la '${resolved.replace(/'/g, "'\\''")}'`)
   }
 }

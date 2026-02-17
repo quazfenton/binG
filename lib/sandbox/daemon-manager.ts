@@ -7,11 +7,28 @@ interface DaemonProcess {
   startedAt: number
   port?: number
   status: 'running' | 'stopped' | 'crashed'
+  pid?: number
 }
 
 const activeDaemons = new Map<string, DaemonProcess[]>()
 
 export class DaemonManager {
+  /**
+   * Sanitize command to prevent shell injection attacks
+   */
+  private sanitizeCommand(command: string): string {
+    // Reject commands with shell metacharacters that could enable injection
+    const dangerousChars = /[;&|`$(){}[\]<>!#~\\]/;
+    if (dangerousChars.test(command)) {
+      throw new Error('Command contains disallowed characters for security');
+    }
+    // Reject commands with newlines or null bytes
+    if (/[\n\r\0]/.test(command)) {
+      throw new Error('Command contains invalid control characters');
+    }
+    return command;
+  }
+
   async startDaemon(
     sandbox: SandboxHandle,
     sessionId: string,
@@ -20,17 +37,29 @@ export class DaemonManager {
   ): Promise<DaemonProcess> {
     const daemonId = `daemon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
+    // Sanitize command to prevent injection
+    const safeCommand = this.sanitizeCommand(command);
+
     // Run command in background via nohup, redirect output to log file
-    const bgCommand = `nohup ${command} > /tmp/${daemonId}.log 2>&1 & echo $!`
+    // Capture PID for later cleanup
+    const bgCommand = `nohup ${safeCommand} > /tmp/${daemonId}.log 2>&1 & echo $!`
     const result = await sandbox.executeCommand(bgCommand)
+
+    if (!result.success) {
+      throw new Error(`Failed to start daemon: ${result.output}`);
+    }
+
+    // Parse the PID from the output
+    const pid = parseInt(result.output.trim(), 10);
 
     const daemon: DaemonProcess = {
       id: daemonId,
       sessionId,
-      command,
+      command: safeCommand,
       startedAt: Date.now(),
       port: options?.port,
       status: 'running',
+      pid: isNaN(pid) ? undefined : pid,
     }
 
     const sessionDaemons = activeDaemons.get(sessionId) ?? []
@@ -51,10 +80,25 @@ export class DaemonManager {
     const daemon = daemons.find((d) => d.id === daemonId)
     if (!daemon) return
 
-    // Find and kill the process by looking for its command
-    await sandbox.executeCommand(
-      `pkill -f "${daemon.command.replace(/"/g, '\\"')}" || true`,
-    )
+    // Prefer killing by PID if available (more reliable than pkill -f)
+    if (daemon.pid) {
+      await sandbox.executeCommand(`kill ${daemon.pid} 2>/dev/null || true`)
+      // Also try SIGKILL if SIGTERM doesn't work
+      await sandbox.executeCommand(`kill -9 ${daemon.pid} 2>/dev/null || true`)
+    } else {
+      // Fallback to pkill if PID not available - escape all shell metacharacters
+      const escapedCommand = daemon.command
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\$/g, '\\$')
+        .replace(/`/g, '\\`')
+        .replace(/\(/g, '\\(')
+        .replace(/\)/g, '\\)')
+        .replace(/;/g, '\\;')
+        .replace(/&/g, '\\&')
+        .replace(/\|/g, '\\|')
+      await sandbox.executeCommand(`pkill -f "${escapedCommand}" || true`)
+    }
 
     daemon.status = 'stopped'
   }

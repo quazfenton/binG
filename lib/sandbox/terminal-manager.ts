@@ -7,6 +7,7 @@ interface PtyConnection {
   sandboxId: string
   sessionId: string
   lastActive: number
+  detectedPorts: Set<number>
 }
 
 const activePtyConnections = new Map<string, PtyConnection>()
@@ -44,18 +45,32 @@ export class TerminalManager {
         onData(text)
 
         if (onPortDetected) {
-          this.detectPort(text, handle, onPortDetected)
+          const connection = activePtyConnections.get(sessionId)
+          if (connection) {
+            this.detectPort(text, handle, onPortDetected, connection)
+          }
         }
       },
     })
 
     await ptyHandle.waitForConnection()
 
+    // Clean up existing connection if present (prevent resource leak)
+    const existingConnection = activePtyConnections.get(sessionId)
+    if (existingConnection) {
+      try {
+        await existingConnection.ptyHandle.disconnect()
+      } catch {
+        // Ignore errors during cleanup
+      }
+    }
+
     activePtyConnections.set(sessionId, {
       ptyHandle,
       sandboxId,
       sessionId,
       lastActive: Date.now(),
+      detectedPorts: new Set(),
     })
 
     updateSession(sessionId, { ptySessionId: ptyId })
@@ -82,18 +97,32 @@ export class TerminalManager {
         onData(text)
 
         if (onPortDetected) {
-          this.detectPort(text, handle, onPortDetected)
+          const connection = activePtyConnections.get(sessionId)
+          if (connection) {
+            this.detectPort(text, handle, onPortDetected, connection)
+          }
         }
       },
     })
 
     await ptyHandle.waitForConnection()
 
+    // Clean up existing connection if present (prevent resource leak)
+    const existingConnection = activePtyConnections.get(sessionId)
+    if (existingConnection) {
+      try {
+        await existingConnection.ptyHandle.disconnect()
+      } catch {
+        // Ignore errors during cleanup
+      }
+    }
+
     activePtyConnections.set(sessionId, {
       ptyHandle,
       sandboxId,
       sessionId,
       lastActive: Date.now(),
+      detectedPorts: new Set(),
     })
   }
 
@@ -140,6 +169,7 @@ export class TerminalManager {
     output: string,
     handle: SandboxHandle,
     callback: (info: PreviewInfo) => void,
+    connection: PtyConnection,
   ): Promise<void> {
     if (!handle.getPreviewLink) return
 
@@ -147,10 +177,11 @@ export class TerminalManager {
       const match = output.match(pattern)
       if (match) {
         const port = parseInt(match[1], 10)
-        if (port > 0 && port < 65536) {
+        if (port > 0 && port < 65536 && !connection.detectedPorts.has(port)) {
           try {
             const preview = await handle.getPreviewLink(port)
             callback(preview)
+            connection.detectedPorts.add(port)
           } catch {
             // Port not yet available, ignore
           }
