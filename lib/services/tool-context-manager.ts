@@ -32,7 +32,17 @@ export class ToolContextManager {
   ): Promise<ToolProcessingResult> {
     // Detect tool intent from messages
     const detectionResult = this.detectToolIntent(messages);
-    
+
+    // If detection returned an error (missing parameters), propagate it first
+    if (detectionResult.error) {
+      return {
+        requiresAuth: false,
+        toolCalls: [],
+        toolResults: [],
+        content: `Invalid request: ${detectionResult.error}`
+      };
+    }
+
     if (!detectionResult.detectedTool) {
       return {
         requiresAuth: false,
@@ -58,26 +68,6 @@ export class ToolContextManager {
           content: `AUTH_REQUIRED:${authUrl}:${detectionResult.detectedTool}`
         };
       }
-    }
-
-    // If detection returned an error (missing parameters), propagate it
-    if (detectionResult.error) {
-      return {
-        requiresAuth: false,
-        toolCalls: [],
-        toolResults: [],
-        content: `Invalid request: ${detectionResult.error}`
-      };
-    }
-
-    // If no tool detected, return generic response
-    if (!detectionResult.detectedTool) {
-      return {
-        requiresAuth: false,
-        toolCalls: [],
-        toolResults: [],
-        content: 'No tool intent detected'
-      };
     }
 
     // If authorized, execute the tool

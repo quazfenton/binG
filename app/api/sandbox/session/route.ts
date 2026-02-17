@@ -26,7 +26,9 @@ export async function POST(req: NextRequest) {
     const session = await sandboxBridge.createWorkspace(authenticatedUserId, body.config);
     return NextResponse.json({ session }, { status: 201 });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('[Sandbox Session] Error:', error);
+    // Don't expose internal error details to clients
+    return NextResponse.json({ error: 'Failed to create session' }, { status: 500 });
   }
 }
 
@@ -51,7 +53,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ session });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('[Sandbox Session] Error:', error);
+    // Don't expose internal error details to clients
+    return NextResponse.json({ error: 'Failed to fetch session' }, { status: 500 });
   }
 }
 
@@ -88,6 +92,8 @@ export async function DELETE(req: NextRequest) {
     await sandboxBridge.destroyWorkspace(sessionId, sandboxId);
     return NextResponse.json({ success: true });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('[Sandbox Session] Error:', error);
+    // Don't expose internal error details to clients
+    return NextResponse.json({ error: 'Failed to delete session' }, { status: 500 });
   }
 }

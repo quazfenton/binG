@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { oauthService } from '@/lib/auth/oauth-service';
+import { getDatabase } from '@/lib/database/connection';
 
 function verifyWebhookSignature(body: string, signature: string | null, secret: string | undefined): boolean {
   if (!secret || !signature) return false;
   const expected = createHmac('sha256', secret).update(body).digest('hex');
   const expectedWithPrefix = `sha256=${expected}`;
-  
+
   // Use timing-safe comparison to prevent timing attacks
   try {
     const sigBuf = Buffer.from(signature, 'utf8');
     const expBuf = Buffer.from(expected, 'utf8');
     const expPrefixBuf = Buffer.from(expectedWithPrefix, 'utf8');
-    
+
     // Check both formats: raw hex and sha256=hex prefix
     if (sigBuf.length === expBuf.length) {
       return timingSafeEqual(sigBuf, expBuf);
@@ -22,6 +23,22 @@ function verifyWebhookSignature(body: string, signature: string | null, secret: 
     }
     return false;
   } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify user exists in database before saving OAuth connection
+ * Defense in depth to prevent creating orphan connections
+ */
+async function verifyUserExists(userId: number): Promise<boolean> {
+  try {
+    const db = getDatabase();
+    const stmt = db.prepare('SELECT 1 FROM users WHERE id = ? LIMIT 1');
+    const row = stmt.get(userId);
+    return !!row;
+  } catch (error) {
+    console.error('[Webhook] Error verifying user:', error);
     return false;
   }
 }
@@ -52,7 +69,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unknown webhook provider' }, { status: 400 });
   } catch (error: any) {
     console.error('[Webhook] Error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    // Don't expose internal error details to clients
+    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 });
   }
 }
 
@@ -64,6 +82,20 @@ async function handleArcadeWebhook(body: any): Promise<NextResponse> {
 
   if (status === 'completed' && user_id) {
     try {
+      // Verify user exists before saving connection (defense in depth)
+      const userId = Number.parseInt(user_id, 10);
+      if (isNaN(userId)) {
+        console.error('[Webhook/Arcade] Invalid user_id in webhook:', user_id);
+        return NextResponse.json({ error: 'Invalid user ID' }, { status: 400 });
+      }
+
+      // Verify user exists in database
+      const userExists = await verifyUserExists(userId);
+      if (!userExists) {
+        console.error('[Webhook/Arcade] User not found:', userId);
+        return NextResponse.json({ error: 'User not found' }, { status: 404 });
+      }
+
       // Map Arcade tool names to our internal provider names
       const providerMap: Record<string, string> = {
         'Gmail': 'google',
@@ -95,7 +127,7 @@ async function handleArcadeWebhook(body: any): Promise<NextResponse> {
       // has authorized this provider/service combination
       // For Arcade, we'll store minimal information since Arcade manages the tokens
       await oauthService.saveConnection({
-        userId: Number.parseInt(user_id, 10),
+        userId,
         provider,
         providerAccountId: `arcade_${user_id}`, // Unique identifier for Arcade connection
         providerDisplayName: `${toolPrefix} via Arcade`,
@@ -108,7 +140,8 @@ async function handleArcadeWebhook(body: any): Promise<NextResponse> {
       console.log(`[Webhook/Arcade] Authorization recorded for user ${user_id}, provider ${provider}`);
     } catch (saveError: any) {
       console.error('[Webhook/Arcade] Error recording authorization:', saveError);
-      return NextResponse.json({ error: 'Failed to record authorization', details: saveError.message }, { status: 500 });
+      // Don't expose internal error details
+      return NextResponse.json({ error: 'Failed to record authorization' }, { status: 500 });
     }
   }
 
@@ -164,6 +197,13 @@ async function handleNangoWebhook(body: any): Promise<NextResponse> {
         return NextResponse.json({ error: 'Invalid user ID' }, { status: 400 });
       }
 
+      // Verify user exists before saving connection (defense in depth)
+      const userExists = await verifyUserExists(userId);
+      if (!userExists) {
+        console.error('[Webhook/Nango] User not found:', userId);
+        return NextResponse.json({ error: 'User not found' }, { status: 404 });
+      }
+
       // For Nango, we store the connectionId which can be used to retrieve tokens later
       // Nango manages the actual tokens, we just need to associate the connectionId with our user
       await oauthService.saveConnection({
@@ -180,7 +220,8 @@ async function handleNangoWebhook(body: any): Promise<NextResponse> {
       console.log(`[Webhook/Nango] Connection saved for user ${userId}, provider ${provider}, connectionId ${connectionId}`);
     } catch (saveError: any) {
       console.error('[Webhook/Nango] Error saving connection:', saveError);
-      return NextResponse.json({ error: 'Failed to save connection', details: saveError.message }, { status: 500 });
+      // Don't expose internal error details
+      return NextResponse.json({ error: 'Failed to save connection' }, { status: 500 });
     }
   }
 

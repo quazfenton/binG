@@ -254,6 +254,7 @@ export class OpencodeProvider implements LLMProvider {
           description: t.description,
           parameters: t.parameters,
         })),
+        systemPrompt: systemPrompt,
       })
       await sandbox.writeFile('/tmp/agent-prompt.json', promptPayload)
 
@@ -261,8 +262,9 @@ export class OpencodeProvider implements LLMProvider {
       const model = process.env.OPENCODE_MODEL || ''
       // Properly quote model flag to prevent shell injection
       const modelFlag = model ? `--model '${model.replace(/'/g, "'\\''")}'` : ''
+      // Pass system prompt via environment variable (opencode reads OPENCODE_SYSTEM_PROMPT)
       const result = await sandbox.executeCommand(
-        `cat /tmp/agent-prompt.json | opencode chat --json ${modelFlag}`.trim(),
+        `OPENCODE_SYSTEM_PROMPT='${(systemPrompt || '').replace(/'/g, "'\\''")}' cat /tmp/agent-prompt.json | opencode chat --json ${modelFlag}`.trim(),
         sandbox.workspaceDir,
         PROCESS_TIMEOUT_MS / 1000,
       )
