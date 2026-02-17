@@ -5,7 +5,7 @@
  * across different mini-services and applications.
  */
 
-import { EventEmitter } from 'node:events';
+import { EventEmitter } from 'events';
 import { SystemError, ERROR_CODES } from './error-types';
 
 export interface ComponentMetadata {

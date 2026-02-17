@@ -313,8 +313,17 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         // Check if it's an auth error using specific error codes/types
         // Composio SDK uses specific error codes for auth failures
         if (error.code === 'AUTH_REQUIRED' || error.name === 'AuthError' || error.authToolkit) {
-          // Use toolkit from error if provided, otherwise extract from message
-          const toolkit = error.authToolkit || error.toolkit;
+          // Use toolkit from error if provided, otherwise try to extract from message
+          let toolkit = error.authToolkit || error.toolkit;
+          
+          if (!toolkit) {
+            // Try to extract toolkit name from error message as fallback
+            const toolkitMatch = error.message?.match(/([A-Z][A-Z_]+)/);
+            if (toolkitMatch && toolkitMatch[1] && toolkitMatch[1].length > 2) {
+              toolkit = toolkitMatch[1];
+            }
+          }
+          
           if (toolkit) {
             const authUrl = await this.getAuthUrl(toolkit, request.userId);
             return {
@@ -322,6 +331,13 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
               requiresAuth: true,
               authUrl,
               authToolkit: toolkit,
+              metadata: { executionTime: Date.now() - startTime },
+            };
+          } else {
+            // Auth required but no toolkit identified - return generic auth prompt
+            return {
+              content: 'Authorization required. Please connect your account to use this feature.',
+              requiresAuth: true,
               metadata: { executionTime: Date.now() - startTime },
             };
           }

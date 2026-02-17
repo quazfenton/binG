@@ -10,7 +10,7 @@
  * - Conflict detection and resolution
  */
 
-import { EventEmitter } from 'node:events';
+import { EventEmitter } from 'events';
 import { z } from 'zod';
 import { 
   createSafeDiffError,

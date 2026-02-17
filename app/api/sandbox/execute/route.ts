@@ -35,8 +35,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Execute the command in the sandbox
-    const result = await sandboxBridge.executeCommand(sandboxId, command);
+    // Validate and sanitize command before execution
+    const { validateSandboxCommand } = await import('@/lib/api/enhanced-llm-service');
+    const validation = validateSandboxCommand(command);
+    if (!validation.isValid) {
+      return NextResponse.json(
+        { error: `Command rejected: ${validation.reason}` },
+        { status: 400 }
+      );
+    }
+
+    // Execute the validated command in the sandbox
+    const result = await sandboxBridge.executeCommand(sandboxId, validation.command);
 
     return NextResponse.json({
       stdout: result.stdout || '',
