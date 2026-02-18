@@ -116,10 +116,15 @@ class QuotaManager {
       }
 
       console.log(`[QuotaManager] Loaded ${this.quotas.size} provider quotas from database`);
-    } catch (error) {
-      console.error('[QuotaManager] Failed to load quotas from database:', error);
-      // Fallback to in-memory
-      this.initializeQuotasFromDefaults();
+    } catch (error: any) {
+      // Table doesn't exist yet - fall back to in-memory
+      if (error.code === 'SQLITE_ERROR' && error.message.includes('no such table')) {
+        console.log('[QuotaManager] Quota table not found, using in-memory storage');
+        this.initializeQuotasFromDefaults();
+      } else {
+        console.error('[QuotaManager] Failed to load quotas from database:', error);
+        this.initializeQuotasFromDefaults();
+      }
     }
   }
 
