@@ -79,36 +79,41 @@ export function useEnhancedStreamingDisplay({
     }
   }, [isStreaming, messageId, content]);
 
-  // Process content changes during streaming
+  // Process content changes during streaming - DIRECT rendering for immediate display
   useEffect(() => {
-    if (isStreaming && sessionIdRef.current && content !== lastContentRef.current) {
-      const newContent = content.slice(lastContentRef.current.length);
-      
-      if (newContent && enhancedBufferManager.getSessionState(sessionIdRef.current)) {
-        // Process the new content chunk
-        enhancedBufferManager.processChunk(sessionIdRef.current, newContent, {
-          chunkType: 'text',
-          isPartial: true
-        });
-        
-        lastContentRef.current = content;
-        
-        // Hide loading indicator once we have content
-        if (state.showLoadingIndicator && content.length > 0) {
-          setState(prev => ({ ...prev, showLoadingIndicator: false }));
+    if (isStreaming && sessionIdRef.current) {
+      // Always update display content directly during streaming for immediate feedback
+      if (content !== lastContentRef.current) {
+        const newContent = content.slice(lastContentRef.current.length);
+
+        if (newContent && enhancedBufferManager.getSessionState(sessionIdRef.current)) {
+          // Process the new content chunk for buffering
+          enhancedBufferManager.processChunk(sessionIdRef.current, newContent, {
+            chunkType: 'text',
+            isPartial: true
+          });
+
+          lastContentRef.current = content;
+
+          // Hide loading indicator once we have content
+          if (state.showLoadingIndicator && content.length > 0) {
+            setState(prev => ({ ...prev, showLoadingIndicator: false }));
+          }
         }
+
+        // DIRECT UPDATE: Always show the full content immediately during streaming
+        setState(prev => ({
+          ...prev,
+          displayContent: content,
+          isAnimating: isStreaming,
+          progress: Math.min(100, (content.length / Math.max(content.length, 1)) * 100)
+        }));
       }
     }
   }, [content, isStreaming, state.showLoadingIndicator]);
 
-  // Set up buffer manager event listeners
+  // Set up buffer manager event listeners for session state only
   useEffect(() => {
-    const handleRender = ({ sessionId, content: renderContent, isComplete }: any) => {
-      if (sessionId === sessionIdRef.current) {
-        startProgressiveAnimation(renderContent, isComplete);
-      }
-    };
-
     const handleSessionError = ({ sessionId, error }: any) => {
       if (sessionId === sessionIdRef.current) {
         setState(prev => ({ ...prev, error, isStreaming: false, isAnimating: false }));
@@ -118,27 +123,24 @@ export function useEnhancedStreamingDisplay({
 
     const handleSessionCompleted = ({ sessionId }: any) => {
       if (sessionId === sessionIdRef.current) {
-        setState(prev => ({ 
-          ...prev, 
-          isStreaming: false, 
+        setState(prev => ({
+          ...prev,
+          isStreaming: false,
           isAnimating: false,
-          progress: 100,
-          displayContent: content
+          progress: 100
         }));
         onStreamingComplete?.();
       }
     };
 
-    enhancedBufferManager.on('render', handleRender);
     enhancedBufferManager.on('session-error', handleSessionError);
     enhancedBufferManager.on('session-completed', handleSessionCompleted);
 
     return () => {
-      enhancedBufferManager.off('render', handleRender);
       enhancedBufferManager.off('session-error', handleSessionError);
       enhancedBufferManager.off('session-completed', handleSessionCompleted);
     };
-  }, [content, onError, onStreamingComplete]);
+  }, [onError, onStreamingComplete]);
 
   // Progressive animation function
   const startProgressiveAnimation = useCallback((targetContent: string, isComplete: boolean) => {

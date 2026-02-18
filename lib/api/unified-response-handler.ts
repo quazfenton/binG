@@ -50,7 +50,7 @@ export class UnifiedResponseHandler {
   processResponse(response: any, requestId?: string): UnifiedResponse {
     const content = this.extractContent(response);
     const commands = this.extractCommands(content);
-    
+
     return {
       success: response.success !== false,
       content,
@@ -59,8 +59,8 @@ export class UnifiedResponseHandler {
       data: {
         content,
         usage: this.calculateUsage(response),
-        model: response.data?.model || response.model,
-        provider: response.data?.provider || response.provider,
+        model: response.metadata?.actualModel || response.data?.model || response.model,
+        provider: response.metadata?.actualProvider || response.data?.provider || response.provider,
         toolCalls: response.data?.toolCalls,
         files: response.data?.files,
         chainedAgents: response.data?.chainedAgents,
@@ -80,6 +80,8 @@ export class UnifiedResponseHandler {
         routedThrough: response.metadata?.routedThrough || response.source,
         fallbackChain: response.fallbackChain || response.metadata?.fallbackChain,
         triedEndpoints: response.metadata?.triedEndpoints,
+        actualProvider: response.metadata?.actualProvider,
+        actualModel: response.metadata?.actualModel,
         timestamp: new Date().toISOString()
       }
     };

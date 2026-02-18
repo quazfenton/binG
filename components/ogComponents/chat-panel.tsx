@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { type Message } from "@/types";
+import { type Message } from "ai/react"; // Only import Message type, useChat is now in parent
 import { toast } from "sonner";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import MessageBubble from "@/components/message-bubble";
@@ -149,11 +149,11 @@ export function ChatPanel({
   };
 
   return (
-    <div className="flex flex-col h-full relative min-h-0 w-full">
-      <div
+    <div className="flex flex-col h-full relative min-h-0">
+      <div 
         ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2 overscroll-contain touch-pan-y w-full"
-        style={{
+        className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2 overscroll-contain touch-pan-y" 
+        style={{ 
           paddingBottom: "120px",
           WebkitOverflowScrolling: "touch",
           scrollBehavior: "smooth"
@@ -168,10 +168,7 @@ export function ChatPanel({
         )}
 
         {messages.map((m: Message) => {
-          // Check if this is the last assistant message that's currently streaming
-          const lastAssistantMessage = [...messages].reverse().find(msg => msg.role === 'assistant');
-          const isCurrentlyStreaming = isLoading && isStreaming && m.id === lastAssistantMessage?.id;
-          
+          const isCurrentlyStreaming = isLoading && m.id === messages[messages.length - 1]?.id;
           return (
             <MessageBubble
               key={m.id}
@@ -185,6 +182,12 @@ export function ChatPanel({
             />
           );
         })}
+        {isLoading && (
+          <MessageBubble
+            message={{ id: "loading", role: "assistant", content: "..." }}
+            isStreaming={true}
+          />
+        )}
         <div ref={messagesEndRef} />
         {/* Extra padding div for better scrolling */}
         <div className="h-20" />

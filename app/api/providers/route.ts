@@ -24,10 +24,17 @@ export async function GET() {
         };
       });
 
+    // Sort: available providers first, then unavailable ones
+    const sortedProviders = allProviders.sort((a, b) => {
+      if (a.isAvailable && !b.isAvailable) return -1;
+      if (!a.isAvailable && b.isAvailable) return 1;
+      return 0;
+    });
+
     return NextResponse.json({
       success: true,
       data: {
-        providers: allProviders,
+        providers: sortedProviders,
         defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "openrouter",
         defaultModel: process.env.DEFAULT_MODEL || "deepseek/deepseek-r1-0528:free",
       },

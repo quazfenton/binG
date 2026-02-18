@@ -1,14 +1,21 @@
 /**
  * Enhanced LLM Service with Fallback System
- * 
+ *
  * Integrates the Enhanced API Client with the existing LLM service
  * to provide robust API communication with fallback mechanisms.
+ *
+ * Supports task-specific providers for optimized performance:
+ * - EMBEDDING_PROVIDER for embeddings (e.g., mistral-embed)
+ * - AGENT_PROVIDER for agent completions (e.g., Mistral)
+ * - OCR_PROVIDER for OCR processing (e.g., Mistral OCR)
+ * - etc.
  */
 
 import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhanced-api-client';
 import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, PROVIDERS } from './llm-providers';
 import { toolContextManager } from '../services/tool-context-manager';
 import { sandboxBridge } from '../sandbox';
+import { getProviderForTask, getModelForTask } from '../config/task-providers';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -24,6 +31,7 @@ export interface EnhancedLLMRequest extends LLMRequest {
   isSandboxCommand?: boolean; // Explicit flag for sandbox/command requests
   userId?: string;
   conversationId?: string;
+  task?: 'chat' | 'code' | 'embedding' | 'image' | 'tool' | 'agent' | 'ocr'; // Task-specific provider selection
 }
 
 export interface LLMEndpointConfig {
@@ -75,11 +83,25 @@ export class EnhancedLLMService {
         priority: 4
       },
       {
+        provider: 'mistral',
+        baseUrl: process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1',
+        apiKey: process.env.MISTRAL_API_KEY || '',
+        models: PROVIDERS.mistral.models,
+        priority: 5
+      },
+      {
         provider: 'portkey',
         baseUrl: 'https://api.portkey.ai/v1',
         apiKey: process.env.PORTKEY_API_KEY || '',
         models: PROVIDERS.portkey.models,
-        priority: 5
+        priority: 6
+      },
+      {
+        provider: 'opencode',
+        baseUrl: process.env.OPENCODE_BASE_URL || 'https://api.opencode.ai/v1',
+        apiKey: process.env.OPENCODE_API_KEY || '',
+        models: PROVIDERS.opencode.models,
+        priority: 7
       }
     ];
 
@@ -91,11 +113,13 @@ export class EnhancedLLMService {
   }
 
   private setupFallbackChains(): void {
-    this.fallbackChains.set('openrouter', ['chutes', 'anthropic', 'google']);
-    this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google']);
-    this.fallbackChains.set('anthropic', ['openrouter', 'chutes', 'google']);
-    this.fallbackChains.set('google', ['openrouter', 'chutes', 'anthropic']);
-    this.fallbackChains.set('portkey', ['openrouter', 'chutes', 'anthropic']);
+    this.fallbackChains.set('openrouter', ['chutes', 'anthropic', 'google', 'mistral']);
+    this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google', 'mistral']);
+    this.fallbackChains.set('anthropic', ['openrouter', 'chutes', 'google', 'mistral']);
+    this.fallbackChains.set('google', ['openrouter', 'chutes', 'anthropic', 'mistral']);
+    this.fallbackChains.set('mistral', ['openrouter', 'chutes', 'anthropic', 'google']);
+    this.fallbackChains.set('portkey', ['openrouter', 'chutes', 'anthropic', 'mistral']);
+    this.fallbackChains.set('opencode', ['openrouter', 'chutes', 'google', 'mistral']);
   }
 
   private startHealthMonitoring(): void {
@@ -104,7 +128,11 @@ export class EnhancedLLMService {
   }
 
   async generateResponse(request: EnhancedLLMRequest): Promise<LLMResponse> {
-    const { enableTools, enableSandbox, userId, conversationId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, ...llmRequest } = request;
+    const { enableTools, enableSandbox, userId, conversationId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, ...llmRequest } = request;
+
+    // Use task-specific provider if specified
+    const actualProvider = task ? getProviderForTask(task) : (provider || getProviderForTask('chat'));
+    const actualModel = task ? getModelForTask(task, llmRequest.model) : llmRequest.model;
 
     // If tools are enabled and user ID is provided, process tools
     if (enableTools && userId && conversationId) {
@@ -138,7 +166,7 @@ export class EnhancedLLMService {
           toolResults: toolResult.toolResults
         };
 
-        return await this.callProviderWithEnhancedClient(provider, updatedRequest, retryOptions, enableCircuitBreaker);
+        return await this.callProviderWithEnhancedClient(actualProvider, updatedRequest, retryOptions, enableCircuitBreaker);
       }
     }
 
@@ -150,12 +178,12 @@ export class EnhancedLLMService {
 
     // Try primary provider first
     try {
-      const fullRequest = { ...llmRequest, provider };
-      return await this.callProviderWithEnhancedClient(provider, fullRequest, retryOptions, enableCircuitBreaker);
+      const fullRequest = { ...llmRequest, provider: actualProvider, model: actualModel };
+      return await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker);
     } catch (primaryError) {
-      console.warn(`Primary provider ${provider} failed:`, primaryError);
+      console.warn(`Primary provider ${actualProvider} failed:`, primaryError);
 
-      const fallbacks = fallbackProviders || this.fallbackChains.get(provider) || [];
+      const fallbacks = fallbackProviders || this.fallbackChains.get(actualProvider) || [];
       const availableFallbacks = fallbacks.filter(fallbackProvider =>
         this.endpointConfigs.has(fallbackProvider) &&
         this.isProviderHealthy(fallbackProvider)
@@ -163,7 +191,7 @@ export class EnhancedLLMService {
 
       if (availableFallbacks.length === 0) {
         throw this.createEnhancedError(
-          `No healthy fallback providers available for ${provider}`,
+          `No healthy fallback providers available for ${actualProvider}`,
           'NO_FALLBACKS_AVAILABLE',
           primaryError as Error
         );
@@ -174,10 +202,10 @@ export class EnhancedLLMService {
           console.log(`Trying fallback provider: ${fallbackProvider}`);
 
           const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
-          const supportedModel = this.findCompatibleModel(llmRequest.model, fallbackConfig.models);
+          const supportedModel = this.findCompatibleModel(actualModel, fallbackConfig.models);
 
           if (!supportedModel) {
-            console.warn(`Model ${llmRequest.model} not supported by ${fallbackProvider}, skipping`);
+            console.warn(`Model ${actualModel} not supported by ${fallbackProvider}, skipping`);
             continue;
           }
 
@@ -196,7 +224,8 @@ export class EnhancedLLMService {
 
           return {
             ...response,
-            provider: `${provider} -> ${fallbackProvider}`
+            provider: `${provider} -> ${fallbackProvider}`,
+            model: supportedModel  // Include the actual fallback model used
           };
         } catch (fallbackError) {
           console.warn(`Fallback provider ${fallbackProvider} failed:`, fallbackError);
