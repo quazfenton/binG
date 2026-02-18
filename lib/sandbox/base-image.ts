@@ -256,7 +256,9 @@ export class WarmPool {
     })
 
     await setupCacheVolumes(handle)
-    await provisionBaseImage(handle)
+    if (process.env.SANDBOX_PRELOAD_PACKAGES !== 'false') {
+      await provisionBaseImage(handle)
+    }
     return handle
   }
 }
