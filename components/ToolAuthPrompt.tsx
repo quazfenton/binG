@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface ToolAuthPromptProps {
   authUrl: string;
@@ -35,6 +35,17 @@ export default function ToolAuthPrompt({
   onAuthorized,
 }: ToolAuthPromptProps) {
   const [popupOpen, setPopupOpen] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cleanup interval on unmount
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, []);
 
   const handleConnect = useCallback(() => {
     const width = 600;
@@ -53,9 +64,10 @@ export default function ToolAuthPrompt({
     if (popup) {
       setPopupOpen(true);
 
-      const interval = setInterval(() => {
+      intervalRef.current = setInterval(() => {
         if (popup.closed) {
-          clearInterval(interval);
+          clearInterval(intervalRef.current!);
+          intervalRef.current = null;
           setPopupOpen(false);
           onAuthorized?.();
         }

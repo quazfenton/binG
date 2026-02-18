@@ -118,10 +118,12 @@ export default function IntegrationAuthPrompt({
     if (popupWindow) {
       interval = setInterval(() => {
         if (popupWindow.closed) {
+          clearInterval(interval);
           setPopupWindow(null);
           setIsConnecting(false);
-          // Popup closed without sending success message - treat as cancel
-          // Don't call onAuthorized to allow retry
+          // SECURITY: Popup closed WITHOUT success message = cancelled/failed
+          // Do NOT call onAuthorized - OAuth flow was not completed
+          console.warn('[IntegrationAuth] Popup closed without completing OAuth flow');
         }
       }, 500);
     }

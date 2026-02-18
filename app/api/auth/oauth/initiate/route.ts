@@ -80,9 +80,13 @@ export async function GET(req: NextRequest) {
       response_type: 'code',
       scope: config.scopes,
       state: session.state,
-      access_type: 'offline',
-      prompt: 'consent',
     });
+
+    // Google-specific parameters
+    if (provider === 'google') {
+      params.set('access_type', 'offline');
+      params.set('prompt', 'consent');
+    }
 
     return NextResponse.redirect(`${config.authUrl}?${params.toString()}`);
   } catch (error: any) {
