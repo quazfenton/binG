@@ -31,6 +31,7 @@ import {
   debugContentProcessing
 } from "@/lib/input-response-separator";
 import { useAuth } from "@/contexts/auth-context";
+import { secureRandom, generateSecureId } from "@/lib/utils";
 
 // Main component wrapped with CodeServiceProvider
 export default function ConversationInterface() {
@@ -53,7 +54,7 @@ function getStableSessionId(): string {
   
   let sessionId = localStorage.getItem('anonymous_session_id');
   if (!sessionId) {
-    sessionId = `anon_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    sessionId = generateSecureId('anon');
     localStorage.setItem('anonymous_session_id', sessionId);
   }
   return sessionId;

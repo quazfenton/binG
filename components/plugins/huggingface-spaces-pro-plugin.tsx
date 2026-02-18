@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
+import { secureRandomInt } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
@@ -385,7 +386,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                   <div className="flex gap-2">
                     <Input type="number" placeholder="random" value={imageParams.seed}
                       onChange={(e) => setImageParams({...imageParams, seed: e.target.value})} />
-                    <Button variant="secondary" size="icon" onClick={() => setImageParams({...imageParams, seed: Math.floor(Math.random() * 1e9)})}>
+                    <Button variant="secondary" size="icon" onClick={() => setImageParams({...imageParams, seed: secureRandomInt(0, 999999999)})}>
                       <Shuffle className="w-4 h-4" />
                     </Button>
                   </div>

@@ -38,6 +38,7 @@ import {
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useCodeModeIntegration } from '../hooks/use-code-mode-integration';
+import { secureRandom, generateSecureId } from '../lib/utils';
 import { CodeModeFile, CodeModeDiff } from '../lib/services/code-mode-integration';
 
 // Legacy interfaces for backward compatibility
@@ -179,7 +180,7 @@ export default function CodeMode({
     }
 
     const codeModeFiles: CodeModeFile[] = Object.entries(memoizedFileContents).map(([path, file]) => ({
-      id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: generateSecureId('file'),
       name: path.split('/').pop() || path,
       path,
       content: file.content,

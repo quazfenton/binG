@@ -10,6 +10,7 @@ import {
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 import { saveTerminalSession, getTerminalSessions, addCommandToHistory } from '@/lib/terminal/terminal-storage';
+import { secureRandom, generateSecureId } from '@/lib/utils';
 
 interface TerminalPanelProps {
   userId?: string;
@@ -54,7 +55,7 @@ function getAnonymousSessionId(): string | null {
   try {
     let sessionId = localStorage.getItem('anonymous_session_id');
     if (!sessionId) {
-      sessionId = `anon_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+      sessionId = generateSecureId('anon');
       localStorage.setItem('anonymous_session_id', sessionId);
     }
     return sessionId;
@@ -176,7 +177,7 @@ export default function TerminalPanel({
 
   const createTerminal = useCallback((name?: string, sandboxInfo?: any) => {
     const newTerminal: TerminalInstance = {
-      id: `terminal-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      id: generateSecureId('terminal'),
       name: name || `Terminal ${terminalsRef.current.length + 1}`,
       sandboxInfo: sandboxInfo || { status: 'none' },
       xtermRef: React.createRef<HTMLDivElement>(),

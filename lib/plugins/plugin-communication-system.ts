@@ -1,3 +1,5 @@
+import { generateSecureId } from '@/lib/utils';
+
 /**
  * Plugin Communication System
  * Enables secure inter-plugin communication and data sharing
@@ -414,7 +416,7 @@ export class PluginCommunicationSystem {
    * Generate unique message ID
    */
   private generateMessageId(): string {
-    return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    return generateSecureId('msg');
   }
 
   /**

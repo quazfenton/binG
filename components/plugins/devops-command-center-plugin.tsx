@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
+import { secureRandomInt } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
@@ -156,8 +157,8 @@ export default function DevOpsCommandCenterPlugin({ onClose }: PluginProps) {
       // Mock logs
       const mockLogs: LogEntry[] = Array.from({ length: 20 }, (_, i) => ({
         timestamp: new Date(Date.now() - i * 5000).toISOString(),
-        level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][Math.floor(Math.random() * 4)],
-        message: `Log message ${i + 1}: ${['Request processed', 'Cache hit', 'Database query', 'API call completed'][Math.floor(Math.random() * 4)]}`
+level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
+        message: `Log message ${i + 1}: ${['Request processed', 'Cache hit', 'Database query', 'API call completed'][secureRandomInt(0, 3)]}`
       }));
       setLogs(mockLogs);
     }

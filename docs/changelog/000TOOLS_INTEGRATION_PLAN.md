@@ -620,6 +620,8 @@ private normalizeOriginalResponse(response: any): any {
 ### Step 5: Update Chat API Route with Authorization
 ```typescript
 // Enhanced app/api/chat/route.ts
+import { generateSecureId } from '@/lib/utils';
+
 export async function POST(request: NextRequest) {
   console.log('[DEBUG] Chat API: Incoming request');
 
@@ -700,7 +702,7 @@ export async function POST(request: NextRequest) {
     // Handle streaming response
     if (stream && selectedProvider.supportsStreaming) {
       // Create streaming events from unified response
-      const streamRequestId = requestId || `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const streamRequestId = requestId || generateSecureId('stream');
       const events = unifiedResponseHandler.createStreamingEvents(unifiedResponse, streamRequestId);
 
       const encoder = new TextEncoder();

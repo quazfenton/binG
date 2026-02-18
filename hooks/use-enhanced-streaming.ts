@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { enhancedStreaming, StreamingMetrics } from '@/lib/streaming/enhanced-streaming';
 import { toast } from 'sonner';
+import { generateSecureId } from '@/lib/utils';
 
 export interface UseEnhancedStreamingOptions {
   onToken?: (content: string) => void;
@@ -212,7 +213,7 @@ export function useEnhancedStreaming(options: UseEnhancedStreamingOptions = {}) 
     resumeFromOffset?: number
   ) => {
     // Generate unique request ID
-    const requestId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const requestId = generateSecureId('stream');
     currentRequestId.current = requestId;
 
     // Reset state

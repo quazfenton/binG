@@ -632,66 +632,12 @@ export class EnhancedLLMService {
       }
     }
 
-    // 2) Structured JSON in content (tool_use / tool_call / tool_calls)
-    const content = response.content || '';
-    const jsonCandidates = this.extractJsonCandidates(content);
-    for (const candidate of jsonCandidates) {
-      const toolUse = candidate?.tool_use;
-      if (toolUse?.name) addCall(toolUse.name, toolUse.input);
-
-      const toolCall = candidate?.tool_call;
-      if (toolCall?.name) addCall(toolCall.name, toolCall.arguments);
-
-      const toolCalls = candidate?.tool_calls;
-      if (Array.isArray(toolCalls)) {
-        for (const call of toolCalls) {
-          if (call?.function?.name) {
-            let args = call.function.arguments;
-            if (typeof args === 'string') {
-              try { args = JSON.parse(args); } catch { args = {}; }
-            }
-            addCall(call.function.name, args);
-          } else if (call?.name) {
-            addCall(call.name, call.arguments ?? call.input);
-          }
-        }
-      }
-    }
+    // NOTE: Tool calls are ONLY accepted from structured metadata, never from free-text content.
+    // Parsing JSON from LLM response content would allow prompt injection attacks where an
+    // adversarial prompt or compromised model could embed malicious tool_calls in text content,
+    // causing unintended tool execution without user confirmation.
 
     return calls;
-  }
-
-  private extractJsonCandidates(content: string): any[] {
-    const candidates: any[] = [];
-
-    const tryParse = (raw: string) => {
-      if (!raw) return;
-      try {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-          candidates.push(parsed);
-        }
-      } catch {
-        // ignore
-      }
-    };
-
-    tryParse(content.trim());
-
-    const fencedJson = content.match(/```json\s*([\s\S]*?)```/gi) || [];
-    for (const block of fencedJson) {
-      const inner = block.replace(/```json/i, '').replace(/```/g, '').trim();
-      tryParse(inner);
-    }
-
-    // Handle plain fenced blocks that still contain JSON.
-    const fenced = content.match(/```([\s\S]*?)```/g) || [];
-    for (const block of fenced) {
-      const inner = block.replace(/```/g, '').trim();
-      tryParse(inner);
-    }
-
-    return candidates;
   }
 
   async processSandboxRequest(request: EnhancedLLMRequest, userId: string, conversationId: string): Promise<LLMResponse> {

@@ -13,8 +13,8 @@ const TamboContext = createContext<TamboContextValue>({
 });
 
 export function TamboContextProvider({ children }: { children: ReactNode }) {
-  const enabled = process.env.NEXT_PUBLIC_TAMBO_ENABLED === 'true';
-  const apiKey = process.env.NEXT_PUBLIC_TAMBO_API_KEY || null;
+  const enabled = process.env.TAMBO_ENABLED === 'true';
+  const apiKey = process.env.TAMBO_API_KEY || null;
 
   return (
     <TamboContext.Provider value={{ enabled, apiKey }}>

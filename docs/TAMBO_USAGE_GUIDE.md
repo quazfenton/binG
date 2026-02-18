@@ -155,8 +155,8 @@ You: [Calls formatCode tool]
 
 ```env
 # .env
-NEXT_PUBLIC_TAMBO_ENABLED=false
-NEXT_PUBLIC_TAMBO_API_KEY=
+TAMBO_ENABLED=false
+TAMBO_API_KEY=
 ```
 
 **Result:** App works exactly as before, zero changes
@@ -165,8 +165,8 @@ NEXT_PUBLIC_TAMBO_API_KEY=
 
 ```env
 # .env
-NEXT_PUBLIC_TAMBO_ENABLED=true
-NEXT_PUBLIC_TAMBO_API_KEY=your_api_key_from_tambo.ai
+TAMBO_ENABLED=true
+TAMBO_API_KEY=your_api_key_from_tambo.ai
 ```
 
 **Result:** Tambo features available with automatic fallback
@@ -264,8 +264,8 @@ npm run dev
 
 ```bash
 # Update .env:
-NEXT_PUBLIC_TAMBO_ENABLED=true
-NEXT_PUBLIC_TAMBO_API_KEY=your_key
+TAMBO_ENABLED=true
+TAMBO_API_KEY=your_key
 
 npm run dev
 # Tambo features now available
@@ -276,7 +276,7 @@ npm run dev
 
 ```typescript
 // Force fallback by using invalid API key
-NEXT_PUBLIC_TAMBO_API_KEY=invalid_key
+TAMBO_API_KEY=invalid_key
 
 npm run dev
 # Should fall back to standard chat automatically
@@ -332,7 +332,7 @@ npm run build
 
 ### Tambo Not Working
 
-1. Check `NEXT_PUBLIC_TAMBO_ENABLED=true`
+1. Check `TAMBO_ENABLED=true`
 2. Verify API key is set
 3. Check browser console for errors
 4. Verify TamboProvider is wrapping app
@@ -343,7 +343,7 @@ If anything breaks:
 
 ```env
 # Disable Tambo
-NEXT_PUBLIC_TAMBO_ENABLED=false
+TAMBO_ENABLED=false
 ```
 
 App will work exactly as before.

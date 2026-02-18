@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { secureRandom } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { 
@@ -146,8 +147,8 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
       id: windowId,
       plugin,
       position: {
-        x: Math.random() * 200 + 100,
-        y: Math.random() * 100 + 100
+x: secureRandom() * 200 + 100,
+        y: secureRandom() * 100 + 100
       },
       size: plugin.defaultSize,
       isMinimized: false,

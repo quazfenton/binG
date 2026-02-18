@@ -7,6 +7,7 @@
 
 import { EnhancedResponse, ProjectItem } from './enhanced-prompt-engine';
 import { ERROR_CODES, createPromptEngineError, createStreamError } from './error-types';
+import { generateSecureId } from '@/lib/utils';
 
 // Import types from the main application
 // These would need to be properly imported based on the actual application structure
@@ -206,7 +207,7 @@ export class LLMIntegration {
       };
 
       // Create streaming session
-      const sessionId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const sessionId = generateSecureId('stream');
       this.activeStreams.set(sessionId, {
         sessionId,
         isActive: true,

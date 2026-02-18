@@ -18,6 +18,7 @@ import {
   ProjectItem,
   PROMPT_TEMPLATES,
 } from "./core/enhanced-prompt-engine";
+import { generateSecureId } from "@/lib/utils";
 import {
   AgenticFrameworkManager,
   FrameworkConfig,
@@ -242,8 +243,7 @@ class EnhancedCodeOrchestrator extends EventEmitter {
   async startSession(request: Partial<EnhancedRequest>): Promise<string> {
     const validatedRequest = EnhancedRequestSchema.parse({
       id:
-        request.id ||
-        `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        request.id || generateSecureId('session'),
       ...request,
     });
 

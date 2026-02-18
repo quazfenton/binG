@@ -9,6 +9,8 @@
  * - User-friendly error messages
  */
 
+import { secureRandom } from '@/lib/utils';
+
 export interface RetryOptions {
   maxAttempts: number;
   backoffStrategy: 'exponential' | 'linear' | 'fixed';
@@ -430,7 +432,7 @@ export class EnhancedAPIClient {
 
     // Apply jitter if enabled
     if (options.jitter) {
-      delay = delay * (0.5 + Math.random() * 0.5);
+      delay = delay * (0.5 + secureRandom() * 0.5);
     }
 
     // Ensure delay doesn't exceed maximum
