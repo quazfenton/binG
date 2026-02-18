@@ -93,8 +93,12 @@ export async function POST(request: NextRequest) {
     const selectedProvider = PROVIDERS[provider as keyof typeof PROVIDERS];
     console.log('[DEBUG] Chat API: Selected provider:', provider, 'supports streaming:', selectedProvider.supportsStreaming);
 
-    // Check if model is supported by the provider
-    if (!selectedProvider.models.includes(model)) {
+    // Check if model is supported by the provider (allow partial matches for models like "z-ai/glm-4.5-air" vs "z-ai/glm-4.5-air:free")
+    const isModelSupported = selectedProvider.models.some(
+      m => m === model || m.startsWith(model + ':') || m.endsWith(':' + model.split(':')[0])
+    );
+    
+    if (!isModelSupported) {
       console.error('[DEBUG] Chat API: Model not supported:', model, 'Available:', selectedProvider.models);
       return NextResponse.json(
         {
@@ -104,7 +108,12 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-    
+
+    // Normalize model name to match PROVIDERS constant (e.g., "z-ai/glm-4.5-air" -> "z-ai/glm-4.5-air:free")
+    const normalizedModel = selectedProvider.models.find(
+      m => m === model || m.startsWith(model + ':') || m.endsWith(':' + model.split(':')[0])
+    ) || model;
+
     console.log('[DEBUG] Chat API: Validation passed, routing through priority chain');
 
     // NEW: Add tool/sandbox detection
@@ -114,7 +123,7 @@ export async function POST(request: NextRequest) {
     const routerRequest = {
       messages,
       provider,
-      model,
+      model: normalizedModel, // Use normalized model name
       temperature,
       maxTokens,
       stream,

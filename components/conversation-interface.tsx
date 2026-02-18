@@ -644,17 +644,13 @@ function ConversationInterfaceContent() {
 
   // Check if there are code blocks in messages for preview button glow (mode-aware)
   const hasCodeBlocks = useMemo(() => {
-    if (activeTab !== 'code') return false;
-    
+    // Check for code blocks in any assistant message
     return messages.some((message) => {
       if (message.role === "assistant" && message.content.includes("```")) {
-        const messageContext = createInputContext(message.role);
-        const processedResponse = processSafeContent(message.content, messageContext);
-        return processedResponse.shouldOpenCodePreview;
+        return true;
       }
-      return false;
     });
-  }, [messages, activeTab]);
+  }, [messages]);
 
   const handleToggleCodePreview = () => {
     setShowCodePreview((prevShowCodePreview) => {
@@ -769,15 +765,9 @@ function ConversationInterfaceContent() {
     toast.info("Dismissed pending diffs");
   };
 
-  // Intermediary function to handle submit from InteractionPanel with ad system
+  // Handle chat submission - no login restrictions
   const handleChatSubmit = (content: string) => {
-    // Check if user needs to see an ad
-    if (!isLoggedIn && promptCount > 0 && promptCount % 3 === 0) {
-      setShowAd(true);
-      return;
-    }
-
-    // Increment prompt count for non-logged-in users
+    // Increment prompt count for tracking (no restrictions)
     if (!isLoggedIn) {
       setPromptCount((prev) => prev + 1);
     }
@@ -963,34 +953,7 @@ function ConversationInterfaceContent() {
         />
       )}
 
-      {/* Advertisement Modal */}
-      {showAd && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-lg max-w-md mx-4">
-            <h3 className="text-lg font-semibold mb-4">Support Our Service</h3>
-            <p className="text-gray-600 mb-4">
-              You've used 3 prompts. Consider creating an account for unlimited access!
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  setShowAd(false);
-                  setShowAccessibility(true);
-                }}
-                className="flex-1 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-              >
-                Sign Up
-              </button>
-              <button
-                onClick={() => setShowAd(false)}
-                className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded hover:bg-gray-400"
-              >
-                Continue
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
