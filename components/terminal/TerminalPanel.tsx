@@ -93,6 +93,12 @@ export default function TerminalPanel({
   // Close sandbox sessions when panel closes (but save session info for reuse)
   useEffect(() => {
     if (!isOpen && terminals.length > 0) {
+      // Close EventSource connections to prevent resource leaks
+      // SSE streams continue in background if not explicitly closed
+      terminals.forEach(t => {
+        t.eventSource?.close();
+      });
+      
       // Save session info before closing sandbox
       terminals.forEach(t => {
         saveTerminalSession({

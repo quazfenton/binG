@@ -161,12 +161,19 @@ export function getSessionByUserId(userId: string): WorkspaceSession | undefined
 export function updateSession(sessionId: string, updates: Partial<WorkspaceSession>): void {
   const now = new Date().toISOString()
 
+  // Whitelist of allowed column names to prevent SQL injection
+  const ALLOWED_COLUMNS = new Set(['sandboxId', 'userId', 'ptySessionId', 'cwd', 'createdAt', 'lastActive', 'status'])
+
   if (useSqlite && db) {
     const setClauses: string[] = ['lastActive = @lastActive']
     const params: Record<string, unknown> = { sessionId, lastActive: now }
 
     for (const [key, value] of Object.entries(updates)) {
       if (key === 'sessionId') continue // never update PK
+      if (!ALLOWED_COLUMNS.has(key)) {
+        console.warn(`[session-store] Ignoring unknown update key: ${key}`)
+        continue
+      }
       setClauses.push(`${key} = @${key}`)
       params[key] = value ?? null
     }

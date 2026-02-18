@@ -62,6 +62,10 @@ function ConversationInterfaceContent() {
     } catch {}
 
     const handler = (e: MessageEvent) => {
+      // Only accept auth messages from the same origin to prevent token injection
+      if (e.origin !== window.location.origin) {
+        return;
+      }
       if (e?.data?.type === 'bing:auth' && e.data.token) {
         try { localStorage.setItem('token', e.data.token); } catch {}
       }

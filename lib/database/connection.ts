@@ -140,12 +140,12 @@ function initializeSchemaSync() {
   if (!db) return;
 
   try {
-    // Skip schema.sql - using migrations instead
-    // const schemaPath = join(process.cwd(), 'lib', 'database', 'schema.sql');
-    // const schema = readFileSync(schemaPath, 'utf-8');
-    // db.exec(schema);
-    
-    console.log('Database initialized (using migrations for schema)');
+    // Execute base schema to ensure required tables exist
+    const schemaPath = join(process.cwd(), 'lib', 'database', 'schema.sql');
+    const schema = readFileSync(schemaPath, 'utf-8');
+    db.exec(schema);
+
+    console.log('Database base schema initialized');
   } catch (error) {
     console.error('Failed to initialize base schema:', error);
     throw error;
