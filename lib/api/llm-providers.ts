@@ -1170,33 +1170,33 @@ class LLMService {
     return Object.values(PROVIDERS).filter(provider => {
       switch (provider.id) {
         case 'openai':
-          return !!this.openai
+          return !!this.openai || !!process.env.OPENAI_API_KEY;
         case 'anthropic':
-          return !!this.anthropic
+          return !!this.anthropic || !!process.env.ANTHROPIC_API_KEY;
         case 'google':
-          return !!this.google
+          return !!this.google || !!process.env.GOOGLE_API_KEY;
         case 'cohere':
-          return !!this.cohere
+          return !!this.cohere || !!process.env.COHERE_API_KEY;
         case 'together':
-          return !!this.together
+          return !!this.together || !!process.env.TOGETHER_API_KEY;
         case 'replicate':
-          return !!this.replicate
+          return !!this.replicate || !!process.env.REPLICATE_API_TOKEN;
         case 'portkey':
-          return !!this.portkey
+          return !!this.portkey || !!process.env.PORTKEY_API_KEY;
         case 'mistral':
-          return !!this.mistral
+          return !!this.mistral || !!process.env.MISTRAL_API_KEY;
         case 'opencode':
-          return !!this.opencodeClient
+          return !!this.opencodeClient || !!process.env.OPENCODE_API_KEY;
         case 'openrouter':
-          return !!process.env.OPENROUTER_API_KEY
+          return !!process.env.OPENROUTER_API_KEY;
         case 'chutes':
-          return !!process.env.CHUTES_API_KEY
+          return !!process.env.CHUTES_API_KEY;
         case 'github':
-          return !!process.env.GITHUB_MODELS_API_KEY || !!process.env.AZURE_OPENAI_API_KEY
+          return !!process.env.GITHUB_MODELS_API_KEY || !!process.env.AZURE_OPENAI_API_KEY;
         case 'composio':
-          return !!this.composioService
+          return !!this.composioService || !!process.env.COMPOSIO_API_KEY;
         default:
-          return false
+          return false;
       }
     })
   }

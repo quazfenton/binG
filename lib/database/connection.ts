@@ -100,14 +100,12 @@ function initializeSchemaSync() {
   if (!db) return;
 
   try {
-    // Use absolute path to schema.sql - __dirname is unreliable in Next.js server components
-    const schemaPath = process.env.SCHEMA_PATH || join(process.cwd(), 'lib', 'database', 'schema.sql');
-    const schema = readFileSync(schemaPath, 'utf-8');
-
-    // Execute base schema
-    db.exec(schema);
-
-    console.log('Database base schema initialized');
+    // Skip schema.sql - using migrations instead
+    // const schemaPath = join(process.cwd(), 'lib', 'database', 'schema.sql');
+    // const schema = readFileSync(schemaPath, 'utf-8');
+    // db.exec(schema);
+    
+    console.log('Database initialized (using migrations for schema)');
   } catch (error) {
     console.error('Failed to initialize base schema:', error);
     throw error;
