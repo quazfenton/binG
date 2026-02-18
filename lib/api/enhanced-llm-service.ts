@@ -113,13 +113,13 @@ export class EnhancedLLMService {
   }
 
   private setupFallbackChains(): void {
-    this.fallbackChains.set('openrouter', ['chutes', 'anthropic', 'google', 'mistral']);
+    this.fallbackChains.set('openrouter', ['mistral', 'opencode', 'google', 'mistral']);
     this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google', 'mistral']);
-    this.fallbackChains.set('anthropic', ['openrouter', 'chutes', 'google', 'mistral']);
-    this.fallbackChains.set('google', ['openrouter', 'chutes', 'anthropic', 'mistral']);
+    this.fallbackChains.set('anthropic', ['openrouter', 'mistral', 'google', 'github']);
+    this.fallbackChains.set('google', ['openrouter', 'mistral', 'github', 'opencode']);
     this.fallbackChains.set('mistral', ['openrouter', 'chutes', 'anthropic', 'google']);
-    this.fallbackChains.set('portkey', ['openrouter', 'chutes', 'anthropic', 'mistral']);
-    this.fallbackChains.set('opencode', ['openrouter', 'chutes', 'google', 'mistral']);
+    this.fallbackChains.set('portkey', ['openrouter', 'google', 'mistral', 'github']);
+    this.fallbackChains.set('opencode', ['mistral', 'google', 'openrouter', 'github']);
   }
 
   private startHealthMonitoring(): void {
@@ -706,6 +706,8 @@ export function validateSandboxCommand(command: string): { isValid: boolean; com
     // NOTE: Container tools and general-purpose interpreters are intentionally excluded
     // as they can be used to escape sandbox or execute arbitrary code
     // NOTE: Destructive commands (rm, chmod, chown) are excluded to prevent data loss
+    // NOTE: Network download and package install commands are RESTRICTED to prevent
+    // arbitrary code execution via downloaded payloads or malicious package installation
     const safeCommandPrefixes = [
       // File operations (read-only and safe create)
       'ls ', 'cat ', 'head ', 'tail ', 'wc ', 'grep ', 'find ', 'tree ',
@@ -724,12 +726,12 @@ export function validateSandboxCommand(command: string): { isValid: boolean; com
       // System info (read-only)
       'uname ', 'whoami ', 'id ', 'date ', 'time ', 'uptime ', 'df ', 'du ',
       'env ', 'printenv ', 'which ', 'whereis ', 'type ',
-      // Network (read-only)
-      'curl ', 'wget ', 'ping ', 'dig ', 'nslookup ', 'netstat ', 'ss ',
+      // Network (read-only diagnostics only - no downloads)
+      'ping ', 'dig ', 'nslookup ', 'netstat ', 'ss ', 'traceroute ',
       // Process info (read-only)
       'ps ', 'top ', 'htop ', 'pgrep ', 'pidof ',
-      // Package managers (read-only operations)
-      'apt ', 'apt-get ', 'apt-cache ', 'yum ', 'dnf ', 'apk ', 'brew ',
+      // Package managers (read-only operations ONLY)
+      'apt list ', 'apt-cache ', 'yum list ', 'dnf list ', 'apk search ', 'brew list ',
       // Text editors (interactive, don't execute code)
       'vim ', 'vi ', 'nano ', 'emacs ', 'code ',
       // Documentation
