@@ -68,7 +68,7 @@ export function useConversation() {
   
   // Handle streaming response
   const handleStreamingResponse = useCallback(async (
-    responseOrParams: Response | { messages: any[]; settings: any; token: string | null },
+    responseOrParams: Response | { response?: Response; messages: any[]; settings: any; token: string | null },
     messageId: string,
     retryCount = 0
   ) => {
@@ -76,12 +76,26 @@ export function useConversation() {
     const RETRY_DELAY = 1000; // 1 second
 
     let response: Response;
+    let requestParams: { messages: any[]; settings: any; token: string | null } | null = null;
 
-    // If we received request params instead of a response, fetch it
-    if (!(responseOrParams instanceof Response)) {
+    // Handle different input types
+    if (responseOrParams instanceof Response) {
+      // Legacy: received only Response (no retry possible)
+      response = responseOrParams;
+    } else if ('response' in responseOrParams && responseOrParams.response) {
+      // Received both response and params (preferred for retry support)
+      response = responseOrParams.response;
+      requestParams = {
+        messages: responseOrParams.messages,
+        settings: responseOrParams.settings,
+        token: responseOrParams.token
+      };
+    } else {
+      // Received only params, need to fetch
+      requestParams = responseOrParams;
       const { messages, settings, token } = responseOrParams;
       const abortController = new AbortController();
-      
+
       const requestBody = {
         messages,
         ...settings,
@@ -103,8 +117,6 @@ export function useConversation() {
           errorData.message || `HTTP error! status: ${response.status}`
         );
       }
-    } else {
-      response = responseOrParams;
     }
 
     if (!response.body) {
@@ -175,17 +187,12 @@ export function useConversation() {
       }
     } catch (error) {
       // On stream read error, retry by re-fetching (not reusing consumed stream)
-      if (retryCount < MAX_RETRIES) {
+      if (retryCount < MAX_RETRIES && requestParams) {
         console.warn(`Stream read error, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (retryCount + 1)));
         
-        // Re-fetch the request with original parameters
-        if (!(responseOrParams instanceof Response)) {
-          return handleStreamingResponse(responseOrParams, messageId, retryCount + 1);
-        } else {
-          // If we only have the response (shouldn't happen), we can't retry
-          throw error;
-        }
+        // Re-fetch with stored request params
+        return handleStreamingResponse(requestParams, messageId, retryCount + 1);
       }
       throw error;
     } finally {
@@ -255,8 +262,11 @@ export function useConversation() {
       }
 
       if (settings.streamingEnabled && response.body) {
-        // Pass request params instead of response so retries can re-fetch
+        // Pass both response and params:
+        // - response: Use existing response body (avoids double-fetch)
+        // - params: Store for retry logic (re-fetches only on error)
         await handleStreamingResponse({
+          response,
           messages: [...messagesRef.current, userMessage].map(({ role, content }) => ({
             role,
             content,

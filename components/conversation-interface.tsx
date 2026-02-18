@@ -63,6 +63,10 @@ function ConversationInterfaceContent() {
     } catch {}
 
     const handler = (e: MessageEvent) => {
+      // Only accept auth messages from the same origin to prevent token injection
+      if (e.origin !== window.location.origin) {
+        return;
+      }
       if (e?.data?.type === 'bing:auth' && e.data.token) {
         try { localStorage.setItem('token', e.data.token); } catch {}
       }
@@ -950,13 +954,12 @@ function ConversationInterfaceContent() {
           isOpen={showCodePreview}
           messages={messages}
           onClose={() => setShowCodePreview(false)}
-          projectFiles={projectFiles}
           commandsByFile={commandsByFile}
           onApplyAllCommandDiffs={applyAllCommandDiffs}
-          onApplyDiffsForFile={applyDiffsForFile}
+          onApplyFileCommandDiffs={applyDiffsForFile}
           onClearAllCommandDiffs={clearAllCommandDiffs}
-          onClearCommandDiffsForFile={clearCommandDiffsForFile}
-          onSquashCommandDiffsForFile={squashCommandDiffsForFile}
+          onClearFileCommandDiffs={clearCommandDiffsForFile}
+          onSquashFileCommandDiffs={squashCommandDiffsForFile}
         />
       )}
 

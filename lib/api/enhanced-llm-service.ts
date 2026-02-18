@@ -162,6 +162,8 @@ export class EnhancedLLMService {
         // This avoids provider compatibility issues (Anthropic rejects 'tool' role, Google maps it incorrectly)
         const updatedRequest = {
           ...llmRequest,
+          provider: actualProvider,
+          model: actualModel,
           toolCalls: toolResult.toolCalls,
           toolResults: toolResult.toolResults
         };

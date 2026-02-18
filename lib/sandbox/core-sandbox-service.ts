@@ -15,7 +15,9 @@ export class SandboxService {
   async createWorkspace(userId: string, config?: SandboxConfig): Promise<WorkspaceSession> {
     let handle: SandboxHandle
 
-    if (process.env.SANDBOX_WARM_POOL === 'true') {
+    // Only use warm pool when no custom config is specified
+    // Custom configs (language, resources, env vars) require fresh sandbox
+    if (process.env.SANDBOX_WARM_POOL === 'true' && !config) {
       handle = await warmPool.acquire(userId)
     } else {
       handle = await this.provider.createSandbox({
