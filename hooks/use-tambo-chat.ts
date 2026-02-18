@@ -47,7 +47,10 @@ export function useTamboChat() {
 async function sendStandardMessage(message: string, options?: any) {
   const response = await fetch('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
+    },
     body: JSON.stringify({
       messages: [{ role: 'user', content: message }],
       ...options,

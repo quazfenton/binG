@@ -198,6 +198,7 @@ export function useConversation() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
         },
         body: JSON.stringify(requestBody),
         signal: abortControllerRef.current?.signal,
