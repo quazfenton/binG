@@ -3,3 +3,6 @@ export { SandboxServiceBridge as SandboxService, sandboxBridge } from './sandbox
 export type { WorkspaceSession, SandboxConfig } from './sandbox-service-bridge';
 export type { ToolResult, PreviewInfo, AgentMessage } from './types';
 export { runAgentLoop } from './agent-loop';
+export { sandboxEvents } from './sandbox-events';
+export type { SandboxEvent, SandboxEventType } from './sandbox-events';
+export { terminalManager, TerminalManager } from './terminal-manager';

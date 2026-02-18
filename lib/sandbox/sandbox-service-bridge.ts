@@ -6,9 +6,7 @@
 
 // Import types from canonical source to avoid duplication
 import type { WorkspaceSession, SandboxConfig } from './types';
-
-// In-memory session store for sandbox sessions
-const sandboxSessions = new Map<string, WorkspaceSession>();
+import { getSession as storeGetSession, getSessionByUserId as storeGetSessionByUserId } from './session-store';
 
 // Track pending session creations to prevent race conditions
 const pendingCreations = new Map<string, Promise<WorkspaceSession>>();
@@ -33,17 +31,13 @@ export class SandboxServiceBridge {
   async createWorkspace(userId: string, config?: SandboxConfig): Promise<WorkspaceSession> {
     await this.ensureInitialized();
     const session = await this.sandboxService.createWorkspace(userId, config);
-    sandboxSessions.set(session.sessionId, session);
     return session;
   }
 
   async getOrCreateSession(userId: string, config?: SandboxConfig): Promise<WorkspaceSession> {
     // Check for existing active session
-    for (const session of sandboxSessions.values()) {
-      if (session.userId === userId && session.status === 'active') {
-        return session;
-      }
-    }
+    const existing = storeGetSessionByUserId(userId);
+    if (existing) return existing;
 
     // Check if a session is already being created for this user (prevent race condition)
     const pendingKey = `user:${userId}`;
@@ -90,20 +84,14 @@ export class SandboxServiceBridge {
   async destroyWorkspace(sessionId: string, sandboxId: string): Promise<void> {
     await this.ensureInitialized();
     await this.sandboxService.destroyWorkspace(sessionId, sandboxId);
-    sandboxSessions.delete(sessionId);
   }
 
   getSession(sessionId: string): WorkspaceSession | undefined {
-    return sandboxSessions.get(sessionId);
+    return storeGetSession(sessionId);
   }
 
   getSessionByUserId(userId: string): WorkspaceSession | undefined {
-    for (const session of sandboxSessions.values()) {
-      if (session.userId === userId && session.status === 'active') {
-        return session;
-      }
-    }
-    return undefined;
+    return storeGetSessionByUserId(userId);
   }
 }
 

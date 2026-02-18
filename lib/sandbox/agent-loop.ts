@@ -3,6 +3,7 @@ import { getSandboxProvider } from './providers'
 import { SANDBOX_TOOLS, validateCommand, type ToolName } from './sandbox-tools'
 import type { ToolResult } from './types'
 import type { SandboxHandle } from './providers/sandbox-provider'
+import { sandboxEvents } from './sandbox-events'
 
 function getSystemPrompt(workspaceDir: string): string {
   return `You are an expert software engineer with access to a Linux sandbox workspace.
@@ -35,18 +36,39 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   const sandboxHandle = await provider.getSandbox(sandboxId)
   const systemPrompt = getSystemPrompt(sandboxHandle.workspaceDir)
 
-  return llm.runAgentLoop({
-    userMessage,
-    conversationHistory,
-    tools: [...SANDBOX_TOOLS],
-    systemPrompt,
-    maxSteps: 15,
-    onToolExecution,
-    onStreamChunk,
-    async executeTool(name: string, args: Record<string, any>): Promise<ToolResult> {
-      return executeToolOnSandbox(sandboxHandle, name as ToolName, args)
-    },
-  })
+  try {
+    const result = await llm.runAgentLoop({
+      userMessage,
+      conversationHistory,
+      tools: [...SANDBOX_TOOLS],
+      systemPrompt,
+      maxSteps: 15,
+      onToolExecution(toolName: string, args: Record<string, any>, toolResult: ToolResult) {
+        sandboxEvents.emit(sandboxId, 'agent:tool_result', { toolName, args, result: toolResult })
+        onToolExecution?.(toolName, args, toolResult)
+      },
+      onStreamChunk(chunk: string) {
+        sandboxEvents.emit(sandboxId, 'agent:stream', { text: chunk })
+        onStreamChunk?.(chunk)
+      },
+      async executeTool(name: string, args: Record<string, any>): Promise<ToolResult> {
+        sandboxEvents.emit(sandboxId, 'agent:tool_start', { toolName: name, args })
+        return executeToolOnSandbox(sandboxHandle, name as ToolName, args)
+      },
+    })
+
+    sandboxEvents.emit(sandboxId, 'agent:complete', {
+      response: result.response,
+      totalSteps: result.totalSteps,
+    })
+
+    return result
+  } catch (error) {
+    sandboxEvents.emit(sandboxId, 'agent:error', {
+      message: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
 }
 
 async function executeToolOnSandbox(
