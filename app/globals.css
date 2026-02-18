@@ -5,6 +5,9 @@
 /* Import responsive utilities */
 @import '../styles/responsive.css';
 
+/* xterm.js terminal styles */
+@import '@xterm/xterm/css/xterm.css';
+
 /* Mobile-first CSS optimizations and safe area support */
 
 /* iOS safe area support */
@@ -531,6 +534,15 @@ body {
     }
 }
 
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 @keyframes spin-reverse {
     from {
         transform: rotate(360deg);
@@ -551,6 +563,10 @@ body {
 
 .animate-spin-slow {
     animation: spin-slow 3s linear infinite;
+}
+
+.animate-spin {
+    animation: spin 1s linear infinite;
 }
 
 .animate-spin-reverse {

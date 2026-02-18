@@ -2,6 +2,7 @@ import type { WorkspaceSession, SandboxConfig, ToolResult, PreviewInfo } from '.
 import { getSandboxProvider, type SandboxProvider, type SandboxHandle } from './providers'
 import { saveSession, updateSession, deleteSession } from './session-store'
 import { setupCacheVolumes } from './dep-cache'
+import { provisionBaseImage, warmPool } from './base-image'
 import { randomUUID } from 'crypto'
 
 export class SandboxService {
@@ -12,19 +13,29 @@ export class SandboxService {
   }
 
   async createWorkspace(userId: string, config?: SandboxConfig): Promise<WorkspaceSession> {
-    const handle = await this.provider.createSandbox({
-      language: config?.language ?? 'typescript',
-      autoStopInterval: config?.autoStopInterval ?? 60,
-      resources: config?.resources ?? { cpu: 2, memory: 4 },
-      envVars: {
-        TERM: 'xterm-256color',
-        LANG: 'en_US.UTF-8',
-        ...config?.envVars,
-      },
-      labels: { userId },
-    })
+    let handle: SandboxHandle
 
-    await setupCacheVolumes(handle)
+    if (process.env.SANDBOX_WARM_POOL === 'true') {
+      handle = await warmPool.acquire(userId)
+    } else {
+      handle = await this.provider.createSandbox({
+        language: config?.language ?? 'typescript',
+        autoStopInterval: config?.autoStopInterval ?? 60,
+        resources: config?.resources ?? { cpu: 2, memory: 4 },
+        envVars: {
+          TERM: 'xterm-256color',
+          LANG: 'en_US.UTF-8',
+          ...config?.envVars,
+        },
+        labels: { userId },
+      })
+
+      await setupCacheVolumes(handle)
+
+      if (process.env.SANDBOX_PRELOAD_PACKAGES !== 'false') {
+        await provisionBaseImage(handle)
+      }
+    }
 
     const session: WorkspaceSession = {
       sessionId: randomUUID(),

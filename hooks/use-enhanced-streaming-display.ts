@@ -61,7 +61,7 @@ export function useEnhancedStreamingDisplay({
         ...prev,
         isStreaming: true,
         sessionId,
-        showLoadingIndicator: content.length === 0
+        showLoadingIndicator: true  // Show loading until we have meaningful content
       }));
     } else if (!isStreaming && sessionIdRef.current) {
       // Complete the session
@@ -95,8 +95,10 @@ export function useEnhancedStreamingDisplay({
 
           lastContentRef.current = content;
 
-          // Hide loading indicator once we have content
-          if (state.showLoadingIndicator && content.length > 0) {
+          // Hide loading indicator once we have meaningful content (at least 50 chars or 2 sentences)
+          const hasMeaningfulContent = content.length >= 50 || 
+            (content.match(/[.!?]/g) || []).length >= 2;
+          if (state.showLoadingIndicator && hasMeaningfulContent) {
             setState(prev => ({ ...prev, showLoadingIndicator: false }));
           }
         }

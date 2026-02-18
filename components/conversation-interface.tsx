@@ -118,11 +118,11 @@ function ConversationInterfaceContent() {
       setTerminalMinimized(false);
     }
     
-    // Auto-focus terminal input when shell tab is selected
+    // Auto-focus terminal when shell tab is selected
     if (activeTab === 'shell' && showTerminal) {
       setTimeout(() => {
-        const activeElement = document.querySelector('[data-terminal-input]') as HTMLInputElement;
-        activeElement?.focus();
+        const xtermEl = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
+        xtermEl?.focus();
       }, 100);
     }
   }, [activeTab, showTerminal]);
@@ -974,7 +974,13 @@ function ConversationInterfaceContent() {
       <TerminalPanel
         userId={currentConversationId || undefined}
         isOpen={showTerminal}
-        onClose={() => setShowTerminal(false)}
+        onClose={() => {
+          setShowTerminal(false);
+          // Return to chat tab when terminal is closed
+          if (activeTab === 'shell') {
+            setActiveTab('chat');
+          }
+        }}
         onMinimize={() => setTerminalMinimized(!terminalMinimized)}
         isMinimized={terminalMinimized}
       />

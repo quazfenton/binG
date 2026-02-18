@@ -49,10 +49,9 @@ export async function POST(req: NextRequest) {
     const result = await sandboxBridge.executeCommand(sandboxId, validation.command);
 
     return NextResponse.json({
-      stdout: result.stdout || '',
-      stderr: result.stderr || '',
-      exitCode: result.exitCode || 0,
-      executionTime: result.executionTime || 0,
+      stdout: result.success ? result.output : '',
+      stderr: result.success ? '' : result.output,
+      exitCode: result.exitCode ?? 0,
     });
   } catch (error: any) {
     console.error('[Sandbox Execute] Error:', error);

@@ -1143,13 +1143,13 @@ export default function InteractionPanel({
           }}
         />
 
-        <div className="p-2 sm:p-4 h-full overflow-hidden max-w-4xl mx-auto flex flex-col relative" style={{ cursor: 'default' }}>
+        <div className="p-2 sm:p-3 h-full overflow-hidden flex flex-col relative" style={{ cursor: 'default' }}>
           {/* Expand/Minimize Button - Far Top Right Corner */}
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setIsExpanded(!isExpanded)}
-            className="absolute top-0.5 right-0 w-7 h-7 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
+            className="absolute top-1 right-1 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
             title={isExpanded ? "Collapse height" : "Expand height"}
             disabled={isMinimized}
           >
@@ -1160,8 +1160,8 @@ export default function InteractionPanel({
             )}
           </Button>
 
-          {/* Header */}
-          <div className="flex justify-between items-center mb-2 mt-7">
+          {/* Header - Compact layout */}
+          <div className="flex justify-between items-center mb-1 mt-5 px-1">
             <div className="flex items-center gap-2">
               <div className="">
                 <Sparkles className="h-3 w-3 text-white" />
@@ -1432,7 +1432,7 @@ export default function InteractionPanel({
                     <Button
                       type="button"
                       variant="destructive"
-                      className="self-end min-w-[80px] bg-red-600/80 hover:bg-red-600 border border-red-500/50"
+                      className="self-end min-w-[80px] bg-red-600/80 hover:bg-red-600 border border-red-500/50 rounded-2xl z-20"
                       onClick={onStopGeneration}
                     >
                       <Square className="h-4 w-4 mr-2" />
@@ -1441,7 +1441,7 @@ export default function InteractionPanel({
                   ) : (
                     <Button
                       type="submit"
-                      className="self-end min-w-[80px] bg-white/10 hover:bg-white/20 border border-white/20"
+                      className="self-end min-w-[80px] bg-white/10 hover:bg-white/20 border border-white/20 rounded-2xl z-20"
                       disabled={isProcessing || !input.trim()}
                     >
                       {isProcessing ? (
@@ -1532,6 +1532,36 @@ export default function InteractionPanel({
                       }`}
                     />
                   </button>
+                </div>
+
+                {/* Send Button for Code Tab */}
+                <div className="flex justify-end mt-2">
+                  {isProcessing && onStopGeneration ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      className="self-end min-w-[80px] bg-red-600/80 hover:bg-red-600 border border-red-500/50 rounded-2xl z-20"
+                      onClick={onStopGeneration}
+                    >
+                      <Square className="h-4 w-4 mr-2" />
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button
+                      type="submit"
+                      className="self-end min-w-[80px] bg-white/10 hover:bg-white/20 border border-white/20 rounded-2xl z-20"
+                      disabled={isProcessing || !input.trim()}
+                    >
+                      {isProcessing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Send className="h-4 w-4 mr-2" />
+                          Send
+                        </>
+                      )}
+                    </Button>
+                  )}
                 </div>
                 </form>
               </TabsContent>

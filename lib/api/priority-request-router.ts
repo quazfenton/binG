@@ -264,13 +264,13 @@ class PriorityRequestRouter {
         }
 
         const duration = Date.now() - startTime;
-        
+
         // Get actual provider/model from response
         // For fallback scenarios, response.data.provider will show "original -> fallback" format
-        const responseProvider = response.data?.provider || endpoint.name;
-        const responseModel = response.data?.model || request.model;
+        const actualProvider = response.data?.provider || endpoint.name;
+        const actualModel = response.data?.model || request.model;
 
-        console.log(`[Router] Request successfully handled by ${endpoint.name} in ${duration}ms (requested: ${request.provider}/${request.model}, actual: ${responseProvider}/${responseModel})`);
+        console.log(`[Router] Request successfully handled by ${endpoint.name} in ${duration}ms (requested: ${request.provider}/${request.model}, actual: ${actualProvider}/${actualModel})`);
 
         return {
           success: true,

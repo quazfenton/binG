@@ -56,8 +56,8 @@ export class EnhancedLLMService {
     const configs: LLMEndpointConfig[] = [
       {
         provider: 'openrouter',
-        baseUrl: process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1',
-        apiKey: process.env.OPENAI_API_KEY || '',
+        baseUrl: process.env.OPENROUTER_BASE_URL || process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1',
+        apiKey: process.env.OPENROUTER_API_KEY || '',
         models: PROVIDERS.openrouter.models,
         priority: 1
       },

@@ -1,14 +1,14 @@
 ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/quazfenton/binG?utm_source=oss&utm_medium=github&utm_campaign=quazfenton%2FbinG&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 # binG - Advanced LLM Chat Interface
 
-A spatial interface for AI interactions that combines traditional chat functionality with immersive  visualization, voice integration, and multi-provider LLM support.
+A spatial interface for AI interactions that combines traditional chat functionality with immersive visualization, voice integration, multi-provider LLM support, and code execution capabilities.
 
 ![binG Interface](https://via.placeholder.com/)
 
 ## ✨ Features
 
 ### 🎯 Core Functionality
-- **Multi-Provider LLM Support**: OpenAI, Anthropic, Google, Cohere, Together AI, Replicate, Portkey
+- **Multi-Provider LLM Support**: OpenAI, Anthropic, Google, Cohere, Together AI, Replicate, Portkey, Mistral, OpenRouter, Chutes
 - **Real-time Streaming**: Smooth text streaming with fade-in animations
 - **Interface**: Traditional chat panel alongside immersive visualization
 - **Voice Integration**: Text-to-speech and speech-to-text using Livekit
@@ -16,12 +16,22 @@ A spatial interface for AI interactions that combines traditional chat functiona
 - **Provider Selection**: Easy switching between AI models and providers
 - **Free Models**: Access to DeepSeek R1, Gemini, OpenRouter, Grok, and Flux models via Portkey
 
+### 💻 Code Execution & Terminal
+- **xterm.js Terminal**: Full-featured terminal with command history and autocomplete
+- **Sandbox Execution**: Isolated code execution via Daytona or Runloop
+- **Session Persistence**: Terminal sessions saved and restored across page reloads
+- **Auto-Reconnect**: Sandbox automatically restarts on shell execution requests
+- **Command History**: Fish-like autocomplete and history navigation (↑/↓)
+- **Split View**: Multiple terminals side-by-side
+
 ### 🎨 Advanced UI/UX
 - **Streaming Animations**: Typewriter effect with smooth character-by-character display
-- **Mood-Responsive Interface**:  environment adapts to conversation tone
+- **Thinking Indicator**: Animated loading spinner while AI processes
+- **Mood-Responsive Interface**: Environment adapts to conversation tone
 - **Copy & Download**: Individual message copying and code block extraction
 - **Accessibility Controls**: Screen reader support, voice controls, text sizing
 - **Error Handling**: Comprehensive error management with user-friendly messages
+- **Task-Specific Providers**: Optimized providers for embeddings, agents, OCR, etc.
 
 ### 🔊 Voice Features
 - **Text-to-Speech**: Automatic voice synthesis for AI responses
@@ -30,10 +40,11 @@ A spatial interface for AI interactions that combines traditional chat functiona
 - **Livekit Integration**: Professional-grade voice processing
 
 ### 💾 Data Management
-- **Local Storage**: Chat history persisted in browser
+- **Local Storage**: Chat history and terminal sessions persisted in browser
 - **Export Options**: Download individual chats or complete history
 - **Code Extraction**: Automatic code block detection and file generation
 - **Session Management**: Resume conversations across browser sessions
+- **Logging Control**: Configurable log levels (silent, error, warn, info, debug)
 
 ## 🚀 Quick Start
 
@@ -118,6 +129,49 @@ PORTKEY_API_KEY=your_portkey_api_key_here
 PORTKEY_VIRTUAL_KEY=your_portkey_virtual_key_here
 ```
 
+### Optional: Code Execution (Sandbox)
+```env
+# Choose sandbox provider: daytona or runloop
+SANDBOX_PROVIDER=daytona
+
+# Daytona API credentials
+DAYTONA_API_KEY=your_daytona_api_key_here
+
+# OR Runloop API credentials (alternative)
+#RUNLOOP_API_KEY=your_runloop_api_key_here
+
+# Sandbox configuration
+SANDBOX_WARM_POOL=true           # Keep warm sandboxes ready
+SANDBOX_WARM_POOL_SIZE=2         # Number of warm sandboxes
+SANDBOX_PRELOAD_PACKAGES=true    # Preload common packages
+SANDBOX_BASE_PACKAGES=git,curl,wget,nodejs,python3,pip
+SANDBOX_EXTRA_PACKAGES_NODE=npm,yarn,pnpm
+SANDBOX_EXTRA_PACKAGES_PYTHON=requests,numpy,pandas
+```
+
+### Optional: Tool Integration (Composio, Arcade, Nango)
+```env
+# Composio (800+ tools)
+COMPOSIO_API_KEY=your_composio_api_key_here
+COMPOSIO_ENABLED=true
+COMPOSIO_LLM_PROVIDER=openrouter
+COMPOSIO_LLM_MODEL=deepseek/deepseek-r1-0528:free
+COMPOSIO_ENABLE_ALL_TOOLS=true
+
+# Arcade (alternative tool platform)
+#ARCADE_API_KEY=your_arcade_api_key_here
+
+# Nango (alternative to Arcade)
+#NANGO_API_KEY=your_nango_api_key_here
+#NANGO_HOST=https://api.nango.dev
+```
+
+### Optional: Logging Configuration
+```env
+# Log levels: silent, error, warn, info, debug
+LOG_LEVEL=info
+```
+
 **Available Free Models:**
 - `chutes/deepseek-r1-0528:free` - DeepSeek R1 (Latest reasoning model)
 - `chutes/gemini-1.5-flash:free` - Google Gemini 1.5 Flash
@@ -156,6 +210,17 @@ PORTKEY_VIRTUAL_KEY=your_portkey_virtual_key_here
 2. **Load Previous**: Use history button to browse past chats
 3. **Export Options**: Download individual chats or complete history
 4. **Delete Chats**: Remove unwanted conversation history
+
+### Terminal & Code Execution
+1. **Open Terminal**: Click Shell tab or terminal button
+2. **Execute Commands**: Type commands and press Enter (sandbox auto-connects on first command)
+3. **Command History**: Use ↑/↓ arrows to navigate previous commands
+4. **Autocomplete**: Start typing and press Tab or → to complete matching commands
+5. **Split View**: Click split button to open multiple terminals side-by-side
+6. **Close Terminal**: Click X to close (sandbox pauses, session saved for reuse)
+7. **Reopen Terminal**: Click Shell tab again (restores previous session, sandbox restarts on command)
+
+**Note:** Sandbox sessions are closed when terminal is closed to save resources. The sandbox automatically restarts when you execute a command after reopening the terminal.
 
 ## 🛠️ Development
 

@@ -2,14 +2,14 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import {
-  Terminal, X, Minimize2, Maximize2, Play, Square,
-  Trash2, Copy, ChevronUp, ChevronDown, Command,
-  Cpu, MemoryStick, HardDrive, Plus, Split
+  Terminal as TerminalIcon, X, Minimize2, Maximize2, Square,
+  Trash2, Copy, ChevronUp, ChevronDown,
+  Cpu, MemoryStick, Plus, Split
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
+import { saveTerminalSession, getTerminalSessions, addCommandToHistory } from '@/lib/terminal/terminal-storage';
 
 interface TerminalPanelProps {
   userId?: string;
@@ -17,13 +17,6 @@ interface TerminalPanelProps {
   onClose: () => void;
   onMinimize?: () => void;
   isMinimized?: boolean;
-}
-
-interface TerminalOutput {
-  id: string;
-  type: 'command' | 'output' | 'error' | 'system';
-  content: string;
-  timestamp: Date;
 }
 
 interface SandboxInfo {
@@ -39,15 +32,21 @@ interface SandboxInfo {
 interface TerminalInstance {
   id: string;
   name: string;
-  outputs: TerminalOutput[];
-  input: string;
-  isExecuting: boolean;
   sandboxInfo: SandboxInfo;
-  terminalRef: React.RefObject<HTMLDivElement>;
-  inputRef: React.RefObject<HTMLInputElement>;
-  commandHistory: string[];
-  historyIndex: number;
-  autocompleteSuggestion: string;
+  xtermRef: React.RefObject<HTMLDivElement>;
+  terminal: any | null;      // xterm Terminal instance
+  fitAddon: any | null;      // FitAddon instance
+  eventSource: EventSource | null;
+  isConnected: boolean;
+}
+
+function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem('token');
+  } catch {
+    return null;
+  }
 }
 
 export default function TerminalPanel({
@@ -62,55 +61,107 @@ export default function TerminalPanel({
   const [isExpanded, setIsExpanded] = useState(false);
   const [isSplitView, setIsSplitView] = useState(false);
 
+  // Refs to hold mutable terminal state without triggering re-renders
+  const terminalsRef = useRef<TerminalInstance[]>([]);
+  terminalsRef.current = terminals;
+
   // Auto-create terminal when panel opens and no terminals exist
   useEffect(() => {
     if (isOpen && terminals.length === 0) {
-      createTerminal('Terminal 1');
+      // Try to restore previous sessions first
+      const savedSessions = getTerminalSessions();
+      if (savedSessions.length > 0) {
+        // Restore most recent session
+        const session = savedSessions[0];
+        createTerminal(session.name, session.sandboxInfo);
+      } else {
+        createTerminal('Terminal 1');
+      }
     }
   }, [isOpen]);
 
-  // Auto-scroll all terminals
+  // Clean up on unmount and when panel closes
   useEffect(() => {
-    terminals.forEach(term => {
-      if (term.terminalRef.current) {
-        term.terminalRef.current.scrollTop = term.terminalRef.current.scrollHeight;
-      }
-    });
-  }, [terminals]);
+    return () => {
+      terminalsRef.current.forEach(t => {
+        t.eventSource?.close();
+        t.terminal?.dispose();
+      });
+    };
+  }, []);
 
-  // Focus active terminal input
+  // Close sandbox sessions when panel closes (but save session info for reuse)
   useEffect(() => {
-    const activeTerminal = terminals.find(t => t.id === activeTerminalId);
-    if (isOpen && !isMinimized && activeTerminal?.inputRef.current) {
-      activeTerminal.inputRef.current.focus();
+    if (!isOpen && terminals.length > 0) {
+      // Save session info before closing sandbox
+      terminals.forEach(t => {
+        saveTerminalSession({
+          id: t.id,
+          name: t.name,
+          commandHistory: [], // xterm handles this internally
+          sandboxInfo: {
+            ...t.sandboxInfo,
+            status: 'none' // Mark as closed, but keep sandboxId for reuse
+          },
+          lastUsed: Date.now()
+        });
+      });
     }
-  }, [isOpen, isMinimized, activeTerminalId, terminals]);
+  }, [isOpen]);
 
-  const createTerminal = (name?: string) => {
+  // Handle resize when expand state or split view changes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      terminals.forEach(t => {
+        if (t.fitAddon && t.terminal) {
+          try {
+            t.fitAddon.fit();
+          } catch {
+            // Terminal not yet attached
+          }
+        }
+      });
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [isExpanded, isSplitView, activeTerminalId, isMinimized]);
+
+  // Global resize handler
+  useEffect(() => {
+    const handleResize = () => {
+      terminalsRef.current.forEach(t => {
+        if (t.fitAddon && t.terminal) {
+          try { t.fitAddon.fit(); } catch { /* ignore */ }
+        }
+      });
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const createTerminal = useCallback((name?: string, sandboxInfo?: any) => {
     const newTerminal: TerminalInstance = {
       id: `terminal-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      name: name || `Terminal ${terminals.length + 1}`,
-      outputs: [],
-      input: '',
-      isExecuting: false,
-      sandboxInfo: { status: 'none' },
-      terminalRef: React.createRef<HTMLDivElement>(),
-      inputRef: React.createRef<HTMLInputElement>(),
-      commandHistory: [],
-      historyIndex: -1,
-      autocompleteSuggestion: ''
+      name: name || `Terminal ${terminalsRef.current.length + 1}`,
+      sandboxInfo: sandboxInfo || { status: 'none' },
+      xtermRef: React.createRef<HTMLDivElement>(),
+      terminal: null,
+      fitAddon: null,
+      eventSource: null,
+      isConnected: false,
     };
 
-    setTerminals(prev => {
-      const updated = [...prev, newTerminal];
-      setActiveTerminalId(newTerminal.id);
-      return updated;
-    });
-
+    setTerminals(prev => [...prev, newTerminal]);
+    setActiveTerminalId(newTerminal.id);
     return newTerminal.id;
-  };
+  }, []);
 
-  const closeTerminal = (terminalId: string) => {
+  const closeTerminal = useCallback((terminalId: string) => {
+    const terminal = terminalsRef.current.find(t => t.id === terminalId);
+    if (terminal) {
+      terminal.eventSource?.close();
+      terminal.terminal?.dispose();
+    }
+
     setTerminals(prev => {
       const updated = prev.filter(t => t.id !== terminalId);
       if (updated.length === 0) {
@@ -121,287 +172,420 @@ export default function TerminalPanel({
       }
       return updated;
     });
-  };
+  }, [activeTerminalId]);
 
-  const updateTerminal = (terminalId: string, updates: Partial<TerminalInstance>) => {
-    setTerminals(prev => prev.map(t => 
+  const updateTerminalState = useCallback((terminalId: string, updates: Partial<TerminalInstance>) => {
+    setTerminals(prev => prev.map(t =>
       t.id === terminalId ? { ...t, ...updates } : t
     ));
-  };
+  }, []);
 
-  const getActiveTerminal = () => {
-    return terminals.find(t => t.id === activeTerminalId);
-  };
-
-  const initializeTerminalSandbox = async (terminalId: string) => {
-    const devUserId = userId || 'dev-anonymous-user';
-    
-    updateTerminal(terminalId, { 
-      sandboxInfo: { status: 'creating' } 
-    });
-    addOutput(terminalId, 'system', 'Initializing sandbox environment...');
+  // Initialize xterm.js for a terminal instance when its container mounts
+  const initXterm = useCallback(async (terminalId: string, containerEl: HTMLDivElement) => {
+    const existing = terminalsRef.current.find(t => t.id === terminalId);
+    if (!existing || existing.terminal) return; // Already initialized
 
     try {
-      const response = await fetch('/api/sandbox/session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: devUserId })
+      const { Terminal } = await import('@xterm/xterm');
+      const { FitAddon } = await import('@xterm/addon-fit');
+      const { WebLinksAddon } = await import('@xterm/addon-web-links');
+
+      const terminal = new Terminal({
+        cursorBlink: true,
+        fontSize: 13,
+        fontFamily: '"Cascadia Code", "Fira Code", "JetBrains Mono", Menlo, Monaco, "Courier New", monospace',
+        theme: {
+          background: '#0a0a0a',
+          foreground: '#e0e0e0',
+          cursor: '#4ade80',
+          selectionBackground: '#4ade8040',
+          black: '#1a1a1a',
+          red: '#f87171',
+          green: '#4ade80',
+          yellow: '#facc15',
+          blue: '#60a5fa',
+          magenta: '#c084fc',
+          cyan: '#22d3ee',
+          white: '#e0e0e0',
+          brightBlack: '#525252',
+          brightRed: '#fca5a5',
+          brightGreen: '#86efac',
+          brightYellow: '#fde68a',
+          brightBlue: '#93c5fd',
+          brightMagenta: '#d8b4fe',
+          brightCyan: '#67e8f9',
+          brightWhite: '#ffffff',
+        },
+        allowProposedApi: true,
+        scrollback: 10000,
+        convertEol: true,
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        updateTerminal(terminalId, {
-          sandboxInfo: {
-            sessionId: data.session.sessionId,
-            sandboxId: data.session.sandboxId,
-            status: 'active',
-            resources: data.session.resources
-          }
-        });
-        addOutput(terminalId, 'system', `✓ Sandbox ready (${data.session.sandboxId})`);
-        if (!userId) {
-          addOutput(terminalId, 'system', '⚠️ Dev mode: Anonymous session (sign in for persistence)');
+      const fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+      terminal.loadAddon(new WebLinksAddon());
+
+      terminal.open(containerEl);
+
+      // Initial fit after a frame
+      requestAnimationFrame(() => {
+        try { fitAddon.fit(); } catch { /* ignore */ }
+      });
+
+      terminal.writeln('\x1b[1;32m● Terminal ready\x1b[0m');
+      terminal.writeln('\x1b[90mSandbox will connect on first keystroke...\x1b[0m');
+      terminal.writeln('');
+
+      updateTerminalState(terminalId, { terminal, fitAddon });
+
+      // Store refs on the mutable object for immediate access
+      const termRef = terminalsRef.current.find(t => t.id === terminalId);
+      if (termRef) {
+        termRef.terminal = terminal;
+        termRef.fitAddon = fitAddon;
+      }
+
+      // Set up input handler — sends keystrokes to PTY via POST
+      terminal.onData((data: string) => {
+        const term = terminalsRef.current.find(t => t.id === terminalId);
+        if (!term) return;
+
+        // If not connected yet, trigger sandbox initialization
+        if (term.sandboxInfo.status === 'none' || !term.isConnected) {
+          connectTerminal(terminalId);
+          // Buffer the keystroke to send after connection
+          const waitAndSend = () => {
+            const check = terminalsRef.current.find(t => t.id === terminalId);
+            if (check?.isConnected && check.sandboxInfo.sessionId) {
+              sendInput(check.sandboxInfo.sessionId, data);
+            } else if (check && check.sandboxInfo.status !== 'error') {
+              setTimeout(waitAndSend, 200);
+            }
+          };
+          setTimeout(waitAndSend, 500);
+          return;
         }
-      } else {
-        throw new Error('Failed to create sandbox');
-      }
-    } catch (error) {
-      updateTerminal(terminalId, { sandboxInfo: { status: 'error' } });
-      addOutput(terminalId, 'error', 'Failed to initialize sandbox. Please try again.');
+
+        if (term.sandboxInfo.sessionId) {
+          sendInput(term.sandboxInfo.sessionId, data);
+        }
+      });
+
+      // Handle resize events from FitAddon
+      terminal.onResize(({ cols, rows }: { cols: number; rows: number }) => {
+        const term = terminalsRef.current.find(t => t.id === terminalId);
+        if (term?.isConnected && term.sandboxInfo.sessionId) {
+          sendResize(term.sandboxInfo.sessionId, cols, rows);
+        }
+      });
+
+    } catch (err) {
+      console.error('[TerminalPanel] Failed to load xterm.js:', err);
+      toast.error('Failed to initialize terminal. Install @xterm/xterm @xterm/addon-fit @xterm/addon-web-links');
     }
-  };
+  }, []);
 
-  const addOutput = (terminalId: string, type: TerminalOutput['type'], content: string) => {
-    setTerminals(prev => prev.map(t => {
-      if (t.id !== terminalId) return t;
-      return {
-        ...t,
-        outputs: [...t.outputs, {
-          id: `output-${Date.now()}-${t.outputs.length}`,
-          type,
-          content,
-          timestamp: new Date()
-        }]
-      };
-    }));
-  };
-
-  const executeCommand = async (command: string) => {
-    const activeTerminal = getActiveTerminal();
-    if (!activeTerminal || !command.trim()) return;
-    
-    // Initialize sandbox on first command if not already done
-    if (!activeTerminal.sandboxInfo.sandboxId || activeTerminal.sandboxInfo.status !== 'active') {
-      await initializeTerminalSandbox(activeTerminal.id);
-      // If sandbox init failed, don't proceed
-      const updatedTerminal = getActiveTerminal();
-      if (!updatedTerminal?.sandboxInfo.sandboxId || updatedTerminal.sandboxInfo.status !== 'active') {
-        return;
-      }
-    }
-    
-    if (activeTerminal.isExecuting) return;
-
-    // Add command to history
-    updateTerminal(activeTerminal.id, {
-      commandHistory: [...activeTerminal.commandHistory, command].slice(-100), // Keep last 100 commands
-      historyIndex: -1,
-      autocompleteSuggestion: ''
-    });
-
-    updateTerminal(activeTerminal.id, { isExecuting: true });
-    addOutput(activeTerminal.id, 'command', `$ ${command}`);
-
+  // Send input to PTY
+  const sendInput = useCallback(async (sessionId: string, data: string) => {
     try {
-      const response = await fetch('/api/sandbox/execute', {
+      await fetch('/api/sandbox/terminal/input', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          command,
-          sandboxId: activeTerminal.sandboxInfo.sandboxId
-        })
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getAuthToken() || ''}`,
+        },
+        body: JSON.stringify({ sessionId, data }),
       });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.stdout) addOutput(activeTerminal.id, 'output', data.stdout);
-        if (data.stderr) addOutput(activeTerminal.id, 'error', data.stderr);
-        if (!data.stdout && !data.stderr) addOutput(activeTerminal.id, 'output', '(no output)');
-      } else {
-        throw new Error('Execution failed');
-      }
-    } catch (error) {
-      addOutput(activeTerminal.id, 'error', `Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      updateTerminal(activeTerminal.id, { isExecuting: false, input: '' });
+    } catch {
+      // Silently ignore individual input failures
     }
-  };
+  }, []);
 
-  const handleInputChange = (terminalId: string, value: string) => {
-    const terminal = terminals.find(t => t.id === terminalId);
-    if (!terminal) return;
-
-    // Find autocomplete suggestion from history
-    let suggestion = '';
-    if (value.length > 0) {
-      const matchingCommand = terminal.commandHistory
-        .slice()
-        .reverse()
-        .find(cmd => cmd.toLowerCase().startsWith(value.toLowerCase()));
-      if (matchingCommand) {
-        suggestion = matchingCommand.slice(value.length);
-      }
-    }
-
-    updateTerminal(terminalId, { 
-      input: value,
-      autocompleteSuggestion: suggestion,
-      historyIndex: -1 // Reset history index when typing new input
-    });
-  };
-
-  const handleInputKeyDown = (e: React.KeyboardEvent, terminalId: string) => {
-    const terminal = terminals.find(t => t.id === terminalId);
-    if (!terminal) return;
-
-    // Handle Tab or Right Arrow for autocomplete
-    if ((e.key === 'Tab' || e.key === 'ArrowRight') && terminal.autocompleteSuggestion) {
-      e.preventDefault();
-      updateTerminal(terminalId, {
-        input: terminal.input + terminal.autocompleteSuggestion,
-        autocompleteSuggestion: ''
-      });
-      return;
-    }
-
-    // Handle Arrow Up for history navigation
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (terminal.commandHistory.length === 0) return;
-
-      const newIndex = terminal.historyIndex === -1 
-        ? terminal.commandHistory.length - 1 
-        : Math.max(0, terminal.historyIndex - 1);
-      
-      updateTerminal(terminalId, {
-        input: terminal.commandHistory[newIndex],
-        historyIndex: newIndex,
-        autocompleteSuggestion: ''
-      });
-      return;
-    }
-
-    // Handle Arrow Down for history navigation
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      if (terminal.historyIndex === -1) return;
-
-      const newIndex = terminal.historyIndex + 1;
-      if (newIndex >= terminal.commandHistory.length) {
-        // End of history, clear input
-        updateTerminal(terminalId, {
-          input: '',
-          historyIndex: -1,
-          autocompleteSuggestion: ''
-        });
-      } else {
-        updateTerminal(terminalId, {
-          input: terminal.commandHistory[newIndex],
-          historyIndex: newIndex,
-          autocompleteSuggestion: ''
-        });
-      }
-      return;
-    }
-  };
-
-  const handleSubmit = (e: React.FormEvent, terminalId: string) => {
-    e.preventDefault();
-    const terminal = terminals.find(t => t.id === terminalId);
-    if (terminal) {
-      executeCommand(terminal.input);
-    }
-  };
-
-  const clearTerminal = (terminalId?: string) => {
-    if (terminalId) {
-      updateTerminal(terminalId, { outputs: [] });
-    } else {
-      setTerminals(prev => prev.map(t => ({ ...t, outputs: [] })));
-    }
-    toast.info('Terminal cleared');
-  };
-
-  const copyOutput = async () => {
-    const text = terminals.flatMap(t => t.outputs).map(o => o.content).join('\n');
+  // Send resize to PTY
+  const sendResize = useCallback(async (sessionId: string, cols: number, rows: number) => {
     try {
-      await navigator.clipboard.writeText(text);
-      toast.success('Copied to clipboard');
+      await fetch('/api/sandbox/terminal/resize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getAuthToken() || ''}`,
+        },
+        body: JSON.stringify({ sessionId, cols, rows }),
+      });
+    } catch {
+      // Silently ignore resize failures
+    }
+  }, []);
+
+  // Connect terminal to sandbox PTY
+  const connectTerminal = useCallback(async (terminalId: string) => {
+    const term = terminalsRef.current.find(t => t.id === terminalId);
+    if (!term || term.sandboxInfo.status === 'creating' || term.isConnected) return;
+
+    const token = getAuthToken();
+
+    updateTerminalState(terminalId, {
+      sandboxInfo: { status: 'creating' },
+    });
+    term.sandboxInfo = { status: 'creating' };
+    term.terminal?.writeln('\x1b[33m⟳ Initializing sandbox environment...\x1b[0m');
+
+    try {
+      // Step 1: Ensure sandbox session exists
+      const sessionRes = await fetch('/api/sandbox/terminal', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token || ''}`,
+        },
+      });
+
+      if (!sessionRes.ok) {
+        throw new Error('Failed to create sandbox session');
+      }
+
+      const sessionData = await sessionRes.json();
+      const { sessionId, sandboxId } = sessionData;
+
+      // Step 2: Connect SSE stream (this creates the PTY)
+      const streamUrl = `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+      const eventSource = new EventSource(streamUrl);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          const currentTerm = terminalsRef.current.find(t => t.id === terminalId);
+          if (!currentTerm?.terminal) return;
+
+          switch (msg.type) {
+            case 'pty':
+              currentTerm.terminal.write(msg.data);
+              break;
+
+            case 'agent:tool_start':
+              currentTerm.terminal.writeln('');
+              currentTerm.terminal.writeln(`\x1b[1;35m🤖 Agent → ${msg.data.toolName}\x1b[0m`);
+              if (msg.data.toolName === 'exec_shell' && msg.data.args?.command) {
+                currentTerm.terminal.writeln(`\x1b[90m   $ ${msg.data.args.command}\x1b[0m`);
+              } else if (msg.data.args) {
+                const argStr = Object.entries(msg.data.args)
+                  .map(([k, v]) => `${k}=${typeof v === 'string' && v.length > 80 ? v.slice(0, 80) + '…' : v}`)
+                  .join(', ');
+                currentTerm.terminal.writeln(`\x1b[90m   ${argStr}\x1b[0m`);
+              }
+              break;
+
+            case 'agent:tool_result': {
+              const r = msg.data.result;
+              if (r?.success) {
+                currentTerm.terminal.writeln(`\x1b[32m   ✓ Success\x1b[0m`);
+              } else {
+                currentTerm.terminal.writeln(`\x1b[31m   ✗ Failed (exit ${r?.exitCode ?? '?'})\x1b[0m`);
+              }
+              if (r?.output) {
+                const lines = r.output.split('\n');
+                const maxLines = 15;
+                const display = lines.length > maxLines
+                  ? [...lines.slice(0, maxLines), `\x1b[90m   ... (${lines.length - maxLines} more lines)\x1b[0m`]
+                  : lines;
+                display.forEach((line: string) => {
+                  currentTerm.terminal.writeln(`\x1b[90m   ${line}\x1b[0m`);
+                });
+              }
+              break;
+            }
+
+            case 'agent:stream':
+              if (msg.data.text) {
+                currentTerm.terminal.write(`\x1b[36m${msg.data.text}\x1b[0m`);
+              }
+              break;
+
+            case 'agent:complete':
+              currentTerm.terminal.writeln('');
+              currentTerm.terminal.writeln(`\x1b[1;32m🤖 Agent complete (${msg.data.totalSteps ?? 0} steps)\x1b[0m`);
+              currentTerm.terminal.writeln('');
+              break;
+
+            case 'agent:error':
+              currentTerm.terminal.writeln('');
+              currentTerm.terminal.writeln(`\x1b[1;31m🤖 Agent error: ${msg.data.message}\x1b[0m`);
+              currentTerm.terminal.writeln('');
+              break;
+
+            case 'port_detected':
+              currentTerm.terminal.writeln('');
+              currentTerm.terminal.writeln(`\x1b[1;34m🌐 Preview available: ${msg.data.url}\x1b[0m`);
+              toast.info(`Preview available on port ${msg.data.port}`, {
+                action: {
+                  label: 'Open',
+                  onClick: () => window.open(msg.data.url, '_blank'),
+                },
+              });
+              break;
+
+            case 'error':
+              currentTerm.terminal.writeln(`\x1b[31m${msg.data}\x1b[0m`);
+              break;
+
+            case 'ping':
+              break;
+          }
+        } catch {
+          // Malformed SSE data
+        }
+      };
+
+      eventSource.onerror = () => {
+        const currentTerm = terminalsRef.current.find(t => t.id === terminalId);
+        if (currentTerm?.isConnected) {
+          currentTerm.terminal?.writeln('\x1b[31m⚠ Connection lost. Reconnecting...\x1b[0m');
+          // EventSource auto-reconnects
+        }
+      };
+
+      const sandboxInfo: SandboxInfo = {
+        sessionId,
+        sandboxId,
+        status: 'active',
+      };
+
+      updateTerminalState(terminalId, {
+        sandboxInfo,
+        eventSource,
+        isConnected: true,
+      });
+
+      // Update mutable ref immediately
+      const termMut = terminalsRef.current.find(t => t.id === terminalId);
+      if (termMut) {
+        termMut.sandboxInfo = sandboxInfo;
+        termMut.eventSource = eventSource;
+        termMut.isConnected = true;
+      }
+
+      if (!userId) {
+        term.terminal?.writeln('\x1b[33m⚠ Dev mode: Anonymous session (sign in for persistence)\x1b[0m');
+      }
+
+      // Send initial resize
+      if (term.terminal) {
+        sendResize(sessionId, term.terminal.cols, term.terminal.rows);
+      }
+
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : 'Unknown error';
+      updateTerminalState(terminalId, {
+        sandboxInfo: { status: 'error' },
+        isConnected: false,
+      });
+      const termMut = terminalsRef.current.find(t => t.id === terminalId);
+      if (termMut) {
+        termMut.sandboxInfo = { status: 'error' };
+        termMut.isConnected = false;
+      }
+      term.terminal?.writeln(`\x1b[31m✗ Failed to connect: ${errMsg}\x1b[0m`);
+      term.terminal?.writeln('\x1b[90mPress any key to retry...\x1b[0m');
+    }
+  }, [userId, updateTerminalState, sendResize]);
+
+  // Ref callback to mount xterm when DOM element is available
+  const setXtermContainer = useCallback((terminalId: string) => (el: HTMLDivElement | null) => {
+    if (el) {
+      const term = terminalsRef.current.find(t => t.id === terminalId);
+      if (term && !term.terminal) {
+        initXterm(terminalId, el);
+      }
+    }
+  }, [initXterm]);
+
+  const clearTerminal = useCallback((terminalId?: string) => {
+    const ids = terminalId ? [terminalId] : terminals.map(t => t.id);
+    ids.forEach(id => {
+      const term = terminalsRef.current.find(t => t.id === id);
+      if (term?.terminal) {
+        term.terminal.clear();
+      }
+    });
+    toast.info('Terminal cleared');
+  }, [terminals]);
+
+  const copyOutput = useCallback(async () => {
+    const active = terminalsRef.current.find(t => t.id === activeTerminalId);
+    if (!active?.terminal) return;
+
+    try {
+      const selection = active.terminal.getSelection();
+      const text = selection || active.terminal.buffer.active.getLine(0)?.translateToString() || '';
+      await navigator.clipboard.writeText(selection || text);
+      toast.success(selection ? 'Selection copied' : 'Copied to clipboard');
     } catch {
       toast.error('Failed to copy to clipboard');
     }
-  };
+  }, [activeTerminalId]);
 
-  const killTerminal = async (terminalId: string) => {
-    const terminal = terminals.find(t => t.id === terminalId);
-    if (!terminal?.sandboxInfo?.sessionId || !terminal?.sandboxInfo?.sandboxId) return;
+  const killTerminal = useCallback(async (terminalId: string) => {
+    const terminal = terminalsRef.current.find(t => t.id === terminalId);
+    if (!terminal?.sandboxInfo?.sessionId) {
+      closeTerminal(terminalId);
+      return;
+    }
 
     try {
-      await fetch('/api/sandbox/session', {
+      terminal.eventSource?.close();
+      await fetch('/api/sandbox/terminal', {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: terminal.sandboxInfo.sessionId,
-          sandboxId: terminal.sandboxInfo.sandboxId
-        })
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${getAuthToken() || ''}`,
+        },
+        body: JSON.stringify({ sessionId: terminal.sandboxInfo.sessionId }),
       });
-      closeTerminal(terminalId);
-      toast.success('Terminal closed');
-    } catch (error) {
-      toast.error('Failed to close terminal');
+    } catch {
+      // Continue with cleanup
     }
-  };
+    closeTerminal(terminalId);
+    toast.success('Terminal closed');
+  }, [closeTerminal]);
 
-  const killAllTerminals = async () => {
-    for (const terminal of terminals) {
-      if (terminal.sandboxInfo.sessionId && terminal.sandboxInfo.sandboxId) {
+  const killAllTerminals = useCallback(async () => {
+    for (const terminal of terminalsRef.current) {
+      terminal.eventSource?.close();
+      if (terminal.sandboxInfo.sessionId) {
         try {
-          await fetch('/api/sandbox/session', {
+          await fetch('/api/sandbox/terminal', {
             method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sessionId: terminal.sandboxInfo.sessionId,
-              sandboxId: terminal.sandboxInfo.sandboxId
-            })
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${getAuthToken() || ''}`,
+            },
+            body: JSON.stringify({ sessionId: terminal.sandboxInfo.sessionId }),
           });
-        } catch (error) {
-          // Continue closing others
+        } catch {
+          // Continue
         }
       }
+      terminal.terminal?.dispose();
     }
     setTerminals([]);
     setActiveTerminalId(null);
     setIsSplitView(false);
     toast.success('All terminals closed');
-  };
+  }, []);
 
-  const toggleSplitView = () => {
+  const toggleSplitView = useCallback(() => {
     if (isSplitView) {
-      // Close one terminal when disabling split view
       if (terminals.length > 1) {
-        const toClose = terminals[terminals.length - 1];
-        killTerminal(toClose.id);
+        killTerminal(terminals[terminals.length - 1].id);
       }
       setIsSplitView(false);
     } else {
-      // Open second terminal
       if (terminals.length < 2) {
         createTerminal('Terminal 2');
       }
       setIsSplitView(true);
     }
-  };
+  }, [isSplitView, terminals, killTerminal, createTerminal]);
 
   if (!isOpen) return null;
 
@@ -415,7 +599,7 @@ export default function TerminalPanel({
       >
         <div className="flex items-center justify-between px-4 py-2">
           <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-green-400" />
+            <TerminalIcon className="w-4 h-4 text-green-400" />
             <span className="text-sm text-white">Terminal</span>
             {terminals.some(t => t.sandboxInfo.status === 'active') && (
               <span className="text-xs text-green-400 flex items-center gap-1">
@@ -437,22 +621,22 @@ export default function TerminalPanel({
     );
   }
 
-  const activeTerminal = getActiveTerminal();
+  const activeTerminal = terminals.find(t => t.id === activeTerminalId);
 
   return (
     <motion.div
       initial={{ y: 100, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       exit={{ y: 100, opacity: 0 }}
-      className={`fixed bottom-0 left-0 right-0 z-50 bg-black/95 border-t border-white/10 backdrop-blur-sm ${
+      className={`fixed bottom-0 left-0 right-0 z-50 bg-black/95 border-t border-white/10 backdrop-blur-sm flex flex-col ${
         isExpanded ? 'h-[80vh]' : 'h-[400px]'
       }`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/50">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/50 shrink-0">
         <div className="flex items-center gap-3 flex-1">
           <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-green-400" />
+            <TerminalIcon className="w-4 h-4 text-green-400" />
             <span className="text-sm font-medium text-white">Terminal</span>
           </div>
 
@@ -516,11 +700,11 @@ export default function TerminalPanel({
                   <span className="text-white/30">|</span>
                   <span className="text-white/50 flex items-center gap-1">
                     <Cpu className="w-3 h-3" />
-                    {activeTerminal.sandboxInfo.resources.cpu || '1 vCPU'}
+                    {activeTerminal.sandboxInfo.resources.cpu || '2 vCPU'}
                   </span>
                   <span className="text-white/50 flex items-center gap-1">
                     <MemoryStick className="w-3 h-3" />
-                    {activeTerminal.sandboxInfo.resources.memory || '2 GB'}
+                    {activeTerminal.sandboxInfo.resources.memory || '4 GB'}
                   </span>
                 </>
               )}
@@ -594,117 +778,40 @@ export default function TerminalPanel({
         </div>
       </div>
 
-      {/* Terminal Output - Split View */}
-      <div className={`flex ${isSplitView ? 'flex-row' : 'flex-col'} h-full`}>
+      {/* Terminal Content — xterm.js instances */}
+      <div className={`flex flex-1 min-h-0 ${isSplitView ? 'flex-row' : 'flex-col'}`}>
         {terminals.map((terminal) => (
           <div
             key={terminal.id}
-            className={`flex-1 flex flex-col min-h-0 ${
+            className={`flex-1 min-h-0 ${
               !isSplitView && activeTerminalId !== terminal.id ? 'hidden' : ''
             } ${
               isSplitView && terminals.length > 1 ? 'border-r border-white/10 last:border-r-0' : ''
             }`}
           >
             <div
-              ref={terminal.terminalRef}
-              className="flex-1 overflow-y-auto p-4 font-mono text-sm min-h-0"
-              style={{ maxHeight: isExpanded ? 'calc(80vh - 220px)' : 'calc(400px - 220px)' }}
-            >
-              {terminal.outputs.length === 0 ? (
-                <div className="text-white/30 text-center py-8">
-                  <Command className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  <p>Welcome to {terminal.name}</p>
-                  <p className="text-xs mt-1">Type commands to execute</p>
-                  <p className="text-xs mt-1 text-white/50">Sandbox will connect on first command</p>
-                </div>
-              ) : (
-                terminal.outputs.map((output) => (
-                  <div key={output.id} className="mb-1">
-                    {output.type === 'command' && (
-                      <div className="text-green-400">{output.content}</div>
-                    )}
-                    {output.type === 'output' && (
-                      <div className="text-white/80 whitespace-pre-wrap">{output.content}</div>
-                    )}
-                    {output.type === 'error' && (
-                      <div className="text-red-400 whitespace-pre-wrap">{output.content}</div>
-                    )}
-                    {output.type === 'system' && (
-                      <div className="text-yellow-400/80 italic">{output.content}</div>
-                    )}
-                  </div>
-                ))
-              )}
-              {terminal.isExecuting && (
-                <div className="flex items-center gap-2 text-white/50 mt-2">
-                  <motion.div
-                    animate={{ rotate: 360 }}
-                    transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                    className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full"
-                  />
-                  <span>Executing...</span>
-                </div>
-              )}
-            </div>
-
-            {/* Input */}
-            <form
-              onSubmit={(e) => handleSubmit(e, terminal.id)}
-              className="p-3 bg-black/50 border-t border-white/10"
-            >
-              <div className="flex items-center gap-2 relative">
-                <span className="text-green-400 font-mono shrink-0">$</span>
-                <div className="relative flex-1 font-mono">
-                  {/* Autocomplete suggestion (ghost text) - rendered behind input */}
-                  {terminal.autocompleteSuggestion && (
-                    <span className="absolute inset-0 text-white/40 pointer-events-none whitespace-pre overflow-hidden px-3" aria-hidden="true">
-                      {terminal.input}{terminal.autocompleteSuggestion}
-                    </span>
-                  )}
-                  <Input
-                    ref={terminal.inputRef}
-                    value={terminal.input}
-                    onChange={(e) => handleInputChange(terminal.id, e.target.value)}
-                    onKeyDown={(e) => handleInputKeyDown(e, terminal.id)}
-                    placeholder={terminal.sandboxInfo.status === 'active' ? "Type a command..." :
-                                 terminal.sandboxInfo.status === 'creating' ? "Connecting..." :
-                                 "Type a command (sandbox will connect)..."}
-                    disabled={terminal.isExecuting || terminal.sandboxInfo.status === 'error'}
-                    className="flex-1 bg-transparent border-0 focus-visible:ring-0 text-white font-mono placeholder:text-white/30 relative z-10"
-                    autoComplete="off"
-                    spellCheck="false"
-                    autoCorrect="off"
-                    autoCapitalize="off"
-                    data-terminal-input
-                  />
-                </div>
-                <Button
-                  type="submit"
-                  size="sm"
-                  disabled={terminal.isExecuting || !terminal.input.trim() || terminal.sandboxInfo.status === 'error'}
-                  className="bg-green-600 hover:bg-green-700 shrink-0"
-                >
-                  {terminal.isExecuting ? (
-                    <motion.div
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                      className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full"
-                    />
-                  ) : (
-                    <Play className="w-4 h-4" />
-                  )}
-                </Button>
-              </div>
-              <div className="flex items-center justify-between mt-1 text-[10px] text-white/30">
-                <span>↑↓ History • Tab/→ Complete • Enter Execute</span>
-                {terminal.sandboxInfo.sandboxId && (
-                  <span className="font-mono">{terminal.sandboxInfo.sandboxId.slice(0, 8)}...</span>
-                )}
-              </div>
-            </form>
+              ref={setXtermContainer(terminal.id)}
+              className="w-full h-full"
+              style={{ padding: '4px' }}
+            />
           </div>
         ))}
       </div>
+
+      {/* Status bar */}
+      {activeTerminal && (
+        <div className="flex items-center justify-between px-4 py-1 border-t border-white/10 bg-black/50 text-[10px] text-white/30 shrink-0">
+          <span>
+            {activeTerminal.isConnected
+              ? `PTY ${activeTerminal.terminal?.cols || 0}×${activeTerminal.terminal?.rows || 0}`
+              : 'Press any key to connect'
+            }
+          </span>
+          {activeTerminal.sandboxInfo.sandboxId && (
+            <span className="font-mono">{activeTerminal.sandboxInfo.sandboxId.slice(0, 12)}…</span>
+          )}
+        </div>
+      )}
     </motion.div>
   );
 }

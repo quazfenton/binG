@@ -60,13 +60,21 @@ export function ChatPanel({
     useVoiceInput();
 
   const [isCodePreviewOpen, setIsCodePreviewOpen] = useState(false);
-  const [isAccessibilityOptionsOpen, setIsAccessibilityOptionsOpen] = useState(false); // State to control accessibility options visibility
+  const [isAccessibilityOptionsOpen, setIsAccessibilityOptionsOpen] = useState(false);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [streamingStates, setStreamingStates] = useState<Map<string, any>>(new Map());
+  const [hasUserInteracted, setHasUserInteracted] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Mark as interacted when user starts typing
+  useEffect(() => {
+    if (input && input.trim().length > 0) {
+      setHasUserInteracted(true);
+    }
+  }, [input]);
 
   // Handle scroll position tracking
   const handleScroll = useCallback(() => {
@@ -160,8 +168,8 @@ export function ChatPanel({
         }}
         onScroll={handleScroll}
       >
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+        {messages.length === 0 && !hasUserInteracted && (
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground opacity-40 hover:opacity-60 transition-opacity duration-300 pointer-events-none">
             <p className="text-lg">Start a conversation</p>
             <p className="text-sm">Type a message or use voice input</p>
           </div>
