@@ -869,28 +869,6 @@ export default function InteractionPanel({
                   compute
                 </span>
               </div>
-              <TabsList className="bg-black/40 border border-white/10">
-                <TabsTrigger value="chat" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
-                  <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                  <span className="hidden sm:inline">Chat</span>
-                </TabsTrigger>
-                <TabsTrigger value="code" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
-                  <Code className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                  <span className="hidden sm:inline">Code</span>
-                </TabsTrigger>
-                <TabsTrigger value="extras" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
-                  <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                  <span className="hidden sm:inline">Extra</span>
-                </TabsTrigger>
-                <TabsTrigger value="integrations" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
-                  <Zap className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                  <span className="hidden sm:inline">Plugins</span>
-                </TabsTrigger>
-                <TabsTrigger value="shell" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
-                  <Terminal className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                  <span className="hidden sm:inline">Shell</span>
-                </TabsTrigger>
-              </TabsList>
             </div>
 
             <div className="flex space-x-1 sm:space-x-2 flex-shrink-0">
@@ -983,6 +961,29 @@ export default function InteractionPanel({
 
           {!isMinimized && (
             <Tabs value={activeTab} onValueChange={(v) => onActiveTabChange?.(v as typeof activeTab)} className="flex-1 flex flex-col">
+              <TabsList className="bg-black/40 border border-white/10 mb-2">
+                <TabsTrigger value="chat" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
+                  <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">Chat</span>
+                </TabsTrigger>
+                <TabsTrigger value="code" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
+                  <Code className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">Code</span>
+                </TabsTrigger>
+                <TabsTrigger value="extras" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
+                  <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">Extra</span>
+                </TabsTrigger>
+                <TabsTrigger value="integrations" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
+                  <Zap className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">Plugins</span>
+                </TabsTrigger>
+                <TabsTrigger value="shell" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
+                  <Terminal className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">Shell</span>
+                </TabsTrigger>
+              </TabsList>
+
               {/* Chat Tab Content */}
               <TabsContent value="chat" className="m-0 flex-1 flex flex-col">
                 <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1">
