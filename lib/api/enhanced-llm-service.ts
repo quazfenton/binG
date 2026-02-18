@@ -12,8 +12,9 @@
  */
 
 import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhanced-api-client';
-import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, PROVIDERS } from './llm-providers';
+import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from './llm-providers';
 import { toolContextManager } from '../services/tool-context-manager';
+import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
 import { getProviderForTask, getModelForTask } from '../config/task-providers';
 
@@ -90,18 +91,25 @@ export class EnhancedLLMService {
         priority: 5
       },
       {
+        provider: 'github',
+        baseUrl: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com',
+        apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY || '',
+        models: PROVIDERS.github.models,
+        priority: 6
+      },
+      {
         provider: 'portkey',
         baseUrl: 'https://api.portkey.ai/v1',
         apiKey: process.env.PORTKEY_API_KEY || '',
         models: PROVIDERS.portkey.models,
-        priority: 6
+        priority: 7
       },
       {
         provider: 'opencode',
         baseUrl: process.env.OPENCODE_BASE_URL || 'https://api.opencode.ai/v1',
         apiKey: process.env.OPENCODE_API_KEY || '',
         models: PROVIDERS.opencode.models,
-        priority: 7
+        priority: 8
       }
     ];
 
@@ -113,11 +121,12 @@ export class EnhancedLLMService {
   }
 
   private setupFallbackChains(): void {
-    this.fallbackChains.set('openrouter', ['mistral', 'opencode', 'google', 'mistral']);
-    this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google', 'mistral']);
+    this.fallbackChains.set('openrouter', ['mistral', 'google', 'github', 'opencode']);
+    this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google', 'mistral', 'github']);
     this.fallbackChains.set('anthropic', ['openrouter', 'mistral', 'google', 'github']);
     this.fallbackChains.set('google', ['openrouter', 'mistral', 'github', 'opencode']);
-    this.fallbackChains.set('mistral', ['openrouter', 'chutes', 'anthropic', 'google']);
+    this.fallbackChains.set('mistral', ['openrouter', 'chutes', 'anthropic', 'google', 'github']);
+    this.fallbackChains.set('github', ['openrouter', 'mistral', 'google', 'opencode']);
     this.fallbackChains.set('portkey', ['openrouter', 'google', 'mistral', 'github']);
     this.fallbackChains.set('opencode', ['mistral', 'google', 'openrouter', 'github']);
   }
@@ -178,10 +187,19 @@ export class EnhancedLLMService {
       return await this.processSandboxRequest(request, userId, conversationId);
     }
 
+    const postProcessToolCalls = async (response: LLMResponse): Promise<LLMResponse> => {
+      if (!enableTools || !userId || !conversationId) {
+        return response;
+      }
+
+      return this.executeModelToolCallsFromResponse(response, userId, conversationId);
+    };
+
     // Try primary provider first
     try {
       const fullRequest = { ...llmRequest, provider: actualProvider, model: actualModel };
-      return await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker);
+      const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker);
+      return await postProcessToolCalls(response);
     } catch (primaryError) {
       console.warn(`Primary provider ${actualProvider} failed:`, primaryError);
 
@@ -224,11 +242,12 @@ export class EnhancedLLMService {
             enableCircuitBreaker
           );
 
-          return {
+          const fallbackResponse = {
             ...response,
             provider: `${provider} -> ${fallbackProvider}`,
             model: supportedModel  // Include the actual fallback model used
           };
+          return await postProcessToolCalls(fallbackResponse);
         } catch (fallbackError) {
           console.warn(`Fallback provider ${fallbackProvider} failed:`, fallbackError);
           continue;
@@ -479,6 +498,200 @@ export class EnhancedLLMService {
         content: `Error processing tool request: ${error.message}`
       };
     }
+  }
+
+  private async executeModelToolCallsFromResponse(
+    response: LLMResponse,
+    userId: string,
+    conversationId: string
+  ): Promise<LLMResponse> {
+    const toolCalls = this.extractToolCallsFromLLMResponse(response);
+    if (toolCalls.length === 0) {
+      return response;
+    }
+
+    const toolManager = getToolManager();
+    const executedCalls: Array<{ name: string; arguments: Record<string, any> }> = [];
+    const toolResults: Array<{ name: string; success: boolean; output?: any; error?: string; authUrl?: string }> = [];
+
+    for (const call of toolCalls) {
+      const resolvedTool = this.resolveToolKey(call.name);
+      if (!resolvedTool) {
+        toolResults.push({
+          name: call.name,
+          success: false,
+          error: `Unknown tool: ${call.name}`
+        });
+        continue;
+      }
+
+      executedCalls.push({ name: resolvedTool, arguments: call.arguments });
+      const result = await toolManager.executeTool(
+        resolvedTool,
+        call.arguments,
+        {
+          userId,
+          conversationId,
+          metadata: { source: 'llm_tool_use' }
+        }
+      );
+
+      toolResults.push({
+        name: resolvedTool,
+        success: result.success,
+        output: result.output,
+        error: result.error,
+        authUrl: result.authUrl
+      });
+    }
+
+    const authRequired = toolResults.find(r => !r.success && !!r.authUrl);
+    if (authRequired?.authUrl) {
+      return {
+        ...response,
+        content: `I need authorization to use ${authRequired.name}. Please connect your account to proceed.`,
+        finishReason: 'tool_auth_required',
+        metadata: {
+          ...(response as any).metadata,
+          requiresAuth: true,
+          authUrl: authRequired.authUrl,
+          toolName: authRequired.name,
+          toolCalls: executedCalls,
+          toolResults
+        }
+      } as LLMResponse;
+    }
+
+    const summaryLines = toolResults.map(r => {
+      if (r.success) return `- ${r.name}: success`;
+      return `- ${r.name}: failed (${r.error || 'unknown error'})`;
+    });
+
+    const appendedSummary = summaryLines.length > 0
+      ? `\n\nTool execution results:\n${summaryLines.join('\n')}`
+      : '';
+
+    return {
+      ...response,
+      content: `${response.content || ''}${appendedSummary}`.trim(),
+      metadata: {
+        ...(response as any).metadata,
+        toolCalls: executedCalls,
+        toolResults,
+      }
+    } as LLMResponse;
+  }
+
+  private resolveToolKey(rawName: string): string | null {
+    if (!rawName) return null;
+    const registryKeys = Object.keys(TOOL_REGISTRY);
+    if (registryKeys.includes(rawName)) return rawName;
+
+    const normalized = rawName.toLowerCase().replace(/[\s_/-]+/g, '.');
+    if (registryKeys.includes(normalized)) return normalized;
+
+    const compact = normalized.replace(/[^a-z0-9]/g, '');
+    const match = registryKeys.find(key => key.replace(/[^a-z0-9]/g, '') === compact);
+    return match || null;
+  }
+
+  private extractToolCallsFromLLMResponse(response: LLMResponse): Array<{ name: string; arguments: Record<string, any> }> {
+    const calls: Array<{ name: string; arguments: Record<string, any> }> = [];
+    const seen = new Set<string>();
+
+    const addCall = (name?: string, args?: any) => {
+      if (!name) return;
+      const call = {
+        name: String(name),
+        arguments: (args && typeof args === 'object') ? args : {}
+      };
+      const key = `${call.name}:${JSON.stringify(call.arguments)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      calls.push(call);
+    };
+
+    // 1) Native metadata path
+    const metaCalls = (response as any)?.metadata?.toolCalls;
+    if (Array.isArray(metaCalls)) {
+      for (const call of metaCalls) {
+        if (!call) continue;
+        if (call.function?.name) {
+          let args = call.function.arguments;
+          if (typeof args === 'string') {
+            try { args = JSON.parse(args); } catch { args = {}; }
+          }
+          addCall(call.function.name, args);
+          continue;
+        }
+        if (call.name && call.input) {
+          addCall(call.name, call.input);
+          continue;
+        }
+        addCall(call.name, call.arguments);
+      }
+    }
+
+    // 2) Structured JSON in content (tool_use / tool_call / tool_calls)
+    const content = response.content || '';
+    const jsonCandidates = this.extractJsonCandidates(content);
+    for (const candidate of jsonCandidates) {
+      const toolUse = candidate?.tool_use;
+      if (toolUse?.name) addCall(toolUse.name, toolUse.input);
+
+      const toolCall = candidate?.tool_call;
+      if (toolCall?.name) addCall(toolCall.name, toolCall.arguments);
+
+      const toolCalls = candidate?.tool_calls;
+      if (Array.isArray(toolCalls)) {
+        for (const call of toolCalls) {
+          if (call?.function?.name) {
+            let args = call.function.arguments;
+            if (typeof args === 'string') {
+              try { args = JSON.parse(args); } catch { args = {}; }
+            }
+            addCall(call.function.name, args);
+          } else if (call?.name) {
+            addCall(call.name, call.arguments ?? call.input);
+          }
+        }
+      }
+    }
+
+    return calls;
+  }
+
+  private extractJsonCandidates(content: string): any[] {
+    const candidates: any[] = [];
+
+    const tryParse = (raw: string) => {
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          candidates.push(parsed);
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    tryParse(content.trim());
+
+    const fencedJson = content.match(/```json\s*([\s\S]*?)```/gi) || [];
+    for (const block of fencedJson) {
+      const inner = block.replace(/```json/i, '').replace(/```/g, '').trim();
+      tryParse(inner);
+    }
+
+    // Handle plain fenced blocks that still contain JSON.
+    const fenced = content.match(/```([\s\S]*?)```/g) || [];
+    for (const block of fenced) {
+      const inner = block.replace(/```/g, '').trim();
+      tryParse(inner);
+    }
+
+    return candidates;
   }
 
   async processSandboxRequest(request: EnhancedLLMRequest, userId: string, conversationId: string): Promise<LLMResponse> {

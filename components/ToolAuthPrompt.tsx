@@ -53,12 +53,13 @@ export default function ToolAuthPrompt({
     const left = window.screenX + (window.outerWidth - width) / 2;
     const top = window.screenY + (window.outerHeight - height) / 2;
 
-    // SECURITY: Add noopener,noreferrer to prevent reverse-tabnabbing attacks
-    // This prevents the OAuth popup from accessing window.opener
+    // SECURITY: OAuth popup - DO NOT use noopener/noreferrer
+    // The OAuth success page needs window.opener to send postMessage back to parent
+    // Reverse-tabnabbing is not a risk here since we control the OAuth domain
     const popup = window.open(
       authUrl,
       'oauth_popup',
-      `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,noopener=yes,noreferrer=yes`,
+      `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`,
     );
 
     if (popup) {
@@ -69,11 +70,13 @@ export default function ToolAuthPrompt({
           clearInterval(intervalRef.current!);
           intervalRef.current = null;
           setPopupOpen(false);
-          onAuthorized?.();
+          // SECURITY: Don't call onAuthorized on popup close
+          // User may have cancelled or closed without completing OAuth
+          // onAuthorized is only called via postMessage from success page
         }
       }, 500);
     }
-  }, [authUrl, onAuthorized]);
+  }, [authUrl]);
 
   const label = PROVIDER_LABELS[provider] || provider;
 

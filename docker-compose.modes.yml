@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  app-standard:
+    profiles: ["standard"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      - LLM_PROVIDER=gemini
+      - OPENCODE_CONTAINERIZED=false
+      - ENABLE_CODE_EXECUTION=true
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  app-opencode:
+    profiles: ["opencode"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      - LLM_PROVIDER=opencode
+      - OPENCODE_CONTAINERIZED=true
+      - ENABLE_CODE_EXECUTION=true
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+

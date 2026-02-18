@@ -988,7 +988,7 @@ function ConversationInterfaceContent() {
 
       {/* Terminal Panel */}
       <TerminalPanel
-        userId={currentConversationId || undefined}
+        userId={user?.id?.toString() || getStableSessionId()}
         isOpen={showTerminal}
         onClose={() => {
           setShowTerminal(false);

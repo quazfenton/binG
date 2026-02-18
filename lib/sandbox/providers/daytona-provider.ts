@@ -13,6 +13,11 @@ import type {
 const WORKSPACE_DIR = '/home/daytona/workspace'
 const MAX_COMMAND_TIMEOUT = 120
 
+// Persistent cache configuration
+const USE_PERSISTENT_CACHE = process.env.SANDBOX_PERSISTENT_CACHE === 'true'
+const CACHE_VOLUME_NAME = process.env.SANDBOX_CACHE_VOLUME_NAME || 'global-package-cache'
+const CACHE_SIZE = process.env.SANDBOX_CACHE_SIZE || '2GB'
+
 export class DaytonaProvider implements SandboxProvider {
   readonly name = 'daytona'
   private client: Daytona
@@ -24,8 +29,20 @@ export class DaytonaProvider implements SandboxProvider {
   }
 
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
-    const sandbox = await this.client.create({
-      language: config.language ?? 'typescript',
+    // Map language to Daytona image
+    const imageMap: Record<string, string> = {
+      'typescript': 'typescript',
+      'javascript': 'javascript',
+      'python': 'python',
+      'go': 'go',
+      'rust': 'rust',
+      'java': 'java',
+    };
+    const image = imageMap[config.language ?? 'typescript'] || 'typescript';
+
+    // Build sandbox creation params
+    const createParams: any = {
+      image: image,
       autoStopInterval: config.autoStopInterval ?? 60,
       resources: config.resources ?? { cpu: 2, memory: 4 },
       envVars: {
@@ -34,7 +51,21 @@ export class DaytonaProvider implements SandboxProvider {
         ...config.envVars,
       },
       labels: config.labels,
-    })
+    }
+
+    // Add persistent cache volume if enabled
+    if (USE_PERSISTENT_CACHE) {
+      createParams.volumes = [
+        {
+          source: CACHE_VOLUME_NAME,
+          target: '/opt/cache',
+          size: CACHE_SIZE,
+        }
+      ]
+      createParams.envVars.SANDBOX_CACHE_ENABLED = 'true'
+    }
+
+    const sandbox = await this.client.create(createParams)
 
     await sandbox.process.executeCommand(`mkdir -p ${WORKSPACE_DIR}`)
     return new DaytonaSandboxHandle(sandbox, this.client)

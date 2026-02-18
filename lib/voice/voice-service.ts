@@ -5,6 +5,8 @@ import {
   RemoteParticipant,
   LocalParticipant,
   AudioTrack,
+  LocalAudioTrack,
+  AudioSource,
 } from "livekit-client";
 
 export interface VoiceSettings {
@@ -17,6 +19,8 @@ export interface VoiceSettings {
   language: string;
   microphoneEnabled: boolean;
   transcriptionEnabled: boolean;
+  useLivekitTTS: boolean; // New: Use Livekit TTS when available
+  ttsProvider: 'cartesia' | 'elevenlabs' | 'web'; // New: TTS provider selection
 }
 
 export interface VoiceEvent {
@@ -36,6 +40,10 @@ class VoiceService {
   private voices: SpeechSynthesisVoice[] = [];
   private isListening = false;
   private currentUtterance: SpeechSynthesisUtterance | null = null;
+  private audioElements: Map<string, HTMLMediaElement> = new Map(); // Fix: Track audio elements
+  private localAudioTrack: LocalAudioTrack | null = null; // Fix: Track local TTS track
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 3;
 
   private settings: VoiceSettings = {
     enabled: false,
@@ -47,6 +55,8 @@ class VoiceService {
     language: "en-US",
     microphoneEnabled: false,
     transcriptionEnabled: false,
+    useLivekitTTS: false,
+    ttsProvider: 'web',
   };
 
   constructor() {
@@ -291,8 +301,38 @@ class VoiceService {
       this.room.on("trackSubscribed", (track, publication, participant) => {
         if (track.kind === "audio") {
           const audioElement = track.attach();
+          audioElement.id = `lk-audio-${track.sid}`;
           document.body.appendChild(audioElement);
+          this.audioElements.set(track.sid, audioElement);
         }
+      });
+
+      this.room.on("trackUnsubscribed", (track, publication, participant) => {
+        if (track.kind === "audio") {
+          const audioElement = this.audioElements.get(track.sid);
+          if (audioElement) {
+            audioElement.remove();
+            this.audioElements.delete(track.sid);
+          }
+        }
+      });
+
+      this.room.on("reconnecting", () => {
+        this.emitEvent({
+          type: "disconnected",
+          data: { reason: "reconnecting" },
+          timestamp: Date.now(),
+        });
+      });
+
+      this.room.on("reconnected", () => {
+        this.isConnected = true;
+        this.reconnectAttempts = 0;
+        this.emitEvent({
+          type: "connected",
+          data: { reconnected: true },
+          timestamp: Date.now(),
+        });
       });
 
       await this.room.connect(process.env.NEXT_PUBLIC_LIVEKIT_URL, jwt);

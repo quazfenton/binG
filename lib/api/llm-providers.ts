@@ -47,6 +47,7 @@ export interface LLMResponse {
   finishReason: string
   timestamp: Date
   provider?: string
+  metadata?: Record<string, any>
   usage?: {
     prompt_tokens: number
     completion_tokens: number
@@ -396,6 +397,61 @@ class LLMService {
     }
   }
 
+  private normalizeOpenAIToolCalls(toolCalls: any[] | undefined): Array<{ id?: string; name: string; arguments: Record<string, any> }> {
+    if (!Array.isArray(toolCalls)) return []
+    return toolCalls
+      .map((call: any) => {
+        const name = call?.function?.name || call?.name
+        if (!name) return null
+        let args: any = call?.function?.arguments ?? call?.arguments ?? {}
+        if (typeof args === 'string') {
+          try {
+            args = JSON.parse(args)
+          } catch {
+            args = {}
+          }
+        }
+        if (!args || typeof args !== 'object') args = {}
+        return {
+          id: call?.id,
+          name: String(name),
+          arguments: args as Record<string, any>,
+        }
+      })
+      .filter(Boolean) as Array<{ id?: string; name: string; arguments: Record<string, any> }>
+  }
+
+  private extractAnthropicToolCalls(contentBlocks: any[] | undefined): Array<{ id?: string; name: string; arguments: Record<string, any> }> {
+    if (!Array.isArray(contentBlocks)) return []
+    return contentBlocks
+      .filter((block: any) => block?.type === 'tool_use' && block?.name)
+      .map((block: any) => ({
+        id: block.id,
+        name: String(block.name),
+        arguments: (block.input && typeof block.input === 'object') ? block.input : {},
+      }))
+  }
+
+  private extractGoogleToolCalls(result: any): Array<{ name: string; arguments: Record<string, any> }> {
+    const candidates = result?.candidates
+    if (!Array.isArray(candidates)) return []
+    const calls: Array<{ name: string; arguments: Record<string, any> }> = []
+    for (const candidate of candidates) {
+      const parts = candidate?.content?.parts
+      if (!Array.isArray(parts)) continue
+      for (const part of parts) {
+        const fn = part?.functionCall
+        if (fn?.name) {
+          calls.push({
+            name: String(fn.name),
+            arguments: (fn.args && typeof fn.args === 'object') ? fn.args : {},
+          })
+        }
+      }
+    }
+    return calls
+  }
+
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
     const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000 } = request
 
@@ -513,12 +569,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }
@@ -549,12 +607,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.extractAnthropicToolCalls(response.content as any[])
 
     return {
       content: response.content[0]?.text || '',
       tokensUsed: response.usage?.input_tokens + response.usage?.output_tokens || 0,
       finishReason: response.stop_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: {
         prompt_tokens: response.usage?.input_tokens || 0,
         completion_tokens: response.usage?.output_tokens || 0,
@@ -588,12 +648,14 @@ class LLMService {
     })
 
     const result = response.response
+    const toolCalls = this.extractGoogleToolCalls(result)
 
     return {
       content: result.text() || '',
       tokensUsed: result.usageMetadata?.totalTokenCount || 0,
       finishReason: result.candidates?.[0]?.finishReason || 'STOP',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: {
         prompt_tokens: result.usageMetadata?.promptTokenCount || 0,
         completion_tokens: result.usageMetadata?.candidatesTokenCount || 0,
@@ -656,12 +718,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }
@@ -709,12 +773,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }
@@ -737,12 +803,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }
@@ -761,12 +829,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }
@@ -785,12 +855,15 @@ class LLMService {
       temperature,
       maxTokens,
     })
+    const rawToolCalls = (response as any)?.choices?.[0]?.message?.toolCalls || (response as any)?.choices?.[0]?.message?.tool_calls
+    const toolCalls = this.normalizeOpenAIToolCalls(rawToolCalls as any[])
 
     return {
       content: response.choices?.[0]?.message?.content || '',
       tokensUsed: response.usage?.totalTokens || 0,
       finishReason: response.choices?.[0]?.finishReason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage ? {
         prompt_tokens: response.usage.promptTokens || 0,
         completion_tokens: response.usage.completionTokens || 0,
@@ -817,12 +890,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }
@@ -841,12 +916,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }

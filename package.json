@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:standard": "node scripts/run-dev-mode.js standard",
+    "dev:opencode": "node scripts/run-dev-mode.js opencode",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

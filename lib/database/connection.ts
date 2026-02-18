@@ -197,24 +197,28 @@ export function encryptApiKey(apiKey: string): { encrypted: string; hash: string
 export function decryptApiKey(encryptedData: string): string {
   const [ivHex, encrypted] = encryptedData.split(':');
   
-  // Handle legacy format (no IV) - backward compatibility
-  if (!encrypted) {
-    // Old format: just encrypted data without IV
-    // Use deprecated createDecipher for backward compatibility only
-    const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
-    let decrypted = decipher.update(ivHex, 'hex', 'utf8');
+  // Try new format first (createCipheriv with proper IV usage)
+  try {
+    const iv = Buffer.from(ivHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
     return decrypted;
+  } catch (newFormatError) {
+    // New format failed - try legacy format (createCipher with EVP_BytesToKey)
+    // Legacy data also has IV:encrypted format, but the IV was randomly generated and unused
+    // createCipher derived both key and IV from the password using MD5
+    try {
+      const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
+      let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
+      return decrypted;
+    } catch (legacyError) {
+      // Both formats failed - this is truly corrupted data
+      console.error('[decryptApiKey] Failed to decrypt: both new and legacy formats failed');
+      throw new Error('Failed to decrypt API key: data may be corrupted');
+    }
   }
-  
-  const iv = Buffer.from(ivHex, 'hex');
-  // Use createDecipheriv which properly uses the IV (non-deprecated)
-  const decipher = crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
-
-  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-
-  return decrypted;
 }
 
 // Database operations
