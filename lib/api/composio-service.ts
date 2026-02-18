@@ -2,6 +2,8 @@
  * Composio Service - Advanced Tool Integration with 800+ Toolkits
  */
 
+import { generateSecureId } from '@/lib/utils';
+
 // Composio uses its own internal LLM handling, so we just need to set up the service
 export interface ComposioService {
   healthCheck(): Promise<boolean>;
@@ -290,7 +292,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
             ) || [];
           if (functionCalls.length > 0) {
             toolCalls = functionCalls.map((call: any) => ({
-              id: `call_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+              id: generateSecureId('call'),
               type: 'function',
               function: {
                 name: call.name,

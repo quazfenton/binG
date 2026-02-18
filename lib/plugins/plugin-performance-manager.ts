@@ -1,3 +1,5 @@
+import { generateSecureId } from '@/lib/utils';
+
 /**
  * Plugin Performance and Resource Management System
  * Handles lazy loading, resource pooling, caching, and background processing
@@ -327,7 +329,7 @@ export class PluginPerformanceManager {
    * Schedule a background task
    */
   scheduleBackgroundTask(task: Omit<BackgroundTask, 'id' | 'status' | 'progress'>): string {
-    const taskId = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const taskId = generateSecureId('task');
     
     const backgroundTask: BackgroundTask = {
       ...task,

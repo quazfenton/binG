@@ -21,6 +21,14 @@ export async function POST(req: NextRequest) {
   try {
     const { text, provider = 'web', voiceId } = await req.json();
 
+    // Validate text is a string
+    if (typeof text !== 'string') {
+      return NextResponse.json(
+        { error: 'Text must be a string' },
+        { status: 400 }
+      );
+    }
+
     if (!text || text.trim().length === 0) {
       return NextResponse.json(
         { error: 'Text is required' },

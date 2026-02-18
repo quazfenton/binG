@@ -6,6 +6,7 @@ import { priorityRequestRouter } from "@/lib/api/priority-request-router";
 import { unifiedResponseHandler } from "@/lib/api/unified-response-handler";
 import { verifyAuth } from "@/lib/auth/jwt";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
+import { generateSecureId } from '@/lib/utils';
 import type { LLMRequest, LLMMessage, LLMProvider } from "@/lib/api/llm-providers";
 import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 
@@ -161,7 +162,7 @@ export async function POST(request: NextRequest) {
 
       // Handle streaming response
       if (stream && selectedProvider.supportsStreaming) {
-        const streamRequestId = requestId || `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const streamRequestId = requestId || generateSecureId('stream');
         
         // Create streaming events from unified response
         const events = unifiedResponseHandler.createStreamingEvents(unifiedResponse, streamRequestId);

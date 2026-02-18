@@ -32,8 +32,9 @@ export function useTamboChat() {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       setError(errorMessage);
       
-      // Fallback to standard chat if Tambo fails
-      if (enabled && options?.useTambo) {
+      // Fallback to standard chat if Tambo was attempted and failed
+      // Only fallback if Tambo was actually enabled and had API key
+      if (enabled && apiKey && options?.useTambo) {
         console.warn('Tambo failed, falling back to standard chat:', errorMessage);
         return await sendStandardMessage(message, options);
       }
