@@ -84,10 +84,234 @@ import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
 import IntegrationPanel from "./integrations/IntegrationPanel";
-import TerminalPanel from "./terminal/TerminalPanel";
 import { useInteractionCodeMode } from "../hooks/use-interaction-code-mode";
 import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
 import { processResponse } from "../lib/mode-manager";
+import DevOpsCommandCenterPlugin from "./plugins/devops-command-center-plugin";
+
+// Define available plugins for PluginManager
+const availablePlugins: Plugin[] = [
+  {
+    id: "huggingface-spaces",
+    name: "Hugging Face Spaces",
+    description: "Generate images using Hugging Face Spaces models",
+    icon: ImageIcon,
+    component: HuggingFaceSpacesPlugin,
+    category: "ai",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "interactive-storyboard",
+    name: "Storyboard Creator",
+    description: "Create visual storyboards for films and animations",
+    icon: Film,
+    component: InteractiveStoryboardPlugin,
+    category: "media",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "cloud-storage",
+    name: "Cloud Storage 5GB",
+    description: "Access encrypted files from cloud providers",
+    icon: Cloud,
+    component: CloudStoragePlugin,
+    category: "utility",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "github-explorer",
+    name: "GitHub Explorer",
+    description: "Browse trending repositories and analyze code",
+    icon: GitBranch,
+    component: GitHubExplorerPlugin,
+    category: "code",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "legal-document",
+    name: "Legal Document Generator",
+    description: "Generate legal documents and analyze existing ones",
+    icon: Scale,
+    component: LegalDocumentPlugin,
+    category: "utility",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "data-visualization",
+    name: "Data Visualization Builder",
+    description: "Create interactive charts and graphs",
+    icon: Database,
+    component: DataVisualizationBuilderPlugin,
+    category: "data",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "network-request-builder",
+    name: "Network Request Builder",
+    description: "Build and test API requests",
+    icon: Globe,
+    component: NetworkRequestBuilderPlugin,
+    category: "developer",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "note-taker",
+    name: "Note Taker",
+    description: "Take and organize notes during conversations",
+    icon: FileText,
+    component: NoteTakerPlugin,
+    category: "productivity",
+    defaultSize: { width: 600, height: 500 },
+    minSize: { width: 400, height: 300 },
+  },
+  {
+    id: "interactive-diagramming",
+    name: "Interactive Diagramming",
+    description: "Create diagrams and flowcharts",
+    icon: CheckCircle,
+    component: InteractiveDiagrammingPlugin,
+    category: "productivity",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "devops-command-center",
+    name: "DevOps Command Center",
+    description: "Manage deployments and infrastructure",
+    icon: Server,
+    component: DevOpsCommandCenterPlugin,
+    category: "developer",
+    defaultSize: { width: 1000, height: 800 },
+    minSize: { width: 800, height: 600 },
+  },
+];
+
+// Plugin modules for Extras tab
+const pluginModules = [
+  {
+    id: "ai-tutor",
+    name: "AI Tutor",
+    description: "Interactive learning assistant with step-by-step explanations",
+    icon: Brain,
+    color: "text-purple-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Act as an expert tutor. Break down complex topics into digestible steps with examples and practice questions. Topic: ",
+      ),
+  },
+  {
+    id: "code-reviewer",
+    name: "Code Reviewer",
+    description: "Professional code review with best practices and optimizations",
+    icon: Code,
+    color: "text-blue-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Review this code for best practices, performance, security, and maintainability. Provide specific suggestions:\n\n```\n// Paste your code here\n```",
+      ),
+  },
+  {
+    id: "data-analyst",
+    name: "Data Analyst",
+    description: "Analyze data patterns and generate insights with visualizations",
+    icon: Database,
+    color: "text-green-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Analyze this data and provide insights, patterns, and recommendations. Create visualizations where helpful:\n\n",
+      ),
+  },
+  {
+    id: "creative-writer",
+    name: "Creative Writer",
+    description: "Craft engaging stories, scripts, and creative content",
+    icon: FileText,
+    color: "text-pink-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Write a compelling story with vivid characters, engaging dialogue, and descriptive settings. Genre: ",
+      ),
+  },
+  {
+    id: "math-solver",
+    name: "Math Solver",
+    description: "Solve mathematical problems with step-by-step solutions",
+    icon: Calculator,
+    color: "text-orange-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Solve this math problem step by step, explaining each step clearly:\n\n",
+      ),
+  },
+  {
+    id: "travel-planner",
+    name: "Travel Planner",
+    description: "Plan detailed itineraries and travel recommendations",
+    icon: Globe,
+    color: "text-cyan-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Create a detailed travel itinerary for ",
+      ),
+  },
+  {
+    id: "legal-assistant",
+    name: "Legal Assistant",
+    description: "Generate legal documents and analyze existing ones",
+    icon: Scale,
+    color: "text-indigo-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Draft a legal document or analyze this legal text: ",
+      ),
+  },
+  {
+    id: "image-generator",
+    name: "HF Image Generator",
+    description: "Generate images using Hugging Face Spaces models",
+    icon: ImageIcon,
+    color: "text-yellow-400",
+    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
+      if (setPluginToOpen && onActiveTabChange) {
+        setPluginToOpen("huggingface-spaces");
+        onActiveTabChange("integrations");
+      }
+    },
+  },
+  {
+    id: "github-explorer",
+    name: "GitHub Explorer",
+    description: "Browse trending repositories and analyze code",
+    icon: GitBranch,
+    color: "text-gray-400",
+    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
+      if (setPluginToOpen && onActiveTabChange) {
+        setPluginToOpen("github-explorer");
+        onActiveTabChange("integrations");
+      }
+    },
+  },
+  {
+    id: "cloud-storage",
+    name: "Cloud Storage 5GB",
+    description: "Access encrypted files from cloud providers",
+    icon: Cloud,
+    color: "text-sky-400",
+    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
+      if (setPluginToOpen && onActiveTabChange) {
+        setPluginToOpen("cloud-storage");
+        onActiveTabChange("integrations");
+      }
+    },
+  },
+];
 
 interface InteractionPanelProps {
   onSubmit: (content: string) => void;
@@ -142,22 +366,32 @@ export default function InteractionPanel({
 }: InteractionPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const codeTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const dragHandleRef = useRef<HTMLDivElement>(null);
 
-  // Terminal panel state
-  const [showTerminal, setShowTerminal] = useState(false);
-  const [terminalMinimized, setTerminalMinimized] = useState(false);
+  // Plugin state
+  const [pluginToOpen, setPluginToOpen] = useState<string | null>(null);
 
   // Panel state
   const [panelHeight, setPanelHeight] = useState(() => {
     if (typeof window !== "undefined" && window.innerWidth <= 768) {
       return Math.min(250, window.innerHeight * 0.4);
     }
-    return 280;
+    return 320; // Increased from 280 to ensure input is always visible
   });
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const prevPanelHeightRef = useRef<number | null>(null);
+
+  // Handle plugin result
+  const handlePluginResult = (pluginId: string, result: any) => {
+    console.log(`Plugin ${pluginId} result:`, result);
+    if (typeof result === "string") {
+      setInput(result);
+    } else if (result?.content) {
+      setInput(result.content);
+    }
+  };
 
   // Adjust panel height on window/viewport resize (mobile orientation + keyboard)
   useEffect(() => {
@@ -377,21 +611,48 @@ export default function InteractionPanel({
     },
   ];
 
-  const handlePluginResult = (pluginId: string, result: any) => {
-    // Handle plugin results - could insert into chat, save to context, etc.
-    console.log(`Plugin ${pluginId} result:`, result);
-
-    // For text-based results, we could insert them into the input
-    if (typeof result === "string") {
-      setInput(result);
-    } else if (result?.content) {
-      setInput(result.content);
-    }
-  };
   const [showFileSelector, setShowFileSelector] = useState(false);
   const [showMultiModelComparison, setShowMultiModelComparison] =
     useState(false);
-  const [pluginToOpen, setPluginToOpen] = useState<string | null>(null);
+
+  // Simple chat suggestions (randomized on mount)
+  const chatSuggestions = useMemo(() => {
+    const suggestions = [
+      "unique app ideas",
+      "code a basic web app",
+      "make an addicting web game",
+      "show me something interesting",
+      "explain quantum computing simply",
+      "create a business plan",
+      "write a short story",
+      "design a logo concept",
+      "plan a workout routine",
+      "suggest healthy recipes",
+      "debug this error",
+      "optimize my workflow",
+    ];
+    return [...suggestions].sort(() => 0.5 - Math.random()).slice(0, 4);
+  }, []);
+
+  // Code-specific prompt templates
+  const codeTemplates = [
+    {
+      title: "Component Creation",
+      template: "Create a [framework] component that [functionality]. Include:\n- TypeScript types\n- Props interface\n- Error handling\n- Unit tests\n- Documentation",
+    },
+    {
+      title: "API Development",
+      template: "Build a [language] API for [purpose] with:\n- RESTful endpoints\n- Input validation\n- Error handling\n- Authentication\n- Database integration\n- API documentation",
+    },
+    {
+      title: "Full Stack App",
+      template: "Create a full-stack [type] application with:\n- Frontend: [frontend-tech]\n- Backend: [backend-tech]\n- Database: [database]\n- Authentication\n- Responsive design\n- Deployment configuration",
+    },
+    {
+      title: "Code Review",
+      template: "Review this code for:\n- Performance optimizations\n- Security vulnerabilities\n- Best practices\n- Code quality\n- Potential bugs\n- Refactoring suggestions\n\n[paste your code here]",
+    },
+  ];
 
   // Plugin modules with randomization
   const pluginModules = useMemo(() => {
@@ -804,10 +1065,8 @@ export default function InteractionPanel({
     },
   ];
 
-  // Calculate bottom position based on terminal and panel state
-  const bottomPosition = showTerminal
-    ? (terminalMinimized ? '60px' : '400px')
-    : "env(safe-area-inset-bottom, 0px)";
+  // Calculate bottom position based on panel state
+  const bottomPosition = "env(safe-area-inset-bottom, 0px)";
 
   return (
     <>
@@ -817,7 +1076,9 @@ export default function InteractionPanel({
           bottom: bottomPosition,
           height: isMinimized
             ? "60px"
-            : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
+            : isExpanded
+              ? `min(${panelHeight * 1.5}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`
+              : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
           maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)",
         }}
         onClick={(e) => {
@@ -831,23 +1092,36 @@ export default function InteractionPanel({
           }
         }}
       >
-        {/* Drag Handle */}
+        {/* Drag Handle - Full width resize bar */}
         <div
-          className={`absolute top-0 left-0 right-0 h-1 bg-white/20 hover:bg-white/30 cursor-ns-resize transition-all duration-200 ${
-            isDragging ? "bg-white/40" : ""
-          }`}
+          ref={dragHandleRef}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: '4px',
+            zIndex: 50,
+            background: isDragging ? 'rgba(255,255,255,0.4)' : 'transparent',
+            transition: 'background 0.2s'
+          }}
           onMouseDown={(e) => {
             setIsDragging(true);
             const startY = e.clientY;
             const startHeight = panelHeight;
+            e.currentTarget.style.cursor = 'ns-resize';
 
             const handleMouseMove = (e: MouseEvent) => {
               const delta = startY - e.clientY;
-              setPanelHeight(Math.max(200, Math.min(600, startHeight + delta)));
+              setPanelHeight(Math.max(240, Math.min(600, startHeight + delta)));
             };
 
             const handleMouseUp = () => {
               setIsDragging(false);
+              if (dragHandleRef.current) {
+                dragHandleRef.current.style.cursor = 'default';
+                dragHandleRef.current.style.background = 'transparent';
+              }
               document.removeEventListener("mousemove", handleMouseMove);
               document.removeEventListener("mouseup", handleMouseUp);
             };
@@ -855,87 +1129,135 @@ export default function InteractionPanel({
             document.addEventListener("mousemove", handleMouseMove);
             document.addEventListener("mouseup", handleMouseUp);
           }}
+          onMouseEnter={(e) => {
+            if (!isDragging) {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.2)';
+              e.currentTarget.style.cursor = 'ns-resize';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!isDragging) {
+              e.currentTarget.style.background = 'transparent';
+              e.currentTarget.style.cursor = 'default';
+            }
+          }}
         />
 
-        <div className="p-2 sm:p-4 h-full overflow-hidden max-w-4xl mx-auto flex flex-col">
-          {/* Header - Restored original styling */}
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
-            <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
-              <div className="flex items-center gap-2">
-                <div className="">
-                  <Sparkles className="h-3 w-3 text-white" />
-                </div>
-                <span className="text-sm font-medium text-white/80">
-                  compute
-                </span>
-              </div>
-            </div>
+        <div className="p-2 sm:p-4 h-full overflow-hidden max-w-4xl mx-auto flex flex-col relative" style={{ cursor: 'default' }}>
+          {/* Expand/Minimize Button - Far Top Right Corner */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="absolute top-0.5 right-0 w-7 h-7 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
+            title={isExpanded ? "Collapse height" : "Expand height"}
+            disabled={isMinimized}
+          >
+            {isExpanded ? (
+              <Minimize2 className="w-3 h-3" />
+            ) : (
+              <Maximize2 className="w-3 h-3" />
+            )}
+          </Button>
 
-            <div className="flex space-x-1 sm:space-x-2 flex-shrink-0">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onNewChat}
-                title="New Chat"
-                className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
-              >
-                <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={toggleHistory}
-                title="Chat History"
-                className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
-              >
-                <History className="h-3 w-3 sm:h-4 sm:w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={toggleAccessibility}
-                title="Accessibility Options"
-                className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
-              >
-                <Accessibility className="h-3 w-3 sm:h-4 sm:w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={toggleCodePreview}
-                title="Code Preview"
-                className={`h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
-                  hasCodeBlocks
-                    ? "ring-2 ring-white/30 shadow-lg shadow-white/20"
-                    : ""
-                }`}
-              >
-                <Code
-                  className={`h-3 w-3 sm:h-4 sm:w-4 ${
-                    hasCodeBlocks ? "text-white" : ""
-                  }`}
-                />
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsMinimized(!isMinimized)}
-                title={isMinimized ? "Expand" : "Minimize"}
-                className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
-              >
-                {isMinimized ? <Maximize2 className="h-3 w-3 sm:h-4 sm:w-4" /> : <Minimize2 className="h-3 w-3 sm:h-4 sm:w-4" />}
-              </Button>
+          {/* Header */}
+          <div className="flex justify-between items-center mb-2 mt-7">
+            <div className="flex items-center gap-2">
+              <div className="">
+                <Sparkles className="h-3 w-3 text-white" />
+              </div>
+              <span className="text-sm font-medium text-white/80">
+                compute
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <GripHorizontal className="w-4 h-4 text-gray-500" />
             </div>
           </div>
 
-          {/* Provider/Model Selection */}
           {!isMinimized && (
-            <div className="flex items-center justify-between mb-3 text-xs text-white/60">
-              <div className="flex items-center gap-2">
+            <Tabs value={activeTab} onValueChange={(value) => onActiveTabChange?.(value as "chat" | "code" | "extras" | "integrations" | "shell")} className="flex-1 flex flex-col min-h-0">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
+                <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
+                  <TabsList className="bg-black/40">
+                    <TabsTrigger value="chat" className="text-xs sm:text-sm">
+                      <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Chat</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="code" className="text-xs sm:text-sm">
+                      <Code className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Code</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="extras" className="text-xs sm:text-sm">
+                      <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Extra</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="integrations" className="text-xs sm:text-sm">
+                      <Zap className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Plugins</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="shell" className="text-xs sm:text-sm">
+                      <Terminal className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Shell</span>
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
+
+                <div className="flex space-x-1 sm:space-x-2 flex-shrink-0">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onNewChat}
+                    title="New Chat"
+                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                  >
+                    <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleHistory}
+                    title="Chat History"
+                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                  >
+                    <History className="h-3 w-3 sm:h-4 sm:w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleAccessibility}
+                    title="Accessibility Options"
+                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                  >
+                    <Accessibility className="h-3 w-3 sm:h-4 sm:w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleCodePreview}
+                    title="Code Preview"
+                    className={`h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
+                      hasCodeBlocks
+                        ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse"
+                        : ""
+                    }`}
+                  >
+                    <Code
+                      className={`h-3 w-3 sm:h-4 sm:w-4 ${
+                        hasCodeBlocks ? "text-white" : ""
+                      }`}
+                    />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Provider/Model Selection - Restored */}
+              <div className="flex items-center gap-2 mb-3 text-xs text-white/60">
                 <Select
                   value={`${currentProvider}:${currentModel}`}
                   onValueChange={(value) => {
-                    const [provider, model] = value.split(":");
+                    const [provider, ...modelParts] = value.split(":");
+                    const model = modelParts.join(":");
                     onProviderChange(provider, model);
                   }}
                 >
@@ -943,58 +1265,60 @@ export default function InteractionPanel({
                     <SelectValue placeholder="Select a model" />
                   </SelectTrigger>
                   <SelectContent>
-                    {availableProviders.map((provider) => (
-                      <SelectGroup key={provider.id}>
-                        <SelectLabel>{provider.name}</SelectLabel>
-                        {provider.models.map((model) => (
-                          <SelectItem key={model} value={`${provider.id}:${model}`}>
-                            {model}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ))}
+                    {/* Only show available providers (with API keys configured) */}
+                    {availableProviders
+                      .filter(p => p.isAvailable !== false)
+                      .map((provider) => (
+                        <SelectGroup key={provider.id}>
+                          <SelectLabel>{provider.name}</SelectLabel>
+                          {provider.models.map((model) => (
+                            <SelectItem key={model} value={`${provider.id}:${model}`}>
+                              {model}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
+                    {/* Show message if no providers configured */}
+                    {availableProviders.filter(p => p.isAvailable !== false).length === 0 && (
+                      <SelectItem value="none" disabled>
+                        No providers configured - add API keys to .env
+                      </SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
-            </div>
-          )}
 
-          {!isMinimized && (
-            <Tabs value={activeTab} onValueChange={(v) => onActiveTabChange?.(v as typeof activeTab)} className="flex-1 flex flex-col">
-              <TabsList className="bg-black/40 border border-white/10 mb-2">
-                <TabsTrigger value="chat" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
-                  <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                  <span className="hidden sm:inline">Chat</span>
-                </TabsTrigger>
-                <TabsTrigger value="code" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
-                  <Code className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                  <span className="hidden sm:inline">Code</span>
-                </TabsTrigger>
-                <TabsTrigger value="extras" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
-                  <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                  <span className="hidden sm:inline">Extra</span>
-                </TabsTrigger>
-                <TabsTrigger value="integrations" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
-                  <Zap className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                  <span className="hidden sm:inline">Plugins</span>
-                </TabsTrigger>
-                <TabsTrigger value="shell" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
-                  <Terminal className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                  <span className="hidden sm:inline">Shell</span>
-                </TabsTrigger>
-              </TabsList>
+              {/* Tab Content Sections */}
+              <TabsContent value="chat" className="m-0 flex-1 flex flex-col min-h-0">
+                {/* Suggestions - Compact row */}
+                <div className="flex flex-wrap gap-2 mb-2 shrink-0">
+                  {chatSuggestions.map((suggestion, index) => (
+                    <Button
+                      key={index}
+                      variant="secondary"
+                      size="sm"
+                      className="text-xs bg-black/20 hover:bg-black/40 transition-all duration-200 shrink-0"
+                      onClick={() => {
+                        setInput(suggestion);
+                        textareaRef.current?.focus();
+                      }}
+                      disabled={isProcessing}
+                    >
+                      {suggestion}
+                    </Button>
+                  ))}
+                </div>
 
-              {/* Chat Tab Content */}
-              <TabsContent value="chat" className="m-0 flex-1 flex flex-col">
-                <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1">
-                  <div className="relative flex-1">
+                {/* Input Form - Always visible at bottom */}
+                <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1 min-h-0">
+                  <div className="relative flex-1 min-h-[60px]">
                     <Textarea
                       ref={textareaRef}
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       placeholder="Type your message..."
-                      className="min-h-[60px] max-h-[200px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20"
-                      rows={3}
+                      className="min-h-[60px] max-h-[120px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20 rounded-2xl"
+                      rows={2}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
@@ -1010,7 +1334,7 @@ export default function InteractionPanel({
                               behavior: "smooth",
                               block: "center",
                             });
-                          }, 300); // Delay to allow keyboard to appear
+                          }, 300);
                         }
                       }}
                       disabled={isProcessing}
@@ -1134,15 +1458,33 @@ export default function InteractionPanel({
               </TabsContent>
 
               {/* Code Tab Content */}
-              <TabsContent value="code" className="m-0 flex-1 flex flex-col">
-                <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1">
+              <TabsContent value="code" className="m-0 flex-1 flex flex-col min-h-0">
+                {/* Code Templates - Compact row */}
+                <div className="flex flex-wrap gap-2 mb-2 shrink-0">
+                  {codeTemplates.map((template, index) => (
+                    <Button
+                      key={index}
+                      variant="outline"
+                      size="sm"
+                      className="text-xs bg-black/20 hover:bg-black/40 border-white/20 text-left justify-start h-auto p-2 shrink-0"
+                      onClick={() => setInput(template.template)}
+                      disabled={isProcessing}
+                    >
+                      <div>
+                        <div className="font-medium">{template.title}</div>
+                      </div>
+                    </Button>
+                  ))}
+                </div>
+
+                <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1 min-h-0">
                   <div className="relative flex-1">
                     <Textarea
                       ref={codeTextareaRef}
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
-                      className="min-h-[120px] max-h-[300px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20"
+                      className="min-h-[120px] max-h-[300px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20 rounded-2xl"
                       rows={6}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -1196,30 +1538,47 @@ export default function InteractionPanel({
 
               {/* Extras Tab Content */}
               <TabsContent value="extras" className="m-0 flex-1 overflow-auto">
-                <Card className="bg-white/5 border-white/10">
-                  <CardContent className="pt-4">
-                    <div className="space-y-3">
-                      <div className="flex items-center gap-2 mb-2">
-                        <Zap className="h-4 w-4 text-yellow-400" />
-                        <span className="text-sm font-medium">Extras</span>
+                <Card className="bg-black/40 border-white/10">
+                  <CardContent className="pt-6">
+                    <div className="space-y-4">
+                      {/* Advanced AI Plugins Section */}
+                      <div className="text-center mb-4">
+                        <h3 className="font-medium text-white mb-2">
+                          Advanced AI Plugins
+                        </h3>
+                        <p className="text-xs text-white/60">
+                          Click any plugin to load its specialized prompt
+                        </p>
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Button
-                          variant="outline"
-                          onClick={() => setShowTerminal(true)}
-                          className="justify-start bg-white/5 hover:bg-white/15 border-white/20"
-                        >
-                          <Terminal className="w-4 h-4 mr-2 text-green-400" />
-                          Open Terminal
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={toggleCodePreview}
-                          className="justify-start bg-white/5 hover:bg-white/15 border-white/20"
-                        >
-                          <FileCode className="w-4 h-4 mr-2 text-blue-400" />
-                          Code Preview
-                        </Button>
+
+                      <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
+                        {pluginModules.map((plugin) => {
+                          const IconComponent = plugin.icon;
+                          return (
+                            <button
+                              key={plugin.id}
+                              onClick={() => {
+                                plugin.action(setInput, onActiveTabChange, setPluginToOpen);
+                                toast.success(
+                                  `${plugin.name} plugin activated! Check the chat input.`,
+                                );
+                              }}
+                              className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
+                            >
+                              <div className="flex items-center gap-2 w-full">
+                                <IconComponent
+                                  className={`h-4 w-4 ${plugin.color} group-hover:scale-110 transition-transform`}
+                                />
+                                <span className="font-medium text-sm text-white truncate">
+                                  {plugin.name}
+                                </span>
+                              </div>
+                              <p className="text-xs text-white/60 line-clamp-2 w-full">
+                                {plugin.description}
+                              </p>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   </CardContent>
@@ -1228,7 +1587,29 @@ export default function InteractionPanel({
 
               {/* Integrations Tab Content */}
               <TabsContent value="integrations" className="m-0 flex-1 overflow-auto">
-                <IntegrationPanel userId={userId} />
+                <Card className="bg-black/40 border-white/10">
+                  <CardContent className="pt-6">
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Zap className="h-4 w-4 text-yellow-400" />
+                        <span className="text-sm font-medium">
+                          Modular Tools
+                        </span>
+                      </div>
+                      <div className="mb-3">
+                        <p className="text-xs text-white/60 mb-2">
+                          Pop-out plugin windows for advanced functionality:
+                        </p>
+                        <PluginManager
+                          availablePlugins={availablePlugins}
+                          onPluginResult={handlePluginResult}
+                          openPluginId={pluginToOpen}
+                          onOpenComplete={() => setPluginToOpen(null)}
+                        />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
               </TabsContent>
 
               {/* Shell Tab Content */}
@@ -1240,22 +1621,13 @@ export default function InteractionPanel({
                         <Terminal className="h-4 w-4 text-green-400" />
                         <span className="text-sm font-medium">Sandbox Terminal</span>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          setShowTerminal(true);
-                          setTerminalMinimized(false);
-                        }}
-                        className="bg-green-600/20 hover:bg-green-600/30 border-green-600/30 text-green-400"
-                      >
-                        <Terminal className="w-4 h-4 mr-2" />
-                        Open Full Terminal
-                      </Button>
                     </div>
-                    <div className="flex-1 bg-black/40 rounded-lg p-4 font-mono text-sm text-white/80 overflow-auto">
-                      <p className="text-white/50">Terminal ready. Click "Open Full Terminal" to start.</p>
-                      <p className="text-white/30 text-xs mt-2">Execute commands in an isolated sandbox environment.</p>
+                    <div className="flex-1 flex items-center justify-center bg-black/40 rounded-lg p-8 font-mono text-sm text-white/60">
+                      <div className="text-center">
+                        <Terminal className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                        <p>Terminal is open below</p>
+                        <p className="text-white/40 text-xs mt-2">Type commands to execute in an isolated environment</p>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -1264,15 +1636,6 @@ export default function InteractionPanel({
           )}
         </div>
       </div>
-
-      {/* Terminal Panel */}
-      <TerminalPanel
-        userId={userId}
-        isOpen={showTerminal}
-        onClose={() => setShowTerminal(false)}
-        onMinimize={() => setTerminalMinimized(!terminalMinimized)}
-        isMinimized={terminalMinimized}
-      />
     </>
   );
 }

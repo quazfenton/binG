@@ -45,6 +45,9 @@ interface CodePreviewPanelProps {
   messages: Message[];
   isOpen: boolean;
   onClose: () => void;
+  // Optional: Inject project files directly (e.g., from code service)
+  // DEBUG: This creates dual data sources - to be removed after debugging
+  projectFiles?: { [key: string]: string };
   // commands management
   commandsByFile?: Record<string, string[]>;
   onApplyAllCommandDiffs?: () => void;
@@ -91,6 +94,7 @@ export default function CodePreviewPanel({
   messages,
   isOpen,
   onClose,
+  projectFiles,
   commandsByFile = {},
   onApplyAllCommandDiffs,
   onApplyFileCommandDiffs,
@@ -201,8 +205,20 @@ export default function CodePreviewPanel({
         const structure = analyzeProjectStructure(codeBlocks);
         setProjectStructure(structure);
       }
+    } else if (projectFiles && Object.keys(projectFiles).length > 0) {
+      // DEBUG: Use injected projectFiles if no code blocks in messages
+      // This allows code service files to be shown even without message parsing
+      const files = { ...projectFiles };
+      const structure: ProjectStructure = {
+        name: 'injected-project',
+        files,
+        framework: 'react',
+        bundler: 'vite',
+        packageManager: 'npm'
+      };
+      setProjectStructure(structure);
     }
-  }, [codeBlocks, messages]);
+  }, [codeBlocks, messages, projectFiles]);
 
   const applySimpleLineDiff = (
     originalContent: string,

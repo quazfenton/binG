@@ -95,13 +95,66 @@ class PriorityRequestRouter {
 
   /**
    * Initialize endpoint configurations in priority order
+   * Priority: LLM reasoning first, then specialized tools as fallbacks
    */
   private initializeEndpoints(): EndpointConfig[] {
     const endpoints: EndpointConfig[] = [
-      // Priority 0: Composio Tools (800+ toolkits with advanced integration)
+      // Priority 0: Fast-Agent (Primary LLM - reasoning, conversation, general tasks)
+      {
+        name: 'fast-agent',
+        priority: 0,
+        enabled: process.env.FAST_AGENT_ENABLED === 'true',
+        service: fastAgentService,
+        healthCheck: () => fastAgentService.healthCheck(),
+        canHandle: (req) => fastAgentService.shouldHandle(this.convertToFastAgentRequest(req)),
+        processRequest: async (req) => {
+          const response = await fastAgentService.processRequest(this.convertToFastAgentRequest(req));
+          return this.normalizeFastAgentResponse(response);
+        }
+      },
+      // Priority 1: Original Enhanced LLM Service (Built-in LLM fallback)
+      {
+        name: 'original-system',
+        priority: 1,
+        enabled: true,
+        service: enhancedLLMService,
+        healthCheck: async () => true, // Always available
+        canHandle: () => true, // Always accepts
+        processRequest: async (req) => {
+          const response = await enhancedLLMService.generateResponse(this.convertToEnhancedLLMRequest(req));
+          return this.normalizeOriginalResponse(response);
+        }
+      },
+      // Priority 2: n8n Agent Chaining (Complex workflows and external integrations)
+      {
+        name: 'n8n-agents',
+        priority: 2,
+        enabled: process.env.N8N_ENABLED === 'true',
+        service: n8nAgentService,
+        healthCheck: () => n8nAgentService.healthCheck(),
+        canHandle: (req) => n8nAgentService.shouldHandle(this.convertToN8nRequest(req)),
+        processRequest: async (req) => {
+          const response = await n8nAgentService.processRequest(this.convertToN8nRequest(req));
+          return this.normalizeN8nResponse(response);
+        }
+      },
+      // Priority 3: Custom Fallback (Additional fallback layer)
+      {
+        name: 'custom-fallback',
+        priority: 3,
+        enabled: process.env.CUSTOM_FALLBACK_ENABLED === 'true',
+        service: customFallbackService,
+        healthCheck: () => customFallbackService.healthCheck(),
+        canHandle: () => true, // Always accepts
+        processRequest: async (req) => {
+          const response = await customFallbackService.processRequest(this.convertToCustomFallbackRequest(req));
+          return this.normalizeCustomFallbackResponse(response);
+        }
+      },
+      // Priority 4: Composio Tools (800+ toolkits - only when explicitly detected)
       {
         name: 'composio-tools',
-        priority: 0,
+        priority: 4,
         enabled: !!this.composioService && process.env.COMPOSIO_ENABLED !== 'false',
         service: this.composioService,
         healthCheck: async () => {
@@ -117,10 +170,10 @@ class PriorityRequestRouter {
           return await this.processComposioRequest(req);
         }
       },
-      // Priority 1: Tool Execution (Handle tool requests with authorization)
+      // Priority 5: Tool Execution (Arcade/Nango - only when explicitly detected)
       {
         name: 'tool-execution',
-        priority: 1,
+        priority: 5,
         enabled: true,
         service: null, // Lazily initialized to prevent crashes if ../tools is missing
         healthCheck: async () => {
@@ -141,10 +194,10 @@ class PriorityRequestRouter {
           return await this.processToolRequest(req);
         }
       },
-      // Priority 2: Sandbox Agent (Handle code execution requests)
+      // Priority 6: Sandbox Agent (Code execution - only when explicitly detected)
       {
         name: 'sandbox-agent',
-        priority: 2,
+        priority: 6,
         enabled: true,
         service: sandboxBridge,
         healthCheck: async () => {
@@ -159,58 +212,6 @@ class PriorityRequestRouter {
         processRequest: async (req) => {
           // Process sandbox request
           return await this.processSandboxRequest(req);
-        }
-      },
-      // Priority 3: Fast-Agent (Most capable - tools, MCP, file handling)
-      {
-        name: 'fast-agent',
-        priority: 3,
-        enabled: process.env.FAST_AGENT_ENABLED === 'true',
-        service: fastAgentService,
-        healthCheck: () => fastAgentService.healthCheck(),
-        canHandle: (req) => fastAgentService.shouldHandle(this.convertToFastAgentRequest(req)),
-        processRequest: async (req) => {
-          const response = await fastAgentService.processRequest(this.convertToFastAgentRequest(req));
-          return this.normalizeFastAgentResponse(response);
-        }
-      },
-      // Priority 4: n8n Agent Chaining (Complex workflows and external integrations)
-      {
-        name: 'n8n-agents',
-        priority: 4,
-        enabled: process.env.N8N_ENABLED === 'true',
-        service: n8nAgentService,
-        healthCheck: () => n8nAgentService.healthCheck(),
-        canHandle: (req) => n8nAgentService.shouldHandle(this.convertToN8nRequest(req)),
-        processRequest: async (req) => {
-          const response = await n8nAgentService.processRequest(this.convertToN8nRequest(req));
-          return this.normalizeN8nResponse(response);
-        }
-      },
-      // Priority 5: Custom Fallback (Last resort before original system)
-      {
-        name: 'custom-fallback',
-        priority: 5,
-        enabled: process.env.CUSTOM_FALLBACK_ENABLED === 'true',
-        service: customFallbackService,
-        healthCheck: () => customFallbackService.healthCheck(),
-        canHandle: () => true, // Always accepts
-        processRequest: async (req) => {
-          const response = await customFallbackService.processRequest(this.convertToCustomFallbackRequest(req));
-          return this.normalizeCustomFallbackResponse(response);
-        }
-      },
-      // Priority 6: Original Enhanced LLM Service (Built-in system)
-      {
-        name: 'original-system',
-        priority: 6,
-        enabled: true,
-        service: enhancedLLMService,
-        healthCheck: async () => true, // Always available
-        canHandle: () => true, // Always accepts
-        processRequest: async (req) => {
-          const response = await enhancedLLMService.generateResponse(this.convertToEnhancedLLMRequest(req));
-          return this.normalizeOriginalResponse(response);
         }
       }
     ];
@@ -263,7 +264,13 @@ class PriorityRequestRouter {
         }
 
         const duration = Date.now() - startTime;
-        console.log(`[Router] Request successfully handled by ${endpoint.name} in ${duration}ms`);
+        
+        // Get actual provider/model from response
+        // For fallback scenarios, response.data.provider will show "original -> fallback" format
+        const responseProvider = response.data?.provider || endpoint.name;
+        const responseModel = response.data?.model || request.model;
+
+        console.log(`[Router] Request successfully handled by ${endpoint.name} in ${duration}ms (requested: ${request.provider}/${request.model}, actual: ${responseProvider}/${responseModel})`);
 
         return {
           success: true,
@@ -276,27 +283,43 @@ class PriorityRequestRouter {
             duration,
             routedThrough: endpoint.name,
             triedEndpoints: fallbackChain.length + 1,
+            actualProvider,
+            actualModel,
             quotaRemaining: quotaProvider ? quotaManager.getRemainingCalls(quotaProvider) : Infinity,
           }
         };
 
       } catch (error) {
         const err = error as Error;
-        console.error(`[Router] ${endpoint.name} failed:`, err.message);
         
+        // Skip verbose logging for expected "not configured" errors
+        const isNotConfiguredError = err.message.includes('not configured');
+        if (!isNotConfiguredError) {
+          console.error(`[Router] ${endpoint.name} failed:`, err.message);
+        } else {
+          console.log(`[Router] ${endpoint.name} skipped: ${err.message}`);
+        }
+
         // Track failure
         this.updateStats(endpoint.name, false);
-        
+
         errors.push({ endpoint: endpoint.name, error: err });
         fallbackChain.push(`${endpoint.name} (error: ${err.message.substring(0, 50)})`);
-        
+
         // Continue to next endpoint
       }
     }
 
     // All endpoints failed - this should be extremely rare with proper fallback configuration
     const duration = Date.now() - startTime;
-    console.error('[Router] All endpoints failed:', errors);
+    
+    // Only log full error details if there were actual errors (not just "not configured")
+    const actualErrors = errors.filter(e => !e.error.message.includes('not configured'));
+    if (actualErrors.length > 0) {
+      console.error('[Router] All endpoints failed:', errors);
+    } else {
+      console.log('[Router] No configured providers available');
+    }
     
     // Return a final emergency response
     return {

@@ -183,7 +183,7 @@ export default function MessageBubble({
   }
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} ${useCompactLayout ? 'mb-3' : 'mb-6'} group`}>
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"} ${useCompactLayout ? 'mb-3' : 'mb-6'} group w-full`}>
       <div
         className={`
           message-bubble-responsive relative transition-all duration-200
@@ -212,18 +212,21 @@ export default function MessageBubble({
         role="article"
         aria-label={`${isUser ? 'User' : 'Assistant'} message`}
       >
-        {/* Loading indicator for initial streaming */}
-        {streamingDisplay.showLoadingIndicator && (
-          <div className="flex items-center gap-2 text-white/60">
+        {/* Thinking indicator - shown at start of streaming */}
+        {isStreaming && streamingDisplay.showLoadingIndicator && (
+          <div className="flex items-center gap-2 text-white/60 mb-2">
             <Loader2 className="w-4 h-4 animate-spin" />
-            <span className="text-sm">Thinking...</span>
+            <span className="text-sm animate-pulse">Thinking...</span>
           </div>
         )}
 
+        {/* Streaming cursor - shown while receiving content */}
+        {isStreaming && streamingDisplay.isStreaming && streamingDisplay.isAnimating && !streamingDisplay.showLoadingIndicator && (
+          <span className="inline-block w-2 h-5 bg-gradient-to-t from-purple-400 to-purple-300 animate-typing-cursor ml-1 rounded-sm" />
+        )}
+
         {/* Main content */}
-        {!streamingDisplay.showLoadingIndicator && (
-          <>
-            <ReactMarkdown
+        <ReactMarkdown
               className={`prose prose-invert transition-opacity duration-200 ${
                 useCompactLayout ? 'prose-sm' : 'prose-base'
               } ${layout.isMobile ? 'prose-sm' : 'prose-base'}`}
@@ -310,14 +313,10 @@ export default function MessageBubble({
             >
               {isUser ? message.content : mainContent}
             </ReactMarkdown>
-            
-            {streamingDisplay.isStreaming && streamingDisplay.isAnimating && (
-              <span className="inline-block w-2 h-5 bg-gradient-to-t from-purple-400 to-purple-300 animate-typing-cursor ml-1 rounded-sm" />
-            )}
 
             {streamingDisplay.isStreaming && streamingDisplay.progress > 0 && (
               <div className="absolute -bottom-1 left-0 right-0 h-0.5 bg-white/10 rounded-full overflow-hidden">
-                <div 
+                <div
                   className="h-full bg-gradient-to-r from-purple-500 to-purple-400 transition-all duration-300 ease-out"
                   style={{ width: `${streamingDisplay.progress}%` }}
                 />
@@ -445,8 +444,6 @@ export default function MessageBubble({
                 )}
               </div>
             )}
-          </>
-        )}
 
         <Button
           variant="ghost"

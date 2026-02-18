@@ -22,7 +22,7 @@ export function getDatabase(): Database.Database {
       // Return a mock database object during build time
       // This allows the build to proceed without requiring the native module
       console.log('Skipping database initialization during build');
-      
+
       // Create a mock database object that implements the necessary methods
       const mockDb: Partial<Database.Database> = {
         prepare: () => {
@@ -51,7 +51,7 @@ export function getDatabase(): Database.Database {
         aggregate: () => mockDb as Database.Database,
         unsafeMode: () => mockDb as Database.Database,
       };
-      
+
       return mockDb as Database.Database;
     }
 
@@ -76,7 +76,47 @@ export function getDatabase(): Database.Database {
       }
 
       console.log('Database initialized successfully');
-    } catch (error) {
+    } catch (error: any) {
+      // Handle native module binding errors gracefully
+      const isNativeModuleError = error.message?.includes('Could not locate the bindings file') ||
+                                  error.message?.includes('better_sqlite3.node');
+      
+      if (isNativeModuleError) {
+        console.warn('Database native module not available. Running in mock mode.');
+        console.warn('To fix: run `pnpm rebuild better-sqlite3` or set SKIP_DB_INIT=true');
+        
+        // Return mock database for graceful degradation
+        const mockDb: Partial<Database.Database> = {
+          prepare: () => {
+            return {
+              run: () => ({ lastInsertRowid: 1, changes: 1 }),
+              get: () => null,
+              all: () => [],
+              bind: () => null,
+              columns: () => [],
+              finalize: () => {},
+              iterate: () => [],
+              raw: () => []
+            } as any;
+          },
+          exec: () => mockDb as Database.Database,
+          pragma: () => {},
+          transaction: (fn: any) => fn,
+          close: () => {},
+          backup: () => Promise.resolve({ progress: () => {} }),
+          defaultSafeIntegers: () => mockDb as Database.Database,
+          register: () => mockDb as Database.Database,
+          loadExtension: () => mockDb as Database.Database,
+          serialize: () => Buffer.alloc(0),
+          table: () => null,
+          function: () => mockDb as Database.Database,
+          aggregate: () => mockDb as Database.Database,
+          unsafeMode: () => mockDb as Database.Database,
+        };
+
+        return mockDb as Database.Database;
+      }
+      
       console.error('Failed to initialize database:', error);
       throw error;
     }
