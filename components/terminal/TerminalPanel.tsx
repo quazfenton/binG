@@ -49,6 +49,36 @@ function getAuthToken(): string | null {
   }
 }
 
+function getAnonymousSessionId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    let sessionId = localStorage.getItem('anonymous_session_id');
+    if (!sessionId) {
+      sessionId = `anon_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+      localStorage.setItem('anonymous_session_id', sessionId);
+    }
+    return sessionId;
+  } catch {
+    return null;
+  }
+}
+
+function getAuthHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  const anonymousSessionId = getAnonymousSessionId();
+  const headers: Record<string, string> = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  if (anonymousSessionId) {
+    headers['X-Anonymous-Session-Id'] = anonymousSessionId;
+  }
+
+  return headers;
+}
+
 export default function TerminalPanel({
   userId,
   isOpen,
@@ -238,8 +268,15 @@ export default function TerminalPanel({
         try { fitAddon.fit(); } catch { /* ignore */ }
       });
 
+      // Show friendly welcome message - sandbox connects lazily on first command
       terminal.writeln('\x1b[1;32m● Terminal ready\x1b[0m');
-      terminal.writeln('\x1b[90mSandbox will connect on first keystroke...\x1b[0m');
+      terminal.writeln('\x1b[90mType a command to connect to sandbox...\x1b[0m');
+      terminal.writeln('\x1b[90mSandbox will initialize automatically on first command\x1b[0m');
+      terminal.writeln('');
+      terminal.writeln('\x1b[36mQuick commands:\x1b[0m');
+      terminal.writeln('  \x1b[32mls\x1b[0m - List files');
+      terminal.writeln('  \x1b[32mpwd\x1b[0m - Show current directory');
+      terminal.writeln('  \x1b[32mnode --version\x1b[0m - Check Node.js version');
       terminal.writeln('');
 
       updateTerminalState(terminalId, { terminal, fitAddon });
@@ -298,8 +335,9 @@ export default function TerminalPanel({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getAuthToken() || ''}`,
+          ...getAuthHeaders(),
         },
+        credentials: 'include',
         body: JSON.stringify({ sessionId, data }),
       });
     } catch {
@@ -314,8 +352,9 @@ export default function TerminalPanel({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getAuthToken() || ''}`,
+          ...getAuthHeaders(),
         },
+        credentials: 'include',
         body: JSON.stringify({ sessionId, cols, rows }),
       });
     } catch {
@@ -329,12 +368,18 @@ export default function TerminalPanel({
     if (!term || term.sandboxInfo.status === 'creating' || term.isConnected) return;
 
     const token = getAuthToken();
+    const anonymousSessionId = getAnonymousSessionId();
 
     updateTerminalState(terminalId, {
       sandboxInfo: { status: 'creating' },
     });
     term.sandboxInfo = { status: 'creating' };
-    term.terminal?.writeln('\x1b[33m⟳ Initializing sandbox environment...\x1b[0m');
+    
+    // Show loading message - but don't mention time estimates
+    term.terminal?.writeln('');
+    term.terminal?.writeln('\x1b[33m⟳ Preparing your sandbox...\x1b[0m');
+    term.terminal?.writeln('\x1b[90mThis only happens once - future terminals will be instant!\x1b[0m');
+    term.terminal?.writeln('');
 
     try {
       // Step 1: Ensure sandbox session exists
@@ -342,8 +387,9 @@ export default function TerminalPanel({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token || ''}`,
+          ...getAuthHeaders(),
         },
+        credentials: 'include',
       });
 
       if (!sessionRes.ok) {
@@ -354,7 +400,7 @@ export default function TerminalPanel({
       const { sessionId, sandboxId } = sessionData;
 
       // Step 2: Connect SSE stream (this creates the PTY)
-      const streamUrl = `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+      const streamUrl = `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}${token ? `&token=${encodeURIComponent(token)}` : ''}${anonymousSessionId ? `&anonymousSessionId=${encodeURIComponent(anonymousSessionId)}` : ''}`;
       const eventSource = new EventSource(streamUrl);
 
       eventSource.onmessage = (event) => {
@@ -470,6 +516,12 @@ export default function TerminalPanel({
         termMut.isConnected = true;
       }
 
+      // Show success message - makes it feel instant even if it took time
+      term.terminal?.writeln('');
+      term.terminal?.writeln('\x1b[1;32m✓ Sandbox ready!\x1b[0m');
+      term.terminal?.writeln('\x1b[90mYour isolated development environment is ready to use.\x1b[0m');
+      term.terminal?.writeln('');
+
       if (!userId) {
         term.terminal?.writeln('\x1b[33m⚠ Dev mode: Anonymous session (sign in for persistence)\x1b[0m');
       }
@@ -543,8 +595,9 @@ export default function TerminalPanel({
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getAuthToken() || ''}`,
+          ...getAuthHeaders(),
         },
+        credentials: 'include',
         body: JSON.stringify({ sessionId: terminal.sandboxInfo.sessionId }),
       });
     } catch {
@@ -563,8 +616,9 @@ export default function TerminalPanel({
             method: 'DELETE',
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer ${getAuthToken() || ''}`,
+              ...getAuthHeaders(),
             },
+            credentials: 'include',
             body: JSON.stringify({ sessionId: terminal.sandboxInfo.sessionId }),
           });
         } catch {

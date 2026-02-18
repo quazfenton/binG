@@ -81,6 +81,18 @@ export async function detectAndInstallDeps(
 }
 
 export async function setupCacheVolumes(sandbox: SandboxHandle): Promise<void> {
+  // Check if persistent cache is enabled
+  const cacheEnabled = process.env.SANDBOX_PERSISTENT_CACHE === 'true'
+  
+  if (cacheEnabled) {
+    // Persistent cache volume is already mounted at /opt/cache
+    // Just ensure npm/pip are configured to use it
+    console.log('[dep-cache] Using persistent cache volume at /opt/cache')
+  } else {
+    // Create cache directories in sandbox (non-persistent)
+    console.log('[dep-cache] Creating per-sandbox cache directories')
+  }
+  
   await sandbox.executeCommand(
     `mkdir -p ${NPM_CACHE} ${PIP_CACHE} ${PNPM_STORE}`,
   )

@@ -1,415 +1,465 @@
 ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/quazfenton/binG?utm_source=oss&utm_medium=github&utm_campaign=quazfenton%2FbinG&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
-# binG - Advanced LLM Chat Interface
 
-A spatial interface for AI interactions that combines traditional chat functionality with immersive visualization, voice integration, multi-provider LLM support, and code execution capabilities.
+# 🚀 binG - Agentic Compute Workspace
 
-![binG Interface](https://via.placeholder.com/)
+**An intelligent workspace where AI agents, code execution, and human collaboration converge.**
 
-## ✨ Features
+binG is not just another chat interface—it's a **full-stack agentic workspace** that combines AI conversation with real code execution, voice interaction, and multi-agent orchestration. Build, test, and deploy applications with AI assistance in an isolated, secure sandbox environment.
 
-### 🎯 Core Functionality
-- **Multi-Provider LLM Support**: OpenAI, Anthropic, Google, Cohere, Together AI, Replicate, Portkey, Mistral, OpenRouter, Chutes
-- **Real-time Streaming**: Smooth text streaming with fade-in animations
-- **Interface**: Traditional chat panel alongside immersive visualization
-- **Voice Integration**: Text-to-speech and speech-to-text using Livekit
-- **Chat History**: Persistent local storage with export functionality
-- **Provider Selection**: Easy switching between AI models and providers
-- **Free Models**: Access to DeepSeek R1, Gemini, OpenRouter, Grok, and Flux models via Portkey
-
-### 💻 Code Execution & Terminal
-- **xterm.js Terminal**: Full-featured terminal with command history and autocomplete
-- **Sandbox Execution**: Isolated code execution via Daytona or Runloop
-- **Session Persistence**: Terminal sessions saved and restored across page reloads
-- **Auto-Reconnect**: Sandbox automatically restarts on shell execution requests
-- **Command History**: Fish-like autocomplete and history navigation (↑/↓)
-- **Split View**: Multiple terminals side-by-side
-
-### 🎨 Advanced UI/UX
-- **Streaming Animations**: Typewriter effect with smooth character-by-character display
-- **Thinking Indicator**: Animated loading spinner while AI processes
-- **Mood-Responsive Interface**: Environment adapts to conversation tone
-- **Copy & Download**: Individual message copying and code block extraction
-- **Accessibility Controls**: Screen reader support, voice controls, text sizing
-- **Error Handling**: Comprehensive error management with user-friendly messages
-- **Task-Specific Providers**: Optimized providers for embeddings, agents, OCR, etc.
-
-### 🔊 Voice Features
-- **Text-to-Speech**: Automatic voice synthesis for AI responses
-- **Speech-to-Text**: Voice input with real-time transcription
-- **Voice Settings**: Customizable rate, pitch, volume, and voice selection
-- **Livekit Integration**: Professional-grade voice processing
-
-### 💾 Data Management
-- **Local Storage**: Chat history and terminal sessions persisted in browser
-- **Export Options**: Download individual chats or complete history
-- **Code Extraction**: Automatic code block detection and file generation
-- **Session Management**: Resume conversations across browser sessions
-- **Logging Control**: Configurable log levels (silent, error, warn, info, debug)
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Node.js 18+ 
-- pnpm (recommended) or npm
-- API keys for your preferred LLM providers
-
-### Installation
-
-1. **Clone and setup**
-   ```bash
-   cd binG
-   pnpm install
-   ```
-
-2. **Configure environment variables**
-   ```bash
-   cp .env.example .env
-   ```
-
-3. **Add your API keys** (see [API Configuration](#api-configuration))
-
-4. **Start development server**
-   ```bash
-   pnpm dev
-   ```
-
-5. **Open in browser**
-   ```
-   http://localhost:3000
-   ```
-
-## 🔑 API Configuration
-
-### Required: At least one LLM provider API key
-
-Edit `.env` file with your API keys:
-
-#### OpenAI (Recommended)
-```env
-OPENAI_API_KEY=sk-your_openai_api_key_here
-OPENAI_ORG_ID=org-your_openai_org_id_here  # Optional
-```
-
-#### Anthropic (Claude)
-```env
-ANTHROPIC_API_KEY=sk-ant-your_anthropic_api_key_here
-```
-
-#### Google (Gemini)
-```env
-GOOGLE_API_KEY=your_google_api_key_here
-```
-
-#### Cohere
-```env
-COHERE_API_KEY=your_cohere_api_key_here
-```
-
-#### Together AI
-```env
-TOGETHER_API_KEY=your_together_api_key_here
-```
-
-#### Replicate
-```env
-REPLICATE_API_TOKEN=r8_your_replicate_token_here
-```
-
-### Optional: Voice Integration (Livekit)
-```env
-LIVEKIT_API_KEY=your_livekit_api_key_here
-LIVEKIT_API_SECRET=your_livekit_api_secret_here
-LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
-NEXT_PUBLIC_LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
-```
-
-### Optional: Portkey (AI Gateway with Free Models)
-```env
-PORTKEY_API_KEY=your_portkey_api_key_here
-PORTKEY_VIRTUAL_KEY=your_portkey_virtual_key_here
-```
-
-### Optional: Code Execution (Sandbox)
-```env
-# Choose sandbox provider: daytona or runloop
-SANDBOX_PROVIDER=daytona
-
-# Daytona API credentials
-DAYTONA_API_KEY=your_daytona_api_key_here
-
-# OR Runloop API credentials (alternative)
-#RUNLOOP_API_KEY=your_runloop_api_key_here
-
-# Sandbox configuration
-SANDBOX_WARM_POOL=true           # Keep warm sandboxes ready
-SANDBOX_WARM_POOL_SIZE=2         # Number of warm sandboxes
-SANDBOX_PRELOAD_PACKAGES=true    # Preload common packages
-SANDBOX_BASE_PACKAGES=git,curl,wget,nodejs,python3,pip
-SANDBOX_EXTRA_PACKAGES_NODE=npm,yarn,pnpm
-SANDBOX_EXTRA_PACKAGES_PYTHON=requests,numpy,pandas
-```
-
-### Optional: Tool Integration (Composio, Arcade, Nango)
-```env
-# Composio (800+ tools)
-COMPOSIO_API_KEY=your_composio_api_key_here
-COMPOSIO_ENABLED=true
-COMPOSIO_LLM_PROVIDER=openrouter
-COMPOSIO_LLM_MODEL=deepseek/deepseek-r1-0528:free
-COMPOSIO_ENABLE_ALL_TOOLS=true
-
-# Arcade (alternative tool platform)
-#ARCADE_API_KEY=your_arcade_api_key_here
-
-# Nango (alternative to Arcade)
-#NANGO_API_KEY=your_nango_api_key_here
-#NANGO_HOST=https://api.nango.dev
-```
-
-### Optional: Logging Configuration
-```env
-# Log levels: silent, error, warn, info, debug
-LOG_LEVEL=info
-```
-
-**Available Free Models:**
-- `chutes/deepseek-r1-0528:free` - DeepSeek R1 (Latest reasoning model)
-- `chutes/gemini-1.5-flash:free` - Google Gemini 1.5 Flash
-- `chutes/openrouter-auto:free` - OpenRouter Auto Selection
-- `chutes/grok-beta:free` - Grok Beta
-- `chutes/flux-dev:free` - Flux Dev (Image Generation)
-- `chutes/flux-schnell:free` - Flux Schnell (Fast Image Generation)
-
-## 🎮 Usage Guide
-
-### Basic Chat
-1. **Start Conversation**: Type in the input field and press Enter
-2. **View Responses**: Messages appear in both 2D chat panel and  space
-3. **Copy Messages**: Click copy button on any message
-4. **Download Code**: Extract code blocks from AI responses
-
-### Provider Management
-1. **Switch Providers**: Use dropdown in chat panel header
-2. **Select Models**: Choose specific model for selected provider
-3. **Adjust Settings**: Temperature, max tokens, streaming options
-
-### Voice Features
-1. **Enable Voice**: Toggle voice button in chat panel or accessibility controls
-2. **Voice Input**: Speak directly to send messages
-3. **Voice Output**: AI responses are automatically spoken
-4. **Voice Settings**: Adjust rate, pitch, volume in accessibility panel
-
-###  Interface
-1. **Navigation**: Click and drag to rotate, scroll to zoom
-2. **Message Nodes**: Click on  shapes to expand message content
-3. **Mood Visualization**: Environment color reflects conversation tone
-4. **Thought Process**: Floating spheres show AI processing stages
-
-### Chat History
-1. **Auto-Save**: Conversations automatically saved locally
-2. **Load Previous**: Use history button to browse past chats
-3. **Export Options**: Download individual chats or complete history
-4. **Delete Chats**: Remove unwanted conversation history
-
-### Terminal & Code Execution
-1. **Open Terminal**: Click Shell tab or terminal button
-2. **Execute Commands**: Type commands and press Enter (sandbox auto-connects on first command)
-3. **Command History**: Use ↑/↓ arrows to navigate previous commands
-4. **Autocomplete**: Start typing and press Tab or → to complete matching commands
-5. **Split View**: Click split button to open multiple terminals side-by-side
-6. **Close Terminal**: Click X to close (sandbox pauses, session saved for reuse)
-7. **Reopen Terminal**: Click Shell tab again (restores previous session, sandbox restarts on command)
-
-**Note:** Sandbox sessions are closed when terminal is closed to save resources. The sandbox automatically restarts when you execute a command after reopening the terminal.
-
-## 🛠️ Development
-
-### Project Structure
-```
-binG/
-├── app/
-│   ├── api/chat/          # LLM API endpoints
-│   ├── globals.css        # Global styles
-│   ├── layout.tsx         # Root layout
-│   └── page.tsx          # Main page
-├── components/
-│   ├── ui/               # Reusable UI components
-│   ├── chat-panel.tsx    # 2D chat interface
-│   ├── conversation-interface.tsx  # Main interface
-│   ├── conversation-space.tsx      #  visualization
-│   └── ...
-├── hooks/
-│   ├── use-conversation.ts  # Chat logic and API calls
-│   └── use-chat-history.ts  # History management
-├── lib/
-│   ├── api/
-│   │   └── llm-providers.ts  # Multi-provider LLM service
-│   └── voice/
-│       └── voice-service.ts  # Voice integration
-├── types/
-│   └── index.ts          # TypeScript definitions
-└── voice-assistant/      # Livekit integration (reference)
-```
-
-### Key Components
-
-#### LLM Service (`lib/api/llm-providers.ts`)
-- Multi-provider abstraction
-- Streaming support
-- Error handling
-- Usage tracking
-
-#### Voice Service (`lib/voice/voice-service.ts`)
-- Web Speech API integration
-- Livekit connectivity
-- Voice settings management
-- Event handling
-
-#### Conversation Hook (`hooks/use-conversation.ts`)
-- Message management
-- API communication
-- Streaming handling
-- Settings persistence
-
-### Adding New Providers
-
-1. **Update LLM Service**
-   ```typescript
-   // Add to PROVIDERS constant
-   newProvider: {
-     id: 'newProvider',
-     name: 'New Provider',
-     models: ['model1', 'model2'],
-     supportsStreaming: true,
-     maxTokens: 4096,
-     description: 'Description'
-   }
-   ```
-
-2. **Implement API Methods**
-   ```typescript
-   private async callNewProvider(messages, model, temperature, maxTokens) {
-     // Implementation
-   }
-   ```
-
-3. **Add Environment Variables**
-   ```env
-   NEW_PROVIDER_API_KEY=your_key_here
-   ```
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-#### "No providers available"
-- **Cause**: Missing or invalid API keys
-- **Solution**: Check `.env` file and verify API key format
-- **Debug**: Check browser console for specific error messages
-
-#### "Failed to generate response"
-- **Cause**: API rate limits, quota exceeded, or network issues
-- **Solution**: Check API usage limits and network connectivity
-- **Debug**: Look at Network tab in browser dev tools
-
-#### Voice features not working
-- **Cause**: Browser doesn't support Web Speech API or microphone permissions
-- **Solution**: Use Chrome/Edge, grant microphone permissions
-- **Debug**: Check browser compatibility and permissions
-
-####  interface not loading
-- **Cause**: WebGL not supported or graphics issues
-- **Solution**: Use modern browser, update graphics drivers
-- **Debug**: Check browser WebGL support
-
-### Performance Optimization
-
-#### Large Chat History
-- **Issue**: Slow loading with many saved chats
-- **Solution**: Clear old chat history regularly
-- **Code**: Use "Download All History" then clear storage
-
-#### Streaming Lag
-- **Issue**: Slow text streaming animation
-- **Solution**: Adjust `TYPING_SPEED` in `chat-panel.tsx`
-- **Code**: Lower value = faster typing
-
-## 🎯 Configuration Options
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DEFAULT_LLM_PROVIDER` | Default AI provider | `openai` |
-| `DEFAULT_MODEL` | Default model | `gpt-4` |
-| `DEFAULT_TEMPERATURE` | Response creativity | `0.7` |
-| `DEFAULT_MAX_TOKENS` | Response length limit | `2000` |
-| `ENABLE_VOICE_FEATURES` | Voice integration | `true` |
-| `ENABLE_CHAT_HISTORY` | History persistence | `true` |
-
-### Runtime Settings
-
-Access via chat panel or accessibility controls:
-- **Provider Selection**: Switch between available providers
-- **Model Selection**: Choose specific models per provider
-- **Voice Settings**: Rate, pitch, volume, language
-- **UI Settings**: Text size, contrast, motion reduction
-
-## 📱 Browser Compatibility
-
-### Fully Supported
-- **Chrome 90+**: All features including voice
-- **Edge 90+**: All features including voice
-- **Firefox 90+**: Limited voice support
-- **Safari 14+**: Limited voice support
-
-### Feature Support Matrix
-
-| Feature | Chrome | Edge | Firefox | Safari |
-|---------|--------|------|---------|--------|
-|  Interface | ✅ | ✅ | ✅ | ✅ |
-| Chat Interface | ✅ | ✅ | ✅ | ✅ |
-| Streaming | ✅ | ✅ | ✅ | ✅ |
-| Text-to-Speech | ✅ | ✅ | ⚠️ | ⚠️ |
-| Speech-to-Text | ✅ | ✅ | ❌ | ❌ |
-| Livekit Voice | ✅ | ✅ | ✅ | ✅ |
-
-## 🤝 Contributing
-
-1. **Fork the repository**
-2. **Create feature branch**: `git checkout -b feature/amazing-feature`
-3. **Commit changes**: `git commit -m 'Add amazing feature'`
-4. **Push to branch**: `git push origin feature/amazing-feature`
-5. **Open Pull Request**
-
-### Development Guidelines
-- Follow TypeScript best practices
-- Add proper error handling
-- Include accessibility features
-- Test across browsers
-- Update documentation
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **Livekit**: Voice integration infrastructure
-- **Three.js**:  visualization engine
-- **Radix UI**: Accessible component library
-- **Framer Motion**: Animation library
-- **OpenAI, Anthropic, Google**: AI model providers
-
-## 🔗 Links
-
-- **Live Demo**: [Coming Soon]
-- **Documentation**: [Wiki](https://github.com/yourusername/binG/wiki)
-- **Issues**: [GitHub Issues](https://github.com/yourusername/binG/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/binG/discussions)
+![binG Workspace](https://via.placeholder.com/)
 
 ---
 
-**Built with ❤️ by the binG team**
+## 🎯 What Makes binG Different?
 
-*A revolutionary approach to AI interaction that bridges the gap between traditional chat interfaces and immersive  experiences.*
+| Traditional Chat | binG Workspace |
+|-----------------|----------------|
+| Text-only responses | **Executable code + live terminal** |
+| Static conversations | **Persistent sandbox sessions** |
+| No environment access | **Full Linux sandbox (Daytona/Runloop)** |
+| Single AI model | **Multi-provider orchestration** |
+| Browser TTS only | **Livekit + Neural TTS (ElevenLabs/Cartesia)** |
+
+---
+
+## ✨ Core Features
+
+### 🤖 Agentic Capabilities
+- **Multi-Agent Orchestration**: Coordinate multiple AI agents for complex tasks
+- **Tool Integration**: 800+ tools via Composio (GitHub, Slack, Gmail, etc.)
+- **Code Execution**: Run generated code in isolated sandboxes
+- **Terminal Access**: Full xterm.js terminal with fish-like autocomplete
+- **Persistent Sessions**: Sandboxes persist across page reloads
+
+### 💻 Development Environment
+- **Isolated Sandboxes**: Each user gets a dedicated Linux environment
+- **Pre-installed Packages**: Node.js, Python, Git, build tools ready to use
+- **Persistent Cache**: Shared package cache (2-3x faster sandbox creation)
+- **Split Terminal View**: Multiple terminals side-by-side
+- **Command History**: Intelligent autocomplete and history navigation
+
+### 🎙️ Voice & Audio
+- **Neural TTS**: ElevenLabs & Cartesia integration (human-quality voices)
+- **Livekit Rooms**: Multi-user voice channels for collaboration
+- **Speech Recognition**: Real-time transcription with Web Speech API
+- **Auto-Speak**: AI responses automatically spoken when enabled
+- **Voice Commands**: Hands-free operation support
+
+### 🔒 Security & Isolation
+- **Per-User Sandboxes**: Complete isolation between users
+- **Ephemeral Environments**: Sandboxes auto-destroy after inactivity
+- **No Host Access**: Sandboxes cannot access host filesystem
+- **Resource Limits**: CPU/memory quotas prevent abuse
+- **Audit Logging**: All commands logged for compliance
+
+### 🎨 User Experience
+- **Instant Terminal UI**: Terminal opens instantly, sandbox connects lazily
+- **Friendly Loading**: Progressive disclosure hides initialization time
+- **Smart Fallbacks**: Graceful degradation when services unavailable
+- **Responsive Design**: Works on desktop, tablet, and mobile
+- **Dark Theme**: Easy on the eyes for extended sessions
+
+---
+
+## 🏗️ Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     binG Workspace                          │
+├─────────────────────────────────────────────────────────────┤
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │   Chat UI    │  │   Terminal   │  │  Code Panel  │     │
+│  │  (React)     │  │  (xterm.js)  │  │  (Monaco)    │     │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘     │
+│         │                 │                 │              │
+│         └─────────────────┴─────────────────┘              │
+│                           │                                │
+│                  ┌────────▼────────┐                       │
+│                  │  API Routes     │                       │
+│                  │  (Next.js)      │                       │
+│                  └────────┬────────┘                       │
+│                           │                                │
+│         ┌─────────────────┼─────────────────┐             │
+│         │                 │                 │              │
+│  ┌──────▼──────┐  ┌──────▼──────┐  ┌──────▼──────┐       │
+│  │ LLM Providers│  │  Sandboxes  │  │   Livekit   │       │
+│  │ (OpenRouter,│  │  (Daytona,  │  │   (Voice    │       │
+│  │  Google,    │  │   Runloop)  │  │   Rooms)    │       │
+│  │  Mistral)   │  │             │  │             │       │
+│  └─────────────┘  └─────────────┘  └─────────────┘       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🚀 Quick Start
+
+### Option 1: Local Development
+
+```bash
+# Clone repository
+git clone https://github.com/quazfenton/binG.git
+cd binG
+
+# Install dependencies
+pnpm install
+
+# Copy environment template
+cp .env.example .env
+
+# Edit .env with your API keys (see Configuration section)
+nano .env
+
+# Start development server
+pnpm dev
+
+# Open browser
+open http://localhost:3000
+```
+
+### Option 2: Docker Deployment (Recommended for Production)
+
+```bash
+# Build and run with Docker Compose
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+```
+
+### Option 3: One-Click Deploy
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new)
+[![Deploy to Railway](https://railway.app/button.svg)](https://railway.app)
+
+---
+
+## ⚙️ Configuration
+
+### Required Environment Variables
+
+```env
+# At least ONE LLM provider must be configured
+OPENROUTER_API_KEY=sk-or-...        # Recommended (access to 100+ models)
+GOOGLE_API_KEY=...                   # Google Gemini
+ANTHROPIC_API_KEY=sk-ant-...         # Claude
+MISTRAL_API_KEY=...                  # Mistral AI
+GITHUB_MODELS_API_KEY=...            # GitHub Models (via Azure)
+
+# Sandbox Provider (for code execution)
+SANDBOX_PROVIDER=daytona             # or 'runloop'
+DAYTONA_API_KEY=...                  # Get from https://daytona.io
+# RUNLOOP_API_KEY=...               # Alternative to Daytona
+
+# Voice Features (Optional)
+LIVEKIT_API_KEY=...
+LIVEKIT_API_SECRET=...
+NEXT_PUBLIC_LIVEKIT_URL=wss://...
+
+# Neural TTS (Optional - enhances voice quality)
+ELEVENLABS_API_KEY=...              # Human-quality voices
+CARTESIA_API_KEY=...                 # Ultra-low latency TTS
+
+# Tool Integration (Optional)
+COMPOSIO_API_KEY=...                 # 800+ tool integrations
+```
+
+### Optional Optimizations
+
+```env
+# Persistent Cache (2-3x faster sandbox creation)
+SANDBOX_PERSISTENT_CACHE=true
+SANDBOX_CACHE_VOLUME_NAME=global-package-cache
+SANDBOX_CACHE_SIZE=2GB
+
+# Warm Pool (instant sandbox availability)
+SANDBOX_WARM_POOL=true
+SANDBOX_WARM_POOL_SIZE=2
+
+# Logging
+LOG_LEVEL=info                       # silent | error | warn | info | debug
+```
+
+---
+
+## 🐳 Docker Deployment Guide
+
+### Prerequisites
+- Docker 20.10+
+- Docker Compose 2.0+
+- 4GB RAM minimum (8GB recommended)
+- 20GB disk space
+
+### Step 1: Clone and Configure
+
+```bash
+git clone https://github.com/quazfenton/binG.git
+cd binG
+cp .env.example .env
+```
+
+Edit `.env` with your API keys (see Configuration section above).
+
+### Step 2: Start Services
+
+```bash
+# Build and start all services
+docker-compose up -d
+
+# Check status
+docker-compose ps
+
+# View logs
+docker-compose logs -f app
+```
+
+### Step 3: Access Application
+
+Open `http://localhost:3000` in your browser.
+
+### Step 4: Production Hardening
+
+For production deployments:
+
+1. **Change default ports:**
+   ```yaml
+   # docker-compose.yml
+   ports:
+     - "8080:3000"  # Change to your preferred port
+   ```
+
+2. **Add SSL/TLS:**
+   ```bash
+   # Use a reverse proxy like Caddy or Nginx
+   docker run -d \
+     -p 443:443 \
+     -v /path/to/certs:/certs \
+     caddy caddy reverse-proxy --from your-domain.com --to binG:3000
+   ```
+
+3. **Set up monitoring:**
+   ```bash
+   # Add Prometheus/Grafana for metrics
+   docker-compose -f docker-compose.monitoring.yml up -d
+   ```
+
+4. **Configure backups:**
+   ```bash
+   # Backup persistent volumes
+   docker run --rm \
+     -v bing_database:/data \
+     -v $(pwd)/backups:/backups \
+     alpine tar czf /backups/database-$(date +%Y%m%d).tar.gz /data
+   ```
+
+### Docker Troubleshooting
+
+**Issue: Container won't start**
+```bash
+# Check logs
+docker-compose logs app
+
+# Rebuild container
+docker-compose build --no-cache app
+docker-compose up -d
+```
+
+**Issue: Sandbox creation fails**
+```bash
+# Verify Daytona API key
+docker-compose exec app curl -H "Authorization: Bearer $DAYTONA_API_KEY" \
+  https://api.daytona.io/health
+
+# Check sandbox provider status
+docker-compose logs | grep -i sandbox
+```
+
+**Issue: High memory usage**
+```bash
+# Limit container memory
+# docker-compose.yml
+services:
+  app:
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+```
+
+---
+
+## 📊 Performance Benchmarks
+
+| Scenario | Without Cache | With Persistent Cache |
+|----------|--------------|----------------------|
+| First sandbox | 10 min | 10 min |
+| Subsequent | 10 min | **2-3 min** |
+| Bandwidth/user | 1.2 GB | **100 MB** |
+| Storage | 1.5 GB/sandbox | **2 GB shared** |
+
+### Optimization Tips
+
+1. **Enable persistent cache** for teams >5 users
+2. **Use warm pool** for instant availability
+3. **Choose regional sandbox provider** for lower latency
+4. **Set LOG_LEVEL=warn** in production (reduces I/O)
+
+---
+
+## 🔐 Security Best Practices
+
+### Production Checklist
+
+- [ ] Change default JWT_SECRET to cryptographically secure value
+- [ ] Enable HTTPS/TLS for all traffic
+- [ ] Set up firewall rules (only expose necessary ports)
+- [ ] Configure rate limiting (prevent abuse)
+- [ ] Enable audit logging (compliance)
+- [ ] Set up monitoring/alerting (detect anomalies)
+- [ ] Regular security updates (patch dependencies)
+- [ ] Backup database daily (disaster recovery)
+
+### API Key Management
+
+**Never commit API keys to version control!**
+
+```bash
+# Use environment variables or secrets manager
+export OPENROUTER_API_KEY="sk-or-..."
+
+# Or use Docker secrets
+docker secret create openrouter_key .env_openrouter
+```
+
+---
+
+## 🛠️ Advanced Usage
+
+### Custom Sandbox Images
+
+Create a custom Daytona image with pre-installed packages:
+
+```dockerfile
+# Dockerfile.sandbox
+FROM daytona/typescript:latest
+
+RUN npm install -g typescript ts-node prettier eslint
+RUN pip install requests flask fastapi numpy pandas
+
+LABEL com.daytona.image="custom-typescript-full"
+```
+
+Build and push:
+```bash
+docker build -t your-registry/custom-typescript -f Dockerfile.sandbox .
+docker push your-registry/custom-typescript
+```
+
+Configure in `.env`:
+```env
+SANDBOX_CUSTOM_IMAGE=your-registry/custom-typescript
+```
+
+### Multi-Agent Orchestration
+
+Coordinate multiple AI agents for complex tasks:
+
+```typescript
+// Example: Code review workflow
+const agents = [
+  { role: 'reviewer', model: 'claude-3-5-sonnet' },
+  { role: 'tester', model: 'gpt-4o' },
+  { role: 'documenter', model: 'gemini-2.5-pro' },
+];
+
+// Each agent handles their specialty
+```
+
+### Voice Customization
+
+Configure neural TTS voices:
+
+```env
+# ElevenLabs voices
+ELEVENLABS_VOICE_ID=EXAVITQu4vr4xnSDxMaL  # "Sarah" - Professional
+ELEVENLABS_STABILITY=0.5
+ELEVENLABS_SIMILARITY_BOOST=0.75
+
+# Cartesia voices
+CARTESIA_VOICE_ID=692530db-220c-4789-9917-79a844212011
+CARTESIA_MODEL=sonic-english
+```
+
+---
+
+## 📚 Documentation
+
+- **[Sandbox Caching Guide](docs/SANDBOX_CACHING_GUIDE.md)** - Optimize sandbox creation speed
+- **[Hiding Creation Time](docs/HIDING_SANDBOX_CREATION_TIME.md)** - UX improvements for perceived performance
+- **[Voice Service Improvements](docs/VOICE_SERVICE_IMPROVEMENTS.md)** - Neural TTS integration guide
+- **[Database Migrations](docs/DATABASE_MIGRATIONS.md)** - Schema management and migrations
+- **[Technical Improvements](docs/TECHNICAL_IMPROVEMENTS_SUMMARY.md)** - Recent enhancements summary
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! 
+
+### Development Setup
+
+```bash
+# Fork and clone
+git clone https://github.com/YOUR_USERNAME/binG.git
+cd binG
+
+# Install dependencies
+pnpm install
+
+# Create feature branch
+git checkout -b feature/your-feature
+
+# Make changes and test
+pnpm dev
+pnpm test
+
+# Commit and push
+git commit -m "feat: add your feature"
+git push origin feature/your-feature
+```
+
+For major changes, please open an issue first to discuss what you would like to change.
+
+---
+
+## 📄 License
+
+MIT License - See [LICENSE](LICENSE) file for details.
+
+---
+
+## 🙏 Acknowledgments
+
+- [Daytona](https://daytona.io) - Sandbox infrastructure
+- [Livekit](https://livekit.io) - Voice/video infrastructure
+- [ElevenLabs](https://elevenlabs.io) - Neural TTS
+- [Cartesia](https://cartesia.ai) - Ultra-low latency TTS
+- [Composio](https://composio.dev) - Tool integrations
+- [OpenRouter](https://openrouter.ai) - Multi-model access
+
+---
+
+## 📬 Support
+
+- **Issues**: https://github.com/quazfenton/binG/issues
+- **Discussions**: https://github.com/quazfenton/binG/discussions
+
+---
+
+**Built with ❤️ by the binG Team**
+
+*Last Updated: December 2024*  
+*Version: 2.0.0*

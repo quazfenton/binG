@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { verifyAuth } from '@/lib/auth/jwt';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { terminalManager } from '@/lib/sandbox/terminal-manager';
 import { sandboxEvents } from '@/lib/sandbox/sandbox-events';
@@ -11,6 +11,7 @@ export async function GET(req: NextRequest) {
     const token = req.nextUrl.searchParams.get('token');
     const sessionId = req.nextUrl.searchParams.get('sessionId');
     const sandboxId = req.nextUrl.searchParams.get('sandboxId');
+    const anonymousSessionId = req.nextUrl.searchParams.get('anonymousSessionId');
 
     if (!sessionId || !sandboxId) {
       return new Response(JSON.stringify({ error: 'sessionId and sandboxId are required' }), {
@@ -19,15 +20,11 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    let authResult;
-    if (token) {
-      const headers = new Headers(req.headers);
-      headers.set('Authorization', `Bearer ${token}`);
-      const modifiedReq = new NextRequest(req.url, { headers });
-      authResult = await verifyAuth(modifiedReq);
-    } else {
-      authResult = await verifyAuth(req);
-    }
+    const authResult = await resolveRequestAuth(req, {
+      bearerToken: token,
+      allowAnonymous: true,
+      anonymousSessionId,
+    });
 
     if (!authResult.success || !authResult.userId) {
       return new Response(JSON.stringify({ error: 'Unauthorized' }), {

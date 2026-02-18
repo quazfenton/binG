@@ -15,6 +15,36 @@ const PROCESS_TIMEOUT_MS = 300_000 // 5 minutes
 export class OpencodeProvider implements LLMProvider {
   readonly name = 'opencode'
 
+  private extractToolInvocation(
+    parsed: any,
+  ): { name: string; args: Record<string, any> } | null {
+    if (!parsed || typeof parsed !== 'object') return null
+
+    // OpenCode/OpenAI-style payload
+    if (parsed.tool_call) {
+      const call = parsed.tool_call
+      if (call?.name) {
+        return {
+          name: String(call.name),
+          args: (call.arguments ?? {}) as Record<string, any>,
+        }
+      }
+    }
+
+    // Anthropic-style payload
+    if (parsed.tool_use) {
+      const toolUse = parsed.tool_use
+      if (toolUse?.name) {
+        return {
+          name: String(toolUse.name),
+          args: (toolUse.input ?? {}) as Record<string, any>,
+        }
+      }
+    }
+
+    return null
+  }
+
   async runAgentLoop(options: LLMAgentOptions): Promise<LLMAgentResult> {
     // Method 2 containerized mode: run the CLI agent inside a sandbox
     if (process.env.OPENCODE_CONTAINERIZED === 'true') {
@@ -107,9 +137,10 @@ export class OpencodeProvider implements LLMProvider {
               continue
             }
 
-            if (parsed.tool_call && stepCount < maxSteps) {
+            const toolInvocation = this.extractToolInvocation(parsed)
+            if (toolInvocation && stepCount < maxSteps) {
               stepCount++
-              const { name, arguments: toolArgs } = parsed.tool_call
+              const { name, args: toolArgs } = toolInvocation
 
               let toolResult: ToolResult
               try {
@@ -142,11 +173,11 @@ export class OpencodeProvider implements LLMProvider {
               if (!proc.killed && !proc.stdin.destroyed) {
                 proc.stdin.write(resultPayload + '\n')
               }
-            } else if (parsed.tool_call && stepCount >= maxSteps) {
+            } else if (toolInvocation && stepCount >= maxSteps) {
               // Inform the process we've hit the step limit - prevents hanging
               const resultPayload = JSON.stringify({
                 tool_result: {
-                  name: parsed.tool_call.name,
+                  name: toolInvocation.name,
                   result: 'Maximum tool execution steps reached',
                   exit_code: 1,
                   success: false,
@@ -159,8 +190,8 @@ export class OpencodeProvider implements LLMProvider {
 
               // Add sentinel step for tracking
               steps.push({
-                toolName: parsed.tool_call.name,
-                args: parsed.tool_call.arguments ?? {},
+                toolName: toolInvocation.name,
+                args: toolInvocation.args,
                 result: { success: false, output: 'Maximum steps reached', exitCode: 1 }
               })
             } else if (parsed.text) {
@@ -278,25 +309,28 @@ export class OpencodeProvider implements LLMProvider {
             if (parsed.text) {
               finalResponse += parsed.text
               onStreamChunk?.(parsed.text)
-            } else if (parsed.tool_call && steps.length < maxSteps) {
-              const { name, arguments: toolArgs } = parsed.tool_call
-              try {
-                const toolResult = await executeTool(name, toolArgs ?? {})
-                steps.push({ toolName: name, args: toolArgs ?? {}, result: toolResult })
-                onToolExecution?.(name, toolArgs ?? {}, toolResult)
-              } catch (err) {
-                steps.push({
-                  toolName: name,
-                  args: toolArgs ?? {},
-                  result: {
-                    success: false,
-                    output: `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`,
-                    exitCode: 1,
-                  },
-                })
+            } else {
+              const toolInvocation = this.extractToolInvocation(parsed)
+              if (toolInvocation && steps.length < maxSteps) {
+                const { name, args: toolArgs } = toolInvocation
+                try {
+                  const toolResult = await executeTool(name, toolArgs ?? {})
+                  steps.push({ toolName: name, args: toolArgs ?? {}, result: toolResult })
+                  onToolExecution?.(name, toolArgs ?? {}, toolResult)
+                } catch (err) {
+                  steps.push({
+                    toolName: name,
+                    args: toolArgs ?? {},
+                    result: {
+                      success: false,
+                      output: `Tool execution failed: ${err instanceof Error ? err.message : String(err)}`,
+                      exitCode: 1,
+                    },
+                  })
+                }
+              } else if (parsed.done || parsed.complete) {
+                finalResponse = parsed.response ?? parsed.text ?? finalResponse
               }
-            } else if (parsed.done || parsed.complete) {
-              finalResponse = parsed.response ?? parsed.text ?? finalResponse
             }
           } catch {
             // Non-JSON line, treat as text output
