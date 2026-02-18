@@ -12,7 +12,7 @@ Tambo AI has been integrated as an **optional, non-breaking enhancement** to you
 Your app works exactly as before. No changes to functionality.
 
 ```env
-NEXT_PUBLIC_TAMBO_ENABLED=false
+TAMBO_ENABLED=false
 ```
 
 ---
@@ -50,8 +50,8 @@ npm run dev
 ### 2. Enable Tambo (When Ready)
 ```bash
 # Edit .env:
-NEXT_PUBLIC_TAMBO_ENABLED=true
-NEXT_PUBLIC_TAMBO_API_KEY=your_api_key_from_tambo.ai
+TAMBO_ENABLED=true
+TAMBO_API_KEY=your_api_key_from_tambo.ai
 
 # Restart server:
 npm run dev

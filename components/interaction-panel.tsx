@@ -87,6 +87,7 @@ import IntegrationPanel from "./integrations/IntegrationPanel";
 import { useInteractionCodeMode } from "../hooks/use-interaction-code-mode";
 import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
 import { processResponse } from "../lib/mode-manager";
+import { secureRandom, generateSecureId } from "../lib/utils";
 import DevOpsCommandCenterPlugin from "./plugins/devops-command-center-plugin";
 
 // Define available plugins for PluginManager
@@ -631,7 +632,7 @@ export default function InteractionPanel({
       "debug this error",
       "optimize my workflow",
     ];
-    return [...suggestions].sort(() => 0.5 - Math.random()).slice(0, 4);
+    return [...suggestions].sort(() => 0.5 - secureRandom()).slice(0, 4);
   }, []);
 
   // Code-specific prompt templates
@@ -1038,7 +1039,7 @@ export default function InteractionPanel({
     ];
 
     // Randomize order using the same approach as template suggestions
-    return [...modules].sort(() => Math.random() - 0.5);
+    return [...modules].sort(() => secureRandom() - 0.5);
   }, [setInput]);
 
   // Sample images for the images tab

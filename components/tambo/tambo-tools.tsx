@@ -24,11 +24,13 @@ async function formatCode({ code, language }: { code: string; language: string }
     return result;
   });
   
+  const formattedCode = formatted.join('\n');
+  
   return {
-    formatted: formatted.join('\n'),
+    formatted: formattedCode,
     language,
     originalLength: code.length,
-    formattedLength: formatted.length,
+    formattedLength: formattedCode.length,
   };
 }
 
@@ -158,6 +160,7 @@ async function calculate({ expression }: { expression: string }) {
 
 // Convert between units
 async function convertUnits({ value, from, to }: { value: number; from: string; to: string }) {
+  // Conversion factors relative to base unit
   const conversions: Record<string, Record<string, number>> = {
     length: {
       m: 1,
@@ -173,18 +176,21 @@ async function convertUnits({ value, from, to }: { value: number; from: string; 
       lb: 2.20462,
       oz: 35.274,
     },
-    temperature: {
-      c: 'celsius',
-      f: 'fahrenheit',
-      k: 'kelvin',
-    },
   };
   
-  // Simple linear conversion
-  if (conversions[from] && conversions[from][to]) {
-    const factor = conversions[from][to] as number;
+  // Find which category contains both units
+  const category = Object.values(conversions).find(
+    (map) => from in map && to in map,
+  );
+  
+  if (category) {
+    // Convert: (value / from_factor) * to_factor
+    const fromFactor = category[from] as number;
+    const toFactor = category[to] as number;
+    const result = (value / fromFactor) * toFactor;
+    
     return {
-      result: value * factor,
+      result,
       from,
       to,
       input: value,

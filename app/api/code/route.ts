@@ -18,6 +18,7 @@ import {
 } from '../../../enhanced-code-system/core/error-types';
 import type { Message } from '../../../types/index';
 import { randomBytes } from 'node:crypto';
+import { generateSecureId } from '@/lib/utils';
 
 // Configuration constants
 const CONFIG_CONSTANTS = {
@@ -548,7 +549,7 @@ async function handleApplyDiffs(body: any) {
       for (const diff of diffsToApply) {
         // Register file with file manager
         const fileState: FileState = {
-          id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          id: generateSecureId('file'),
           name: diff.path.split('/').pop() || diff.path,
           path: diff.path,
           content: session.files[diff.path] || '',
@@ -685,7 +686,7 @@ async function processSessionAsync(
 
     // Convert selectedFiles to ProjectItem array for orchestrator
     const projectFiles: ProjectItem[] = Object.entries(selectedFiles).map(([path, content]) => ({
-      id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: generateSecureId('file'),
       name: path.split('/').pop() || path,
       path,
       content,

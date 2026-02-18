@@ -57,9 +57,9 @@ export class DaytonaProvider implements SandboxProvider {
     if (USE_PERSISTENT_CACHE) {
       createParams.volumes = [
         {
-          source: CACHE_VOLUME_NAME,
-          target: '/opt/cache',
-          size: CACHE_SIZE,
+          volumeId: CACHE_VOLUME_NAME,
+          mountPath: '/opt/cache',
+          readOnly: false,
         }
       ]
       createParams.envVars.SANDBOX_CACHE_ENABLED = 'true'

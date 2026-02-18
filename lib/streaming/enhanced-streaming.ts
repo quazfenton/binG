@@ -1,6 +1,7 @@
 "use client";
 
 import { EventEmitter } from 'events';
+import { generateSecureId } from '@/lib/utils';
 import { streamingErrorHandler, type StreamingError } from './streaming-error-handler';
 
 // Types for streaming events
@@ -394,7 +395,7 @@ export class EnhancedStreamingService extends EventEmitter {
           const chunk: StreamChunk = {
             content,
             timestamp: event.timestamp,
-            chunkId: `${requestId}-${Date.now()}-${Math.random()}`,
+            chunkId: generateSecureId(requestId),
           };
 
           // Add to buffer
@@ -459,7 +460,7 @@ export class EnhancedStreamingService extends EventEmitter {
           const chunk: StreamChunk = {
             content: unknownContent,
             timestamp: event.timestamp,
-            chunkId: `${requestId}-${Date.now()}-${Math.random()}`,
+            chunkId: generateSecureId(requestId),
           };
           buffer.push(chunk);
           this.buffers.set(requestId, buffer);

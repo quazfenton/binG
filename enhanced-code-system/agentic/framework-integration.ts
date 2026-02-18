@@ -17,6 +17,25 @@ import {
   createOrchestratorError,
   ERROR_CODES 
 } from '../core/error-types';
+/**
+ * Generate a cryptographically secure random number between 0 and 1
+ * Uses crypto.getRandomValues in browser, crypto.randomBytes in Node.js
+ */
+function secureRandom(): number {
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const array = new Uint32Array(1);
+    crypto.getRandomValues(array);
+    return array[0] / 0x100000000;
+  }
+  
+  // Fallback for Node.js environment
+  try {
+    const cryptoModule = require('crypto');
+    return cryptoModule.randomBytes(4).readUInt32LE(0) / 0x100000000;
+  } catch {
+    throw new Error('No secure random number generator available');
+  }
+}
 
 // Base interfaces for agentic frameworks
 interface BaseAgent {
@@ -543,7 +562,7 @@ class CrewAIAdapter extends FrameworkAdapter {
             taskId: `task_${Date.now()}`,
             agentId: agent.id,
             output,
-            qualityScore: Math.random() * 0.3 + 0.7, // Simulate quality score
+            qualityScore: secureRandom() * 0.3 + 0.7, // Simulate quality score
             executionTime,
             tokensUsed: Math.floor(output.length / 4),
             feedback: [`Agent ${agent.role} completed task`],
@@ -699,7 +718,7 @@ class PraisonAIAdapter extends FrameworkAdapter {
             taskId: `workflow_${step.agent}_${Date.now()}`,
             agentId: agent.id,
             output,
-            qualityScore: Math.random() * 0.2 + 0.8,
+            qualityScore: secureRandom() * 0.2 + 0.8,
             executionTime,
             tokensUsed: Math.floor(output.length / 4),
             feedback: [`Workflow step ${step.task} completed`],
@@ -829,8 +848,8 @@ class AG2Adapter extends FrameworkAdapter {
               taskId: `groupchat_${agent.id}_${Date.now()}`,
               agentId: agent.id,
               output,
-              qualityScore: Math.random() * 0.3 + 0.7,
-              executionTime: 1000 + Math.random() * 2000,
+              qualityScore: secureRandom() * 0.3 + 0.7,
+              executionTime: 1000 + secureRandom() * 2000,
               tokensUsed: Math.floor(output.length / 4),
               feedback: [`Group chat response from ${agent.role}`],
               improvements: []
@@ -960,7 +979,7 @@ class CustomFrameworkAdapter extends FrameworkAdapter {
         taskId: `pipeline_${agent.id}_${Date.now()}`,
         agentId: agent.id,
         output,
-        qualityScore: Math.random() * 0.2 + 0.8,
+        qualityScore: secureRandom() * 0.2 + 0.8,
         executionTime,
         tokensUsed: Math.floor(output.length / 4),
         feedback: [`Pipeline step completed by ${agent.role}`],
@@ -985,7 +1004,7 @@ class CustomFrameworkAdapter extends FrameworkAdapter {
         taskId: `consensus_${agent.id}_${Date.now()}`,
         agentId: agent.id,
         output,
-        qualityScore: Math.random() * 0.2 + 0.8,
+        qualityScore: secureRandom() * 0.2 + 0.8,
         executionTime,
         tokensUsed: Math.floor(output.length / 4),
         feedback: [`Consensus contribution from ${agent.role}`],
@@ -1003,7 +1022,7 @@ class CustomFrameworkAdapter extends FrameworkAdapter {
     for (const agent of agents) {
       const startTime = Date.now();
       const output = `Competitive solution by ${agent.role}: ${task}`;
-      const qualityScore = Math.random();
+      const qualityScore = secureRandom();
       const executionTime = Date.now() - startTime;
 
       results.push({
@@ -1044,7 +1063,7 @@ class CustomFrameworkAdapter extends FrameworkAdapter {
         taskId: `delegation_${aspect}_${agent.id}_${Date.now()}`,
         agentId: agent.id,
         output,
-        qualityScore: Math.random() * 0.2 + 0.8,
+        qualityScore: secureRandom() * 0.2 + 0.8,
         executionTime,
         tokensUsed: Math.floor(output.length / 4),
         feedback: [`Handled aspect: ${aspect}`],
@@ -1071,7 +1090,7 @@ class CustomFrameworkAdapter extends FrameworkAdapter {
         taskId: `enhanced_${agent.id}_${Date.now()}`,
         agentId: agent.id,
         output,
-        qualityScore: Math.random() * 0.3 + 0.7,
+        qualityScore: secureRandom() * 0.3 + 0.7,
         executionTime,
         tokensUsed: Math.floor(output.length / 4),
         feedback: [`Enhanced execution completed by ${agent.role}`],

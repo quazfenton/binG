@@ -1113,6 +1113,7 @@ function verifyToken(token: string) {
 import { NextRequest, NextResponse } from 'next/server';
 import { oauthService } from '@/lib/auth/oauth-service';
 import { authService } from '@/lib/auth/auth-service';
+import { generateSecureId } from '@/lib/utils';
 
 export async function GET(request: NextRequest) {
   try {
@@ -1404,7 +1405,7 @@ async function getOrCreateUserFromOAuth(userInfo: any, provider: string): Promis
     // Create new user with security measures
     const newUser = await authService.register({
       email: email || `${userInfo.accountId}@${provider}.oauth`,
-      password: `oauth_temp_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`, // Secure temporary password
+      password: generateSecureId('oauth_temp'), // Secure temporary password
       username: userInfo.displayName
     });
 

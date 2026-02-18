@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useCallback } from 'react';
+import { secureRandomString } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
@@ -110,7 +111,7 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
       
       const shortened: ShortenedUrl = {
         original: input,
-        shortened: `https://short.ly/${Math.random().toString(36).substr(2, 8)}`,
+        shortened: `https://short.ly/${secureRandomString(8).toLowerCase()}`,
         clicks: 0,
         created: new Date().toISOString()
       };

@@ -21,6 +21,7 @@ import {
 } from '../core/error-types';
 import { EnhancedResponse, ProjectItem } from '../core/enhanced-prompt-engine';
 import { SafeDiffOperations, ValidationResult, BackupState, Conflict } from './safe-diff-operations';
+import { generateSecureId } from '@/lib/utils';
 
 // File operation schemas
 const FileOperationSchema = z.object({
@@ -1423,7 +1424,7 @@ class AdvancedFileManager extends EventEmitter {
     }
 
     // Create new file
-    const fileId = `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const fileId = generateSecureId('file');
     const fileName = operation.target.split('/').pop() || operation.target;
     const language = this.detectLanguageFromFileExtension(operation.target);
     

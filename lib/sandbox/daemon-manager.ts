@@ -1,4 +1,5 @@
 import type { SandboxHandle } from './providers/sandbox-provider'
+import { generateSecureId } from '@/lib/utils';
 
 interface DaemonProcess {
   id: string
@@ -35,7 +36,7 @@ export class DaemonManager {
     command: string,
     options?: { port?: number },
   ): Promise<DaemonProcess> {
-    const daemonId = `daemon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const daemonId = generateSecureId('daemon')
 
     // Sanitize command to prevent injection
     const safeCommand = this.sanitizeCommand(command);
