@@ -144,6 +144,10 @@ export default function MessageBubble({
 
   const getContentToDisplay = () => {
     if (isUser) return message.content
+    // Use displayContent if auth was dismissed (strips AUTH_REQUIRED sentinel)
+    if (authInfo && authDismissed) {
+      return displayContent;
+    }
     return streamingDisplay.displayContent || message.content
   }
 
@@ -181,6 +185,11 @@ export default function MessageBubble({
       />
     )
   }
+
+  // Strip AUTH_REQUIRED sentinel from content if auth was dismissed
+  const displayContent = authInfo && authDismissed && !isUser
+    ? message.content.replace(/AUTH_REQUIRED:[\s\S]*?(?=\n\n|$)/, '')
+    : message.content;
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} ${useCompactLayout ? 'mb-3' : 'mb-6'} group w-full`}>

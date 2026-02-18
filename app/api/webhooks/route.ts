@@ -163,7 +163,16 @@ async function handleNangoWebhook(body: any): Promise<NextResponse> {
   //   ...
   // }
   const { type, operation, success, connectionId, providerConfigKey, tags } = body;
-  console.log(`[Webhook/Nango] connection=${connectionId} provider=${providerConfigKey} type=${type} operation=${operation} success=${success} tags=${JSON.stringify(tags)}`);
+  
+  // SECURITY: Redact PII from tags before logging
+  const safeTags = tags ? {
+    end_user_id: tags.end_user_id,
+    organization_id: tags.organization_id,
+    // Redact email to prevent PII leakage
+    end_user_email: tags.end_user_email ? '[REDACTED]' : undefined
+  } : undefined;
+  
+  console.log(`[Webhook/Nango] connection=${connectionId} provider=${providerConfigKey} type=${type} operation=${operation} success=${success} tags=${JSON.stringify(safeTags)}`);
 
   if (success && type === 'auth' && operation === 'creation' && tags) {
     try {

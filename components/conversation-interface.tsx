@@ -24,12 +24,13 @@ import { parseCodeBlocksFromMessages } from "@/lib/code-parser";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
 import { modeManager, setCurrentMode, processResponse } from "@/lib/mode-manager";
-import { 
-  createInputContext, 
-  processSafeContent, 
+import {
+  createInputContext,
+  processSafeContent,
   shouldGenerateDiffsForContext,
-  debugContentProcessing 
+  debugContentProcessing
 } from "@/lib/input-response-separator";
+import { useAuth } from "@/contexts/auth-context";
 
 // Main component wrapped with CodeServiceProvider
 export default function ConversationInterface() {
@@ -47,7 +48,19 @@ export default function ConversationInterface() {
  *
  * @returns A JSX element that renders the conversation interface and its associated panels and controls.
  */
+function getStableSessionId(): string {
+  if (typeof window === 'undefined') return 'server-session';
+  
+  let sessionId = localStorage.getItem('anonymous_session_id');
+  if (!sessionId) {
+    sessionId = `anon_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    localStorage.setItem('anonymous_session_id', sessionId);
+  }
+  return sessionId;
+}
+
 function ConversationInterfaceContent() {
+  const { user } = useAuth();
   const [embedMode, setEmbedMode] = useState(false);
 
   useEffect(() => {
@@ -926,7 +939,7 @@ function ConversationInterfaceContent() {
         activeTab={activeTab}
         onActiveTabChange={setActiveTab}
         streamingState={streamingState}
-        userId={currentConversationId || undefined} // Pass user/conversation ID for integrations
+        userId={user?.id?.toString() || getStableSessionId()} // Use stable user ID or session ID
       />
 
       {/* Chat History Modal */}

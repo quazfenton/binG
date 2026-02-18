@@ -92,20 +92,30 @@ export async function GET(req: NextRequest) {
     const { clientId, clientSecret } = credentials;
     const redirectUri = session.redirectUri || `${req.nextUrl.origin}/api/auth/oauth/callback`;
 
-    // Exchange code for tokens
+    // Exchange code for tokens with provider-specific handling
+    const tokenHeaders: Record<string, string> = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    };
+
+    // Notion requires HTTP Basic Authentication
+    if (session.provider === 'notion') {
+      const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+      tokenHeaders.Authorization = `Basic ${credentials}`;
+    }
+
+    const tokenBody = new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code',
+    });
+
     const tokenResponse = await fetch(tokenEndpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-      },
-      body: new URLSearchParams({
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code',
-      }),
+      headers: tokenHeaders,
+      body: tokenBody,
     });
 
     if (!tokenResponse.ok) {
@@ -120,9 +130,22 @@ export async function GET(req: NextRequest) {
     }
 
     const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
-    const refreshToken = tokenData.refresh_token;
-    const expiresIn = tokenData.expires_in;
+    
+    // Provider-specific token extraction
+    let accessToken: string;
+    let refreshToken: string;
+    let expiresIn: number;
+    
+    if (session.provider === 'slack') {
+      // Slack nests tokens under authed_user for user scopes
+      accessToken = tokenData.access_token || tokenData.authed_user?.access_token;
+      refreshToken = tokenData.refresh_token || tokenData.authed_user?.refresh_token;
+      expiresIn = tokenData.expires_in || tokenData.authed_user?.expires_in;
+    } else {
+      accessToken = tokenData.access_token;
+      refreshToken = tokenData.refresh_token;
+      expiresIn = tokenData.expires_in;
+    }
 
     // Get user info from provider
     let providerAccountId = 'unknown';

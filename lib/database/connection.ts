@@ -5,10 +5,19 @@ import * as crypto from 'crypto';
 
 // Database configuration
 const DB_PATH = process.env.DATABASE_PATH || join(process.cwd(), 'data', 'binG.db');
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'your-32-char-secret-key-here-change-this';
 
-// Ensure the encryption key is 32 bytes
-const encryptionKey = Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
+// Encryption key - MUST be set via environment variable in production
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+
+// Validate encryption key is set
+if (!ENCRYPTION_KEY) {
+  console.warn('⚠️  WARNING: ENCRYPTION_KEY not set! API keys will not be encrypted properly.');
+  console.warn('Set ENCRYPTION_KEY environment variable to a secure 32+ character random string.');
+  console.warn('Example: ENCRYPTION_KEY=$(openssl rand -hex 32)');
+}
+
+// Ensure the encryption key is 32 bytes (pad or truncate as needed)
+const encryptionKey = Buffer.from((ENCRYPTION_KEY || 'default-insecure-key-please-change').padEnd(32, '0').slice(0, 32));
 
 // Initialize database
 let db: Database.Database | null = null;
@@ -170,14 +179,15 @@ async function initializeSchema() {
 // Encryption utilities for API keys
 export function encryptApiKey(apiKey: string): { encrypted: string; hash: string } {
   const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipher('aes-256-cbc', encryptionKey);
-  
+  // Use createCipheriv which properly uses the IV (non-deprecated)
+  const cipher = crypto.createCipheriv('aes-256-cbc', encryptionKey, iv);
+
   let encrypted = cipher.update(apiKey, 'utf8', 'hex');
   encrypted += cipher.final('hex');
-  
+
   const encryptedWithIv = iv.toString('hex') + ':' + encrypted;
   const hash = crypto.createHash('sha256').update(apiKey).digest('hex');
-  
+
   return {
     encrypted: encryptedWithIv,
     hash
@@ -186,13 +196,24 @@ export function encryptApiKey(apiKey: string): { encrypted: string; hash: string
 
 export function decryptApiKey(encryptedData: string): string {
   const [ivHex, encrypted] = encryptedData.split(':');
+  
+  // Handle legacy format (no IV) - backward compatibility
+  if (!encrypted) {
+    // Old format: just encrypted data without IV
+    // Use deprecated createDecipher for backward compatibility only
+    const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
+    let decrypted = decipher.update(ivHex, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  }
+  
   const iv = Buffer.from(ivHex, 'hex');
-  
-  const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
-  
+  // Use createDecipheriv which properly uses the IV (non-deprecated)
+  const decipher = crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
+
   let decrypted = decipher.update(encrypted, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
-  
+
   return decrypted;
 }
 

@@ -228,16 +228,21 @@ export async function POST(request: NextRequest) {
       // Log which providers were tried from the fallback chain
       const errorMessage = routerErrorObj.message;
       const isNotConfigured = errorMessage.includes('not configured');
-      
+
       if (!isNotConfigured) {
-        console.error('[DEBUG] Chat API: Router error (should be rare):', routerError);
+        console.error('[DEBUG] Chat API: Router error:', errorMessage);
       } else {
         console.log(`[DEBUG] Chat API: No providers configured for request (tried: ${provider}/${model})`);
       }
-      
-      // Emergency fallback - return friendly error
+
+      // Emergency fallback - return friendly error with proper status
       return NextResponse.json({
-        success: true, // Still report success to avoid UI errors
+        success: false, // Indicate failure so UI can show error state
+        error: {
+          type: 'router_error',
+          message: 'All providers failed to process request',
+          isRetryable: true
+        },
         data: {
           content: "I apologize, but I'm experiencing technical difficulties. Please try again in a moment.",
           provider: 'emergency-fallback',
@@ -245,15 +250,15 @@ export async function POST(request: NextRequest) {
           isFallback: true
         },
         timestamp: new Date().toISOString()
-      });
+      }, { status: 503 }); // Service Unavailable - indicates temporary issue
     }
   } catch (error) {
     // Skip verbose logging for expected "not configured" errors
     const errorMessage = error instanceof Error ? error.message : String(error);
     const isNotConfiguredError = errorMessage.includes('not configured');
-    
+
     if (!isNotConfiguredError) {
-      console.error("Chat API error:", error);
+      console.error("Chat API error:", errorMessage);
       console.error('[CRITICAL] Chat API: All fallback mechanisms failed');
     } else {
       console.log(`[Chat API] Provider not available: ${errorMessage}`);
@@ -272,10 +277,16 @@ export async function POST(request: NextRequest) {
       }
     );
 
-    // Return friendly response even in critical failure (no API errors to users)
+    // Return friendly response with proper error status
     return NextResponse.json(
       {
-        success: true, // Report success to avoid UI errors
+        success: false, // Indicate failure for proper error handling
+        error: {
+          type: 'critical_error',
+          code: processedError.code,
+          message: 'Critical system error occurred',
+          isRetryable: processedError.severity !== 'high'
+        },
         data: {
           content: "I apologize, but I'm experiencing technical difficulties at the moment. Our team has been notified and is working to resolve the issue. Please try again in a few moments.",
           provider: 'critical-fallback',
@@ -283,14 +294,9 @@ export async function POST(request: NextRequest) {
           isFallback: true,
           fallbackReason: 'critical_error'
         },
-        metadata: {
-          criticalError: true,
-          errorCode: processedError.code,
-          timestamp: new Date().toISOString()
-        },
         timestamp: new Date().toISOString()
       },
-      { status: 200 }, // Still return 200 to avoid UI error display
+      { status: 500 }, // Internal Server Error - indicates server-side issue
     );
   }
 }
