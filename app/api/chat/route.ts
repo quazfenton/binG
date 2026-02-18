@@ -15,11 +15,20 @@ import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 export async function POST(request: NextRequest) {
   console.log('[DEBUG] Chat API: Incoming request');
 
-  // Extract user authentication
+  // Extract user authentication - REQUIRED for chat API
   const authResult = await verifyAuth(request);
   if (!authResult.success) {
     console.log('[DEBUG] Chat API: Authentication failed:', authResult.error);
-    // Continue without user context for now (some features may be limited)
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { 
+        status: 401,
+        headers: {
+          'Access-Control-Allow-Origin': process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || '',
+          'Vary': 'Origin'
+        }
+      }
+    );
   }
 
   try {
@@ -192,9 +201,10 @@ export async function POST(request: NextRequest) {
             Expires: "0",
             Connection: "keep-alive",
             "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || "",
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Vary": "Origin",
           },
         });
       }
@@ -585,13 +595,14 @@ export async function GET() {
 }
 
 // Handle preflight requests for CORS
-export async function OPTIONS() {
+export async function OPTIONS(request: NextRequest) {
   return new Response(null, {
     status: 200,
     headers: {
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || "",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Vary": "Origin",
     },
   });
 }
