@@ -165,6 +165,10 @@ export class TerminalManager {
     return activePtyConnections.has(sessionId)
   }
 
+  getConnection(sessionId: string): PtyConnection | undefined {
+    return activePtyConnections.get(sessionId)
+  }
+
   private async detectPort(
     output: string,
     handle: SandboxHandle,
@@ -191,3 +195,5 @@ export class TerminalManager {
     }
   }
 }
+
+export const terminalManager = new TerminalManager()
