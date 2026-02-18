@@ -67,16 +67,30 @@ class PriorityRequestRouter {
    * Map endpoint name to quota provider key
    */
   private mapEndpointToProvider(endpointName: string): string | null {
-    const mapping: Record<string, string> = {
-      'composio-tools': 'composio',
-      'tool-execution': 'arcade',  // Default to arcade for tool execution
-      'sandbox-agent': 'daytona',  // Default to daytona for sandbox
-      'fast-agent': 'daytona',
-      'n8n-agents': 'nango',
-      'custom-fallback': 'microsandbox',
-      'original-system': 'microsandbox',
-    };
-    return mapping[endpointName] || null;
+    switch (endpointName) {
+      case 'composio-tools':
+        return 'composio';
+      case 'tool-execution': {
+        // Prefer arcade when configured, otherwise fall back to nango
+        if (process.env.ARCADE_API_KEY) return 'arcade';
+        if (process.env.NANGO_API_KEY) return 'nango';
+        return null;
+      }
+      case 'sandbox-agent': {
+        // Use the actual sandbox provider configured in the system
+        const sandboxProvider = process.env.SANDBOX_PROVIDER || 'daytona';
+        return sandboxProvider;
+      }
+      case 'fast-agent':
+        return process.env.SANDBOX_PROVIDER || 'daytona';
+      case 'n8n-agents':
+        return 'nango';
+      case 'custom-fallback':
+      case 'original-system':
+        return 'microsandbox';
+      default:
+        return null;
+    }
   }
 
   /**

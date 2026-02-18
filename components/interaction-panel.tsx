@@ -863,21 +863,21 @@ export default function InteractionPanel({
             <div className="flex items-center gap-2">
               <button
                 onClick={onNewChat}
-                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+                className="p-2 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
                 title="New Chat"
               >
                 <Plus className="w-4 h-4" />
               </button>
               <button
                 onClick={toggleHistory}
-                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+                className="p-2 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
                 title="Chat History"
               >
                 <History className="w-4 h-4" />
               </button>
               <button
                 onClick={toggleAccessibility}
-                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+                className="p-2 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
                 title="Accessibility"
               >
                 <Accessibility className="w-4 h-4" />
@@ -887,7 +887,7 @@ export default function InteractionPanel({
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setIsMinimized(!isMinimized)}
-                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
+                className="p-2 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
               >
                 {isMinimized ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
               </button>
@@ -896,12 +896,12 @@ export default function InteractionPanel({
 
           {!isMinimized && (
             <Tabs value={activeTab} onValueChange={(v) => onActiveTabChange?.(v as typeof activeTab)} className="flex-1 flex flex-col">
-              <TabsList className="grid w-full grid-cols-5 bg-black/40 mb-2">
-                <TabsTrigger value="chat" className="text-xs">Chat</TabsTrigger>
-                <TabsTrigger value="code" className="text-xs">Code</TabsTrigger>
-                <TabsTrigger value="extras" className="text-xs">Extras</TabsTrigger>
-                <TabsTrigger value="integrations" className="text-xs">Integrations</TabsTrigger>
-                <TabsTrigger value="shell" className="text-xs flex items-center gap-1">
+              <TabsList className="grid w-full grid-cols-5 bg-white/5 border border-white/10 rounded-lg mb-2">
+                <TabsTrigger value="chat" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white">Chat</TabsTrigger>
+                <TabsTrigger value="code" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white">Code</TabsTrigger>
+                <TabsTrigger value="extras" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white">Extras</TabsTrigger>
+                <TabsTrigger value="integrations" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white">Integrations</TabsTrigger>
+                <TabsTrigger value="shell" className="text-xs flex items-center gap-1 data-[state=active]:bg-white/10 data-[state=active]:text-white">
                   <Terminal className="w-3 h-3" />
                   Shell
                 </TabsTrigger>
@@ -916,7 +916,7 @@ export default function InteractionPanel({
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       placeholder="Type your message..."
-                      className="min-h-[60px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
+                      className="min-h-[60px] max-h-[200px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20"
                       rows={3}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
@@ -944,7 +944,7 @@ export default function InteractionPanel({
                         onClick={() => {
                           setShowFileSelector(!showFileSelector);
                         }}
-                        className="p-1 rounded hover:bg-white/10 transition-colors"
+                        className="p-1.5 rounded-md bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
                         title="Attach Files"
                         disabled={isProcessing}
                       >
@@ -956,7 +956,7 @@ export default function InteractionPanel({
                           onActiveTabChange?.("chat");
                           setPluginToOpen("cloud-storage");
                         }}
-                        className="p-1 rounded hover:bg-white/10 transition-colors"
+                        className="p-1.5 rounded-md bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
                         title="Open Cloud Storage Plugin"
                         disabled={isProcessing}
                       >
@@ -1031,7 +1031,7 @@ export default function InteractionPanel({
                     <Button
                       type="button"
                       variant="destructive"
-                      className="self-end min-w-[80px]"
+                      className="self-end min-w-[80px] bg-red-600/80 hover:bg-red-600 border border-red-500/50"
                       onClick={onStopGeneration}
                     >
                       <Square className="h-4 w-4 mr-2" />
@@ -1040,7 +1040,7 @@ export default function InteractionPanel({
                   ) : (
                     <Button
                       type="submit"
-                      className="self-end min-w-[80px]"
+                      className="self-end min-w-[80px] bg-white/10 hover:bg-white/20 border border-white/20"
                       disabled={isProcessing || !input.trim()}
                     >
                       {isProcessing ? (
@@ -1065,7 +1065,7 @@ export default function InteractionPanel({
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
-                      className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
+                      className="min-h-[120px] max-h-[300px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20"
                       rows={6}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
@@ -1119,7 +1119,7 @@ export default function InteractionPanel({
 
               {/* Extras Tab Content */}
               <TabsContent value="extras" className="m-0 flex-1 overflow-auto">
-                <Card className="bg-black/40 border-white/10">
+                <Card className="bg-white/5 border-white/10">
                   <CardContent className="pt-4">
                     <div className="space-y-3">
                       <div className="flex items-center gap-2 mb-2">
@@ -1130,7 +1130,7 @@ export default function InteractionPanel({
                         <Button
                           variant="outline"
                           onClick={() => setShowTerminal(true)}
-                          className="justify-start bg-black/20 border-white/20"
+                          className="justify-start bg-white/5 hover:bg-white/15 border-white/20"
                         >
                           <Terminal className="w-4 h-4 mr-2 text-green-400" />
                           Open Terminal
@@ -1138,7 +1138,7 @@ export default function InteractionPanel({
                         <Button
                           variant="outline"
                           onClick={toggleCodePreview}
-                          className="justify-start bg-black/20 border-white/20"
+                          className="justify-start bg-white/5 hover:bg-white/15 border-white/20"
                         >
                           <FileCode className="w-4 h-4 mr-2 text-blue-400" />
                           Code Preview
@@ -1156,7 +1156,7 @@ export default function InteractionPanel({
 
               {/* Shell Tab Content */}
               <TabsContent value="shell" className="m-0 flex-1 overflow-auto">
-                <Card className="bg-black/40 border-white/10 h-full">
+                <Card className="bg-white/5 border-white/10 h-full">
                   <CardContent className="pt-4 h-full flex flex-col">
                     <div className="flex items-center justify-between mb-4">
                       <div className="flex items-center gap-2">
@@ -1176,7 +1176,7 @@ export default function InteractionPanel({
                         Open Full Terminal
                       </Button>
                     </div>
-                    <div className="flex-1 bg-black/60 rounded-lg p-4 font-mono text-sm text-white/80 overflow-auto">
+                    <div className="flex-1 bg-black/40 rounded-lg p-4 font-mono text-sm text-white/80 overflow-auto">
                       <p className="text-white/50">Terminal ready. Click "Open Full Terminal" to start.</p>
                       <p className="text-white/30 text-xs mt-2">Execute commands in an isolated sandbox environment.</p>
                     </div>

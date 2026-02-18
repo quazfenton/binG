@@ -254,7 +254,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'mistral-large-latest',
       'mistral-small-latest',
       'codestral-latest',
-      'mistral-embed',
       'pixtral-large-latest',
       'ministral-3b-latest',
       'ministral-8b-latest'
@@ -1239,6 +1238,18 @@ export const llmService = new LLMService({
   chutes: {
     apiKey: process.env.CHUTES_API_KEY,
     baseURL: process.env.CHUTES_BASE_URL
+  },
+  mistral: {
+    apiKey: process.env.MISTRAL_API_KEY,
+    baseURL: process.env.MISTRAL_BASE_URL
+  },
+  github: {
+    apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY,
+    baseURL: process.env.GITHUB_MODELS_BASE_URL
+  },
+  opencode: {
+    apiKey: process.env.OPENCODE_API_KEY,
+    baseURL: process.env.OPENCODE_BASE_URL
   }
 })
 

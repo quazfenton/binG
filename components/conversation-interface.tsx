@@ -85,8 +85,8 @@ function ConversationInterfaceContent() {
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
     [],
   );
-  const [currentProvider, setCurrentProvider] = useState<string>("");
-  const [currentModel, setCurrentModel] = useState<string>("");
+  const [currentProvider, setCurrentProvider] = useState<string>("google"); // Default to google
+  const [currentModel, setCurrentModel] = useState<string>("gemini-2.5-flash"); // Default to gemini-2.5-flash
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
@@ -442,8 +442,14 @@ function ConversationInterfaceContent() {
 
           const selection = fromPersisted || fromServer || fromFirst;
           if (selection) {
-            if (!currentProvider) setCurrentProvider(selection.provider);
-            if (!currentModel) setCurrentModel(selection.model);
+            // Always update if we have a valid selection and current is not set or not in available providers
+            const providerAvailable = providers.some(p => p.id === selection.provider);
+            if (!currentProvider || !providerAvailable) {
+              setCurrentProvider(selection.provider);
+            }
+            if (!currentModel || !providers.find(p => p.id === selection.provider)?.models.includes(selection.model)) {
+              setCurrentModel(selection.model);
+            }
           }
         }
       })
@@ -452,6 +458,11 @@ function ConversationInterfaceContent() {
         toast.error(
           "Failed to load AI providers. Check your API configuration.",
         );
+        // Fallback to defaults if fetch fails
+        if (!currentProvider) {
+          setCurrentProvider("google");
+          setCurrentModel("gemini-2.5-flash");
+        }
       });
   }, []); // initial load only
 
@@ -878,7 +889,7 @@ function ConversationInterfaceContent() {
       <InteractionPanel
         onSubmit={handleChatSubmit} // Pass the intermediary function
         onNewChat={handleNewChat}
-        isProcessing={isLoading || codeServiceContext.state.isProcessing || !currentProvider}
+        isProcessing={isLoading || codeServiceContext.state.isProcessing}
         toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
         toggleHistory={() => setShowHistory(!showHistory)}
         toggleCodePreview={() => {
