@@ -33,13 +33,14 @@ class QuotaManager {
   constructor() {
     try {
       this.db = getDatabase();
-      this.initializeQuotas();
       this.initialized = true;
+      this.initializeQuotas();
     } catch (error) {
       console.error('[QuotaManager] Failed to initialize:', error);
       // Fallback to in-memory only
-      this.initializeQuotas();
+      this.db = null;
       this.initialized = false;
+      this.initializeQuotas();
     }
   }
 
