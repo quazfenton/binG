@@ -112,6 +112,7 @@ export default function MultiModelComparison({
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
           },
           body: JSON.stringify({
             messages: [{ role: 'user', content: prompt }],

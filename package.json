@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "migrate": "node scripts/run-migrations.js",
     "test-fast-agent": "node test-fast-agent-integration.js"
   },
   "dependencies": {

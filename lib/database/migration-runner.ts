@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import path from 'path';
 import { getDatabase } from './connection';
 
 interface Migration {
@@ -14,7 +14,7 @@ export class MigrationRunner {
 
   constructor() {
     this.db = getDatabase();
-    this.migrationsPath = join(__dirname, 'migrations');
+    this.migrationsPath = path.join(process.cwd(), 'lib', 'database', 'migrations');
     this.initializeMigrationsTable();
   }
 
@@ -37,13 +37,15 @@ export class MigrationRunner {
 
   private getMigrationFiles(): Migration[] {
     try {
-      const files = readdirSync(this.migrationsPath)
+      // Use process.cwd() for reliable path resolution in all environments
+      const migrationsPath = path.join(process.cwd(), 'lib', 'database', 'migrations');
+      const files = readdirSync(migrationsPath)
         .filter(file => file.endsWith('.sql'))
         .sort();
 
       return files.map(filename => {
         const version = filename.split('_')[0];
-        const sql = readFileSync(join(this.migrationsPath, filename), 'utf-8');
+        const sql = readFileSync(path.join(migrationsPath, filename), 'utf-8');
         return { version, filename, sql };
       });
     } catch (error) {
