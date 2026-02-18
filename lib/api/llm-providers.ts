@@ -5,6 +5,7 @@ import { CohereClient } from 'cohere-ai'
 import Together from 'together-ai'
 import Replicate from 'replicate'
 import { Portkey } from 'portkey-ai'
+import { Mistral } from '@mistralai/mistralai'
 import {
   createOrchestratorError,
   createStreamError,
@@ -92,6 +93,18 @@ export interface ProviderConfig {
     restrictedToolkits?: string[]
   }
   chutes?: {
+    apiKey?: string
+    baseURL?: string
+  }
+  mistral?: {
+    apiKey?: string
+    baseURL?: string
+  }
+  github?: {
+    apiKey?: string
+    baseURL?: string
+  }
+  opencode?: {
     apiKey?: string
     baseURL?: string
   }
@@ -233,6 +246,82 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: true,
     maxTokens: 128000,
     description: 'Composio with 800+ toolkits and tool execution'
+  },
+  mistral: {
+    id: 'mistral',
+    name: 'Mistral AI',
+    models: [
+      'mistral-large-latest',
+      'mistral-small-latest',
+      'codestral-latest',
+      'mistral-embed',
+      'pixtral-large-latest',
+      'ministral-3b-latest',
+      'ministral-8b-latest'
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Mistral AI models including Mistral Large, Small, and Codestral'
+  },
+  github: {
+    id: 'github',
+    name: 'GitHub Models',
+    models: [
+      'gpt-4o',
+      'gpt-4o-mini',
+      'o1',
+      'o1-mini',
+      'o3-mini',
+      'gpt-4',
+      'gpt-4-turbo',
+      'gpt-35-turbo',
+      'llama-3.3-70b-instruct',
+      'llama-3.2-90b-vision-instruct',
+      'llama-3.2-11b-vision-instruct',
+      'llama-3.1-405b-instruct',
+      'llama-3.1-70b-instruct',
+      'llama-3.1-8b-instruct',
+      'mistral-large-2407',
+      'mistral-small-2402',
+      'codellama-34b-instruct',
+      'phi-3.5-mini-instruct',
+      'phi-3.5-moe-instruct',
+      'phi-3-mini-4k-instruct',
+      'phi-3-small-4k-instruct',
+      'phi-3-small-8k-instruct',
+      'phi-3-medium-4k-instruct',
+      'phi-3-medium-128k-instruct',
+      'ai21-jamba-1.5-large',
+      'ai21-jamba-1.5-mini',
+      'command-r-plus',
+      'command-r',
+      'deepseek-v3',
+      'deepseek-r1',
+      'gemini-1.5-pro',
+      'gemini-1.5-flash',
+      'gemini-2.0-flash-exp',
+      'llama-3.2-1b-instruct',
+      'llama-3.2-3b-instruct'
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'GitHub Models - Access to GPT-4, Llama, Mistral, Phi, and more via GitHub Azure'
+  },
+  opencode: {
+    id: 'opencode',
+    name: 'OpenCode API',
+    models: [
+      'zen',
+      'zen-32k',
+      'zen-128k',
+      'kimi-2.5',
+      'kimi-2.5-32k',
+      'kimi-2.5-128k',
+      'kimi-2.5-turbo'
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'OpenCode API - Access to Zen and Kimi 2.5 models with extended context windows'
   }
 }
 
@@ -244,6 +333,8 @@ class LLMService {
   private together: Together | null = null
   private replicate: Replicate | null = null
   private portkey: Portkey | null = null
+  private mistral: Mistral | null = null
+  private opencodeClient: OpenAI | null = null
   private composioService: ComposioService | null = null
 
   constructor(config: ProviderConfig = {}) {
@@ -289,6 +380,21 @@ class LLMService {
         apiKey: config.portkey.apiKey
       })
     }
+
+    if (config.mistral?.apiKey) {
+      this.mistral = new Mistral({
+        apiKey: config.mistral.apiKey,
+        serverURL: config.mistral.baseURL
+      })
+    }
+
+    if (config.opencode?.apiKey) {
+      // OpenCode API is OpenAI-compatible
+      this.opencodeClient = new OpenAI({
+        apiKey: config.opencode.apiKey,
+        baseURL: config.opencode.baseURL || 'https://api.opencode.ai/v1'
+      })
+    }
   }
 
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
@@ -314,6 +420,12 @@ class LLMService {
           return await this.generateOpenRouterResponse(model, messages, temperature, maxTokens)
         case 'chutes':
           return await this.generateChutesResponse(model, messages, temperature, maxTokens)
+        case 'mistral':
+          return await this.generateMistralResponse(model, messages, temperature, maxTokens)
+        case 'github':
+          return await this.generateGitHubResponse(model, messages, temperature, maxTokens)
+        case 'opencode':
+          return await this.generateOpenCodeResponse(model, messages, temperature, maxTokens)
         default:
           throw createLLMError(`Unsupported provider: ${provider}`, {
             code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
@@ -365,6 +477,15 @@ class LLMService {
           break
         case 'chutes':
           yield* this.streamChutesResponse(model, messages, temperature, maxTokens)
+          break
+        case 'mistral':
+          yield* this.streamMistralResponse(model, messages, temperature, maxTokens)
+          break
+        case 'github':
+          yield* this.streamGitHubResponse(model, messages, temperature, maxTokens)
+          break
+        case 'opencode':
+          yield* this.streamOpenCodeResponse(model, messages, temperature, maxTokens)
           break
         default:
           throw new Error(`Streaming is not supported for provider: ${provider}`);
@@ -651,6 +772,86 @@ class LLMService {
     }
   }
 
+  private async generateMistralResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): Promise<LLMResponse> {
+    if (!this.mistral) throw new Error('Mistral not initialized');
+
+    const response = await this.mistral.chat.complete({
+      model,
+      messages: messages as any,
+      temperature,
+      maxTokens,
+    })
+
+    return {
+      content: response.choices?.[0]?.message?.content || '',
+      tokensUsed: response.usage?.totalTokens || 0,
+      finishReason: response.choices?.[0]?.finishReason || 'stop',
+      timestamp: new Date(),
+      usage: response.usage ? {
+        prompt_tokens: response.usage.promptTokens || 0,
+        completion_tokens: response.usage.completionTokens || 0,
+        total_tokens: response.usage.totalTokens || 0
+      } : undefined
+    }
+  }
+
+  private async generateGitHubResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): Promise<LLMResponse> {
+    // GitHub Models is OpenAI-compatible via Azure endpoint
+    const github = new OpenAI({
+      apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY || '',
+      baseURL: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com'
+    });
+
+    const response = await github.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    })
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      usage: response.usage
+    }
+  }
+
+  private async generateOpenCodeResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): Promise<LLMResponse> {
+    if (!this.opencodeClient) throw new Error('OpenCode API not initialized');
+
+    const response = await this.opencodeClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    })
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      usage: response.usage
+    }
+  }
+
   private async *streamOpenRouterResponse(
     model: string,
     messages: LLMMessage[],
@@ -693,6 +894,84 @@ class LLMService {
     });
 
     const stream = await chutes.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content || ''
+      if (delta) {
+        yield { content: delta, isComplete: false }
+      }
+    }
+    yield { content: '', isComplete: true }
+  }
+
+  private async *streamMistralResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    if (!this.mistral) throw new Error('Mistral not initialized');
+
+    const stream = await this.mistral.chat.stream({
+      model,
+      messages: messages as any,
+      temperature,
+      maxTokens,
+    })
+
+    for await (const chunk of stream) {
+      const delta = chunk.data?.choices?.[0]?.delta?.content || ''
+      if (delta) {
+        yield { content: delta, isComplete: false }
+      }
+    }
+    yield { content: '', isComplete: true }
+  }
+
+  private async *streamGitHubResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    // GitHub Models is OpenAI-compatible via Azure endpoint
+    const github = new OpenAI({
+      apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY || '',
+      baseURL: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com'
+    });
+
+    const stream = await github.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content || ''
+      if (delta) {
+        yield { content: delta, isComplete: false }
+      }
+    }
+    yield { content: '', isComplete: true }
+  }
+
+  private async *streamOpenCodeResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    if (!this.opencodeClient) throw new Error('OpenCode API not initialized');
+
+    const stream = await this.opencodeClient.chat.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -905,10 +1184,16 @@ class LLMService {
           return !!this.replicate
         case 'portkey':
           return !!this.portkey
+        case 'mistral':
+          return !!this.mistral
+        case 'opencode':
+          return !!this.opencodeClient
         case 'openrouter':
           return !!process.env.OPENROUTER_API_KEY
         case 'chutes':
           return !!process.env.CHUTES_API_KEY
+        case 'github':
+          return !!process.env.GITHUB_MODELS_API_KEY || !!process.env.AZURE_OPENAI_API_KEY
         case 'composio':
           return !!this.composioService
         default:
