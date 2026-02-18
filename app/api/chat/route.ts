@@ -15,20 +15,13 @@ import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 export async function POST(request: NextRequest) {
   console.log('[DEBUG] Chat API: Incoming request');
 
-  // Extract user authentication - REQUIRED for chat API
+  // Extract user authentication (optional for anonymous usage)
   const authResult = await verifyAuth(request);
+  const userId = authResult.userId;
+  
   if (!authResult.success) {
-    console.log('[DEBUG] Chat API: Authentication failed:', authResult.error);
-    return NextResponse.json(
-      { error: 'Authentication required' },
-      { 
-        status: 401,
-        headers: {
-          'Access-Control-Allow-Origin': process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || '',
-          'Vary': 'Origin'
-        }
-      }
-    );
+    console.log('[DEBUG] Chat API: Anonymous request (no auth token)');
+    // Allow anonymous usage - some features may be limited
   }
 
   try {

@@ -15,15 +15,19 @@
 const { execSync } = require('child_process');
 const path = require('path');
 
-console.log('🔧 Running database migrations...\n');
+// Change to project root directory
+const projectRoot = path.join(__dirname, '..');
+process.chdir(projectRoot);
+
+console.log('🔧 Running database migrations from:', projectRoot, '\n');
 
 try {
   // Run migrations using tsx (TypeScript executor) which is already a dependency
   execSync(
-    `npx tsx -e "import { migrationRunner } from '../lib/database/migration-runner'; migrationRunner.runMigrations().then(() => console.log('\\n✅ Migrations complete')).catch(err => { console.error('\\n❌ Migration failed:', err); process.exit(1); })"`,
+    `npx tsx -e "import { migrationRunner } from './lib/database/migration-runner'; migrationRunner.runMigrations().then(() => console.log('\\n✅ Migrations complete')).catch(err => { console.error('\\n❌ Migration failed:', err); process.exit(1); })"`,
     {
       stdio: 'inherit',
-      cwd: __dirname,
+      cwd: projectRoot,
     }
   );
   console.log('\n✅ All migrations completed successfully!');

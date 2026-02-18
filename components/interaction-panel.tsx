@@ -858,55 +858,131 @@ export default function InteractionPanel({
         />
 
         <div className="p-2 sm:p-4 h-full overflow-hidden max-w-4xl mx-auto flex flex-col">
-          {/* Header */}
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={onNewChat}
-                className="p-2 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
-                title="New Chat"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-              <button
-                onClick={toggleHistory}
-                className="p-2 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
-                title="Chat History"
-              >
-                <History className="w-4 h-4" />
-              </button>
-              <button
-                onClick={toggleAccessibility}
-                className="p-2 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
-                title="Accessibility"
-              >
-                <Accessibility className="w-4 h-4" />
-              </button>
+          {/* Header - Restored original styling */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
+            <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
+              <div className="flex items-center gap-2">
+                <div className="">
+                  <Sparkles className="h-3 w-3 text-white" />
+                </div>
+                <span className="text-sm font-medium text-white/80">
+                  compute
+                </span>
+              </div>
+              <TabsList className="bg-black/40 border border-white/10">
+                <TabsTrigger value="chat" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
+                  <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">Chat</span>
+                </TabsTrigger>
+                <TabsTrigger value="code" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
+                  <Code className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">Code</span>
+                </TabsTrigger>
+                <TabsTrigger value="extras" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
+                  <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">Extra</span>
+                </TabsTrigger>
+                <TabsTrigger value="integrations" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
+                  <Zap className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">Plugins</span>
+                </TabsTrigger>
+                <TabsTrigger value="shell" className="text-xs sm:text-sm data-[state=active]:bg-white/10">
+                  <Terminal className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                  <span className="hidden sm:inline">Shell</span>
+                </TabsTrigger>
+              </TabsList>
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setIsMinimized(!isMinimized)}
-                className="p-2 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
+            <div className="flex space-x-1 sm:space-x-2 flex-shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onNewChat}
+                title="New Chat"
+                className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
               >
-                {isMinimized ? <Maximize2 className="w-4 h-4" /> : <Minimize2 className="w-4 h-4" />}
-              </button>
+                <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={toggleHistory}
+                title="Chat History"
+                className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+              >
+                <History className="h-3 w-3 sm:h-4 sm:w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={toggleAccessibility}
+                title="Accessibility Options"
+                className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+              >
+                <Accessibility className="h-3 w-3 sm:h-4 sm:w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={toggleCodePreview}
+                title="Code Preview"
+                className={`h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
+                  hasCodeBlocks
+                    ? "ring-2 ring-white/30 shadow-lg shadow-white/20"
+                    : ""
+                }`}
+              >
+                <Code
+                  className={`h-3 w-3 sm:h-4 sm:w-4 ${
+                    hasCodeBlocks ? "text-white" : ""
+                  }`}
+                />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsMinimized(!isMinimized)}
+                title={isMinimized ? "Expand" : "Minimize"}
+                className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+              >
+                {isMinimized ? <Maximize2 className="h-3 w-3 sm:h-4 sm:w-4" /> : <Minimize2 className="h-3 w-3 sm:h-4 sm:w-4" />}
+              </Button>
             </div>
           </div>
 
+          {/* Provider/Model Selection */}
+          {!isMinimized && (
+            <div className="flex items-center justify-between mb-3 text-xs text-white/60">
+              <div className="flex items-center gap-2">
+                <Select
+                  value={`${currentProvider}:${currentModel}`}
+                  onValueChange={(value) => {
+                    const [provider, model] = value.split(":");
+                    onProviderChange(provider, model);
+                  }}
+                >
+                  <SelectTrigger className="w-[280px] bg-black/40 border-white/20">
+                    <SelectValue placeholder="Select a model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableProviders.map((provider) => (
+                      <SelectGroup key={provider.id}>
+                        <SelectLabel>{provider.name}</SelectLabel>
+                        {provider.models.map((model) => (
+                          <SelectItem key={model} value={`${provider.id}:${model}`}>
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+
           {!isMinimized && (
             <Tabs value={activeTab} onValueChange={(v) => onActiveTabChange?.(v as typeof activeTab)} className="flex-1 flex flex-col">
-              <TabsList className="grid w-full grid-cols-5 bg-white/5 border border-white/10 rounded-lg mb-2">
-                <TabsTrigger value="chat" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white">Chat</TabsTrigger>
-                <TabsTrigger value="code" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white">Code</TabsTrigger>
-                <TabsTrigger value="extras" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white">Extras</TabsTrigger>
-                <TabsTrigger value="integrations" className="text-xs data-[state=active]:bg-white/10 data-[state=active]:text-white">Integrations</TabsTrigger>
-                <TabsTrigger value="shell" className="text-xs flex items-center gap-1 data-[state=active]:bg-white/10 data-[state=active]:text-white">
-                  <Terminal className="w-3 h-3" />
-                  Shell
-                </TabsTrigger>
-              </TabsList>
-
               {/* Chat Tab Content */}
               <TabsContent value="chat" className="m-0 flex-1 flex flex-col">
                 <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1">
