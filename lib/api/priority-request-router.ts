@@ -469,6 +469,7 @@ class PriorityRequestRouter {
    * Convert router request to enhanced LLM format
    */
   private convertToEnhancedLLMRequest(request: RouterRequest): EnhancedLLMRequest {
+    const requestType = detectRequestType(request.messages);
     return {
       messages: request.messages,
       provider: request.provider,
@@ -477,6 +478,11 @@ class PriorityRequestRouter {
       maxTokens: request.maxTokens,
       stream: false, // Non-streaming for routing
       apiKeys: request.apiKeys,
+      userId: request.userId,
+      conversationId: request.requestId || `conv_${Date.now()}`,
+      enableTools: request.enableTools ?? requestType === 'tool',
+      enableSandbox: request.enableSandbox ?? requestType === 'sandbox',
+      isSandboxCommand: requestType === 'sandbox',
       enableCircuitBreaker: true,
       retryOptions: {
         maxAttempts: 2,

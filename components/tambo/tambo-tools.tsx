@@ -5,79 +5,193 @@
  * Define functions/tools that Tambo can call during response generation
  */
 
-// Example: Format code tool
+// Format code with proper indentation
 async function formatCode({ code, language }: { code: string; language: string }) {
-  // Simple formatting example - can be enhanced with actual formatters
+  // Simple formatting - can be enhanced with prettier or language-specific formatters
+  const indentSize = 2;
+  const lines = code.split('\n');
+  let indentLevel = 0;
+  
+  const formatted = lines.map(line => {
+    const trimmed = line.trim();
+    if (trimmed.match(/^[}\]]/)) {
+      indentLevel = Math.max(0, indentLevel - 1);
+    }
+    const result = ' '.repeat(indentLevel * indentSize) + trimmed;
+    if (trimmed.match(/[{[]$/)) {
+      indentLevel++;
+    }
+    return result;
+  });
+  
   return {
-    formatted: code.trim(),
+    formatted: formatted.join('\n'),
     language,
+    originalLength: code.length,
+    formattedLength: formatted.length,
   };
 }
 
-// Example: Validate input tool
-async function validateInput({ input, type }: { input: string; type: string }) {
-  // Simple validation example
-  const validations: Record<string, (val: string) => boolean> = {
-    email: (val) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val),
+// Validate input with multiple validation types
+async function validateInput({ input, type, options }: { 
+  input: string; 
+  type: string;
+  options?: { minLength?: number; maxLength?: number; pattern?: string };
+}) {
+  const validations: Record<string, (val: string, opts?: any) => { valid: boolean; message: string }> = {
+    email: (val) => ({
+      valid: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val),
+      message: 'Invalid email address',
+    }),
     url: (val) => {
       try {
         new URL(val);
-        return true;
+        return { valid: true, message: 'Valid URL' };
       } catch {
-        return false;
+        return { valid: false, message: 'Invalid URL' };
       }
     },
-    number: (val) => !isNaN(Number(val)),
+    number: (val) => ({
+      valid: !isNaN(Number(val)),
+      message: 'Must be a number',
+    }),
+    phone: (val) => ({
+      valid: /^[\d\s\-\+\(\)]+$/.test(val),
+      message: 'Invalid phone number',
+    }),
   };
 
-  const isValid = validations[type]?.(input) ?? true;
-
-  return {
-    valid: isValid,
-    message: isValid ? 'Valid input' : `Invalid ${type}`,
-  };
+  const validation = validations[type]?.(input, options);
+  
+  if (!validation) {
+    return { valid: true, message: 'No validation rules applied' };
+  }
+  
+  // Check length constraints
+  if (options?.minLength && input.length < options.minLength) {
+    return { valid: false, message: `Minimum length is ${options.minLength}` };
+  }
+  if (options?.maxLength && input.length > options.maxLength) {
+    return { valid: false, message: `Maximum length is ${options.maxLength}` };
+  }
+  
+  // Check pattern
+  if (options?.pattern) {
+    const regex = new RegExp(options.pattern);
+    if (!regex.test(input)) {
+      return { valid: false, message: 'Does not match required pattern' };
+    }
+  }
+  
+  return validation;
 }
 
-// Example: Search documentation tool
-async function searchDocs({ query }: { query: string }) {
-  // Placeholder - integrate with your actual docs search
+// Search documentation (placeholder - integrate with actual docs)
+async function searchDocs({ query, limit = 5 }: { query: string; limit?: number }) {
+  // Placeholder - integrate with your actual docs search API
   return {
     results: [
       {
         title: 'Getting Started',
         excerpt: 'Learn how to get started with the platform...',
         url: '/docs/getting-started',
+        score: 0.95,
       },
-    ],
+      {
+        title: 'API Reference',
+        excerpt: 'Complete API documentation...',
+        url: '/docs/api',
+        score: 0.85,
+      },
+    ].slice(0, limit),
+    query,
+    totalFound: 2,
   };
 }
 
-// Example: Get file info tool
+// Get file information
 async function getFileInfo({ path }: { path: string }) {
   // Placeholder - integrate with actual file system if needed
+  const extension = path.split('.').pop() || '';
+  const languageMap: Record<string, string> = {
+    ts: 'TypeScript',
+    tsx: 'TypeScript React',
+    js: 'JavaScript',
+    jsx: 'JavaScript React',
+    py: 'Python',
+    md: 'Markdown',
+    json: 'JSON',
+  };
+  
   return {
-    name: path.split('/').pop(),
+    name: path.split('/').pop() || path,
     path,
-    type: path.endsWith('.tsx') ? 'TypeScript React' : 'Unknown',
+    extension,
+    type: languageMap[extension] || 'Unknown',
+    size: 'Unknown', // Would need actual file access
   };
 }
 
-// Example: Calculate tool
+// Calculate mathematical expressions safely
 async function calculate({ expression }: { expression: string }) {
   try {
-    // Simple safe evaluation for basic math
-    // In production, use a proper math parser library
-    const result = Function(`'use strict'; return (${expression})`)();
+    // Safe math evaluation using Function with strict mode
+    // Only allows basic math operations
+    const sanitized = expression.replace(/[^0-9+\-*/().\s]/g, '');
+    if (sanitized !== expression) {
+      return { error: 'Invalid characters in expression' };
+    }
+    
+    const result = Function(`'use strict'; return (${sanitized})`)();
     return {
       result: String(result),
       expression,
+      sanitized,
     };
   } catch (error) {
     return {
-      error: 'Invalid expression',
+      error: 'Invalid mathematical expression',
       expression,
     };
   }
+}
+
+// Convert between units
+async function convertUnits({ value, from, to }: { value: number; from: string; to: string }) {
+  const conversions: Record<string, Record<string, number>> = {
+    length: {
+      m: 1,
+      km: 0.001,
+      cm: 100,
+      mm: 1000,
+      ft: 3.28084,
+      in: 39.3701,
+    },
+    weight: {
+      kg: 1,
+      g: 1000,
+      lb: 2.20462,
+      oz: 35.274,
+    },
+    temperature: {
+      c: 'celsius',
+      f: 'fahrenheit',
+      k: 'kelvin',
+    },
+  };
+  
+  // Simple linear conversion
+  if (conversions[from] && conversions[from][to]) {
+    const factor = conversions[from][to] as number;
+    return {
+      result: value * factor,
+      from,
+      to,
+      input: value,
+    };
+  }
+  
+  return { error: 'Unsupported unit conversion' };
 }
 
 // Register tools for Tambo to use
@@ -87,6 +201,7 @@ export const tamboTools = {
   searchDocs,
   getFileInfo,
   calculate,
+  convertUnits,
   // Add more tools as needed
 };
 

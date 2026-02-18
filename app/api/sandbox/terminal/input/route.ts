@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth/jwt';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { terminalManager } from '@/lib/sandbox/terminal-manager';
 
@@ -7,10 +7,10 @@ export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   try {
-    const authResult = await verifyAuth(req);
+    const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
-        { error: 'Unauthorized: valid authentication token required' },
+        { error: 'Unauthorized: valid authentication token, session, or anonymous session required' },
         { status: 401 }
       );
     }
