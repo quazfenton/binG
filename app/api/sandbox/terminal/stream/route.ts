@@ -82,11 +82,8 @@ export async function GET(req: NextRequest) {
 
         const setupPty = async () => {
           try {
-            if (terminalManager.isConnected(sessionId)) {
-              await terminalManager.reconnectTerminal(sessionId, sandboxId, sessionId, onData, onPortDetected);
-            } else {
-              await terminalManager.createTerminalSession(sessionId, sandboxId, onData, onPortDetected);
-            }
+            // Always create (or replace) the PTY session; TerminalManager will clean up any existing connection
+            await terminalManager.createTerminalSession(sessionId, sandboxId, onData, onPortDetected);
             send({ type: 'connected', data: { sessionId, sandboxId } });
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Failed to connect to terminal';
