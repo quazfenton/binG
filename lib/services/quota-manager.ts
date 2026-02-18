@@ -27,55 +27,66 @@ const DEFAULT_QUOTAS: Record<string, number> = {
 
 class QuotaManager {
   private quotas: Map<string, ProviderQuota> = new Map();
-  private db: any;
+  private db: any = null;
   private initialized = false;
+  private dbInitialized = false;
 
   constructor() {
+    // Lazy initialization - don't initialize database on construction
+    this.initializeQuotas();
+  }
+
+  /**
+   * Lazily initialize database connection only when needed
+   */
+  private ensureDatabase(): void {
+    if (this.dbInitialized) return;
+
     try {
       this.db = getDatabase();
-      this.initialized = true;
-      this.initializeQuotas();
+      this.dbInitialized = true;
     } catch (error) {
-      console.error('[QuotaManager] Failed to initialize:', error);
-      // Fallback to in-memory only
+      console.error('[QuotaManager] Failed to initialize database:', error);
       this.db = null;
-      this.initialized = false;
-      this.initializeQuotas();
+      this.dbInitialized = false;
     }
   }
 
   private initializeQuotas(): void {
-    // If database is available, load from DB
-    if (this.db && this.initialized) {
-      this.loadQuotasFromDatabase();
-    } else {
-      // Fallback to in-memory initialization
-      for (const [provider, defaultLimit] of Object.entries(DEFAULT_QUOTAS)) {
-        const envKey = `QUOTA_${provider.toUpperCase()}_MONTHLY`;
-        let limit = defaultLimit;
+    // Always use in-memory initialization by default
+    // Database loading happens lazily when first accessed
+    for (const [provider, defaultLimit] of Object.entries(DEFAULT_QUOTAS)) {
+      const envKey = `QUOTA_${provider.toUpperCase()}_MONTHLY`;
+      let limit = defaultLimit;
 
-        if (process.env[envKey]) {
-          const parsed = parseInt(process.env[envKey]!, 10);
-          // Validate parsed value to prevent NaN limits
-          if (!isNaN(parsed) && parsed > 0) {
-            limit = parsed;
-          } else {
-            console.warn(`[QuotaManager] Invalid ${envKey} value: "${process.env[envKey]}". Using default limit: ${defaultLimit}`);
-          }
+      if (process.env[envKey]) {
+        const parsed = parseInt(process.env[envKey]!, 10);
+        // Validate parsed value to prevent NaN limits
+        if (!isNaN(parsed) && parsed > 0) {
+          limit = parsed;
+        } else {
+          console.warn(`[QuotaManager] Invalid ${envKey} value: "${process.env[envKey]}". Using default limit: ${defaultLimit}`);
         }
-
-        this.quotas.set(provider, {
-          provider,
-          monthlyLimit: limit,
-          currentUsage: 0,
-          resetDate: this.getNextResetDate(),
-          isDisabled: false,
-        });
       }
+
+      this.quotas.set(provider, {
+        provider,
+        monthlyLimit: limit,
+        currentUsage: 0,
+        resetDate: this.getNextResetDate(),
+        isDisabled: false,
+      });
     }
   }
 
   private loadQuotasFromDatabase(): void {
+    this.ensureDatabase();
+    if (!this.db) {
+      // Database not available, use defaults
+      this.initializeQuotasFromDefaults();
+      return;
+    }
+
     try {
       const stmt = this.db.prepare('SELECT * FROM provider_quotas');
       const rows = stmt.all() as any[];
@@ -151,11 +162,12 @@ class QuotaManager {
   }
 
   private saveQuotaToDatabase(quota: ProviderQuota): void {
-    if (!this.db || !this.initialized) return;
+    this.ensureDatabase();
+    if (!this.db) return;
 
     try {
       const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO provider_quotas 
+        INSERT OR REPLACE INTO provider_quotas
         (provider, monthly_limit, current_usage, reset_date, is_disabled, updated_at)
         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);

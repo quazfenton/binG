@@ -139,8 +139,11 @@ export async function POST(request: NextRequest) {
     // Route through priority chain (Fast-Agent → n8n → Custom Fallback → Original System)
     try {
       const routerResponse = await priorityRequestRouter.route(routerRequest);
+
+      const actualProvider = routerResponse.metadata?.actualProvider || routerResponse.source;
+      const actualModel = routerResponse.metadata?.actualModel || routerRequest.model;
       
-      console.log(`[DEBUG] Chat API: Request handled by ${routerResponse.source} (priority ${routerResponse.priority})`);
+      console.log(`[DEBUG] Chat API: Request handled by ${routerResponse.source} (priority ${routerResponse.priority}) - Actual: ${actualProvider}/${actualModel}`);
       
       // Check for auth_required in response
       if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
@@ -221,7 +224,16 @@ export async function POST(request: NextRequest) {
       });
       
     } catch (routerError) {
-      console.error('[DEBUG] Chat API: Router error (should be rare):', routerError);
+      const routerErrorObj = routerError as Error;
+      // Log which providers were tried from the fallback chain
+      const errorMessage = routerErrorObj.message;
+      const isNotConfigured = errorMessage.includes('not configured');
+      
+      if (!isNotConfigured) {
+        console.error('[DEBUG] Chat API: Router error (should be rare):', routerError);
+      } else {
+        console.log(`[DEBUG] Chat API: No providers configured for request (tried: ${provider}/${model})`);
+      }
       
       // Emergency fallback - return friendly error
       return NextResponse.json({
@@ -515,11 +527,16 @@ export async function POST(request: NextRequest) {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Chat API error:", error);
-
-    // With proper fallback chain, this should rarely happen
-    // But if it does, still return a user-friendly response
-    console.error('[CRITICAL] Chat API: All fallback mechanisms failed');
+    // Skip verbose logging for expected "not configured" errors
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isNotConfiguredError = errorMessage.includes('not configured');
+    
+    if (!isNotConfiguredError) {
+      console.error("Chat API error:", error);
+      console.error('[CRITICAL] Chat API: All fallback mechanisms failed');
+    } else {
+      console.log(`[Chat API] Provider not available: ${errorMessage}`);
+    }
 
     // Process error with enhanced error handler for logging
     const processedError = errorHandler.processError(

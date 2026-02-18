@@ -21,19 +21,6 @@ export function useTamboChat() {
     } finally {
       setIsLoading(false);
     }
-  const sendMessage = useCallback(async (message: string, options?: any) => {
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      return await sendStandardMessage(message, options);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-      setError(errorMessage);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
   }, [enabled, apiKey]);
 
   return {

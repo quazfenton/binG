@@ -37,15 +37,13 @@ export class MigrationRunner {
 
   private getMigrationFiles(): Migration[] {
     try {
-      // Use process.cwd() for reliable path resolution in all environments
-      const migrationsPath = path.join(process.cwd(), 'lib', 'database', 'migrations');
-      const files = readdirSync(migrationsPath)
+      const files = readdirSync(this.migrationsPath)
         .filter(file => file.endsWith('.sql'))
         .sort();
 
       return files.map(filename => {
         const version = filename.split('_')[0];
-        const sql = readFileSync(path.join(migrationsPath, filename), 'utf-8');
+        const sql = readFileSync(path.join(this.migrationsPath, filename), 'utf-8');
         return { version, filename, sql };
       });
     } catch (error) {
