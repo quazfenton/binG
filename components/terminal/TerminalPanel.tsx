@@ -54,10 +54,10 @@ export default function TerminalPanel({
 
   // Initialize sandbox session when panel opens
   useEffect(() => {
-    if (isOpen && userId && sandboxInfo.status === 'none') {
+    if (isOpen && sandboxInfo.status === 'none') {
       initializeSandbox();
     }
-  }, [isOpen, userId]);
+  }, [isOpen]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -74,11 +74,9 @@ export default function TerminalPanel({
   }, [isOpen, isMinimized]);
 
   const initializeSandbox = async () => {
-    if (!userId) {
-      addOutput('system', 'Please sign in to use the terminal');
-      return;
-    }
-
+    // For dev: allow anonymous usage if userId not provided
+    const devUserId = userId || 'dev-anonymous-user';
+    
     setSandboxInfo({ status: 'creating' });
     addOutput('system', 'Initializing sandbox environment...');
 
@@ -86,7 +84,7 @@ export default function TerminalPanel({
       const response = await fetch('/api/sandbox/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId })
+        body: JSON.stringify({ userId: devUserId })
       });
 
       if (response.ok) {
@@ -98,7 +96,9 @@ export default function TerminalPanel({
           resources: data.session.resources
         });
         addOutput('system', `✓ Sandbox ready (${data.session.sandboxId})`);
-        addOutput('system', 'Type commands to execute in the sandbox environment');
+        if (!userId) {
+          addOutput('system', '⚠️ Dev mode: Anonymous session (sign in for persistence)');
+        }
       } else {
         throw new Error('Failed to create sandbox');
       }
