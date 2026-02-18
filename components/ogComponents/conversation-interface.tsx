@@ -561,14 +561,14 @@ function ConversationInterfaceContent() {
     if (availableProviders.length <= 1) return;
 
     const currentProviderIndex = availableProviders.findIndex(
-      (p) => p.name === currentProvider,
+      (p) => p.id === currentProvider,
     );
     const nextIndex = (currentProviderIndex + 1) % availableProviders.length;
     const nextProvider = availableProviders[nextIndex];
 
     if (nextProvider && nextProvider.models.length > 0) {
       const nextModel = nextProvider.models[0]; // Use first model of next provider
-      handleProviderChange(nextProvider.name, nextModel);
+      handleProviderChange(nextProvider.id, nextModel);
     }
   }, [availableProviders, currentProvider, handleProviderChange]);
 
