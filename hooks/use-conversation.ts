@@ -194,11 +194,12 @@ export function useConversation() {
         ...settings,
       };
       
+      const token = localStorage.getItem('token');
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
         body: JSON.stringify(requestBody),
         signal: abortControllerRef.current?.signal,

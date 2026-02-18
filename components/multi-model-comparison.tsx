@@ -108,11 +108,12 @@ export default function MultiModelComparison({
           i === index ? { ...r, status: 'streaming' } : r
         ));
         
+        const token = localStorage.getItem('token');
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('token') || ''}`,
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
           },
           body: JSON.stringify({
             messages: [{ role: 'user', content: prompt }],
