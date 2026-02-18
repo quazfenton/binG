@@ -22,8 +22,8 @@ export async function POST(req: NextRequest) {
     // Get or create sandbox session
     const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
     if (!userSession) {
-      // Create a new sandbox session
-      const session = await sandboxBridge.createWorkspace(authResult.userId);
+      // Create a new sandbox session (use getOrCreateSession to avoid races)
+      const session = await sandboxBridge.getOrCreateSession(authResult.userId);
       return NextResponse.json({
         sessionId: session.sessionId,
         sandboxId: session.sandboxId,
