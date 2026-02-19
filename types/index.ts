@@ -6,6 +6,13 @@ export interface Message {
   timestamp?: string; // ISO format date string
   isComplete?: boolean; // For streaming messages
   isStreaming?: boolean; // Currently streaming content
+  metadata?: {
+    requiresAuth?: boolean;
+    authUrl?: string;
+    toolName?: string;
+    provider?: string;
+    [key: string]: any;
+  };
 }
 
 export interface ConversationContext {

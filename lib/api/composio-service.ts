@@ -89,15 +89,189 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
   };
 
   const selectedModel = llmModel || defaultModels[llmProvider] || defaultModels.openrouter;
+  const appBase = process.env.NEXT_PUBLIC_APP_URL || '';
+
+  const inferProviderFromToolkit = (toolkit?: string): string => {
+    const value = String(toolkit || '').toLowerCase();
+    if (!value) return 'google';
+    if (value.includes('gmail') || value.includes('google')) return 'google';
+    if (value.includes('github')) return 'github';
+    if (value.includes('slack')) return 'slack';
+    if (value.includes('notion')) return 'notion';
+    if (value.includes('discord')) return 'discord';
+    if (value.includes('twitter') || value === 'x') return 'twitter';
+    if (value.includes('spotify')) return 'spotify';
+    return value;
+  };
+
+  const buildFallbackAuthUrl = (toolkit?: string): string => {
+    const provider = inferProviderFromToolkit(toolkit);
+    const arcadeProviders = ['google', 'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive', 'googlemaps', 'exa', 'twilio', 'spotify', 'vercel', 'railway'];
+    const nangoProviders = ['github', 'slack', 'discord', 'twitter', 'reddit'];
+    if (arcadeProviders.includes(provider)) {
+      return `${appBase}/api/auth/arcade/authorize?provider=${encodeURIComponent(provider)}&redirect=1`;
+    }
+    if (nangoProviders.includes(provider)) {
+      return `${appBase}/api/auth/nango/authorize?provider=${encodeURIComponent(provider)}&redirect=1`;
+    }
+    return `${appBase}/api/auth/oauth/initiate?provider=${encodeURIComponent(provider)}`;
+  };
+
+  const isAuthFailure = (payload: any): boolean => {
+    const haystack = JSON.stringify(payload || {}).toLowerCase();
+    return (
+      haystack.includes('auth_required') ||
+      haystack.includes('authorization required') ||
+      haystack.includes('connect your account') ||
+      haystack.includes('oauth')
+    );
+  };
+
+  const extractToolArray = (raw: any): any[] => {
+    if (Array.isArray(raw)) return raw;
+    if (Array.isArray(raw?.items)) return raw.items;
+    if (Array.isArray(raw?.tools)) return raw.tools;
+    return [];
+  };
+
+  const normalizeTool = (tool: any) => {
+    const name = tool?.slug || tool?.name || tool?.toolSlug;
+    const description = tool?.description || tool?.deprecated?.displayName || `Tool ${name}`;
+    const parameters =
+      tool?.inputParameters ||
+      tool?.input_parameters ||
+      tool?.parameters ||
+      {
+        type: 'object',
+        properties: {},
+        additionalProperties: true,
+      };
+
+    const toolkit =
+      tool?.toolkit?.slug ||
+      tool?.toolkitSlug ||
+      tool?.appName ||
+      (typeof name === 'string' ? String(name).split('_')[0]?.toLowerCase() : 'unknown');
+
+    return { ...tool, name, description, parameters, toolkit };
+  };
+
+  const loadToolsForRequest = async (
+    composio: any,
+    userId: string,
+    requestedToolkits?: string[]
+  ): Promise<any[]> => {
+    const requested = (requestedToolkits || []).map((t) => t.toLowerCase());
+
+    const filterByToolkit = (tools: any[]) => {
+      if (requested.length === 0) return tools;
+      return tools.filter((tool) => requested.includes(String(tool.toolkit || '').toLowerCase()));
+    };
+
+    // Preferred path for newer SDK docs: composio.tools.get(userId, filters)
+    if (typeof composio?.tools?.get === 'function') {
+      try {
+        const result = await composio.tools.get(userId, {
+          ...(requested.length > 0 ? { toolkits: requested } : {}),
+          limit: 300,
+        });
+        const tools = extractToolArray(result).map(normalizeTool);
+        if (tools.length > 0) return filterByToolkit(tools);
+      } catch {}
+    }
+
+    // Common list path in several SDK versions
+    if (typeof composio?.tools?.list === 'function') {
+      const tryParams = [
+        requested.length > 0 ? { toolkit_slug: requested[0], limit: 300 } : { limit: 300 },
+        requested.length > 0 ? { apps: requested.join(','), limit: 300 } : { limit: 300 },
+        requested.length > 0 ? { toolkits: requested, limit: 300 } : { limit: 300 },
+        undefined,
+      ];
+      for (const params of tryParams) {
+        try {
+          const result = params ? await composio.tools.list(params) : await composio.tools.list();
+          const tools = extractToolArray(result).map(normalizeTool);
+          if (tools.length > 0) return filterByToolkit(tools);
+        } catch {}
+      }
+    }
+
+    // Session-based native tools path
+    if (typeof composio?.create === 'function') {
+      try {
+        const session = await composio.create(userId);
+        if (typeof session?.tools === 'function') {
+          const result = await session.tools();
+          const tools = extractToolArray(result).map(normalizeTool);
+          if (tools.length > 0) return filterByToolkit(tools);
+        }
+      } catch {}
+    }
+
+    // Raw tools fallback
+    if (typeof composio?.tools?.getRawComposioTools === 'function') {
+      try {
+        const result = await composio.tools.getRawComposioTools({
+          ...(requested.length > 0 ? { toolkits: requested } : {}),
+          limit: 300,
+        });
+        const tools = extractToolArray(result).map(normalizeTool);
+        if (tools.length > 0) return filterByToolkit(tools);
+      } catch {}
+    }
+
+    return [];
+  };
+
+  const inferToolkitFromUserMessage = (raw: string): string | null => {
+    const text = String(raw || '').toLowerCase();
+    if (!text) return null;
+    if (text.includes('gmail') || text.includes('email')) return 'google';
+    if (text.includes('github')) return 'github';
+    if (text.includes('slack')) return 'slack';
+    if (text.includes('notion')) return 'notion';
+    if (text.includes('discord')) return 'discord';
+    if (text.includes('twitter') || text.includes('tweet') || text.includes('x ')) return 'twitter';
+    if (text.includes('spotify')) return 'spotify';
+    return null;
+  };
+
+  const hasActiveConnectionForToolkit = (accounts: any[], toolkit: string): boolean => {
+    const target = inferProviderFromToolkit(toolkit);
+    return (accounts || []).some((a: any) => {
+      const appName = String(a?.appName || a?.integrationId || a?.toolkitSlug || a?.provider || '').toLowerCase();
+      const status = String(a?.status || '').toLowerCase();
+      const statusOk = !status || status === 'active' || status === 'connected' || status === 'authorized';
+      return statusOk && (appName === target || appName.includes(target));
+    });
+  };
 
   return {
     async healthCheck(): Promise<boolean> {
       try {
         const { Composio } = await import('@composio/core');
         const composio = new Composio({ apiKey: config.apiKey });
-        // Verify API connectivity with read-only call (no side effects)
-        await composio.toolkits.list();
-        return true;
+
+        // Verify API connectivity with read-only methods, across SDK variants.
+        if (typeof (composio as any)?.tools?.list === 'function') {
+          await (composio as any).tools.list({ limit: 1 });
+          return true;
+        }
+        if (typeof (composio as any)?.tools?.getToolsEnum === 'function') {
+          await (composio as any).tools.getToolsEnum();
+          return true;
+        }
+        if (typeof (composio as any)?.tools?.getRawComposioTools === 'function') {
+          await (composio as any).tools.getRawComposioTools({ limit: 1 });
+          return true;
+        }
+        if (typeof (composio as any)?.connectedAccounts?.list === 'function') {
+          await (composio as any).connectedAccounts.list({ userId: 'healthcheck' });
+          return true;
+        }
+
+        return false;
       } catch (error) {
         console.error('[ComposioService] Health check failed:', error);
         return false;
@@ -111,24 +285,19 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         const { Composio } = await import('@composio/core');
         const composio = new Composio({ apiKey: config.apiKey });
 
-        // Create session for user (create() only takes userId)
-        const session = await composio.create(request.userId);
+        // Create session for user when available (not required on all SDK paths)
+        const session = typeof (composio as any).create === 'function'
+          ? await composio.create(request.userId)
+          : null;
 
         // Get available tools - filter by requested toolkits if specified
-        let tools;
-        if (request.toolkits && request.toolkits.length > 0) {
-          // If restrictedToolkits is configured, intersect with request.toolkits to prevent bypass
-          const allowedToolkits = config.restrictedToolkits && config.restrictedToolkits.length > 0
+        let effectiveToolkits: string[] | undefined = request.toolkits;
+        if (config.restrictedToolkits && config.restrictedToolkits.length > 0) {
+          effectiveToolkits = request.toolkits && request.toolkits.length > 0
             ? request.toolkits.filter((toolkit) => config.restrictedToolkits!.includes(toolkit))
-            : request.toolkits;
-          tools = await composio.tools.list({ apps: allowedToolkits.join(',') });
-        } else if (config.restrictedToolkits && config.restrictedToolkits.length > 0) {
-          // Use configured restricted toolkits
-          tools = await composio.tools.list({ apps: config.restrictedToolkits.join(',') });
-        } else {
-          // No restrictions - get all tools (use with caution)
-          tools = await composio.tools.list();
+            : config.restrictedToolkits;
         }
+        const tools = await loadToolsForRequest(composio, request.userId, effectiveToolkits);
 
         // Extract the last user message
         const lastMessage = request.messages
@@ -138,7 +307,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         if (!lastMessage) {
           return {
             content: 'No user message found to process',
-            metadata: { sessionId: session.id, executionTime: Date.now() - startTime },
+            metadata: { sessionId: session?.id, executionTime: Date.now() - startTime },
           };
         }
 
@@ -196,10 +365,33 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
               try {
                 const toolSlug = toolCall.function.name;
                 const toolArgs = JSON.parse(toolCall.function.arguments);
-                const result = await composio.tools.execute(toolSlug, {
-                  connectedAccountId: request.userId,
-                  input: toolArgs,
-                });
+                let result: any;
+                try {
+                  result = await composio.tools.execute(toolSlug, {
+                    userId: request.userId,
+                    arguments: toolArgs,
+                    dangerouslySkipVersionCheck: true,
+                  });
+                } catch {
+                  // Backward-compatible payload shape fallback
+                  result = await composio.tools.execute(toolSlug, {
+                    connectedAccountId: request.userId,
+                    input: toolArgs,
+                  });
+                }
+
+                // Some SDK versions return auth-required as a normal unsuccessful payload, not thrown error
+                if (result?.successful === false && isAuthFailure(result)) {
+                  const kitName = toolSlug.split('_')[0].toUpperCase();
+                  const authUrl = (await this.getAuthUrl(kitName, request.userId)) || buildFallbackAuthUrl(kitName);
+                  return {
+                    content: `Authorization required for ${kitName}. Please connect your account.`,
+                    requiresAuth: true,
+                    authUrl,
+                    authToolkit: kitName,
+                    metadata: { sessionId: session?.id, toolsUsed: toolCalls.map((t: any) => t.function?.name) },
+                  };
+                }
 
                 // Add to message history
                 messages.push({
@@ -224,13 +416,13 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                 // Check if tool requires auth
                 if (toolError.message?.includes('auth') || toolError.message?.includes('connect')) {
                   const kitName = toolCall.function.name.split('_')[0].toUpperCase();
-                  const authUrl = await this.getAuthUrl(kitName, request.userId);
+                  const authUrl = (await this.getAuthUrl(kitName, request.userId)) || buildFallbackAuthUrl(kitName);
                   return {
                     content: `Authorization required for ${kitName}. Please connect your account.`,
                     requiresAuth: true,
                     authUrl,
                     authToolkit: kitName,
-                    metadata: { sessionId: session.id, toolsUsed: toolCalls.map((t: any) => t.function?.name) },
+                    metadata: { sessionId: session?.id, toolsUsed: toolCalls.map((t: any) => t.function?.name) },
                   };
                 }
               }
@@ -305,9 +497,21 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
             for (const call of functionCalls) {
               try {
                 const toolResult = await composio.tools.execute(call.name, {
-                  connectedAccountId: request.userId,
-                  input: call.args,
+                  userId: request.userId,
+                  arguments: call.args,
+                  dangerouslySkipVersionCheck: true,
                 });
+                if (toolResult?.successful === false && isAuthFailure(toolResult)) {
+                  const kitName = call.name.split('_')[0].toUpperCase();
+                  const authUrl = (await this.getAuthUrl(kitName, request.userId)) || buildFallbackAuthUrl(kitName);
+                  return {
+                    content: `Authorization required for ${kitName}. Please connect your account.`,
+                    requiresAuth: true,
+                    authUrl,
+                    authToolkit: kitName,
+                    metadata: { sessionId: session?.id, toolsUsed: toolCalls.map((t: any) => t.function?.name) },
+                  };
+                }
                 functionResponses.push({
                   name: call.name,
                   response: toolResult,
@@ -315,13 +519,13 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
               } catch (toolError: any) {
                 if (toolError.message?.includes('auth') || toolError.message?.includes('connect')) {
                   const kitName = call.name.split('_')[0].toUpperCase();
-                  const authUrl = await this.getAuthUrl(kitName, request.userId);
+                  const authUrl = (await this.getAuthUrl(kitName, request.userId)) || buildFallbackAuthUrl(kitName);
                   return {
                     content: `Authorization required for ${kitName}. Please connect your account.`,
                     requiresAuth: true,
                     authUrl,
                     authToolkit: kitName,
-                    metadata: { sessionId: session.id, toolsUsed: toolCalls.map((t: any) => t.function?.name) },
+                    metadata: { sessionId: session?.id, toolsUsed: toolCalls.map((t: any) => t.function?.name) },
                   };
                 }
                 functionResponses.push({
@@ -348,13 +552,38 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
 
         // Get connected accounts
         const connectedAccounts = await composio.connectedAccounts.list({ userId: request.userId });
+        const connectedItems = connectedAccounts?.items || [];
+
+        // Deterministic auth fallback:
+        // if no textual output and no successful tool outcome, guide user to connect the likely toolkit.
+        if (!content || !String(content).trim()) {
+          const inferredToolkit = inferToolkitFromUserMessage(String(lastMessage));
+          if (inferredToolkit && !hasActiveConnectionForToolkit(connectedItems, inferredToolkit)) {
+            const authUrl = (await this.getAuthUrl(inferredToolkit, request.userId)) || buildFallbackAuthUrl(inferredToolkit);
+            return {
+              content: `Authorization required for ${inferredToolkit}. Please connect your account to proceed.`,
+              requiresAuth: true,
+              authUrl,
+              authToolkit: inferredToolkit,
+              metadata: {
+                sessionId: session?.id,
+                toolsUsed: toolCalls.map((t: any) => t.function?.name),
+                executionTime: Date.now() - startTime,
+              },
+            };
+          }
+
+          content = toolCalls.length > 0
+            ? `Tool request was processed (${toolCalls.length} tool call${toolCalls.length > 1 ? 's' : ''}) but returned no text output.`
+            : 'Tool request was processed but returned no text output.';
+        }
 
         return {
           content,
           toolCalls,
-          connectedAccounts: connectedAccounts?.items || [],
+          connectedAccounts: connectedItems,
           metadata: {
-            sessionId: session.id,
+            sessionId: session?.id,
             toolsUsed: toolCalls.map((t: any) => t.function?.name),
             executionTime: Date.now() - startTime,
           },
@@ -382,7 +611,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
           }
           
           if (toolkit) {
-            const authUrl = await this.getAuthUrl(toolkit, request.userId);
+            const authUrl = (await this.getAuthUrl(toolkit, request.userId)) || buildFallbackAuthUrl(toolkit);
             return {
               content: `Authorization required for ${toolkit}. Please connect your account to use this feature.`,
               requiresAuth: true,
@@ -395,6 +624,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
             return {
               content: 'Authorization required. Please connect your account to use this feature.',
               requiresAuth: true,
+              authUrl: buildFallbackAuthUrl('google'),
               metadata: { executionTime: Date.now() - startTime },
             };
           }
@@ -409,11 +639,11 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
       try {
         const { Composio } = await import('@composio/core');
         const composio = new Composio({ apiKey: config.apiKey });
-        const tools = await composio.tools.list();
+        const tools = await loadToolsForRequest(composio, 'default');
         // Group tools by toolkit/app
         const toolkitMap = new Map<string, any>();
         for (const tool of (tools || [])) {
-          const appName = tool.appName || tool.name?.split('_')[0] || 'unknown';
+          const appName = tool.toolkit || tool.appName || tool.name?.split('_')[0] || 'unknown';
           if (!toolkitMap.has(appName)) {
             toolkitMap.set(appName, { name: appName, tools: [] });
           }
@@ -442,26 +672,22 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
       try {
         const { Composio } = await import('@composio/core');
         const composio = new Composio({ apiKey: config.apiKey });
-
-        // Check if we have a connected account for this toolkit
-        const accounts = await composio.connectedAccounts.list({ userId });
-        const existingAccount = (accounts?.items || []).find((a: any) =>
-          a.appName?.toLowerCase() === toolkit.toLowerCase()
-        );
-
-        if (existingAccount && existingAccount.status === 'active') {
-          return '';
+        // Prefer direct Composio connection init; skip pre-list query because
+        // some SDK versions reject list() with optional fields shaping.
+        try {
+          const connectionRequest = await composio.connectedAccounts.initiate({
+            userId,
+            integrationId: toolkit.toLowerCase(),
+          });
+          const directUrl = connectionRequest?.redirectUrl || connectionRequest?.url;
+          if (directUrl) return directUrl;
+        } catch (initErr: any) {
+          console.warn('[ComposioService] Direct initiate failed, using provider auth fallback:', initErr?.message);
         }
-
-        // Use initiateConnection for new connections
-        const connectionRequest = await composio.connectedAccounts.initiate({
-          userId,
-          integrationId: toolkit.toLowerCase(),
-        });
-        return connectionRequest?.redirectUrl || connectionRequest?.url || '';
+        return buildFallbackAuthUrl(toolkit);
       } catch (error: any) {
         console.error('[ComposioService] Failed to get auth URL:', error.message);
-        return '';
+        return buildFallbackAuthUrl(toolkit);
       }
     },
   };

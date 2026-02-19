@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Arcade from '@arcadeai/arcadejs';
-import { verifyAuth } from '@/lib/auth/jwt';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
+import { authService } from '@/lib/auth/auth-service';
 
 const arcade = new Arcade({
   apiKey: process.env.ARCADE_API_KEY || '',
@@ -9,10 +10,14 @@ const arcade = new Arcade({
 export async function GET(req: NextRequest) {
   // Extract provider before try block so it's accessible in catch
   const provider = req.nextUrl.searchParams.get('provider');
+  const shouldRedirect = req.nextUrl.searchParams.get('redirect') === '1';
 
   try {
-    // CRITICAL: Authenticate user from JWT token - do NOT trust userId from query string
-    const authResult = await verifyAuth(req);
+    const tokenFromQuery = req.nextUrl.searchParams.get('token');
+    const authResult = await resolveRequestAuth(req, {
+      bearerToken: tokenFromQuery,
+      allowAnonymous: false,
+    });
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },
@@ -20,8 +25,20 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Use authenticated userId from token, ignore query userId
+    // Use authenticated userId from token/session, ignore query userId
     const authenticatedUserId = authResult.userId;
+
+    const strategy = (process.env.ARCADE_USER_ID_STRATEGY || 'email').toLowerCase();
+    let arcadeUserId = authenticatedUserId;
+    if (strategy === 'email') {
+      const numericUserId = Number(authenticatedUserId);
+      if (!Number.isNaN(numericUserId)) {
+        const user = await authService.getUserById(numericUserId);
+        if (user?.email) {
+          arcadeUserId = user.email;
+        }
+      }
+    }
 
     if (!provider) {
       return NextResponse.json({ error: 'provider is required' }, { status: 400 });
@@ -65,12 +82,16 @@ export async function GET(req: NextRequest) {
 
     // Start authorization with all collected scopes at once
     const authResponse = await arcade.auth.start(
-      authenticatedUserId,
+      arcadeUserId,
       provider,
       { scopes: scopesArray }
     );
 
     // Return the authorization URL for popup window
+    if (shouldRedirect) {
+      return NextResponse.redirect(authResponse.url);
+    }
+
     return NextResponse.json({
       authUrl: authResponse.url,
       authId: authResponse.id,

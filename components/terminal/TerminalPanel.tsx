@@ -95,6 +95,8 @@ export default function TerminalPanel({
   // Refs to hold mutable terminal state without triggering re-renders
   const terminalsRef = useRef<TerminalInstance[]>([]);
   terminalsRef.current = terminals;
+  const preConnectLineBufferRef = useRef<Record<string, string>>({});
+  const preConnectQueueRef = useRef<Record<string, string[]>>({});
 
   // Auto-create terminal when panel opens and no terminals exist
   useEffect(() => {
@@ -187,6 +189,8 @@ export default function TerminalPanel({
       isConnected: false,
     };
 
+    preConnectLineBufferRef.current[newTerminal.id] = '';
+    preConnectQueueRef.current[newTerminal.id] = [];
     setTerminals(prev => [...prev, newTerminal]);
     setActiveTerminalId(newTerminal.id);
     return newTerminal.id;
@@ -198,6 +202,8 @@ export default function TerminalPanel({
       terminal.eventSource?.close();
       terminal.terminal?.dispose();
     }
+    delete preConnectLineBufferRef.current[terminalId];
+    delete preConnectQueueRef.current[terminalId];
 
     setTerminals(prev => {
       const updated = prev.filter(t => t.id !== terminalId);
@@ -279,6 +285,7 @@ export default function TerminalPanel({
       terminal.writeln('  \x1b[32mpwd\x1b[0m - Show current directory');
       terminal.writeln('  \x1b[32mnode --version\x1b[0m - Check Node.js version');
       terminal.writeln('');
+      terminal.write('local$ ');
 
       updateTerminalState(terminalId, { terminal, fitAddon });
 
@@ -296,17 +303,43 @@ export default function TerminalPanel({
 
         // If not connected yet, trigger sandbox initialization
         if (term.sandboxInfo.status === 'none' || !term.isConnected) {
-          connectTerminal(terminalId);
-          // Buffer the keystroke to send after connection
-          const waitAndSend = () => {
-            const check = terminalsRef.current.find(t => t.id === terminalId);
-            if (check?.isConnected && check.sandboxInfo.sessionId) {
-              sendInput(check.sandboxInfo.sessionId, data);
-            } else if (check && check.sandboxInfo.status !== 'error') {
-              setTimeout(waitAndSend, 200);
+          if (term.sandboxInfo.status !== 'creating') {
+            connectTerminal(terminalId);
+          }
+
+          // Pre-connect local line editor + queue so terminal remains usable
+          // while sandbox provisioning is in progress.
+          const buffer = preConnectLineBufferRef.current[terminalId] ?? '';
+          let nextBuffer = buffer;
+          let queuedCommand: string | null = null;
+
+          for (const ch of data) {
+            if (ch === '\r' || ch === '\n') {
+              term.terminal?.write('\r\n');
+              const command = nextBuffer.trim();
+              nextBuffer = '';
+              if (command) {
+                const queue = preConnectQueueRef.current[terminalId] ?? [];
+                queue.push(command);
+                preConnectQueueRef.current[terminalId] = queue;
+                queuedCommand = command;
+              }
+              term.terminal?.write('local$ ');
+            } else if (ch === '\u007f') {
+              if (nextBuffer.length > 0) {
+                nextBuffer = nextBuffer.slice(0, -1);
+                term.terminal?.write('\b \b');
+              }
+            } else if (ch >= ' ') {
+              nextBuffer += ch;
+              term.terminal?.write(ch);
             }
-          };
-          setTimeout(waitAndSend, 500);
+          }
+
+          preConnectLineBufferRef.current[terminalId] = nextBuffer;
+          if (queuedCommand) {
+            term.terminal?.writeln('\x1b[90m[queued] command will run once sandbox is connected\x1b[0m');
+          }
           return;
         }
 
@@ -362,6 +395,18 @@ export default function TerminalPanel({
       // Silently ignore resize failures
     }
   }, []);
+
+  const flushPreConnectQueue = useCallback(async (terminalId: string, sessionId: string) => {
+    const queue = preConnectQueueRef.current[terminalId];
+    if (!queue || queue.length === 0) return;
+
+    const toRun = [...queue];
+    preConnectQueueRef.current[terminalId] = [];
+
+    for (const command of toRun) {
+      await sendInput(sessionId, `${command}\n`);
+    }
+  }, [sendInput]);
 
   // Connect terminal to sandbox PTY
   const connectTerminal = useCallback(async (terminalId: string) => {
@@ -532,6 +577,9 @@ export default function TerminalPanel({
         sendResize(sessionId, term.terminal.cols, term.terminal.rows);
       }
 
+      preConnectLineBufferRef.current[terminalId] = '';
+      await flushPreConnectQueue(terminalId, sessionId);
+
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : 'Unknown error';
       updateTerminalState(terminalId, {
@@ -546,7 +594,7 @@ export default function TerminalPanel({
       term.terminal?.writeln(`\x1b[31m✗ Failed to connect: ${errMsg}\x1b[0m`);
       term.terminal?.writeln('\x1b[90mPress any key to retry...\x1b[0m');
     }
-  }, [userId, updateTerminalState, sendResize]);
+  }, [userId, updateTerminalState, sendResize, flushPreConnectQueue]);
 
   // Ref callback to mount xterm when DOM element is available
   const setXtermContainer = useCallback((terminalId: string) => (el: HTMLDivElement | null) => {

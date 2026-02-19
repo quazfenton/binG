@@ -6,6 +6,8 @@
  */
 
 import { getDatabase } from '@/lib/database/connection';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { dirname, join } from 'path';
 
 export interface ProviderQuota {
   provider: string;
@@ -30,8 +32,10 @@ class QuotaManager {
   private db: any = null;
   private initialized = false;
   private dbInitialized = false;
+  private readonly quotaFilePath: string;
 
   constructor() {
+    this.quotaFilePath = process.env.QUOTA_FALLBACK_FILE_PATH || join(process.cwd(), 'data', 'provider-quotas.json');
     // Lazy initialization - don't initialize database on construction
     this.initializeQuotas();
   }
@@ -97,6 +101,84 @@ class QuotaManager {
         resetDate: this.getNextResetDate(),
         isDisabled: false,
       });
+    }
+  }
+
+  private ensureInitialized(): void {
+    if (this.initialized) return;
+    this.initialized = true;
+
+    // Start with defaults, then merge persisted sources.
+    this.initializeQuotasFromDefaults();
+    this.loadQuotasFromDatabase();
+    this.loadQuotasFromFile();
+  }
+
+  private loadQuotasFromFile(): void {
+    try {
+      if (!existsSync(this.quotaFilePath)) return;
+      const raw = readFileSync(this.quotaFilePath, 'utf-8');
+      const parsed = JSON.parse(raw) as {
+        quotas?: Record<string, {
+          monthlyLimit: number;
+          currentUsage: number;
+          resetDate: string;
+          isDisabled: boolean;
+        }>
+      };
+
+      if (!parsed?.quotas) return;
+      for (const [provider, fromFile] of Object.entries(parsed.quotas)) {
+        const existing = this.quotas.get(provider);
+        if (!existing) {
+          this.quotas.set(provider, {
+            provider,
+            monthlyLimit: fromFile.monthlyLimit,
+            currentUsage: fromFile.currentUsage,
+            resetDate: fromFile.resetDate,
+            isDisabled: !!fromFile.isDisabled,
+          });
+          continue;
+        }
+
+        // Merge additively/safely: preserve highest observed usage so offline writes are not lost.
+        existing.currentUsage = Math.max(existing.currentUsage, fromFile.currentUsage);
+        // Keep configured monthly limit unless file has a larger explicit value.
+        existing.monthlyLimit = Math.max(existing.monthlyLimit, fromFile.monthlyLimit || 0);
+        existing.resetDate = new Date(fromFile.resetDate) > new Date(existing.resetDate)
+          ? fromFile.resetDate
+          : existing.resetDate;
+        existing.isDisabled = existing.currentUsage >= existing.monthlyLimit || !!fromFile.isDisabled;
+      }
+    } catch (error) {
+      console.warn('[QuotaManager] Failed to load quota file fallback:', error);
+    }
+  }
+
+  private saveAllQuotasToFile(): void {
+    try {
+      const dir = dirname(this.quotaFilePath);
+      mkdirSync(dir, { recursive: true });
+      const tmpPath = `${this.quotaFilePath}.tmp`;
+      const payload = {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        quotas: Object.fromEntries(
+          Array.from(this.quotas.entries()).map(([provider, quota]) => [
+            provider,
+            {
+              monthlyLimit: quota.monthlyLimit,
+              currentUsage: quota.currentUsage,
+              resetDate: quota.resetDate,
+              isDisabled: quota.isDisabled,
+            },
+          ])
+        ),
+      };
+      writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
+      renameSync(tmpPath, this.quotaFilePath);
+    } catch (error) {
+      console.warn('[QuotaManager] Failed to save quota file fallback:', error);
     }
   }
 
@@ -204,6 +286,11 @@ class QuotaManager {
     }
   }
 
+  private persistQuota(quota: ProviderQuota): void {
+    this.saveQuotaToDatabase(quota);
+    this.saveAllQuotasToFile();
+  }
+
   private getNextResetDate(): string {
     const now = new Date();
     const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
@@ -226,6 +313,7 @@ class QuotaManager {
    * Returns false if the provider is now over quota (just disabled).
    */
   recordUsage(provider: string, count: number = 1): boolean {
+    this.ensureInitialized();
     const quota = this.quotas.get(provider);
     if (!quota) return true; // Unknown provider, allow
 
@@ -248,7 +336,7 @@ class QuotaManager {
     }
 
     // Persist to database
-    this.saveQuotaToDatabase(quota);
+    this.persistQuota(quota);
 
     return quota.currentUsage < quota.monthlyLimit;
   }
@@ -257,6 +345,7 @@ class QuotaManager {
    * Check if a provider is available (not over quota).
    */
   isAvailable(provider: string): boolean {
+    this.ensureInitialized();
     const quota = this.quotas.get(provider);
     if (!quota) return true;
 
@@ -268,6 +357,7 @@ class QuotaManager {
    * Get remaining calls for a provider.
    */
   getRemainingCalls(provider: string): number {
+    this.ensureInitialized();
     const quota = this.quotas.get(provider);
     if (!quota) return Infinity;
 
@@ -279,6 +369,7 @@ class QuotaManager {
    * Get usage percentage for a provider.
    */
   getUsagePercent(provider: string): number {
+    this.ensureInitialized();
     const quota = this.quotas.get(provider);
     if (!quota) return 0;
 
@@ -290,6 +381,7 @@ class QuotaManager {
    * Get all quota statuses.
    */
   getAllQuotas(): ProviderQuota[] {
+    this.ensureInitialized();
     const results: ProviderQuota[] = [];
     for (const quota of this.quotas.values()) {
       this.checkAndResetIfNeeded(quota);
@@ -302,13 +394,14 @@ class QuotaManager {
    * Override quota limit for a provider (useful for plan upgrades).
    */
   setLimit(provider: string, newLimit: number): void {
+    this.ensureInitialized();
     const quota = this.quotas.get(provider);
     if (quota) {
       quota.monthlyLimit = newLimit;
       if (quota.currentUsage < quota.monthlyLimit) {
         quota.isDisabled = false;
       }
-      this.saveQuotaToDatabase(quota);
+      this.persistQuota(quota);
     }
   }
 
@@ -317,18 +410,45 @@ class QuotaManager {
    * Useful for fallback when primary provider is over quota.
    */
   findAlternative(providerType: 'tool' | 'sandbox', excludeProvider: string): string | null {
+    this.ensureInitialized();
     const toolProviders = ['composio', 'arcade', 'nango'];
-    const sandboxProviders = ['daytona', 'runloop', 'microsandbox'];
+    const sandboxProviders = this.getSandboxProviderChain(excludeProvider).filter(p => p !== excludeProvider);
 
-    const candidates = providerType === 'tool' ? toolProviders : sandboxProviders;
+    const candidates = providerType === 'tool'
+      ? this.rotateProviderOrder(toolProviders, excludeProvider)
+      : sandboxProviders;
 
     for (const provider of candidates) {
-      if (provider !== excludeProvider && this.isAvailable(provider)) {
-        return provider;
-      }
+      if (this.isAvailable(provider)) return provider;
     }
 
     return null;
+  }
+
+  /**
+   * Returns a circular fallback order for sandbox providers beginning with `primary`.
+   */
+  getSandboxProviderChain(primary: string): string[] {
+    const explicitChains: Record<string, string[]> = {
+      daytona: ['daytona', 'runloop', 'microsandbox', 'e2b'],
+      runloop: ['runloop', 'microsandbox', 'daytona', 'e2b'],
+      microsandbox: ['microsandbox', 'runloop', 'daytona', 'e2b'],
+      e2b: ['e2b', 'daytona', 'runloop', 'microsandbox'],
+    };
+    const base = explicitChains[primary] || [primary, 'daytona', 'runloop', 'microsandbox', 'e2b'];
+    const deduped = Array.from(new Set(base));
+    return deduped.filter(provider => this.isAvailable(provider));
+  }
+
+  pickAvailableSandboxProvider(primary: string): string | null {
+    const chain = this.getSandboxProviderChain(primary);
+    return chain.length > 0 ? chain[0] : null;
+  }
+
+  private rotateProviderOrder(list: string[], preferred: string): string[] {
+    const idx = list.indexOf(preferred);
+    if (idx === -1) return list;
+    return [...list.slice(idx), ...list.slice(0, idx)];
   }
 }
 

@@ -90,11 +90,11 @@ export class ToolAuthorizationManager {
     
     // Check if this provider uses Arcade
     if (arcadeProviders.includes(provider)) {
-      return `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/arcade/authorize?provider=${provider}`;
+      return `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/arcade/authorize?provider=${provider}&redirect=1`;
     } 
     // Check if this provider uses Nango
     else if (nangoProviders.includes(provider)) {
-      return `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/nango/authorize?provider=${provider}`;
+      return `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/nango/authorize?provider=${provider}&redirect=1`;
     } 
     // Default to standard OAuth flow
     else {
