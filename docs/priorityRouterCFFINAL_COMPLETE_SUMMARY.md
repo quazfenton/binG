@@ -183,8 +183,8 @@ CUSTOM_FALLBACK_ENABLED=false
 CLOUDFLARE_WORKER_URL=https://ai-orchestrator.workers.dev
 
 # Tambo (optional, disabled by default)
-TAMBO_ENABLED=false
-TAMBO_API_KEY=
+NEXT_PUBLIC_TAMBO_ENABLED=false
+NEXT_PUBLIC_TAMBO_API_KEY=
 
 # Fast-Agent Workflows
 FAST_AGENT_ENABLE_WORKFLOWS=true

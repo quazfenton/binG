@@ -31,7 +31,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Set session cookie
+    // Check if email verification is required
+    if (result.requiresVerification) {
+      return NextResponse.json({
+        success: true,
+        requiresVerification: true,
+        message: result.message || 'Registration successful! Please check your email to verify your account.',
+        user: result.user
+      });
+    }
+
+    // Set session cookie (for backward compatibility or if verification not required)
     const response = NextResponse.json({
       success: true,
       user: result.user,

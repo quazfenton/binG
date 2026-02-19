@@ -44,11 +44,32 @@ class QuotaManager {
 
     try {
       this.db = getDatabase();
+      this.ensureSchema();
       this.dbInitialized = true;
     } catch (error) {
       console.error('[QuotaManager] Failed to initialize database:', error);
       this.db = null;
       this.dbInitialized = false;
+    }
+  }
+
+  private ensureSchema(): void {
+    if (!this.db) return;
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS provider_quotas (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          provider TEXT NOT NULL UNIQUE,
+          monthly_limit INTEGER NOT NULL DEFAULT 0,
+          current_usage INTEGER NOT NULL DEFAULT 0,
+          reset_date DATETIME NOT NULL,
+          is_disabled BOOLEAN NOT NULL DEFAULT FALSE,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_provider_quotas_provider ON provider_quotas(provider);
+      `);
+    } catch (error) {
+      console.error('[QuotaManager] Failed to ensure quota schema:', error);
     }
   }
 

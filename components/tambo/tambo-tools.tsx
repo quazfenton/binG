@@ -5,6 +5,8 @@
  * Define functions/tools that Tambo can call during response generation
  */
 
+import { z } from 'zod';
+
 // Format code with proper indentation
 async function formatCode({ code, language }: { code: string; language: string }) {
   // Simple formatting - can be enhanced with prettier or language-specific formatters
@@ -200,16 +202,68 @@ async function convertUnits({ value, from, to }: { value: number; from: string; 
   return { error: 'Unsupported unit conversion' };
 }
 
-// Register tools for Tambo to use
-export const tamboTools = {
-  formatCode,
-  validateInput,
-  searchDocs,
-  getFileInfo,
-  calculate,
-  convertUnits,
+// Register tools for Tambo to use (as array for @tambo-ai/react)
+export const tamboTools = [
+  {
+    name: 'formatCode',
+    tool: formatCode,
+    argsSchema: z.object({
+      code: z.string().describe('The code to format'),
+      language: z.string().describe('The programming language (e.g., typescript, python)'),
+    }),
+    description: 'Formats code with proper indentation and styling',
+  },
+  {
+    name: 'validateInput',
+    tool: validateInput,
+    argsSchema: z.object({
+      input: z.string().describe('The input string to validate'),
+      type: z.string().describe('Validation type: email, url, number, phone'),
+      options: z.object({
+        minLength: z.number().optional(),
+        maxLength: z.number().optional(),
+        pattern: z.string().optional(),
+      }).optional().describe('Optional validation constraints'),
+    }),
+    description: 'Validates input based on specified rules',
+  },
+  {
+    name: 'searchDocs',
+    tool: searchDocs,
+    argsSchema: z.object({
+      query: z.string().describe('The search query'),
+      limit: z.number().default(5).describe('Maximum number of results to return'),
+    }),
+    description: 'Searches documentation for relevant results',
+  },
+  {
+    name: 'getFileInfo',
+    tool: getFileInfo,
+    argsSchema: z.object({
+      path: z.string().describe('The file path to get information about'),
+    }),
+    description: 'Gets information about a file including name, type, and extension',
+  },
+  {
+    name: 'calculate',
+    tool: calculate,
+    argsSchema: z.object({
+      expression: z.string().describe('Mathematical expression to evaluate (e.g., "2 + 2 * 3")'),
+    }),
+    description: 'Safely calculates mathematical expressions',
+  },
+  {
+    name: 'convertUnits',
+    tool: convertUnits,
+    argsSchema: z.object({
+      value: z.number().describe('The numeric value to convert'),
+      from: z.string().describe('Source unit (e.g., m, km, kg, lb)'),
+      to: z.string().describe('Target unit (e.g., ft, cm, oz, kg)'),
+    }),
+    description: 'Converts between different units of measurement',
+  },
   // Add more tools as needed
-};
+];
 
 // Export types for TypeScript
-export type TamboToolName = keyof typeof tamboTools;
+export type TamboToolName = 'formatCode' | 'validateInput' | 'searchDocs' | 'getFileInfo' | 'calculate' | 'convertUnits';

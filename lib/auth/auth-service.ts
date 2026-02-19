@@ -1,8 +1,26 @@
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
+import * as crypto from 'crypto';
 import { getDatabase } from '../database/connection';
 import { DatabaseOperations } from '../database/connection';
 import { generateToken } from './jwt';
+
+// Session token hashing utilities
+// We hash session tokens before storing them in the database
+// This prevents attackers from using stolen database contents to create valid sessions
+const SESSION_TOKEN_HASH_SECRET = process.env.ENCRYPTION_KEY || 'default-session-secret-change-in-production';
+
+/**
+ * Hash a session token using HMAC-SHA256
+ * This is fast for lookups while still being secure (prevents rainbow table attacks)
+ * The hash is stored in the database instead of the raw token
+ */
+function hashSessionToken(token: string): string {
+  return crypto
+    .createHmac('sha256', SESSION_TOKEN_HASH_SECRET)
+    .update(token)
+    .digest('hex');
+}
 
 export interface User {
   id: number;
@@ -21,6 +39,8 @@ export interface AuthResult {
   token?: string;
   sessionId?: string;
   error?: string;
+  message?: string;
+  requiresVerification?: boolean;
 }
 
 export interface LoginCredentials {
@@ -84,11 +104,18 @@ export class AuthService {
       // Hash password
       const passwordHash = await this.hashPassword(credentials.password);
 
-      // Create user
-      const result = this.dbOps.createUser(
+      // Generate email verification token
+      const { v4: uuidv4 } = await import('uuid');
+      const verificationToken = uuidv4();
+      const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+      // Create user with verification token
+      const result = this.dbOps.createUserWithVerification(
         credentials.email,
         credentials.username || '',
-        passwordHash
+        passwordHash,
+        verificationToken,
+        verificationExpires
       );
 
       if (!result.lastInsertRowid) {
@@ -103,29 +130,26 @@ export class AuthService {
         return { success: false, error: 'Failed to retrieve created user' };
       }
 
-      // Create session
-      const sessionId = uuidv4();
-      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+      // Send verification email
+      try {
+        const { emailService } = await import('@/lib/email/email-service');
+        const verificationUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}`;
+        await emailService.sendVerificationEmail(credentials.email, { 
+          token: verificationToken, 
+          expiresAt: verificationExpires, 
+          verificationUrl 
+        });
+      } catch (emailError) {
+        console.error('Failed to send verification email:', emailError);
+        // Don't fail registration if email fails - user can request resend later
+      }
 
-      this.dbOps.createSession(
-        sessionId,
-        userId,
-        expiresAt,
-        sessionInfo?.ipAddress,
-        sessionInfo?.userAgent
-      );
-
-      // Generate JWT token
-      const token = generateToken({
-        userId: userId.toString(),
-        email: credentials.email
-      });
-
+      // Return success without auto-login - user must verify email first
       return {
         success: true,
         user: this.mapDbUserToUser(user),
-        token,
-        sessionId
+        requiresVerification: true,
+        message: 'Registration successful! Please check your email to verify your account.'
       };
 
     } catch (error) {
@@ -154,12 +178,13 @@ export class AuthService {
       // Update last login
       this.updateLastLogin(dbUser.id);
 
-      // Create session
+      // Create session with hashed token storage
       const sessionId = uuidv4();
+      const sessionIdHash = hashSessionToken(sessionId);
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
       this.dbOps.createSession(
-        sessionId,
+        sessionIdHash,
         dbUser.id,
         expiresAt,
         sessionInfo?.ipAddress,
@@ -190,7 +215,8 @@ export class AuthService {
    */
   async logout(sessionId: string): Promise<{ success: boolean; error?: string }> {
     try {
-      this.dbOps.deleteSession(sessionId);
+      const sessionIdHash = hashSessionToken(sessionId);
+      this.dbOps.deleteSession(sessionIdHash);
       return { success: true };
     } catch (error) {
       console.error('Logout error:', error);
@@ -203,7 +229,8 @@ export class AuthService {
    */
   async validateSession(sessionId: string): Promise<AuthResult> {
     try {
-      const session = this.dbOps.getSession(sessionId) as any;
+      const sessionIdHash = hashSessionToken(sessionId);
+      const session = this.dbOps.getSession(sessionIdHash) as any;
       
       if (!session) {
         return { success: false, error: 'Invalid session' };
@@ -215,7 +242,7 @@ export class AuthService {
       
       if (now > expiresAt) {
         // Clean up expired session
-        this.dbOps.deleteSession(sessionId);
+        this.dbOps.deleteSession(sessionIdHash);
         return { success: false, error: 'Session expired' };
       }
 
@@ -385,8 +412,9 @@ export class AuthService {
    */
   async revokeSession(sessionId: string, userId: number): Promise<{ success: boolean; error?: string }> {
     try {
+      const sessionIdHash = hashSessionToken(sessionId);
       const stmt = this.db.prepare('DELETE FROM user_sessions WHERE id = ? AND user_id = ?');
-      const result = stmt.run(sessionId, userId);
+      const result = stmt.run(sessionIdHash, userId);
       
       if (result.changes === 0) {
         return { success: false, error: 'Session not found' };

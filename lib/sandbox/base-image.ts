@@ -168,6 +168,24 @@ interface PoolEntry {
   provisionedAt: number
 }
 
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(raw ?? '', 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function isDaytonaCapacityError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const anyErr = err as any
+  const statusCode = anyErr?.statusCode ?? anyErr?.response?.status
+  const message = `${anyErr?.message ?? ''}`.toLowerCase()
+  return (
+    statusCode === 403 &&
+    (message.includes('total memory limit exceeded') ||
+      message.includes('limits') ||
+      message.includes('concurrency'))
+  )
+}
+
 export class WarmPool {
   private poolSize: number
   private refillThreshold: number
@@ -175,10 +193,11 @@ export class WarmPool {
   private provisioningCount = 0
   private started = false
   private totalCreated = 0
+  private refillSuspendedUntil = 0
 
   constructor(options?: { poolSize?: number; refillThreshold?: number }) {
     this.poolSize = options?.poolSize
-      ?? parseInt(process.env.SANDBOX_WARM_POOL_SIZE ?? '2', 10)
+      ?? parsePositiveInt(process.env.SANDBOX_WARM_POOL_SIZE, 1)
     this.refillThreshold = options?.refillThreshold ?? 1
   }
 
@@ -220,12 +239,14 @@ export class WarmPool {
   // ---- internal helpers ---------------------------------------------------
 
   private maybeRefill(): void {
+    if (Date.now() < this.refillSuspendedUntil) return
     if (this.pool.length < this.refillThreshold) {
       this.refillPool()
     }
   }
 
   private refillPool(): void {
+    if (Date.now() < this.refillSuspendedUntil) return
     const needed = this.poolSize - this.pool.length - this.provisioningCount
     for (let i = 0; i < needed; i++) {
       this.provisionOne()
@@ -239,6 +260,13 @@ export class WarmPool {
         this.pool.push({ handle, provisionedAt: Date.now() })
       })
       .catch((err) => {
+        if (isDaytonaCapacityError(err)) {
+          // Pause background provisioning to prevent noisy loops when org limits are reached.
+          const cooldownMs = parsePositiveInt(process.env.SANDBOX_WARM_POOL_RETRY_COOLDOWN_MS, 5 * 60 * 1000)
+          this.refillSuspendedUntil = Date.now() + cooldownMs
+          console.warn(`[warm-pool] Daytona capacity reached; suspending warm-pool refill for ${cooldownMs}ms`)
+          return
+        }
         console.error('[warm-pool] Failed to provision sandbox:', err)
       })
       .finally(() => {
@@ -248,10 +276,12 @@ export class WarmPool {
 
   private async createAndProvision(): Promise<SandboxHandle> {
     const provider = getSandboxProvider()
+    const cpu = parsePositiveInt(process.env.SANDBOX_WARM_POOL_CPU, 1)
+    const memory = parsePositiveInt(process.env.SANDBOX_WARM_POOL_MEMORY, 2)
     const handle = await provider.createSandbox({
       language: 'typescript',
       autoStopInterval: 60,
-      resources: { cpu: 2, memory: 4 },
+      resources: { cpu, memory },
       envVars: { TERM: 'xterm-256color', LANG: 'en_US.UTF-8' },
     })
 
