@@ -38,7 +38,8 @@ export const FEATURE_FLAGS = {
   ENABLE_PREMIUM_THEMES: true,
   ENABLE_UNLIMITED_PROMPTS: true,
   ENABLE_PROMPT_HISTORY: true,
-  SKIP_AUTH_IN_DEV: true, // Skip authentication in development
+  // Disabled by default. To enable intentionally, set NEXT_PUBLIC_SKIP_AUTH_IN_DEV=true
+  SKIP_AUTH_IN_DEV: process.env.NEXT_PUBLIC_SKIP_AUTH_IN_DEV === 'true',
 } as const;
 
 // Helper functions

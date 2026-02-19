@@ -31,6 +31,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Check if email is verified (optional - can be disabled via env var)
+    const requireEmailVerification = process.env.REQUIRE_EMAIL_VERIFICATION === 'true';
+    if (requireEmailVerification && result.user && !result.user.emailVerified) {
+      // Delete the session since we're not allowing login
+      if (result.sessionId) {
+        await authService.logout(result.sessionId);
+      }
+      
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: 'Please verify your email before logging in. Check your inbox for the verification link.',
+          requiresVerification: true
+        },
+        { status: 403 }
+      );
+    }
+
     // Set session cookie
     const response = NextResponse.json({
       success: true,

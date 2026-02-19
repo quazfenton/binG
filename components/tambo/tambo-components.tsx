@@ -5,6 +5,7 @@
  * Define UI components that Tambo can dynamically render
  */
 
+import { z } from 'zod';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -153,16 +154,68 @@ function ProgressDisplay({ progress, label }: { progress: number; label?: string
   );
 }
 
-// Register components for Tambo to use
-export const tamboComponents = {
-  CodeDisplay,
-  DataCard,
-  ActionList,
-  StatusAlert,
-  FileTree,
-  ProgressDisplay,
+// Register components for Tambo to use (as array for @tambo-ai/react)
+export const tamboComponents = [
+  {
+    name: 'CodeDisplay',
+    component: CodeDisplay,
+    propsSchema: z.object({
+      code: z.string().describe('The code content to display'),
+      language: z.string().describe('The programming language for syntax highlighting'),
+    }),
+  },
+  {
+    name: 'DataCard',
+    component: DataCard,
+    propsSchema: z.object({
+      title: z.string().describe('The card title'),
+      value: z.string().describe('The main value to display'),
+      description: z.string().optional().describe('Optional description text'),
+      trend: z.enum(['up', 'down', 'neutral']).optional().describe('Trend indicator'),
+    }),
+  },
+  {
+    name: 'ActionList',
+    component: ActionList,
+    propsSchema: z.object({
+      actions: z.array(z.object({
+        label: z.string().describe('Button label'),
+        action: z.string().describe('Action identifier'),
+        variant: z.string().optional().describe('Button variant'),
+      })).describe('List of actions to display'),
+    }),
+  },
+  {
+    name: 'StatusAlert',
+    component: StatusAlert,
+    propsSchema: z.object({
+      status: z.enum(['success', 'error', 'warning', 'info']).describe('Alert type'),
+      message: z.string().describe('Alert message content'),
+      title: z.string().optional().describe('Optional alert title'),
+    }),
+  },
+  {
+    name: 'FileTree',
+    component: FileTree,
+    propsSchema: z.object({
+      files: z.array(z.object({
+        name: z.string().describe('File or folder name'),
+        type: z.enum(['file', 'folder']).describe('Whether this is a file or folder'),
+        path: z.string().optional().describe('Optional file path'),
+      })).describe('List of files/folders to display'),
+      onSelect: z.function().args(z.string()).optional().describe('Callback when a file is selected'),
+    }),
+  },
+  {
+    name: 'ProgressDisplay',
+    component: ProgressDisplay,
+    propsSchema: z.object({
+      progress: z.number().min(0).max(100).describe('Progress percentage (0-100)'),
+      label: z.string().optional().describe('Optional label text'),
+    }),
+  },
   // Add more custom components as needed
-};
+];
 
 // Export types for TypeScript
-export type TamboComponentName = keyof typeof tamboComponents;
+export type TamboComponentName = 'CodeDisplay' | 'DataCard' | 'ActionList' | 'StatusAlert' | 'FileTree' | 'ProgressDisplay';
