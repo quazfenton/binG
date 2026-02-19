@@ -9,12 +9,13 @@ let _toolManager: ToolIntegrationManager | null = null;
 
 export function getToolManager(): ToolIntegrationManager {
   if (!_toolManager) {
+    const nangoKey = process.env.NANGO_SECRET_KEY || process.env.NANGO_API_KEY || '';
     _toolManager = new ToolIntegrationManager({
       arcade: {
         apiKey: process.env.ARCADE_API_KEY || '',
       },
       nango: {
-        apiKey: process.env.NANGO_API_KEY || '',
+        apiKey: nangoKey,
         host: process.env.NANGO_HOST || 'https://api.nango.dev',
       },
     });

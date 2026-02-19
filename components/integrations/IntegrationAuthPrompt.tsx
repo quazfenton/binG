@@ -89,6 +89,30 @@ export default function IntegrationAuthPrompt({
   const [isConnecting, setIsConnecting] = useState(false);
   const [popupWindow, setPopupWindow] = useState<Window | null>(null);
 
+  const isProviderConnected = useCallback(async () => {
+    try {
+      const token = (() => {
+        try {
+          return localStorage.getItem('token');
+        } catch {
+          return null;
+        }
+      })();
+      const response = await fetch('/api/tools/execute', {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      if (!response.ok) return false;
+      const data = await response.json();
+      const connected: string[] = Array.isArray(data?.connectedProviders) ? data.connectedProviders : [];
+      const expected = provider.toLowerCase();
+      const aliases = new Set<string>([expected]);
+      if (expected === 'gmail' || expected.startsWith('google')) aliases.add('google');
+      return connected.some((p) => aliases.has(String(p).toLowerCase()));
+    } catch {
+      return false;
+    }
+  }, [provider]);
+
   const providerName = PROVIDER_NAMES[provider] || provider;
   const providerIcon = PROVIDER_ICONS[provider] || <ExternalLink className="w-6 h-6" />;
   const gradientColor = PROVIDER_COLORS[provider] || 'from-purple-500 to-blue-500';
@@ -121,9 +145,19 @@ export default function IntegrationAuthPrompt({
           clearInterval(interval);
           setPopupWindow(null);
           setIsConnecting(false);
-          // SECURITY: Popup closed WITHOUT success message = cancelled/failed
-          // Do NOT call onAuthorized - OAuth flow was not completed
-          console.warn('[IntegrationAuth] Popup closed without completing OAuth flow');
+          // Some providers (Arcade/Nango redirect flow) may close without postMessage.
+          // Verify actual connection state before deciding this was a cancel.
+          isProviderConnected()
+            .then((connected) => {
+              if (connected) {
+                onAuthorized?.();
+              } else {
+                console.warn('[IntegrationAuth] Popup closed without completing OAuth flow');
+              }
+            })
+            .catch(() => {
+              console.warn('[IntegrationAuth] Unable to verify OAuth state after popup close');
+            });
         }
       }, 500);
     }
@@ -134,7 +168,7 @@ export default function IntegrationAuthPrompt({
       }
       window.removeEventListener('message', handleMessage);
     };
-  }, [popupWindow, onAuthorized]);
+  }, [popupWindow, onAuthorized, isProviderConnected]);
 
   const handleConnect = useCallback(() => {
     setIsConnecting(true);
@@ -144,8 +178,19 @@ export default function IntegrationAuthPrompt({
     const left = window.screenX + (window.outerWidth - width) / 2;
     const top = window.screenY + (window.outerHeight - height) / 2;
 
-    // Add origin parameter for postMessage security
-    const urlWithOrigin = `${authUrl}${authUrl.includes('?') ? '&' : '?'}origin=${encodeURIComponent(window.location.origin)}`;
+    // Add origin parameter for postMessage security, and bearer token fallback for popup auth.
+    const token = (() => {
+      try {
+        return localStorage.getItem('token');
+      } catch {
+        return null;
+      }
+    })();
+    const extraParams = new URLSearchParams({
+      origin: window.location.origin,
+      ...(token ? { token } : {}),
+    });
+    const urlWithOrigin = `${authUrl}${authUrl.includes('?') ? '&' : '?'}${extraParams.toString()}`;
 
     const popup = window.open(
       urlWithOrigin,

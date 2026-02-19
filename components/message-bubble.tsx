@@ -25,6 +25,20 @@ interface MessageBubbleProps {
   userId?: string
 }
 
+const inferProviderFromTool = (toolName?: string): string => {
+  if (!toolName) return 'unknown';
+  const normalized = toolName.toLowerCase();
+  if (normalized.startsWith('gmail.') || normalized.startsWith('google')) return 'google';
+  if (normalized.startsWith('github.')) return 'github';
+  if (normalized.startsWith('slack.')) return 'slack';
+  if (normalized.startsWith('notion.')) return 'notion';
+  if (normalized.startsWith('discord.')) return 'discord';
+  if (normalized.startsWith('twitter.') || normalized.startsWith('x.')) return 'twitter';
+  if (normalized.startsWith('spotify.')) return 'spotify';
+  if (normalized.startsWith('twilio.')) return 'twilio';
+  return normalized.split('.')[0] || 'unknown';
+};
+
 export default function MessageBubble({ 
   message, 
   isStreaming = false, 
@@ -145,10 +159,13 @@ export default function MessageBubble({
   // Check for auth_required in message metadata
   const authInfo = useMemo(() => {
     if ((message as any).metadata?.requiresAuth) {
+      const toolName = (message as any).metadata.toolName || 'unknown';
+      const provider = (message as any).metadata.provider || inferProviderFromTool(toolName);
+      const authUrl = (message as any).metadata.authUrl || `/api/auth/oauth/initiate?provider=${encodeURIComponent(provider)}`;
       return {
-        toolName: (message as any).metadata.toolName || 'unknown',
-        provider: (message as any).metadata.provider || 'unknown',
-        authUrl: (message as any).metadata.authUrl
+        toolName,
+        provider,
+        authUrl
       }
     }
     return null

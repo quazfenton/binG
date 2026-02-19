@@ -37,6 +37,30 @@ export default function ToolAuthPrompt({
   const [popupOpen, setPopupOpen] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const isProviderConnected = useCallback(async () => {
+    try {
+      const token = (() => {
+        try {
+          return localStorage.getItem('token');
+        } catch {
+          return null;
+        }
+      })();
+      const response = await fetch('/api/tools/execute', {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      if (!response.ok) return false;
+      const data = await response.json();
+      const connected: string[] = Array.isArray(data?.connectedProviders) ? data.connectedProviders : [];
+      const expected = provider.toLowerCase();
+      const aliases = new Set<string>([expected]);
+      if (expected === 'gmail' || expected.startsWith('google')) aliases.add('google');
+      return connected.some((p) => aliases.has(String(p).toLowerCase()));
+    } catch {
+      return false;
+    }
+  }, [provider]);
+
   // Cleanup interval on unmount
   useEffect(() => {
     return () => {
@@ -56,8 +80,21 @@ export default function ToolAuthPrompt({
     // SECURITY: OAuth popup - DO NOT use noopener/noreferrer
     // The OAuth success page needs window.opener to send postMessage back to parent
     // Reverse-tabnabbing is not a risk here since we control the OAuth domain
+    const token = (() => {
+      try {
+        return localStorage.getItem('token');
+      } catch {
+        return null;
+      }
+    })();
+    const extraParams = new URLSearchParams({
+      origin: window.location.origin,
+      ...(token ? { token } : {}),
+    });
+    const popupUrl = `${authUrl}${authUrl.includes('?') ? '&' : '?'}${extraParams.toString()}`;
+
     const popup = window.open(
-      authUrl,
+      popupUrl,
       'oauth_popup',
       `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`,
     );
@@ -70,13 +107,17 @@ export default function ToolAuthPrompt({
           clearInterval(intervalRef.current!);
           intervalRef.current = null;
           setPopupOpen(false);
-          // SECURITY: Don't call onAuthorized on popup close
-          // User may have cancelled or closed without completing OAuth
-          // onAuthorized is only called via postMessage from success page
+          isProviderConnected()
+            .then((connected) => {
+              if (connected) {
+                onAuthorized?.();
+              }
+            })
+            .catch(() => {});
         }
       }, 500);
     }
-  }, [authUrl]);
+  }, [authUrl, isProviderConnected, onAuthorized]);
 
   const label = PROVIDER_LABELS[provider] || provider;
 

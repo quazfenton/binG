@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, Suspense, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -11,11 +11,18 @@ function VerifyEmailContent() {
   const searchParams = useSearchParams();
   const [status, setStatus] = useState<'verifying' | 'success' | 'error'>('verifying');
   const [error, setError] = useState<string>('');
+  const hasProcessed = useRef(false);
 
   useEffect(() => {
+    // Prevent processing multiple times
+    if (hasProcessed.current) return;
+    hasProcessed.current = true;
+
+    const token = searchParams.get('token');
     const errorParam = searchParams.get('error');
     const successParam = searchParams.get('success');
 
+    // If success or error from API redirect, show result
     if (successParam) {
       setStatus('success');
     } else if (errorParam) {
@@ -30,8 +37,31 @@ function VerifyEmailContent() {
         default:
           setError('An unknown error occurred');
       }
+    } else if (token) {
+      // Token present but no result yet - call the verification API
+      verifyEmail(token);
+    } else {
+      setStatus('error');
+      setError('No verification token provided');
     }
   }, [searchParams]);
+
+  const verifyEmail = async (token: string) => {
+    try {
+      const response = await fetch(`/api/auth/verify-email?token=${token}`);
+
+      if (response.ok) {
+        setStatus('success');
+      } else {
+        const data = await response.json();
+        setError(data.error || 'Verification failed');
+        setStatus('error');
+      }
+    } catch (err) {
+      setError('Network error. Please try again.');
+      setStatus('error');
+    }
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 p-4">
@@ -81,7 +111,7 @@ function VerifyEmailContent() {
             {status === 'error' && (
               <>
                 <Button asChild variant="outline" className="w-full">
-                  <Link href="/register">Back to Registration</Link>
+                  <Link href="/">Back to Home</Link>
                 </Button>
                 <Button asChild variant="secondary" className="w-full">
                   <Link href="/login">Go to Login</Link>

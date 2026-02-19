@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToolManager } from '@/lib/tools';
 import { toolAuthManager } from '@/lib/services/tool-authorization-manager';
-import { verifyAuth } from '@/lib/auth/jwt';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 export async function POST(req: NextRequest) {
   try {
-    // CRITICAL: Authenticate user from JWT token - do NOT trust userId from request body
-    const authResult = await verifyAuth(req);
+    const tokenFromQuery = req.nextUrl.searchParams.get('token');
+    const authResult = await resolveRequestAuth(req, {
+      bearerToken: tokenFromQuery,
+      allowAnonymous: false,
+    });
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },
@@ -79,8 +82,11 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   try {
-    // Authenticate user from JWT token
-    const authResult = await verifyAuth(req);
+    const tokenFromQuery = req.nextUrl.searchParams.get('token');
+    const authResult = await resolveRequestAuth(req, {
+      bearerToken: tokenFromQuery,
+      allowAnonymous: false,
+    });
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },
