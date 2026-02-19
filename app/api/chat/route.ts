@@ -4,7 +4,7 @@ import { enhancedLLMService } from "@/lib/api/enhanced-llm-service";
 import { errorHandler } from "@/lib/api/error-handler";
 import { priorityRequestRouter } from "@/lib/api/priority-request-router";
 import { unifiedResponseHandler } from "@/lib/api/unified-response-handler";
-import { verifyAuth } from "@/lib/auth/jwt";
+import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
 import { generateSecureId } from '@/lib/utils';
 import type { LLMRequest, LLMMessage, LLMProvider } from "@/lib/api/llm-providers";
@@ -16,13 +16,11 @@ import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 export async function POST(request: NextRequest) {
   console.log('[DEBUG] Chat API: Incoming request');
 
-  // Extract user authentication (optional for anonymous usage)
-  const authResult = await verifyAuth(request);
-  const userId = authResult.userId;
-  
-  if (!authResult.success) {
-    console.log('[DEBUG] Chat API: Anonymous request (no auth token)');
-    // Allow anonymous usage - some features may be limited
+  // Extract user authentication (JWT or session cookie).
+  // Anonymous chat is allowed, but tools/sandbox require authenticated userId.
+  const authResult = await resolveRequestAuth(request);
+  if (!authResult.success || !authResult.userId) {
+    console.log('[DEBUG] Chat API: Anonymous request (no auth token/session)');
   }
 
   try {
@@ -119,6 +117,19 @@ export async function POST(request: NextRequest) {
 
     // NEW: Add tool/sandbox detection
     const requestType = detectRequestType(messages);
+    const authenticatedUserId = authResult.success ? authResult.userId : undefined;
+
+    // Tool/sandbox actions require authenticated user identity for authorization and ownership checks.
+    if ((requestType === 'tool' || requestType === 'sandbox') && !authenticatedUserId) {
+      return NextResponse.json({
+        success: false,
+        status: 'auth_required',
+        error: {
+          type: 'auth_required',
+          message: `${requestType === 'tool' ? 'Tool use' : 'Sandbox actions'} require authentication. Please log in first.`
+        }
+      }, { status: 401 });
+    }
 
     // PRIORITY-BASED ROUTING - Routes through Fast-Agent → n8n → Custom Fallback → Original System
     const routerRequest = {
@@ -130,9 +141,10 @@ export async function POST(request: NextRequest) {
       stream,
       apiKeys,
       requestId,
-      userId: authResult.userId, // Include userId for tool and sandbox authorization
-      enableTools: requestType === 'tool' && !!authResult.userId,
-      enableSandbox: requestType === 'sandbox' && !!authResult.userId,
+      userId: authenticatedUserId, // Include userId for tool and sandbox authorization
+      enableTools: requestType === 'tool' && !!authenticatedUserId,
+      enableSandbox: requestType === 'sandbox' && !!authenticatedUserId,
+      enableComposio: requestType === 'tool' && !!authenticatedUserId,
     };
 
     console.log('[DEBUG] Chat API: Routing request through priority chain');
@@ -353,4 +365,3 @@ export async function OPTIONS(request: NextRequest) {
     },
   });
 }
-

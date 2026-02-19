@@ -11,7 +11,7 @@ Successfully integrated Tambo AI (@tambo-ai/react) as a **modular, non-breaking 
 ### 1. Context & Configuration
 - ✅ `contexts/tambo-context.tsx` - Tambo state management
 - ✅ `components/tambo/tambo-wrapper.tsx` - Conditional TamboProvider wrapper
-- ✅ `.env` - Added TAMBO_ENABLED and TAMBO_API_KEY
+- ✅ `.env` - Added NEXT_PUBLIC_TAMBO_ENABLED and NEXT_PUBLIC_TAMBO_API_KEY
 
 ### 2. Component Registry
 - ✅ `components/tambo/tambo-components.tsx` - UI components Tambo can render:
@@ -70,15 +70,15 @@ TamboMessageRenderer (checks metadata)
 
 ### Disable Tambo (Default)
 ```env
-TAMBO_ENABLED=false
-TAMBO_API_KEY=
+NEXT_PUBLIC_TAMBO_ENABLED=false
+NEXT_PUBLIC_TAMBO_API_KEY=
 ```
 Result: App works exactly as before, zero changes to behavior
 
 ### Enable Tambo
 ```env
-TAMBO_ENABLED=true
-TAMBO_API_KEY=your_api_key_here
+NEXT_PUBLIC_TAMBO_ENABLED=true
+NEXT_PUBLIC_TAMBO_API_KEY=your_api_key_here
 ```
 Result: Tambo features available, falls back gracefully
 
@@ -185,8 +185,8 @@ npm run dev
 ### 2. Test With Tambo (When You Have API Key)
 ```bash
 # Update .env:
-TAMBO_ENABLED=true
-TAMBO_API_KEY=your_key
+NEXT_PUBLIC_TAMBO_ENABLED=true
+NEXT_PUBLIC_TAMBO_API_KEY=your_key
 
 npm run dev
 # Tambo features now available
@@ -224,8 +224,8 @@ npm run dev
 
 ### When Ready to Use Tambo
 1. Get Tambo API key from https://tambo.ai
-2. Set `TAMBO_ENABLED=true`
-3. Set `TAMBO_API_KEY=your_key`
+2. Set `NEXT_PUBLIC_TAMBO_ENABLED=true`
+3. Set `NEXT_PUBLIC_TAMBO_API_KEY=your_key`
 4. Restart dev server
 5. Test Tambo features
 
@@ -311,7 +311,7 @@ npm run build
 ```
 
 ### Tambo not working
-1. Check `TAMBO_ENABLED=true`
+1. Check `NEXT_PUBLIC_TAMBO_ENABLED=true`
 2. Verify API key is set
 3. Check browser console for errors
 4. Verify TamboProvider is wrapping app
@@ -320,7 +320,7 @@ npm run build
 If anything breaks:
 ```env
 # Disable Tambo
-TAMBO_ENABLED=false
+NEXT_PUBLIC_TAMBO_ENABLED=false
 ```
 App will work exactly as before.
 

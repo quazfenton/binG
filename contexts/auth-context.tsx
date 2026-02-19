@@ -32,7 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Skip auth in development mode
+  // Skip auth only when explicitly enabled.
   const isDev = FEATURE_FLAGS.IS_DEVELOPMENT;
   const skipAuth = isDev && FEATURE_FLAGS.SKIP_AUTH_IN_DEV;
 
@@ -58,10 +58,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Validate session and get user info
   const validateSession = async (): Promise<User | null> => {
     try {
+      const token = getStoredToken();
       const response = await fetch('/api/auth/validate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         credentials: 'include', // Include cookies for session validation
       });
@@ -86,9 +88,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const initializeAuth = async () => {
       if (skipAuth) {
-        setUser({ 
-          id: 1, 
-          email: 'dev@example.com',
+        // Explicit opt-in bypass for development only.
+        setUser({
+          id: 1,
+          email: 'dev-auth-bypass@example.com',
           createdAt: new Date(),
           isActive: true,
           subscriptionTier: 'premium',
@@ -114,8 +117,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     if (skipAuth) {
-      setUser({ 
-        id: 1, 
+      setUser({
+        id: 1,
         email,
         createdAt: new Date(),
         isActive: true,
@@ -192,8 +195,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const register = async (email: string, password: string, username?: string) => {
     if (skipAuth) {
-      setUser({ 
-        id: 1, 
+      setUser({
+        id: 1,
         email,
         username,
         createdAt: new Date(),
@@ -217,13 +220,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       const data = await response.json();
-      
+
       if (!response.ok) {
         throw new Error(data.error || 'Registration failed');
       }
 
-      if (!data.success || !data.user) {
-        throw new Error('Invalid response from server');
+      if (!data.success) {
+        throw new Error('Registration failed');
+      }
+
+      // Check if email verification is required
+      if (data.requiresVerification) {
+        // Don't set user as logged in - they need to verify email first
+        // Return success but let the UI handle showing the "check your email" message
+        return;
       }
 
       // Store token if provided (for backward compatibility)
@@ -248,10 +258,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (skipAuth) return true;
 
     try {
+      const token = getStoredToken();
       const response = await fetch('/api/auth/refresh', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         credentials: 'include', // Include cookies for session
       });
@@ -275,11 +287,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const getApiKeys = () => {
+    if (typeof window === 'undefined') return {};
     const storedKeys = localStorage.getItem('apiKeys');
     return storedKeys ? JSON.parse(storedKeys) : {};
   };
 
   const setApiKeys = (keys: Record<string, string>) => {
+    if (typeof window === 'undefined') return;
     localStorage.setItem('apiKeys', JSON.stringify(keys));
   };
 

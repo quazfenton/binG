@@ -10,7 +10,10 @@
     "start": "next start",
     "lint": "next lint",
     "migrate": "node scripts/run-migrations.js",
-    "test-fast-agent": "node test-fast-agent-integration.js"
+    "test-fast-agent": "node test-fast-agent-integration.js",
+    "backup": "node scripts/backup-database.js",
+    "backup:local": "BACKUP_PROVIDER=local node scripts/backup-database.js",
+    "backup:s3": "BACKUP_PROVIDER=s3 node scripts/backup-database.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.9",
@@ -79,6 +82,7 @@
     "critters": "^0.0.25",
     "date-fns": "4.1.0",
     "diff": "^8.0.3",
+    "diff-match-patch": "^1.0.5",
     "embla-carousel-react": "8.5.1",
     "expo": "latest",
     "expo-asset": "latest",
@@ -94,6 +98,7 @@
     "microsandbox": "^0.1.0",
     "next": "15.5.9",
     "next-themes": "^0.4.4",
+    "nodemailer": "^8.0.1",
     "octokit": "^5.0.3",
     "openai": "^4.47.1",
     "portkey-ai": "^0.1.11",
@@ -136,6 +141,9 @@
       "node-forge": ">=1.3.2",
       "qs": ">=6.14.1",
       "@modelcontextprotocol/sdk": ">=1.25.2"
-    }
+    },
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
   }
 }

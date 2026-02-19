@@ -81,6 +81,11 @@ export function getDatabase(): Database.Database {
       // Initialize schema synchronously first time
       if (!dbInitialized) {
         initializeSchemaSync();
+        // Best-effort async migration run for tables not in base schema.
+        // Keep startup resilient even if migration step fails.
+        initializeSchema().catch((error) => {
+          console.warn('[database] Async migrations failed (continuing with base schema):', error);
+        });
         dbInitialized = true;
       }
 
@@ -235,8 +240,17 @@ export class DatabaseOperations {
       INSERT INTO users (email, username, password_hash)
       VALUES (?, ?, ?)
     `);
-    
+
     return stmt.run(email, username, passwordHash);
+  }
+
+  createUserWithVerification(email: string, username: string, passwordHash: string, verificationToken: string, verificationExpires: Date) {
+    const stmt = this.db.prepare(`
+      INSERT INTO users (email, username, password_hash, email_verification_token, email_verification_expires, email_verified)
+      VALUES (?, ?, ?, ?, ?, FALSE)
+    `);
+
+    return stmt.run(email, username, passwordHash, verificationToken, verificationExpires.toISOString());
   }
   
   getUserByEmail(email: string) {

@@ -35,3 +35,32 @@ node_modules*
 .amazonq/
 .vscode/
 .kiro/
+
+# ===========================================
+# DATABASE & BACKUPS
+# ===========================================
+
+# SQLite database files (NEVER commit these!)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+/data/*.db
+/data/*.db-*
+
+# Backup files
+*.backup
+*.bak
+*.dump
+*.sql.gz
+/backups/
+/backup/
+/data/backups/
+
+# Database journals
+*.journal
+
+# Temporary database files
+*.tmp
+*.temp

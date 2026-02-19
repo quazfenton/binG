@@ -61,9 +61,60 @@ export interface OAuthSession {
 
 export class OAuthService {
   private db: any;
+  private schemaEnsured = false;
 
   constructor() {
     this.db = getDatabase();
+    this.ensureSchema();
+  }
+
+  private ensureSchema(): void {
+    if (this.schemaEnsured) return;
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS external_connections (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          provider TEXT NOT NULL,
+          provider_account_id TEXT NOT NULL,
+          provider_display_name TEXT,
+          access_token_encrypted TEXT,
+          refresh_token_encrypted TEXT,
+          token_expires_at DATETIME,
+          scopes TEXT,
+          metadata TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          is_active BOOLEAN DEFAULT TRUE,
+          last_accessed_at DATETIME,
+          refresh_attempts INTEGER DEFAULT 0,
+          UNIQUE(user_id, provider, provider_account_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS oauth_sessions (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER,
+          provider TEXT NOT NULL,
+          state TEXT NOT NULL,
+          nonce TEXT,
+          redirect_uri TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          expires_at DATETIME NOT NULL,
+          is_completed BOOLEAN DEFAULT FALSE,
+          completed_at DATETIME,
+          ip_address TEXT,
+          user_agent TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_sessions_state ON oauth_sessions(state);
+        CREATE INDEX IF NOT EXISTS idx_oauth_sessions_expires ON oauth_sessions(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_ext_conn_user_provider ON external_connections(user_id, provider);
+        CREATE INDEX IF NOT EXISTS idx_ext_conn_active ON external_connections(is_active);
+      `);
+      this.schemaEnsured = true;
+    } catch (error) {
+      console.error('[OAuthService] Failed to ensure OAuth schema:', error);
+    }
   }
 
   async createOAuthSession(params: {

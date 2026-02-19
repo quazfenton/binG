@@ -229,10 +229,22 @@ class PriorityRequestRouter {
     const errors: Array<{ endpoint: string; error: Error }> = [];
     const fallbackChain: string[] = [];
     const startTime = Date.now();
+    const requestType = detectRequestType(request.messages);
+    const preferSpecialized = !!request.userId && (
+      (requestType === 'tool' && (request.enableComposio !== false || request.enableTools !== false)) ||
+      (requestType === 'sandbox' && request.enableSandbox !== false)
+    );
 
-    console.log(`[Router] Starting request routing. Available endpoints: ${this.endpoints.map(e => e.name).join(', ')}`);
+    const orderedEndpoints = preferSpecialized
+      ? [
+          ...this.endpoints.filter(e => e.name !== 'original-system'),
+          ...this.endpoints.filter(e => e.name === 'original-system'),
+        ]
+      : this.endpoints;
 
-    for (const endpoint of this.endpoints) {
+    console.log(`[Router] Starting request routing. Available endpoints: ${orderedEndpoints.map(e => e.name).join(', ')}`);
+
+    for (const endpoint of orderedEndpoints) {
       try {
         console.log(`[Router] Trying endpoint: ${endpoint.name} (priority ${endpoint.priority})`);
         
