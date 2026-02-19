@@ -2,6 +2,7 @@ import { getToolManager } from '@/lib/tools';
 import { toolAuthManager as toolAuthorizationManager } from '@/lib/services/tool-authorization-manager';
 import type { LLMMessage } from '@/lib/api/llm-providers';
 import type { ToolExecutionContext } from '@/lib/tools';
+import { authService } from '@/lib/auth/auth-service';
 
 export interface ToolDetectionResult {
   detectedTool: string | null;
@@ -22,6 +23,17 @@ export interface ToolProcessingResult {
 }
 
 export class ToolContextManager {
+  private async resolveUserEmail(userId: string): Promise<string | undefined> {
+    const numericUserId = Number(userId);
+    if (Number.isNaN(numericUserId)) return undefined;
+    try {
+      const user = await authService.getUserById(numericUserId);
+      return user?.email;
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
    * Process a tool request with proper authorization checking
    */
@@ -72,6 +84,10 @@ export class ToolContextManager {
 
     // If authorized, execute the tool
     const toolManager = getToolManager();
+    const userEmail = await this.resolveUserEmail(userId);
+    const strategy = (process.env.ARCADE_USER_ID_STRATEGY || 'email').toLowerCase();
+    const arcadeUserId = strategy === 'email' && userEmail ? userEmail : userId;
+
     const toolResult = await toolManager.executeTool(
       detectionResult.detectedTool!,
       detectionResult.toolInput,
@@ -79,7 +95,9 @@ export class ToolContextManager {
         userId,
         conversationId,
         metadata: {
-          sessionId: `session_${conversationId}` // Store session ID in metadata
+          sessionId: `session_${conversationId}`, // Store session ID in metadata
+          userEmail,
+          arcadeUserId,
         }
       }
     );
@@ -105,8 +123,9 @@ export class ToolContextManager {
    * Detect tool intent from messages
    */
   private detectToolIntent(messages: LLMMessage[]): ToolDetectionResult {
-    const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content;
-    if (!lastUserMsg || typeof lastUserMsg !== 'string') {
+    const userMessages = messages.filter(m => m.role === 'user').map(m => m.content).filter((c): c is string => typeof c === 'string');
+    const lastUserMsg = userMessages[userMessages.length - 1];
+    if (!lastUserMsg) {
       return {
         detectedTool: null,
         toolInput: {},
@@ -115,16 +134,21 @@ export class ToolContextManager {
     }
 
     const text = lastUserMsg.toLowerCase();
+    const previousUserMsg = userMessages.length > 1 ? userMessages[userMessages.length - 2] : '';
+    const previousText = previousUserMsg.toLowerCase();
     let detectedTool: string | null = null;
     let toolInput: any = {};
 
+    const followUpSendIntent = /\b(send it|send that|do it|go ahead|yes send)\b/i.test(text);
+    const emailBaseText = followUpSendIntent && previousText ? previousText : text;
+
     // Tool detection patterns
-    if (text.includes('send') && (text.includes('email') || text.includes('gmail'))) {
+    if ((emailBaseText.includes('send') && (emailBaseText.includes('email') || emailBaseText.includes('gmail'))) || (followUpSendIntent && (previousText.includes('email') || previousText.includes('gmail')))) {
       detectedTool = 'gmail.send';
       // Extract email details from message
-      const emailMatch = text.match(/to\s+([^\s,]+)/i);
-      const subjectMatch = text.match(/subject[:\s]+([^\.]+)/i);
-      const bodyMatch = text.match(/body[:\s]+(.+)/i);
+      const emailMatch = emailBaseText.match(/to\s+([^\s,]+)/i);
+      const subjectMatch = emailBaseText.match(/subject[:\s]+([^\.]+)/i);
+      const bodyMatch = emailBaseText.match(/body[:\s]+(.+)/i);
 
       // Require recipient email - don't proceed with empty 'to' field
       if (!emailMatch) {
@@ -139,7 +163,7 @@ export class ToolContextManager {
       toolInput = {
         to: emailMatch[1],
         subject: subjectMatch ? subjectMatch[1].trim() : 'No Subject',
-        body: bodyMatch ? bodyMatch[1].trim() : lastUserMsg
+        body: bodyMatch ? bodyMatch[1].trim() : (followUpSendIntent && previousUserMsg ? previousUserMsg : lastUserMsg)
       };
     } else if (text.includes('read') && (text.includes('email') || text.includes('gmail'))) {
       detectedTool = 'gmail.read';

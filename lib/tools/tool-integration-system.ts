@@ -581,12 +581,19 @@ export class ToolIntegrationManager {
     }
 
     try {
+      const strategy = (process.env.ARCADE_USER_ID_STRATEGY || 'email').toLowerCase();
+      const metadata = context.metadata || {};
+      const arcadeUserId =
+        (typeof metadata.arcadeUserId === 'string' && metadata.arcadeUserId) ||
+        (strategy === 'email' && typeof metadata.userEmail === 'string' && metadata.userEmail) ||
+        context.userId;
+
       // Step 1: Authorize the tool only if it requires auth
       // Skip auth for tools marked as requiresAuth: false (e.g., Google Maps, Google News)
       if (toolConfig.requiresAuth !== false) {
         const authResponse = await this.arcadeClient.tools.authorize({
           tool_name: toolConfig.toolName,
-          user_id: context.userId,
+          user_id: arcadeUserId,
         });
 
         // Step 2: If authorization is not completed, return auth URL
@@ -604,7 +611,7 @@ export class ToolIntegrationManager {
       const response = await this.arcadeClient.tools.execute({
         tool_name: toolConfig.toolName,
         input: input,
-        user_id: context.userId,
+        user_id: arcadeUserId,
       });
 
       return {

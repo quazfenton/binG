@@ -1,18 +1,19 @@
 import type { WorkspaceSession, SandboxConfig, ToolResult, PreviewInfo } from './types'
-import { getSandboxProvider, type SandboxProvider, type SandboxHandle } from './providers'
+import { getSandboxProvider, type SandboxProvider, type SandboxHandle, type SandboxProviderType } from './providers'
 import { saveSession, updateSession, deleteSession } from './session-store'
 import { setupCacheVolumes } from './dep-cache'
 import { provisionBaseImage, warmPool } from './base-image'
 import { randomUUID } from 'crypto'
+import { quotaManager } from '../services/quota-manager'
 
 export class SandboxService {
   private provider: SandboxProvider
-  private fallbackProvider: SandboxProvider | null
+  private primaryProviderType: SandboxProviderType
   private sandboxProviderById = new Map<string, SandboxProvider>()
 
   constructor() {
-    this.provider = getSandboxProvider()
-    this.fallbackProvider = this.getConfiguredFallbackProvider()
+    this.primaryProviderType = (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona'
+    this.provider = getSandboxProvider(this.primaryProviderType)
   }
 
   private getDefaultResources(): { cpu: number; memory: number } {
@@ -26,26 +27,27 @@ export class SandboxService {
     }
   }
 
-  private getConfiguredFallbackProvider(): SandboxProvider | null {
-    const enabled = process.env.SANDBOX_ENABLE_FALLBACK === 'true'
-    if (!enabled) return null
-
-    const fallbackType = (process.env.SANDBOX_FALLBACK_PROVIDER || 'microsandbox') as any
-    try {
-      const fallback = getSandboxProvider(fallbackType)
-      if (fallback.name === this.provider.name) return null
-      return fallback
-    } catch (error) {
-      console.warn(`[sandbox-service] Invalid SANDBOX_FALLBACK_PROVIDER="${fallbackType}", fallback disabled`)
-      return null
+  private getCandidateProviderTypes(primary: SandboxProviderType): SandboxProviderType[] {
+    const chain = quotaManager.getSandboxProviderChain(primary) as SandboxProviderType[];
+    const unique = Array.from(new Set(chain.length ? chain : [primary]));
+    const supported: SandboxProviderType[] = [];
+    for (const providerType of unique) {
+      try {
+        getSandboxProvider(providerType);
+        supported.push(providerType);
+      } catch {
+        // Provider not integrated in this build, skip.
+      }
     }
+    return supported.length ? supported : [primary];
   }
 
   private async createSandboxWithProvider(
-    provider: SandboxProvider,
+    providerType: SandboxProviderType,
     userId: string,
     config?: SandboxConfig
   ): Promise<SandboxHandle> {
+    const provider = getSandboxProvider(providerType)
     const handle = await provider.createSandbox({
       language: config?.language ?? 'typescript',
       autoStopInterval: config?.autoStopInterval ?? 60,
@@ -74,6 +76,7 @@ export class SandboxService {
     }
 
     this.sandboxProviderById.set(handle.id, provider)
+    quotaManager.recordUsage(provider.name)
     return handle
   }
 
@@ -90,11 +93,13 @@ export class SandboxService {
       // continue
     }
 
-    if (this.fallbackProvider) {
+    const fallbackTypes = this.getCandidateProviderTypes(this.primaryProviderType).filter(t => t !== this.primaryProviderType)
+    for (const fallbackType of fallbackTypes) {
       try {
-        await this.fallbackProvider.getSandbox(sandboxId)
-        this.sandboxProviderById.set(sandboxId, this.fallbackProvider)
-        return this.fallbackProvider
+        const fallback = getSandboxProvider(fallbackType)
+        await fallback.getSandbox(sandboxId)
+        this.sandboxProviderById.set(sandboxId, fallback)
+        return fallback
       } catch {
         // continue
       }
@@ -109,36 +114,49 @@ export class SandboxService {
   }
 
   async createWorkspace(userId: string, config?: SandboxConfig): Promise<WorkspaceSession> {
-    let handle: SandboxHandle
+    let handle: SandboxHandle | null = null
+    const preferredType = (quotaManager.pickAvailableSandboxProvider(this.primaryProviderType) as SandboxProviderType | null)
+      || this.primaryProviderType
+    const candidateTypes = this.getCandidateProviderTypes(preferredType)
 
     // Only use warm pool when no custom config is specified
     // Custom configs (language, resources, env vars) require fresh sandbox
-    if (process.env.SANDBOX_WARM_POOL === 'true' && !config) {
+    if (process.env.SANDBOX_WARM_POOL === 'true' && !config && preferredType === this.primaryProviderType) {
       try {
         handle = await warmPool.acquire(userId)
         this.sandboxProviderById.set(handle.id, this.provider)
       } catch (error) {
-        console.warn('[sandbox-service] Warm pool unavailable; falling back to direct sandbox creation')
-        try {
-          handle = await this.createSandboxWithProvider(this.provider, userId, config)
-        } catch (primaryError) {
-          if (!this.fallbackProvider) {
-            throw primaryError
+        console.warn('[sandbox-service] Warm pool unavailable; falling back to provider chain')
+        let lastError: unknown = error
+        for (const providerType of candidateTypes) {
+          try {
+            handle = await this.createSandboxWithProvider(providerType, userId, config)
+            lastError = null
+            break
+          } catch (providerError) {
+            lastError = providerError
+            console.warn(`[sandbox-service] Provider failed (${providerType}); trying next fallback`)
           }
-          console.warn(`[sandbox-service] Primary provider failed (${this.provider.name}); trying fallback provider (${this.fallbackProvider.name})`)
-          handle = await this.createSandboxWithProvider(this.fallbackProvider, userId, config)
         }
+        if (lastError) throw lastError
       }
     } else {
-      try {
-        handle = await this.createSandboxWithProvider(this.provider, userId, config)
-      } catch (primaryError) {
-        if (!this.fallbackProvider) {
-          throw primaryError
+      let lastError: unknown = null
+      for (const providerType of candidateTypes) {
+        try {
+          handle = await this.createSandboxWithProvider(providerType, userId, config)
+          lastError = null
+          break
+        } catch (providerError) {
+          lastError = providerError
+          console.warn(`[sandbox-service] Provider failed (${providerType}); trying next fallback`)
         }
-        console.warn(`[sandbox-service] Primary provider failed (${this.provider.name}); trying fallback provider (${this.fallbackProvider.name})`)
-        handle = await this.createSandboxWithProvider(this.fallbackProvider, userId, config)
       }
+      if (lastError) throw lastError
+    }
+
+    if (!handle) {
+      throw new Error('Failed to create sandbox with all available providers')
     }
 
     const session: WorkspaceSession = {

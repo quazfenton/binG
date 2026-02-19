@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { oauthService } from '@/lib/auth/oauth-service';
-import { verifyAuth } from '@/lib/auth/jwt';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 const OAUTH_CONFIGS: Record<string, { authUrl: string; scopes: string; clientIdEnv: string }> = {
   google: {
@@ -37,8 +37,15 @@ const OAUTH_CONFIGS: Record<string, { authUrl: string; scopes: string; clientIdE
 
 export async function GET(req: NextRequest) {
   try {
-    // CRITICAL: Authenticate user from JWT token - do NOT trust userId from query string
-    const authResult = await verifyAuth(req);
+    // Authenticate user using the same strategy as /api/chat:
+    // - Authorization bearer token, OR
+    // - session cookie, OR
+    // - bearer token passed via popup query param fallback
+    const tokenFromQuery = req.nextUrl.searchParams.get('token');
+    const authResult = await resolveRequestAuth(req, {
+      bearerToken: tokenFromQuery,
+      allowAnonymous: false,
+    });
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },

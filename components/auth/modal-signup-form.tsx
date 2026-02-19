@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useAuth } from '@/contexts/auth-context';
 
 interface ModalSignupFormProps {
@@ -68,15 +69,12 @@ export default function ModalSignupForm({ onSwitchMode, onSuccess, onError }: Mo
     setIsLoading(true);
     try {
       await register(email, password);
+      // Keep email for success message
       setIsSuccess(true);
-      // Clear form
-      setEmail('');
+      // Clear password fields only
       setPassword('');
       setConfirmPassword('');
-      // Auto-close modal after 1.5 seconds
-      setTimeout(() => {
-        onSuccess?.();
-      }, 1500);
+      // Don't auto-close - let user see verification message
     } catch (err: any) {
       const errorMessage = err.message || 'Failed to create account. Please try again.';
       setErrors({ general: errorMessage });
@@ -86,18 +84,47 @@ export default function ModalSignupForm({ onSwitchMode, onSuccess, onError }: Mo
     }
   };
 
+  const handleResendVerification = async () => {
+    try {
+      const response = await fetch('/api/auth/send-verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        alert('Verification email resent! Check your inbox (or server console).');
+      } else {
+        alert(data.error || 'Failed to resend');
+      }
+    } catch (err) {
+      alert('Failed to resend verification email');
+    }
+  };
+
   if (isSuccess) {
     return (
       <div className="w-full max-w-md p-8 bg-white/10 backdrop-blur-md rounded-xl border border-white/20">
-        <div className="text-center">
-          <div className="text-green-500 text-6xl mb-4">✓</div>
-          <h2 className="text-2xl font-bold mb-4">Welcome!</h2>
-          <p className="text-gray-300 mb-4">
-            Your account has been created successfully and you're now signed in.
+        <h2 className="text-2xl font-bold mb-6 text-center">Check Your Email</h2>
+        
+        <Alert className="bg-green-500/20 border-green-500/50 text-green-200 mb-6">
+          <AlertDescription>
+            We've sent a verification link to <strong>{email}</strong>. Please click the link to verify your email address.
+          </AlertDescription>
+        </Alert>
+
+        <div className="space-y-3">
+          <p className="text-center text-gray-300 text-sm">
+            Didn't receive the email? Check your spam folder or the server console.
           </p>
-          <p className="text-sm text-gray-400">
-            Closing in a moment...
-          </p>
+          
+          <Button onClick={handleResendVerification} className="w-full" variant="secondary">
+            Resend Verification Email
+          </Button>
+          
+          <Button onClick={onSwitchMode} className="w-full" variant="outline">
+            Go to Login
+          </Button>
         </div>
       </div>
     );
@@ -106,11 +133,11 @@ export default function ModalSignupForm({ onSwitchMode, onSuccess, onError }: Mo
   return (
     <div className="w-full max-w-md p-8 bg-white/10 backdrop-blur-md rounded-xl border border-white/20">
       <h2 className="text-2xl font-bold mb-6 text-center">Join Us</h2>
-      
+
       {errors.general && (
-        <div className="text-red-500 mb-4 text-center p-3 bg-red-500/10 rounded-md border border-red-500/20">
-          {errors.general}
-        </div>
+        <Alert className="bg-red-500/20 border-red-500/50 text-red-200 mb-4">
+          <AlertDescription>{errors.general}</AlertDescription>
+        </Alert>
       )}
       
       <form onSubmit={handleSubmit} className="space-y-4">

@@ -210,7 +210,12 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     if (!userId) return;
 
     try {
-      const response = await fetch(`/api/tools/execute?userId=${userId}`);
+      const token = (() => {
+        try { return localStorage.getItem('token'); } catch { return null; }
+      })();
+      const response = await fetch(`/api/tools/execute?userId=${userId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
       if (response.ok) {
         const data = await response.json();
         const connectedProviders = data.connectedProviders || [];
@@ -241,10 +246,42 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       const arcadeProviders = ['google', 'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive', 'exa', 'twilio', 'spotify', 'vercel', 'railway'];
       if (arcadeProviders.includes(integration.provider)) {
         try {
-          const response = await fetch(`/api/auth/arcade/authorize?provider=${integration.provider}&userId=${userId}`);
+          const token = (() => {
+            try { return localStorage.getItem('token'); } catch { return null; }
+          })();
+          const authQuery = token ? `&token=${encodeURIComponent(token)}` : '';
+          const response = await fetch(`/api/auth/arcade/authorize?provider=${integration.provider}&userId=${userId}${authQuery}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
           if (response.ok) {
             const data = await response.json();
             authEndpoint = data.authUrl;
+          } else {
+            toast.error(`Failed to initialize ${integration.name} connection`);
+            setLoading(null);
+            return;
+          }
+        } catch {
+          toast.error(`Failed to reach authorization service for ${integration.name}`);
+          setLoading(null);
+          return;
+        }
+      }
+
+      // Check if provider uses Nango
+      const nangoProviders = ['github', 'slack', 'discord', 'twitter', 'reddit'];
+      if (nangoProviders.includes(integration.provider)) {
+        try {
+          const token = (() => {
+            try { return localStorage.getItem('token'); } catch { return null; }
+          })();
+          const authQuery = token ? `&token=${encodeURIComponent(token)}` : '';
+          const response = await fetch(`/api/auth/nango/authorize?provider=${integration.provider}&userId=${userId}${authQuery}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
+          if (response.ok) {
+            const data = await response.json();
+            authEndpoint = data.connectLink || data.authUrl || authEndpoint;
           } else {
             toast.error(`Failed to initialize ${integration.name} connection`);
             setLoading(null);

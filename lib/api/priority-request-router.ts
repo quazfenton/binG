@@ -63,6 +63,23 @@ class PriorityRequestRouter {
     this.endpoints = this.initializeEndpoints();
   }
 
+  private getToolServicePreference(): 'composio-tools' | 'tool-execution' | 'auto' {
+    const preferred = (process.env.TOOL_HANDLER || process.env.TOOL_PROVIDER || 'auto').toLowerCase();
+    if (preferred === 'composio' || preferred === 'composio-tools') return 'composio-tools';
+    if (preferred === 'tool-execution' || preferred === 'arcade' || preferred === 'nango') return 'tool-execution';
+    return 'auto';
+  }
+
+  private reorderForToolPreference(endpoints: EndpointConfig[]): EndpointConfig[] {
+    const preference = this.getToolServicePreference();
+    if (preference === 'auto') return endpoints;
+
+    const preferred = endpoints.filter(e => e.name === preference);
+    const secondary = endpoints.filter(e => e.name === (preference === 'composio-tools' ? 'tool-execution' : 'composio-tools'));
+    const others = endpoints.filter(e => e.name !== 'composio-tools' && e.name !== 'tool-execution');
+    return [...preferred, ...secondary, ...others];
+  }
+
   /**
    * Map endpoint name to quota provider key
    */
@@ -235,12 +252,26 @@ class PriorityRequestRouter {
       (requestType === 'sandbox' && request.enableSandbox !== false)
     );
 
-    const orderedEndpoints = preferSpecialized
+    let orderedEndpoints = preferSpecialized
       ? [
           ...this.endpoints.filter(e => e.name !== 'original-system'),
           ...this.endpoints.filter(e => e.name === 'original-system'),
         ]
       : this.endpoints;
+
+    if (requestType === 'tool' && preferSpecialized) {
+      orderedEndpoints = this.reorderForToolPreference(orderedEndpoints);
+      const toolChain = orderedEndpoints
+        .map(e => e.name)
+        .filter(name => name === 'composio-tools' || name === 'tool-execution' || name === 'original-system');
+      console.log(
+        `[Router] Tool routing context: preference=${this.getToolServicePreference()} ` +
+        `composio=${process.env.COMPOSIO_ENABLED !== 'false' && !!process.env.COMPOSIO_API_KEY} ` +
+        `arcade=${!!process.env.ARCADE_API_KEY} ` +
+        `nango=${!!(process.env.NANGO_SECRET_KEY || process.env.NANGO_API_KEY)} ` +
+        `chain=${toolChain.join(' -> ')}`
+      );
+    }
 
     console.log(`[Router] Starting request routing. Available endpoints: ${orderedEndpoints.map(e => e.name).join(', ')}`);
 
@@ -352,6 +383,10 @@ class PriorityRequestRouter {
    * Process Composio tool request with 800+ toolkits
    */
   private async processComposioRequest(request: RouterRequest): Promise<any> {
+    return this.processComposioRequestInternal(request, true);
+  }
+
+  private async processComposioRequestInternal(request: RouterRequest, allowFallbackToToolExecution: boolean): Promise<any> {
     if (!this.composioService) {
       return {
         content: 'Composio service not available',
@@ -386,23 +421,45 @@ class PriorityRequestRouter {
       const result = await this.composioService.processToolRequest(composioRequest);
 
       // Handle authentication required
-      if (result.requiresAuth && result.authUrl) {
+      if (result.requiresAuth) {
+        const toolkitName = result.authToolkit || 'the requested service';
+        const inferredProvider = toolkitName.toLowerCase().includes('gmail') || toolkitName.toLowerCase().includes('google')
+          ? 'google'
+          : toolkitName.toLowerCase();
+        const authUrl = result.authUrl || toolAuthManager.getAuthorizationUrl(inferredProvider);
         return {
-          content: `I need authorization to use ${result.authToolkit || 'the requested service'} through Composio. Please connect your account to proceed.`,
+          content: result.content || `I need authorization to use ${toolkitName} through Composio. Please connect your account to proceed.`,
           data: {
             source: 'composio-tools',
             requiresAuth: true,
-            authUrl: result.authUrl,
-            toolkit: result.authToolkit,
+            authUrl,
+            toolkit: toolkitName,
+            provider: inferredProvider,
+            toolName: toolkitName,
             type: 'auth_required',
             composioSessionId: result.metadata?.sessionId
           }
         };
       }
 
+      const genericNoOutput =
+        !result.content ||
+        result.content.trim().length === 0 ||
+        result.content.includes('Tool request was processed but returned no text output') ||
+        result.content.includes('Tool request was processed (') && result.content.includes('but returned no text output');
+
+      // If Composio did not produce actionable output, fallback to deterministic tool pipeline.
+      if (genericNoOutput && allowFallbackToToolExecution) {
+        console.log('[Router] Composio no-output -> fallback tool-execution');
+        const fallback = await this.processToolRequestInternal(request, false);
+        if (fallback?.data?.type === 'auth_required' || fallback?.data?.type === 'tool_execution') {
+          return fallback;
+        }
+      }
+
       // Success response
       return {
-        content: result.content,
+        content: result.content || 'Tool request completed.',
         data: {
           source: 'composio-tools',
           type: 'composio_execution',
@@ -623,6 +680,10 @@ class PriorityRequestRouter {
    * Process tool request with authorization
    */
   private async processToolRequest(request: RouterRequest): Promise<any> {
+    return this.processToolRequestInternal(request, true);
+  }
+
+  private async processToolRequestInternal(request: RouterRequest, allowFallbackToComposio: boolean): Promise<any> {
     if (!request.userId) {
       return {
         content: 'User authentication required for tool access',
@@ -666,15 +727,30 @@ class PriorityRequestRouter {
         };
       }
 
-      return {
+      const noToolResult = {
         content: result.content,
         data: {
           source: 'tool-execution',
           type: 'no_tools_detected'
         }
       };
+      if (allowFallbackToComposio) {
+        console.log('[Router] tool-execution no_tools_detected -> fallback composio-tools');
+        const fallback = await this.processComposioRequestInternal(request, false);
+        if (fallback?.data?.type === 'auth_required' || fallback?.data?.type === 'composio_execution') {
+          return fallback;
+        }
+      }
+      return noToolResult;
     } catch (error) {
       console.error('[Router] Tool processing error:', error);
+      if (allowFallbackToComposio) {
+        console.log('[Router] tool-execution error -> fallback composio-tools');
+        const fallback = await this.processComposioRequestInternal(request, false);
+        if (fallback?.data?.type === 'auth_required' || fallback?.data?.type === 'composio_execution') {
+          return fallback;
+        }
+      }
       return {
         content: 'Tool execution is currently unavailable. Please try again later.',
         data: {

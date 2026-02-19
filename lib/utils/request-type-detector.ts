@@ -6,28 +6,52 @@ import type { LLMMessage } from '@/lib/api/llm-providers';
  * @returns The detected request type: 'tool', 'sandbox', or 'chat'
  */
 export function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 'chat' {
-  const lastUserContent = messages.filter(m => m.role === 'user').pop()?.content;
+  const userMessages = messages.filter(m => m.role === 'user');
+  const lastUserContent = userMessages[userMessages.length - 1]?.content;
   
   // Extract text from content (handle both string and multimodal array formats)
-  let text: string;
-  if (typeof lastUserContent === 'string') {
-    text = lastUserContent;
-  } else if (Array.isArray(lastUserContent)) {
-    // Extract text parts from multimodal content
-    text = lastUserContent
-      .filter(part => part && (part.type === 'text' || typeof part === 'string'))
-      .map(part => typeof part === 'string' ? part : (part as any).text || '')
-      .join(' ');
-  } else {
-    return 'chat';
-  }
+  const extractText = (value: any): string => {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      return value
+        .map((part: any) => {
+          if (typeof part === 'string') return part;
+          if (part?.type === 'text') return part?.text || '';
+          if (typeof part?.text === 'string') return part.text;
+          if (typeof part?.content === 'string') return part.content;
+          return '';
+        })
+        .join(' ');
+    }
+    if (typeof value?.text === 'string') return value.text;
+    if (typeof value?.content === 'string') return value.content;
+    if (Array.isArray(value?.parts)) return extractText(value.parts);
+    return '';
+  };
+
+  const text = extractText(lastUserContent);
+  const recentUserContext = userMessages
+    .slice(-3)
+    .map((m) => extractText(m.content))
+    .join(' ')
+    .trim();
+  const combinedText = `${recentUserContext} ${text}`.trim();
   
-  if (!text.trim()) return 'chat';
+  if (!combinedText.trim()) return 'chat';
   
-  const lowerText = text.toLowerCase();
+  const lowerText = combinedText.toLowerCase();
 
   // Tool intent patterns (third-party service actions)
   const TOOL_PATTERNS = [
+    /\b(use|using)\s+(a\s+)?tools?\b/i,
+    /\b(tool|function)\s*(call|use|execution)?\b/i,
+    /\b(send|draft|compose)\s+(an?\s+)?email\b/i,
+    /\bgmail\b/i,
+    /\bemail\s+to\b/i,
+    /\bcalendar\b/i,
+    /\bgithub\b/i,
+    /\bslack\b/i,
     /send\s+(an?\s+)?email/i, /read\s+(my\s+)?emails?/i,
     /create\s+(a\s+)?calendar\s+event/i, /add\s+to\s+(my\s+)?calendar/i,
     /post\s+(to|on)\s+(twitter|x|reddit|slack|discord)/i,

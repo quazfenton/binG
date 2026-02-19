@@ -142,9 +142,11 @@ export async function POST(request: NextRequest) {
       apiKeys,
       requestId,
       userId: authenticatedUserId, // Include userId for tool and sandbox authorization
-      enableTools: requestType === 'tool' && !!authenticatedUserId,
-      enableSandbox: requestType === 'sandbox' && !!authenticatedUserId,
-      enableComposio: requestType === 'tool' && !!authenticatedUserId,
+      // Keep these tri-state so router-level detection can still route specialized endpoints.
+      // `false` means "explicitly disable", `undefined` means "auto-detect".
+      enableTools: requestType === 'tool' ? !!authenticatedUserId : undefined,
+      enableSandbox: requestType === 'sandbox' ? !!authenticatedUserId : undefined,
+      enableComposio: requestType === 'tool' ? !!authenticatedUserId : undefined,
     };
 
     console.log('[DEBUG] Chat API: Routing request through priority chain');

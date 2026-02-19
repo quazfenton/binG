@@ -1,6 +1,7 @@
 import type { SandboxHandle } from './providers/sandbox-provider'
 import { getSandboxProvider } from './providers'
 import { setupCacheVolumes } from './dep-cache'
+import { quotaManager } from '../services/quota-manager'
 
 // ---------------------------------------------------------------------------
 // Part 1 – Base Package Manifest
@@ -284,6 +285,7 @@ export class WarmPool {
       resources: { cpu, memory },
       envVars: { TERM: 'xterm-256color', LANG: 'en_US.UTF-8' },
     })
+    quotaManager.recordUsage(provider.name)
 
     await setupCacheVolumes(handle)
     if (process.env.SANDBOX_PRELOAD_PACKAGES !== 'false') {

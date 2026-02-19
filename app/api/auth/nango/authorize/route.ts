@@ -1,23 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAuth } from '@/lib/auth/jwt';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 // Lazy-initialize Nango client to avoid crash when env var is missing
 let _nango: any | null = null;
 function getNango() {
   if (!_nango) {
-    if (!process.env.NANGO_SECRET_KEY) {
+    const nangoSecret = process.env.NANGO_SECRET_KEY || process.env.NANGO_API_KEY;
+    if (!nangoSecret) {
       throw new Error('Nango secret key not configured');
     }
     const { Nango } = require('@nangohq/node');
-    _nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY });
+    _nango = new Nango({ secretKey: nangoSecret });
   }
   return _nango;
 }
 
 export async function GET(req: NextRequest) {
   try {
-    // CRITICAL: Authenticate user from JWT token - do NOT trust userId from query string
-    const authResult = await verifyAuth(req);
+    const shouldRedirect = req.nextUrl.searchParams.get('redirect') === '1';
+    const tokenFromQuery = req.nextUrl.searchParams.get('token');
+    const authResult = await resolveRequestAuth(req, {
+      bearerToken: tokenFromQuery,
+      allowAnonymous: false,
+    });
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },
@@ -47,6 +52,10 @@ export async function GET(req: NextRequest) {
 
     // Return the connect session token
     // The frontend would use this with Nango's frontend SDK to initiate the connection
+    if (shouldRedirect) {
+      return NextResponse.redirect(connectSession.data.connect_link);
+    }
+
     return NextResponse.json({
       sessionToken: connectSession.data.token,
       connectLink: connectSession.data.connect_link,

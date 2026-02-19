@@ -236,21 +236,27 @@ export class DatabaseOperations {
   
   // User operations
   createUser(email: string, username: string, passwordHash: string) {
+    // Handle empty username - set to NULL to avoid unique constraint conflicts
+    const finalUsername = username.trim() || null;
+    
     const stmt = this.db.prepare(`
       INSERT INTO users (email, username, password_hash)
       VALUES (?, ?, ?)
     `);
 
-    return stmt.run(email, username, passwordHash);
+    return stmt.run(email, finalUsername, passwordHash);
   }
 
   createUserWithVerification(email: string, username: string, passwordHash: string, verificationToken: string, verificationExpires: Date) {
+    // Handle empty username - set to NULL to avoid unique constraint conflicts
+    const finalUsername = username.trim() || null;
+    
     const stmt = this.db.prepare(`
       INSERT INTO users (email, username, password_hash, email_verification_token, email_verification_expires, email_verified)
       VALUES (?, ?, ?, ?, ?, FALSE)
     `);
 
-    return stmt.run(email, username, passwordHash, verificationToken, verificationExpires.toISOString());
+    return stmt.run(email, finalUsername, passwordHash, verificationToken, verificationExpires.toISOString());
   }
   
   getUserByEmail(email: string) {
