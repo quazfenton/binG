@@ -1096,21 +1096,14 @@ export default function InteractionPanel({
         {/* Drag Handle - Full width resize bar */}
         <div
           ref={dragHandleRef}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            height: '4px',
-            zIndex: 50,
-            background: isDragging ? 'rgba(255,255,255,0.4)' : 'transparent',
-            transition: 'background 0.2s'
-          }}
+          className={`w-full absolute top-0 left-0 right-0 h-[4px] transition-all duration-200 ${
+            isDragging ? 'bg-white/40 cursor-ns-resize' : 'bg-transparent cursor-default'
+          }`}
+          style={{ zIndex: 50 }}
           onMouseDown={(e) => {
             setIsDragging(true);
             const startY = e.clientY;
             const startHeight = panelHeight;
-            e.currentTarget.style.cursor = 'ns-resize';
 
             const handleMouseMove = (e: MouseEvent) => {
               const delta = startY - e.clientY;
@@ -1119,10 +1112,6 @@ export default function InteractionPanel({
 
             const handleMouseUp = () => {
               setIsDragging(false);
-              if (dragHandleRef.current) {
-                dragHandleRef.current.style.cursor = 'default';
-                dragHandleRef.current.style.background = 'transparent';
-              }
               document.removeEventListener("mousemove", handleMouseMove);
               document.removeEventListener("mouseup", handleMouseUp);
             };
@@ -1132,14 +1121,12 @@ export default function InteractionPanel({
           }}
           onMouseEnter={(e) => {
             if (!isDragging) {
-              e.currentTarget.style.background = 'rgba(255,255,255,0.2)';
-              e.currentTarget.style.cursor = 'ns-resize';
+              e.currentTarget.classList.add('bg-white/20');
             }
           }}
           onMouseLeave={(e) => {
             if (!isDragging) {
-              e.currentTarget.style.background = 'transparent';
-              e.currentTarget.style.cursor = 'default';
+              e.currentTarget.classList.remove('bg-white/20');
             }
           }}
         />
@@ -1572,17 +1559,17 @@ export default function InteractionPanel({
                 <Card className="bg-black/40 border-white/10">
                   <CardContent className="pt-6">
                     <div className="space-y-4">
-                      {/* Advanced AI Plugins Section */}
+                      {/* Quick Prompt Templates Section */}
                       <div className="text-center mb-4">
                         <h3 className="font-medium text-white mb-2">
-                          Advanced AI Plugins
+                          Quick Prompt Templates
                         </h3>
                         <p className="text-xs text-white/60">
-                          Click any plugin to load its specialized prompt
+                          Click to insert a specialized prompt into the chat
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
+                      <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto mb-6">
                         {pluginModules.map((plugin) => {
                           const IconComponent = plugin.icon;
                           return (
@@ -1591,7 +1578,7 @@ export default function InteractionPanel({
                               onClick={() => {
                                 plugin.action(setInput, onActiveTabChange, setPluginToOpen);
                                 toast.success(
-                                  `${plugin.name} plugin activated! Check the chat input.`,
+                                  `${plugin.name} prompt loaded! Check the chat input.`,
                                 );
                               }}
                               className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
@@ -1611,9 +1598,56 @@ export default function InteractionPanel({
                           );
                         })}
                       </div>
+
+                      {/* Pop-out Plugin Windows Section */}
+                      <div className="text-center mb-4 pt-4 border-t border-white/10">
+                        <h3 className="font-medium text-white mb-2">
+                          Plugin Windows
+                        </h3>
+                        <p className="text-xs text-white/60">
+                          Click to open a plugin in a pop-out window
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
+                        {availablePlugins.map((plugin) => {
+                          const IconComponent = plugin.icon;
+                          return (
+                            <button
+                              key={plugin.id}
+                              onClick={() => {
+                                setPluginToOpen(plugin.id);
+                                toast.success(
+                                  `${plugin.name} window opened!`,
+                                );
+                              }}
+                              className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
+                            >
+                              <div className="flex items-center gap-2 w-full">
+                                <IconComponent
+                                  className={`h-4 w-4 ${plugin.category === 'ai' ? 'text-purple-400' : plugin.category === 'code' ? 'text-blue-400' : plugin.category === 'utility' ? 'text-green-400' : plugin.category === 'design' ? 'text-pink-400' : plugin.category === 'data' ? 'text-indigo-400' : plugin.category === 'media' ? 'text-yellow-400' : 'text-gray-400'} group-hover:scale-110 transition-transform`}
+                                />
+                                <span className="font-medium text-sm text-white truncate">
+                                  {plugin.name}
+                                </span>
+                              </div>
+                              <p className="text-xs text-white/60 line-clamp-2 w-full">
+                                {plugin.description}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
+                {/* PluginManager for pop-out windows */}
+                <PluginManager
+                  availablePlugins={availablePlugins}
+                  onPluginResult={handlePluginResult}
+                  openPluginId={pluginToOpen}
+                  onOpenComplete={() => setPluginToOpen(null)}
+                />
               </TabsContent>
 
               {/* Integrations Tab Content */}

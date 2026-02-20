@@ -187,6 +187,17 @@ function isDaytonaCapacityError(err: unknown): boolean {
   )
 }
 
+function isDaytonaReadinessTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const anyErr = err as any
+  const message = `${anyErr?.message ?? ''}`.toLowerCase()
+  return (
+    message.includes('sandbox failed to become ready within the timeout period')
+    || message.includes('failed to become ready')
+    || message.includes('timeout')
+  )
+}
+
 export class WarmPool {
   private poolSize: number
   private refillThreshold: number
@@ -266,6 +277,13 @@ export class WarmPool {
           const cooldownMs = parsePositiveInt(process.env.SANDBOX_WARM_POOL_RETRY_COOLDOWN_MS, 5 * 60 * 1000)
           this.refillSuspendedUntil = Date.now() + cooldownMs
           console.warn(`[warm-pool] Daytona capacity reached; suspending warm-pool refill for ${cooldownMs}ms`)
+          return
+        }
+        if (isDaytonaReadinessTimeoutError(err)) {
+          // Readiness timeouts usually recover after a short delay; back off to avoid hot-loop failures.
+          const cooldownMs = parsePositiveInt(process.env.SANDBOX_WARM_POOL_TIMEOUT_RETRY_COOLDOWN_MS, 60 * 1000)
+          this.refillSuspendedUntil = Date.now() + cooldownMs
+          console.warn(`[warm-pool] Daytona readiness timeout; suspending warm-pool refill for ${cooldownMs}ms`)
           return
         }
         console.error('[warm-pool] Failed to provision sandbox:', err)
