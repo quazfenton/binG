@@ -93,8 +93,22 @@ export class SandboxService {
       // continue
     }
 
-    const fallbackTypes = this.getCandidateProviderTypes(this.primaryProviderType).filter(t => t !== this.primaryProviderType)
-    for (const fallbackType of fallbackTypes) {
+    // For resolving existing sandboxes, try ALL configured providers (not just quota-available ones)
+    // Sandboxes created before quota was hit should remain accessible even if provider is now over quota
+    const allProviderTypes: SandboxProviderType[] = ['daytona', 'runloop', 'microsandbox', 'e2b']
+    const configuredProviders: SandboxProviderType[] = []
+    
+    for (const providerType of allProviderTypes) {
+      try {
+        getSandboxProvider(providerType)
+        configuredProviders.push(providerType)
+      } catch {
+        // Provider not configured in this build, skip
+      }
+    }
+
+    // Try all configured providers (excluding primary which we already tried)
+    for (const fallbackType of configuredProviders.filter(t => t !== this.primaryProviderType)) {
       try {
         const fallback = getSandboxProvider(fallbackType)
         await fallback.getSandbox(sandboxId)

@@ -577,8 +577,18 @@ export default function TerminalPanel({
         sendResize(sessionId, term.terminal.cols, term.terminal.rows);
       }
 
-      preConnectLineBufferRef.current[terminalId] = '';
+      // Flush any queued input BEFORE clearing buffer to prevent losing typed commands
+      // 1. Send completed commands from queue
       await flushPreConnectQueue(terminalId, sessionId);
+      
+      // 2. Send any partially typed input to keep UI and PTY in sync
+      const pendingBuffer = preConnectLineBufferRef.current[terminalId];
+      if (pendingBuffer) {
+        await sendInput(sessionId, pendingBuffer);
+      }
+      
+      // 3. Clear buffer after flushing
+      preConnectLineBufferRef.current[terminalId] = '';
 
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : 'Unknown error';

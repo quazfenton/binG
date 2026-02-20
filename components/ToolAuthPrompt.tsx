@@ -80,16 +80,23 @@ export default function ToolAuthPrompt({
     // SECURITY: OAuth popup - DO NOT use noopener/noreferrer
     // The OAuth success page needs window.opener to send postMessage back to parent
     // Reverse-tabnabbing is not a risk here since we control the OAuth domain
-    const token = (() => {
-      try {
-        return localStorage.getItem('token');
-      } catch {
-        return null;
-      }
-    })();
+
+    // SECURITY: Do NOT pass token in URL query string to prevent leakage via:
+    // - Server/proxy access logs
+    // - Browser history
+    // - Referer headers sent to OAuth provider
+    // The popup will authenticate via existing session cookies instead
+    
+    // Validate authUrl before proceeding
+    if (!authUrl) {
+      console.error('[ToolAuthPrompt] Missing authUrl for provider', provider);
+      toast.error('Authorization URL not available. Please try again.');
+      setIsConnecting(false);
+      return;
+    }
+    
     const extraParams = new URLSearchParams({
       origin: window.location.origin,
-      ...(token ? { token } : {}),
     });
     const popupUrl = `${authUrl}${authUrl.includes('?') ? '&' : '?'}${extraParams.toString()}`;
 

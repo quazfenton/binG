@@ -156,6 +156,20 @@ class DaytonaSandboxHandle implements SandboxHandle {
     return new DaytonaPtyHandle(sessionId, ptyHandle)
   }
 
+  async killPty(sessionId: string): Promise<void> {
+    const ptyHandle = await this.sandbox.process.getPty(sessionId)
+    if (ptyHandle) {
+      await ptyHandle.kill()
+    }
+  }
+
+  async resizePty(sessionId: string, cols: number, rows: number): Promise<void> {
+    const ptyHandle = await this.sandbox.process.getPty(sessionId)
+    if (ptyHandle) {
+      await ptyHandle.resize(cols, rows)
+    }
+  }
+
   private resolvePath(filePath: string): string {
     const resolved = filePath.startsWith('/')
       ? resolve(filePath)
@@ -189,6 +203,11 @@ class DaytonaPtyHandle implements PtyHandle {
 
   async waitForConnection(): Promise<void> {
     await this.handle.waitForConnection()
+  }
+
+  async wait(): Promise<{ exitCode: number }> {
+    await this.handle.wait()
+    return { exitCode: this.handle.exitCode || 0 }
   }
 
   async disconnect(): Promise<void> {

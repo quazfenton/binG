@@ -249,8 +249,9 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
           const token = (() => {
             try { return localStorage.getItem('token'); } catch { return null; }
           })();
-          const authQuery = token ? `&token=${encodeURIComponent(token)}` : '';
-          const response = await fetch(`/api/auth/arcade/authorize?provider=${integration.provider}&userId=${userId}${authQuery}`, {
+          // SECURITY: Only send token via Authorization header, NOT in URL query string
+          // URL tokens can leak via logs, browser history, and Referer headers
+          const response = await fetch(`/api/auth/arcade/authorize?provider=${integration.provider}&userId=${userId}`, {
             headers: token ? { Authorization: `Bearer ${token}` } : undefined,
           });
           if (response.ok) {
@@ -275,8 +276,9 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
           const token = (() => {
             try { return localStorage.getItem('token'); } catch { return null; }
           })();
-          const authQuery = token ? `&token=${encodeURIComponent(token)}` : '';
-          const response = await fetch(`/api/auth/nango/authorize?provider=${integration.provider}&userId=${userId}${authQuery}`, {
+          // SECURITY: Only send token via Authorization header, NOT in URL query string
+          // URL tokens can leak via logs, browser history, and Referer headers
+          const response = await fetch(`/api/auth/nango/authorize?provider=${integration.provider}&userId=${userId}`, {
             headers: token ? { Authorization: `Bearer ${token}` } : undefined,
           });
           if (response.ok) {

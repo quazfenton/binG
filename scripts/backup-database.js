@@ -65,16 +65,23 @@ function log(level, message) {
  */
 function encryptFile(inputPath, outputPath, key) {
   const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipher('aes-256-gcm', key);
   
+  // SECURITY: Derive a fixed 32-byte key for AES-256 from the provided key material
+  // and use createCipheriv (not deprecated createCipher) with the generated IV
+  const keyBuffer = typeof key === 'string'
+    ? crypto.createHash('sha256').update(key).digest()
+    : key;
+  
+  const cipher = crypto.createCipheriv('aes-256-gcm', keyBuffer, iv);
+
   const input = fs.readFileSync(inputPath);
   const encrypted = Buffer.concat([cipher.update(input), cipher.final()]);
   const authTag = cipher.getAuthTag();
-  
+
   // Format: IV (16 bytes) + Auth Tag (16 bytes) + Encrypted Data
   const output = Buffer.concat([iv, authTag, encrypted]);
   fs.writeFileSync(outputPath, output);
-  
+
   return outputPath;
 }
 
