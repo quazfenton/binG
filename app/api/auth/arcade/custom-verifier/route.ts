@@ -54,6 +54,26 @@ async function confirmUserWithArcade(flowId: string, userId: string): Promise<an
   return data;
 }
 
+/**
+ * Validate redirect URI to prevent open redirect vulnerabilities
+ * Only allows same-origin URLs or relative paths
+ */
+function isValidRedirectUri(uri: string, origin: string): boolean {
+  // Allow relative paths (start with / but not //)
+  if (uri.startsWith('/') && !uri.startsWith('//')) {
+    return true;
+  }
+  
+  // Allow same-origin absolute URLs
+  try {
+    const parsed = new URL(uri);
+    return parsed.origin === origin;
+  } catch {
+    // Invalid URL format
+    return false;
+  }
+}
+
 export async function GET(req: NextRequest) {
   if (!isEnabled()) {
     return NextResponse.json({ error: 'Arcade custom verifier is disabled' }, { status: 404 });
@@ -86,7 +106,13 @@ export async function GET(req: NextRequest) {
 
     const nextUri = result?.next_uri || result?.nextUri;
     if (typeof nextUri === 'string' && nextUri.trim().length > 0) {
-      return NextResponse.redirect(nextUri, { status: 303 });
+      // Validate redirect URI to prevent open redirect vulnerability
+      if (isValidRedirectUri(nextUri, req.nextUrl.origin)) {
+        return NextResponse.redirect(nextUri, { status: 303 });
+      } else {
+        console.warn('[Arcade Custom Verifier] Invalid redirect URI rejected:', nextUri);
+        // Fall through to default success URL instead of redirecting to invalid URI
+      }
     }
 
     const successUrl = new URL('/settings', req.nextUrl.origin);

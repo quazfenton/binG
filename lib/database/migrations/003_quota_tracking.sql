@@ -16,10 +16,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_quotas_provider ON provider_quotas(provi
 
 -- Insert default quota limits for known providers
 INSERT OR IGNORE INTO provider_quotas (provider, monthly_limit, current_usage, reset_date, is_disabled)
-VALUES 
+VALUES
   ('composio', 20000, 0, date('now', 'start of month', '+1 month'), FALSE),
   ('arcade', 10000, 0, date('now', 'start of month', '+1 month'), FALSE),
   ('nango', 10000, 0, date('now', 'start of month', '+1 month'), FALSE),
   ('daytona', 5000, 0, date('now', 'start of month', '+1 month'), FALSE),
   ('runloop', 5000, 0, date('now', 'start of month', '+1 month'), FALSE),
-  ('microsandbox', 10000, 0, date('now', 'start of month', '+1 month'), FALSE);
+  ('microsandbox', 10000, 0, date('now', 'start of month', '+1 month'), FALSE),
+  ('e2b', 1000, 0, date('now', 'start of month', '+1 month'), FALSE);

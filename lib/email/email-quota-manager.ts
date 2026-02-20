@@ -1,6 +1,9 @@
 /**
- * Quota Manager - Tracks tool/sandbox call usage per provider and disables
- * providers when monthly quotas are reached to prevent overages.
+ * Email Quota Manager - Tracks email sending usage per provider and 
+ * automatically switches providers when monthly quotas are reached.
+ * 
+ * Supports automatic fallback chain:
+ * Brevo (300/month free) → Resend → SendGrid → SMTP
  * 
  * Uses SQLite database for persistent storage across server restarts.
  */
@@ -9,35 +12,34 @@ import { getDatabase } from '@/lib/database/connection';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 
-export interface ProviderQuota {
-  provider: string;
+export interface EmailProviderQuota {
+  provider: 'brevo' | 'resend' | 'sendgrid' | 'smtp';
   monthlyLimit: number;
   currentUsage: number;
   resetDate: string; // ISO date of next reset
   isDisabled: boolean;
+  priority: number; // Lower = higher priority
 }
 
-// Default monthly limits (can be overridden via env vars)
-const DEFAULT_QUOTAS: Record<string, number> = {
-  composio: 20000,
-  arcade: 10000,
-  nango: 10000,
-  daytona: 5000,
-  runloop: 5000,
-  microsandbox: 10000,
-  e2b: 1000,  // E2B sandbox sessions per month (free tier: 1000 hours/month)
+// Default monthly limits for email providers
+const DEFAULT_EMAIL_QUOTAS: Record<string, { limit: number; priority: number }> = {
+  brevo: { limit: 9000, priority: 1 },       // 300 emails/day × 30 days
+  mailersend: { limit: 3000, priority: 2 },  // 100 emails/day × 30 days
+  resend: { limit: 3000, priority: 3 },      // 3000 emails/month free
+  sendgrid: { limit: 3000, priority: 4 },    // 100 emails/day × 30 days
+  smtp: { limit: 10000, priority: 5 },       // SMTP relay - typically high limits
 };
 
-class QuotaManager {
-  private quotas: Map<string, ProviderQuota> = new Map();
+class EmailQuotaManager {
+  private quotas: Map<string, EmailProviderQuota> = new Map();
   private db: any = null;
   private initialized = false;
   private dbInitialized = false;
   private readonly quotaFilePath: string;
 
   constructor() {
-    this.quotaFilePath = process.env.QUOTA_FALLBACK_FILE_PATH || join(process.cwd(), 'data', 'provider-quotas.json');
-    // Lazy initialization - don't initialize database on construction
+    this.quotaFilePath = process.env.EMAIL_QUOTA_FALLBACK_FILE_PATH || 
+      join(process.cwd(), 'data', 'email-provider-quotas.json');
     this.initializeQuotas();
   }
 
@@ -52,7 +54,7 @@ class QuotaManager {
       this.ensureSchema();
       this.dbInitialized = true;
     } catch (error) {
-      console.error('[QuotaManager] Failed to initialize database:', error);
+      console.error('[EmailQuotaManager] Failed to initialize database:', error);
       this.db = null;
       this.dbInitialized = false;
     }
@@ -62,45 +64,44 @@ class QuotaManager {
     if (!this.db) return;
     try {
       this.db.exec(`
-        CREATE TABLE IF NOT EXISTS provider_quotas (
+        CREATE TABLE IF NOT EXISTS email_provider_quotas (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           provider TEXT NOT NULL UNIQUE,
           monthly_limit INTEGER NOT NULL DEFAULT 0,
           current_usage INTEGER NOT NULL DEFAULT 0,
           reset_date DATETIME NOT NULL,
           is_disabled BOOLEAN NOT NULL DEFAULT FALSE,
+          priority INTEGER NOT NULL DEFAULT 0,
           updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
-        CREATE INDEX IF NOT EXISTS idx_provider_quotas_provider ON provider_quotas(provider);
+        CREATE INDEX IF NOT EXISTS idx_email_quotas_provider ON email_provider_quotas(provider);
       `);
     } catch (error) {
-      console.error('[QuotaManager] Failed to ensure quota schema:', error);
+      console.error('[EmailQuotaManager] Failed to ensure schema:', error);
     }
   }
 
   private initializeQuotas(): void {
-    // Always use in-memory initialization by default
-    // Database loading happens lazily when first accessed
-    for (const [provider, defaultLimit] of Object.entries(DEFAULT_QUOTAS)) {
-      const envKey = `QUOTA_${provider.toUpperCase()}_MONTHLY`;
-      let limit = defaultLimit;
+    for (const [provider, config] of Object.entries(DEFAULT_EMAIL_QUOTAS)) {
+      const envKey = `EMAIL_QUOTA_${provider.toUpperCase()}_MONTHLY`;
+      let limit = config.limit;
 
       if (process.env[envKey]) {
         const parsed = parseInt(process.env[envKey]!, 10);
-        // Validate parsed value to prevent NaN limits
         if (!isNaN(parsed) && parsed > 0) {
           limit = parsed;
         } else {
-          console.warn(`[QuotaManager] Invalid ${envKey} value: "${process.env[envKey]}". Using default limit: ${defaultLimit}`);
+          console.warn(`[EmailQuotaManager] Invalid ${envKey} value. Using default: ${config.limit}`);
         }
       }
 
       this.quotas.set(provider, {
-        provider,
+        provider: provider as EmailProviderQuota['provider'],
         monthlyLimit: limit,
         currentUsage: 0,
         resetDate: this.getNextResetDate(),
         isDisabled: false,
+        priority: config.priority,
       });
     }
   }
@@ -109,8 +110,7 @@ class QuotaManager {
     if (this.initialized) return;
     this.initialized = true;
 
-    // Start with defaults, then merge persisted sources.
-    this.initializeQuotasFromDefaults();
+    this.initializeQuotas();
     this.loadQuotasFromDatabase();
     this.loadQuotasFromFile();
   }
@@ -125,6 +125,7 @@ class QuotaManager {
           currentUsage: number;
           resetDate: string;
           isDisabled: boolean;
+          priority: number;
         }>
       };
 
@@ -133,26 +134,27 @@ class QuotaManager {
         const existing = this.quotas.get(provider);
         if (!existing) {
           this.quotas.set(provider, {
-            provider,
+            provider: provider as EmailProviderQuota['provider'],
             monthlyLimit: fromFile.monthlyLimit,
             currentUsage: fromFile.currentUsage,
             resetDate: fromFile.resetDate,
             isDisabled: !!fromFile.isDisabled,
+            priority: fromFile.priority || DEFAULT_EMAIL_QUOTAS[provider]?.priority || 99,
           });
           continue;
         }
 
-        // Merge additively/safely: preserve highest observed usage so offline writes are not lost.
+        // Merge: preserve highest usage, keep configured limit
         existing.currentUsage = Math.max(existing.currentUsage, fromFile.currentUsage);
-        // Keep configured monthly limit unless file has a larger explicit value.
         existing.monthlyLimit = Math.max(existing.monthlyLimit, fromFile.monthlyLimit || 0);
         existing.resetDate = new Date(fromFile.resetDate) > new Date(existing.resetDate)
           ? fromFile.resetDate
           : existing.resetDate;
         existing.isDisabled = existing.currentUsage >= existing.monthlyLimit || !!fromFile.isDisabled;
+        existing.priority = fromFile.priority || existing.priority;
       }
     } catch (error) {
-      console.warn('[QuotaManager] Failed to load quota file fallback:', error);
+      console.warn('[EmailQuotaManager] Failed to load quota file:', error);
     }
   }
 
@@ -172,6 +174,7 @@ class QuotaManager {
               currentUsage: quota.currentUsage,
               resetDate: quota.resetDate,
               isDisabled: quota.isDisabled,
+              priority: quota.priority,
             },
           ])
         ),
@@ -179,20 +182,19 @@ class QuotaManager {
       writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
       renameSync(tmpPath, this.quotaFilePath);
     } catch (error) {
-      console.warn('[QuotaManager] Failed to save quota file fallback:', error);
+      console.warn('[EmailQuotaManager] Failed to save quota file:', error);
     }
   }
 
   private loadQuotasFromDatabase(): void {
     this.ensureDatabase();
     if (!this.db) {
-      // Database not available, use defaults
-      this.initializeQuotasFromDefaults();
+      this.initializeQuotas();
       return;
     }
 
     try {
-      const stmt = this.db.prepare('SELECT * FROM provider_quotas');
+      const stmt = this.db.prepare('SELECT * FROM email_provider_quotas');
       const rows = stmt.all() as any[];
 
       for (const row of rows) {
@@ -202,92 +204,62 @@ class QuotaManager {
           currentUsage: row.current_usage,
           resetDate: row.reset_date,
           isDisabled: !!row.is_disabled,
+          priority: row.priority || DEFAULT_EMAIL_QUOTAS[row.provider]?.priority || 99,
         });
       }
 
       // Add any providers not in DB yet
-      for (const [provider, defaultLimit] of Object.entries(DEFAULT_QUOTAS)) {
+      for (const [provider, config] of Object.entries(DEFAULT_EMAIL_QUOTAS)) {
         if (!this.quotas.has(provider)) {
-          const envKey = `QUOTA_${provider.toUpperCase()}_MONTHLY`;
-          let limit = defaultLimit;
-
-          if (process.env[envKey]) {
-            const parsed = parseInt(process.env[envKey]!, 10);
-            if (!isNaN(parsed) && parsed > 0) {
-              limit = parsed;
-            }
-          }
-
           const quota = {
-            provider,
-            monthlyLimit: limit,
+            provider: provider as EmailProviderQuota['provider'],
+            monthlyLimit: config.limit,
             currentUsage: 0,
             resetDate: this.getNextResetDate(),
             isDisabled: false,
+            priority: config.priority,
           };
           this.quotas.set(provider, quota);
           this.saveQuotaToDatabase(quota);
         }
       }
 
-      console.log(`[QuotaManager] Loaded ${this.quotas.size} provider quotas from database`);
+      console.log(`[EmailQuotaManager] Loaded ${this.quotas.size} email provider quotas`);
     } catch (error: any) {
-      // Table doesn't exist yet - fall back to in-memory
       if (error.code === 'SQLITE_ERROR' && error.message.includes('no such table')) {
-        console.log('[QuotaManager] Quota table not found, using in-memory storage');
-        this.initializeQuotasFromDefaults();
+        console.log('[EmailQuotaManager] Quota table not found, using in-memory storage');
+        this.initializeQuotas();
       } else {
-        console.error('[QuotaManager] Failed to load quotas from database:', error);
-        this.initializeQuotasFromDefaults();
+        console.error('[EmailQuotaManager] Failed to load quotas from database:', error);
+        this.initializeQuotas();
       }
     }
   }
 
-  private initializeQuotasFromDefaults(): void {
-    for (const [provider, defaultLimit] of Object.entries(DEFAULT_QUOTAS)) {
-      const envKey = `QUOTA_${provider.toUpperCase()}_MONTHLY`;
-      let limit = defaultLimit;
-
-      if (process.env[envKey]) {
-        const parsed = parseInt(process.env[envKey]!, 10);
-        if (!isNaN(parsed) && parsed > 0) {
-          limit = parsed;
-        }
-      }
-
-      this.quotas.set(provider, {
-        provider,
-        monthlyLimit: limit,
-        currentUsage: 0,
-        resetDate: this.getNextResetDate(),
-        isDisabled: false,
-      });
-    }
-  }
-
-  private saveQuotaToDatabase(quota: ProviderQuota): void {
+  private saveQuotaToDatabase(quota: EmailProviderQuota): void {
     this.ensureDatabase();
     if (!this.db) return;
 
     try {
       const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO provider_quotas
-        (provider, monthly_limit, current_usage, reset_date, is_disabled, updated_at)
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        INSERT OR REPLACE INTO email_provider_quotas
+        (provider, monthly_limit, current_usage, reset_date, is_disabled, priority, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);
       stmt.run(
         quota.provider,
         quota.monthlyLimit,
         quota.currentUsage,
         quota.resetDate,
-        quota.isDisabled ? 1 : 0
+        quota.isDisabled ? 1 : 0,
+        quota.priority
       );
     } catch (error) {
-      console.error('[QuotaManager] Failed to save quota to database:', error);
+      console.error('[EmailQuotaManager] Failed to save quota to database:', error);
     }
   }
 
-  private persistQuota(quota: ProviderQuota): void {
+  private persistQuota(quota: EmailProviderQuota): void {
     this.saveQuotaToDatabase(quota);
     this.saveAllQuotasToFile();
   }
@@ -298,47 +270,43 @@ class QuotaManager {
     return nextMonth.toISOString();
   }
 
-  private checkAndResetIfNeeded(quota: ProviderQuota): void {
+  private checkAndResetIfNeeded(quota: EmailProviderQuota): void {
     const now = new Date();
     if (now >= new Date(quota.resetDate)) {
       quota.currentUsage = 0;
       quota.resetDate = this.getNextResetDate();
       quota.isDisabled = false;
-      console.log(`[QuotaManager] Reset quota for ${quota.provider}. New reset date: ${quota.resetDate}`);
+      console.log(`[EmailQuotaManager] Reset quota for ${quota.provider}. New reset date: ${quota.resetDate}`);
       this.saveQuotaToDatabase(quota);
     }
   }
 
   /**
-   * Record a usage event for a provider.
-   * Returns false if the provider is now over quota (just disabled).
+   * Record an email sent event for a provider.
+   * Returns false if the provider is now over quota.
    */
   recordUsage(provider: string, count: number = 1): boolean {
     this.ensureInitialized();
     const quota = this.quotas.get(provider);
     if (!quota) return true; // Unknown provider, allow
 
-    // Reject negative counts to prevent quota bypass
     if (count < 0) {
-      console.warn(`[QuotaManager] Attempted to record negative usage for provider '${provider}': ${count}`);
+      console.warn(`[EmailQuotaManager] Attempted negative usage for '${provider}': ${count}`);
       return true;
     }
 
     this.checkAndResetIfNeeded(quota);
-
     quota.currentUsage += count;
 
     if (quota.currentUsage >= quota.monthlyLimit) {
       quota.isDisabled = true;
       console.warn(
-        `[QuotaManager] Provider '${provider}' has reached its monthly limit ` +
+        `[EmailQuotaManager] Provider '${provider}' reached monthly limit ` +
         `(${quota.currentUsage}/${quota.monthlyLimit}). Disabled until ${quota.resetDate}.`
       );
     }
 
-    // Persist to database
     this.persistQuota(quota);
-
     return quota.currentUsage < quota.monthlyLimit;
   }
 
@@ -355,9 +323,9 @@ class QuotaManager {
   }
 
   /**
-   * Get remaining calls for a provider.
+   * Get remaining emails for a provider.
    */
-  getRemainingCalls(provider: string): number {
+  getRemaining(provider: string): number {
     this.ensureInitialized();
     const quota = this.quotas.get(provider);
     if (!quota) return Infinity;
@@ -379,11 +347,47 @@ class QuotaManager {
   }
 
   /**
+   * Get the best available provider based on priority and quota.
+   * Returns null if no providers are available.
+   */
+  getBestAvailableProvider(): string | null {
+    this.ensureInitialized();
+    
+    // Sort by priority (lower = higher priority)
+    const sorted = Array.from(this.quotas.values())
+      .filter(q => !q.isDisabled)
+      .sort((a, b) => a.priority - b.priority);
+
+    for (const quota of sorted) {
+      this.checkAndResetIfNeeded(quota);
+      if (!quota.isDisabled && quota.currentUsage < quota.monthlyLimit) {
+        return quota.provider;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get fallback provider chain in priority order.
+   * Excludes the specified provider.
+   */
+  getFallbackChain(excludeProvider?: string): string[] {
+    this.ensureInitialized();
+    
+    return Array.from(this.quotas.values())
+      .filter(q => q.provider !== excludeProvider)
+      .sort((a, b) => a.priority - b.priority)
+      .filter(q => !q.isDisabled)
+      .map(q => q.provider);
+  }
+
+  /**
    * Get all quota statuses.
    */
-  getAllQuotas(): ProviderQuota[] {
+  getAllQuotas(): EmailProviderQuota[] {
     this.ensureInitialized();
-    const results: ProviderQuota[] = [];
+    const results: EmailProviderQuota[] = [];
     for (const quota of this.quotas.values()) {
       this.checkAndResetIfNeeded(quota);
       results.push({ ...quota });
@@ -392,66 +396,56 @@ class QuotaManager {
   }
 
   /**
-   * Override quota limit for a provider (useful for plan upgrades).
+   * Get quota status for a specific provider.
    */
-  setLimit(provider: string, newLimit: number): void {
+  getQuota(provider: string): EmailProviderQuota | null {
+    this.ensureInitialized();
+    const quota = this.quotas.get(provider);
+    if (!quota) return null;
+    
+    this.checkAndResetIfNeeded(quota);
+    return { ...quota };
+  }
+
+  /**
+   * Manually disable a provider (e.g., on API errors).
+   */
+  disableProvider(provider: string, reason?: string): void {
     this.ensureInitialized();
     const quota = this.quotas.get(provider);
     if (quota) {
-      quota.monthlyLimit = newLimit;
-      if (quota.currentUsage < quota.monthlyLimit) {
-        quota.isDisabled = false;
-      }
+      quota.isDisabled = true;
+      console.warn(`[EmailQuotaManager] Manually disabled provider '${provider}': ${reason || 'Quota exceeded'}`);
       this.persistQuota(quota);
     }
   }
 
   /**
-   * Find an alternative provider that is still within quota.
-   * Useful for fallback when primary provider is over quota.
+   * Manually enable a provider (e.g., after fixing issues).
    */
-  findAlternative(providerType: 'tool' | 'sandbox', excludeProvider: string): string | null {
+  enableProvider(provider: string): void {
     this.ensureInitialized();
-    const toolProviders = ['composio', 'arcade', 'nango'];
-    const sandboxProviders = this.getSandboxProviderChain(excludeProvider).filter(p => p !== excludeProvider);
-
-    // Filter out excluded provider from candidates to prevent returning it as an "alternative"
-    const candidates = providerType === 'tool'
-      ? this.rotateProviderOrder(toolProviders, excludeProvider).filter(p => p !== excludeProvider)
-      : sandboxProviders;
-
-    for (const provider of candidates) {
-      if (this.isAvailable(provider)) return provider;
+    const quota = this.quotas.get(provider);
+    if (quota) {
+      quota.isDisabled = false;
+      console.log(`[EmailQuotaManager] Manually enabled provider '${provider}'`);
+      this.persistQuota(quota);
     }
-
-    return null;
   }
 
   /**
-   * Returns a circular fallback order for sandbox providers beginning with `primary`.
+   * Reset usage for a provider (admin action).
    */
-  getSandboxProviderChain(primary: string): string[] {
-    const explicitChains: Record<string, string[]> = {
-      daytona: ['daytona', 'runloop', 'microsandbox', 'e2b'],
-      runloop: ['runloop', 'microsandbox', 'daytona', 'e2b'],
-      microsandbox: ['microsandbox', 'runloop', 'daytona', 'e2b'],
-      e2b: ['e2b', 'daytona', 'runloop', 'microsandbox'],
-    };
-    const base = explicitChains[primary] || [primary, 'daytona', 'runloop', 'microsandbox', 'e2b'];
-    const deduped = Array.from(new Set(base));
-    return deduped.filter(provider => this.isAvailable(provider));
-  }
-
-  pickAvailableSandboxProvider(primary: string): string | null {
-    const chain = this.getSandboxProviderChain(primary);
-    return chain.length > 0 ? chain[0] : null;
-  }
-
-  private rotateProviderOrder(list: string[], preferred: string): string[] {
-    const idx = list.indexOf(preferred);
-    if (idx === -1) return list;
-    return [...list.slice(idx), ...list.slice(0, idx)];
+  resetUsage(provider: string): void {
+    this.ensureInitialized();
+    const quota = this.quotas.get(provider);
+    if (quota) {
+      quota.currentUsage = 0;
+      quota.isDisabled = false;
+      console.log(`[EmailQuotaManager] Manually reset usage for provider '${provider}'`);
+      this.persistQuota(quota);
+    }
   }
 }
 
-export const quotaManager = new QuotaManager();
+export const emailQuotaManager = new EmailQuotaManager();

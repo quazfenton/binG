@@ -53,7 +53,10 @@ export async function GET(req: NextRequest) {
     // Return the connect session token
     // The frontend would use this with Nango's frontend SDK to initiate the connection
     if (shouldRedirect) {
-      return NextResponse.redirect(connectSession.data.connect_link);
+      // Add Referrer-Policy header to prevent JWT token leakage via Referer header
+      const redirectResponse = NextResponse.redirect(connectSession.data.connect_link);
+      redirectResponse.headers.set('Referrer-Policy', 'no-referrer');
+      return redirectResponse;
     }
 
     return NextResponse.json({

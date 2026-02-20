@@ -89,15 +89,20 @@ export default function IntegrationAuthPrompt({
   const [isConnecting, setIsConnecting] = useState(false);
   const [popupWindow, setPopupWindow] = useState<Window | null>(null);
 
+  /**
+   * Get auth token from localStorage safely
+   */
+  const getStoredToken = useCallback((): string | null => {
+    try {
+      return localStorage.getItem('token');
+    } catch {
+      return null;
+    }
+  }, []);
+
   const isProviderConnected = useCallback(async () => {
     try {
-      const token = (() => {
-        try {
-          return localStorage.getItem('token');
-        } catch {
-          return null;
-        }
-      })();
+      const token = getStoredToken();
       const response = await fetch('/api/tools/execute', {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });
@@ -178,17 +183,11 @@ export default function IntegrationAuthPrompt({
     const left = window.screenX + (window.outerWidth - width) / 2;
     const top = window.screenY + (window.outerHeight - height) / 2;
 
-    // Add origin parameter for postMessage security, and bearer token fallback for popup auth.
-    const token = (() => {
-      try {
-        return localStorage.getItem('token');
-      } catch {
-        return null;
-      }
-    })();
+    // SECURITY: Only pass origin for postMessage security
+    // Do NOT pass token in URL - it can leak via logs, browser history, and Referer headers
+    // The popup will authenticate via existing session cookies instead
     const extraParams = new URLSearchParams({
       origin: window.location.origin,
-      ...(token ? { token } : {}),
     });
     const urlWithOrigin = `${authUrl}${authUrl.includes('?') ? '&' : '?'}${extraParams.toString()}`;
 

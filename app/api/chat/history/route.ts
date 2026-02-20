@@ -149,10 +149,16 @@ export async function POST(request: NextRequest) {
 
     // Create or update conversation
     const existingConversation = dbOps.getConversation(id);
-    
+
     if (!existingConversation) {
       // Create new conversation
       dbOps.createConversation(id, session.user_id, title || 'Untitled Chat');
+    } else if (existingConversation.user_id !== session.user_id) {
+      // SECURITY: Prevent users from overwriting other users' conversations
+      return NextResponse.json(
+        { error: 'Access denied: conversation belongs to another user' },
+        { status: 403 }
+      );
     }
 
     // Save messages (clear old ones first to avoid duplicates)

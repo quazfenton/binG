@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 /**
  * Server-side Text-to-Speech API
- * 
+ *
  * Supports multiple TTS providers:
  * - ElevenLabs (high quality, requires API key)
  * - Cartesia (ultra-low latency, requires API key)
  * - Web (browser SpeechSynthesis, default fallback)
- * 
+ *
  * Usage:
  * POST /api/tts
  * {
@@ -19,6 +20,18 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(req: NextRequest) {
   try {
+    // SECURITY: Require authentication to prevent unauthorized API quota consumption
+    const authResult = await resolveRequestAuth(req, {
+      allowAnonymous: false,
+    });
+    
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     const { text, provider = 'web', voiceId } = await req.json();
 
     // Validate text is a string
@@ -32,6 +45,14 @@ export async function POST(req: NextRequest) {
     if (!text || text.trim().length === 0) {
       return NextResponse.json(
         { error: 'Text is required' },
+        { status: 400 }
+      );
+    }
+
+    // SECURITY: Validate voiceId against safe pattern to prevent path traversal
+    if (voiceId && !/^[a-zA-Z0-9_-]+$/.test(voiceId)) {
+      return NextResponse.json(
+        { error: 'Invalid voiceId format' },
         { status: 400 }
       );
     }
@@ -54,8 +75,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error('[TTS] Error:', error);
+    // SECURITY: Don't leak internal error details to clients
     return NextResponse.json(
-      { error: error.message || 'TTS synthesis failed' },
+      { error: 'TTS synthesis failed' },
       { status: 500 }
     );
   }

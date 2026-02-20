@@ -39,6 +39,37 @@ const inferProviderFromTool = (toolName?: string): string => {
   return normalized.split('.')[0] || 'unknown';
 };
 
+/**
+ * Get authorization URL for provider, mirroring backend routing logic
+ * Routes Arcade/Nango providers to their respective endpoints
+ */
+const getAuthUrlForProvider = (provider: string): string => {
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+  
+  // Arcade providers (Google ecosystem, Exa, Twilio, Spotify, etc.)
+  const arcadeProviders = [
+    'google', 'gmail', 'googledocs', 'googlesheets', 
+    'googlecalendar', 'googledrive', 'googlemaps',
+    'exa', 'twilio', 'spotify', 'vercel', 'railway'
+  ];
+  
+  // Nango providers (GitHub, Slack, Discord, etc.)
+  const nangoProviders = [
+    'github', 'slack', 'discord', 'twitter', 'reddit'
+  ];
+  
+  if (arcadeProviders.includes(provider)) {
+    return `${baseUrl}/api/auth/arcade/authorize?provider=${encodeURIComponent(provider)}&redirect=1`;
+  }
+  
+  if (nangoProviders.includes(provider)) {
+    return `${baseUrl}/api/auth/nango/authorize?provider=${encodeURIComponent(provider)}&redirect=1`;
+  }
+  
+  // Default to standard OAuth flow
+  return `${baseUrl}/api/auth/oauth/initiate?provider=${encodeURIComponent(provider)}`;
+};
+
 export default function MessageBubble({ 
   message, 
   isStreaming = false, 
@@ -161,7 +192,8 @@ export default function MessageBubble({
     if ((message as any).metadata?.requiresAuth) {
       const toolName = (message as any).metadata.toolName || 'unknown';
       const provider = (message as any).metadata.provider || inferProviderFromTool(toolName);
-      const authUrl = (message as any).metadata.authUrl || `/api/auth/oauth/initiate?provider=${encodeURIComponent(provider)}`;
+      // Use provided authUrl or generate correct one based on provider routing
+      const authUrl = (message as any).metadata.authUrl || getAuthUrlForProvider(provider);
       return {
         toolName,
         provider,
