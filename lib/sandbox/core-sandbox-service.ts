@@ -28,10 +28,13 @@ export class SandboxService {
   }
 
   private getCandidateProviderTypes(primary: SandboxProviderType): SandboxProviderType[] {
-    const chain = quotaManager.getSandboxProviderChain(primary) as SandboxProviderType[];
-    const unique = Array.from(new Set(chain.length ? chain : [primary]));
+    const quotaChain = quotaManager.getSandboxProviderChain(primary) as SandboxProviderType[];
+    const preferred = Array.from(new Set(quotaChain.length ? quotaChain : [primary]));
+    const allKnown: SandboxProviderType[] = ['daytona', 'runloop', 'microsandbox', 'e2b'];
+    const combined = Array.from(new Set([...preferred, ...allKnown]));
     const supported: SandboxProviderType[] = [];
-    for (const providerType of unique) {
+
+    for (const providerType of combined) {
       try {
         getSandboxProvider(providerType);
         supported.push(providerType);
@@ -39,6 +42,7 @@ export class SandboxService {
         // Provider not integrated in this build, skip.
       }
     }
+
     return supported.length ? supported : [primary];
   }
 
@@ -149,7 +153,8 @@ export class SandboxService {
             break
           } catch (providerError) {
             lastError = providerError
-            console.warn(`[sandbox-service] Provider failed (${providerType}); trying next fallback`)
+            const message = providerError instanceof Error ? providerError.message : String(providerError)
+            console.warn(`[sandbox-service] Provider failed (${providerType}): ${message}; trying next fallback`)
           }
         }
         if (lastError) throw lastError
@@ -163,7 +168,8 @@ export class SandboxService {
           break
         } catch (providerError) {
           lastError = providerError
-          console.warn(`[sandbox-service] Provider failed (${providerType}); trying next fallback`)
+          const message = providerError instanceof Error ? providerError.message : String(providerError)
+          console.warn(`[sandbox-service] Provider failed (${providerType}): ${message}; trying next fallback`)
         }
       }
       if (lastError) throw lastError

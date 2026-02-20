@@ -29,6 +29,7 @@
     "@composio/vercel": "^0.5.4",
     "@daytonaio/sdk": "^0.143.0",
     "@e2b/code-interpreter": "^2.3.3",
+    "@e2b/desktop": "^2.2.2",
     "@getbrevo/brevo": "^4.0.1",
     "@google/generative-ai": "^0.14.0",
     "@hookform/resolvers": "^3.9.1",

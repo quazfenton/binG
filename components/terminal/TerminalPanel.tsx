@@ -456,6 +456,49 @@ export default function TerminalPanel({
           if (!currentTerm?.terminal) return;
 
           switch (msg.type) {
+            case 'connected': {
+              const connectedInfo: SandboxInfo = {
+                sessionId,
+                sandboxId,
+                status: 'active',
+              };
+
+              updateTerminalState(terminalId, {
+                sandboxInfo: connectedInfo,
+                isConnected: true,
+              });
+
+              const termMut = terminalsRef.current.find(t => t.id === terminalId);
+              if (termMut) {
+                termMut.sandboxInfo = connectedInfo;
+                termMut.isConnected = true;
+              }
+
+              currentTerm.terminal.writeln('');
+              currentTerm.terminal.writeln('\x1b[1;32m✓ Sandbox ready!\x1b[0m');
+              currentTerm.terminal.writeln('\x1b[90mYour isolated development environment is ready to use.\x1b[0m');
+              currentTerm.terminal.writeln('');
+
+              if (!userId) {
+                currentTerm.terminal.writeln('\x1b[33m⚠ Dev mode: Anonymous session (sign in for persistence)\x1b[0m');
+              }
+
+              if (currentTerm.terminal) {
+                sendResize(sessionId, currentTerm.terminal.cols, currentTerm.terminal.rows);
+              }
+
+              flushPreConnectQueue(terminalId, sessionId).then(async () => {
+                const pendingBuffer = preConnectLineBufferRef.current[terminalId];
+                if (pendingBuffer) {
+                  await sendInput(sessionId, pendingBuffer);
+                }
+                preConnectLineBufferRef.current[terminalId] = '';
+              }).catch(() => {
+                // Keep stream alive even if queue flush fails
+              });
+              break;
+            }
+
             case 'pty':
               currentTerm.terminal.write(msg.data);
               break;
@@ -524,6 +567,19 @@ export default function TerminalPanel({
 
             case 'error':
               currentTerm.terminal.writeln(`\x1b[31m${msg.data}\x1b[0m`);
+              if (!currentTerm.isConnected) {
+                updateTerminalState(terminalId, {
+                  sandboxInfo: { sessionId, sandboxId, status: 'error' },
+                  isConnected: false,
+                });
+                const termMut = terminalsRef.current.find(t => t.id === terminalId);
+                if (termMut) {
+                  termMut.sandboxInfo = { sessionId, sandboxId, status: 'error' };
+                  termMut.isConnected = false;
+                }
+                currentTerm.eventSource?.close();
+                currentTerm.terminal.writeln('\x1b[90mPress any key to retry...\x1b[0m');
+              }
               break;
 
             case 'ping':
@@ -542,53 +598,25 @@ export default function TerminalPanel({
         }
       };
 
-      const sandboxInfo: SandboxInfo = {
+      const pendingSandboxInfo: SandboxInfo = {
         sessionId,
         sandboxId,
-        status: 'active',
+        status: 'creating',
       };
 
       updateTerminalState(terminalId, {
-        sandboxInfo,
+        sandboxInfo: pendingSandboxInfo,
         eventSource,
-        isConnected: true,
+        isConnected: false,
       });
 
       // Update mutable ref immediately
       const termMut = terminalsRef.current.find(t => t.id === terminalId);
       if (termMut) {
-        termMut.sandboxInfo = sandboxInfo;
+        termMut.sandboxInfo = pendingSandboxInfo;
         termMut.eventSource = eventSource;
-        termMut.isConnected = true;
+        termMut.isConnected = false;
       }
-
-      // Show success message - makes it feel instant even if it took time
-      term.terminal?.writeln('');
-      term.terminal?.writeln('\x1b[1;32m✓ Sandbox ready!\x1b[0m');
-      term.terminal?.writeln('\x1b[90mYour isolated development environment is ready to use.\x1b[0m');
-      term.terminal?.writeln('');
-
-      if (!userId) {
-        term.terminal?.writeln('\x1b[33m⚠ Dev mode: Anonymous session (sign in for persistence)\x1b[0m');
-      }
-
-      // Send initial resize
-      if (term.terminal) {
-        sendResize(sessionId, term.terminal.cols, term.terminal.rows);
-      }
-
-      // Flush any queued input BEFORE clearing buffer to prevent losing typed commands
-      // 1. Send completed commands from queue
-      await flushPreConnectQueue(terminalId, sessionId);
-      
-      // 2. Send any partially typed input to keep UI and PTY in sync
-      const pendingBuffer = preConnectLineBufferRef.current[terminalId];
-      if (pendingBuffer) {
-        await sendInput(sessionId, pendingBuffer);
-      }
-      
-      // 3. Clear buffer after flushing
-      preConnectLineBufferRef.current[terminalId] = '';
 
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : 'Unknown error';
@@ -604,7 +632,7 @@ export default function TerminalPanel({
       term.terminal?.writeln(`\x1b[31m✗ Failed to connect: ${errMsg}\x1b[0m`);
       term.terminal?.writeln('\x1b[90mPress any key to retry...\x1b[0m');
     }
-  }, [userId, updateTerminalState, sendResize, flushPreConnectQueue]);
+  }, [userId, updateTerminalState, sendResize, flushPreConnectQueue, sendInput]);
 
   // Ref callback to mount xterm when DOM element is available
   const setXtermContainer = useCallback((terminalId: string) => (el: HTMLDivElement | null) => {
