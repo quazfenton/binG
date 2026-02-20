@@ -581,12 +581,33 @@ export class ToolIntegrationManager {
     }
 
     try {
+      // SECURITY: arcadeUserId MUST come from server-verified context.userId
+      // Do NOT trust metadata.arcadeUserId or metadata.userEmail from client request
+      // as they could be spoofed to execute tools under another user's account
       const strategy = (process.env.ARCADE_USER_ID_STRATEGY || 'email').toLowerCase();
-      const metadata = context.metadata || {};
-      const arcadeUserId =
-        (typeof metadata.arcadeUserId === 'string' && metadata.arcadeUserId) ||
-        (strategy === 'email' && typeof metadata.userEmail === 'string' && metadata.userEmail) ||
-        context.userId;
+      let arcadeUserId = context.userId;
+      
+      // If email strategy is configured, resolve email server-side from verified userId
+      if (strategy === 'email') {
+        const numericUserId = Number(context.userId);
+        if (!Number.isNaN(numericUserId)) {
+          const { authService } = await import('@/lib/auth/auth-service');
+          const user = await authService.getUserById(numericUserId);
+          if (user?.email) {
+            arcadeUserId = user.email;
+          } else {
+            console.warn(
+              `[ToolIntegration] Email strategy: User ${numericUserId} has no email, ` +
+              `using userId "${context.userId}" for Arcade identification`
+            );
+          }
+        } else {
+          console.warn(
+            `[ToolIntegration] Email strategy: Invalid userId format "${context.userId}", ` +
+            `using as-is for Arcade identification`
+          );
+        }
+      }
 
       // Step 1: Authorize the tool only if it requires auth
       // Skip auth for tools marked as requiresAuth: false (e.g., Google Maps, Google News)

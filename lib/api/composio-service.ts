@@ -232,7 +232,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
     if (text.includes('slack')) return 'slack';
     if (text.includes('notion')) return 'notion';
     if (text.includes('discord')) return 'discord';
-    if (text.includes('twitter') || text.includes('tweet') || text.includes('x ')) return 'twitter';
+    // Use word boundary for 'x' to match standalone "x" (Twitter) not words like "explain", "next", etc.
+    if (text.includes('twitter') || text.includes('tweet') || /\bx\b/.test(text)) return 'twitter';
     if (text.includes('spotify')) return 'spotify';
     return null;
   };
@@ -293,9 +294,17 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         // Get available tools - filter by requested toolkits if specified
         let effectiveToolkits: string[] | undefined = request.toolkits;
         if (config.restrictedToolkits && config.restrictedToolkits.length > 0) {
-          effectiveToolkits = request.toolkits && request.toolkits.length > 0
-            ? request.toolkits.filter((toolkit) => config.restrictedToolkits!.includes(toolkit))
-            : config.restrictedToolkits;
+          if (request.toolkits && request.toolkits.length > 0) {
+            const intersection = request.toolkits.filter((toolkit) =>
+              config.restrictedToolkits!.includes(toolkit)
+            );
+            // SECURITY: If the intersection is empty, fall back to the restricted toolkits
+            // so we never drop back to "all toolkits" when restrictions are configured.
+            // This prevents bypassing toolkit restrictions by requesting unauthorized toolkits.
+            effectiveToolkits = intersection.length > 0 ? intersection : config.restrictedToolkits;
+          } else {
+            effectiveToolkits = config.restrictedToolkits;
+          }
         }
         const tools = await loadToolsForRequest(composio, request.userId, effectiveToolkits);
 

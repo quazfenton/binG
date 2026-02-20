@@ -1,13 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AccessToken } from 'livekit-server-sdk';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 export async function POST(req: NextRequest) {
   try {
-    const { roomName, participantName } = await req.json();
-
-    if (!roomName || !participantName) {
+    // SECURITY: Require authentication to prevent unauthorized token generation
+    const authResult = await resolveRequestAuth(req, {
+      allowAnonymous: false,
+    });
+    
+    if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
-        { error: 'roomName and participantName are required' },
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
+    const { roomName } = await req.json();
+
+    if (!roomName) {
+      return NextResponse.json(
+        { error: 'roomName is required' },
         { status: 400 }
       );
     }
@@ -23,9 +36,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // SECURITY: Derive identity from authenticated user ID, not user-supplied name
+    // This prevents impersonation attacks
+    const identity = `user_${authResult.userId}`;
+
     // Create access token
     const token = new AccessToken(apiKey, apiSecret, {
-      identity: participantName,
+      identity,
       ttl: '5m',
     });
 
@@ -42,7 +59,7 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     console.error('[LiveKit Token] Error:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to generate token' },
+      { error: 'Failed to generate token' },
       { status: 500 }
     );
   }

@@ -46,19 +46,41 @@ export class TerminalManager {
     sandboxId: string,
   ): Promise<{ handle: SandboxHandle; providerType: SandboxProviderType }> {
     const primaryType = (process.env.SANDBOX_PROVIDER || 'daytona') as SandboxProviderType
-    const primary = getSandboxProvider(primaryType)
-    try {
-      const handle = await primary.getSandbox(sandboxId)
-      return { handle, providerType: primaryType }
-    } catch {
-      // try fallback below
+    
+    // Track tried providers to avoid duplicates
+    const tried = new Set<SandboxProviderType>()
+    
+    const tryProvider = async (
+      providerType: SandboxProviderType,
+    ): Promise<{ handle: SandboxHandle; providerType: SandboxProviderType } | null> => {
+      if (tried.has(providerType)) return null
+      tried.add(providerType)
+      try {
+        const provider = getSandboxProvider(providerType)
+        const handle = await provider.getSandbox(sandboxId)
+        return { handle, providerType }
+      } catch {
+        return null
+      }
     }
-
+    
+    // Try primary provider first
+    const primaryResult = await tryProvider(primaryType)
+    if (primaryResult) return primaryResult
+    
+    // Try all known providers to locate the sandbox (supports quota-based fallbacks)
+    // This is critical because sandbox-service can create sandboxes on any provider via fallback
+    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'microsandbox', 'e2b']
+    for (const providerType of allProviders) {
+      const result = await tryProvider(providerType)
+      if (result) return result
+    }
+    
+    // Finally try explicit fallback provider if configured
     const fallbackType = this.getFallbackProviderType()
     if (fallbackType) {
-      const fallback = getSandboxProvider(fallbackType)
-      const handle = await fallback.getSandbox(sandboxId)
-      return { handle, providerType: fallbackType }
+      const fallbackResult = await tryProvider(fallbackType)
+      if (fallbackResult) return fallbackResult
     }
 
     throw new Error(`Sandbox ${sandboxId} not found on configured providers`)

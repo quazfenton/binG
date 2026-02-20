@@ -5,9 +5,9 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 export async function POST(req: NextRequest) {
   try {
-    const tokenFromQuery = req.nextUrl.searchParams.get('token');
+    // SECURITY: Only accept auth via Authorization header, NOT query params
+    // Query param tokens can leak via logs, browser history, and Referer headers
     const authResult = await resolveRequestAuth(req, {
-      bearerToken: tokenFromQuery,
       allowAnonymous: false,
     });
     if (!authResult.success || !authResult.userId) {

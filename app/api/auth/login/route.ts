@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authService } from '@/lib/auth/auth-service';
+import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,6 +13,12 @@ export async function POST(request: NextRequest) {
         { success: false, error: 'Email and password are required' },
         { status: 400 }
       );
+    }
+
+    // Rate limiting: Check before processing (strict limits to prevent brute-force)
+    const rateLimitResult = rateLimitMiddleware(request, 'login', email);
+    if (!rateLimitResult.success && rateLimitResult.response) {
+      return rateLimitResult.response;
     }
 
     // Get client info for session

@@ -178,13 +178,14 @@ export class AuthService {
       // Update last login
       this.updateLastLogin(dbUser.id);
 
-      // Create session with hashed token storage
+      // Create session
+      // Note: We store the raw sessionId (not hashed) to match how sessions are looked up
+      // in other parts of the codebase (e.g., chat/history route uses raw sessionId from cookie)
       const sessionId = uuidv4();
-      const sessionIdHash = hashSessionToken(sessionId);
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
       this.dbOps.createSession(
-        sessionIdHash,
+        sessionId,
         dbUser.id,
         expiresAt,
         sessionInfo?.ipAddress,
@@ -215,8 +216,8 @@ export class AuthService {
    */
   async logout(sessionId: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const sessionIdHash = hashSessionToken(sessionId);
-      this.dbOps.deleteSession(sessionIdHash);
+      // Use raw sessionId to match how sessions are stored
+      this.dbOps.deleteSession(sessionId);
       return { success: true };
     } catch (error) {
       console.error('Logout error:', error);
@@ -229,9 +230,9 @@ export class AuthService {
    */
   async validateSession(sessionId: string): Promise<AuthResult> {
     try {
-      const sessionIdHash = hashSessionToken(sessionId);
-      const session = this.dbOps.getSession(sessionIdHash) as any;
-      
+      // Use raw sessionId to match how sessions are stored
+      const session = this.dbOps.getSession(sessionId) as any;
+
       if (!session) {
         return { success: false, error: 'Invalid session' };
       }

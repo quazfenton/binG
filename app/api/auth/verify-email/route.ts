@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
+import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,6 +12,12 @@ export async function GET(request: NextRequest) {
         { success: false, error: 'Verification token is missing' },
         { status: 400 }
       );
+    }
+
+    // Rate limiting: Check before processing
+    const rateLimitResult = rateLimitMiddleware(request, 'verifyEmail');
+    if (!rateLimitResult.success && rateLimitResult.response) {
+      return rateLimitResult.response;
     }
 
     const db = getDatabase();
@@ -33,12 +40,16 @@ export async function GET(request: NextRequest) {
     });
 
     // Find user with this verification token
+    // SECURITY: Pass current time as ISO string parameter for correct comparison
+    // SQLite's datetime('now') returns 'YYYY-MM-DD HH:MM:SS' format which doesn't
+    // compare correctly with ISO 8601 strings stored in email_verification_expires
+    const nowIso = new Date().toISOString();
     const user = db.prepare(`
       SELECT * FROM users
       WHERE email_verification_token = ?
         AND is_active = TRUE
-        AND email_verification_expires > datetime('now')
-    `).get(token) as any;
+        AND email_verification_expires > ?
+    `).get(token, nowIso) as any;
 
     console.log('[Verify Email] Query result:', !!user);
 

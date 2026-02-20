@@ -30,14 +30,61 @@ export async function GET(req: NextRequest) {
 
     const strategy = (process.env.ARCADE_USER_ID_STRATEGY || 'email').toLowerCase();
     let arcadeUserId = authenticatedUserId;
+    
     if (strategy === 'email') {
       const numericUserId = Number(authenticatedUserId);
-      if (!Number.isNaN(numericUserId)) {
-        const user = await authService.getUserById(numericUserId);
-        if (user?.email) {
-          arcadeUserId = user.email;
-        }
+      
+      if (Number.isNaN(numericUserId)) {
+        // Invalid user ID format - cannot lookup email
+        console.error(
+          `[Arcade Auth] Email strategy failed: Invalid user ID format "${authenticatedUserId}". ` +
+          `Expected numeric ID. Cannot proceed with email-based identification.`
+        );
+        // Return error instead of silent fallback to prevent orphaned authorizations
+        return NextResponse.json(
+          { 
+            error: 'Invalid user ID format for email strategy',
+            details: 'Email strategy requires a valid numeric user ID'
+          }, 
+          { status: 400 }
+        );
       }
+      
+      const user = await authService.getUserById(numericUserId);
+      
+      if (!user) {
+        // User not found
+        console.error(
+          `[Arcade Auth] Email strategy failed: User ${numericUserId} not found. ` +
+          `Cannot proceed with email-based identification.`
+        );
+        return NextResponse.json(
+          { 
+            error: 'User not found for email strategy',
+            details: `User ID ${numericUserId} does not exist`
+          }, 
+          { status: 404 }
+        );
+      }
+      
+      if (!user.email) {
+        // User has no email
+        console.error(
+          `[Arcade Auth] Email strategy failed: User ${numericUserId} has no email address. ` +
+          `Cannot proceed with email-based identification.`
+        );
+        return NextResponse.json(
+          { 
+            error: 'User has no email address',
+            details: `User ${numericUserId} exists but has no email configured`
+          }, 
+          { status: 400 }
+        );
+      }
+      
+      // Success - use email as Arcade user ID
+      arcadeUserId = user.email;
+      console.log(`[Arcade Auth] Using email "${user.email}" as Arcade user ID for user ${numericUserId}`);
     }
 
     if (!provider) {
@@ -89,7 +136,10 @@ export async function GET(req: NextRequest) {
 
     // Return the authorization URL for popup window
     if (shouldRedirect) {
-      return NextResponse.redirect(authResponse.url);
+      // Add Referrer-Policy header to prevent JWT token leakage via Referer header
+      const redirectResponse = NextResponse.redirect(authResponse.url);
+      redirectResponse.headers.set('Referrer-Policy', 'no-referrer');
+      return redirectResponse;
     }
 
     return NextResponse.json({

@@ -81,11 +81,19 @@ export function getDatabase(): Database.Database {
       // Initialize schema synchronously first time
       if (!dbInitialized) {
         initializeSchemaSync();
-        // Best-effort async migration run for tables not in base schema.
-        // Keep startup resilient even if migration step fails.
-        initializeSchema().catch((error) => {
-          console.warn('[database] Async migrations failed (continuing with base schema):', error);
-        });
+        
+        // SECURITY: Run migrations SYNCHRONOUSLY to prevent race conditions
+        // Without this, requests can execute before migrations complete, causing
+        // "no such column" errors for migration-added columns like email_verification_token
+        try {
+          // Require here to avoid circular import at module load time
+          const { migrationRunner } = require('./migration-runner');
+          migrationRunner.runMigrations();
+          console.log('[database] Migrations completed successfully');
+        } catch (error) {
+          console.warn('[database] Migrations failed (continuing with base schema):', error);
+        }
+        
         dbInitialized = true;
       }
 

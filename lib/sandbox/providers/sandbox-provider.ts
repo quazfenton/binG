@@ -20,6 +20,8 @@ export interface SandboxHandle {
 
   createPty?(options: PtyOptions): Promise<PtyHandle>
   connectPty?(sessionId: string, options: PtyConnectOptions): Promise<PtyHandle>
+  killPty?(sessionId: string): Promise<void>
+  resizePty?(sessionId: string, cols: number, rows: number): Promise<void>
 }
 
 export interface PtyHandle {
@@ -27,12 +29,13 @@ export interface PtyHandle {
   sendInput(data: string): Promise<void>
   resize(cols: number, rows: number): Promise<void>
   waitForConnection(): Promise<void>
+  wait?(): Promise<{ exitCode: number }>
   disconnect(): Promise<void>
   kill(): Promise<void>
 }
 
 export interface PtyOptions {
-  id: string
+  id: string  // Session identifier
   cwd?: string
   envs?: Record<string, string>
   cols?: number
