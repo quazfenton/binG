@@ -445,8 +445,29 @@ export default function TerminalPanel({
       const sessionData = await sessionRes.json();
       const { sessionId, sandboxId } = sessionData;
 
-      // Step 2: Connect SSE stream (this creates the PTY)
-      const streamUrl = `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}${token ? `&token=${encodeURIComponent(token)}` : ''}${anonymousSessionId ? `&anonymousSessionId=${encodeURIComponent(anonymousSessionId)}` : ''}`;
+      // Step 2: Get short-lived connection token (avoids passing JWT in URL)
+      let connectionToken: string | undefined;
+      try {
+        const tokenRes = await fetch('/api/sandbox/terminal/stream', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+          credentials: 'include',
+          body: JSON.stringify({ sessionId, sandboxId }),
+        });
+
+        if (tokenRes.ok) {
+          const tokenData = await tokenRes.json();
+          connectionToken = tokenData.connectionToken;
+        }
+      } catch (err) {
+        console.warn('[TerminalPanel] Failed to get connection token, falling back to JWT:', err);
+      }
+
+      // Step 3: Connect SSE stream (this creates the PTY)
+      const streamUrl = `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}${connectionToken ? `&token=${encodeURIComponent(connectionToken)}` : ''}${anonymousSessionId ? `&anonymousSessionId=${encodeURIComponent(anonymousSessionId)}` : ''}`;
       const eventSource = new EventSource(streamUrl);
 
       eventSource.onmessage = (event) => {

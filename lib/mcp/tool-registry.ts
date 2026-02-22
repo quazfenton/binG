@@ -192,9 +192,11 @@ export class MCPToolRegistry {
     timeout?: number
   ): Promise<MCPToolCallResult> {
     const startTime = Date.now()
+    let serverId = ''
 
     try {
-      const [serverId, toolName] = this.parseQualifiedToolName(qualifiedName)
+      const [parsedServerId, toolName] = this.parseQualifiedToolName(qualifiedName)
+      serverId = parsedServerId
 
       const wrapper = this.tools.get(qualifiedName)
       if (!wrapper) {

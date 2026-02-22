@@ -150,11 +150,6 @@ export class MCPClient extends EventEmitter {
    */
   async disconnect(): Promise<void> {
     try {
-      // Send shutdown notification only if we are currently connected
-      if (this.isConnected()) {
-        await this.notify('notifications/initialized')
-      }
-
       // Close process if stdio
       if (this.process) {
         this.process.kill()

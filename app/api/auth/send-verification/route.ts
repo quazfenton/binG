@@ -25,22 +25,29 @@ export async function POST(request: NextRequest) {
     // Find user by email
     const user = db.prepare('SELECT * FROM users WHERE email = ? AND is_active = TRUE').get(email) as any;
 
-    if (!user) {
-      // Don't reveal if email exists or not (security best practice)
-      return NextResponse.json({
+    // Create response with rate limit headers for all paths
+    const createResponse = () => {
+      const response = NextResponse.json({
         success: true,
         message: 'If the email exists, a verification link has been sent',
       });
+      // Propagate rate limit headers so clients can see remaining attempts
+      Object.entries(rateLimitResult.headers).forEach(([key, value]) => {
+        response.headers.set(key, value);
+      });
+      return response;
+    };
+
+    if (!user) {
+      // Don't reveal if email exists or not (security best practice)
+      return createResponse();
     }
 
     // Check if already verified
     if (user.email_verified) {
       // SECURITY: Return same response as user-not-found to prevent email enumeration
       // This prevents attackers from determining if an email is registered AND verified
-      return NextResponse.json({
-        success: true,
-        message: 'If the email exists, a verification link has been sent',
-      });
+      return createResponse();
     }
 
     // Generate verification token
