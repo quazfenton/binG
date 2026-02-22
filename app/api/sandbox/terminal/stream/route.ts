@@ -7,19 +7,27 @@ import { randomUUID } from 'crypto';
 
 export const runtime = 'nodejs';
 
-// In-memory store for short-lived connection tokens (5 minute TTL)
-// Format: Map<token, { userId, sandboxId, sessionId, expiresAt }>
-const connectionTokens = new Map<string, { userId: string; sandboxId: string; sessionId: string; expiresAt: number }>();
+// Use globalThis to prevent HMR leaks in development
+// Without this, each hot-reload would create a new Map and interval timer
+declare global {
+  var __terminalConnectionTokens: Map<string, { userId: string; sandboxId: string; sessionId: string; expiresAt: number }> | undefined;
+  var __terminalTokenCleanupInterval: NodeJS.Timeout | undefined;
+}
 
-// Cleanup expired tokens every minute
-setInterval(() => {
-  const now = Date.now();
-  for (const [token, data] of connectionTokens.entries()) {
-    if (data.expiresAt < now) {
-      connectionTokens.delete(token);
+// Initialize connection tokens Map (singleton across HMR)
+const connectionTokens = globalThis.__terminalConnectionTokens ??= new Map();
+
+// Initialize cleanup interval (singleton across HMR)
+if (!globalThis.__terminalTokenCleanupInterval) {
+  globalThis.__terminalTokenCleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [token, data] of connectionTokens.entries()) {
+      if (data.expiresAt < now) {
+        connectionTokens.delete(token);
+      }
     }
-  }
-}, 60000);
+  }, 60000);
+}
 
 /**
  * POST to initiate a terminal stream and get a short-lived connection token

@@ -116,41 +116,13 @@ export function getDatabase(): Database.Database {
       // Handle native module binding errors gracefully
       const isNativeModuleError = error.message?.includes('Could not locate the bindings file') ||
                                   error.message?.includes('better_sqlite3.node');
-      
+
       if (isNativeModuleError) {
         console.warn('Database native module not available. Running in mock mode.');
         console.warn('To fix: run `pnpm rebuild better-sqlite3` or set SKIP_DB_INIT=true');
-        
-        // Return mock database for graceful degradation
-        const mockDb: Partial<Database.Database> = {
-          prepare: () => {
-            return {
-              run: () => ({ lastInsertRowid: 1, changes: 1 }),
-              get: () => null,
-              all: () => [],
-              bind: () => null,
-              columns: () => [],
-              finalize: () => {},
-              iterate: () => [],
-              raw: () => []
-            } as any;
-          },
-          exec: () => mockDb as Database.Database,
-          pragma: () => {},
-          transaction: (fn: any) => fn,
-          close: () => {},
-          backup: () => Promise.resolve({ progress: () => {} }),
-          defaultSafeIntegers: () => mockDb as Database.Database,
-          register: () => mockDb as Database.Database,
-          loadExtension: () => mockDb as Database.Database,
-          serialize: () => Buffer.alloc(0),
-          table: () => null,
-          function: () => mockDb as Database.Database,
-          aggregate: () => mockDb as Database.Database,
-          unsafeMode: () => mockDb as Database.Database,
-        };
 
-        return mockDb as Database.Database;
+        // Return mock database for graceful degradation
+        return getMockDatabase();
       }
       
       console.error('Failed to initialize database:', error);
@@ -239,16 +211,22 @@ export function decryptApiKey(encryptedData: string): string {
       const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
       let decrypted = decipher.update(encrypted, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
-      
-      // SECURITY: Legacy format detected - log warning for migration
-      // The data was decrypted successfully but uses insecure MD5 key derivation
+
+      // SECURITY WARNING: Legacy format detected
+      // This data was encrypted with deprecated createDecipher using MD5 key derivation
+      // which is vulnerable to known-plaintext attacks.
+      // 
+      // ACTION REQUIRED: Re-encrypt this API key using the secure format by calling
+      // encryptApiKey() with the decrypted value and updating the database record.
+      // 
+      // The legacy fallback will be removed in a future version.
       console.warn(
-        '[decryptApiKey] Legacy encryption format detected. ' +
-        'API keys encrypted with deprecated createDecipher (MD5 key derivation) should be ' +
-        're-encrypted using the secure format. Consider running a migration to re-encrypt ' +
-        'all legacy keys using encryptApiKey().'
+        '[decryptApiKey] ⚠️  SECURITY WARNING: Legacy encryption format detected!',
+        'Data encrypted with deprecated createDecipher (MD5 key derivation) is vulnerable.',
+        'Please migrate this API key by re-encrypting with encryptApiKey() and updating the database.',
+        'Legacy support will be removed in a future release.'
       );
-      
+
       return decrypted;
     } catch (legacyError) {
       // Both formats failed - this is truly corrupted data
@@ -256,6 +234,69 @@ export function decryptApiKey(encryptedData: string): string {
       throw new Error('Failed to decrypt API key: data may be corrupted');
     }
   }
+}
+
+/**
+ * Migration helper: Re-encrypt all API credentials with secure format
+ * Call this once to migrate legacy encrypted data to the new format
+ */
+export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; errors: number }> {
+  const db = getDatabase();
+  let migrated = 0;
+  let errors = 0;
+
+  try {
+    // Get all API credentials
+    const stmt = db.prepare('SELECT id, user_id, provider, api_key_encrypted FROM api_credentials WHERE is_active = TRUE');
+    const credentials = stmt.all() as Array<{ id: number; user_id: number; provider: string; api_key_encrypted: string }>;
+
+    for (const cred of credentials) {
+      try {
+        // Check if it's legacy format (legacy format has a shorter IV - 32 hex chars vs proper 32 hex chars)
+        const parts = cred.api_key_encrypted.split(':');
+        if (parts.length !== 2 || parts[0].length !== 32) {
+          // Skip if it doesn't look like our format
+          continue;
+        }
+
+        // Try to decrypt with legacy method
+        const ivHex = parts[0];
+        const encrypted = parts[1];
+        
+        // If IV is 32 chars but doesn't work with new format, it's legacy
+        try {
+          const iv = Buffer.from(ivHex, 'hex');
+          crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
+          // If this succeeds, it's new format - skip
+          continue;
+        } catch {
+          // New format failed, this is legacy - migrate it
+          const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
+          let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+          decrypted += decipher.final('utf8');
+
+          // Re-encrypt with secure format
+          const { encrypted: newEncrypted } = encryptApiKey(decrypted);
+
+          // Update database
+          const updateStmt = db.prepare('UPDATE api_credentials SET api_key_encrypted = ? WHERE id = ?');
+          updateStmt.run(newEncrypted, cred.id);
+          migrated++;
+          console.log(`[MigrateKeys] Migrated API key for user ${cred.user_id}, provider ${cred.provider}`);
+        }
+      } catch (err) {
+        errors++;
+        console.error(`[MigrateKeys] Failed to migrate key for user ${cred.user_id}, provider ${cred.provider}:`, err);
+      }
+    }
+
+    console.log(`[MigrateKeys] Migration complete: ${migrated} migrated, ${errors} errors`);
+  } catch (error) {
+    console.error('[MigrateKeys] Migration failed:', error);
+    errors++;
+  }
+
+  return { migrated, errors };
 }
 
 // Database operations
