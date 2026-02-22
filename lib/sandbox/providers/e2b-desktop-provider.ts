@@ -300,7 +300,7 @@ export class DesktopSandboxHandle {
         }
 
       case 'wait':
-        if (action.duration) {
+        if (typeof action.duration === 'number' && Number.isFinite(action.duration) && action.duration >= 0) {
           await new Promise(resolve => setTimeout(resolve, action.duration))
           return { success: true, output: `Waited ${action.duration}ms` }
         }

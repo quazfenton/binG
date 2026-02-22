@@ -16,7 +16,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Rate limiting: Check before processing (prevent spam registrations)
-    const rateLimitResult = rateLimitMiddleware(request, 'register', email);
+    // Rate limit by IP address, not email, to prevent bypass with different emails
+    const rateLimitResult = rateLimitMiddleware(request, 'register');
     if (!rateLimitResult.success && rateLimitResult.response) {
       return rateLimitResult.response;
     }

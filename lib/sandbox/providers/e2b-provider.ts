@@ -18,6 +18,7 @@
  */
 
 import { resolve, relative, join, dirname } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { quotaManager } from '@/lib/services/quota-manager'
 import type { ToolResult, PreviewInfo } from '../types'
 import type {
@@ -304,11 +305,13 @@ class E2BSandboxHandle implements SandboxHandle {
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
     try {
       const resolved = this.resolvePath(filePath)
-      
+
       // Ensure directory exists
       const dir = dirname(resolved)
       if (dir !== '/') {
-        await this.sandbox.commands.run(`mkdir -p ${dir}`)
+        // Shell-escape the directory path to prevent command injection
+        const escapedDir = dir.replace(/'/g, "'\\''")
+        await this.sandbox.commands.run(`mkdir -p '${escapedDir}'`)
       }
 
       // Write file using sandbox filesystem
@@ -354,9 +357,10 @@ class E2BSandboxHandle implements SandboxHandle {
   async listDirectory(dirPath: string): Promise<ToolResult> {
     try {
       const resolved = this.resolvePath(dirPath)
-      
-      // Use ls command for directory listing
-      const result = await this.sandbox.commands.run(`ls -la "${resolved}"`)
+
+      // Use ls command for directory listing with shell-escaped path
+      const escapedPath = resolved.replace(/'/g, "'\\''")
+      const result = await this.sandbox.commands.run(`ls -la '${escapedPath}'`)
       
       if (result.exitCode !== 0) {
         return {
@@ -384,8 +388,13 @@ class E2BSandboxHandle implements SandboxHandle {
   async uploadFile(localPath: string, sandboxPath: string): Promise<ToolResult> {
     try {
       const resolved = this.resolvePath(sandboxPath)
-      // Note: E2B SDK handles file upload via files.write for content
-      // For binary files, you'd need to read locally and write as buffer
+      
+      // Read file content from local filesystem
+      const content = readFileSync(localPath, 'utf-8')
+      
+      // Write file to sandbox filesystem
+      await this.sandbox.files.write(resolved, content)
+      
       return {
         success: true,
         output: `File uploaded: ${resolved}`,

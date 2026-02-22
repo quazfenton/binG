@@ -90,8 +90,6 @@ export default function ToolAuthPrompt({
     // Validate authUrl before proceeding
     if (!authUrl) {
       console.error('[ToolAuthPrompt] Missing authUrl for provider', provider);
-      toast.error('Authorization URL not available. Please try again.');
-      setIsConnecting(false);
       return;
     }
     

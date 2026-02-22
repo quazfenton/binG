@@ -46,23 +46,26 @@ const inferProviderFromTool = (toolName?: string): string => {
 const getAuthUrlForProvider = (provider: string): string => {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || '';
   
+  // Normalize provider to lowercase for comparison
+  const normalizedProvider = provider.toLowerCase();
+
   // Arcade providers (Google ecosystem, Exa, Twilio, Spotify, etc.)
   const arcadeProviders = [
-    'google', 'gmail', 'googledocs', 'googlesheets', 
+    'google', 'gmail', 'googledocs', 'googlesheets',
     'googlecalendar', 'googledrive', 'googlemaps',
     'exa', 'twilio', 'spotify', 'vercel', 'railway'
   ];
-  
+
   // Nango providers (GitHub, Slack, Discord, etc.)
   const nangoProviders = [
     'github', 'slack', 'discord', 'twitter', 'reddit'
   ];
-  
-  if (arcadeProviders.includes(provider)) {
+
+  if (arcadeProviders.includes(normalizedProvider)) {
     return `${baseUrl}/api/auth/arcade/authorize?provider=${encodeURIComponent(provider)}&redirect=1`;
   }
-  
-  if (nangoProviders.includes(provider)) {
+
+  if (nangoProviders.includes(normalizedProvider)) {
     return `${baseUrl}/api/auth/nango/authorize?provider=${encodeURIComponent(provider)}&redirect=1`;
   }
   

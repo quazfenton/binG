@@ -126,8 +126,10 @@ Find more servers at: https://github.com/modelcontextprotocol/servers
 
 ### Method 1: JSON Array (MCP_SERVERS)
 
+Multi-line JSON values must be enclosed in quotes:
+
 ```env
-MCP_SERVERS=[
+MCP_SERVERS='[
   {
     "id": "filesystem",
     "name": "Filesystem",
@@ -148,7 +150,7 @@ MCP_SERVERS=[
       "args": ["-y", "@modelcontextprotocol/server-github"]
     }
   }
-]
+]'
 ```
 
 ### Method 2: Individual Variables
@@ -294,7 +296,7 @@ Use environment variables for connection strings:
 
 ```env
 DATABASE_URL=postgresql://user:password@localhost/dbname
-MCP_POSTGRESQL_ARGS=["-y","@modelcontextprotocol/server-postgres",process.env.DATABASE_URL]
+MCP_POSTGRESQL_ARGS=["-y","@modelcontextprotocol/server-postgres","$DATABASE_URL"]
 ```
 
 ## Troubleshooting

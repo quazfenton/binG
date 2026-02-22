@@ -55,11 +55,14 @@ export interface MCPImageContent {
 }
 
 /**
- * Resource content
+ * Resource content (text or blob)
+ * Per MCP spec: resources/read returns direct content objects, not wrapped
  */
 export interface MCPResourceContent {
-  type: 'resource'
-  resource: MCPResource
+  uri: string
+  mimeType?: string
+  text?: string
+  blob?: string
 }
 
 /**

@@ -192,38 +192,39 @@ export class MCPToolRegistry {
     timeout?: number
   ): Promise<MCPToolCallResult> {
     const startTime = Date.now()
-    const [serverId, toolName] = this.parseQualifiedToolName(qualifiedName)
-    
-    const wrapper = this.tools.get(qualifiedName)
-    if (!wrapper) {
-      return {
-        success: false,
-        toolName: qualifiedName,
-        serverId,
-        content: `Tool not found: ${qualifiedName}`,
-        isError: true,
-      }
-    }
-
-    const client = this.clients.get(serverId)
-    if (!client) {
-      return {
-        success: false,
-        toolName: qualifiedName,
-        serverId,
-        content: `Server not found: ${serverId}`,
-        isError: true,
-      }
-    }
 
     try {
+      const [serverId, toolName] = this.parseQualifiedToolName(qualifiedName)
+
+      const wrapper = this.tools.get(qualifiedName)
+      if (!wrapper) {
+        return {
+          success: false,
+          toolName: qualifiedName,
+          serverId,
+          content: `Tool not found: ${qualifiedName}`,
+          isError: true,
+        }
+      }
+
+      const client = this.clients.get(serverId)
+      if (!client) {
+        return {
+          success: false,
+          toolName: qualifiedName,
+          serverId,
+          content: `Server not found: ${serverId}`,
+          isError: true,
+        }
+      }
+
       const result: MCPToolResult = await client.callTool({
         name: toolName,
         arguments: args,
       }, timeout)
 
       const duration = Date.now() - startTime
-      
+
       // Convert result content to string
       const content = result.content
         .map(c => {
@@ -320,11 +321,18 @@ export class MCPToolRegistry {
   }
 
   private parseQualifiedToolName(qualifiedName: string): [string, string] {
-    const parts = qualifiedName.split(':')
-    if (parts.length !== 2) {
+    const colonIndex = qualifiedName.indexOf(':')
+    if (colonIndex === -1) {
       throw new Error(`Invalid qualified tool name: ${qualifiedName}`)
     }
-    return [parts[0], parts[1]]
+    const serverId = qualifiedName.slice(0, colonIndex)
+    const toolName = qualifiedName.slice(colonIndex + 1)
+    
+    if (!serverId || !toolName) {
+      throw new Error(`Invalid qualified tool name: ${qualifiedName}`)
+    }
+    
+    return [serverId, toolName]
   }
 
   private handleServerEvent(serverId: string, event: MCPEvent): void {

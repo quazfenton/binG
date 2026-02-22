@@ -1641,13 +1641,6 @@ export default function InteractionPanel({
                     </div>
                   </CardContent>
                 </Card>
-                {/* PluginManager for pop-out windows */}
-                <PluginManager
-                  availablePlugins={availablePlugins}
-                  onPluginResult={handlePluginResult}
-                  openPluginId={pluginToOpen}
-                  onOpenComplete={() => setPluginToOpen(null)}
-                />
               </TabsContent>
 
               {/* Integrations Tab Content */}
@@ -1665,12 +1658,6 @@ export default function InteractionPanel({
                         <p className="text-xs text-white/60 mb-2">
                           Pop-out plugin windows for advanced functionality:
                         </p>
-                        <PluginManager
-                          availablePlugins={availablePlugins}
-                          onPluginResult={handlePluginResult}
-                          openPluginId={pluginToOpen}
-                          onOpenComplete={() => setPluginToOpen(null)}
-                        />
                       </div>
                     </div>
                   </CardContent>
@@ -1698,6 +1685,13 @@ export default function InteractionPanel({
                 </Card>
               </TabsContent>
             </Tabs>
+            {/* PluginManager for pop-out windows - single instance outside Tabs */}
+            <PluginManager
+              availablePlugins={availablePlugins}
+              onPluginResult={handlePluginResult}
+              openPluginId={pluginToOpen}
+              onOpenComplete={() => setPluginToOpen(null)}
+            />
           )}
         </div>
       </div>

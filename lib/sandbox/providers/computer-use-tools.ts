@@ -294,11 +294,13 @@ export function toolCallToAction(
         endY: args.endY,
       }
 
-    case 'scroll':
+    case 'scroll': {
+      const ticks = typeof args.ticks === 'number' && Number.isFinite(args.ticks) ? args.ticks : 1
       return {
         type: 'scroll',
-        scrollY: args.direction === 'down' ? args.ticks : -args.ticks,
+        scrollY: args.direction === 'down' ? ticks : -ticks,
       }
+    }
 
     case 'type_text':
       return {

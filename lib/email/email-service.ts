@@ -246,7 +246,7 @@ class EmailService {
   /**
    * Send via Brevo (https://brevo.com)
    * Uses Brevo's transactional email API
-   * 
+   *
    * Quota: 300 emails/day (9000/month)
    * Alternative: Brevo SMTP Relay
    * - Host: smtp-relay.brevo.com
@@ -254,6 +254,11 @@ class EmailService {
    * - Login: a2dd32001@smtp-brevo.com (use your actual SMTP login)
    */
   private async sendViaBrevo(options: EmailOptions): Promise<{ success: boolean; error?: string }> {
+    const apiKey = process.env.BREVO_API_KEY;
+    if (!apiKey) {
+      return { success: false, error: 'Brevo API key is not configured' };
+    }
+
     // Try SDK first if client is initialized
     if (this.brevoClient) {
       try {
@@ -283,7 +288,7 @@ class EmailService {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'api-key': this.apiKey!,
+        'api-key': apiKey,
       },
       body: JSON.stringify({
         htmlContent: options.html,
@@ -312,18 +317,23 @@ class EmailService {
   /**
    * Send via MailerSend (https://mailersend.com)
    * Uses MailerSend's transactional email API
-   * 
+   *
    * Quota: 100 emails/day (3000/month) free tier
    */
   private async sendViaMailerSend(options: EmailOptions): Promise<{ success: boolean; error?: string }> {
+    const apiKey = process.env.MAILERSEND_API_KEY;
+    if (!apiKey) {
+      return { success: false, error: 'MailerSend API key is not configured' };
+    }
+
     // Try SDK first if client is initialized
     if (this.mailerSendClient) {
       try {
         const { EmailParams, Sender, Recipient } = await import('mailersend');
-        
+
         const sentFrom = new Sender(this.fromEmail, this.fromName || this.appName);
         const recipients = [new Recipient(options.to)];
-        
+
         const emailParams = new EmailParams()
           .setFrom(sentFrom)
           .setTo(recipients)
@@ -345,7 +355,7 @@ class EmailService {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey!}`,
+        'Authorization': `Bearer ${apiKey}`,
         'X-Requested-With': 'XMLHttpRequest',
       },
       body: JSON.stringify({
@@ -376,11 +386,16 @@ class EmailService {
    * Send via Resend (https://resend.com)
    */
   private async sendViaResend(options: EmailOptions): Promise<{ success: boolean; error?: string }> {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      return { success: false, error: 'Resend API key is not configured' };
+    }
+
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         from: this.fromEmail,
@@ -403,11 +418,16 @@ class EmailService {
    * Send via SendGrid (https://sendgrid.com)
    */
   private async sendViaSendGrid(options: EmailOptions): Promise<{ success: boolean; error?: string }> {
+    const apiKey = process.env.SENDGRID_API_KEY;
+    if (!apiKey) {
+      return { success: false, error: 'SendGrid API key is not configured' };
+    }
+
     const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         personalizations: [{ to: [{ email: options.to }] }],
@@ -451,7 +471,7 @@ class EmailService {
 
     await transporter.sendMail({
       from: {
-        email: this.fromEmail,
+        address: this.fromEmail,
         name: this.fromName || this.appName,
       },
       to: options.to,

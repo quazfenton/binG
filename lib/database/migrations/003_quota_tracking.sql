@@ -22,5 +22,4 @@ VALUES
   ('nango', 10000, 0, date('now', 'start of month', '+1 month'), FALSE),
   ('daytona', 5000, 0, date('now', 'start of month', '+1 month'), FALSE),
   ('runloop', 5000, 0, date('now', 'start of month', '+1 month'), FALSE),
-  ('microsandbox', 10000, 0, date('now', 'start of month', '+1 month'), FALSE),
-  ('e2b', 1000, 0, date('now', 'start of month', '+1 month'), FALSE);
+  ('microsandbox', 10000, 0, date('now', 'start of month', '+1 month'), FALSE);

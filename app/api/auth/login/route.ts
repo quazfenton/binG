@@ -15,8 +15,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Normalize email for rate limiting (prevent bypass via whitespace/casing)
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : email;
+
     // Rate limiting: Check before processing (strict limits to prevent brute-force)
-    const rateLimitResult = rateLimitMiddleware(request, 'login', email);
+    const rateLimitResult = rateLimitMiddleware(request, 'login', normalizedEmail);
     if (!rateLimitResult.success && rateLimitResult.response) {
       return rateLimitResult.response;
     }

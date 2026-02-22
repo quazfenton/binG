@@ -25,7 +25,11 @@ function encrypt(text: string): string {
 }
 
 function decrypt(data: string): string {
-  const [ivHex, authTagHex, encrypted] = data.split(':');
+  const parts = data.split(':');
+  if (parts.length !== 3) {
+    throw new Error('Invalid encrypted data format: expected iv:authTag:ciphertext');
+  }
+  const [ivHex, authTagHex, encrypted] = parts;
   const iv = Buffer.from(ivHex, 'hex');
   const authTag = Buffer.from(authTagHex, 'hex');
   const decipher = createDecipheriv(ALGORITHM, getEncryptionKey(), iv);

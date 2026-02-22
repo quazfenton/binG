@@ -108,7 +108,7 @@ export async function GET(req: NextRequest) {
     if (typeof nextUri === 'string' && nextUri.trim().length > 0) {
       // Validate redirect URI to prevent open redirect vulnerability
       if (isValidRedirectUri(nextUri, req.nextUrl.origin)) {
-        return NextResponse.redirect(nextUri, { status: 303 });
+        return NextResponse.redirect(new URL(nextUri, req.url), { status: 303 });
       } else {
         console.warn('[Arcade Custom Verifier] Invalid redirect URI rejected:', nextUri);
         // Fall through to default success URL instead of redirecting to invalid URI

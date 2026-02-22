@@ -352,14 +352,17 @@ class EmailQuotaManager {
    */
   getBestAvailableProvider(): string | null {
     this.ensureInitialized();
-    
+
     // Sort by priority (lower = higher priority)
     const sorted = Array.from(this.quotas.values())
+      .map(q => {
+        this.checkAndResetIfNeeded(q);
+        return q;
+      })
       .filter(q => !q.isDisabled)
       .sort((a, b) => a.priority - b.priority);
 
     for (const quota of sorted) {
-      this.checkAndResetIfNeeded(quota);
       if (!quota.isDisabled && quota.currentUsage < quota.monthlyLimit) {
         return quota.provider;
       }
@@ -374,10 +377,14 @@ class EmailQuotaManager {
    */
   getFallbackChain(excludeProvider?: string): string[] {
     this.ensureInitialized();
-    
+
     return Array.from(this.quotas.values())
       .filter(q => q.provider !== excludeProvider)
       .sort((a, b) => a.priority - b.priority)
+      .map(q => {
+        this.checkAndResetIfNeeded(q);
+        return q;
+      })
       .filter(q => !q.isDisabled)
       .map(q => q.provider);
   }
