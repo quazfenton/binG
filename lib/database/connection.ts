@@ -5,10 +5,58 @@ import * as crypto from 'crypto';
 
 // Database configuration
 const DB_PATH = process.env.DATABASE_PATH || join(process.cwd(), 'data', 'binG.db');
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'your-32-char-secret-key-here-change-this';
 
-// Ensure the encryption key is 32 bytes
-const encryptionKey = Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
+// Encryption key - MUST be set via environment variable in production
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+
+// Ensure the encryption key is 32 bytes (pad or truncate as needed)
+const encryptionKey = (() => {
+  if (!ENCRYPTION_KEY) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('ENCRYPTION_KEY must be set in production');
+    }
+    console.warn('⚠️  WARNING: ENCRYPTION_KEY not set! Using insecure fallback for development only.');
+    console.warn('Set ENCRYPTION_KEY environment variable to a secure 32+ character random string.');
+    console.warn('Example: ENCRYPTION_KEY=$(openssl rand -hex 32)');
+    return Buffer.from('default-insecure-key-change-me!!'); // exactly 32 bytes
+  }
+  return Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
+})();
+
+/**
+ * Create a mock database object for use during build or while migrations are pending
+ */
+function getMockDatabase(): Database.Database {
+  const mockDb: Partial<Database.Database> = {
+    prepare: () => {
+      return {
+        run: () => ({ lastInsertRowid: 1, changes: 1 }),
+        get: () => null,
+        all: () => [],
+        bind: () => null,
+        columns: () => [],
+        finalize: () => {},
+        iterate: () => [],
+        raw: () => []
+      } as any;
+    },
+    exec: () => mockDb as Database.Database,
+    pragma: () => {},
+    transaction: (fn: any) => fn,
+    close: () => {},
+    backup: () => Promise.resolve({ progress: () => {} }),
+    defaultSafeIntegers: () => mockDb as Database.Database,
+    register: () => mockDb as Database.Database,
+    loadExtension: () => mockDb as Database.Database,
+    serialize: () => Buffer.alloc(0),
+    table: () => null,
+    function: () => mockDb as Database.Database,
+    aggregate: () => mockDb as Database.Database,
+    unsafeMode: () => mockDb as Database.Database,
+  };
+
+  return mockDb as Database.Database;
+}
 
 // Initialize database
 let db: Database.Database | null = null;
@@ -22,38 +70,7 @@ export function getDatabase(): Database.Database {
       // Return a mock database object during build time
       // This allows the build to proceed without requiring the native module
       console.log('Skipping database initialization during build');
-      
-      // Create a mock database object that implements the necessary methods
-      const mockDb: Partial<Database.Database> = {
-        prepare: () => {
-          return {
-            run: () => ({ lastInsertRowid: 1, changes: 1 }),
-            get: () => null,
-            all: () => [],
-            bind: () => null,
-            columns: () => [],
-            finalize: () => {},
-            iterate: () => [],
-            raw: () => []
-          } as any;
-        },
-        exec: () => mockDb as Database.Database,
-        pragma: () => {},
-        transaction: (fn: any) => fn,
-        close: () => {},
-        backup: () => Promise.resolve({ progress: () => {} }),
-        defaultSafeIntegers: () => mockDb as Database.Database,
-        register: () => mockDb as Database.Database,
-        loadExtension: () => mockDb as Database.Database,
-        serialize: () => Buffer.alloc(0),
-        table: () => null,
-        function: () => mockDb as Database.Database,
-        aggregate: () => mockDb as Database.Database,
-        backup: () => Promise.resolve({ progress: () => {} }),
-        unsafeMode: () => mockDb as Database.Database,
-      };
-      
-      return mockDb as Database.Database;
+      return getMockDatabase();
     }
 
     try {
@@ -73,11 +90,41 @@ export function getDatabase(): Database.Database {
       // Initialize schema synchronously first time
       if (!dbInitialized) {
         initializeSchemaSync();
+
+        // SECURITY: Run migrations SYNCHRONOUSLY to prevent race conditions
+        // Without this, requests can execute before migrations complete, causing
+        // "no such column" errors for migration-added columns like email_verification_token
+        try {
+          // Require here to avoid circular import at module load time
+          const { migrationRunner } = require('./migration-runner');
+          if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
+            // Use synchronous migration runner
+            migrationRunner.runMigrationsSync();
+            console.log('[database] Migrations completed successfully');
+          } else {
+            console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
+          }
+        } catch (error) {
+          console.warn('[database] Migrations failed (continuing with base schema):', error);
+        }
+
         dbInitialized = true;
       }
 
       console.log('Database initialized successfully');
-    } catch (error) {
+    } catch (error: any) {
+      // Handle native module binding errors gracefully
+      const isNativeModuleError = error.message?.includes('Could not locate the bindings file') ||
+                                  error.message?.includes('better_sqlite3.node');
+
+      if (isNativeModuleError) {
+        console.warn('Database native module not available. Running in mock mode.');
+        console.warn('To fix: run `pnpm rebuild better-sqlite3` or set SKIP_DB_INIT=true');
+
+        // Return mock database for graceful degradation
+        return getMockDatabase();
+      }
+      
       console.error('Failed to initialize database:', error);
       throw error;
     }
@@ -99,14 +146,13 @@ export async function initializeDatabaseAsync(): Promise<Database.Database> {
 
 function initializeSchemaSync() {
   if (!db) return;
-  
+
   try {
-    const schemaPath = join(__dirname, 'schema.sql');
+    // Execute base schema to ensure required tables exist
+    const schemaPath = join(process.cwd(), 'lib', 'database', 'schema.sql');
     const schema = readFileSync(schemaPath, 'utf-8');
-    
-    // Execute base schema
     db.exec(schema);
-    
+
     console.log('Database base schema initialized');
   } catch (error) {
     console.error('Failed to initialize base schema:', error);
@@ -132,14 +178,15 @@ async function initializeSchema() {
 // Encryption utilities for API keys
 export function encryptApiKey(apiKey: string): { encrypted: string; hash: string } {
   const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipher('aes-256-cbc', encryptionKey);
-  
+  // Use createCipheriv which properly uses the IV (non-deprecated)
+  const cipher = crypto.createCipheriv('aes-256-cbc', encryptionKey, iv);
+
   let encrypted = cipher.update(apiKey, 'utf8', 'hex');
   encrypted += cipher.final('hex');
-  
+
   const encryptedWithIv = iv.toString('hex') + ':' + encrypted;
   const hash = crypto.createHash('sha256').update(apiKey).digest('hex');
-  
+
   return {
     encrypted: encryptedWithIv,
     hash
@@ -148,14 +195,108 @@ export function encryptApiKey(apiKey: string): { encrypted: string; hash: string
 
 export function decryptApiKey(encryptedData: string): string {
   const [ivHex, encrypted] = encryptedData.split(':');
-  const iv = Buffer.from(ivHex, 'hex');
-  
-  const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
-  
-  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  
-  return decrypted;
+
+  // Try new format first (createCipheriv with proper IV usage)
+  try {
+    const iv = Buffer.from(ivHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (newFormatError) {
+    // New format failed - try legacy format (createCipher with EVP_BytesToKey)
+    // Legacy data also has IV:encrypted format, but the IV was randomly generated and unused
+    // createCipher derived both key and IV from the password using MD5
+    try {
+      const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
+      let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
+
+      // SECURITY WARNING: Legacy format detected
+      // This data was encrypted with deprecated createDecipher using MD5 key derivation
+      // which is vulnerable to known-plaintext attacks.
+      // 
+      // ACTION REQUIRED: Re-encrypt this API key using the secure format by calling
+      // encryptApiKey() with the decrypted value and updating the database record.
+      // 
+      // The legacy fallback will be removed in a future version.
+      console.warn(
+        '[decryptApiKey] ⚠️  SECURITY WARNING: Legacy encryption format detected!',
+        'Data encrypted with deprecated createDecipher (MD5 key derivation) is vulnerable.',
+        'Please migrate this API key by re-encrypting with encryptApiKey() and updating the database.',
+        'Legacy support will be removed in a future release.'
+      );
+
+      return decrypted;
+    } catch (legacyError) {
+      // Both formats failed - this is truly corrupted data
+      console.error('[decryptApiKey] Failed to decrypt: both new and legacy formats failed');
+      throw new Error('Failed to decrypt API key: data may be corrupted');
+    }
+  }
+}
+
+/**
+ * Migration helper: Re-encrypt all API credentials with secure format
+ * Call this once to migrate legacy encrypted data to the new format
+ */
+export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; errors: number }> {
+  const db = getDatabase();
+  let migrated = 0;
+  let errors = 0;
+
+  try {
+    // Get all API credentials
+    const stmt = db.prepare('SELECT id, user_id, provider, api_key_encrypted FROM api_credentials WHERE is_active = TRUE');
+    const credentials = stmt.all() as Array<{ id: number; user_id: number; provider: string; api_key_encrypted: string }>;
+
+    for (const cred of credentials) {
+      try {
+        // Check if it's legacy format (legacy format has a shorter IV - 32 hex chars vs proper 32 hex chars)
+        const parts = cred.api_key_encrypted.split(':');
+        if (parts.length !== 2 || parts[0].length !== 32) {
+          // Skip if it doesn't look like our format
+          continue;
+        }
+
+        // Try to decrypt with legacy method
+        const ivHex = parts[0];
+        const encrypted = parts[1];
+        
+        // If IV is 32 chars but doesn't work with new format, it's legacy
+        try {
+          const iv = Buffer.from(ivHex, 'hex');
+          crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
+          // If this succeeds, it's new format - skip
+          continue;
+        } catch {
+          // New format failed, this is legacy - migrate it
+          const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
+          let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+          decrypted += decipher.final('utf8');
+
+          // Re-encrypt with secure format
+          const { encrypted: newEncrypted } = encryptApiKey(decrypted);
+
+          // Update database
+          const updateStmt = db.prepare('UPDATE api_credentials SET api_key_encrypted = ? WHERE id = ?');
+          updateStmt.run(newEncrypted, cred.id);
+          migrated++;
+          console.log(`[MigrateKeys] Migrated API key for user ${cred.user_id}, provider ${cred.provider}`);
+        }
+      } catch (err) {
+        errors++;
+        console.error(`[MigrateKeys] Failed to migrate key for user ${cred.user_id}, provider ${cred.provider}:`, err);
+      }
+    }
+
+    console.log(`[MigrateKeys] Migration complete: ${migrated} migrated, ${errors} errors`);
+  } catch (error) {
+    console.error('[MigrateKeys] Migration failed:', error);
+    errors++;
+  }
+
+  return { migrated, errors };
 }
 
 // Database operations
@@ -168,12 +309,27 @@ export class DatabaseOperations {
   
   // User operations
   createUser(email: string, username: string, passwordHash: string) {
+    // Handle empty username - set to NULL to avoid unique constraint conflicts
+    const finalUsername = username.trim() || null;
+    
     const stmt = this.db.prepare(`
       INSERT INTO users (email, username, password_hash)
       VALUES (?, ?, ?)
     `);
+
+    return stmt.run(email, finalUsername, passwordHash);
+  }
+
+  createUserWithVerification(email: string, username: string, passwordHash: string, verificationToken: string, verificationExpires: Date) {
+    // Handle empty username - set to NULL to avoid unique constraint conflicts
+    const finalUsername = username.trim() || null;
     
-    return stmt.run(email, username, passwordHash);
+    const stmt = this.db.prepare(`
+      INSERT INTO users (email, username, password_hash, email_verification_token, email_verification_expires, email_verified)
+      VALUES (?, ?, ?, ?, ?, FALSE)
+    `);
+
+    return stmt.run(email, finalUsername, passwordHash, verificationToken, verificationExpires.toISOString());
   }
   
   getUserByEmail(email: string) {

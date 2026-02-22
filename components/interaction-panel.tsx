@@ -66,6 +66,7 @@ import Key from "lucide-react/dist/esm/icons/key";
 import Cloud from "lucide-react/dist/esm/icons/cloud";
 import Server from "lucide-react/dist/esm/icons/server";
 import Scale from "lucide-react/dist/esm/icons/scale";
+import Terminal from "lucide-react/dist/esm/icons/terminal";
 import type { LLMProvider } from "../lib/api/llm-providers";
 import { templateCache, cacheKey } from "../lib/cache";
 import MultiModelComparison from "./multi-model-comparison";
@@ -82,50 +83,278 @@ import GitHubExplorerPlugin from "./plugins/github-explorer-plugin";
 import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
+import IntegrationPanel from "./integrations/IntegrationPanel";
 import { useInteractionCodeMode } from "../hooks/use-interaction-code-mode";
 import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
 import { processResponse } from "../lib/mode-manager";
+import { secureRandom, generateSecureId } from "../lib/utils";
+import DevOpsCommandCenterPlugin from "./plugins/devops-command-center-plugin";
+
+// Define available plugins for PluginManager
+const availablePlugins: Plugin[] = [
+  {
+    id: "huggingface-spaces",
+    name: "Hugging Face Spaces",
+    description: "Generate images using Hugging Face Spaces models",
+    icon: ImageIcon,
+    component: HuggingFaceSpacesPlugin,
+    category: "ai",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "interactive-storyboard",
+    name: "Storyboard Creator",
+    description: "Create visual storyboards for films and animations",
+    icon: Film,
+    component: InteractiveStoryboardPlugin,
+    category: "media",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "cloud-storage",
+    name: "Cloud Storage 5GB",
+    description: "Access encrypted files from cloud providers",
+    icon: Cloud,
+    component: CloudStoragePlugin,
+    category: "utility",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "github-explorer",
+    name: "GitHub Explorer",
+    description: "Browse trending repositories and analyze code",
+    icon: GitBranch,
+    component: GitHubExplorerPlugin,
+    category: "code",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "legal-document",
+    name: "Legal Document Generator",
+    description: "Generate legal documents and analyze existing ones",
+    icon: Scale,
+    component: LegalDocumentPlugin,
+    category: "utility",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "data-visualization",
+    name: "Data Visualization Builder",
+    description: "Create interactive charts and graphs",
+    icon: Database,
+    component: DataVisualizationBuilderPlugin,
+    category: "data",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "network-request-builder",
+    name: "Network Request Builder",
+    description: "Build and test API requests",
+    icon: Globe,
+    component: NetworkRequestBuilderPlugin,
+    category: "developer",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "note-taker",
+    name: "Note Taker",
+    description: "Take and organize notes during conversations",
+    icon: FileText,
+    component: NoteTakerPlugin,
+    category: "productivity",
+    defaultSize: { width: 600, height: 500 },
+    minSize: { width: 400, height: 300 },
+  },
+  {
+    id: "interactive-diagramming",
+    name: "Interactive Diagramming",
+    description: "Create diagrams and flowcharts",
+    icon: CheckCircle,
+    component: InteractiveDiagrammingPlugin,
+    category: "productivity",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "devops-command-center",
+    name: "DevOps Command Center",
+    description: "Manage deployments and infrastructure",
+    icon: Server,
+    component: DevOpsCommandCenterPlugin,
+    category: "developer",
+    defaultSize: { width: 1000, height: 800 },
+    minSize: { width: 800, height: 600 },
+  },
+];
+
+// Plugin modules for Extras tab
+const pluginModules = [
+  {
+    id: "ai-tutor",
+    name: "AI Tutor",
+    description: "Interactive learning assistant with step-by-step explanations",
+    icon: Brain,
+    color: "text-purple-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Act as an expert tutor. Break down complex topics into digestible steps with examples and practice questions. Topic: ",
+      ),
+  },
+  {
+    id: "code-reviewer",
+    name: "Code Reviewer",
+    description: "Professional code review with best practices and optimizations",
+    icon: Code,
+    color: "text-blue-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Review this code for best practices, performance, security, and maintainability. Provide specific suggestions:\n\n```\n// Paste your code here\n```",
+      ),
+  },
+  {
+    id: "data-analyst",
+    name: "Data Analyst",
+    description: "Analyze data patterns and generate insights with visualizations",
+    icon: Database,
+    color: "text-green-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Analyze this data and provide insights, patterns, and recommendations. Create visualizations where helpful:\n\n",
+      ),
+  },
+  {
+    id: "creative-writer",
+    name: "Creative Writer",
+    description: "Craft engaging stories, scripts, and creative content",
+    icon: FileText,
+    color: "text-pink-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Write a compelling story with vivid characters, engaging dialogue, and descriptive settings. Genre: ",
+      ),
+  },
+  {
+    id: "math-solver",
+    name: "Math Solver",
+    description: "Solve mathematical problems with step-by-step solutions",
+    icon: Calculator,
+    color: "text-orange-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Solve this math problem step by step, explaining each step clearly:\n\n",
+      ),
+  },
+  {
+    id: "travel-planner",
+    name: "Travel Planner",
+    description: "Plan detailed itineraries and travel recommendations",
+    icon: Globe,
+    color: "text-cyan-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Create a detailed travel itinerary for ",
+      ),
+  },
+  {
+    id: "legal-assistant",
+    name: "Legal Assistant",
+    description: "Generate legal documents and analyze existing ones",
+    icon: Scale,
+    color: "text-indigo-400",
+    action: (setInput: (value: string) => void) =>
+      setInput(
+        "Draft a legal document or analyze this legal text: ",
+      ),
+  },
+  {
+    id: "image-generator",
+    name: "HF Image Generator",
+    description: "Generate images using Hugging Face Spaces models",
+    icon: ImageIcon,
+    color: "text-yellow-400",
+    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
+      if (setPluginToOpen && onActiveTabChange) {
+        setPluginToOpen("huggingface-spaces");
+        onActiveTabChange("integrations");
+      }
+    },
+  },
+  {
+    id: "github-explorer",
+    name: "GitHub Explorer",
+    description: "Browse trending repositories and analyze code",
+    icon: GitBranch,
+    color: "text-gray-400",
+    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
+      if (setPluginToOpen && onActiveTabChange) {
+        setPluginToOpen("github-explorer");
+        onActiveTabChange("integrations");
+      }
+    },
+  },
+  {
+    id: "cloud-storage",
+    name: "Cloud Storage 5GB",
+    description: "Access encrypted files from cloud providers",
+    icon: Cloud,
+    color: "text-sky-400",
+    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
+      if (setPluginToOpen && onActiveTabChange) {
+        setPluginToOpen("cloud-storage");
+        onActiveTabChange("integrations");
+      }
+    },
+  },
+];
 
 interface InteractionPanelProps {
   onSubmit: (content: string) => void;
   onNewChat: () => void;
   isProcessing: boolean;
-  toggleAccessibility: () => void; // This prop is expected to be a function that toggles accessibility options
+  toggleAccessibility: () => void;
   toggleHistory: () => void;
-  toggleCodePreview: () => void; // This prop is expected to be a function
-  toggleCodeMode?: () => void; // This prop is expected to be a function that toggles code mode
+  toggleCodePreview: () => void;
+  toggleCodeMode?: () => void;
   onAcceptPendingDiffs?: () => void;
   onDismissPendingDiffs?: () => void;
   onStopGeneration?: () => void;
-  onRetry?: () => void; // Add retry function prop
+  onRetry?: () => void;
   currentProvider?: string;
   currentModel?: string;
   error?: string | null;
-  input: string; // Add input prop
-  setInput: (value: string) => void; // Add setInput prop
+  input: string;
+  setInput: (value: string) => void;
   availableProviders: LLMProvider[];
   onProviderChange: (provider: string, model: string) => void;
-  hasCodeBlocks?: boolean; // Add code blocks detection
+  hasCodeBlocks?: boolean;
   pendingDiffs?: { path: string; diff: string }[];
-  activeTab?: "chat" | "code"; // Add activeTab prop
-  onActiveTabChange?: (tab: "chat" | "code") => void; // Add activeTab change handler
+  activeTab?: "chat" | "code" | "extras" | "integrations" | "shell";
+  onActiveTabChange?: (tab: "chat" | "code" | "extras" | "integrations" | "shell") => void;
+  userId?: string;
 }
 
 export default function InteractionPanel({
   onSubmit,
   onNewChat,
   isProcessing,
-  toggleAccessibility, // Receive the prop
+  toggleAccessibility,
   toggleHistory,
-  toggleCodePreview, // Receive the prop
+  toggleCodePreview,
   toggleCodeMode,
   onStopGeneration,
   onRetry,
   currentProvider = "openrouter",
   currentModel = "deepseek/deepseek-r1-0528:free",
   error,
-  input, // Destructure input
-  setInput, // Destructure setInput
+  input,
+  setInput,
   availableProviders,
   onProviderChange,
   hasCodeBlocks = false,
@@ -134,29 +363,36 @@ export default function InteractionPanel({
   onDismissPendingDiffs,
   activeTab = "chat",
   onActiveTabChange,
+  userId,
 }: InteractionPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const codeTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const dragHandleRef = useRef<HTMLDivElement>(null);
 
-  // Autosuggest state
-  const [autosuggestEnabled, setAutosuggestEnabled] = useState(true);
-  const [ghostSuffix, setGhostSuffix] = useState("");
-  const suggestCache = useRef(new Map<string, string>());
-  const debounceTimerRef = useRef<number | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  // Plugin state
+  const [pluginToOpen, setPluginToOpen] = useState<string | null>(null);
 
   // Panel state
   const [panelHeight, setPanelHeight] = useState(() => {
-    // Use smaller height on mobile devices
     if (typeof window !== "undefined" && window.innerWidth <= 768) {
-      return Math.min(250, window.innerHeight * 0.4); // Max 40% of screen height on mobile
+      return Math.min(250, window.innerHeight * 0.4);
     }
-    return 280;
-  }); // Default height - lowered for better mobile experience
+    return 320; // Increased from 280 to ensure input is always visible
+  });
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const prevPanelHeightRef = useRef<number | null>(null);
+
+  // Handle plugin result
+  const handlePluginResult = (pluginId: string, result: any) => {
+    console.log(`Plugin ${pluginId} result:`, result);
+    if (typeof result === "string") {
+      setInput(result);
+    } else if (result?.content) {
+      setInput(result.content);
+    }
+  };
 
   // Adjust panel height on window/viewport resize (mobile orientation + keyboard)
   useEffect(() => {
@@ -222,69 +458,6 @@ export default function InteractionPanel({
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
-
-  // Debounced suggest fetcher
-  useEffect(() => {
-    if (!autosuggestEnabled) {
-      setGhostSuffix("");
-      return;
-    }
-
-    const q = input;
-    if (!q || !q.trim()) {
-      setGhostSuffix("");
-      return;
-    }
-
-    // Try cache by prefix: find longest cached key K where K is prefix of q and (K+suffix) startsWith q
-    let usedFromCache = false;
-    let bestKey = "";
-    let bestFull = "";
-    for (const [k, s] of suggestCache.current.entries()) {
-      if (q.startsWith(k)) {
-        const full = k + s;
-        if (full.toLowerCase().startsWith(q.toLowerCase())) {
-          if (k.length > bestKey.length) {
-            bestKey = k;
-            bestFull = full;
-          }
-        }
-      }
-    }
-    if (bestKey) {
-      setGhostSuffix(bestFull.slice(q.length));
-      usedFromCache = true;
-    }
-
-    if (usedFromCache) return;
-
-    if (debounceTimerRef.current) window.clearTimeout(debounceTimerRef.current);
-    debounceTimerRef.current = window.setTimeout(async () => {
-      try {
-        abortRef.current?.abort();
-        abortRef.current = new AbortController();
-        const res = await fetch(`/api/suggest?q=${encodeURIComponent(q)}`, {
-          signal: abortRef.current.signal,
-        });
-        if (!res.ok) throw new Error("suggest failed");
-        const data = await res.json();
-        const suffix = (data?.suggestion as string) || "";
-        suggestCache.current.set(q, suffix);
-        // Only apply if input hasn't changed significantly
-        if (input === q) {
-          setGhostSuffix(suffix);
-        }
-      } catch (e) {
-        if ((e as any)?.name === "AbortError") return;
-        // ignore errors silently
-      }
-    }, 300); // 250–400 ms debounce; we use ~300ms
-
-    return () => {
-      if (debounceTimerRef.current)
-        window.clearTimeout(debounceTimerRef.current);
-    };
-  }, [input, autosuggestEnabled]);
 
   // Mobile: Focus input on mount and when tapping the panel background
   useEffect(() => {
@@ -439,21 +612,48 @@ export default function InteractionPanel({
     },
   ];
 
-  const handlePluginResult = (pluginId: string, result: any) => {
-    // Handle plugin results - could insert into chat, save to context, etc.
-    console.log(`Plugin ${pluginId} result:`, result);
-
-    // For text-based results, we could insert them into the input
-    if (typeof result === "string") {
-      setInput(result);
-    } else if (result?.content) {
-      setInput(result.content);
-    }
-  };
   const [showFileSelector, setShowFileSelector] = useState(false);
   const [showMultiModelComparison, setShowMultiModelComparison] =
     useState(false);
-  const [pluginToOpen, setPluginToOpen] = useState<string | null>(null);
+
+  // Simple chat suggestions (randomized on mount)
+  const chatSuggestions = useMemo(() => {
+    const suggestions = [
+      "unique app ideas",
+      "code a basic web app",
+      "make an addicting web game",
+      "show me something interesting",
+      "explain quantum computing simply",
+      "create a business plan",
+      "write a short story",
+      "design a logo concept",
+      "plan a workout routine",
+      "suggest healthy recipes",
+      "debug this error",
+      "optimize my workflow",
+    ];
+    return [...suggestions].sort(() => 0.5 - secureRandom()).slice(0, 4);
+  }, []);
+
+  // Code-specific prompt templates
+  const codeTemplates = [
+    {
+      title: "Component Creation",
+      template: "Create a [framework] component that [functionality]. Include:\n- TypeScript types\n- Props interface\n- Error handling\n- Unit tests\n- Documentation",
+    },
+    {
+      title: "API Development",
+      template: "Build a [language] API for [purpose] with:\n- RESTful endpoints\n- Input validation\n- Error handling\n- Authentication\n- Database integration\n- API documentation",
+    },
+    {
+      title: "Full Stack App",
+      template: "Create a full-stack [type] application with:\n- Frontend: [frontend-tech]\n- Backend: [backend-tech]\n- Database: [database]\n- Authentication\n- Responsive design\n- Deployment configuration",
+    },
+    {
+      title: "Code Review",
+      template: "Review this code for:\n- Performance optimizations\n- Security vulnerabilities\n- Best practices\n- Code quality\n- Potential bugs\n- Refactoring suggestions\n\n[paste your code here]",
+    },
+  ];
 
   // Plugin modules with randomization
   const pluginModules = useMemo(() => {
@@ -498,7 +698,7 @@ export default function InteractionPanel({
         color: "text-green-400",
         action: () =>
           setInput(
-            "Analyze this document and provide: 1) Executive summary 2) Key points 3) Action items 4) Questions for clarification:\n\n",
+            "Analyze this document and provide: 1) Executive summary 2) Key findings 3) Different perspectives 4) Recent developments 5) Reliable sources. Topic: ",
           ),
       },
       {
@@ -839,332 +1039,10 @@ export default function InteractionPanel({
     ];
 
     // Randomize order using the same approach as template suggestions
-    return [...modules].sort(() => Math.random() - 0.5);
+    return [...modules].sort(() => secureRandom() - 0.5);
   }, [setInput]);
-  const dragStartY = useRef(0);
-  const dragStartHeight = useRef(0);
 
-  // Simplified drag handlers for vertical resizing only
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      setIsDragging(true);
-      dragStartY.current = e.clientY;
-      dragStartHeight.current = panelHeight;
-      e.preventDefault();
-    },
-    [panelHeight],
-  );
-
-  const handleMouseMove = useCallback(
-    (e: MouseEvent) => {
-      if (!isDragging) return;
-
-      const deltaY = dragStartY.current - e.clientY;
-      const newHeight = Math.max(
-        200,
-        Math.min(800, dragStartHeight.current + deltaY),
-      );
-      setPanelHeight(newHeight);
-    },
-    [isDragging],
-  );
-
-  const handleMouseUp = useCallback(() => {
-    setIsDragging(false);
-  }, []);
-
-  useEffect(() => {
-    if (isDragging) {
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", handleMouseUp);
-      return () => {
-        document.removeEventListener("mousemove", handleMouseMove);
-        document.removeEventListener("mouseup", handleMouseUp);
-      };
-    }
-  }, [isDragging, handleMouseMove, handleMouseUp]);
-
-  const mockFileContents: Record<string, { content: string; version: number }> =
-    {
-      "src/components/App.tsx": {
-        content: `import React from 'react';\n\nconst App = () => (\n  <div>Hello World</div>\n);\n\nexport default App;`,
-        version: 1,
-      },
-      "src/utils/helpers.ts": {
-        content: `export function formatDate(date: Date) {\n  return date.toISOString().split('T')[0];\n}`,
-        version: 1,
-      },
-      "package.json": {
-        content: `{\n  "name": "my-app",\n  "version": "1.0.0",\n  "dependencies": {}\n}`,
-        version: 1,
-      },
-      "README.md": { content: `# My App\n\nA sample application`, version: 1 },
-      "src/styles/globals.css": {
-        content: `body {\n  margin: 0;\n  padding: 0;\n}`,
-        version: 1,
-      },
-    };
-
-  const getFileContent = async (
-    path: string,
-  ): Promise<{ content: string; version: number }> => {
-    return (
-      mockFileContents[path] || { content: `Content of ${path}`, version: 1 }
-    );
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (input.trim() && !isProcessing) {
-      let enhancedInput = input;
-
-      // Check if we're in code mode and should use the enhanced orchestrator
-      if (activeTab === "code" && codeModeState.mode === "advanced") {
-        try {
-          // Use the enhanced code mode integration
-          const codeResponse = await codeModeActions.processCodePrompt(input, {
-            selectedFiles: codeModeState.selectedFiles,
-            attachedFiles: codeModeState.attachedFiles,
-            mode: codeModeState.mode,
-          });
-
-          // Submit the enhanced response to the chat
-          onSubmit(codeResponse);
-          setInput("");
-          setGhostSuffix("");
-          return;
-        } catch (error) {
-          console.error('Code mode processing failed:', error);
-          // Fall back to regular processing
-        }
-      }
-
-      // Legacy code mode processing for basic mode or fallback
-      if (activeTab === "code") {
-        // Prepend command schema/rules section (parseable by the model)
-        const rulesHeader = [
-          "=== TASK_RULES_START ===",
-          "You can ask for project context using command lines:",
-          "@list_project                       # get project file list",
-          '@read_file("path")                 # request file content',
-          '@write_diff("path")\n*** Begin Diff\n...\n*** End Diff   # unified diff, minimal context',
-          '@next_file("path")                 # ask the app to attach this file next',
-          "",
-          "When proposing edits, respond with a dedicated section:",
-          "=== COMMANDS_START ===",
-          'request_files: ["optional/next/file1", "optional/next/file2"]',
-          "write_diffs: [",
-          '  { path: "file", diff: "*** Begin Diff\\n...\\n*** End Diff" }',
-          "]\n=== COMMANDS_END ===",
-          "Do not mix prose inside the command block.",
-          "=== TASK_RULES_END ===",
-          "",
-        ].join("\n");
-        enhancedInput = `${rulesHeader}${enhancedInput}`;
-
-        // Detect @next_file("path") commands to auto-attach requested files
-        const nextFileRegex = /@next_file\(["']([^"']+)["']\)/g;
-        const autoFiles: string[] = [];
-        let m: RegExpExecArray | null;
-        while ((m = nextFileRegex.exec(input)) !== null) {
-          autoFiles.push(m[1]);
-        }
-
-        const allFilesToAttach = Array.from(
-          new Set([...codeModeState.selectedFiles, ...autoFiles]),
-        );
-
-        // Attach selected files to context
-        if (allFilesToAttach.length > 0) {
-          const filesContent: string[] = [];
-          let cacheUpdated = false;
-
-          for (const file of allFilesToAttach) {
-            if (!codeModeState.attachedFiles[file]) {
-              const fileContent = await getFileContent(file);
-              codeModeActions.attachFile(file, fileContent.content);
-              cacheUpdated = true;
-            }
-            const fileData = codeModeState.attachedFiles[file];
-            if (fileData) {
-              filesContent.push(
-                `File: ${file} (v${fileData.version})\n\`\`\`\n${fileData.content}\n\`\`\``,
-              );
-            }
-          }
-
-          enhancedInput +=
-            "\n\n=== CONTEXT_FILES_START ===\n" +
-            filesContent.join("\n\n") +
-            "\n=== CONTEXT_FILES_END ===\n";
-        }
-
-        // Auto-enhance prompts when in Code tab
-        enhancedInput = `As an expert developer, please help with this coding request. Provide detailed, production-ready code with explanations:
-
-${enhancedInput}
-
-Please include:
-- Complete, working code examples
-- Best practices and patterns
-- Error handling where appropriate
-- Comments explaining key concepts
-- Any necessary dependencies or setup instructions
-
-${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integration is available for advanced operations." : ""}`;
-      }
-
-      onSubmit(enhancedInput);
-      setInput("");
-      setGhostSuffix("");
-    }
-  };
-
-  // Keyboard handling for accepting/dismissing pending diffs (only in code mode)
-  useEffect(() => {
-    const onKey = (ev: KeyboardEvent) => {
-      // Only handle pending diffs keyboard shortcuts in code mode
-      if (!pendingDiffs || pendingDiffs.length === 0 || activeTab !== "code") return;
-      if (ev.key === "Enter" && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
-        onAcceptPendingDiffs?.();
-      } else if (ev.key === "Escape") {
-        onDismissPendingDiffs?.();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [pendingDiffs, onAcceptPendingDiffs, onDismissPendingDiffs, activeTab]);
-
-  const handleSuggestionClick = (suggestion: string) => {
-    if (!isProcessing) {
-      onSubmit(suggestion);
-    }
-  };
-
-  const chatSuggestions = useMemo(() => {
-    const suggestions = [
-      "unique app ideas",
-      "code a basic web app",
-      "make an addicting web game",
-      "show me sum interesting",
-      "explain quantum computing simply",
-      "create a business plan",
-      "write a short story",
-      "design a logo concept",
-      "plan a workout routine",
-      "suggest healthy recipes",
-      "debug this error",
-      "optimize my workflow",
-    ];
-
-    // Randomize order and return first 4
-    return [...suggestions].sort(() => Math.random() - 0.5).slice(0, 4);
-  }, []);
-
-  const codeSuggestions = [
-    "Create a React component with TypeScript",
-    "Build a REST API with Node.js and Express",
-    "Design a responsive CSS layout with Flexbox",
-    "Implement authentication with JWT tokens",
-    "Create a database schema for an e-commerce app",
-    "Build a real-time chat application with WebSockets",
-    "Optimize performance for a large dataset",
-    "Set up CI/CD pipeline with GitHub Actions",
-  ];
-
-  const allCodePromptTemplates = [
-    {
-      title: "Component Creation",
-      template:
-        "Create a [framework] component that [functionality]. Include:\n- TypeScript types\n- Props interface\n- Error handling\n- Unit tests\n- Documentation",
-    },
-    {
-      title: "API Development",
-      template:
-        "Build a [language] API for [purpose] with:\n- RESTful endpoints\n- Input validation\n- Error handling\n- Authentication\n- Database integration\n- API documentation",
-    },
-    {
-      title: "Full Stack App",
-      template:
-        "Create a full-stack [type] application with:\n- Frontend: [frontend-tech]\n- Backend: [backend-tech]\n- Database: [database]\n- Authentication\n- Responsive design\n- Deployment configuration",
-    },
-    {
-      title: "Code Review",
-      template:
-        "Review this code for:\n- Performance optimizations\n- Security vulnerabilities\n- Best practices\n- Code quality\n- Potential bugs\n- Refactoring suggestions\n\n[paste your code here]",
-    },
-    {
-      title: "Database Design",
-      template:
-        "Design a database schema for [application type] with:\n- Entity relationships\n- Primary/Foreign keys\n- Indexes for performance\n- Data validation rules\n- Migration scripts\n- Sample queries",
-    },
-    {
-      title: "Testing Strategy",
-      template:
-        "Create a comprehensive testing strategy for [project] including:\n- Unit tests\n- Integration tests\n- E2E tests\n- Performance tests\n- Test data setup\n- CI/CD integration",
-    },
-    {
-      title: "Performance Optimization",
-      template:
-        "Optimize [application/code] for better performance:\n- Identify bottlenecks\n- Memory usage optimization\n- Database query optimization\n- Caching strategies\n- Load balancing\n- Monitoring setup",
-    },
-    {
-      title: "Security Implementation",
-      template:
-        "Implement security measures for [application] including:\n- Authentication & Authorization\n- Input validation & sanitization\n- SQL injection prevention\n- XSS protection\n- CSRF protection\n- Security headers",
-    },
-    {
-      title: "Microservices Architecture",
-      template:
-        "Design a microservices architecture for [system] with:\n- Service boundaries\n- Communication patterns\n- Data consistency\n- Service discovery\n- Load balancing\n- Monitoring & logging",
-    },
-    {
-      title: "Mobile App Development",
-      template:
-        "Create a [platform] mobile app for [purpose] with:\n- Native/Cross-platform approach\n- UI/UX design\n- State management\n- API integration\n- Offline functionality\n- App store deployment",
-    },
-    {
-      title: "DevOps Pipeline",
-      template:
-        "Set up a DevOps pipeline for [project] including:\n- Version control workflow\n- Automated testing\n- Build automation\n- Deployment strategies\n- Infrastructure as Code\n- Monitoring & alerting",
-    },
-  ];
-
-  // Function to get random templates with caching
-  const getRandomTemplates = (count: number = 4) => {
-    const cacheKeyStr = cacheKey.codeTemplate("all", `random_${count}`);
-
-    // Try to get from cache first
-    const cached =
-      templateCache.get<typeof allCodePromptTemplates>(cacheKeyStr);
-    if (cached) {
-      return cached;
-    }
-
-    // Generate new random templates
-    const shuffled = [...allCodePromptTemplates].sort(
-      () => 0.5 - Math.random(),
-    );
-    const result = shuffled.slice(0, count);
-
-    // Cache for 10 minutes
-    templateCache.set(cacheKeyStr, result, 10 * 60 * 1000);
-
-    return result;
-  };
-
-  // Get random templates on component mount and when activeTab changes
-  const [displayedTemplates, setDisplayedTemplates] = useState(() =>
-    getRandomTemplates(),
-  );
-
-  // Refresh templates when switching to code tab
-  useEffect(() => {
-    if (activeTab === "code") {
-      setDisplayedTemplates(getRandomTemplates());
-    }
-  }, [activeTab]);
-
+  // Sample images for the images tab
   const sampleImages = [
     {
       id: 1,
@@ -1188,78 +1066,78 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
     },
   ];
 
-  return (
-    <div
-      className={`fixed bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 border-t`}
-      style={{
-        bottom: "env(safe-area-inset-bottom, 0px)",
-        height: isMinimized
-          ? "60px"
-          : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
-        maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)",
-      }}
-      onClick={(e) => {
-        // Tap anywhere on the panel background to focus the textarea on mobile
-        if (
-          window.innerWidth <= 768 &&
-          textareaRef.current &&
-          e.target instanceof HTMLElement &&
-          !["TEXTAREA", "INPUT", "BUTTON", "SELECT"].includes(e.target.tagName)
-        ) {
-          textareaRef.current.focus();
-        }
-      }}
-    >
-      {/* Drag Handle - Only vertical resizing */}
-      <div
-        className={`absolute top-0 left-0 right-0 h-1 bg-white/20 hover:bg-white/30 cursor-ns-resize transition-all duration-200 ${
-          isDragging ? "bg-white/40" : ""
-        }`}
-        onMouseDown={handleMouseDown}
-      />
+  // Calculate bottom position based on panel state
+  const bottomPosition = "env(safe-area-inset-bottom, 0px)";
 
-      <div className="p-2 sm:p-4 h-full overflow-hidden max-w-4xl mx-auto flex flex-col">
-        {/* Minimize/Maximize Controls */}
-        <div className="absolute top-2 right-4 flex items-center gap-2">
-          {/* Minimize toggle */}
+  return (
+    <>
+      <div
+        className={`fixed bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 border-t`}
+        style={{
+          bottom: bottomPosition,
+          height: isMinimized
+            ? "60px"
+            : isExpanded
+              ? `min(${panelHeight * 1.5}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`
+              : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
+          maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)",
+        }}
+        onClick={(e) => {
+          if (
+            window.innerWidth <= 768 &&
+            textareaRef.current &&
+            e.target instanceof HTMLElement &&
+            !["TEXTAREA", "INPUT", "BUTTON", "SELECT"].includes(e.target.tagName)
+          ) {
+            textareaRef.current.focus();
+          }
+        }}
+      >
+        {/* Drag Handle - Full width resize bar */}
+        <div
+          ref={dragHandleRef}
+          className={`w-full absolute top-0 left-0 right-0 h-[4px] transition-all duration-200 ${
+            isDragging ? 'bg-white/40 cursor-ns-resize' : 'bg-transparent cursor-default'
+          }`}
+          style={{ zIndex: 50 }}
+          onMouseDown={(e) => {
+            setIsDragging(true);
+            const startY = e.clientY;
+            const startHeight = panelHeight;
+
+            const handleMouseMove = (e: MouseEvent) => {
+              const delta = startY - e.clientY;
+              setPanelHeight(Math.max(240, Math.min(600, startHeight + delta)));
+            };
+
+            const handleMouseUp = () => {
+              setIsDragging(false);
+              document.removeEventListener("mousemove", handleMouseMove);
+              document.removeEventListener("mouseup", handleMouseUp);
+            };
+
+            document.addEventListener("mousemove", handleMouseMove);
+            document.addEventListener("mouseup", handleMouseUp);
+          }}
+          onMouseEnter={(e) => {
+            if (!isDragging) {
+              e.currentTarget.classList.add('bg-white/20');
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!isDragging) {
+              e.currentTarget.classList.remove('bg-white/20');
+            }
+          }}
+        />
+
+        <div className="p-2 sm:p-3 h-full overflow-hidden flex flex-col relative" style={{ cursor: 'default' }}>
+          {/* Expand/Minimize Button - Far Top Right Corner */}
           <Button
-            size="sm"
             variant="ghost"
-            onClick={() => setIsMinimized(!isMinimized)}
-            className="w-6 h-6 p-0 text-gray-400 hover:text-white"
-            title={isMinimized ? "Restore" : "Minimize"}
-          >
-            {isMinimized ? (
-              <Maximize2 className="w-3 h-3" />
-            ) : (
-              <Minimize2 className="w-3 h-3" />
-            )}
-          </Button>
-          {/* Expand to ~60% viewport toggle */}
-          <Button
             size="sm"
-            variant="ghost"
-            onClick={() => {
-              if (!isExpanded) {
-                prevPanelHeightRef.current = panelHeight;
-                const vv =
-                  typeof window !== "undefined" &&
-                  (window as any).visualViewport
-                    ? ((window as any).visualViewport as VisualViewport)
-                    : null;
-                const viewportH =
-                  vv?.height ??
-                  (typeof window !== "undefined" ? window.innerHeight : 0);
-                const target = Math.max(200, Math.round(viewportH * 0.6));
-                setPanelHeight(target);
-                setIsExpanded(true);
-              } else {
-                const restore = prevPanelHeightRef.current ?? 280;
-                setPanelHeight(restore);
-                setIsExpanded(false);
-              }
-            }}
-            className="w-6 h-6 p-0 text-gray-400 hover:text-white"
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="absolute top-1 right-1 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
             title={isExpanded ? "Collapse height" : "Expand height"}
             disabled={isMinimized}
           >
@@ -1269,201 +1147,149 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
               <Maximize2 className="w-3 h-3" />
             )}
           </Button>
-          <div className="flex items-center gap-1">
-            <GripHorizontal className="w-4 h-4 text-gray-500" />
-          </div>
-        </div>
-        {!isMinimized && (
-          <Tabs
-            value={activeTab}
-            onValueChange={(value) =>
-              onActiveTabChange?.(value as "chat" | "code")
-            }
-            className="flex-1 flex flex-col min-h-0"
-          >
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
-              <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <div className="">
-                    <Sparkles className="h-3 w-3 text-white" />
-                  </div>
-                  <span className="text-sm font-medium text-white/80">
-                    compute
-                  </span>
-                </div>
-                <TabsList className="bg-black/40">
-                  <TabsTrigger value="chat" className="text-xs sm:text-sm">
-                    <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                    <span className="hidden sm:inline">Chat</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="code" className="text-xs sm:text-sm">
-                    <Code className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                    <span className="hidden sm:inline">Code</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="images" className="text-xs sm:text-sm">
-                    <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                    <span className="hidden sm:inline">Extra</span>
-                  </TabsTrigger>
-                  <TabsTrigger value="plugins" className="text-xs sm:text-sm">
-                    <Zap className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                    <span className="hidden sm:inline">Plugins</span>
-                  </TabsTrigger>
-                </TabsList>
-              </div>
 
-              <div className="flex space-x-1 sm:space-x-2 flex-shrink-0">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={onNewChat}
-                  title="New Chat"
-                  className="h-8 w-8 sm:h-10 sm:w-10 p-0"
-                >
-                  <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={toggleHistory}
-                  title="Chat History"
-                  className="h-8 w-8 sm:h-10 sm:w-10 p-0"
-                >
-                  <History className="h-3 w-3 sm:h-4 sm:w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={toggleAccessibility} // Call the passed prop
-                  title="Accessibility Options"
-                  className="h-8 w-8 sm:h-10 sm:w-10 p-0"
-                >
-                  <Accessibility className="h-3 w-3 sm:h-4 sm:w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={toggleCodePreview} // Simplified onClick handler
-                  title="Code Preview"
-                  className={`h-8 w-8 sm:h-10 sm:w-10 p-0 ${
-                    hasCodeBlocks
-                      ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse"
-                      : ""
-                  }`}
-                >
-                  <Code
-                    className={`h-3 w-3 sm:h-4 sm:w-4 ${
-                      hasCodeBlocks ? "text-white" : ""
-                    }`}
-                  />
-                </Button>
+          {/* Header - Compact layout */}
+          <div className="flex justify-between items-center mb-1 mt-5 px-1">
+            <div className="flex items-center gap-2">
+              <div className="">
+                <Sparkles className="h-3 w-3 text-white" />
               </div>
+              <span className="text-sm font-medium text-white/80">
+                compute
+              </span>
             </div>
+            <div className="flex items-center gap-2">
+              <GripHorizontal className="w-4 h-4 text-gray-500" />
+            </div>
+          </div>
 
-            <TabsContent value="chat" className="m-0 flex flex-col h-full">
-              {/* Provider Status and Selection */}
-              <div className="flex items-center justify-between mb-3 text-xs text-white/60">
-                <div className="flex items-center gap-2">
-                  <Select
-                    value={`${currentProvider}:${currentModel}`}
-                    onValueChange={(value) => {
-                      const [provider, model] = value.split(":");
-                      onProviderChange(provider, model);
-                    }}
+          {!isMinimized && (
+            <Tabs value={activeTab} onValueChange={(value) => onActiveTabChange?.(value as "chat" | "code" | "extras" | "integrations" | "shell")} className="flex-1 flex flex-col min-h-0">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
+                <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
+                  <TabsList className="bg-black/40">
+                    <TabsTrigger value="chat" className="text-xs sm:text-sm">
+                      <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Chat</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="code" className="text-xs sm:text-sm">
+                      <Code className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Code</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="extras" className="text-xs sm:text-sm">
+                      <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Extra</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="integrations" className="text-xs sm:text-sm">
+                      <Zap className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Plugins</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="shell" className="text-xs sm:text-sm">
+                      <Terminal className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Shell</span>
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
+
+                <div className="flex space-x-1 sm:space-x-2 flex-shrink-0">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onNewChat}
+                    title="New Chat"
+                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
                   >
-                    <SelectTrigger className="w-[280px] bg-black/40 border-white/20">
-                      <SelectValue placeholder="Select a model" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableProviders.map((provider) => (
+                    <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleHistory}
+                    title="Chat History"
+                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                  >
+                    <History className="h-3 w-3 sm:h-4 sm:w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleAccessibility}
+                    title="Accessibility Options"
+                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                  >
+                    <Accessibility className="h-3 w-3 sm:h-4 sm:w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleCodePreview}
+                    title="Code Preview"
+                    className={`h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
+                      hasCodeBlocks
+                        ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse"
+                        : ""
+                    }`}
+                  >
+                    <Code
+                      className={`h-3 w-3 sm:h-4 sm:w-4 ${
+                        hasCodeBlocks ? "text-white" : ""
+                      }`}
+                    />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Provider/Model Selection - Restored */}
+              <div className="flex items-center gap-2 mb-3 text-xs text-white/60">
+                <Select
+                  value={`${currentProvider}:${currentModel}`}
+                  onValueChange={(value) => {
+                    const [provider, ...modelParts] = value.split(":");
+                    const model = modelParts.join(":");
+                    onProviderChange(provider, model);
+                  }}
+                >
+                  <SelectTrigger className="w-[280px] bg-black/40 border-white/20">
+                    <SelectValue placeholder="Select a model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {/* Only show available providers (with API keys configured) */}
+                    {availableProviders
+                      .filter(p => p.isAvailable !== false)
+                      .map((provider) => (
                         <SelectGroup key={provider.id}>
                           <SelectLabel>{provider.name}</SelectLabel>
                           {provider.models.map((model) => (
-                            <SelectItem
-                              key={model}
-                              value={`${provider.id}:${model}`}
-                            >
+                            <SelectItem key={model} value={`${provider.id}:${model}`}>
                               {model}
                             </SelectItem>
                           ))}
                         </SelectGroup>
                       ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs">Suggest</span>
-                    <Switch
-                      checked={autosuggestEnabled}
-                      onCheckedChange={(v) => setAutosuggestEnabled(!!v)}
-                    />
-                  </div>
-                  {isProcessing && (
-                    <div className="flex items-center gap-2">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      <span>Generating...</span>
-                    </div>
-                  )}
-                </div>
+                    {/* Show message if no providers configured */}
+                    {availableProviders.filter(p => p.isAvailable !== false).length === 0 && (
+                      <SelectItem value="none" disabled>
+                        No providers configured - add API keys to .env
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
               </div>
 
-              {/* Error Display */}
-              {error && (
-                <div className="flex items-center justify-between gap-2 mb-3 p-2 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-xs">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                    <span>{error}</span>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => (onRetry ? onRetry() : onSubmit(input))}
-                    className="ml-2"
-                  >
-                    Retry
-                  </Button>
-                </div>
-              )}
-
-              {/* Input Section - Always at bottom */}
-              <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-2 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
-                {pendingDiffs && pendingDiffs.length > 0 && activeTab === "code" && (
-                  <div className="mb-3 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-xs text-yellow-200">
-                    <div className="flex items-center justify-between">
-                      <span>
-                        {pendingDiffs.length} diff(s) proposed. Press Enter to
-                        apply to preview, Esc to dismiss.
-                      </span>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={onAcceptPendingDiffs}
-                          className="h-6 px-2"
-                        >
-                          Apply
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={onDismissPendingDiffs}
-                          className="h-6 px-2"
-                        >
-                          Dismiss
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {/* Suggestions */}
-                <div className="flex flex-wrap gap-2">
+              {/* Tab Content Sections */}
+              <TabsContent value="chat" className="m-0 flex-1 flex flex-col min-h-0">
+                {/* Suggestions - Compact row */}
+                <div className="flex flex-wrap gap-2 mb-2 shrink-0">
                   {chatSuggestions.map((suggestion, index) => (
                     <Button
                       key={index}
                       variant="secondary"
                       size="sm"
-                      className="text-xs bg-black/20 hover:bg-black/40 transition-all duration-200"
-                      onClick={() => handleSuggestionClick(suggestion)}
+                      className="text-xs bg-black/20 hover:bg-black/40 transition-all duration-200 shrink-0"
+                      onClick={() => {
+                        setInput(suggestion);
+                        textareaRef.current?.focus();
+                      }}
                       disabled={isProcessing}
                     >
                       {suggestion}
@@ -1471,29 +1297,21 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                   ))}
                 </div>
 
-                <form onSubmit={handleSubmit} className="flex space-x-2">
-                  <div className="relative flex-1">
+                {/* Input Form - Always visible at bottom */}
+                <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1 min-h-0">
+                  <div className="relative flex-1 min-h-[60px]">
                     <Textarea
                       ref={textareaRef}
                       value={input}
-                      onChange={(e) => setInput(e.target.value)} // Use the passed setInput
+                      onChange={(e) => setInput(e.target.value)}
                       placeholder="Type your message..."
-                      className="min-h-[60px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
-                      rows={3}
+                      className="min-h-[60px] max-h-[120px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20 rounded-2xl"
+                      rows={2}
                       onKeyDown={(e) => {
-                        if (
-                          e.key === "Tab" &&
-                          autosuggestEnabled &&
-                          ghostSuffix
-                        ) {
-                          e.preventDefault();
-                          setInput(input + ghostSuffix);
-                          setGhostSuffix("");
-                          return;
-                        }
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
-                          handleSubmit(e);
+                          onSubmit(input);
+                          setInput('');
                         }
                       }}
                       onFocus={() => {
@@ -1504,54 +1322,43 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                               behavior: "smooth",
                               block: "center",
                             });
-                          }, 300); // Delay to allow keyboard to appear
+                          }, 300);
                         }
                       }}
                       disabled={isProcessing}
                     />
-                    {autosuggestEnabled && !!ghostSuffix && (
-                      <div className="pointer-events-none absolute left-3 right-12 top-3 whitespace-pre-wrap text-white/40 text-base sm:text-sm">
-                        <span className="invisible">{input}</span>
-                        <span>{ghostSuffix}</span>
-                      </div>
-                    )}
                     <div className="absolute right-3 top-3 flex gap-1">
                       <button
                         type="button"
                         onClick={() => {
                           setShowFileSelector(!showFileSelector);
                         }}
-                        className="p-1 rounded hover:bg-white/10 transition-colors"
+                        className="p-1.5 rounded-md bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
                         title="Attach Files"
                         disabled={isProcessing}
                       >
-                        <FolderPlus className="h-4 w-4 text-blue-400" />
+                        <FolderPlus className="w-4 h-4 text-blue-400" />
                       </button>
                       <button
                         type="button"
                         onClick={() => {
                           onActiveTabChange?.("chat");
+                          setPluginToOpen("cloud-storage");
                         }}
-                        className="p-1 rounded hover:bg-white/10 transition-colors"
-                        title="Open AI Enhancer Plugin"
+                        className="p-1.5 rounded-md bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
+                        title="Open Cloud Storage Plugin"
                         disabled={isProcessing}
                       >
-                        <Zap
-                          className={`h-4 w-4 ${
-                            !isProcessing
-                              ? "text-white-400 hover:text-yellow-300"
-                              : "text-gray-500"
-                          }`}
-                        />
+                        <Cloud className="w-4 h-4 text-blue-400" />
                       </button>
                     </div>
 
                     {showFileSelector && (
                       <div className="absolute right-0 top-10 w-64 bg-black/90 border border-white/20 rounded-lg shadow-lg z-10 p-2">
-                        <h4 className="text-sm font-medium mb-2">
+                        <h4 className="text-sm font-medium text-white/80">
                           Attach Files
                         </h4>
-                        <div className="max-h-60 overflow-y-auto">
+                        <div className="max-h-32 overflow-y-auto">
                           <div className="mb-3">
                             <h5 className="text-xs font-medium mb-1">
                               Project Files
@@ -1613,7 +1420,7 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                     <Button
                       type="button"
                       variant="destructive"
-                      className="self-end min-w-[80px]"
+                      className="self-end min-w-[80px] bg-red-600/80 hover:bg-red-600 border border-red-500/50 rounded-2xl z-20"
                       onClick={onStopGeneration}
                     >
                       <Square className="h-4 w-4 mr-2" />
@@ -1622,7 +1429,7 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                   ) : (
                     <Button
                       type="submit"
-                      className="self-end min-w-[80px]"
+                      className="self-end min-w-[80px] bg-white/10 hover:bg-white/20 border border-white/20 rounded-2xl z-20"
                       disabled={isProcessing || !input.trim()}
                     >
                       {isProcessing ? (
@@ -1636,559 +1443,258 @@ ${codeModeState.mode === "advanced" ? "Note: Enhanced Code Orchestrator integrat
                     </Button>
                   )}
                 </form>
-              </div>
-            </TabsContent>
+              </TabsContent>
 
-            <TabsContent value="code" className="m-0 flex flex-col h-full">
-              {/* Code Mode Header */}
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Code className="h-4 w-4 text-blue-400" />
-                  <span className="text-sm font-medium text-white">
-                    Code Assistant
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant={codeModeState.mode === "advanced" ? "default" : "outline"}
-                    onClick={() =>
-                      codeModeActions.setMode(codeModeState.mode === "basic" ? "advanced" : "basic")
-                    }
-                    className="text-xs"
-                  >
-                    {codeModeState.mode === "advanced" ? "🔧 Advanced" : "📝 Basic"}
-                  </Button>
-                  <Badge variant="outline" className="text-xs">
-                    {codeModeState.mode === "advanced"
-                      ? "Enhanced Orchestrator"
-                      : "Enhanced Prompting"}
-                  </Badge>
-                  {codeModeState.sessionActive && (
-                    <Badge variant="outline" className="text-xs bg-green-900/20 text-green-400">
-                      Session Active
-                    </Badge>
-                  )}
-                  {codeModeState.isProcessing && (
-                    <Badge variant="outline" className="text-xs bg-blue-900/20 text-blue-400">
-                      Processing...
-                    </Badge>
-                  )}
-                </div>
-              </div>
-
-              {/* Advanced Code Mode - File Selector */}
-              {codeModeState.mode === "advanced" && (
-                <div className="mb-4 p-3 bg-black/30 rounded-lg border border-white/10">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-xs font-medium text-white/80">
-                      Project Files
-                    </h4>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setShowFileSelector(!showFileSelector)}
-                        className="text-xs"
-                      >
-                        {showFileSelector ? "Hide" : "Select Files"}
-                      </Button>
-                      {codeModeState.selectedFiles.length > 0 && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => codeModeActions.setSelectedFiles([])}
-                          className="text-xs text-red-400 hover:text-red-300"
-                        >
-                          Clear
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-
-                  {showFileSelector && (
-                    <div className="space-y-2 max-h-32 overflow-y-auto">
-                      {codeModeState.projectStructure.map((file) => (
-                        <label
-                          key={file}
-                          className="flex items-center gap-2 text-xs cursor-pointer hover:bg-white/5 p-1 rounded"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={codeModeState.selectedFiles.includes(file)}
-                            onChange={() => codeModeActions.toggleFileSelection(file)}
-                            className="rounded"
-                          />
-                          <span className="text-white/70">{file}</span>
-                          {Object.keys(codeModeState.attachedFiles).includes(file) && (
-                            <Badge variant="outline" className="text-xs bg-blue-900/20 text-blue-400">
-                              Attached
-                            </Badge>
-                          )}
-                        </label>
-                      ))}
-                    </div>
-                  )}
-
-                  {codeModeState.selectedFiles.length > 0 && (
-                    <div className="mt-2 flex items-center justify-between">
-                      <div className="text-xs text-green-400">
-                        ✓ {codeModeState.selectedFiles.length} file(s) selected for context
-                      </div>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          // Simulate attaching files with mock content
-                          codeModeState.selectedFiles.forEach(file => {
-                            if (!codeModeState.attachedFiles[file]) {
-                              codeModeActions.attachFile(file, `// Mock content for ${file}\n// This would be the actual file content in a real implementation`);
-                            }
-                          });
-                        }}
-                        className="text-xs"
-                        disabled={codeModeState.selectedFiles.every(f => codeModeState.attachedFiles[f])}
-                      >
-                        Attach Selected
-                      </Button>
-                    </div>
-                  )}
-
-                  {codeModeState.error && (
-                    <div className="mt-2 p-2 bg-red-900/20 border border-red-700 rounded text-red-300 text-xs">
-                      <div className="flex items-center justify-between">
-                        <span>{codeModeState.error}</span>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={codeModeActions.clearError}
-                          className="text-red-400 hover:text-red-300"
-                        >
-                          ×
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Quick Templates */}
-              <div className="mb-4">
-                <h4 className="text-xs font-medium text-white/80 mb-2">
-                  Quick Templates
-                </h4>
-                <div className="grid grid-cols-2 gap-2">
-                  {displayedTemplates.map((template, index) => (
+              {/* Code Tab Content */}
+              <TabsContent value="code" className="m-0 flex-1 flex flex-col min-h-0">
+                {/* Code Templates - Compact row */}
+                <div className="flex flex-wrap gap-2 mb-2 shrink-0">
+                  {codeTemplates.map((template, index) => (
                     <Button
                       key={index}
                       variant="outline"
                       size="sm"
-                      className="text-xs bg-black/20 hover:bg-black/40 border-white/20 text-left justify-start h-auto p-2"
+                      className="text-xs bg-black/20 hover:bg-black/40 border-white/20 text-left justify-start h-auto p-2 shrink-0"
                       onClick={() => setInput(template.template)}
                       disabled={isProcessing}
                     >
                       <div>
                         <div className="font-medium">{template.title}</div>
-                        <div className="text-xs text-white/60 mt-1 line-clamp-2">
-                          {template.template.split("\n")[0]}
-                        </div>
                       </div>
                     </Button>
                   ))}
                 </div>
-              </div>
 
-              {/* Input Section - Always at bottom */}
-              <div className="mt-auto space-y-3 pb-2 sm:pb-0 bg-black/20 md:bg-transparent p-2 md:p-0 rounded-lg md:rounded-none border md:border-0 border-white/10">
-                {/* Code Suggestions */}
-                <div>
-                  <h4 className="text-xs font-medium text-white/80 mb-2">
-                    Popular Requests
-                  </h4>
-                  <div className="flex flex-wrap gap-2">
-                    {codeSuggestions.slice(0, 4).map((suggestion, index) => (
-                      <Button
-                        key={index}
-                        variant="secondary"
-                        size="sm"
-                        className="text-xs bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/20 transition-all duration-200"
-                        onClick={() => handleSuggestionClick(suggestion)}
-                        disabled={isProcessing}
-                      >
-                        {suggestion}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Enhanced Code Input */}
-                <form onSubmit={handleSubmit} className="space-y-3">
-                  {codeModeState.mode === "advanced" && (
-                    <div className="bg-black/20 rounded-lg p-3 border border-white/10 mb-3">
-                      <h4 className="text-xs font-medium text-white/80 mb-2">
-                        Enhanced Code Orchestrator
-                      </h4>
-                      <div className="text-xs text-white/60 space-y-1">
-                        <div>
-                          <code className="bg-white/10 px-1 rounded">
-                            @read_file(path)
-                          </code>{" "}
-                          - Request file content
-                        </div>
-                        <div>
-                          <code className="bg-white/10 px-1 rounded">
-                            @write_diff(file, changes)
-                          </code>{" "}
-                          - Apply safe diff operations
-                        </div>
-                        <div>
-                          <code className="bg-white/10 px-1 rounded">
-                            @analyze_code(file)
-                          </code>{" "}
-                          - Deep code analysis with AI agents
-                        </div>
-                        <div>
-                          <code className="bg-white/10 px-1 rounded">
-                            @orchestrate(task)
-                          </code>{" "}
-                          - Multi-agent collaboration
-                        </div>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        <div className="text-xs text-blue-400">
-                          🚀 Enhanced Code Orchestrator
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {codeModeState.sessionActive && (
-                            <div className="flex items-center gap-1 text-xs text-green-400">
-                              <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                              Active
-                            </div>
-                          )}
-                          {codeModeState.isProcessing && (
-                            <div className="flex items-center gap-1 text-xs text-blue-400">
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                              Processing
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="relative">
+                <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1 min-h-0">
+                  <div className="relative flex-1">
                     <Textarea
                       ref={codeTextareaRef}
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
-                      className="min-h-[120px] bg-black/40 border-white/20 pr-12 resize-none text-base sm:text-sm"
+                      className="min-h-[120px] max-h-[300px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20 rounded-2xl"
                       rows={6}
-                      onKeyDown={(e) => {
-                        if (
-                          e.key === "Tab" &&
-                          autosuggestEnabled &&
-                          ghostSuffix
-                        ) {
-                          e.preventDefault();
-                          setInput(input + ghostSuffix);
-                          setGhostSuffix("");
-                          return;
-                        }
-                        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                          e.preventDefault();
-                          handleSubmit(e);
-                        }
-                      }}
-                      onFocus={() => {
-                        // Scroll to input on mobile when focused
-                        if (
-                          window.innerWidth <= 768 &&
-                          codeTextareaRef.current
-                        ) {
-                          setTimeout(() => {
-                            codeTextareaRef.current?.scrollIntoView({
-                              behavior: "smooth",
-                              block: "center",
-                            });
-                          }, 300); // Delay to allow keyboard to appear
-                        }
-                      }}
-                      disabled={isProcessing}
-                    />
-                    {autosuggestEnabled && !!ghostSuffix && (
-                      <div className="pointer-events-none absolute left-3 right-12 top-3 whitespace-pre-wrap text-white/40 text-base sm:text-sm">
-                        <span className="invisible">{input}</span>
-                        <span>{ghostSuffix}</span>
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const enhancePrompt = `Please enhance and improve this coding request to be more detailed and specific:\n\n"${input}"\n\nProvide an enhanced version that includes:
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        onSubmit(input);
+                        setInput('');
+                      }
+                    }}
+                    onFocus={() => {
+                      // Scroll to input on mobile when focused
+                      if (
+                        window.innerWidth <= 768 &&
+                        codeTextareaRef.current
+                      ) {
+                        setTimeout(() => {
+                          codeTextareaRef.current?.scrollIntoView({
+                            behavior: "smooth",
+                            block: "center",
+                          });
+                        }, 300); // Delay to allow keyboard to appear
+                      }
+                    }}
+                    disabled={isProcessing}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const enhancePrompt = `Please enhance and improve this coding request to be more detailed and specific:\n\n"${input}"\n\nProvide an enhanced version that includes:
 - Specific framework/language requirements
 - Detailed feature specifications
 - Performance and security considerations
 - Code structure and architecture preferences
 - Testing and documentation requirements`;
-                        setInput(enhancePrompt);
-                      }}
-                      className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
-                      title="Enhance this coding request"
-                      disabled={!input.trim() || isProcessing}
+                      setInput(enhancePrompt);
+                    }}
+                    className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
+                    title="Enhance this coding request"
+                    disabled={!input.trim() || isProcessing}
+                  >
+                    <Code
+                      className={`h-4 w-4 ${
+                        input.trim() && !isProcessing
+                          ? "text-blue-400 hover:text-blue-300"
+                          : "text-gray-500"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Send Button for Code Tab */}
+                <div className="flex justify-end mt-2">
+                  {isProcessing && onStopGeneration ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      className="self-end min-w-[80px] bg-red-600/80 hover:bg-red-600 border border-red-500/50 rounded-2xl z-20"
+                      onClick={onStopGeneration}
                     >
-                      <Code
-                        className={`h-4 w-4 ${
-                          input.trim() && !isProcessing
-                            ? "text-blue-400 hover:text-blue-300"
-                            : "text-gray-500"
-                        }`}
-                      />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs text-white/60">
-                      Tip: Use Ctrl+Enter to submit, Enter for new line
-                    </div>
-                    {isProcessing && onStopGeneration ? (
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        size="sm"
-                        onClick={onStopGeneration}
-                      >
-                        <Square className="h-4 w-4 mr-2" />
-                        Stop
-                      </Button>
-                    ) : (
-                      <Button
-                        type="submit"
-                        size="sm"
-                        className="bg-blue-600 hover:bg-blue-700"
-                        disabled={isProcessing || !input.trim()}
-                      >
-                        {isProcessing ? (
-                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                        ) : (
-                          <Code className="h-4 w-4 mr-2" />
-                        )}
-                        {isProcessing ? "Generating..." : "Generate Code"}
-                      </Button>
-                    )}
-                  </div>
+                      <Square className="h-4 w-4 mr-2" />
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button
+                      type="submit"
+                      className="self-end min-w-[80px] bg-white/10 hover:bg-white/20 border border-white/20 rounded-2xl z-20"
+                      disabled={isProcessing || !input.trim()}
+                    >
+                      {isProcessing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <Send className="h-4 w-4 mr-2" />
+                          Send
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </div>
                 </form>
-              </div>
-            </TabsContent>
+              </TabsContent>
 
-            <TabsContent value="images" className="m-0">
-              <Card className="bg-black/40 border-white/10">
-                <CardContent className="pt-6">
-                  <div className="space-y-4">
-                    {/* Advanced AI Plugins Section */}
-                    <div className="text-center mb-4">
-                      <h3 className="font-medium text-white mb-2">
-                        Advanced AI Plugins
-                      </h3>
-                      <p className="text-xs text-white/60">
-                        Click any plugin to load its specialized prompt and
-                        switch to chat
-                      </p>
+              {/* Extras Tab Content */}
+              <TabsContent value="extras" className="m-0 flex-1 overflow-auto">
+                <Card className="bg-black/40 border-white/10">
+                  <CardContent className="pt-6">
+                    <div className="space-y-4">
+                      {/* Quick Prompt Templates Section */}
+                      <div className="text-center mb-4">
+                        <h3 className="font-medium text-white mb-2">
+                          Quick Prompt Templates
+                        </h3>
+                        <p className="text-xs text-white/60">
+                          Click to insert a specialized prompt into the chat
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto mb-6">
+                        {pluginModules.map((plugin) => {
+                          const IconComponent = plugin.icon;
+                          return (
+                            <button
+                              key={plugin.id}
+                              onClick={() => {
+                                plugin.action(setInput, onActiveTabChange, setPluginToOpen);
+                                toast.success(
+                                  `${plugin.name} prompt loaded! Check the chat input.`,
+                                );
+                              }}
+                              className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
+                            >
+                              <div className="flex items-center gap-2 w-full">
+                                <IconComponent
+                                  className={`h-4 w-4 ${plugin.color} group-hover:scale-110 transition-transform`}
+                                />
+                                <span className="font-medium text-sm text-white truncate">
+                                  {plugin.name}
+                                </span>
+                              </div>
+                              <p className="text-xs text-white/60 line-clamp-2 w-full">
+                                {plugin.description}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Pop-out Plugin Windows Section */}
+                      <div className="text-center mb-4 pt-4 border-t border-white/10">
+                        <h3 className="font-medium text-white mb-2">
+                          Plugin Windows
+                        </h3>
+                        <p className="text-xs text-white/60">
+                          Click to open a plugin in a pop-out window
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
+                        {availablePlugins.map((plugin) => {
+                          const IconComponent = plugin.icon;
+                          return (
+                            <button
+                              key={plugin.id}
+                              onClick={() => {
+                                setPluginToOpen(plugin.id);
+                                toast.success(
+                                  `${plugin.name} window opened!`,
+                                );
+                              }}
+                              className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
+                            >
+                              <div className="flex items-center gap-2 w-full">
+                                <IconComponent
+                                  className={`h-4 w-4 ${plugin.category === 'ai' ? 'text-purple-400' : plugin.category === 'code' ? 'text-blue-400' : plugin.category === 'utility' ? 'text-green-400' : plugin.category === 'design' ? 'text-pink-400' : plugin.category === 'data' ? 'text-indigo-400' : plugin.category === 'media' ? 'text-yellow-400' : 'text-gray-400'} group-hover:scale-110 transition-transform`}
+                                />
+                                <span className="font-medium text-sm text-white truncate">
+                                  {plugin.name}
+                                </span>
+                              </div>
+                              <p className="text-xs text-white/60 line-clamp-2 w-full">
+                                {plugin.description}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
 
-                    <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
-                      {pluginModules.map((plugin) => {
-                        const IconComponent = plugin.icon;
-                        return (
-                          <button
-                            key={plugin.id}
-                            onClick={() => {
-                              plugin.action();
-                              onActiveTabChange?.("chat"); // Switch to chat tab to show the input
-                              toast.success(
-                                `${plugin.name} plugin activated! Check the chat input.`,
-                              );
-                            }}
-                            className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
-                          >
-                            <div className="flex items-center gap-2 w-full">
-                              <IconComponent
-                                className={`h-4 w-4 ${plugin.color} group-hover:scale-110 transition-transform`}
-                              />
-                              <span className="font-medium text-sm text-white truncate">
-                                {plugin.name}
-                              </span>
-                            </div>
-                            <p className="text-xs text-white/60 line-clamp-2 w-full">
-                              {plugin.description}
-                            </p>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* Images Section */}
-                    <div className="mt-6 pt-4 border-t border-white/10">
-                      <div className="flex items-center gap-2 mb-3">
-                        <ImageIcon className="h-4 w-4 text-blue-400" />
+              {/* Integrations Tab Content */}
+              <TabsContent value="integrations" className="m-0 flex-1 overflow-auto">
+                <Card className="bg-black/40 border-white/10">
+                  <CardContent className="pt-6">
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Zap className="h-4 w-4 text-yellow-400" />
                         <span className="text-sm font-medium">
-                          Sample Images
+                          Modular Tools
                         </span>
                       </div>
-                      <div className="max-h-64 overflow-y-auto space-y-3">
-                        {sampleImages.map((image) => (
-                          <div
-                            key={image.id}
-                            className="flex items-center gap-3 p-3 bg-black/20 rounded-lg hover:bg-black/30 transition-colors"
-                          >
-                            <img
-                              src={image.url || "/placeholder.svg"}
-                              alt={image.title}
-                              className="w-16 h-12 object-cover rounded"
-                            />
-                            <div className="flex-1">
-                              <h4 className="text-sm font-medium text-white">
-                                {image.title}
-                              </h4>
-                              <p className="text-xs text-white/60">
-                                Click to use in conversation
-                              </p>
-                            </div>
-                            <Button size="sm" variant="ghost">
-                              <ImageIcon className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="plugins" className="m-0">
-              <Card className="bg-black/40 border-white/10">
-                <CardContent className="pt-6">
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Zap className="h-4 w-4 text-yellow-400" />
-                      <span className="text-sm font-medium">
-                        Modular Tools
-                      </span>
-                    </div>
-                    <div className="mb-3">
-                      <p className="text-xs text-white/60 mb-2">
-                        Pop-out plugin windows for advanced functionality:
-                      </p>
-                      <PluginManager
-                        availablePlugins={availablePlugins}
-                        onPluginResult={handlePluginResult}
-                        openPluginId={pluginToOpen}
-                        onOpenComplete={() => setPluginToOpen(null)}
-                      />
-                    </div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <Settings className="h-4 w-4 text-green-400" />
-                      <span className="text-sm font-medium">
-                        Quick Shortcuts
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-1 text-xs text-white/60">
-                      <div>
-                        <kbd className="bg-black/40 px-1 rounded">
-                          Ctrl+Enter
-                        </kbd>{" "}
-                        Submit
-                      </div>
-                      <div>
-                        <kbd className="bg-black/40 px-1 rounded">
-                          Shift+Enter
-                        </kbd>{" "}
-                        New line
-                      </div>
-                      <div>
-                        <kbd className="bg-black/40 px-1 rounded">Ctrl+K</kbd>{" "}
-                        Focus input
-                      </div>
-                      <div>
-                        <kbd className="bg-black/40 px-1 rounded">Esc</kbd>{" "}
-                        Clear input
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="help" className="m-0">
-              <Card className="bg-black/40 border-white/10">
-                <CardContent className="pt-6">
-                  <div className="space-y-4">
-                    <div className="flex items-start gap-3">
-                      <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
-                      <div>
-                        <h3 className="font-medium">Navigation</h3>
-                        <p className="text-sm text-white/70">
-                          Click and drag to rotate the view. Scroll to zoom
-                          in/out.
+                      <div className="mb-3">
+                        <p className="text-xs text-white/60 mb-2">
+                          Pop-out plugin windows for advanced functionality:
                         </p>
                       </div>
                     </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
 
-                    <div className="flex items-start gap-3">
-                      <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
-                      <div>
-                        <h3 className="font-medium">Interaction</h3>
-                        <p className="text-sm text-white/70">
-                          Click on message nodes to expand and view their
-                          content.
-                        </p>
+              {/* Shell Tab Content */}
+              <TabsContent value="shell" className="m-0 flex-1 overflow-auto">
+                <Card className="bg-white/5 border-white/10 h-full">
+                  <CardContent className="pt-4 h-full flex flex-col">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <Terminal className="h-4 w-4 text-green-400" />
+                        <span className="text-sm font-medium">Sandbox Terminal</span>
                       </div>
                     </div>
-
-                    <div className="flex items-start gap-3">
-                      <HelpCircle className="h-5 w-5 text-purple-400 mt-0.5" />
-                      <div>
-                        <h3 className="font-medium">Chat History</h3>
-                        <p className="text-sm text-white/70">
-                          Use the + button for new chats and history button to
-                          view past conversations.
-                        </p>
+                    <div className="flex-1 flex items-center justify-center bg-black/40 rounded-lg p-8 font-mono text-sm text-white/60">
+                      <div className="text-center">
+                        <Terminal className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                        <p>Terminal is open below</p>
+                        <p className="text-white/40 text-xs mt-2">Type commands to execute in an isolated environment</p>
                       </div>
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
-        )}
-        {/* Floating "Jump to input" FAB */}
-        {!isMinimized && (
-          <button
-            type="button"
-            onClick={() => {
-              textareaRef.current?.scrollIntoView({
-                behavior: "smooth",
-                block: "center",
-              });
-              setTimeout(() => textareaRef.current?.focus(), 250);
-            }}
-            className="fixed bottom-24 right-4 z-[60] bg-black/70 hover:bg-black/80 backdrop-blur-sm border border-white/20 text-white p-3 rounded-full shadow-lg transition-all duration-200"
-            title="Jump to input"
-          >
-            <ArrowDownToLine className="w-4 h-4" />
-          </button>
-        )}
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
+            {/* PluginManager for pop-out windows - single instance outside Tabs */}
+            <PluginManager
+              availablePlugins={availablePlugins}
+              onPluginResult={handlePluginResult}
+              openPluginId={pluginToOpen}
+              onOpenComplete={() => setPluginToOpen(null)}
+            />
+          )}
+        </div>
       </div>
-
-      {/* Multi-Model Comparison Modal */}
-      <MultiModelComparison
-        isOpen={showMultiModelComparison}
-        onClose={() => setShowMultiModelComparison(false)}
-        availableProviders={availableProviders}
-        currentProvider={currentProvider}
-        currentModel={currentModel}
-      />
-    </div>
+    </>
   );
 }

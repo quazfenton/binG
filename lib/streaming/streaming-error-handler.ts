@@ -1,5 +1,7 @@
 "use client";
 
+import { secureRandom } from '@/lib/utils';
+
 /**
  * Streaming Error Handler
  * 
@@ -119,7 +121,7 @@ export class StreamingErrorHandler {
       }
 
       // Add jitter to prevent thundering herd
-      delay += Math.random() * 1000;
+      delay += secureRandom() * 1000;
 
       // Wait before retry
       await new Promise(resolve => setTimeout(resolve, delay));

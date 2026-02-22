@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
+import { secureRandomInt } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
@@ -197,7 +198,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
           height: imageParams.height,
           num_inference_steps: imageParams.steps,
           guidance_scale: imageParams.guidance,
-          seed: imageParams.seed === '' ? -1 : parseInt(imageParams.seed as string),
+          seed: imageParams.seed === '' ? -1 : Number.parseInt(imageParams.seed as string),
           sampler: imageParams.sampler,
           num_images: imageParams.numImages
         })
@@ -343,12 +344,12 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                 <div>
                   <label className="text-sm mb-1 block">Width</label>
                   <Input type="number" value={imageParams.width} 
-                    onChange={(e) => setImageParams({...imageParams, width: parseInt(e.target.value)})} />
+                    onChange={(e) => setImageParams({...imageParams, width: Number.parseInt(e.target.value)})} />
                 </div>
                 <div>
                   <label className="text-sm mb-1 block">Height</label>
                   <Input type="number" value={imageParams.height}
-                    onChange={(e) => setImageParams({...imageParams, height: parseInt(e.target.value)})} />
+                    onChange={(e) => setImageParams({...imageParams, height: Number.parseInt(e.target.value)})} />
                 </div>
               </div>
 
@@ -385,7 +386,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                   <div className="flex gap-2">
                     <Input type="number" placeholder="random" value={imageParams.seed}
                       onChange={(e) => setImageParams({...imageParams, seed: e.target.value})} />
-                    <Button variant="secondary" size="icon" onClick={() => setImageParams({...imageParams, seed: Math.floor(Math.random() * 1e9)})}>
+                    <Button variant="secondary" size="icon" onClick={() => setImageParams({...imageParams, seed: secureRandomInt(0, 999999999)})}>
                       <Shuffle className="w-4 h-4" />
                     </Button>
                   </div>
@@ -395,7 +396,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
               <div>
                 <label className="text-sm mb-1 block">Number of Images</label>
                 <Input type="number" min={1} max={4} value={imageParams.numImages}
-                  onChange={(e) => setImageParams({...imageParams, numImages: parseInt(e.target.value)})} />
+                  onChange={(e) => setImageParams({...imageParams, numImages: Number.parseInt(e.target.value)})} />
               </div>
 
               <Button onClick={generateImage} disabled={!imageParams.prompt || generating} className="w-full">

@@ -10,6 +10,7 @@ import ChatHistoryModal from "@/components/chat-history-modal";
 import { ChatPanel } from "@/components/chat-panel";
 import CodePreviewPanel from "@/components/code-preview-panel";
 import CodeMode from "@/components/code-mode";
+import TerminalPanel from "@/components/terminal/TerminalPanel";
 // import { useConversation } from "@/hooks/use-conversation"; // No longer needed
 import { useChatHistory } from "@/hooks/use-chat-history";
 import { voiceService } from "@/lib/voice/voice-service";
@@ -23,12 +24,14 @@ import { parseCodeBlocksFromMessages } from "@/lib/code-parser";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
 import { modeManager, setCurrentMode, processResponse } from "@/lib/mode-manager";
-import { 
-  createInputContext, 
-  processSafeContent, 
+import {
+  createInputContext,
+  processSafeContent,
   shouldGenerateDiffsForContext,
-  debugContentProcessing 
+  debugContentProcessing
 } from "@/lib/input-response-separator";
+import { useAuth } from "@/contexts/auth-context";
+import { secureRandom, generateSecureId } from "@/lib/utils";
 
 // Main component wrapped with CodeServiceProvider
 export default function ConversationInterface() {
@@ -46,7 +49,19 @@ export default function ConversationInterface() {
  *
  * @returns A JSX element that renders the conversation interface and its associated panels and controls.
  */
+function getStableSessionId(): string {
+  if (typeof window === 'undefined') return 'server-session';
+  
+  let sessionId = localStorage.getItem('anonymous_session_id');
+  if (!sessionId) {
+    sessionId = generateSecureId('anon');
+    localStorage.setItem('anonymous_session_id', sessionId);
+  }
+  return sessionId;
+}
+
 function ConversationInterfaceContent() {
+  const { user } = useAuth();
   const [embedMode, setEmbedMode] = useState(false);
 
   useEffect(() => {
@@ -62,6 +77,10 @@ function ConversationInterfaceContent() {
     } catch {}
 
     const handler = (e: MessageEvent) => {
+      // Only accept auth messages from the same origin to prevent token injection
+      if (e.origin !== window.location.origin) {
+        return;
+      }
       if (e?.data?.type === 'bing:auth' && e.data.token) {
         try { localStorage.setItem('token', e.data.token); } catch {}
       }
@@ -73,6 +92,8 @@ function ConversationInterfaceContent() {
   const [showHistory, setShowHistory] = useState(false);
   const [showCodePreview, setShowCodePreview] = useState(false);
   const [showCodeMode, setShowCodeMode] = useState(false);
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [terminalMinimized, setTerminalMinimized] = useState(false);
   const [projectFiles, setProjectFiles] = useState<{ [key: string]: string }>(
     {},
   );
@@ -85,8 +106,16 @@ function ConversationInterfaceContent() {
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
     [],
   );
-  const [currentProvider, setCurrentProvider] = useState<string>("");
-  const [currentModel, setCurrentModel] = useState<string>("");
+  const [currentProvider, setCurrentProvider] = useState<string>(
+    typeof window !== 'undefined' 
+      ? (localStorage.getItem("chat_provider") || "openrouter")
+      : "openrouter"
+  );
+  const [currentModel, setCurrentModel] = useState<string>(
+    typeof window !== 'undefined'
+      ? (localStorage.getItem("chat_model") || "deepseek/deepseek-r1-0528:free")
+      : "deepseek/deepseek-r1-0528:free"
+  );
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
@@ -94,18 +123,27 @@ function ConversationInterfaceContent() {
   >(null);
 
   // Enhanced code system integration
-  const [activeTab, setActiveTab] = useState<"chat" | "code">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "code" | "extras" | "integrations" | "shell">("chat");
   const codeServiceContext = useCodeService();
 
   // Update mode manager when active tab changes
   useEffect(() => {
     setCurrentMode(activeTab);
-    
-    // Close code preview panel when switching to chat mode
-    if (activeTab === 'chat' && showCodePreview) {
-      setShowCodePreview(false);
+
+    // Auto-open terminal when shell tab is selected
+    if (activeTab === 'shell' && !showTerminal) {
+      setShowTerminal(true);
+      setTerminalMinimized(false);
     }
-  }, [activeTab, showCodePreview]);
+    
+    // Auto-focus terminal when shell tab is selected
+    if (activeTab === 'shell' && showTerminal) {
+      setTimeout(() => {
+        const xtermEl = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
+        xtermEl?.focus();
+      }, 100);
+    }
+  }, [activeTab, showTerminal]);
 
   // Enhanced streaming state management
   const streamingState = useStreamingState({
@@ -442,8 +480,14 @@ function ConversationInterfaceContent() {
 
           const selection = fromPersisted || fromServer || fromFirst;
           if (selection) {
-            if (!currentProvider) setCurrentProvider(selection.provider);
-            if (!currentModel) setCurrentModel(selection.model);
+            // Always update if we have a valid selection and current is not set or not in available providers
+            const providerAvailable = providers.some(p => p.id === selection.provider);
+            if (!currentProvider || !providerAvailable) {
+              setCurrentProvider(selection.provider);
+            }
+            if (!currentModel || !providers.find(p => p.id === selection.provider)?.models.includes(selection.model)) {
+              setCurrentModel(selection.model);
+            }
           }
         }
       })
@@ -452,6 +496,11 @@ function ConversationInterfaceContent() {
         toast.error(
           "Failed to load AI providers. Check your API configuration.",
         );
+        // Fallback to defaults if fetch fails
+        if (!currentProvider) {
+          setCurrentProvider("google");
+          setCurrentModel("gemini-2.5-flash");
+        }
       });
   }, []); // initial load only
 
@@ -633,25 +682,15 @@ function ConversationInterfaceContent() {
 
   // Check if there are code blocks in messages for preview button glow (mode-aware)
   const hasCodeBlocks = useMemo(() => {
-    if (activeTab !== 'code') return false;
-    
+    // Check for code blocks in any assistant message
     return messages.some((message) => {
       if (message.role === "assistant" && message.content.includes("```")) {
-        const messageContext = createInputContext(message.role);
-        const processedResponse = processSafeContent(message.content, messageContext);
-        return processedResponse.shouldOpenCodePreview;
+        return true;
       }
-      return false;
     });
-  }, [messages, activeTab]);
+  }, [messages]);
 
   const handleToggleCodePreview = () => {
-    // Allow code preview in both chat and code modes
-    // If switching from chat to code preview, also switch to code tab
-    if (activeTab !== 'code') {
-      setActiveTab('code');
-    }
-
     setShowCodePreview((prevShowCodePreview) => {
       const newState = !prevShowCodePreview;
       return newState;
@@ -764,15 +803,9 @@ function ConversationInterfaceContent() {
     toast.info("Dismissed pending diffs");
   };
 
-  // Intermediary function to handle submit from InteractionPanel with ad system
+  // Handle chat submission - no login restrictions
   const handleChatSubmit = (content: string) => {
-    // Check if user needs to see an ad
-    if (!isLoggedIn && promptCount > 0 && promptCount % 3 === 0) {
-      setShowAd(true);
-      return;
-    }
-
-    // Increment prompt count for non-logged-in users
+    // Increment prompt count for tracking (no restrictions)
     if (!isLoggedIn) {
       setPromptCount((prev) => prev + 1);
     }
@@ -884,7 +917,7 @@ function ConversationInterfaceContent() {
       <InteractionPanel
         onSubmit={handleChatSubmit} // Pass the intermediary function
         onNewChat={handleNewChat}
-        isProcessing={isLoading || codeServiceContext.state.isProcessing || !currentProvider}
+        isProcessing={isLoading || codeServiceContext.state.isProcessing}
         toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
         toggleHistory={() => setShowHistory(!showHistory)}
         toggleCodePreview={() => {
@@ -907,6 +940,7 @@ function ConversationInterfaceContent() {
         activeTab={activeTab}
         onActiveTabChange={setActiveTab}
         streamingState={streamingState}
+        userId={user?.id?.toString() || getStableSessionId()} // Use stable user ID or session ID
       />
 
       {/* Chat History Modal */}
@@ -929,21 +963,17 @@ function ConversationInterfaceContent() {
       )}
 
       {/* Code Preview Panel */}
-      {showCodePreview && activeTab === 'code' && (
+      {showCodePreview && (
         <CodePreviewPanel
+          isOpen={showCodePreview}
           messages={messages}
           onClose={() => setShowCodePreview(false)}
-          projectFiles={projectFiles}
-          onUpdateFiles={handleUpdateProjectFiles}
-          pendingDiffs={pendingDiffs}
-          onAcceptDiffs={acceptPendingDiffs}
-          onDismissDiffs={dismissPendingDiffs}
           commandsByFile={commandsByFile}
           onApplyAllCommandDiffs={applyAllCommandDiffs}
-          onApplyDiffsForFile={applyDiffsForFile}
+          onApplyFileCommandDiffs={applyDiffsForFile}
           onClearAllCommandDiffs={clearAllCommandDiffs}
-          onClearCommandDiffsForFile={clearCommandDiffsForFile}
-          onSquashCommandDiffsForFile={squashCommandDiffsForFile}
+          onClearFileCommandDiffs={clearCommandDiffsForFile}
+          onSquashFileCommandDiffs={squashCommandDiffsForFile}
         />
       )}
 
@@ -957,34 +987,20 @@ function ConversationInterfaceContent() {
         />
       )}
 
-      {/* Advertisement Modal */}
-      {showAd && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-lg max-w-md mx-4">
-            <h3 className="text-lg font-semibold mb-4">Support Our Service</h3>
-            <p className="text-gray-600 mb-4">
-              You've used 3 prompts. Consider creating an account for unlimited access!
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  setShowAd(false);
-                  setShowAccessibility(true);
-                }}
-                className="flex-1 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-              >
-                Sign Up
-              </button>
-              <button
-                onClick={() => setShowAd(false)}
-                className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded hover:bg-gray-400"
-              >
-                Continue
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Terminal Panel */}
+      <TerminalPanel
+        userId={user?.id?.toString() || getStableSessionId()}
+        isOpen={showTerminal}
+        onClose={() => {
+          setShowTerminal(false);
+          // Return to chat tab when terminal is closed
+          if (activeTab === 'shell') {
+            setActiveTab('chat');
+          }
+        }}
+        onMinimize={() => setTerminalMinimized(!terminalMinimized)}
+        isMinimized={terminalMinimized}
+      />
     </div>
   );
 }

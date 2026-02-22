@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authService } from '@/lib/auth/auth-service';
+import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,6 +13,15 @@ export async function POST(request: NextRequest) {
         { success: false, error: 'Email and password are required' },
         { status: 400 }
       );
+    }
+
+    // Normalize email for rate limiting (prevent bypass via whitespace/casing)
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : undefined;
+
+    // Rate limiting: Check before processing (strict limits to prevent brute-force)
+    const rateLimitResult = rateLimitMiddleware(request, 'login', normalizedEmail);
+    if (!rateLimitResult.success && rateLimitResult.response) {
+      return rateLimitResult.response;
     }
 
     // Get client info for session
@@ -28,6 +38,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: result.error },
         { status: 401 }
+      );
+    }
+
+    // Check if email is verified (optional - can be disabled via env var)
+    const requireEmailVerification = process.env.REQUIRE_EMAIL_VERIFICATION === 'true';
+    if (requireEmailVerification && result.user && !result.user.emailVerified) {
+      // Delete the session since we're not allowing login
+      if (result.sessionId) {
+        await authService.logout(result.sessionId);
+      }
+      
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: 'Please verify your email before logging in. Check your inbox for the verification link.',
+          requiresVerification: true
+        },
+        { status: 403 }
       );
     }
 

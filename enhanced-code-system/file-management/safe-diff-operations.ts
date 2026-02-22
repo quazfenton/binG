@@ -18,6 +18,7 @@ import {
   ERROR_CODES 
 } from '../core/error-types';
 import { DiffOperation, FileState } from './advanced-file-manager';
+import { generateSecureId } from '@/lib/utils';
 
 // Validation schemas
 const ValidationResultSchema = z.object({
@@ -353,7 +354,7 @@ class SafeDiffOperations extends EventEmitter {
     content: string,
     version: number
   ): Promise<string> {
-    const backupId = `backup_${fileId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const backupId = generateSecureId(`backup_${fileId}`);
     
     const backup: BackupState = {
       id: backupId,
@@ -1419,7 +1420,7 @@ class SafeDiffOperations extends EventEmitter {
         
         if (semanticImpact.hasBreakingChanges) {
           conflicts.push({
-            id: `semantic_conflict_${fileId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            id: generateSecureId(`semantic_conflict_${fileId}`),
             fileId,
             type: 'semantic_conflict',
             description: semanticImpact.description,

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { secureRandomInt } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Input } from '../ui/input';
@@ -38,7 +39,7 @@ const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, ini
     }
     try {
       setIsGenerating(true);
-      const [w, h] = dimensions.split('x').map((v) => parseInt(v, 10));
+      const [w, h] = dimensions.split('x').map((v) => Number.parseInt(v, 10));
       const res = await fetch('/api/image/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -172,7 +173,7 @@ const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, ini
                 <div>
                   <label className="text-sm font-medium mb-1 block">Steps</label>
                   <Input type="number" min={1} max={64} value={steps}
-                    onChange={(e) => setSteps(parseInt(e.target.value || '0', 10))} />
+                    onChange={(e) => setSteps(Number.parseInt(e.target.value || '0', 10))} />
                 </div>
                 <div>
                   <label className="text-sm font-medium mb-1 block">Guidance</label>
@@ -183,8 +184,8 @@ const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, ini
                   <label className="text-sm font-medium mb-1 block">Seed</label>
                   <div className="flex gap-2">
                     <Input type="number" placeholder="random" value={seed}
-                      onChange={(e) => setSeed(e.target.value === '' ? '' : parseInt(e.target.value, 10))} />
-                    <Button type="button" variant="secondary" onClick={() => setSeed(Math.floor(Math.random() * 1e9))}>
+                      onChange={(e) => setSeed(e.target.value === '' ? '' : Number.parseInt(e.target.value, 10))} />
+                    <Button type="button" variant="secondary" onClick={() => setSeed(secureRandomInt(0, 999999999))}>
                       <Shuffle className="w-4 h-4" />
                     </Button>
                   </div>

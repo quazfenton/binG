@@ -29,6 +29,11 @@ export interface UnifiedResponse {
     optimizations?: Record<string, any>;
     isFallback?: boolean;
     fallbackReason?: string;
+    requiresAuth?: boolean;
+    authUrl?: string;
+    toolName?: string;
+    authProvider?: string;
+    messageMetadata?: Record<string, any>;
   };
   commands?: {
     request_files?: string[];
@@ -50,7 +55,21 @@ export class UnifiedResponseHandler {
   processResponse(response: any, requestId?: string): UnifiedResponse {
     const content = this.extractContent(response);
     const commands = this.extractCommands(content);
-    
+    const toolName = response.data?.toolName;
+    const authProvider =
+      response.data?.provider ||
+      response.data?.authProvider ||
+      this.inferProviderFromToolName(toolName);
+    const requiresAuth = !!response.data?.requiresAuth;
+    const messageMetadata = requiresAuth
+      ? {
+          requiresAuth: true,
+          authUrl: response.data?.authUrl,
+          toolName,
+          provider: authProvider,
+        }
+      : undefined;
+
     return {
       success: response.success !== false,
       content,
@@ -59,8 +78,8 @@ export class UnifiedResponseHandler {
       data: {
         content,
         usage: this.calculateUsage(response),
-        model: response.data?.model || response.model,
-        provider: response.data?.provider || response.provider,
+        model: response.metadata?.actualModel || response.data?.model || response.model,
+        provider: response.metadata?.actualProvider || response.data?.provider || response.provider,
         toolCalls: response.data?.toolCalls,
         files: response.data?.files,
         chainedAgents: response.data?.chainedAgents,
@@ -72,7 +91,12 @@ export class UnifiedResponseHandler {
         classifications: response.data?.classifications,
         optimizations: response.data?.optimizations,
         isFallback: response.data?.isFallback,
-        fallbackReason: response.data?.fallbackReason
+        fallbackReason: response.data?.fallbackReason,
+        requiresAuth,
+        authUrl: response.data?.authUrl,
+        toolName,
+        authProvider,
+        messageMetadata,
       },
       commands,
       metadata: {
@@ -80,9 +104,26 @@ export class UnifiedResponseHandler {
         routedThrough: response.metadata?.routedThrough || response.source,
         fallbackChain: response.fallbackChain || response.metadata?.fallbackChain,
         triedEndpoints: response.metadata?.triedEndpoints,
-        timestamp: new Date().toISOString()
+        actualProvider: response.metadata?.actualProvider,
+        actualModel: response.metadata?.actualModel,
+        timestamp: new Date().toISOString(),
+        messageMetadata,
       }
     };
+  }
+
+  private inferProviderFromToolName(toolName?: string): string | undefined {
+    if (!toolName || typeof toolName !== 'string') return undefined;
+    const normalized = toolName.toLowerCase();
+    if (normalized.startsWith('gmail.') || normalized.startsWith('google')) return 'google';
+    if (normalized.startsWith('github.')) return 'github';
+    if (normalized.startsWith('slack.')) return 'slack';
+    if (normalized.startsWith('notion.')) return 'notion';
+    if (normalized.startsWith('discord.')) return 'discord';
+    if (normalized.startsWith('twitter.') || normalized.startsWith('x.')) return 'twitter';
+    if (normalized.startsWith('spotify.')) return 'spotify';
+    if (normalized.startsWith('twilio.')) return 'twilio';
+    return normalized.split('.')[0];
   }
 
   /**
@@ -264,7 +305,8 @@ export class UnifiedResponseHandler {
       totalTokens: response.data.usage?.totalTokens || content.length,
       qualityScore: response.data.qualityScore,
       source: response.source,
-      metadata: response.metadata
+      metadata: response.metadata,
+      messageMetadata: response.data.messageMetadata || response.metadata?.messageMetadata
     }));
 
     return events;

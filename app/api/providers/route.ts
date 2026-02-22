@@ -1,22 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { enhancedLLMService } from "@/lib/api/enhanced-llm-service";
-import { PROVIDERS } from "@/lib/api/llm-providers";
+import { llmService, PROVIDERS } from "@/lib/api/llm-providers";
 
 export async function GET() {
   try {
-    const providerHealth = enhancedLLMService.getProviderHealth();
-    const availableProviderIds = enhancedLLMService.getAvailableProviders();
-    
-    // Return all providers from the PROVIDERS constant, but mark which ones are available
+    // Get providers that have API keys configured
+    const availableProviders = llmService.getAvailableProviders();
+    const availableProviderIds = availableProviders.map(p => p.id);
+
+    // Return all providers from the PROVIDERS constant, marking which ones are available
     const allProviders = Object.values(PROVIDERS)
-      .filter(provider => {
-        // Only include providers that are configured in enhancedLLMService
-        return provider.id in providerHealth;
-      })
       .map(provider => {
         // Check if this provider has API keys configured (is available)
         const isAvailable = availableProviderIds.includes(provider.id);
-        
+
         return {
           id: provider.id,
           name: provider.name,
@@ -28,10 +24,17 @@ export async function GET() {
         };
       });
 
+    // Sort: available providers first, then unavailable ones
+    const sortedProviders = allProviders.sort((a, b) => {
+      if (a.isAvailable && !b.isAvailable) return -1;
+      if (!a.isAvailable && b.isAvailable) return 1;
+      return 0;
+    });
+
     return NextResponse.json({
       success: true,
       data: {
-        providers: allProviders,
+        providers: sortedProviders,
         defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "openrouter",
         defaultModel: process.env.DEFAULT_MODEL || "deepseek/deepseek-r1-0528:free",
       },

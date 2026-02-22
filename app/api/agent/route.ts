@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fastAgentService } from "@/lib/api/fast-agent-service";
 import type { LLMMessage } from "@/lib/api/llm-providers";
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Dedicated Fast-Agent endpoint
@@ -20,7 +21,7 @@ export async function POST(request: NextRequest) {
       maxTokens = 4000,
       stream = false,
       apiKeys = {},
-      requestId = `agent_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+      requestId = generateSecureId('agent')
     } = body;
 
     // Validate messages

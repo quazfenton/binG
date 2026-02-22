@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "updatedAt": "2026-02-20T10:03:58.819Z",
+  "quotas": {
+    "composio": {
+      "monthlyLimit": 20000,
+      "currentUsage": 8,
+      "resetDate": "2026-03-01T05:00:00.000Z",
+      "isDisabled": false
+    },
+    "arcade": {
+      "monthlyLimit": 10000,
+      "currentUsage": 0,
+      "resetDate": "2026-03-01T05:00:00.000Z",
+      "isDisabled": false
+    },
+    "nango": {
+      "monthlyLimit": 10000,
+      "currentUsage": 0,
+      "resetDate": "2026-03-01T05:00:00.000Z",
+      "isDisabled": false
+    },
+    "daytona": {
+      "monthlyLimit": 5000,
+      "currentUsage": 0,
+      "resetDate": "2026-03-01T05:00:00.000Z",
+      "isDisabled": false
+    },
+    "runloop": {
+      "monthlyLimit": 5000,
+      "currentUsage": 0,
+      "resetDate": "2026-03-01T05:00:00.000Z",
+      "isDisabled": false
+    },
+    "microsandbox": {
+      "monthlyLimit": 10000,
+      "currentUsage": 6,
+      "resetDate": "2026-03-01T05:00:00.000Z",
+      "isDisabled": false
+    },
+    "e2b": {
+      "monthlyLimit": 1000,
+      "currentUsage": 0,
+      "resetDate": "2026-03-01",
+      "isDisabled": false
+    }
+  }
+}

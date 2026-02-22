@@ -71,14 +71,43 @@ const nextConfig = {
       "@google/generative-ai",
       "portkey-ai",
     ],
-    webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, dev }) => {
+    // Suppress specific warnings in development
+    if (dev) {
+      const existingIgnoreWarnings = config.ignoreWarnings || [];
+      config.ignoreWarnings = [
+        ...existingIgnoreWarnings,
+        // Suppress require-in-the-middle warnings (OpenTelemetry)
+        (warning) => {
+          const moduleName = typeof warning.module === 'string' ? warning.module : (warning.module?.resource || '');
+          const message = warning.message || '';
+          
+          if (moduleName && moduleName.includes('require-in-the-middle')) {
+            return true;
+          }
+          if (message.includes('Critical dependency: require function is used')) {
+            return true;
+          }
+          return false;
+        },
+        // Suppress viewport metadata warnings
+        (warning) => {
+          const message = warning.message || '';
+          if (message.includes('viewport')) {
+            return true;
+          }
+          return false;
+        }
+      ];
+    }
+
     // Handle ESM modules with proper extension priority
     config.resolve.extensionAlias = {
       ".js": [".js", ".ts", ".tsx", ".jsx"], // Prioritize .js over .ts
       ".mjs": [".mjs", ".mts"],
       ".cjs": [".cjs", ".cts"]
     };
-    
+
     // Explicitly define main fields for ESM/CJS resolution
     config.resolve.mainFields = ['module', 'main'];
 
@@ -104,7 +133,7 @@ const nextConfig = {
         util: false,
         events: false,
       };
-      
+
       // Handle node: protocol imports by mapping them to false (exclude from bundle)
       config.resolve.alias = {
         ...config.resolve.alias,

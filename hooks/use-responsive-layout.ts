@@ -62,8 +62,8 @@ const defaultConfig: ResponsiveConfig = {
       sm: 90,  // Small phones
       md: 85,  // Standard phones
       lg: 85,  // Large phones
-      xl: 80,  // Tablets
-      '2xl': 75 // Desktop
+      xl: 85,  // Tablets
+      '2xl': 85 // Desktop - allow more width
     },
     padding: {
       xs: '12px 16px',
@@ -192,7 +192,7 @@ export function calculateDynamicWidth(
   screenWidth: number,
   maxWidthPercentage: number,
   minWidth: number = 280,
-  maxWidth: number = 800
+  maxWidth: number = 1200
 ): number {
   const calculatedWidth = (screenWidth * maxWidthPercentage) / 100
   return Math.max(minWidth, Math.min(maxWidth, calculatedWidth))

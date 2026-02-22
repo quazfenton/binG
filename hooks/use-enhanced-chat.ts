@@ -117,6 +117,45 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
+      // Some auth-required responses are returned as JSON, not SSE.
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const payload = await response.json().catch(() => ({} as any));
+        const authRequired =
+          payload?.status === 'auth_required' ||
+          payload?.data?.requiresAuth === true ||
+          payload?.metadata?.messageMetadata?.requiresAuth === true;
+
+        if (authRequired) {
+          const content =
+            payload?.message ||
+            payload?.data?.content ||
+            `I need authorization to use ${payload?.toolName || payload?.data?.toolName || 'this tool'}. Please connect your account to proceed.`;
+
+          const messageMetadata = payload?.metadata?.messageMetadata || {
+            requiresAuth: true,
+            authUrl: payload?.authUrl || payload?.data?.authUrl,
+            toolName: payload?.toolName || payload?.data?.toolName,
+            provider: payload?.provider || payload?.data?.provider
+          };
+
+          setMessages(prev => prev.map(msg =>
+            msg.id === assistantMessage.id
+              ? { ...msg, content, metadata: { ...(msg.metadata || {}), ...messageMetadata } }
+              : msg
+          ));
+          setIsLoading(false);
+          if (options.onFinish && currentMessageRef.current) {
+            options.onFinish({
+              ...currentMessageRef.current,
+              content,
+              metadata: messageMetadata
+            });
+          }
+          return;
+        }
+      }
+
       console.log('[DEBUG] useEnhancedChat: Response received, status:', response.status);
 
       if (!response.body) {
@@ -302,13 +341,22 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'done':
+                  if (eventData.messageMetadata) {
+                    const metadata = eventData.messageMetadata;
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
+                        ? { ...msg, metadata: { ...(msg.metadata || {}), ...metadata } }
+                        : msg
+                    ));
+                  }
                   // Streaming complete
                   clearTimeout(timeoutId);
                   setIsLoading(false);
                   if (options.onFinish && currentMessageRef.current) {
                     options.onFinish({
                       ...currentMessageRef.current,
-                      content: accumulatedContent
+                      content: accumulatedContent,
+                      metadata: eventData.messageMetadata
                     });
                   }
                   return;
