@@ -8,6 +8,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useCodeModeIntegration } from './use-code-mode-integration';
 import { CodeModeFile } from '../lib/services/code-mode-integration';
+import { generateSecureId } from '@/lib/utils';
 
 export interface CodeModeState {
   mode: 'basic' | 'advanced';
@@ -93,7 +94,7 @@ export function useInteractionCodeMode() {
 
     try {
       const files: CodeModeFile[] = Object.entries(state.attachedFiles).map(([path, fileData]) => ({
-        id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: generateSecureId('file'),
         name: path.split('/').pop() || path,
         path,
         content: fileData.content,

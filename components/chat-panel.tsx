@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { type Message } from "ai/react"; // Only import Message type, useChat is now in parent
+import { type Message } from "@/types";
 import { toast } from "sonner";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import MessageBubble from "@/components/message-bubble";
@@ -60,13 +60,21 @@ export function ChatPanel({
     useVoiceInput();
 
   const [isCodePreviewOpen, setIsCodePreviewOpen] = useState(false);
-  const [isAccessibilityOptionsOpen, setIsAccessibilityOptionsOpen] = useState(false); // State to control accessibility options visibility
+  const [isAccessibilityOptionsOpen, setIsAccessibilityOptionsOpen] = useState(false);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [streamingStates, setStreamingStates] = useState<Map<string, any>>(new Map());
+  const [hasUserInteracted, setHasUserInteracted] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Mark as interacted when user starts typing
+  useEffect(() => {
+    if (input && input.trim().length > 0) {
+      setHasUserInteracted(true);
+    }
+  }, [input]);
 
   // Handle scroll position tracking
   const handleScroll = useCallback(() => {
@@ -149,26 +157,29 @@ export function ChatPanel({
   };
 
   return (
-    <div className="flex flex-col h-full relative min-h-0">
-      <div 
+    <div className="flex flex-col h-full relative min-h-0 w-full">
+      <div
         ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2 overscroll-contain touch-pan-y" 
-        style={{ 
+        className="flex-1 overflow-y-auto p-2 sm:p-4 space-y-2 overscroll-contain touch-pan-y w-full"
+        style={{
           paddingBottom: "120px",
           WebkitOverflowScrolling: "touch",
           scrollBehavior: "smooth"
         }}
         onScroll={handleScroll}
       >
-        {messages.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+        {messages.length === 0 && !hasUserInteracted && (
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground opacity-40 hover:opacity-60 transition-opacity duration-300 pointer-events-none">
             <p className="text-lg">Start a conversation</p>
             <p className="text-sm">Type a message or use voice input</p>
           </div>
         )}
 
         {messages.map((m: Message) => {
-          const isCurrentlyStreaming = isLoading && m.id === messages[messages.length - 1]?.id;
+          // Check if this is the last assistant message that's currently streaming
+          const lastAssistantMessage = [...messages].reverse().find(msg => msg.role === 'assistant');
+          const isCurrentlyStreaming = isLoading && isStreaming && m.id === lastAssistantMessage?.id;
+          
           return (
             <MessageBubble
               key={m.id}
@@ -182,12 +193,6 @@ export function ChatPanel({
             />
           );
         })}
-        {isLoading && (
-          <MessageBubble
-            message={{ id: "loading", role: "assistant", content: "..." }}
-            isStreaming={true}
-          />
-        )}
         <div ref={messagesEndRef} />
         {/* Extra padding div for better scrolling */}
         <div className="h-20" />

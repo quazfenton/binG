@@ -4,6 +4,9 @@ import { enhancedLLMService } from "@/lib/api/enhanced-llm-service";
 import { errorHandler } from "@/lib/api/error-handler";
 import { priorityRequestRouter } from "@/lib/api/priority-request-router";
 import { unifiedResponseHandler } from "@/lib/api/unified-response-handler";
+import { resolveRequestAuth } from "@/lib/auth/request-auth";
+import { detectRequestType } from "@/lib/utils/request-type-detector";
+import { generateSecureId } from '@/lib/utils';
 import type { LLMRequest, LLMMessage, LLMProvider } from "@/lib/api/llm-providers";
 import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 
@@ -12,7 +15,14 @@ import type { EnhancedLLMRequest } from "@/lib/api/enhanced-llm-service";
 
 export async function POST(request: NextRequest) {
   console.log('[DEBUG] Chat API: Incoming request');
-  
+
+  // Extract user authentication (JWT or session cookie).
+  // Anonymous chat is allowed, but tools/sandbox require authenticated userId.
+  const authResult = await resolveRequestAuth(request);
+  if (!authResult.success || !authResult.userId) {
+    console.log('[DEBUG] Chat API: Anonymous request (no auth token/session)');
+  }
+
   try {
     const body = await request.json();
     console.log('[DEBUG] Chat API: Request body parsed:', {
@@ -21,9 +31,10 @@ export async function POST(request: NextRequest) {
       provider: body.provider,
       model: body.model,
       stream: body.stream,
-      bodyKeys: Object.keys(body)
+      bodyKeys: Object.keys(body),
+      userId: authResult.userId // Log the extracted userId
     });
-    
+
     const {
       messages,
       provider,
@@ -81,8 +92,12 @@ export async function POST(request: NextRequest) {
     const selectedProvider = PROVIDERS[provider as keyof typeof PROVIDERS];
     console.log('[DEBUG] Chat API: Selected provider:', provider, 'supports streaming:', selectedProvider.supportsStreaming);
 
-    // Check if model is supported by the provider
-    if (!selectedProvider.models.includes(model)) {
+    // Check if model is supported by the provider (allow partial matches for models like "z-ai/glm-4.5-air" vs "z-ai/glm-4.5-air:free")
+    const isModelSupported = selectedProvider.models.some(
+      m => m === model || m.startsWith(model + ':') || m.endsWith(':' + model.split(':')[0])
+    );
+    
+    if (!isModelSupported) {
       console.error('[DEBUG] Chat API: Model not supported:', model, 'Available:', selectedProvider.models);
       return NextResponse.json(
         {
@@ -92,19 +107,46 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-    
+
+    // Normalize model name to match PROVIDERS constant (e.g., "z-ai/glm-4.5-air" -> "z-ai/glm-4.5-air:free")
+    const normalizedModel = selectedProvider.models.find(
+      m => m === model || m.startsWith(model + ':') || m.endsWith(':' + model.split(':')[0])
+    ) || model;
+
     console.log('[DEBUG] Chat API: Validation passed, routing through priority chain');
+
+    // NEW: Add tool/sandbox detection
+    const requestType = detectRequestType(messages);
+    const authenticatedUserId = authResult.success ? authResult.userId : undefined;
+
+    // Tool/sandbox actions require authenticated user identity for authorization and ownership checks.
+    if ((requestType === 'tool' || requestType === 'sandbox') && !authenticatedUserId) {
+      return NextResponse.json({
+        success: false,
+        status: 'auth_required',
+        error: {
+          type: 'auth_required',
+          message: `${requestType === 'tool' ? 'Tool use' : 'Sandbox actions'} require authentication. Please log in first.`
+        }
+      }, { status: 401 });
+    }
 
     // PRIORITY-BASED ROUTING - Routes through Fast-Agent → n8n → Custom Fallback → Original System
     const routerRequest = {
       messages,
       provider,
-      model,
+      model: normalizedModel, // Use normalized model name
       temperature,
       maxTokens,
       stream,
       apiKeys,
-      requestId
+      requestId,
+      userId: authenticatedUserId, // Include userId for tool and sandbox authorization
+      // Keep these tri-state so router-level detection can still route specialized endpoints.
+      // `false` means "explicitly disable", `undefined` means "auto-detect".
+      enableTools: requestType === 'tool' ? !!authenticatedUserId : undefined,
+      enableSandbox: requestType === 'sandbox' ? !!authenticatedUserId : undefined,
+      enableComposio: requestType === 'tool' ? !!authenticatedUserId : undefined,
     };
 
     console.log('[DEBUG] Chat API: Routing request through priority chain');
@@ -112,15 +154,29 @@ export async function POST(request: NextRequest) {
     // Route through priority chain (Fast-Agent → n8n → Custom Fallback → Original System)
     try {
       const routerResponse = await priorityRequestRouter.route(routerRequest);
+
+      const actualProvider = routerResponse.metadata?.actualProvider || routerResponse.source;
+      const actualModel = routerResponse.metadata?.actualModel || routerRequest.model;
       
-      console.log(`[DEBUG] Chat API: Request handled by ${routerResponse.source} (priority ${routerResponse.priority})`);
+      console.log(`[DEBUG] Chat API: Request handled by ${routerResponse.source} (priority ${routerResponse.priority}) - Actual: ${actualProvider}/${actualModel}`);
+      
+      // Check for auth_required in response
+      if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
+        return NextResponse.json({
+          status: 'auth_required',
+          authUrl: routerResponse.data.authUrl,
+          toolName: routerResponse.data.toolName,
+          provider: routerResponse.data.provider || 'unknown',
+          message: `Please authorize ${routerResponse.data.toolName} to continue`
+        });
+      }
       
       // Process response through unified handler
       const unifiedResponse = unifiedResponseHandler.processResponse(routerResponse, requestId);
-      
+
       // Handle streaming response
       if (stream && selectedProvider.supportsStreaming) {
-        const streamRequestId = requestId || `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const streamRequestId = requestId || generateSecureId('stream');
         
         // Create streaming events from unified response
         const events = unifiedResponseHandler.createStreamingEvents(unifiedResponse, streamRequestId);
@@ -165,9 +221,10 @@ export async function POST(request: NextRequest) {
             Expires: "0",
             Connection: "keep-alive",
             "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || "",
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Vary": "Origin",
           },
         });
       }
@@ -182,11 +239,25 @@ export async function POST(request: NextRequest) {
       });
       
     } catch (routerError) {
-      console.error('[DEBUG] Chat API: Router error (should be rare):', routerError);
-      
-      // Emergency fallback - return friendly error
+      const routerErrorObj = routerError as Error;
+      // Log which providers were tried from the fallback chain
+      const errorMessage = routerErrorObj.message;
+      const isNotConfigured = errorMessage.includes('not configured');
+
+      if (!isNotConfigured) {
+        console.error('[DEBUG] Chat API: Router error:', errorMessage);
+      } else {
+        console.log(`[DEBUG] Chat API: No providers configured for request (tried: ${provider}/${model})`);
+      }
+
+      // Emergency fallback - return friendly error with proper status
       return NextResponse.json({
-        success: true, // Still report success to avoid UI errors
+        success: false, // Indicate failure so UI can show error state
+        error: {
+          type: 'router_error',
+          message: 'All providers failed to process request',
+          isRetryable: true
+        },
         data: {
           content: "I apologize, but I'm experiencing technical difficulties. Please try again in a moment.",
           provider: 'emergency-fallback',
@@ -194,293 +265,19 @@ export async function POST(request: NextRequest) {
           isFallback: true
         },
         timestamp: new Date().toISOString()
-      });
+      }, { status: 503 }); // Service Unavailable - indicates temporary issue
     }
-
-    // LEGACY CODE BELOW - Keep for reference but should not be reached with proper routing
-    const llmRequest: EnhancedLLMRequest = {
-      messages,
-      provider,
-      model,
-      temperature,
-      maxTokens,
-      stream: false, // Force non-streaming for legacy path
-      apiKeys,
-      enableCircuitBreaker: true,
-      retryOptions: {
-        maxAttempts: 3,
-        backoffStrategy: 'exponential',
-        baseDelay: 1000,
-        maxDelay: 10000
-      }
-    };
-
-    // Handle streaming response with enhanced features (LEGACY - should not reach here)
-    if (false && stream && selectedProvider.supportsStreaming) {
-      const encoder = new TextEncoder();
-      const streamRequestId =
-        requestId ||
-        `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const startTime = Date.now();
-      let firstTokenTime = 0;
-      let tokenCount = 0;
-      let heartbeatInterval: NodeJS.Timeout;
-
-      // Streaming configuration for mobile optimization
-      const config = {
-        heartbeatIntervalMs: 20000, // 20 seconds
-        bufferSizeLimit: 2048, // 2KB
-        minChunkSize: 8, // 8 characters
-        softTimeoutMs: 30000, // 30 seconds
-        hardTimeoutMs: 120000, // 2 minutes
-      };
-
-      const llmStream = enhancedLLMService.generateStreamingResponse(llmRequest);
-      let buffer = "";
-      let aborted = false;
-
-      const readableStream = new ReadableStream({
-        async start(controller) {
-          // Start heartbeat to keep connection alive
-          heartbeatInterval = setInterval(() => {
-            if (!aborted) {
-              try {
-                const heartbeat = `event: heartbeat\ndata: {"timestamp": ${Date.now()}, "requestId": "${streamRequestId}"}\n\n`;
-                controller.enqueue(encoder.encode(heartbeat));
-              } catch (e) {
-                console.warn("Failed to send heartbeat:", e);
-              }
-            }
-          }, config.heartbeatIntervalMs);
-
-          // Soft timeout warning
-          const softTimeout = setTimeout(() => {
-            if (!aborted) {
-              try {
-                const timeoutWarning = `event: softTimeout\ndata: {"requestId": "${streamRequestId}", "message": "Taking longer than usual"}\n\n`;
-                controller.enqueue(encoder.encode(timeoutWarning));
-              } catch (e) {
-                console.warn("Failed to send timeout warning:", e);
-              }
-            }
-          }, config.softTimeoutMs);
-
-          // Hard timeout
-          const hardTimeout = setTimeout(() => {
-            if (!aborted) {
-              aborted = true;
-              try {
-                const errorEvent = `event: error\ndata: ${JSON.stringify({
-                  requestId: streamRequestId,
-                  message: "Request timed out",
-                  canRetry: true,
-                  offset: tokenCount,
-                })}\n\n`;
-                controller.enqueue(encoder.encode(errorEvent));
-              } catch (e) {
-                console.warn("Failed to send timeout error:", e);
-              } finally {
-                controller.close();
-              }
-            }
-          }, config.hardTimeoutMs);
-
-          try {
-            // Send initial event with metadata
-            const initEvent = `event: init\ndata: ${JSON.stringify({
-              requestId: streamRequestId,
-              startTime,
-              provider,
-              model,
-            })}\n\n`;
-            console.log('[DEBUG] Chat API: Sending init event');
-            controller.enqueue(encoder.encode(initEvent));
-
-            for await (const chunk of llmStream) {
-              if (aborted) break;
-
-              if (chunk?.content) {
-                // Record first token time
-                if (firstTokenTime === 0) {
-                  firstTokenTime = Date.now();
-                  const ttft = firstTokenTime - startTime;
-                  const metricsEvent = `event: metrics\ndata: ${JSON.stringify({
-                    requestId: streamRequestId,
-                    timeToFirstToken: ttft,
-                  })}\n\n`;
-                  controller.enqueue(encoder.encode(metricsEvent));
-                }
-
-                // Add to buffer for coalescing
-                buffer += chunk.content;
-                tokenCount += chunk.content.length;
-
-                // Check if we should emit the buffer
-                const shouldEmit =
-                  buffer.length >= config.minChunkSize ||
-                  /[\s\.\!\?\;\:]+$/.test(buffer) ||
-                  buffer.length >= config.bufferSizeLimit;
-
-                if (shouldEmit) {
-                  // Emit token data
-                  const tokenEvent = `data: ${JSON.stringify({
-                    type: "token",
-                    content: buffer,
-                    requestId: streamRequestId,
-                    timestamp: Date.now(),
-                    offset: tokenCount - buffer.length,
-                  })}\n\n`;
-                  controller.enqueue(encoder.encode(tokenEvent));
-
-                  // Check for commands in the current buffer
-                  const commandMatch = buffer.match(
-                    /=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/,
-                  );
-                  if (commandMatch) {
-                    const block = commandMatch[1];
-                    let commands: {
-                      request_files?: string[];
-                      write_diffs?: { path: string; diff: string }[];
-                    } | null = null;
-                    try {
-                      const reqMatch = block.match(
-                        /request_files:\s*\[(.*?)\]/s,
-                      );
-                      const diffsMatch = block.match(
-                        /write_diffs:\s*\[([\s\S]*?)\]/,
-                      );
-                      const request_files = reqMatch
-                        ? JSON.parse(
-                            `[${reqMatch[1]}]`.replace(
-                              /([a-zA-Z0-9_\-\/\.]+)(?=\s*[\],])/g,
-                              '"$1"',
-                            ),
-                          )
-                        : [];
-                      let write_diffs: { path: string; diff: string }[] = [];
-                      if (diffsMatch) {
-                        const items = diffsMatch[1]
-                          .split(/},/)
-                          .map((s) => (s.endsWith("}") ? s : s + "}"))
-                          .map((s) => s.trim())
-                          .filter(Boolean);
-                        write_diffs = items.map((raw) => {
-                          const pathMatch = raw.match(/path:\s*"([^"]+)"/);
-                          const diffMatch = raw.match(/diff:\s*"([\s\S]*)"/);
-                          return {
-                            path: pathMatch?.[1] || "",
-                            diff: (diffMatch?.[1] || "").replace(/\\n/g, "\n"),
-                          };
-                        });
-                      }
-                      commands = { request_files, write_diffs };
-                    } catch (parseError) {
-                      console.warn("Failed to parse commands:", parseError);
-                      commands = null;
-                    }
-
-                    const commandsEvent = `event: commands\ndata: ${JSON.stringify(
-                      {
-                        requestId: streamRequestId,
-                        commands: commands || { raw: block },
-                      },
-                    )}\n\n`;
-                    controller.enqueue(encoder.encode(commandsEvent));
-                  }
-
-                  buffer = "";
-                }
-              }
-            }
-
-            // Emit any remaining buffer content
-            if (buffer.length > 0 && !aborted) {
-              const finalTokenEvent = `data: ${JSON.stringify({
-                type: "token",
-                content: buffer,
-                requestId: streamRequestId,
-                timestamp: Date.now(),
-                offset: tokenCount - buffer.length,
-              })}\n\n`;
-              controller.enqueue(encoder.encode(finalTokenEvent));
-            }
-
-            // Send completion event with final metrics
-            if (!aborted) {
-              const endTime = Date.now();
-              const totalLatency = endTime - startTime;
-              const tokensPerSecond =
-                tokenCount > 0 ? (tokenCount / totalLatency) * 1000 : 0;
-
-              const doneEvent = `event: done\ndata: ${JSON.stringify({
-                requestId: streamRequestId,
-                success: true,
-                totalTokens: tokenCount,
-                totalLatency,
-                tokensPerSecond,
-                timeToFirstToken: firstTokenTime - startTime,
-              })}\n\n`;
-              controller.enqueue(encoder.encode(doneEvent));
-            }
-          } catch (err) {
-            if (!aborted) {
-              const errorMsg =
-                err instanceof Error ? err.message : "Unknown streaming error";
-              const errorEvent = `event: error\ndata: ${JSON.stringify({
-                requestId: streamRequestId,
-                message: errorMsg,
-                canRetry: true,
-                offset: tokenCount,
-              })}\n\n`;
-              controller.enqueue(encoder.encode(errorEvent));
-            }
-          } finally {
-            clearInterval(heartbeatInterval);
-            clearTimeout(softTimeout);
-            clearTimeout(hardTimeout);
-            if (!aborted) {
-              controller.close();
-            }
-          }
-        },
-        cancel() {
-          aborted = true;
-          if (heartbeatInterval) clearInterval(heartbeatInterval);
-          console.log(`Stream cancelled by client: ${streamRequestId}`);
-        },
-      });
-
-      // Enhanced headers for mobile optimization
-      return new Response(readableStream, {
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache, no-store, must-revalidate",
-          Pragma: "no-cache",
-          Expires: "0",
-          Connection: "keep-alive",
-          "X-Accel-Buffering": "no", // Disable nginx buffering
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        },
-      });
-    }
-
-    // Handle non-streaming response (LEGACY - should not reach here)
-    console.warn('[DEBUG] Chat API: Reached legacy non-streaming code path - this should not happen');
-    const response = await enhancedLLMService.generateResponse(llmRequest);
-
-    return NextResponse.json({
-      success: true,
-      data: response,
-      timestamp: new Date().toISOString(),
-    });
   } catch (error) {
-    console.error("Chat API error:", error);
+    // Skip verbose logging for expected "not configured" errors
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isNotConfiguredError = errorMessage.includes('not configured');
 
-    // With proper fallback chain, this should rarely happen
-    // But if it does, still return a user-friendly response
-    console.error('[CRITICAL] Chat API: All fallback mechanisms failed');
+    if (!isNotConfiguredError) {
+      console.error("Chat API error:", errorMessage);
+      console.error('[CRITICAL] Chat API: All fallback mechanisms failed');
+    } else {
+      console.log(`[Chat API] Provider not available: ${errorMessage}`);
+    }
 
     // Process error with enhanced error handler for logging
     const processedError = errorHandler.processError(
@@ -495,10 +292,16 @@ export async function POST(request: NextRequest) {
       }
     );
 
-    // Return friendly response even in critical failure (no API errors to users)
+    // Return friendly response with proper error status
     return NextResponse.json(
       {
-        success: true, // Report success to avoid UI errors
+        success: false, // Indicate failure for proper error handling
+        error: {
+          type: 'critical_error',
+          code: processedError.code,
+          message: 'Critical system error occurred',
+          isRetryable: processedError.severity !== 'high'
+        },
         data: {
           content: "I apologize, but I'm experiencing technical difficulties at the moment. Our team has been notified and is working to resolve the issue. Please try again in a few moments.",
           provider: 'critical-fallback',
@@ -506,44 +309,23 @@ export async function POST(request: NextRequest) {
           isFallback: true,
           fallbackReason: 'critical_error'
         },
-        metadata: {
-          criticalError: true,
-          errorCode: processedError.code,
-          timestamp: new Date().toISOString()
-        },
         timestamp: new Date().toISOString()
       },
-      { status: 200 }, // Still return 200 to avoid UI error display
+      { status: 500 }, // Internal Server Error - indicates server-side issue
     );
   }
 }
 
 export async function GET() {
   try {
-    // Use enhancedLLMService to get health information
-    const providerHealth = enhancedLLMService.getProviderHealth();
-    const availableProviderIds = enhancedLLMService.getAvailableProviders();
+    // Get list of configured provider IDs (checks if API keys are set)
+    const configuredProviderIds = llmService.getAvailableProviders().map(p => p.id);
     
-    // Return all providers from the PROVIDERS constant, but mark which ones are available
-    const allProviders = Object.values(PROVIDERS)
-      .filter(provider => {
-        // Only include providers that are configured in enhancedLLMService
-        return provider.id in providerHealth;
-      })
-      .map(provider => {
-        // Check if this provider has API keys configured (is available)
-        const isAvailable = availableProviderIds.includes(provider.id);
-        
-        return {
-          id: provider.id,
-          name: provider.name,
-          models: provider.models,
-          supportsStreaming: provider.supportsStreaming,
-          maxTokens: provider.maxTokens,
-          description: provider.description,
-          isAvailable // Add availability status for UI
-        };
-      }) as LLMProvider[];
+    // Return all providers with availability status (based on API key configuration)
+    const allProviders = Object.values(PROVIDERS).map(provider => ({
+      ...provider,
+      isAvailable: configuredProviderIds.includes(provider.id)
+    }));
 
     return NextResponse.json({
       success: true,
@@ -555,7 +337,7 @@ export async function GET() {
         defaultTemperature: parseFloat(
           process.env.DEFAULT_TEMPERATURE || "0.7",
         ),
-        defaultMaxTokens: parseInt(process.env.DEFAULT_MAX_TOKENS || "80000"),
+        defaultMaxTokens: Number.parseInt(process.env.DEFAULT_MAX_TOKENS || "80000"),
         features: {
           voiceEnabled: process.env.ENABLE_VOICE_FEATURES === "true",
           imageGeneration: process.env.ENABLE_IMAGE_GENERATION === "true",
@@ -574,13 +356,14 @@ export async function GET() {
 }
 
 // Handle preflight requests for CORS
-export async function OPTIONS() {
+export async function OPTIONS(request: NextRequest) {
   return new Response(null, {
     status: 200,
     headers: {
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || "",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Vary": "Origin",
     },
   });
 }

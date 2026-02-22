@@ -9,6 +9,7 @@
 import { EventEmitter } from 'events';
 import { CodeModeErrorHandler, CodeModeError } from './code-mode-error-handler';
 import { codeRequestDeduplicator } from '../utils/request-deduplicator';
+import { generateSecureId } from '@/lib/utils';
 
 // Import the actual enhanced code orchestrator
 import { EnhancedCodeOrchestrator } from '../../enhanced-code-system/enhanced-code-orchestrator';
@@ -155,7 +156,7 @@ export class CodeModeIntegrationService extends EventEmitter {
         return existingSession.id;
       }
 
-      const sessionId = `code_session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const sessionId = generateSecureId('code_session');
       
       const session: CodeModeSession = {
         id: sessionId,
@@ -363,7 +364,7 @@ export class CodeModeIntegrationService extends EventEmitter {
     try {
       // Prepare request for orchestrator
       const orchestratorRequest = {
-        id: `request_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: generateSecureId('request'),
         task,
         files: files.map(file => ({
           id: file.id,
@@ -845,7 +846,7 @@ export class CodeModeIntegrationService extends EventEmitter {
 
     // Create new file
     const newFile: CodeModeFile = {
-      id: `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: generateSecureId('file'),
       name: request.path.split('/').pop() || request.path,
       path: request.path,
       content: request.content,

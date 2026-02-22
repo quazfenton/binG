@@ -1,6 +1,7 @@
 "use client";
 
 import { EventEmitter } from 'events';
+import { generateSecureId } from '@/lib/utils';
 import { streamingErrorHandler } from './streaming-error-handler';
 
 // Enhanced streaming interfaces
@@ -129,7 +130,7 @@ export class EnhancedBufferManager extends EventEmitter {
       }
 
       const chunk: StreamChunk = {
-        id: `${sessionId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        id: generateSecureId(sessionId),
         content,
         timestamp: Date.now(),
         sequenceNumber: session.getNextSequenceNumber(),

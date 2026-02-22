@@ -3,6 +3,8 @@
  * Provides parallel processing and perspective-based improvement
  */
 
+import { secureRandom } from '@/lib/utils';
+
 export interface ReflectionPerspective {
   name: string;
   prompt: string;
@@ -133,14 +135,14 @@ Provide specific, actionable improvements and rate your confidence (0-1).
     suggestedChanges: string;
   }> {
     // Simulate processing delay
-    await new Promise(resolve => setTimeout(resolve, Math.random() * 1000 + 500));
+    await new Promise(resolve => setTimeout(resolve, Math.floor(secureRandom() * 1000) + 500));
 
     // Generate mock improvements based on perspective
     const improvements = this.generateMockImprovements(perspective.name);
     
     return {
       improvements,
-      confidence: Math.random() * 0.3 + 0.7, // 0.7-1.0 range
+      confidence: secureRandom() * 0.3 + 0.7, // 0.7-1.0 range
       suggestedChanges: improvements.join('; ')
     };
   }
@@ -171,7 +173,7 @@ Provide specific, actionable improvements and rate your confidence (0-1).
     };
 
     const improvements = improvementMap[perspectiveName] || ['General improvement needed'];
-    return improvements.slice(0, Math.floor(Math.random() * 3) + 1);
+    return improvements.slice(0, Math.floor(secureRandom() * 3) + 1);
   }
 
   /**

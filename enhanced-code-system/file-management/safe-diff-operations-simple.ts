@@ -7,6 +7,7 @@
 
 import { EventEmitter } from 'events';
 import { DiffOperation } from './advanced-file-manager';
+import { generateSecureId } from '@/lib/utils';
 
 // Core interfaces
 interface ValidationResult {
@@ -136,7 +137,7 @@ export class SafeDiffOperations extends EventEmitter {
     content: string,
     version: number = 1
   ): Promise<string> {
-    const backupId = `backup_${fileId}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const backupId = generateSecureId(`backup_${fileId}`);
 
     const backup: BackupState = {
       id: backupId,
