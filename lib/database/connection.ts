@@ -86,6 +86,10 @@ export function getDatabase(): Database.Database {
       db.pragma('synchronous = NORMAL');
       db.pragma('cache_size = 1000');
       db.pragma('temp_store = memory');
+      
+      // SECURITY: Enable foreign key enforcement
+      // Without this, ON DELETE CASCADE and foreign key constraints are silently ignored
+      db.pragma('foreign_keys = ON');
 
       // Initialize schema synchronously first time
       if (!dbInitialized) {

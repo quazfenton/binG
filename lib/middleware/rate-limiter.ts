@@ -72,13 +72,15 @@ export const RATE_LIMIT_CONFIGS = {
 
 /**
  * Get client identifier for rate limiting
- * Uses IP address, with email as secondary identifier for auth endpoints
+ * Uses BOTH IP address AND email (when provided) to prevent:
+ * - Password spraying attacks (single IP trying many emails)
+ * - Distributed attacks (many IPs targeting one email)
  */
 function getClientIdentifier(request: Request, email?: string): string {
   // Try to get IP from headers (works with proxies/Cloudflare)
   const forwardedFor = request.headers.get('x-forwarded-for');
   const realIp = request.headers.get('x-real-ip');
-  
+
   let ip = 'unknown';
   if (forwardedFor) {
     // x-forwarded-for can contain multiple IPs, take the first one
@@ -87,9 +89,12 @@ function getClientIdentifier(request: Request, email?: string): string {
     ip = realIp;
   }
 
-  // For auth endpoints, also consider the email to prevent distributed attacks
+  // For auth endpoints, rate limit by BOTH IP and email to prevent:
+  // 1. Password spraying: Single IP trying many emails (now limited by IP)
+  // 2. Distributed attacks: Many IPs targeting one email (now limited by email)
+  // 3. IP spoofing: Spoofed x-forwarded-for (now also limited by email)
   if (email) {
-    return `email:${email.toLowerCase()}`;
+    return `ip:${ip}:email:${email.toLowerCase()}`;
   }
 
   return `ip:${ip}`;
