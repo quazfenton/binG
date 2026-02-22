@@ -1,14 +1,77 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { terminalManager } from '@/lib/sandbox/terminal-manager';
 import { sandboxEvents } from '@/lib/sandbox/sandbox-events';
+import { randomUUID } from 'crypto';
 
 export const runtime = 'nodejs';
 
+// In-memory store for short-lived connection tokens (5 minute TTL)
+// Format: Map<token, { userId, sandboxId, sessionId, expiresAt }>
+const connectionTokens = new Map<string, { userId: string; sandboxId: string; sessionId: string; expiresAt: number }>();
+
+// Cleanup expired tokens every minute
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, data] of connectionTokens.entries()) {
+    if (data.expiresAt < now) {
+      connectionTokens.delete(token);
+    }
+  }
+}, 60000);
+
+/**
+ * POST to initiate a terminal stream and get a short-lived connection token
+ * This avoids passing JWT tokens in URLs
+ */
+export async function POST(req: NextRequest) {
+  try {
+    const authResult = await resolveRequestAuth(req, {
+      allowAnonymous: true,
+    });
+
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const { sessionId, sandboxId } = body;
+
+    if (!sessionId || !sandboxId) {
+      return NextResponse.json({ error: 'sessionId and sandboxId are required' }, { status: 400 });
+    }
+
+    // Verify user has access to this sandbox
+    const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
+    if (!userSession || userSession.sandboxId !== sandboxId || userSession.sessionId !== sessionId) {
+      return NextResponse.json({ error: 'Unauthorized: sandbox does not belong to this user' }, { status: 403 });
+    }
+
+    // Generate short-lived connection token (5 minute TTL)
+    const connectionToken = randomUUID();
+    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes
+
+    connectionTokens.set(connectionToken, {
+      userId: authResult.userId,
+      sandboxId,
+      sessionId,
+      expiresAt,
+    });
+
+    return NextResponse.json({ connectionToken, expiresAt });
+  } catch (error) {
+    console.error('[Terminal Token] Error:', error);
+    return NextResponse.json({ error: 'Failed to generate connection token' }, { status: 500 });
+  }
+}
+
+/**
+ * GET to establish the SSE terminal stream using a short-lived connection token
+ */
 export async function GET(req: NextRequest) {
   try {
-    const token = req.nextUrl.searchParams.get('token');
+    const connectionToken = req.nextUrl.searchParams.get('token');
     const sessionId = req.nextUrl.searchParams.get('sessionId');
     const sandboxId = req.nextUrl.searchParams.get('sandboxId');
     const anonymousSessionId = req.nextUrl.searchParams.get('anonymousSessionId');
@@ -20,25 +83,51 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const authResult = await resolveRequestAuth(req, {
-      bearerToken: token,
-      allowAnonymous: true,
-      anonymousSessionId,
-    });
-
-    if (!authResult.success || !authResult.userId) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { 'Content-Type': 'application/json' },
+    // Validate connection token
+    let userId: string;
+    if (connectionToken) {
+      const tokenData = connectionTokens.get(connectionToken);
+      if (!tokenData || tokenData.expiresAt < Date.now()) {
+        connectionTokens.delete(connectionToken);
+        return new Response(JSON.stringify({ error: 'Connection token expired or invalid' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      // Verify token matches the requested session
+      if (tokenData.sandboxId !== sandboxId || tokenData.sessionId !== sessionId) {
+        return new Response(JSON.stringify({ error: 'Connection token does not match this session' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      userId = tokenData.userId;
+      // Invalidate token after first use (single-use token)
+      connectionTokens.delete(connectionToken);
+    } else {
+      // Fallback to anonymous auth (for backward compatibility)
+      const authResult = await resolveRequestAuth(req, {
+        allowAnonymous: true,
+        anonymousSessionId,
       });
-    }
 
-    const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
-    if (!userSession || userSession.sandboxId !== sandboxId || userSession.sessionId !== sessionId) {
-      return new Response(JSON.stringify({ error: 'Unauthorized: sandbox does not belong to this user' }), {
-        status: 403,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      if (!authResult.success || !authResult.userId) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+
+      userId = authResult.userId;
+
+      // Verify user has access to this sandbox
+      const userSession = sandboxBridge.getSessionByUserId(userId);
+      if (!userSession || userSession.sandboxId !== sandboxId || userSession.sessionId !== sessionId) {
+        return new Response(JSON.stringify({ error: 'Unauthorized: sandbox does not belong to this user' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
     }
 
     let cleanup: (() => void) | undefined;

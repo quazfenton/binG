@@ -52,7 +52,7 @@ export class MigrationRunner {
     }
   }
 
-  public async runMigrations(): Promise<void> {
+  public runMigrationsSync(): void {
     const executedMigrations = this.getExecutedMigrations();
     const migrationFiles = this.getMigrationFiles();
 
@@ -70,11 +70,11 @@ export class MigrationRunner {
     for (const migration of pendingMigrations) {
       try {
         console.log(`Executing migration ${migration.version}: ${migration.filename}`);
-        
+
         // Execute migration in a transaction
         this.db.transaction(() => {
           this.db.exec(migration.sql);
-          
+
           // Record migration as executed
           const stmt = this.db.prepare(`
             INSERT INTO schema_migrations (version, filename)
@@ -91,6 +91,11 @@ export class MigrationRunner {
     }
 
     console.log('All migrations completed successfully');
+  }
+
+  public async runMigrations(): Promise<void> {
+    // Delegate to synchronous implementation
+    this.runMigrationsSync();
   }
 
   public async rollbackMigration(version: string): Promise<void> {

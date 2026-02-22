@@ -64,12 +64,14 @@ function log(level, message) {
  * Encrypt file using AES-256-GCM
  */
 function encryptFile(inputPath, outputPath, key) {
+  // Generate a random salt for this encryption (stored with ciphertext)
+  const salt = crypto.randomBytes(16);
   const iv = crypto.randomBytes(16);
 
-  // SECURITY: Use scrypt for key derivation to protect against brute-force attacks
-  // scrypt is a proper KDF that is computationally expensive and memory-hard
+  // SECURITY: Use scrypt with random salt for key derivation
+  // Salt is prepended to output so it can be retrieved during decryption
   const keyBuffer = typeof key === 'string'
-    ? crypto.scryptSync(key, 'bing-backup-salt', 32)
+    ? crypto.scryptSync(key, salt, 32)
     : key;
 
   const cipher = crypto.createCipheriv('aes-256-gcm', keyBuffer, iv);
@@ -78,8 +80,8 @@ function encryptFile(inputPath, outputPath, key) {
   const encrypted = Buffer.concat([cipher.update(input), cipher.final()]);
   const authTag = cipher.getAuthTag();
 
-  // Format: IV (16 bytes) + Auth Tag (16 bytes) + Encrypted Data
-  const output = Buffer.concat([iv, authTag, encrypted]);
+  // Format: Salt (16) + IV (16) + Auth Tag (16) + Encrypted Data
+  const output = Buffer.concat([salt, iv, authTag, encrypted]);
   fs.writeFileSync(outputPath, output);
 
   return outputPath;

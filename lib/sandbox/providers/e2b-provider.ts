@@ -18,7 +18,7 @@
  */
 
 import { resolve, relative, join, dirname } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { quotaManager } from '@/lib/services/quota-manager'
 import type { ToolResult, PreviewInfo } from '../types'
 import type {
@@ -388,13 +388,13 @@ class E2BSandboxHandle implements SandboxHandle {
   async uploadFile(localPath: string, sandboxPath: string): Promise<ToolResult> {
     try {
       const resolved = this.resolvePath(sandboxPath)
-      
-      // Read file content from local filesystem
-      const content = readFileSync(localPath, 'utf-8')
-      
+
+      // Read file content as Buffer to support both text and binary files
+      const content = await readFile(localPath)
+
       // Write file to sandbox filesystem
       await this.sandbox.files.write(resolved, content)
-      
+
       return {
         success: true,
         output: `File uploaded: ${resolved}`,
