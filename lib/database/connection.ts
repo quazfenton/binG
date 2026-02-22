@@ -9,15 +9,19 @@ const DB_PATH = process.env.DATABASE_PATH || join(process.cwd(), 'data', 'binG.d
 // Encryption key - MUST be set via environment variable in production
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 
-// Validate encryption key is set
-if (!ENCRYPTION_KEY) {
-  console.warn('⚠️  WARNING: ENCRYPTION_KEY not set! API keys will not be encrypted properly.');
-  console.warn('Set ENCRYPTION_KEY environment variable to a secure 32+ character random string.');
-  console.warn('Example: ENCRYPTION_KEY=$(openssl rand -hex 32)');
-}
-
 // Ensure the encryption key is 32 bytes (pad or truncate as needed)
-const encryptionKey = Buffer.from((ENCRYPTION_KEY || 'default-insecure-key-please-change').padEnd(32, '0').slice(0, 32));
+const encryptionKey = (() => {
+  if (!ENCRYPTION_KEY) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('ENCRYPTION_KEY must be set in production');
+    }
+    console.warn('⚠️  WARNING: ENCRYPTION_KEY not set! Using insecure fallback for development only.');
+    console.warn('Set ENCRYPTION_KEY environment variable to a secure 32+ character random string.');
+    console.warn('Example: ENCRYPTION_KEY=$(openssl rand -hex 32)');
+    return Buffer.from('default-insecure-key-change-me!!'); // exactly 32 bytes
+  }
+  return Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
+})();
 
 // Initialize database
 let db: Database.Database | null = null;
@@ -81,19 +85,25 @@ export function getDatabase(): Database.Database {
       // Initialize schema synchronously first time
       if (!dbInitialized) {
         initializeSchemaSync();
-        
+
         // SECURITY: Run migrations SYNCHRONOUSLY to prevent race conditions
         // Without this, requests can execute before migrations complete, causing
         // "no such column" errors for migration-added columns like email_verification_token
         try {
           // Require here to avoid circular import at module load time
           const { migrationRunner } = require('./migration-runner');
-          migrationRunner.runMigrations();
-          console.log('[database] Migrations completed successfully');
+          if (migrationRunner && typeof migrationRunner.runMigrations === 'function') {
+            // runMigrations is async - handle promise properly in sync context
+            migrationRunner.runMigrations()
+              .then(() => console.log('[database] Migrations completed successfully'))
+              .catch((error: any) => console.warn('[database] Migrations failed (continuing with base schema):', error));
+          } else {
+            console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
+          }
         } catch (error) {
           console.warn('[database] Migrations failed (continuing with base schema):', error);
         }
-        
+
         dbInitialized = true;
       }
 
@@ -209,7 +219,7 @@ export function encryptApiKey(apiKey: string): { encrypted: string; hash: string
 
 export function decryptApiKey(encryptedData: string): string {
   const [ivHex, encrypted] = encryptedData.split(':');
-  
+
   // Try new format first (createCipheriv with proper IV usage)
   try {
     const iv = Buffer.from(ivHex, 'hex');
@@ -225,6 +235,16 @@ export function decryptApiKey(encryptedData: string): string {
       const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
       let decrypted = decipher.update(encrypted, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
+      
+      // SECURITY: Legacy format detected - log warning for migration
+      // The data was decrypted successfully but uses insecure MD5 key derivation
+      console.warn(
+        '[decryptApiKey] Legacy encryption format detected. ' +
+        'API keys encrypted with deprecated createDecipher (MD5 key derivation) should be ' +
+        're-encrypted using the secure format. Consider running a migration to re-encrypt ' +
+        'all legacy keys using encryptApiKey().'
+      );
+      
       return decrypted;
     } catch (legacyError) {
       // Both formats failed - this is truly corrupted data

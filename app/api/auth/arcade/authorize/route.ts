@@ -84,7 +84,7 @@ export async function GET(req: NextRequest) {
       
       // Success - use email as Arcade user ID
       arcadeUserId = user.email;
-      console.log(`[Arcade Auth] Using email "${user.email}" as Arcade user ID for user ${numericUserId}`);
+      console.log(`[Arcade Auth] Using email strategy for Arcade user ID for user ${numericUserId}`);
     }
 
     if (!provider) {

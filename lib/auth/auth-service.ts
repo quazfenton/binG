@@ -240,10 +240,10 @@ export class AuthService {
       // Check if session is expired
       const now = new Date();
       const expiresAt = new Date(session.expires_at);
-      
+
       if (now > expiresAt) {
         // Clean up expired session
-        this.dbOps.deleteSession(sessionIdHash);
+        this.dbOps.deleteSession(sessionId);
         return { success: false, error: 'Session expired' };
       }
 
@@ -413,14 +413,14 @@ export class AuthService {
    */
   async revokeSession(sessionId: string, userId: number): Promise<{ success: boolean; error?: string }> {
     try {
-      const sessionIdHash = hashSessionToken(sessionId);
+      // Use raw sessionId to match how sessions are stored
       const stmt = this.db.prepare('DELETE FROM user_sessions WHERE id = ? AND user_id = ?');
-      const result = stmt.run(sessionIdHash, userId);
-      
+      const result = stmt.run(sessionId, userId);
+
       if (result.changes === 0) {
         return { success: false, error: 'Session not found' };
       }
-      
+
       return { success: true };
     } catch (error) {
       console.error('Revoke session error:', error);

@@ -232,8 +232,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
     if (text.includes('slack')) return 'slack';
     if (text.includes('notion')) return 'notion';
     if (text.includes('discord')) return 'discord';
-    // Use word boundary for 'x' to match standalone "x" (Twitter) not words like "explain", "next", etc.
-    if (text.includes('twitter') || text.includes('tweet') || /\bx\b/.test(text)) return 'twitter';
+    // Match 'x' as the Twitter/X platform only via unambiguous signals: exact message, x.com domain, or explicit platform phrases.
+    if (text.includes('twitter') || text.includes('tweet') || text.includes('x.com') || text === 'x' || /(?:^|\s)(?:on x|to x|post x|use x|via x|from x|at x)(?:\s|$)/.test(text)) return 'twitter';
     if (text.includes('spotify')) return 'spotify';
     return null;
   };

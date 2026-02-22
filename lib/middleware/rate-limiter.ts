@@ -29,43 +29,43 @@ const rateLimitStore = new Map<string, RateLimitEntry>();
 export const RATE_LIMIT_CONFIGS = {
   // Login: Strict limits to prevent brute-force attacks
   login: {
-    windowMs: parseInt(process.env.RATE_LIMIT_LOGIN_WINDOW_MS || '900000'), // 15 minutes
-    maxRequests: parseInt(process.env.RATE_LIMIT_LOGIN_MAX || '5'),
+    windowMs: parseInt(process.env.RATE_LIMIT_LOGIN_WINDOW_MS || '900000', 10) || 900000, // 15 minutes
+    maxRequests: parseInt(process.env.RATE_LIMIT_LOGIN_MAX || '5', 10) || 5,
     message: 'Too many login attempts. Please try again in 15 minutes.',
   } as RateLimitConfig,
 
   // Registration: Moderate limits to prevent spam
   register: {
-    windowMs: parseInt(process.env.RATE_LIMIT_REGISTER_WINDOW_MS || '3600000'), // 1 hour
-    maxRequests: parseInt(process.env.RATE_LIMIT_REGISTER_MAX || '3'),
+    windowMs: parseInt(process.env.RATE_LIMIT_REGISTER_WINDOW_MS || '3600000', 10) || 3600000, // 1 hour
+    maxRequests: parseInt(process.env.RATE_LIMIT_REGISTER_MAX || '3', 10) || 3,
     message: 'Too many registration attempts. Please try again in 1 hour.',
   } as RateLimitConfig,
 
   // Email verification: Lenient limits (users may need multiple attempts)
   verifyEmail: {
-    windowMs: parseInt(process.env.RATE_LIMIT_VERIFY_WINDOW_MS || '3600000'), // 1 hour
-    maxRequests: parseInt(process.env.RATE_LIMIT_VERIFY_MAX || '10'),
+    windowMs: parseInt(process.env.RATE_LIMIT_VERIFY_WINDOW_MS || '3600000', 10) || 3600000, // 1 hour
+    maxRequests: parseInt(process.env.RATE_LIMIT_VERIFY_MAX || '10', 10) || 10,
     message: 'Too many verification attempts. Please try again in 1 hour.',
   } as RateLimitConfig,
 
   // Send verification email: Strict to prevent email spam
   sendVerification: {
-    windowMs: parseInt(process.env.RATE_LIMIT_SEND_VERIFICATION_WINDOW_MS || '3600000'), // 1 hour
-    maxRequests: parseInt(process.env.RATE_LIMIT_SEND_VERIFICATION_MAX || '3'),
+    windowMs: parseInt(process.env.RATE_LIMIT_SEND_VERIFICATION_WINDOW_MS || '3600000', 10) || 3600000, // 1 hour
+    maxRequests: parseInt(process.env.RATE_LIMIT_SEND_VERIFICATION_MAX || '3', 10) || 3,
     message: 'Too many verification emails requested. Please try again in 1 hour.',
   } as RateLimitConfig,
 
   // Password reset: Strict to prevent abuse
   passwordReset: {
-    windowMs: parseInt(process.env.RATE_LIMIT_PASSWORD_RESET_WINDOW_MS || '3600000'), // 1 hour
-    maxRequests: parseInt(process.env.RATE_LIMIT_PASSWORD_RESET_MAX || '3'),
+    windowMs: parseInt(process.env.RATE_LIMIT_PASSWORD_RESET_WINDOW_MS || '3600000', 10) || 3600000, // 1 hour
+    maxRequests: parseInt(process.env.RATE_LIMIT_PASSWORD_RESET_MAX || '3', 10) || 3,
     message: 'Too many password reset requests. Please try again in 1 hour.',
   } as RateLimitConfig,
 
   // Generic API: Default limits for other endpoints
   generic: {
-    windowMs: parseInt(process.env.RATE_LIMIT_GENERIC_WINDOW_MS || '60000'), // 1 minute
-    maxRequests: parseInt(process.env.RATE_LIMIT_GENERIC_MAX || '30'),
+    windowMs: parseInt(process.env.RATE_LIMIT_GENERIC_WINDOW_MS || '60000', 10) || 60000, // 1 minute
+    maxRequests: parseInt(process.env.RATE_LIMIT_GENERIC_MAX || '30', 10) || 30,
     message: 'Too many requests. Please slow down.',
   } as RateLimitConfig,
 };
@@ -170,9 +170,8 @@ export function checkRateLimit(
   }
   
   // Window still active
-  const remaining = Math.max(0, config.maxRequests - entry.count);
   const resetAfter = windowEnd - now;
-  
+
   if (entry.count >= config.maxRequests) {
     // Rate limit exceeded
     return {
@@ -182,11 +181,12 @@ export function checkRateLimit(
       retryAfter: Math.ceil(resetAfter / 1000), // Convert to seconds
     };
   }
-  
-  // Increment counter
+
+  // Increment counter first, then compute remaining
   entry.count++;
   rateLimitStore.set(key, entry);
-  
+  const remaining = Math.max(0, config.maxRequests - entry.count);
+
   return {
     allowed: true,
     remaining,
@@ -200,13 +200,13 @@ export function checkRateLimit(
  * @param request - The incoming request
  * @param configKey - Key for the rate limit configuration to use
  * @param email - Optional email for email-based rate limiting
- * @returns Response object if rate limited, null if allowed
+ * @returns Response object if rate limited, null + headers if allowed
  */
 export function rateLimitMiddleware(
   request: Request,
   configKey: keyof typeof RATE_LIMIT_CONFIGS = 'generic',
   email?: string
-): { success: false; response: Response } | { success: true; response: null } {
+): { success: false; response: Response } | { success: true; response: null; headers: Record<string, string> } {
   const config = RATE_LIMIT_CONFIGS[configKey];
   const identifier = getClientIdentifier(request, email);
   const result = checkRateLimit(identifier, config);
@@ -234,7 +234,7 @@ export function rateLimitMiddleware(
     };
   }
   
-  // Add rate limit headers to successful response
+  // Build rate limit headers for successful response so callers can attach them
   const headers = {
     'X-RateLimit-Limit': config.maxRequests.toString(),
     'X-RateLimit-Remaining': result.remaining.toString(),
@@ -244,6 +244,7 @@ export function rateLimitMiddleware(
   return {
     success: true,
     response: null,
+    headers,
   };
 }
 

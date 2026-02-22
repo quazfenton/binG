@@ -30,11 +30,9 @@ export class SandboxService {
   private getCandidateProviderTypes(primary: SandboxProviderType): SandboxProviderType[] {
     const quotaChain = quotaManager.getSandboxProviderChain(primary) as SandboxProviderType[];
     const preferred = Array.from(new Set(quotaChain.length ? quotaChain : [primary]));
-    const allKnown: SandboxProviderType[] = ['daytona', 'runloop', 'microsandbox', 'e2b'];
-    const combined = Array.from(new Set([...preferred, ...allKnown]));
     const supported: SandboxProviderType[] = [];
 
-    for (const providerType of combined) {
+    for (const providerType of preferred) {
       try {
         getSandboxProvider(providerType);
         supported.push(providerType);
