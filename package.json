@@ -75,7 +75,7 @@
     "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.8.2",
     "@xyflow/xy-ui": "^0.0.12",
-    "ai": "^5.0.52",
+    "ai": "^5.0.53",
     "autoprefixer": "^10.4.20",
     "bcryptjs": "^3.0.2",
     "better-sqlite3": "^11.1.2",
