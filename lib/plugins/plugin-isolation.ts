@@ -1,3 +1,5 @@
+import { secureRandom } from '@/lib/utils';
+
 /**
  * Plugin Isolation System
  * Provides sandboxing, resource monitoring, and error isolation for plugins
@@ -239,7 +241,7 @@ export class PluginIsolationManager {
     const runtime = Date.now() - sandbox.createdAt;
     return {
       memoryMB: Math.min(50, runtime / 1000), // Simulate memory growth
-      cpuPercent: Math.random() * 20, // Simulate CPU usage
+      cpuPercent: secureRandom() * 20, // Simulate CPU usage
       networkRequests: sandbox.resourceUsage.networkRequests,
       storageKB: sandbox.resourceUsage.storageKB,
       executionTimeMs: sandbox.resourceUsage.executionTimeMs

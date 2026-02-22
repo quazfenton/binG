@@ -1,12 +1,22 @@
 /**
  * Enhanced LLM Service with Fallback System
- * 
+ *
  * Integrates the Enhanced API Client with the existing LLM service
  * to provide robust API communication with fallback mechanisms.
+ *
+ * Supports task-specific providers for optimized performance:
+ * - EMBEDDING_PROVIDER for embeddings (e.g., mistral-embed)
+ * - AGENT_PROVIDER for agent completions (e.g., Mistral)
+ * - OCR_PROVIDER for OCR processing (e.g., Mistral OCR)
+ * - etc.
  */
 
 import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhanced-api-client';
-import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, PROVIDERS } from './llm-providers';
+import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from './llm-providers';
+import { toolContextManager } from '../services/tool-context-manager';
+import { getToolManager, TOOL_REGISTRY } from '../tools';
+import { sandboxBridge } from '../sandbox';
+import { getProviderForTask, getModelForTask } from '../config/task-providers';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -17,6 +27,12 @@ export interface EnhancedLLMRequest extends LLMRequest {
     maxDelay?: number;
   };
   enableCircuitBreaker?: boolean;
+  enableTools?: boolean;
+  enableSandbox?: boolean;
+  isSandboxCommand?: boolean; // Explicit flag for sandbox/command requests
+  userId?: string;
+  conversationId?: string;
+  task?: 'chat' | 'code' | 'embedding' | 'image' | 'tool' | 'agent' | 'ocr'; // Task-specific provider selection
 }
 
 export interface LLMEndpointConfig {
@@ -38,12 +54,11 @@ export class EnhancedLLMService {
   }
 
   private initializeEndpointConfigs(): void {
-    // Configure endpoint mappings for different providers
     const configs: LLMEndpointConfig[] = [
       {
         provider: 'openrouter',
-        baseUrl: process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1',
-        apiKey: process.env.OPENAI_API_KEY || '',
+        baseUrl: process.env.OPENROUTER_BASE_URL || process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1',
+        apiKey: process.env.OPENROUTER_API_KEY || '',
         models: PROVIDERS.openrouter.models,
         priority: 1
       },
@@ -69,11 +84,32 @@ export class EnhancedLLMService {
         priority: 4
       },
       {
+        provider: 'mistral',
+        baseUrl: process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1',
+        apiKey: process.env.MISTRAL_API_KEY || '',
+        models: PROVIDERS.mistral.models,
+        priority: 5
+      },
+      {
+        provider: 'github',
+        baseUrl: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com',
+        apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY || '',
+        models: PROVIDERS.github.models,
+        priority: 6
+      },
+      {
         provider: 'portkey',
         baseUrl: 'https://api.portkey.ai/v1',
         apiKey: process.env.PORTKEY_API_KEY || '',
         models: PROVIDERS.portkey.models,
-        priority: 5
+        priority: 7
+      },
+      {
+        provider: 'opencode',
+        baseUrl: process.env.OPENCODE_BASE_URL || 'https://api.opencode.ai/v1',
+        apiKey: process.env.OPENCODE_API_KEY || '',
+        models: PROVIDERS.opencode.models,
+        priority: 8
       }
     ];
 
@@ -85,55 +121,111 @@ export class EnhancedLLMService {
   }
 
   private setupFallbackChains(): void {
-    // Define fallback chains for different providers
-    this.fallbackChains.set('openrouter', ['chutes', 'anthropic', 'google']);
-    this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google']);
-    this.fallbackChains.set('anthropic', ['openrouter', 'chutes', 'google']);
-    this.fallbackChains.set('google', ['openrouter', 'chutes', 'anthropic']);
-    this.fallbackChains.set('portkey', ['openrouter', 'chutes', 'anthropic']);
+    this.fallbackChains.set('openrouter', ['mistral', 'google', 'github', 'opencode']);
+    this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google', 'mistral', 'github']);
+    this.fallbackChains.set('anthropic', ['openrouter', 'mistral', 'google', 'github']);
+    this.fallbackChains.set('google', ['openrouter', 'mistral', 'github', 'opencode']);
+    this.fallbackChains.set('mistral', ['openrouter', 'chutes', 'anthropic', 'google', 'github']);
+    this.fallbackChains.set('github', ['openrouter', 'mistral', 'google', 'opencode']);
+    this.fallbackChains.set('portkey', ['openrouter', 'google', 'mistral', 'github']);
+    this.fallbackChains.set('opencode', ['mistral', 'google', 'openrouter', 'github']);
   }
 
   private startHealthMonitoring(): void {
     const endpoints = Array.from(this.endpointConfigs.values()).map(config => config.baseUrl);
-    enhancedAPIClient.startHealthMonitoring(endpoints, 60000); // Check every minute
+    enhancedAPIClient.startHealthMonitoring(endpoints, 60000);
   }
 
   async generateResponse(request: EnhancedLLMRequest): Promise<LLMResponse> {
-    const { provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, ...llmRequest } = request;
+    const { enableTools, enableSandbox, userId, conversationId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, ...llmRequest } = request;
 
+    // Use task-specific provider if specified
+    const actualProvider = task ? getProviderForTask(task) : (provider || getProviderForTask('chat'));
+    const actualModel = task ? getModelForTask(task, llmRequest.model) : llmRequest.model;
+
+    // If tools are enabled and user ID is provided, process tools
+    if (enableTools && userId && conversationId) {
+      const toolResult = await this.processToolRequest(
+        llmRequest.messages,
+        userId,
+        conversationId
+      );
+
+      if (toolResult.requiresAuth && toolResult.authUrl) {
+        return {
+          content: `I need authorization to use ${toolResult.toolName}. Please connect your account to proceed.`,
+          tokensUsed: 0,
+          finishReason: 'tool_auth_required',
+          timestamp: new Date(),
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          metadata: {
+            requiresAuth: true,
+            authUrl: toolResult.authUrl,
+            toolName: toolResult.toolName
+          }
+        };
+      }
+
+      if (toolResult.toolCalls && toolResult.toolCalls.length > 0) {
+        // Store tool results in request metadata instead of injecting synthetic messages
+        // This avoids provider compatibility issues (Anthropic rejects 'tool' role, Google maps it incorrectly)
+        const updatedRequest = {
+          ...llmRequest,
+          provider: actualProvider,
+          model: actualModel,
+          toolCalls: toolResult.toolCalls,
+          toolResults: toolResult.toolResults
+        };
+
+        return await this.callProviderWithEnhancedClient(actualProvider, updatedRequest, retryOptions, enableCircuitBreaker);
+      }
+    }
+
+    // Only process sandbox request if explicitly flagged as a sandbox/command request
+    // This prevents short-circuiting normal LLM flow for all messages when sandbox is enabled
+    if (request.isSandboxCommand && userId && conversationId) {
+      return await this.processSandboxRequest(request, userId, conversationId);
+    }
+
+    const postProcessToolCalls = async (response: LLMResponse): Promise<LLMResponse> => {
+      if (!enableTools || !userId || !conversationId) {
+        return response;
+      }
+
+      return this.executeModelToolCallsFromResponse(response, userId, conversationId);
+    };
+
+    // Try primary provider first
     try {
-      // Try primary provider first
-      const fullRequest = { ...llmRequest, provider };
-      return await this.callProviderWithEnhancedClient(provider, fullRequest, retryOptions, enableCircuitBreaker);
+      const fullRequest = { ...llmRequest, provider: actualProvider, model: actualModel };
+      const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker);
+      return await postProcessToolCalls(response);
     } catch (primaryError) {
-      console.warn(`Primary provider ${provider} failed:`, primaryError);
+      console.warn(`Primary provider ${actualProvider} failed:`, primaryError);
 
-      // Determine fallback providers
-      const fallbacks = fallbackProviders || this.fallbackChains.get(provider) || [];
-      const availableFallbacks = fallbacks.filter(fallbackProvider => 
-        this.endpointConfigs.has(fallbackProvider) && 
+      const fallbacks = fallbackProviders || this.fallbackChains.get(actualProvider) || [];
+      const availableFallbacks = fallbacks.filter(fallbackProvider =>
+        this.endpointConfigs.has(fallbackProvider) &&
         this.isProviderHealthy(fallbackProvider)
       );
 
       if (availableFallbacks.length === 0) {
         throw this.createEnhancedError(
-          `No healthy fallback providers available for ${provider}`,
+          `No healthy fallback providers available for ${actualProvider}`,
           'NO_FALLBACKS_AVAILABLE',
           primaryError as Error
         );
       }
 
-      // Try fallback providers
       for (const fallbackProvider of availableFallbacks) {
         try {
           console.log(`Trying fallback provider: ${fallbackProvider}`);
-          
-          // Check if the model is supported by the fallback provider
+
           const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
-          const supportedModel = this.findCompatibleModel(llmRequest.model, fallbackConfig.models);
-          
+          const supportedModel = this.findCompatibleModel(actualModel, fallbackConfig.models);
+
           if (!supportedModel) {
-            console.warn(`Model ${llmRequest.model} not supported by ${fallbackProvider}, skipping`);
+            console.warn(`Model ${actualModel} not supported by ${fallbackProvider}, skipping`);
             continue;
           }
 
@@ -144,24 +236,24 @@ export class EnhancedLLMService {
           };
 
           const response = await this.callProviderWithEnhancedClient(
-            fallbackProvider, 
-            fallbackRequest, 
-            retryOptions, 
+            fallbackProvider,
+            fallbackRequest,
+            retryOptions,
             enableCircuitBreaker
           );
 
-          // Add fallback information to response
-          return {
+          const fallbackResponse = {
             ...response,
-            provider: `${provider} -> ${fallbackProvider}` // Indicate fallback was used
+            provider: `${provider} -> ${fallbackProvider}`,
+            model: supportedModel  // Include the actual fallback model used
           };
+          return await postProcessToolCalls(fallbackResponse);
         } catch (fallbackError) {
           console.warn(`Fallback provider ${fallbackProvider} failed:`, fallbackError);
           continue;
         }
       }
 
-      // All providers failed
       throw this.createEnhancedError(
         'All providers failed to generate response',
         'ALL_PROVIDERS_FAILED',
@@ -174,13 +266,11 @@ export class EnhancedLLMService {
     const { provider, fallbackProviders, ...llmRequest } = request;
 
     try {
-      // For streaming, we'll use the original service but with enhanced error handling
       const fullRequest = { ...llmRequest, provider };
       yield* llmService.generateStreamingResponse(fullRequest);
     } catch (error) {
       console.warn(`Streaming failed for ${provider}:`, error);
       
-      // For streaming fallback, we need to restart the stream with a different provider
       const fallbacks = fallbackProviders || this.fallbackChains.get(provider) || [];
       const availableFallbacks = fallbacks.filter(fallbackProvider => 
         this.endpointConfigs.has(fallbackProvider) && 
@@ -196,7 +286,6 @@ export class EnhancedLLMService {
         );
       }
 
-      // Try first available streaming fallback
       const fallbackProvider = availableFallbacks[0];
       const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
       const supportedModel = this.findCompatibleModel(llmRequest.model, fallbackConfig.models);
@@ -222,7 +311,7 @@ export class EnhancedLLMService {
 
   private async callProviderWithEnhancedClient(
     provider: string,
-    request: LLMRequest,
+    request: LLMRequest & { toolCalls?: any[]; toolResults?: any[] },
     retryOptions?: any,
     enableCircuitBreaker: boolean = true
   ): Promise<LLMResponse> {
@@ -231,33 +320,73 @@ export class EnhancedLLMService {
       throw new Error(`Provider ${provider} not configured`);
     }
 
-    // For now, we'll use the original LLM service but wrap it with enhanced error handling
-    // In a full implementation, we would refactor the LLM service to use the enhanced client
+    // Filter messages for provider compatibility
+    // OpenAI supports 'tool' role, but Anthropic and Google do not
+    const filteredMessages = this.filterMessagesForProvider(request.messages, provider);
+
+    const providerRequest = {
+      ...request,
+      messages: filteredMessages
+    };
+
     try {
-      return await llmService.generateResponse(request);
+      return await llmService.generateResponse(providerRequest);
     } catch (error) {
-      // Enhance the error with better user messages
       throw this.enhanceError(error as Error, provider);
     }
   }
 
+  /**
+   * Filter messages for provider compatibility.
+   * - OpenAI: Supports 'tool' and 'assistant' roles with tool calls
+   * - Anthropic: Only supports 'user' and 'assistant' roles
+   * - Google: Maps 'tool' to 'user' which is incorrect
+   */
+  private filterMessagesForProvider(
+    messages: Array<{ role: string; content: string }>,
+    provider: string
+  ): Array<{ role: string; content: string }> {
+    // OpenAI-compatible providers can handle tool messages
+    const openAICompatible = ['openrouter', 'chutes', 'portkey'];
+    if (openAICompatible.includes(provider)) {
+      return messages;
+    }
+
+    // For other providers (Anthropic, Google, etc.), filter out synthetic tool messages
+    return messages.filter(msg => {
+      // Remove 'tool' role messages
+      if (msg.role === 'tool') return false;
+
+      // Remove assistant messages that are just JSON-stringified tool calls
+      if (msg.role === 'assistant' && msg.content) {
+        try {
+          const parsed = JSON.parse(msg.content);
+          if (Array.isArray(parsed) && parsed.every(item => item.id && item.type && item.function)) {
+            return false; // This is a synthetic tool call message
+          }
+        } catch {
+          // Not JSON, keep the message
+        }
+      }
+
+      return true;
+    });
+  }
+
   private findCompatibleModel(requestedModel: string, availableModels: string[]): string | null {
-    // Direct match
     if (availableModels.includes(requestedModel)) {
       return requestedModel;
     }
 
-    // Try to find similar models based on naming patterns
     const modelFamily = this.extractModelFamily(requestedModel);
     const compatibleModel = availableModels.find(model => 
       this.extractModelFamily(model) === modelFamily
     );
 
-    return compatibleModel || availableModels[0] || null; // Return first available as last resort
+    return compatibleModel || availableModels[0] || null;
   }
 
   private extractModelFamily(model: string): string {
-    // Extract model family from model name (e.g., "gpt-4" from "gpt-4-turbo")
     const patterns = [
       /^(gpt-[34])/i,
       /^(claude-[23])/i,
@@ -282,13 +411,12 @@ export class EnhancedLLMService {
     if (!config) return false;
 
     const health = enhancedAPIClient.getEndpointHealth(config.baseUrl) as any;
-    return health.isHealthy !== false; // Default to healthy if no health data
+    return health.isHealthy !== false;
   }
 
   private enhanceError(error: Error, provider: string): Error {
     const enhancedError = new Error(error.message);
     
-    // Add user-friendly messages based on error patterns
     if (error.message.includes('API key')) {
       enhancedError.message = `Authentication failed for ${provider}. Please check your API key configuration.`;
     } else if (error.message.includes('rate limit')) {
@@ -313,7 +441,6 @@ export class EnhancedLLMService {
     return error;
   }
 
-  // Health and monitoring methods
   getProviderHealth(): Record<string, any> {
     const health: Record<string, any> = {};
     
@@ -346,11 +473,470 @@ export class EnhancedLLMService {
     }
   }
 
-  // Cleanup
+  async processToolRequest(messages: LLMMessage[], userId: string, conversationId: string) {
+    try {
+      const result = await toolContextManager.processToolRequest(
+        messages,
+        userId,
+        conversationId
+      );
+
+      return {
+        requiresAuth: result.requiresAuth,
+        authUrl: result.authUrl,
+        toolName: result.toolName,
+        toolCalls: result.toolCalls,
+        toolResults: result.toolResults,
+        content: result.content
+      };
+    } catch (error: any) {
+      console.error('Tool request processing error:', error);
+      return {
+        requiresAuth: false,
+        toolCalls: [],
+        toolResults: [],
+        content: `Error processing tool request: ${error.message}`
+      };
+    }
+  }
+
+  private async executeModelToolCallsFromResponse(
+    response: LLMResponse,
+    userId: string,
+    conversationId: string
+  ): Promise<LLMResponse> {
+    const toolCalls = this.extractToolCallsFromLLMResponse(response);
+    if (toolCalls.length === 0) {
+      return response;
+    }
+
+    const toolManager = getToolManager();
+    const executedCalls: Array<{ name: string; arguments: Record<string, any> }> = [];
+    const toolResults: Array<{ name: string; success: boolean; output?: any; error?: string; authUrl?: string }> = [];
+
+    for (const call of toolCalls) {
+      const resolvedTool = this.resolveToolKey(call.name);
+      if (!resolvedTool) {
+        toolResults.push({
+          name: call.name,
+          success: false,
+          error: `Unknown tool: ${call.name}`
+        });
+        continue;
+      }
+
+      executedCalls.push({ name: resolvedTool, arguments: call.arguments });
+      const result = await toolManager.executeTool(
+        resolvedTool,
+        call.arguments,
+        {
+          userId,
+          conversationId,
+          metadata: { source: 'llm_tool_use' }
+        }
+      );
+
+      toolResults.push({
+        name: resolvedTool,
+        success: result.success,
+        output: result.output,
+        error: result.error,
+        authUrl: result.authUrl
+      });
+    }
+
+    const authRequired = toolResults.find(r => !r.success && !!r.authUrl);
+    if (authRequired?.authUrl) {
+      return {
+        ...response,
+        content: `I need authorization to use ${authRequired.name}. Please connect your account to proceed.`,
+        finishReason: 'tool_auth_required',
+        metadata: {
+          ...(response as any).metadata,
+          requiresAuth: true,
+          authUrl: authRequired.authUrl,
+          toolName: authRequired.name,
+          toolCalls: executedCalls,
+          toolResults
+        }
+      } as LLMResponse;
+    }
+
+    const summaryLines = toolResults.map(r => {
+      if (r.success) return `- ${r.name}: success`;
+      return `- ${r.name}: failed (${r.error || 'unknown error'})`;
+    });
+
+    const appendedSummary = summaryLines.length > 0
+      ? `\n\nTool execution results:\n${summaryLines.join('\n')}`
+      : '';
+
+    return {
+      ...response,
+      content: `${response.content || ''}${appendedSummary}`.trim(),
+      metadata: {
+        ...(response as any).metadata,
+        toolCalls: executedCalls,
+        toolResults,
+      }
+    } as LLMResponse;
+  }
+
+  private resolveToolKey(rawName: string): string | null {
+    if (!rawName) return null;
+    const registryKeys = Object.keys(TOOL_REGISTRY);
+    if (registryKeys.includes(rawName)) return rawName;
+
+    const normalized = rawName.toLowerCase().replace(/[\s_/-]+/g, '.');
+    if (registryKeys.includes(normalized)) return normalized;
+
+    const compact = normalized.replace(/[^a-z0-9]/g, '');
+    const match = registryKeys.find(key => key.replace(/[^a-z0-9]/g, '') === compact);
+    return match || null;
+  }
+
+  private extractToolCallsFromLLMResponse(response: LLMResponse): Array<{ name: string; arguments: Record<string, any> }> {
+    const calls: Array<{ name: string; arguments: Record<string, any> }> = [];
+    const seen = new Set<string>();
+
+    const addCall = (name?: string, args?: any) => {
+      if (!name) return;
+      const call = {
+        name: String(name),
+        arguments: (args && typeof args === 'object') ? args : {}
+      };
+      const key = `${call.name}:${JSON.stringify(call.arguments)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      calls.push(call);
+    };
+
+    // 1) Native metadata path
+    const metaCalls = (response as any)?.metadata?.toolCalls;
+    if (Array.isArray(metaCalls)) {
+      for (const call of metaCalls) {
+        if (!call) continue;
+        if (call.function?.name) {
+          let args = call.function.arguments;
+          if (typeof args === 'string') {
+            try { args = JSON.parse(args); } catch { args = {}; }
+          }
+          addCall(call.function.name, args);
+          continue;
+        }
+        if (call.name && call.input) {
+          addCall(call.name, call.input);
+          continue;
+        }
+        addCall(call.name, call.arguments);
+      }
+    }
+
+    // NOTE: Tool calls are ONLY accepted from structured metadata, never from free-text content.
+    // Parsing JSON from LLM response content would allow prompt injection attacks where an
+    // adversarial prompt or compromised model could embed malicious tool_calls in text content,
+    // causing unintended tool execution without user confirmation.
+
+    return calls;
+  }
+
+  async processSandboxRequest(request: EnhancedLLMRequest, userId: string, conversationId: string): Promise<LLMResponse> {
+    try {
+      const session = await sandboxBridge.getOrCreateSession(userId);
+
+      const lastUserMessage = request.messages
+        .filter(m => m.role === 'user')
+        .pop()?.content;
+
+      if (!lastUserMessage) {
+        return {
+          content: 'No user message found to process in sandbox',
+          tokensUsed: 0,
+          finishReason: 'error',
+          timestamp: new Date(),
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+        };
+      }
+
+      // Type guard: Ensure content is a string, not an array of content parts
+      let commandString: string;
+      if (typeof lastUserMessage !== 'string') {
+        // Handle array content by extracting text from parts
+        if (Array.isArray(lastUserMessage)) {
+          commandString = lastUserMessage
+            .filter(part => typeof part === 'string' || (part as any).type === 'text')
+            .map(part => typeof part === 'string' ? part : (part as any).text || '')
+            .join(' ');
+        } else {
+          return {
+            content: 'Invalid message format: expected string or text content',
+            tokensUsed: 0,
+            finishReason: 'error',
+            timestamp: new Date(),
+            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+          };
+        }
+      } else {
+        commandString = lastUserMessage;
+      }
+
+      // Extract command from natural language input
+      // Look for common command patterns and extract the actual shell command
+      const extractedCommand = this.extractCommandFromNaturalLanguage(commandString);
+      
+      // Validate and sanitize command input before execution
+      const validatedCommand = this.validateSandboxCommand(extractedCommand);
+      if (!validatedCommand.isValid) {
+        return {
+          content: `Command rejected: ${validatedCommand.reason}`,
+          tokensUsed: 0,
+          finishReason: 'error',
+          timestamp: new Date(),
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+        };
+      }
+
+      const result = await sandboxBridge.executeCommand(session.sandboxId, validatedCommand.command);
+
+      return {
+        content: `Sandbox execution completed.\n\nOutput:\n${result.output || 'No output'}${result.exitCode !== undefined && result.exitCode !== 0 ? `\n\nExit code: ${result.exitCode}` : ''}`,
+        tokensUsed: 0,
+        finishReason: result.success ? 'stop' : 'error',
+        timestamp: new Date(),
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        metadata: {
+          success: result.success,
+          exitCode: result.exitCode
+        }
+      };
+    } catch (error: any) {
+      console.error('Sandbox request processing error:', error);
+      return {
+        content: `Error executing in sandbox: ${error.message}`,
+        tokensUsed: 0,
+        finishReason: 'error',
+        timestamp: new Date(),
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      };
+    }
+  }
+
+  /**
+   * Validates and sanitizes command input before sandbox execution.
+   * Prevents command injection attacks by blocking dangerous patterns.
+   */
+  private validateSandboxCommand(command: string): { isValid: boolean; command: string; reason?: string } {
+    return validateSandboxCommand(command);
+  }
+
+  /**
+   * Extracts shell commands from natural language input.
+   * Converts phrases like "please run ls -la" to "ls -la".
+   */
+  private extractCommandFromNaturalLanguage(input: string): string {
+    const trimmedInput = input.trim();
+
+    // Common natural language prefixes to strip
+    const commandPrefixes = [
+      /^(?:please\s+)?(?:run|execute|exec)\s+/i,
+      /^(?:please\s+)?(?:can\s+you\s+)?(?:run|execute)\s+/i,
+      /^(?:could\s+you\s+)?(?:please\s+)?(?:run|execute)\s+/i,
+      /^(?:i\s+want\s+to\s+)?(?:run|execute)\s+/i,
+      /^(?:i\s+need\s+to\s+)?(?:run|execute)\s+/i,
+      /^(?:let['']s\s+)?(?:run|execute)\s+/i,
+      /^(?:just\s+)?(?:run|execute)\s+/i,
+      /^(?:show\s+me\s+)/i,
+      /^(?:check\s+)/i,
+      /^(?:list\s+)/i,
+      /^(?:display\s+)/i,
+    ];
+
+    let command = trimmedInput;
+    for (const prefix of commandPrefixes) {
+      const match = command.match(prefix);
+      if (match) {
+        command = command.replace(prefix, '');
+        break;
+      }
+    }
+
+    // Remove trailing punctuation that's common in natural language
+    command = command.replace(/[.!?,;]+$/, '').trim();
+
+    // Remove quote wrappers if present
+    const quoteMatch = command.match(/^["'](.+)["']$/);
+    if (quoteMatch) {
+      command = quoteMatch[1];
+    }
+
+    return command.trim() || trimmedInput;
+  }
+
   destroy(): void {
     enhancedAPIClient.destroy();
   }
 }
 
-// Export singleton instance
+/**
+ * Validates and sanitizes command input before sandbox execution.
+ * Prevents command injection attacks by blocking dangerous patterns.
+ * Exported as standalone function for use in sandbox execute API.
+ */
+export function validateSandboxCommand(command: string): { isValid: boolean; command: string; reason?: string } {
+  if (!command || typeof command !== 'string') {
+    return { isValid: false, command: '', reason: 'Command is required' };
+  }
+
+  // Length limit to prevent resource exhaustion
+  const MAX_COMMAND_LENGTH = 10000;
+  if (command.length > MAX_COMMAND_LENGTH) {
+    return { isValid: false, command: '', reason: `Command exceeds maximum length of ${MAX_COMMAND_LENGTH} characters` };
+  }
+
+  const trimmedCommand = command.trim();
+
+  // Block dangerous command patterns that could escape sandbox or cause harm
+  const dangerousPatterns = [
+    // Network exfiltration attempts (using [^|]* instead of .* to prevent backtracking)
+    /\bcurl\b[^|]*\|\s*(?:ba)?sh\b/i,
+    /\bwget\b[^|]*\|\s*(?:ba)?sh\b/i,
+    // Privilege escalation
+    /\bsudo\b/i,
+    /\bsu\b\s+/i,
+    // Container escape attempts
+    /\bdocker\b/i,
+    /\bkubectl\b/i,
+    // Filesystem traversal beyond workspace
+    /\.\.\/\.\./,
+    /\/etc\/passwd/,
+    /\/etc\/shadow/,
+    // Process manipulation
+    /\bpkill\b/i,
+    /\bkillall\b/i,
+    // Code execution in other languages (using \s+ instead of .*)
+    /\bpython[3]?\s+-c\b/i,
+    /\bperl\s+-e\b/i,
+    /\bruby\s+-e\b/i,
+    // Base64 decode and execute patterns
+    /\bbase64\b[^|]*\|\s*(?:ba)?sh\b/i,
+    /\bbase64\b[^|]*\|\s*bash\b/i,
+    // Eval patterns
+    /\beval\s*\(/i,
+    /\bexec\s*\(/i,
+    // Netcat with exec flag
+    /\bnc\s+-e\b/i,
+    /\bnetcat\s+-e\b/i,
+    // Additional dangerous patterns for common attack vectors
+    /\bnode\s+-e\b/i,
+    /\bphp\s+-r\b/i,
+    /\bbash\s+-c\b/i,
+    /\bzsh\s+-c\b/i,
+    /\bsh\s+-c\b/i,
+    // Piping to any shell variant
+    /\|\s*(ba)?sh\b/i,
+    /\|\s*bash\b/i,
+    /\|\s*zsh\b/i,
+    /\|\s*ash\b/i,
+    // Command substitution
+    /\$\([^)]+\)/,
+    /`[^`]+`/,
+  ];
+
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(trimmedCommand)) {
+        return { isValid: false, command: '', reason: 'Command contains potentially dangerous pattern' };
+      }
+    }
+
+    // Universal shell metacharacter check - applied to ALL commands
+    // These characters can enable command injection or redirection attacks
+    const dangerousChars = [';', '&&', '||', '|', '`', '$', '>', '<', '&', '\n', '\r'];
+    for (const char of dangerousChars) {
+      if (trimmedCommand.includes(char)) {
+        return {
+          isValid: false,
+          command: '',
+          reason: `Command contains unsafe character: ${char}`
+        };
+      }
+    }
+
+    // Allow-list of safe command prefixes for common development tasks
+    // NOTE: Container tools and general-purpose interpreters are intentionally excluded
+    // as they can be used to escape sandbox or execute arbitrary code
+    // NOTE: Destructive commands (rm, chmod, chown) are excluded to prevent data loss
+    // NOTE: Network download and package install commands are RESTRICTED to prevent
+    // arbitrary code execution via downloaded payloads or malicious package installation
+    const safeCommandPrefixes = [
+      // File operations (read-only and safe create)
+      'ls ', 'cat ', 'head ', 'tail ', 'wc ', 'grep ', 'find ', 'tree ',
+      'pwd ', 'cd ', 'mkdir ', 'rmdir ', 'cp ', 'mv ', 'touch ',
+      'ln ', 'readlink ',
+      // Text processing
+      'sed ', 'awk ', 'cut ', 'sort ', 'uniq ', 'tr ', 'rev ',
+      'echo ', 'printf ',
+      // Build tools and compilers (safe, produce deterministic output)
+      'npm ', 'yarn ', 'pnpm ', 'bun ', 'cargo ', 'go ',
+      'make ', 'cmake ', 'gcc ', 'g++ ', 'clang ', 'rustc ',
+      // Version control
+      'git ', 'svn ', 'hg ',
+      // Testing
+      'jest ', 'mocha ', 'pytest ', 'cargo test', 'go test ',
+      // System info (read-only)
+      'uname ', 'whoami ', 'id ', 'date ', 'time ', 'uptime ', 'df ', 'du ',
+      'env ', 'printenv ', 'which ', 'whereis ', 'type ',
+      // Network (read-only diagnostics only - no downloads)
+      'ping ', 'dig ', 'nslookup ', 'netstat ', 'ss ', 'traceroute ',
+      // Process info (read-only)
+      'ps ', 'top ', 'htop ', 'pgrep ', 'pidof ',
+      // Package managers (read-only operations ONLY)
+      'apt list ', 'apt-cache ', 'yum list ', 'dnf list ', 'apk search ', 'brew list ',
+      // Text editors (interactive, don't execute code)
+      'vim ', 'vi ', 'nano ', 'emacs ', 'code ',
+      // Documentation
+      'man ', 'help ', '--help', '-h ',
+    ];
+
+    // Additional blocklist for dangerous argument patterns (defense in depth)
+    const dangerousArgPatterns = [
+      /rm\s+-rf\s/i,          // rm -rf (recursive force delete)
+      /rm\s+--no-preserve-root/i,  // rm --no-preserve-root
+      /chmod\s+(-[aR]*7|000)/i,    // chmod with dangerous permissions
+      /chown\s+.*:.*\//i,     // chown with recursive paths
+      /\s-\w*f\s/i,           // force flag patterns
+    ];
+
+    for (const pattern of dangerousArgPatterns) {
+      if (pattern.test(trimmedCommand)) {
+        return {
+          isValid: false,
+          command: '',
+          reason: 'Command contains dangerous argument pattern'
+        };
+      }
+    }
+
+    // Check if command starts with a safe prefix or is a simple command
+    const lowerCommand = trimmedCommand.toLowerCase();
+    const isSafePrefix = safeCommandPrefixes.some(prefix =>
+      lowerCommand.startsWith(prefix.toLowerCase())
+    );
+
+    // Also allow simple commands without arguments (e.g., "ls", "pwd")
+    const simpleCommand = trimmedCommand.split(/\s+/)[0].toLowerCase();
+    const isSimpleSafeCommand = safeCommandPrefixes.some(prefix =>
+      prefix.trim() === simpleCommand
+    );
+
+    if (!isSafePrefix && !isSimpleSafeCommand) {
+      return {
+        isValid: false,
+        command: '',
+        reason: 'Command not in allowed list'
+      };
+    }
+
+    return { isValid: true, command: trimmedCommand };
+  }
+
 export const enhancedLLMService = new EnhancedLLMService();

@@ -5,12 +5,16 @@ import { CohereClient } from 'cohere-ai'
 import Together from 'together-ai'
 import Replicate from 'replicate'
 import { Portkey } from 'portkey-ai'
+import { Mistral } from '@mistralai/mistralai'
 import {
   createOrchestratorError,
   createStreamError,
   createLLMError,
-  ERROR_CODES
+  ERROR_CODES,
+  LLMError
 } from '../../enhanced-code-system/core/error-types'
+
+import { initializeComposioService, getComposioService, type ComposioService } from './composio-service'
 
 export interface LLMProvider {
   id: string
@@ -22,7 +26,7 @@ export interface LLMProvider {
 }
 
 export interface LLMMessage {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'tool'
   content: string | Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }>
 }
 
@@ -42,6 +46,8 @@ export interface LLMResponse {
   tokensUsed: number
   finishReason: string
   timestamp: Date
+  provider?: string
+  metadata?: Record<string, any>
   usage?: {
     prompt_tokens: number
     completion_tokens: number
@@ -80,6 +86,29 @@ export interface ProviderConfig {
   portkey?: {
     apiKey?: string
   }
+  composio?: {
+    apiKey?: string
+    llmProvider?: 'openrouter' | 'google' | 'openai'
+    llmModel?: string
+    enableAllTools?: boolean
+    restrictedToolkits?: string[]
+  }
+  chutes?: {
+    apiKey?: string
+    baseURL?: string
+  }
+  mistral?: {
+    apiKey?: string
+    baseURL?: string
+  }
+  github?: {
+    apiKey?: string
+    baseURL?: string
+  }
+  opencode?: {
+    apiKey?: string
+    baseURL?: string
+  }
 }
 
 export const PROVIDERS: Record<string, LLMProvider> = {
@@ -101,7 +130,18 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   openrouter: {
     id: 'openrouter',
     name: 'OpenRouter',
-        models: ['deepseek/deepseek-r1-0528:free', 'deepseek/deepseek-chat-v3-0324:free', 'meta-llama/llama-4-maverick:free', 'gemma-3-27b-it:free', 'meta-llama/llama-3.3-70b-instruct:free', 'meta-llama/llama-3.2-11b-vision-instruct:free'],
+    models: [
+      'openai/gpt-oss-120b:free',
+      'deepseek/deepseek-r1-0528:free',
+      'qwen/qwen3-coder:free',
+      'z-ai/glm-4.5-air:free',
+      'nvidia/nemotron-3-nano-30b-a3b:free',
+      'nvidia/nemotron-nano-12b-v2-vl:free',
+      'mistralai/mistral-small-3.1-24b-instruct:free',
+      'liquid/lfm-2.5-1.2b-instruct:free',
+      'arcee-ai/trinity-large-preview:free',
+      'meta-llama/llama-3.3-70b-instruct:free'
+    ],
     supportsStreaming: true,
     maxTokens: 128000, // OpenRouter models can vary, setting a common high limit
     description: 'OpenRouter gateway models'
@@ -131,7 +171,14 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   google: {
     id: 'google',
     name: 'Google',
-    models: ['gemini-2.5-flash-preview-05-20', 'gemini-pro', 'gemini-pro-vision', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-vision'],
+    models: [
+      'gemini-3-flash-preview',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-preview-09-2025',
+      'gemini-2.5-flash-lite',
+      'gemini-2.5-flash-lite-preview-09-2025'
+    ],
     supportsStreaming: true,
     maxTokens: 2000000,
     description: 'Google Gemini models'
@@ -177,18 +224,104 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   portkey: {
     id: 'portkey',
     name: 'Portkey AI Gateway',
-    models: [
-      'openrouter/auto',
+    models: ['openrouter/auto',
       'deepseek/deepseek-r1-0528:free',
       'chutes/gemini-1.5-flash:free',
       'chutes/openrouter-auto:free',
       'chutes/grok-beta:free',
       'chutes/flux-dev:free',
-      'chutes/flux-schnell:free'
-    ],
+      'chutes/flux-schnell:free'],
     supportsStreaming: true,
     maxTokens: 32000,
     description: 'Portkey AI Gateway with free models'
+  },
+  composio: {
+    id: 'composio',
+    name: 'Composio (800+ Tools)',
+    models: [
+      'openai/gpt-oss-120b:free',
+      'google/gemini-2.5-flash',
+      'gpt-4o-mini',
+      'claude-3-haiku-20240307'
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Composio with 800+ toolkits and tool execution'
+  },
+  mistral: {
+    id: 'mistral',
+    name: 'Mistral AI',
+    models: [
+      'mistral-large-latest',
+      'mistral-small-latest',
+      'codestral-latest',
+      'pixtral-large-latest',
+      'ministral-3b-latest',
+      'ministral-8b-latest'
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Mistral AI models including Mistral Large, Small, and Codestral'
+  },
+  github: {
+    id: 'github',
+    name: 'GitHub Models',
+    models: [
+      'gpt-4o',
+      'gpt-4o-mini',
+      'o1',
+      'o1-mini',
+      'o3-mini',
+      'gpt-4',
+      'gpt-4-turbo',
+      'gpt-35-turbo',
+      'llama-3.3-70b-instruct',
+      'llama-3.2-90b-vision-instruct',
+      'llama-3.2-11b-vision-instruct',
+      'llama-3.1-405b-instruct',
+      'llama-3.1-70b-instruct',
+      'llama-3.1-8b-instruct',
+      'mistral-large-2407',
+      'mistral-small-2402',
+      'codellama-34b-instruct',
+      'phi-3.5-mini-instruct',
+      'phi-3.5-moe-instruct',
+      'phi-3-mini-4k-instruct',
+      'phi-3-small-4k-instruct',
+      'phi-3-small-8k-instruct',
+      'phi-3-medium-4k-instruct',
+      'phi-3-medium-128k-instruct',
+      'ai21-jamba-1.5-large',
+      'ai21-jamba-1.5-mini',
+      'command-r-plus',
+      'command-r',
+      'deepseek-v3',
+      'deepseek-r1',
+      'gemini-1.5-pro',
+      'gemini-1.5-flash',
+      'gemini-2.0-flash-exp',
+      'llama-3.2-1b-instruct',
+      'llama-3.2-3b-instruct'
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'GitHub Models - Access to GPT-4, Llama, Mistral, Phi, and more via GitHub Azure'
+  },
+  opencode: {
+    id: 'opencode',
+    name: 'OpenCode API',
+    models: [
+      'zen',
+      'zen-32k',
+      'zen-128k',
+      'kimi-2.5',
+      'kimi-2.5-32k',
+      'kimi-2.5-128k',
+      'kimi-2.5-turbo'
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'OpenCode API - Access to Zen and Kimi 2.5 models with extended context windows'
   }
 }
 
@@ -200,6 +333,9 @@ class LLMService {
   private together: Together | null = null
   private replicate: Replicate | null = null
   private portkey: Portkey | null = null
+  private mistral: Mistral | null = null
+  private opencodeClient: OpenAI | null = null
+  private composioService: ComposioService | null = null
 
   constructor(config: ProviderConfig = {}) {
     // Initialize providers with API keys
@@ -244,6 +380,76 @@ class LLMService {
         apiKey: config.portkey.apiKey
       })
     }
+
+    if (config.mistral?.apiKey) {
+      this.mistral = new Mistral({
+        apiKey: config.mistral.apiKey,
+        serverURL: config.mistral.baseURL
+      })
+    }
+
+    if (config.opencode?.apiKey) {
+      // OpenCode API is OpenAI-compatible
+      this.opencodeClient = new OpenAI({
+        apiKey: config.opencode.apiKey,
+        baseURL: config.opencode.baseURL || 'https://api.opencode.ai/v1'
+      })
+    }
+  }
+
+  private normalizeOpenAIToolCalls(toolCalls: any[] | undefined): Array<{ id?: string; name: string; arguments: Record<string, any> }> {
+    if (!Array.isArray(toolCalls)) return []
+    return toolCalls
+      .map((call: any) => {
+        const name = call?.function?.name || call?.name
+        if (!name) return null
+        let args: any = call?.function?.arguments ?? call?.arguments ?? {}
+        if (typeof args === 'string') {
+          try {
+            args = JSON.parse(args)
+          } catch {
+            args = {}
+          }
+        }
+        if (!args || typeof args !== 'object') args = {}
+        return {
+          id: call?.id,
+          name: String(name),
+          arguments: args as Record<string, any>,
+        }
+      })
+      .filter(Boolean) as Array<{ id?: string; name: string; arguments: Record<string, any> }>
+  }
+
+  private extractAnthropicToolCalls(contentBlocks: any[] | undefined): Array<{ id?: string; name: string; arguments: Record<string, any> }> {
+    if (!Array.isArray(contentBlocks)) return []
+    return contentBlocks
+      .filter((block: any) => block?.type === 'tool_use' && block?.name)
+      .map((block: any) => ({
+        id: block.id,
+        name: String(block.name),
+        arguments: (block.input && typeof block.input === 'object') ? block.input : {},
+      }))
+  }
+
+  private extractGoogleToolCalls(result: any): Array<{ name: string; arguments: Record<string, any> }> {
+    const candidates = result?.candidates
+    if (!Array.isArray(candidates)) return []
+    const calls: Array<{ name: string; arguments: Record<string, any> }> = []
+    for (const candidate of candidates) {
+      const parts = candidate?.content?.parts
+      if (!Array.isArray(parts)) continue
+      for (const part of parts) {
+        const fn = part?.functionCall
+        if (fn?.name) {
+          calls.push({
+            name: String(fn.name),
+            arguments: (fn.args && typeof fn.args === 'object') ? fn.args : {},
+          })
+        }
+      }
+    }
+    return calls
   }
 
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
@@ -269,6 +475,12 @@ class LLMService {
           return await this.generateOpenRouterResponse(model, messages, temperature, maxTokens)
         case 'chutes':
           return await this.generateChutesResponse(model, messages, temperature, maxTokens)
+        case 'mistral':
+          return await this.generateMistralResponse(model, messages, temperature, maxTokens)
+        case 'github':
+          return await this.generateGitHubResponse(model, messages, temperature, maxTokens)
+        case 'opencode':
+          return await this.generateOpenCodeResponse(model, messages, temperature, maxTokens)
         default:
           throw createLLMError(`Unsupported provider: ${provider}`, {
             code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
@@ -321,6 +533,15 @@ class LLMService {
         case 'chutes':
           yield* this.streamChutesResponse(model, messages, temperature, maxTokens)
           break
+        case 'mistral':
+          yield* this.streamMistralResponse(model, messages, temperature, maxTokens)
+          break
+        case 'github':
+          yield* this.streamGitHubResponse(model, messages, temperature, maxTokens)
+          break
+        case 'opencode':
+          yield* this.streamOpenCodeResponse(model, messages, temperature, maxTokens)
+          break
         default:
           throw new Error(`Streaming is not supported for provider: ${provider}`);
       }
@@ -348,12 +569,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }
@@ -384,12 +607,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.extractAnthropicToolCalls(response.content as any[])
 
     return {
       content: response.content[0]?.text || '',
       tokensUsed: response.usage?.input_tokens + response.usage?.output_tokens || 0,
       finishReason: response.stop_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: {
         prompt_tokens: response.usage?.input_tokens || 0,
         completion_tokens: response.usage?.output_tokens || 0,
@@ -423,12 +648,14 @@ class LLMService {
     })
 
     const result = response.response
+    const toolCalls = this.extractGoogleToolCalls(result)
 
     return {
       content: result.text() || '',
       tokensUsed: result.usageMetadata?.totalTokenCount || 0,
       finishReason: result.candidates?.[0]?.finishReason || 'STOP',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: {
         prompt_tokens: result.usageMetadata?.promptTokenCount || 0,
         completion_tokens: result.usageMetadata?.candidatesTokenCount || 0,
@@ -448,12 +675,13 @@ class LLMService {
     // Convert messages to Cohere format
     const chatHistory = messages.slice(0, -1).map(msg => ({
       role: msg.role === 'user' ? 'USER' : 'CHATBOT',
-      message: typeof msg.content === 'string' ? msg.content : msg.content.map(c => c.text || '').join('')
+      message: typeof msg.content === 'string' ? msg.content : (Array.isArray(msg.content) ? msg.content.map(c => c.text || '').join('') : '')
     }))
 
-    const message = typeof messages[messages.length - 1].content === 'string' 
-      ? messages[messages.length - 1].content 
-      : messages[messages.length - 1].content.map(c => c.text || '').join('')
+    const lastMessageContent = messages[messages.length - 1].content;
+    const message = typeof lastMessageContent === 'string'
+      ? lastMessageContent
+      : (Array.isArray(lastMessageContent) ? lastMessageContent.map(c => c.text || '').join('') : '')
 
     const response = await this.cohere.chat({
       model,
@@ -490,12 +718,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }
@@ -543,12 +773,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }
@@ -571,12 +803,14 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }
@@ -595,12 +829,101 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
       tokensUsed: response.usage?.total_tokens || 0,
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    }
+  }
+
+  private async generateMistralResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): Promise<LLMResponse> {
+    if (!this.mistral) throw new Error('Mistral not initialized');
+
+    const response = await this.mistral.chat.complete({
+      model,
+      messages: messages as any,
+      temperature,
+      maxTokens,
+    })
+    const rawToolCalls = (response as any)?.choices?.[0]?.message?.toolCalls || (response as any)?.choices?.[0]?.message?.tool_calls
+    const toolCalls = this.normalizeOpenAIToolCalls(rawToolCalls as any[])
+
+    return {
+      content: response.choices?.[0]?.message?.content || '',
+      tokensUsed: response.usage?.totalTokens || 0,
+      finishReason: response.choices?.[0]?.finishReason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage ? {
+        prompt_tokens: response.usage.promptTokens || 0,
+        completion_tokens: response.usage.completionTokens || 0,
+        total_tokens: response.usage.totalTokens || 0
+      } : undefined
+    }
+  }
+
+  private async generateGitHubResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): Promise<LLMResponse> {
+    // GitHub Models is OpenAI-compatible via Azure endpoint
+    const github = new OpenAI({
+      apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY || '',
+      baseURL: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com'
+    });
+
+    const response = await github.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
+      usage: response.usage
+    }
+  }
+
+  private async generateOpenCodeResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): Promise<LLMResponse> {
+    if (!this.opencodeClient) throw new Error('OpenCode API not initialized');
+
+    const response = await this.opencodeClient.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+    })
+    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      tokensUsed: response.usage?.total_tokens || 0,
+      finishReason: response.choices[0]?.finish_reason || 'stop',
+      timestamp: new Date(),
+      metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage
     }
   }
@@ -647,6 +970,84 @@ class LLMService {
     });
 
     const stream = await chutes.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content || ''
+      if (delta) {
+        yield { content: delta, isComplete: false }
+      }
+    }
+    yield { content: '', isComplete: true }
+  }
+
+  private async *streamMistralResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    if (!this.mistral) throw new Error('Mistral not initialized');
+
+    const stream = await this.mistral.chat.stream({
+      model,
+      messages: messages as any,
+      temperature,
+      maxTokens,
+    })
+
+    for await (const chunk of stream) {
+      const delta = chunk.data?.choices?.[0]?.delta?.content || ''
+      if (delta) {
+        yield { content: delta, isComplete: false }
+      }
+    }
+    yield { content: '', isComplete: true }
+  }
+
+  private async *streamGitHubResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    // GitHub Models is OpenAI-compatible via Azure endpoint
+    const github = new OpenAI({
+      apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY || '',
+      baseURL: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com'
+    });
+
+    const stream = await github.chat.completions.create({
+      model,
+      messages: messages as any,
+      temperature,
+      max_tokens: maxTokens,
+      stream: true,
+    })
+
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content || ''
+      if (delta) {
+        yield { content: delta, isComplete: false }
+      }
+    }
+    yield { content: '', isComplete: true }
+  }
+
+  private async *streamOpenCodeResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    if (!this.opencodeClient) throw new Error('OpenCode API not initialized');
+
+    const stream = await this.opencodeClient.chat.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -767,12 +1168,13 @@ class LLMService {
     // Convert messages to Cohere format
     const chatHistory = messages.slice(0, -1).map(msg => ({
       role: msg.role === 'user' ? 'USER' : 'CHATBOT',
-      message: typeof msg.content === 'string' ? msg.content : msg.content.map(c => c.text || '').join('')
+      message: typeof msg.content === 'string' ? msg.content : (Array.isArray(msg.content) ? msg.content.map(c => c.text || '').join('') : '')
     }))
 
-    const message = typeof messages[messages.length - 1].content === 'string' 
-      ? messages[messages.length - 1].content 
-      : messages[messages.length - 1].content.map(c => c.text || '').join('')
+    const lastMessageContent = messages[messages.length - 1].content;
+    const message = typeof lastMessageContent === 'string'
+      ? lastMessageContent
+      : (Array.isArray(lastMessageContent) ? lastMessageContent.map(c => c.text || '').join('') : '')
 
     const stream = await this.cohere.chatStream({
       model,
@@ -845,25 +1247,33 @@ class LLMService {
     return Object.values(PROVIDERS).filter(provider => {
       switch (provider.id) {
         case 'openai':
-          return !!this.openai
+          return !!process.env.OPENAI_API_KEY;
         case 'anthropic':
-          return !!this.anthropic
+          return !!process.env.ANTHROPIC_API_KEY;
         case 'google':
-          return !!this.google
+          return !!process.env.GOOGLE_API_KEY;
         case 'cohere':
-          return !!this.cohere
+          return !!process.env.COHERE_API_KEY;
         case 'together':
-          return !!this.together
+          return !!process.env.TOGETHER_API_KEY;
         case 'replicate':
-          return !!this.replicate
+          return !!process.env.REPLICATE_API_TOKEN;
         case 'portkey':
-          return !!this.portkey
+          return !!process.env.PORTKEY_API_KEY;
+        case 'mistral':
+          return !!process.env.MISTRAL_API_KEY;
+        case 'opencode':
+          return !!process.env.OPENCODE_API_KEY;
         case 'openrouter':
-          return !!process.env.OPENROUTER_API_KEY
+          return !!process.env.OPENROUTER_API_KEY;
         case 'chutes':
-          return !!process.env.CHUTES_API_KEY
+          return !!process.env.CHUTES_API_KEY;
+        case 'github':
+          return !!process.env.GITHUB_MODELS_API_KEY || !!process.env.AZURE_OPENAI_API_KEY;
+        case 'composio':
+          return !!process.env.COMPOSIO_API_KEY;
         default:
-          return false
+          return false;
       }
     })
   }
@@ -905,15 +1315,21 @@ export const llmService = new LLMService({
   chutes: {
     apiKey: process.env.CHUTES_API_KEY,
     baseURL: process.env.CHUTES_BASE_URL
+  },
+  mistral: {
+    apiKey: process.env.MISTRAL_API_KEY,
+    baseURL: process.env.MISTRAL_BASE_URL
+  },
+  github: {
+    apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY,
+    baseURL: process.env.GITHUB_MODELS_BASE_URL
+  },
+  opencode: {
+    apiKey: process.env.OPENCODE_API_KEY,
+    baseURL: process.env.OPENCODE_BASE_URL
   }
 })
 
 export {
-  LLMService,
-  type LLMProvider,
-  type LLMMessage,
-  type LLMRequest,
-  type LLMResponse,
-  type StreamingResponse,
-  type ProviderConfig
+  LLMService
 }

@@ -378,10 +378,139 @@ class FastAgentService {
   }
 
   /**
+   * Check if service is enabled
+   */
+  isEnabled(): boolean {
+    return this.config.enabled;
+  }
+
+  /**
    * Check if service is enabled and healthy
    */
   isAvailable(): boolean {
     return this.config.enabled && this.isHealthy;
+  }
+
+  /**
+   * Create streaming response for Fast-Agent
+   */
+  createStreamingResponse(fastAgentResponse: FastAgentResponse, requestId?: string): ReadableStream {
+    const encoder = new TextEncoder();
+    const content = fastAgentResponse.content || '';
+    let cancelled = false;
+    let timerId: ReturnType<typeof setTimeout> | undefined;
+
+    return new ReadableStream({
+      start(controller) {
+        const streamId = requestId || `fast-agent-${Date.now()}`;
+
+        // Send initial event
+        const initEvent = `event: init\ndata: ${JSON.stringify({
+          requestId: streamId,
+          startTime: Date.now(),
+          provider: 'fast-agent',
+          model: 'fast-agent',
+          source: 'fast-agent'
+        })}\n\n`;
+        controller.enqueue(encoder.encode(initEvent));
+
+        const chunkSize = 30;
+        let offset = 0;
+
+        const sendChunk = () => {
+          if (cancelled) return;
+          try {
+            if (offset < content.length) {
+              const endOffset = Math.min(offset + chunkSize, content.length);
+              const chunk = content.slice(offset, endOffset);
+
+              const tokenEvent = `data: ${JSON.stringify({
+                type: "token",
+                content: chunk,
+                requestId: streamId,
+                timestamp: Date.now(),
+                offset
+              })}\n\n`;
+              controller.enqueue(encoder.encode(tokenEvent));
+
+              offset = endOffset;
+              timerId = setTimeout(sendChunk, 80);
+            } else {
+              const doneEvent = `event: done\ndata: ${JSON.stringify({
+                requestId: streamId,
+                success: true,
+                totalTokens: content.length,
+                source: 'fast-agent'
+              })}\n\n`;
+              controller.enqueue(encoder.encode(doneEvent));
+              controller.close();
+            }
+          } catch (error) {
+            const errorEvent = `event: error\ndata: ${JSON.stringify({
+              requestId: streamId,
+              message: error instanceof Error ? error.message : 'Streaming error',
+              source: 'fast-agent'
+            })}\n\n`;
+            controller.enqueue(encoder.encode(errorEvent));
+            controller.close();
+          }
+        };
+
+        timerId = setTimeout(sendChunk, 200);
+      },
+      cancel() {
+        cancelled = true;
+        if (timerId !== undefined) clearTimeout(timerId);
+      }
+    });
+  }
+
+  /**
+   * Format Fast-Agent response for API consumption
+   */
+  formatResponse(fastAgentResponse: FastAgentResponse, requestId?: string) {
+    const response: any = {
+      success: fastAgentResponse.success,
+      data: {
+        content: fastAgentResponse.content || '',
+        usage: {
+          promptTokens: 0,
+          // Note: These are character counts, not actual token counts
+          // Fast-Agent doesn't provide token usage, so we use character estimates
+          completionTokens: fastAgentResponse.content?.length || 0,
+          totalTokens: fastAgentResponse.content?.length || 0
+        },
+        model: 'fast-agent',
+        provider: 'fast-agent'
+      },
+      timestamp: new Date().toISOString(),
+      source: 'fast-agent'
+    };
+
+    // Add tool calls if present
+    if (fastAgentResponse.toolCalls?.length) {
+      response.data.toolCalls = fastAgentResponse.toolCalls;
+    }
+
+    // Add file operations if present
+    if (fastAgentResponse.files?.length) {
+      response.data.files = fastAgentResponse.files;
+    }
+
+    // Add chained agents if present
+    if (fastAgentResponse.chainedAgents?.length) {
+      response.data.chainedAgents = fastAgentResponse.chainedAgents;
+    }
+
+    // Propagate error and fallback metadata on failure
+    if (!fastAgentResponse.success) {
+      response.error = fastAgentResponse.error || 'Fast-Agent request failed';
+      if (fastAgentResponse.fallbackToOriginal !== undefined) {
+        response.fallbackToOriginal = fastAgentResponse.fallbackToOriginal;
+      }
+    }
+
+    return response;
   }
 }
 

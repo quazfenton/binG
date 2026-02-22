@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authService } from '@/lib/auth/auth-service';
+import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,6 +13,13 @@ export async function POST(request: NextRequest) {
         { success: false, error: 'Email and password are required' },
         { status: 400 }
       );
+    }
+
+    // Rate limiting: Check before processing (prevent spam registrations)
+    // Rate limit by IP address, not email, to prevent bypass with different emails
+    const rateLimitResult = rateLimitMiddleware(request, 'register');
+    if (!rateLimitResult.success && rateLimitResult.response) {
+      return rateLimitResult.response;
     }
 
     // Get client info for session
@@ -31,7 +39,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Set session cookie
+    // Check if email verification is required
+    if (result.requiresVerification) {
+      return NextResponse.json({
+        success: true,
+        requiresVerification: true,
+        message: result.message || 'Registration successful! Please check your email to verify your account.',
+        user: result.user
+      });
+    }
+
+    // Set session cookie (for backward compatibility or if verification not required)
     const response = NextResponse.json({
       success: true,
       user: result.user,

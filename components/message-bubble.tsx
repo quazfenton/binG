@@ -11,6 +11,7 @@ import { useEnhancedStreamingDisplay } from "@/hooks/use-enhanced-streaming-disp
 import { useResponsiveLayout, calculateDynamicWidth, getOverflowStrategy } from "@/hooks/use-responsive-layout"
 import { analyzeMessageContent, getContentBasedStyling, shouldUseCompactLayout } from "@/lib/message-content-analyzer"
 import { useTouchHandler, useKeyboardHandler } from "@/hooks/use-touch-handler"
+import IntegrationAuthPrompt from "@/components/integrations/IntegrationAuthPrompt"
 
 interface MessageBubbleProps {
   message: Message
@@ -20,7 +21,57 @@ interface MessageBubbleProps {
   maxWidth?: number
   responsive?: boolean
   overflow?: 'wrap' | 'scroll' | 'ellipsis'
+  onAuthPromptDismiss?: () => void
+  userId?: string
 }
+
+const inferProviderFromTool = (toolName?: string): string => {
+  if (!toolName) return 'unknown';
+  const normalized = toolName.toLowerCase();
+  if (normalized.startsWith('gmail.') || normalized.startsWith('google')) return 'google';
+  if (normalized.startsWith('github.')) return 'github';
+  if (normalized.startsWith('slack.')) return 'slack';
+  if (normalized.startsWith('notion.')) return 'notion';
+  if (normalized.startsWith('discord.')) return 'discord';
+  if (normalized.startsWith('twitter.') || normalized.startsWith('x.')) return 'twitter';
+  if (normalized.startsWith('spotify.')) return 'spotify';
+  if (normalized.startsWith('twilio.')) return 'twilio';
+  return normalized.split('.')[0] || 'unknown';
+};
+
+/**
+ * Get authorization URL for provider, mirroring backend routing logic
+ * Routes Arcade/Nango providers to their respective endpoints
+ */
+const getAuthUrlForProvider = (provider: string): string => {
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+  
+  // Normalize provider to lowercase for comparison
+  const normalizedProvider = provider.toLowerCase();
+
+  // Arcade providers (Google ecosystem, Exa, Twilio, Spotify, etc.)
+  const arcadeProviders = [
+    'google', 'gmail', 'googledocs', 'googlesheets',
+    'googlecalendar', 'googledrive', 'googlemaps',
+    'exa', 'twilio', 'spotify', 'vercel', 'railway'
+  ];
+
+  // Nango providers (GitHub, Slack, Discord, etc.)
+  const nangoProviders = [
+    'github', 'slack', 'discord', 'twitter', 'reddit'
+  ];
+
+  if (arcadeProviders.includes(normalizedProvider)) {
+    return `${baseUrl}/api/auth/arcade/authorize?provider=${encodeURIComponent(provider)}&redirect=1`;
+  }
+
+  if (nangoProviders.includes(normalizedProvider)) {
+    return `${baseUrl}/api/auth/nango/authorize?provider=${encodeURIComponent(provider)}&redirect=1`;
+  }
+  
+  // Default to standard OAuth flow
+  return `${baseUrl}/api/auth/oauth/initiate?provider=${encodeURIComponent(provider)}`;
+};
 
 export default function MessageBubble({ 
   message, 
@@ -29,28 +80,27 @@ export default function MessageBubble({
   onStreamingComplete,
   maxWidth,
   responsive = true,
-  overflow
+  overflow,
+  onAuthPromptDismiss,
+  userId
 }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const [showReasoning, setShowReasoning] = useState(false)
   const [showStreamingControls, setShowStreamingControls] = useState(false)
+  const [authDismissed, setAuthDismissed] = useState(false)
 
   const isUser = message.role === "user"
   
-  // Get responsive layout information
   const layout = useResponsiveLayout()
   
-  // Analyze message content for responsive adjustments
   const contentAnalysis = useMemo(() => {
     const content = isUser ? message.content : (streamingContent || message.content)
     return analyzeMessageContent(content)
   }, [message.content, streamingContent, isUser])
   
-  // Calculate dynamic styling based on content and screen size
   const dynamicStyles = useMemo(() => {
     const baseStyles = getContentBasedStyling(contentAnalysis, layout.isMobile)
     
-    // Calculate dynamic width
     const dynamicWidth = responsive 
       ? calculateDynamicWidth(
           layout.screenWidth, 
@@ -60,7 +110,6 @@ export default function MessageBubble({
         )
       : maxWidth || 600
     
-    // Determine overflow strategy
     const overflowStrategy = overflow || getOverflowStrategy(
       message.content.length,
       contentAnalysis.hasCodeBlocks,
@@ -78,20 +127,18 @@ export default function MessageBubble({
     }
   }, [contentAnalysis, layout, responsive, maxWidth, overflow, message.content])
   
-  // Determine if we should use compact layout
   const useCompactLayout = shouldUseCompactLayout(
     contentAnalysis,
     layout.screenWidth,
     layout.screenHeight
   )
   
-  // Use enhanced streaming display for non-user messages
   const streamingDisplay = useEnhancedStreamingDisplay({
     messageId: message.id,
     content: streamingContent || message.content,
     isStreaming: isStreaming && !isUser,
     onStreamingComplete,
-    animationSpeed: 3, // Smooth but not too slow
+    animationSpeed: 3,
     enableProgressIndicator: true
   })
 
@@ -102,7 +149,6 @@ export default function MessageBubble({
     setTimeout(() => setCopied(false), 2000)
   }
 
-  // Touch and keyboard handlers for mobile interaction
   const { touchHandlers } = useTouchHandler({
     onTap: handleCopy,
     onLongPress: () => {
@@ -114,9 +160,7 @@ export default function MessageBubble({
   
   const { handleKeyDown } = useKeyboardHandler()
 
-  // Parse reasoning/thinking content from models like DeepSeek R1
   const parseReasoningContent = (content: string) => {
-    // Look for thinking tags or reasoning patterns
     const thinkingRegex = /<think>([\s\S]*?)<\/think>/g
     const reasoningRegex = /\*\*Reasoning:\*\*([\s\S]*?)(?=\*\*|$)/g
     const thoughtRegex = /\*\*Thought:\*\*([\s\S]*?)(?=\*\*|$)/g
@@ -124,20 +168,17 @@ export default function MessageBubble({
     let reasoning = ""
     let mainContent = content
     
-    // Extract thinking content
     let match
     while ((match = thinkingRegex.exec(content)) !== null) {
       reasoning += match[1].trim() + "\n\n"
       mainContent = mainContent.replace(match[0], "")
     }
     
-    // Extract reasoning sections
     while ((match = reasoningRegex.exec(content)) !== null) {
       reasoning += "**Reasoning:**" + match[1].trim() + "\n\n"
       mainContent = mainContent.replace(match[0], "")
     }
     
-    // Extract thought sections
     while ((match = thoughtRegex.exec(content)) !== null) {
       reasoning += "**Thought:**" + match[1].trim() + "\n\n"
       mainContent = mainContent.replace(match[0], "")
@@ -149,16 +190,61 @@ export default function MessageBubble({
     }
   }
 
-  // Get the content to display based on streaming state
+  // Check for auth_required in message metadata
+  const authInfo = useMemo(() => {
+    if ((message as any).metadata?.requiresAuth) {
+      const toolName = (message as any).metadata.toolName || 'unknown';
+      const provider = (message as any).metadata.provider || inferProviderFromTool(toolName);
+      // Use provided authUrl or generate correct one based on provider routing
+      const authUrl = (message as any).metadata.authUrl || getAuthUrlForProvider(provider);
+      return {
+        toolName,
+        provider,
+        authUrl
+      }
+    }
+    return null
+  }, [message])
+
+  // Strip AUTH_REQUIRED sentinel from content if auth was dismissed
+  const displayContent = authInfo && authDismissed && !isUser
+    ? message.content.replace(/AUTH_REQUIRED:[\s\S]*?(?=\n\n|$)/, '')
+    : message.content;
+
   const getContentToDisplay = () => {
     if (isUser) return message.content
+    // Use displayContent if auth was dismissed (strips AUTH_REQUIRED sentinel)
+    if (authInfo && authDismissed) {
+      return displayContent;
+    }
     return streamingDisplay.displayContent || message.content
   }
 
   const { reasoning, mainContent } = parseReasoningContent(getContentToDisplay())
 
+  const handleAuthDismiss = () => {
+    setAuthDismissed(true)
+    onAuthPromptDismiss?.()
+  }
+
+  // If auth is required and not dismissed, show auth prompt
+  if (authInfo && !authDismissed && !isUser) {
+    return (
+      <IntegrationAuthPrompt
+        toolName={authInfo.toolName}
+        provider={authInfo.provider}
+        authUrl={authInfo.authUrl}
+        onDismiss={handleAuthDismiss}
+        onAuthorized={() => {
+          setAuthDismissed(true)
+          onAuthPromptDismiss?.()
+        }}
+      />
+    )
+  }
+
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} ${useCompactLayout ? 'mb-3' : 'mb-6'} group`}>
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"} ${useCompactLayout ? 'mb-3' : 'mb-6'} group w-full`}>
       <div
         className={`
           message-bubble-responsive relative transition-all duration-200
@@ -187,18 +273,21 @@ export default function MessageBubble({
         role="article"
         aria-label={`${isUser ? 'User' : 'Assistant'} message`}
       >
-        {/* Loading indicator for initial streaming */}
-        {streamingDisplay.showLoadingIndicator && (
-          <div className="flex items-center gap-2 text-white/60">
+        {/* Thinking indicator - shown at start of streaming */}
+        {isStreaming && streamingDisplay.showLoadingIndicator && (
+          <div className="flex items-center gap-2 text-white/60 mb-2">
             <Loader2 className="w-4 h-4 animate-spin" />
-            <span className="text-sm">Thinking...</span>
+            <span className="text-sm animate-pulse">Thinking...</span>
           </div>
         )}
 
+        {/* Streaming cursor - shown while receiving content */}
+        {isStreaming && streamingDisplay.isStreaming && streamingDisplay.isAnimating && !streamingDisplay.showLoadingIndicator && (
+          <span className="inline-block w-2 h-5 bg-gradient-to-t from-purple-400 to-purple-300 animate-typing-cursor ml-1 rounded-sm" />
+        )}
+
         {/* Main content */}
-        {!streamingDisplay.showLoadingIndicator && (
-          <>
-            <ReactMarkdown
+        <ReactMarkdown
               className={`prose prose-invert transition-opacity duration-200 ${
                 useCompactLayout ? 'prose-sm' : 'prose-base'
               } ${layout.isMobile ? 'prose-sm' : 'prose-base'}`}
@@ -234,7 +323,6 @@ export default function MessageBubble({
                     </code>
                   );
                 },
-                // Responsive components for better mobile formatting
                 p: ({ children }) => (
                   <p className={`${useCompactLayout ? 'mb-2' : 'mb-4'} leading-relaxed`}>
                     {children}
@@ -269,7 +357,6 @@ export default function MessageBubble({
                     {children}
                   </blockquote>
                 ),
-                // Handle links with proper overflow
                 a: ({ children, href, ...props }) => (
                   <a 
                     href={href} 
@@ -287,23 +374,16 @@ export default function MessageBubble({
             >
               {isUser ? message.content : mainContent}
             </ReactMarkdown>
-            
-            {/* Enhanced streaming cursor with smooth animation */}
-            {streamingDisplay.isStreaming && streamingDisplay.isAnimating && (
-              <span className="inline-block w-2 h-5 bg-gradient-to-t from-purple-400 to-purple-300 animate-typing-cursor ml-1 rounded-sm" />
-            )}
 
-            {/* Streaming progress indicator */}
             {streamingDisplay.isStreaming && streamingDisplay.progress > 0 && (
               <div className="absolute -bottom-1 left-0 right-0 h-0.5 bg-white/10 rounded-full overflow-hidden">
-                <div 
+                <div
                   className="h-full bg-gradient-to-r from-purple-500 to-purple-400 transition-all duration-300 ease-out"
                   style={{ width: `${streamingDisplay.progress}%` }}
                 />
               </div>
             )}
 
-            {/* Streaming controls (visible on hover during streaming) - responsive */}
             {streamingDisplay.isStreaming && showStreamingControls && (
               <div className={`absolute -top-2 -right-2 flex gap-1 bg-black/80 backdrop-blur-sm border border-white/20 rounded-lg ${
                 layout.isMobile ? 'p-1.5' : 'p-1'
@@ -359,77 +439,73 @@ export default function MessageBubble({
               </div>
             )}
 
-        {/* Reasoning section for AI responses - responsive */}
-        {!isUser && reasoning && (
-          <div className={`${useCompactLayout ? 'mt-2' : 'mt-4'} border-t border-white/10 ${useCompactLayout ? 'pt-2' : 'pt-3'}`}>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowReasoning(!showReasoning)}
-              className={`flex items-center gap-2 text-white/60 hover:text-white/80 ${useCompactLayout ? 'mb-1' : 'mb-2'} ${
-                layout.isMobile ? 'text-xs h-8' : 'text-xs'
-              }`}
-              style={{
-                minHeight: layout.isMobile ? dynamicStyles.touchTargetSize : 'auto'
-              }}
-            >
-              <Brain className={`${layout.isMobile ? 'w-4 h-4' : 'w-3 h-3'}`} />
-              {showReasoning ? "Hide" : "Show"} Reasoning
-              {showReasoning ? (
-                <ChevronUp className={`${layout.isMobile ? 'w-4 h-4' : 'w-3 h-3'}`} />
-              ) : (
-                <ChevronDown className={`${layout.isMobile ? 'w-4 h-4' : 'w-3 h-3'}`} />
-              )}
-            </Button>
-            
-            {showReasoning && (
-              <div className={`bg-black/20 rounded-lg border border-white/10 ${
-                layout.isMobile ? 'p-2' : 'p-3'
-              }`}>
-                <ReactMarkdown
-                  className={`text-white/70 prose prose-invert max-w-none ${
-                    layout.isMobile ? 'prose-xs text-xs' : 'prose-sm text-sm'
+            {!isUser && reasoning && (
+              <div className={`${useCompactLayout ? 'mt-2' : 'mt-4'} border-t border-white/10 ${useCompactLayout ? 'pt-2' : 'pt-3'}`}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowReasoning(!showReasoning)}
+                  className={`flex items-center gap-2 text-white/60 hover:text-white/80 ${useCompactLayout ? 'mb-1' : 'mb-2'} ${
+                    layout.isMobile ? 'text-xs h-8' : 'text-xs'
                   }`}
-                  components={{
-                    code: ({ node, inline, className, children, ...props }) => {
-                      const match = /language-(\w+)/.exec(className || "");
-                      return node && !node.properties.inline && match ? (
-                        <SyntaxHighlighter
-                          style={vscDarkPlus as any}
-                          language={match[1]}
-                          PreTag="div"
-                          customStyle={{
-                            fontSize: layout.isMobile ? '10px' : '12px',
-                            padding: layout.isMobile ? '6px' : '8px',
-                            borderRadius: '4px',
-                            margin: '4px 0'
-                          }}
-                        >
-                          {String(children).replace(/\n$/, "")}
-                        </SyntaxHighlighter>
-                      ) : (
-                        <code className={`${className} bg-white/10 px-1 py-0.5 rounded text-xs`} {...props}>
-                          {children}
-                        </code>
-                      );
-                    },
-                    p: ({ children }) => (
-                      <p className={`${useCompactLayout ? 'mb-1' : 'mb-2'} ${layout.isMobile ? 'text-xs' : 'text-sm'}`}>
-                        {children}
-                      </p>
-                    ),
+                  style={{
+                    minHeight: layout.isMobile ? dynamicStyles.touchTargetSize : 'auto'
                   }}
                 >
-                  {reasoning}
-                </ReactMarkdown>
+                  <Brain className={`${layout.isMobile ? 'w-4 h-4' : 'w-3 h-3'}`} />
+                  {showReasoning ? "Hide" : "Show"} Reasoning
+                  {showReasoning ? (
+                    <ChevronUp className={`${layout.isMobile ? 'w-4 h-4' : 'w-3 h-3'}`} />
+                  ) : (
+                    <ChevronDown className={`${layout.isMobile ? 'w-4 h-4' : 'w-3 h-3'}`} />
+                  )}
+                </Button>
+                
+                {showReasoning && (
+                  <div className={`bg-black/20 rounded-lg border border-white/10 ${
+                    layout.isMobile ? 'p-2' : 'p-3'
+                  }`}>
+                    <ReactMarkdown
+                      className={`text-white/70 prose prose-invert max-w-none ${
+                        layout.isMobile ? 'prose-xs text-xs' : 'prose-sm text-sm'
+                      }`}
+                      components={{
+                        code: ({ node, inline, className, children, ...props }) => {
+                          const match = /language-(\w+)/.exec(className || "");
+                          return node && !node.properties.inline && match ? (
+                            <SyntaxHighlighter
+                              style={vscDarkPlus as any}
+                              language={match[1]}
+                              PreTag="div"
+                              customStyle={{
+                                fontSize: layout.isMobile ? '10px' : '12px',
+                                padding: layout.isMobile ? '6px' : '8px',
+                                borderRadius: '4px',
+                                margin: '4px 0'
+                              }}
+                            >
+                              {String(children).replace(/\n$/, "")}
+                            </SyntaxHighlighter>
+                          ) : (
+                            <code className={`${className} bg-white/10 px-1 py-0.5 rounded text-xs`} {...props}>
+                              {children}
+                            </code>
+                          );
+                        },
+                        p: ({ children }) => (
+                          <p className={`${useCompactLayout ? 'mb-1' : 'mb-2'} ${layout.isMobile ? 'text-xs' : 'text-sm'}`}>
+                            {children}
+                          </p>
+                        ),
+                      }}
+                    >
+                      {reasoning}
+                    </ReactMarkdown>
+                  </div>
+                )}
               </div>
             )}
-          </div>
-        )}
-          </>
-        )}
 
-        {/* Copy button - responsive sizing */}
         <Button
           variant="ghost"
           size="icon"
