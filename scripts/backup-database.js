@@ -65,13 +65,13 @@ function log(level, message) {
  */
 function encryptFile(inputPath, outputPath, key) {
   const iv = crypto.randomBytes(16);
-  
-  // SECURITY: Derive a fixed 32-byte key for AES-256 from the provided key material
-  // and use createCipheriv (not deprecated createCipher) with the generated IV
+
+  // SECURITY: Use scrypt for key derivation to protect against brute-force attacks
+  // scrypt is a proper KDF that is computationally expensive and memory-hard
   const keyBuffer = typeof key === 'string'
-    ? crypto.createHash('sha256').update(key).digest()
+    ? crypto.scryptSync(key, 'bing-backup-salt', 32)
     : key;
-  
+
   const cipher = crypto.createCipheriv('aes-256-gcm', keyBuffer, iv);
 
   const input = fs.readFileSync(inputPath);

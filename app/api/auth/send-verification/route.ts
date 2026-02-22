@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
-import { rateLimitMiddleware, getRateLimitHeaders } from '@/lib/middleware/rate-limiter';
+import { rateLimitMiddleware } from '@/lib/middleware/rate-limiter';
 
 export async function POST(request: NextRequest) {
   try {
@@ -63,13 +63,11 @@ export async function POST(request: NextRequest) {
 
     const response = NextResponse.json({
       success: true,
-      message: 'Verification email sent successfully',
+      message: 'If the email exists, a verification link has been sent',
     });
 
-    // Add rate limit headers
-    const config = { windowMs: 3600000, maxRequests: 3 }; // Match sendVerification config
-    const headers = getRateLimitHeaders(config.maxRequests, 0, config.windowMs);
-    Object.entries(headers).forEach(([key, value]) => {
+    // Add accurate rate limit headers from the middleware result
+    Object.entries(rateLimitResult.headers).forEach(([key, value]) => {
       response.headers.set(key, value);
     });
 

@@ -149,20 +149,18 @@ export class MCPClient extends EventEmitter {
    * Disconnect from MCP server
    */
   async disconnect(): Promise<void> {
-    if (!this.isConnected()) {
-      return
-    }
-
     try {
-      // Send shutdown notification
-      await this.notify('notifications/initialized')
-      
+      // Send shutdown notification only if we are currently connected
+      if (this.isConnected()) {
+        await this.notify('notifications/initialized')
+      }
+
       // Close process if stdio
       if (this.process) {
         this.process.kill()
         this.process = undefined
       }
-      
+
       // Clear pending requests
       for (const [id, request] of this.pendingRequests.entries()) {
         if (request.timeout) {
@@ -355,16 +353,24 @@ export class MCPClient extends EventEmitter {
       this.process.on('close', (code) => {
         if (this.isConnected()) {
           this.updateState('disconnected')
-          this.emitEvent({ 
-            type: 'disconnected', 
+          this.emitEvent({
+            type: 'disconnected',
             data: { code },
             timestamp: new Date()
           })
         }
       })
 
-      // Give process time to start
-      setTimeout(resolve, 100)
+      // Resolve on 'spawn' event (process successfully started) or fall back to timeout
+      const spawnTimeout = setTimeout(() => {
+        this.process?.removeAllListeners('spawn')
+        resolve()
+      }, 100)
+
+      this.process.on('spawn', () => {
+        clearTimeout(spawnTimeout)
+        resolve()
+      })
     })
   }
 

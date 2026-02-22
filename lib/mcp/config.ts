@@ -46,11 +46,21 @@ export function parseMCPServerConfigs(): MCPServerConfig[] {
       const serverId = key
         .slice(mcpPrefix.length, -commandSuffix.length)
         .toLowerCase()
-      
+
       const argsEnv = process.env[`MCP_${serverId.toUpperCase()}_ARGS`]
       const enabledEnv = process.env[`MCP_${serverId.toUpperCase()}_ENABLED`]
       const timeoutEnv = process.env[`MCP_${serverId.toUpperCase()}_TIMEOUT`]
-      
+
+      // Parse args with error handling to prevent crash on malformed JSON
+      let args: any[] = []
+      if (argsEnv) {
+        try {
+          args = JSON.parse(argsEnv)
+        } catch (error) {
+          console.warn(`[MCP] Invalid JSON in MCP_${serverId.toUpperCase()}_ARGS: ${argsEnv}. Using empty args.`)
+        }
+      }
+
       const config: MCPServerConfig = {
         id: serverId,
         name: serverId,
@@ -59,10 +69,10 @@ export function parseMCPServerConfigs(): MCPServerConfig[] {
         transport: {
           type: 'stdio',
           command: value,
-          args: argsEnv ? JSON.parse(argsEnv) : [],
+          args,
         },
       }
-      
+
       configs.push(config)
     }
   }
