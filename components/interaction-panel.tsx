@@ -67,6 +67,7 @@ import Cloud from "lucide-react/dist/esm/icons/cloud";
 import Server from "lucide-react/dist/esm/icons/server";
 import Scale from "lucide-react/dist/esm/icons/scale";
 import Terminal from "lucide-react/dist/esm/icons/terminal";
+import Link from "lucide-react/dist/esm/icons/link";
 import type { LLMProvider } from "../lib/api/llm-providers";
 import { templateCache, cacheKey } from "../lib/cache";
 import MultiModelComparison from "./multi-model-comparison";
@@ -89,9 +90,20 @@ import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin
 import { processResponse } from "../lib/mode-manager";
 import { secureRandom, generateSecureId } from "../lib/utils";
 import DevOpsCommandCenterPlugin from "./plugins/devops-command-center-plugin";
+import AIPromptLibraryPlugin from "./plugins/ai-prompt-library-plugin";
+import APIPlaygroundProPlugin from "./plugins/api-playground-pro-plugin";
+import CloudStorageProPlugin from "./plugins/cloud-storage-pro-plugin";
+import CodeSandboxPlugin from "./plugins/code-sandbox-plugin";
+import CreativeStudioPlugin from "./plugins/creative-studio-plugin";
+import DataScienceWorkbenchPlugin from "./plugins/data-science-workbench-plugin";
+import GitHubExplorerAdvancedPlugin from "./plugins/github-explorer-advanced-plugin";
+import HuggingFaceSpacesProPlugin from "./plugins/huggingface-spaces-pro-plugin";
+import JsonValidatorPlugin from "./plugins/json-validator-plugin";
+import UrlUtilitiesPlugin from "./plugins/url-utilities-plugin";
+import WikiKnowledgeBasePlugin from "./plugins/wiki-knowledge-base-plugin";
 
-// Define available plugins for PluginManager
-const availablePlugins: Plugin[] = [
+// Pop-out plugin windows for Plugins tab
+const popOutPlugins: Plugin[] = [
   {
     id: "huggingface-spaces",
     name: "Hugging Face Spaces",
@@ -191,126 +203,6 @@ const availablePlugins: Plugin[] = [
     category: "developer",
     defaultSize: { width: 1000, height: 800 },
     minSize: { width: 800, height: 600 },
-  },
-];
-
-// Plugin modules for Extras tab
-const pluginModules = [
-  {
-    id: "ai-tutor",
-    name: "AI Tutor",
-    description: "Interactive learning assistant with step-by-step explanations",
-    icon: Brain,
-    color: "text-purple-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Act as an expert tutor. Break down complex topics into digestible steps with examples and practice questions. Topic: ",
-      ),
-  },
-  {
-    id: "code-reviewer",
-    name: "Code Reviewer",
-    description: "Professional code review with best practices and optimizations",
-    icon: Code,
-    color: "text-blue-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Review this code for best practices, performance, security, and maintainability. Provide specific suggestions:\n\n```\n// Paste your code here\n```",
-      ),
-  },
-  {
-    id: "data-analyst",
-    name: "Data Analyst",
-    description: "Analyze data patterns and generate insights with visualizations",
-    icon: Database,
-    color: "text-green-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Analyze this data and provide insights, patterns, and recommendations. Create visualizations where helpful:\n\n",
-      ),
-  },
-  {
-    id: "creative-writer",
-    name: "Creative Writer",
-    description: "Craft engaging stories, scripts, and creative content",
-    icon: FileText,
-    color: "text-pink-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Write a compelling story with vivid characters, engaging dialogue, and descriptive settings. Genre: ",
-      ),
-  },
-  {
-    id: "math-solver",
-    name: "Math Solver",
-    description: "Solve mathematical problems with step-by-step solutions",
-    icon: Calculator,
-    color: "text-orange-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Solve this math problem step by step, explaining each step clearly:\n\n",
-      ),
-  },
-  {
-    id: "travel-planner",
-    name: "Travel Planner",
-    description: "Plan detailed itineraries and travel recommendations",
-    icon: Globe,
-    color: "text-cyan-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Create a detailed travel itinerary for ",
-      ),
-  },
-  {
-    id: "legal-assistant",
-    name: "Legal Assistant",
-    description: "Generate legal documents and analyze existing ones",
-    icon: Scale,
-    color: "text-indigo-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Draft a legal document or analyze this legal text: ",
-      ),
-  },
-  {
-    id: "image-generator",
-    name: "HF Image Generator",
-    description: "Generate images using Hugging Face Spaces models",
-    icon: ImageIcon,
-    color: "text-yellow-400",
-    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
-      if (setPluginToOpen && onActiveTabChange) {
-        setPluginToOpen("huggingface-spaces");
-        onActiveTabChange("integrations");
-      }
-    },
-  },
-  {
-    id: "github-explorer",
-    name: "GitHub Explorer",
-    description: "Browse trending repositories and analyze code",
-    icon: GitBranch,
-    color: "text-gray-400",
-    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
-      if (setPluginToOpen && onActiveTabChange) {
-        setPluginToOpen("github-explorer");
-        onActiveTabChange("integrations");
-      }
-    },
-  },
-  {
-    id: "cloud-storage",
-    name: "Cloud Storage 5GB",
-    description: "Access encrypted files from cloud providers",
-    icon: Cloud,
-    color: "text-sky-400",
-    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
-      if (setPluginToOpen && onActiveTabChange) {
-        setPluginToOpen("cloud-storage");
-        onActiveTabChange("integrations");
-      }
-    },
   },
 ];
 
@@ -610,6 +502,128 @@ export default function InteractionPanel({
       defaultSize: { width: 800, height: 600 },
       minSize: { width: 600, height: 400 },
     },
+    {
+      id: "devops-command-center",
+      name: "DevOps Command Center",
+      description: "Manage deployments and infrastructure",
+      icon: Server,
+      component: DevOpsCommandCenterPlugin,
+      category: "developer",
+      defaultSize: { width: 1000, height: 800 },
+      minSize: { width: 800, height: 600 },
+    },
+    // Pro versions with advanced features
+    {
+      id: "cloud-storage-pro",
+      name: "Cloud Storage Pro",
+      description: "Advanced cloud storage with 10GB and multi-provider sync",
+      icon: Cloud,
+      component: CloudStorageProPlugin,
+      category: "utility",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "huggingface-spaces-pro",
+      name: "HF Image Generator Pro",
+      description: "Advanced image generation with multiple models and upscaling",
+      icon: ImageIcon,
+      component: HuggingFaceSpacesProPlugin,
+      category: "ai",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "api-playground-pro",
+      name: "API Tester Pro",
+      description: "Advanced API testing with collections and automation",
+      icon: Globe,
+      component: APIPlaygroundProPlugin,
+      category: "developer",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "github-explorer-advanced",
+      name: "GitHub Explorer Pro",
+      description: "Advanced GitHub analytics and code search",
+      icon: GitBranch,
+      component: GitHubExplorerAdvancedPlugin,
+      category: "code",
+      defaultSize: { width: 1000, height: 800 },
+      minSize: { width: 800, height: 600 },
+    },
+    // Utility plugins
+    {
+      id: "code-sandbox",
+      name: "Code Sandbox",
+      description: "Live code execution and testing environment",
+      icon: Code,
+      component: CodeSandboxPlugin,
+      category: "code",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "creative-studio",
+      name: "Creative Studio",
+      description: "All-in-one creative tools for design and content",
+      icon: Palette,
+      component: CreativeStudioPlugin,
+      category: "design",
+      defaultSize: { width: 1000, height: 800 },
+      minSize: { width: 800, height: 600 },
+    },
+    {
+      id: "data-science-workbench",
+      name: "Data Science Workbench",
+      description: "Advanced data analysis and ML model building",
+      icon: Database,
+      component: DataScienceWorkbenchPlugin,
+      category: "data",
+      defaultSize: { width: 1100, height: 800 },
+      minSize: { width: 900, height: 600 },
+    },
+    {
+      id: "json-validator",
+      name: "JSON Validator",
+      description: "Validate and format JSON data",
+      icon: CheckCircle,
+      component: JsonValidatorPlugin,
+      category: "utility",
+      defaultSize: { width: 700, height: 600 },
+      minSize: { width: 500, height: 400 },
+    },
+    {
+      id: "url-utilities",
+      name: "URL Utilities",
+      description: "URL shortening, parsing, and validation tools",
+      icon: Link,
+      component: UrlUtilitiesPlugin,
+      category: "utility",
+      defaultSize: { width: 600, height: 500 },
+      minSize: { width: 400, height: 350 },
+    },
+    {
+      id: "wiki-knowledge-base",
+      name: "Wiki Knowledge Base",
+      description: "Search and browse Wikipedia knowledge",
+      icon: FileText,
+      component: WikiKnowledgeBasePlugin,
+      category: "utility",
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 450 },
+    },
+    {
+      id: "ai-prompt-library",
+      name: "AI Prompt Library",
+      description: "Browse and use pre-made AI prompts",
+      icon: Brain,
+      component: AIPromptLibraryPlugin,
+      category: "ai",
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 450 },
+    },
   ];
 
   const [showFileSelector, setShowFileSelector] = useState(false);
@@ -655,8 +669,8 @@ export default function InteractionPanel({
     },
   ];
 
-  // Plugin modules with randomization
-  const pluginModules = useMemo(() => {
+  // Extra modules for Extras tab (prompt templates, not full plugins)
+  const extraModules = useMemo(() => {
     const modules = [
       {
         id: "ai-tutor",
@@ -1559,80 +1573,40 @@ export default function InteractionPanel({
                 <Card className="bg-black/40 border-white/10">
                   <CardContent className="pt-6">
                     <div className="space-y-4">
-                      {/* Quick Prompt Templates Section */}
+                      {/* Extras - Quick Prompt Templates */}
                       <div className="text-center mb-4">
                         <h3 className="font-medium text-white mb-2">
-                          Quick Prompt Templates
+                          Extras
                         </h3>
                         <p className="text-xs text-white/60">
                           Click to insert a specialized prompt into the chat
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto mb-6">
-                        {pluginModules.map((plugin) => {
-                          const IconComponent = plugin.icon;
+                      <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto">
+                        {extraModules.map((extra) => {
+                          const IconComponent = extra.icon;
                           return (
                             <button
-                              key={plugin.id}
+                              key={extra.id}
                               onClick={() => {
-                                plugin.action(setInput, onActiveTabChange, setPluginToOpen);
+                                extra.action(setInput, onActiveTabChange, setPluginToOpen);
                                 toast.success(
-                                  `${plugin.name} prompt loaded! Check the chat input.`,
+                                  `${extra.name} prompt loaded! Check the chat input.`,
                                 );
                               }}
                               className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
                             >
                               <div className="flex items-center gap-2 w-full">
                                 <IconComponent
-                                  className={`h-4 w-4 ${plugin.color} group-hover:scale-110 transition-transform`}
+                                  className={`h-4 w-4 ${extra.color} group-hover:scale-110 transition-transform`}
                                 />
                                 <span className="font-medium text-sm text-white truncate">
-                                  {plugin.name}
+                                  {extra.name}
                                 </span>
                               </div>
                               <p className="text-xs text-white/60 line-clamp-2 w-full">
-                                {plugin.description}
-                              </p>
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {/* Pop-out Plugin Windows Section */}
-                      <div className="text-center mb-4 pt-4 border-t border-white/10">
-                        <h3 className="font-medium text-white mb-2">
-                          Plugin Windows
-                        </h3>
-                        <p className="text-xs text-white/60">
-                          Click to open a plugin in a pop-out window
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
-                        {availablePlugins.map((plugin) => {
-                          const IconComponent = plugin.icon;
-                          return (
-                            <button
-                              key={plugin.id}
-                              onClick={() => {
-                                setPluginToOpen(plugin.id);
-                                toast.success(
-                                  `${plugin.name} window opened!`,
-                                );
-                              }}
-                              className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
-                            >
-                              <div className="flex items-center gap-2 w-full">
-                                <IconComponent
-                                  className={`h-4 w-4 ${plugin.category === 'ai' ? 'text-purple-400' : plugin.category === 'code' ? 'text-blue-400' : plugin.category === 'utility' ? 'text-green-400' : plugin.category === 'design' ? 'text-pink-400' : plugin.category === 'data' ? 'text-indigo-400' : plugin.category === 'media' ? 'text-yellow-400' : 'text-gray-400'} group-hover:scale-110 transition-transform`}
-                                />
-                                <span className="font-medium text-sm text-white truncate">
-                                  {plugin.name}
-                                </span>
-                              </div>
-                              <p className="text-xs text-white/60 line-clamp-2 w-full">
-                                {plugin.description}
+                                {extra.description}
                               </p>
                             </button>
                           );
@@ -1658,6 +1632,13 @@ export default function InteractionPanel({
                         <p className="text-xs text-white/60 mb-2">
                           Pop-out plugin windows for advanced functionality:
                         </p>
+                        {/* PluginManager for pop-out windows */}
+                        <PluginManager
+                          availablePlugins={availablePlugins}
+                          onPluginResult={handlePluginResult}
+                          openPluginId={pluginToOpen}
+                          onOpenComplete={() => setPluginToOpen(null)}
+                        />
                       </div>
                     </div>
                   </CardContent>
@@ -1685,13 +1666,6 @@ export default function InteractionPanel({
                 </Card>
               </TabsContent>
             </Tabs>
-            {/* PluginManager for pop-out windows - single instance outside Tabs */}
-            <PluginManager
-              availablePlugins={availablePlugins}
-              onPluginResult={handlePluginResult}
-              openPluginId={pluginToOpen}
-              onOpenComplete={() => setPluginToOpen(null)}
-            />
           )}
         </div>
       </div>

@@ -462,17 +462,18 @@ export default function TerminalPanel({
         if (tokenRes.ok) {
           const tokenData = await tokenRes.json();
           connectionToken = tokenData.connectionToken;
-        } else {
-          // Token endpoint failed, fall back to JWT
+        } else if (tokenRes.status === 404 || tokenRes.status === 405) {
+          // Endpoint doesn't support connection tokens - fall back to JWT for backward compatibility
           useJwtFallback = true;
         }
+        // For other errors (5xx), don't fall back to JWT to avoid exposing it in logs
       } catch (err) {
-        console.warn('[TerminalPanel] Failed to get connection token, falling back to JWT:', err);
-        useJwtFallback = true;
+        console.warn('[TerminalPanel] Failed to get connection token:', err);
+        // Network error - don't fall back to JWT
       }
 
       // Step 3: Connect SSE stream (this creates the PTY)
-      // Use connection token if available, otherwise fall back to JWT for backward compatibility
+      // Use connection token if available, otherwise fall back to JWT only for 404/405
       const tokenParam = connectionToken 
         ? `&token=${encodeURIComponent(connectionToken)}` 
         : useJwtFallback && token 
