@@ -233,7 +233,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
     if (text.includes('notion')) return 'notion';
     if (text.includes('discord')) return 'discord';
     // Match 'x' as the Twitter/X platform only via unambiguous signals: exact message, x.com domain, or explicit platform phrases.
-    if (text.includes('twitter') || text.includes('tweet') || text.includes('x.com') || text === 'x' || /(?:^|\s)(?:on x|to x|post x|use x|via x|from x|at x)(?:\s|$)/.test(text)) return 'twitter';
+    // Use word boundary \b to match phrases followed by punctuation (e.g., "post x." or "on x!")
+    if (text.includes('twitter') || text.includes('tweet') || text.includes('x.com') || text === 'x' || /(?:^|\s)(?:on x|to x|post x|use x|via x|from x|at x)\b/.test(text)) return 'twitter';
     if (text.includes('spotify')) return 'spotify';
     return null;
   };

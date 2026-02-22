@@ -191,10 +191,11 @@ function isDaytonaReadinessTimeoutError(err: unknown): boolean {
   if (!(err instanceof Error)) return false
   const anyErr = err as any
   const message = `${anyErr?.message ?? ''}`.toLowerCase()
+  // Only match specific readiness timeout errors, not generic timeouts
   return (
     message.includes('sandbox failed to become ready within the timeout period')
     || message.includes('failed to become ready')
-    || message.includes('timeout')
+    || message.includes('sandbox readiness timeout')
   )
 }
 

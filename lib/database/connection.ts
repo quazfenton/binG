@@ -23,6 +23,41 @@ const encryptionKey = (() => {
   return Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
 })();
 
+/**
+ * Create a mock database object for use during build or while migrations are pending
+ */
+function getMockDatabase(): Database.Database {
+  const mockDb: Partial<Database.Database> = {
+    prepare: () => {
+      return {
+        run: () => ({ lastInsertRowid: 1, changes: 1 }),
+        get: () => null,
+        all: () => [],
+        bind: () => null,
+        columns: () => [],
+        finalize: () => {},
+        iterate: () => [],
+        raw: () => []
+      } as any;
+    },
+    exec: () => mockDb as Database.Database,
+    pragma: () => {},
+    transaction: (fn: any) => fn,
+    close: () => {},
+    backup: () => Promise.resolve({ progress: () => {} }),
+    defaultSafeIntegers: () => mockDb as Database.Database,
+    register: () => mockDb as Database.Database,
+    loadExtension: () => mockDb as Database.Database,
+    serialize: () => Buffer.alloc(0),
+    table: () => null,
+    function: () => mockDb as Database.Database,
+    aggregate: () => mockDb as Database.Database,
+    unsafeMode: () => mockDb as Database.Database,
+  };
+
+  return mockDb as Database.Database;
+}
+
 // Initialize database
 let db: Database.Database | null = null;
 
@@ -35,37 +70,7 @@ export function getDatabase(): Database.Database {
       // Return a mock database object during build time
       // This allows the build to proceed without requiring the native module
       console.log('Skipping database initialization during build');
-
-      // Create a mock database object that implements the necessary methods
-      const mockDb: Partial<Database.Database> = {
-        prepare: () => {
-          return {
-            run: () => ({ lastInsertRowid: 1, changes: 1 }),
-            get: () => null,
-            all: () => [],
-            bind: () => null,
-            columns: () => [],
-            finalize: () => {},
-            iterate: () => [],
-            raw: () => []
-          } as any;
-        },
-        exec: () => mockDb as Database.Database,
-        pragma: () => {},
-        transaction: (fn: any) => fn,
-        close: () => {},
-        backup: () => Promise.resolve({ progress: () => {} }),
-        defaultSafeIntegers: () => mockDb as Database.Database,
-        register: () => mockDb as Database.Database,
-        loadExtension: () => mockDb as Database.Database,
-        serialize: () => Buffer.alloc(0),
-        table: () => null,
-        function: () => mockDb as Database.Database,
-        aggregate: () => mockDb as Database.Database,
-        unsafeMode: () => mockDb as Database.Database,
-      };
-
-      return mockDb as Database.Database;
+      return getMockDatabase();
     }
 
     try {
@@ -92,11 +97,10 @@ export function getDatabase(): Database.Database {
         try {
           // Require here to avoid circular import at module load time
           const { migrationRunner } = require('./migration-runner');
-          if (migrationRunner && typeof migrationRunner.runMigrations === 'function') {
-            // runMigrations is async - handle promise properly in sync context
-            migrationRunner.runMigrations()
-              .then(() => console.log('[database] Migrations completed successfully'))
-              .catch((error: any) => console.warn('[database] Migrations failed (continuing with base schema):', error));
+          if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
+            // Use synchronous migration runner
+            migrationRunner.runMigrationsSync();
+            console.log('[database] Migrations completed successfully');
           } else {
             console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
           }
