@@ -6,11 +6,16 @@ import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { 
-  BarChart, LineChart, PieChart, Upload, Download, Play,
+  BarChart as BarChartIcon, LineChart as LineChartIcon, PieChart as PieChartIcon, Upload, Download, Play,
   Loader2, XCircle, Table, TrendingUp, Brain, Database
 } from 'lucide-react';
+import {
+  BarChart, Bar, LineChart, Line, PieChart, Pie, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell
+} from 'recharts';
 import type { PluginProps } from './plugin-manager';
 import { toast } from 'sonner';
+
+const COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#0088fe', '#00c49f'];
 
 interface DataRow {
   [key: string]: string | number;
@@ -99,7 +104,7 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
     try {
       // Simulate model training
       await new Promise(resolve => setTimeout(resolve, 2000));
-      toast.success('Model trained successfully');
+      toast.info('Model training simulation complete. Connect TensorFlow.js for real ML training.');
     } catch (err) {
       toast.error('Training failed');
     } finally {
@@ -143,20 +148,18 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
         <Tabs defaultValue="data" className="w-full">
           <TabsList className="grid grid-cols-4 w-full">
             <TabsTrigger value="data"><Database className="w-4 h-4 mr-1" /> Data</TabsTrigger>
-            <TabsTrigger value="stats"><BarChart className="w-4 h-4 mr-1" /> Stats</TabsTrigger>
-            <TabsTrigger value="viz"><PieChart className="w-4 h-4 mr-1" /> Visualize</TabsTrigger>
+            <TabsTrigger value="stats"><BarChartIcon className="w-4 h-4 mr-1" /> Stats</TabsTrigger>
+            <TabsTrigger value="viz"><PieChartIcon className="w-4 h-4 mr-1" /> Visualize</TabsTrigger>
             <TabsTrigger value="ml"><Brain className="w-4 h-4 mr-1" /> ML</TabsTrigger>
           </TabsList>
 
           <TabsContent value="data" className="space-y-3 pt-4">
             <div className="flex gap-2">
-              <label className="flex-1">
-                <Button variant="outline" className="w-full" as="span">
-                  <Upload className="w-4 h-4 mr-2" />
-                  Upload CSV
-                </Button>
-                <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
-              </label>
+              <Button variant="outline" className="flex-1" onClick={() => document.getElementById('csv-upload')?.click()}>
+                <Upload className="w-4 h-4 mr-2" />
+                Upload CSV
+              </Button>
+              <input id="csv-upload" type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
               <Button variant="outline" onClick={exportData} disabled={data.length === 0}>
                 <Download className="w-4 h-4 mr-2" />
                 Export
@@ -250,12 +253,60 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
             </div>
 
             <Card className="bg-white/5">
-              <CardContent className="p-4 h-96 flex items-center justify-center">
-                <div className="text-center text-gray-400">
-                  <PieChart className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                  <p>Chart visualization placeholder</p>
-                  <p className="text-xs mt-2">Select a column and chart type to visualize</p>
-                </div>
+              <CardContent className="p-4 h-96">
+                {!selectedColumn || data.length === 0 ? (
+                  <div className="h-full flex items-center justify-center">
+                    <div className="text-center text-gray-400">
+                      <PieChartIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                      <p>Select a column and chart type to visualize</p>
+                    </div>
+                  </div>
+                ) : (() => {
+                  const labelColumn = columns.find(c => data.some(r => typeof r[c] === 'string')) || columns[0];
+                  const chartData = data.map(row => ({
+                    name: String(row[labelColumn]),
+                    value: typeof row[selectedColumn] === 'number' ? row[selectedColumn] as number : 0,
+                  }));
+
+                  if (chartType === 'pie') {
+                    return (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Tooltip />
+                          <Pie data={chartData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
+                            {chartData.map((_, i) => (
+                              <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                            ))}
+                          </Pie>
+                        </PieChart>
+                      </ResponsiveContainer>
+                    );
+                  }
+
+                  if (chartType === 'line') {
+                    return (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={chartData}>
+                          <XAxis dataKey="name" tick={{ fill: '#9ca3af' }} />
+                          <YAxis tick={{ fill: '#9ca3af' }} />
+                          <Tooltip />
+                          <Line type="monotone" dataKey="value" stroke="#8884d8" strokeWidth={2} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    );
+                  }
+
+                  return (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={chartData}>
+                        <XAxis dataKey="name" tick={{ fill: '#9ca3af' }} />
+                        <YAxis tick={{ fill: '#9ca3af' }} />
+                        <Tooltip />
+                        <Bar dataKey="value" fill="#8884d8" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  );
+                })()}
               </CardContent>
             </Card>
           </TabsContent>

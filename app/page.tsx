@@ -27,7 +27,7 @@ export default function ChatBox() {
     <ThemeProvider
       attribute="class"
       defaultTheme="dark"
-      enableSystem
+      enableSystem={false}
       disableTransitionOnChange
     >
       <ConversationInterface />

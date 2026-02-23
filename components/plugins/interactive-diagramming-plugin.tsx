@@ -23,7 +23,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
-import { X, Share2, Circle, Square, Diamond, ZoomIn, ZoomOut, Minus, Plus } from 'lucide-react';
+import { X, Share2, Circle, Square, Diamond, ZoomIn, ZoomOut, Maximize, Plus } from 'lucide-react';
 
 // Define custom node types
 const nodeTypes: NodeTypes = {
@@ -340,7 +340,7 @@ const ZoomControls = () => {
     <Panel position="top-right" className="flex gap-1">
       <Button variant="outline" size="icon" onClick={() => zoomIn()}><ZoomIn size={16} /></Button>
       <Button variant="outline" size="icon" onClick={() => zoomOut()}><ZoomOut size={16} /></Button>
-      <Button variant="outline" size="icon" onClick={() => fitView()}><Minus size={16} /></Button>
+      <Button variant="outline" size="icon" onClick={() => fitView()}><Maximize size={16} /></Button>
     </Panel>
   );
 };

@@ -104,7 +104,7 @@ export default function CodeSandboxPlugin({ onClose }: PluginProps) {
     const startTime = Date.now();
 
     try {
-      const res = await fetch('/api/execute', {
+      const res = await fetch('/api/sandbox/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -147,7 +147,7 @@ export default function CodeSandboxPlugin({ onClose }: PluginProps) {
       await new Promise(resolve => setTimeout(resolve, 1000));
       setPackages([...packages, newPackage]);
       setNewPackage('');
-      toast.success(`Installed ${newPackage}`);
+      toast.info(`Added ${newPackage} (packages are available if supported by the execution environment)`);
     } catch (err) {
       toast.error('Failed to install package');
     } finally {

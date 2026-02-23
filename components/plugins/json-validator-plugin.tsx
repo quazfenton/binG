@@ -14,7 +14,9 @@ import {
   Download,
   Loader2,
   AlertTriangle,
-  Info
+  Info,
+  ClipboardPaste,
+  Upload
 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
 
@@ -53,11 +55,6 @@ export const JsonValidatorPlugin: React.FC<PluginProps> = ({
     setIsValidating(true);
     
     try {
-      // Simulate processing time for large JSON
-      if (input.length > 10000) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-
       const parsed = JSON.parse(input);
       const stats = calculateStats(parsed);
       
@@ -232,9 +229,53 @@ export const JsonValidatorPlugin: React.FC<PluginProps> = ({
       <div className="flex-1 space-y-4">
         {/* Input */}
         <div>
-          <label className="block text-sm font-medium text-white/80 mb-2">
-            JSON Input
-          </label>
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-sm font-medium text-white/80">
+              JSON Input
+            </label>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  try {
+                    const text = await navigator.clipboard.readText();
+                    setInput(text);
+                  } catch (error) {
+                    console.error('Failed to read clipboard:', error);
+                  }
+                }}
+                className="text-white/60 hover:text-white"
+              >
+                <ClipboardPaste className="w-4 h-4 mr-1" />
+                Paste from clipboard
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  const fileInput = document.createElement('input');
+                  fileInput.type = 'file';
+                  fileInput.accept = '.json';
+                  fileInput.onchange = (e) => {
+                    const file = (e.target as HTMLInputElement).files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onload = (ev) => {
+                        setInput(ev.target?.result as string);
+                      };
+                      reader.readAsText(file);
+                    }
+                  };
+                  fileInput.click();
+                }}
+                className="text-white/60 hover:text-white"
+              >
+                <Upload className="w-4 h-4 mr-1" />
+                Load from file
+              </Button>
+            </div>
+          </div>
           <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}

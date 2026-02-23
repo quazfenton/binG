@@ -122,11 +122,21 @@ export default function AIPromptLibraryPlugin({ onClose }: PluginProps) {
         processedContent = processedContent.replace(new RegExp(`{{${variable}}}`, 'g'), value);
       });
 
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      const mockResult = `[Generated response for: ${selectedPrompt.title}]\n\n${processedContent}\n\n[This is a simulated response. Connect to an LLM API for real results.]`;
-      setResult(mockResult);
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            { role: 'user', content: processedContent }
+          ],
+          model: selectedModel
+        }),
+      });
+
+      if (!response.ok) throw new Error('Execution failed');
+      const data = await response.json();
+      const generatedResult = data.message || data.choices?.[0]?.message?.content || data.content || '';
+      setResult(generatedResult);
       toast.success('Prompt executed');
     } catch (err) {
       toast.error('Execution failed');

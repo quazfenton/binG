@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { secureRandom } from '@/lib/utils';
 import { Button } from '../ui/button';
@@ -85,6 +86,7 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
   const [openWindows, setOpenWindows] = useState<PluginWindow[]>([]);
   const [nextZIndex, setNextZIndex] = useState(1000);
   const [pluginErrors, setPluginErrors] = useState<Map<string, PluginError[]>>(new Map());
+  const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
   const [dragState, setDragState] = useState<{
     windowId: string | null;
     isDragging: boolean;
@@ -140,6 +142,10 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
       }
     }
   }, [openPluginId]);
+
+  useEffect(() => {
+    setPortalRoot(document.body);
+  }, []);
 
   const openPlugin = (plugin: Plugin, initialData?: any) => {
     const windowId = `${plugin.id}-${Date.now()}`;
@@ -300,35 +306,8 @@ x: secureRandom() * 200 + 100,
     };
   }, [dragState]);
 
-  return (
+  const pluginWindowsLayer = (
     <>
-      {/* Plugin Launcher */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {availablePlugins.map(plugin => {
-          const IconComponent = plugin.icon;
-          const isEnhanced = enableEnhancedMode && plugin.enhanced;
-          
-          return (
-            <Button
-              key={plugin.id}
-              variant="secondary"
-              size="sm"
-              className={`flex items-center gap-2 bg-black/20 hover:bg-black/40 border border-white/10 ${
-                isEnhanced ? 'ring-1 ring-green-500/30' : ''
-              }`}
-              onClick={() => openPlugin(plugin)}
-            >
-              <IconComponent className="w-4 h-4" />
-              <span className="hidden sm:inline">{plugin.name}</span>
-              {isEnhanced && (
-                <Shield className="w-3 h-3 text-green-400" title="Enhanced Mode" />
-              )}
-            </Button>
-          );
-        })}
-      </div>
-
-      {/* Plugin Windows */}
       <AnimatePresence>
         {openWindows.map(window => {
           const PluginComponent = window.plugin.component;
@@ -353,7 +332,6 @@ x: secureRandom() * 200 + 100,
               }}
               onMouseDown={() => bringToFront(window.id)}
             >
-              {/* Window Header */}
               <div
                 className="h-10 bg-black/60 border-b border-white/10 flex items-center justify-between px-3 cursor-move select-none"
                 onMouseDown={(e) => handleMouseDown(e, window.id, 'drag')}
@@ -364,7 +342,6 @@ x: secureRandom() * 200 + 100,
                     {window.plugin.name}
                   </span>
                   
-                  {/* Status indicators */}
                   {useEnhanced && (
                     <div className="flex items-center gap-1">
                       <Shield className="w-3 h-3 text-green-400" title="Enhanced Mode" />
@@ -408,7 +385,6 @@ x: secureRandom() * 200 + 100,
                 </div>
               </div>
 
-              {/* Window Content */}
               {!window.isMinimized && (
                 <div className="h-full overflow-hidden">
                   {useEnhanced ? (
@@ -431,7 +407,6 @@ x: secureRandom() * 200 + 100,
                 </div>
               )}
 
-              {/* Resize Handle */}
               {!window.isMinimized && !window.isMaximized && (
                 <div
                   className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize bg-white/10 hover:bg-white/20"
@@ -445,7 +420,6 @@ x: secureRandom() * 200 + 100,
         })}
       </AnimatePresence>
 
-      {/* Minimized Windows Taskbar */}
       {openWindows.some(w => w.isMinimized) && (
         <div className="fixed bottom-4 left-4 flex gap-2 z-50">
           {openWindows.filter(w => w.isMinimized).map(window => (
@@ -462,6 +436,37 @@ x: secureRandom() * 200 + 100,
           ))}
         </div>
       )}
+    </>
+  );
+
+  return (
+    <>
+      <div className="flex flex-wrap gap-2 mb-4">
+        {availablePlugins.map(plugin => {
+          const IconComponent = plugin.icon;
+          const isEnhanced = enableEnhancedMode && plugin.enhanced;
+          
+          return (
+            <Button
+              key={plugin.id}
+              variant="secondary"
+              size="sm"
+              className={`flex items-center gap-2 bg-black/20 hover:bg-black/40 border border-white/10 ${
+                isEnhanced ? 'ring-1 ring-green-500/30' : ''
+              }`}
+              onClick={() => openPlugin(plugin)}
+            >
+              <IconComponent className="w-4 h-4" />
+              <span className="hidden sm:inline">{plugin.name}</span>
+              {isEnhanced && (
+                <Shield className="w-3 h-3 text-green-400" title="Enhanced Mode" />
+              )}
+            </Button>
+          );
+        })}
+      </div>
+
+      {portalRoot ? createPortal(pluginWindowsLayer, portalRoot) : pluginWindowsLayer}
     </>
   );
 };

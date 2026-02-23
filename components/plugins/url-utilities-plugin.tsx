@@ -41,21 +41,36 @@ interface ShortenedUrl {
   shortened: string;
   clicks: number;
   created: string;
+  reachable?: boolean | null;
 }
+
+const SHORTENED_URLS_KEY = 'url-utilities-shortened';
+
+const loadShortenedUrls = (): ShortenedUrl[] => {
+  try {
+    const stored = localStorage.getItem(SHORTENED_URLS_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch {}
+  return [];
+};
 
 export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({ 
   onClose, 
   onResult, 
   initialData 
 }) => {
-  const [mode, setMode] = useState<'validate' | 'shorten' | 'bulk'>('validate');
+  const [mode, setMode] = useState<'validate' | 'shorten' | 'bulk' | 'encode' | 'qrcode'>('validate');
   const [input, setInput] = useState(initialData?.url || '');
   const [bulkInput, setBulkInput] = useState('');
   const [analysis, setAnalysis] = useState<UrlAnalysis | null>(null);
-  const [shortenedUrls, setShortenedUrls] = useState<ShortenedUrl[]>([]);
+  const [shortenedUrls, setShortenedUrls] = useState<ShortenedUrl[]>(loadShortenedUrls);
   const [bulkResults, setBulkResults] = useState<UrlAnalysis[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [copied, setCopied] = useState<string>('');
+  const [encodeInput, setEncodeInput] = useState('');
+  const [encodeResult, setEncodeResult] = useState('');
+  const [encodeDirection, setEncodeDirection] = useState<'encode' | 'decode'>('encode');
+  const [qrUrl, setQrUrl] = useState('');
 
   const validateUrl = useCallback(async (url: string): Promise<UrlAnalysis> => {
     if (!url.trim()) {
@@ -97,6 +112,13 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
     }
   };
 
+  const persistShortenedUrls = useCallback((urls: ShortenedUrl[]) => {
+    setShortenedUrls(urls);
+    try {
+      localStorage.setItem(SHORTENED_URLS_KEY, JSON.stringify(urls));
+    } catch {}
+  }, []);
+
   const handleShorten = async () => {
     setIsProcessing(true);
     try {
@@ -106,19 +128,35 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
         return;
       }
 
-      // Simulate URL shortening (in real implementation, this would call an API)
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
       const shortened: ShortenedUrl = {
         original: input,
         shortened: `https://short.ly/${secureRandomString(8).toLowerCase()}`,
         clicks: 0,
-        created: new Date().toISOString()
+        created: new Date().toISOString(),
+        reachable: null
       };
 
-      setShortenedUrls(prev => [shortened, ...prev.slice(0, 9)]); // Keep last 10
+      const newUrls = [shortened, ...shortenedUrls.slice(0, 9)];
+      persistShortenedUrls(newUrls);
       setAnalysis({ valid: true, url: validation.url });
       onResult?.(shortened);
+
+      // Non-blocking reachability check via HEAD request
+      fetch(input, { method: 'HEAD', mode: 'no-cors' })
+        .then(() => {
+          setShortenedUrls(prev => {
+            const updated = prev.map(u => u.shortened === shortened.shortened ? { ...u, reachable: true } : u);
+            try { localStorage.setItem(SHORTENED_URLS_KEY, JSON.stringify(updated)); } catch {}
+            return updated;
+          });
+        })
+        .catch(() => {
+          setShortenedUrls(prev => {
+            const updated = prev.map(u => u.shortened === shortened.shortened ? { ...u, reachable: false } : u);
+            try { localStorage.setItem(SHORTENED_URLS_KEY, JSON.stringify(updated)); } catch {}
+            return updated;
+          });
+        });
     } catch (error) {
       console.error('Shortening error:', error);
     } finally {
@@ -199,6 +237,8 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
             <option value="validate">Validate</option>
             <option value="shorten">Shorten</option>
             <option value="bulk">Bulk Validate</option>
+            <option value="encode">Encode/Decode</option>
+            <option value="qrcode">QR Code</option>
           </select>
         </div>
       </div>
@@ -384,9 +424,20 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
                           </div>
                         </div>
                         <div className="text-xs text-white/60 truncate">{item.original}</div>
-                        <div className="flex justify-between text-xs text-white/40">
+                        <div className="flex justify-between items-center text-xs text-white/40">
                           <span>{item.clicks} clicks</span>
-                          <span>{new Date(item.created).toLocaleDateString()}</span>
+                          <div className="flex items-center gap-2">
+                            {item.reachable === true && (
+                              <Badge className="text-xs bg-green-500/20 text-green-300 border-green-500/30">Reachable</Badge>
+                            )}
+                            {item.reachable === false && (
+                              <Badge className="text-xs bg-red-500/20 text-red-300 border-red-500/30">Unreachable</Badge>
+                            )}
+                            {item.reachable === null && (
+                              <Badge className="text-xs bg-gray-500/20 text-gray-300 border-gray-500/30">Checking…</Badge>
+                            )}
+                            <span>{new Date(item.created).toLocaleDateString()}</span>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -470,6 +521,118 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* URL Encode/Decode Mode */}
+        {mode === 'encode' && (
+          <div className="space-y-4">
+            <div className="flex gap-2 mb-2">
+              <Button
+                size="sm"
+                variant={encodeDirection === 'encode' ? 'default' : 'outline'}
+                onClick={() => setEncodeDirection('encode')}
+                className={encodeDirection === 'encode' ? 'bg-blue-600' : ''}
+              >
+                Encode
+              </Button>
+              <Button
+                size="sm"
+                variant={encodeDirection === 'decode' ? 'default' : 'outline'}
+                onClick={() => setEncodeDirection('decode')}
+                className={encodeDirection === 'decode' ? 'bg-blue-600' : ''}
+              >
+                Decode
+              </Button>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-white/80 mb-2">
+                {encodeDirection === 'encode' ? 'Text to encode' : 'Encoded URL to decode'}
+              </label>
+              <Input
+                value={encodeInput}
+                onChange={(e) => setEncodeInput(e.target.value)}
+                placeholder={encodeDirection === 'encode' ? 'hello world & foo=bar' : 'hello%20world%20%26%20foo%3Dbar'}
+                className="bg-black/40 border-white/20 text-white"
+              />
+            </div>
+            <Button
+              onClick={() => {
+                try {
+                  setEncodeResult(
+                    encodeDirection === 'encode'
+                      ? encodeURIComponent(encodeInput)
+                      : decodeURIComponent(encodeInput)
+                  );
+                } catch {
+                  setEncodeResult('Error: Invalid input for decoding');
+                }
+              }}
+              disabled={!encodeInput.trim()}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {encodeDirection === 'encode' ? 'Encode' : 'Decode'}
+            </Button>
+            {encodeResult && (
+              <div className="p-3 bg-black/20 rounded-lg border border-white/10 space-y-2">
+                <div className="text-sm font-medium text-white/80">Result</div>
+                <div className="font-mono text-sm break-all text-green-300">{encodeResult}</div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => copyToClipboard(encodeResult, 'encode-result')}
+                  className="text-white/60 hover:text-white"
+                >
+                  {copied === 'encode-result' ? (
+                    <>
+                      <Check className="w-3 h-3 mr-1" />
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3 h-3 mr-1" />
+                      Copy
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* QR Code Mode */}
+        {mode === 'qrcode' && (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-white/80 mb-2">
+                URL for QR Code
+              </label>
+              <div className="flex gap-2">
+                <Input
+                  value={qrUrl}
+                  onChange={(e) => setQrUrl(e.target.value)}
+                  placeholder="https://example.com"
+                  className="bg-black/40 border-white/20 text-white"
+                />
+                <Button
+                  onClick={() => {}}
+                  disabled={!qrUrl.trim()}
+                  className="bg-blue-600 hover:bg-blue-700"
+                >
+                  Generate
+                </Button>
+              </div>
+            </div>
+            {qrUrl.trim() && (
+              <div className="p-4 bg-white rounded-lg flex flex-col items-center gap-3">
+                <img
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrUrl)}`}
+                  alt={`QR code for ${qrUrl}`}
+                  className="w-[200px] h-[200px]"
+                />
+                <div className="text-xs text-gray-600 text-center break-all max-w-[200px]">{qrUrl}</div>
               </div>
             )}
           </div>
