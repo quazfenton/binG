@@ -28,7 +28,6 @@ import Send from "lucide-react/dist/esm/icons/send";
 import Plus from "lucide-react/dist/esm/icons/plus";
 import Sparkles from "lucide-react/dist/esm/icons/sparkles";
 import Settings from "lucide-react/dist/esm/icons/settings";
-import Accessibility from "lucide-react/dist/esm/icons/accessibility";
 import HelpCircle from "lucide-react/dist/esm/icons/help-circle";
 import History from "lucide-react/dist/esm/icons/history";
 import Loader2 from "lucide-react/dist/esm/icons/loader-2";
@@ -275,6 +274,12 @@ export default function InteractionPanel({
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const prevPanelHeightRef = useRef<number | null>(null);
+  const getPanelMaxHeight = useCallback(() => {
+    if (typeof window === "undefined") {
+      return 600;
+    }
+    return Math.max(240, window.innerHeight - 60);
+  }, []);
 
   // Handle plugin result
   const handlePluginResult = (pluginId: string, result: any) => {
@@ -298,7 +303,7 @@ export default function InteractionPanel({
         const viewportH = vw?.height ?? window.innerHeight;
 
         if (window.innerWidth <= 768) {
-          const maxMobileHeight = Math.min(250, viewportH * 0.4);
+          const maxMobileHeight = Math.max(240, viewportH - 60);
           setPanelHeight((prev) =>
             prev > maxMobileHeight ? maxMobileHeight : prev,
           );
@@ -1092,7 +1097,7 @@ export default function InteractionPanel({
           height: isMinimized
             ? "60px"
             : isExpanded
-              ? `min(${panelHeight * 1.5}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`
+              ? "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)"
               : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
           maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)",
         }}
@@ -1115,13 +1120,16 @@ export default function InteractionPanel({
           }`}
           style={{ zIndex: 50 }}
           onMouseDown={(e) => {
+            setIsExpanded(false);
             setIsDragging(true);
             const startY = e.clientY;
             const startHeight = panelHeight;
 
             const handleMouseMove = (e: MouseEvent) => {
               const delta = startY - e.clientY;
-              setPanelHeight(Math.max(240, Math.min(600, startHeight + delta)));
+              setPanelHeight(
+                Math.max(240, Math.min(getPanelMaxHeight(), startHeight + delta)),
+              );
             };
 
             const handleMouseUp = () => {
@@ -1231,7 +1239,7 @@ export default function InteractionPanel({
                     title="Accessibility Options"
                     className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
                   >
-                    <Accessibility className="h-3 w-3 sm:h-4 sm:w-4" />
+                    <Settings className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
                   <Button
                     variant="outline"
@@ -1569,10 +1577,10 @@ export default function InteractionPanel({
               </TabsContent>
 
               {/* Extras Tab Content */}
-              <TabsContent value="extras" className="m-0 flex-1 overflow-auto">
-                <Card className="bg-black/40 border-white/10">
-                  <CardContent className="pt-6">
-                    <div className="space-y-4">
+              <TabsContent value="extras" className="m-0 flex-1 min-h-0 flex flex-col overflow-hidden">
+                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                  <CardContent className="pt-6 h-full flex flex-col min-h-0">
+                    <div className="space-y-4 flex-1 min-h-0 flex flex-col">
                       {/* Extras - Quick Prompt Templates */}
                       <div className="text-center mb-4">
                         <h3 className="font-medium text-white mb-2">
@@ -1583,7 +1591,7 @@ export default function InteractionPanel({
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto">
+                      <div className="grid grid-cols-2 gap-3 overflow-y-auto flex-1 min-h-0 content-start">
                         {extraModules.map((extra) => {
                           const IconComponent = extra.icon;
                           return (
@@ -1618,10 +1626,10 @@ export default function InteractionPanel({
               </TabsContent>
 
               {/* Integrations Tab Content */}
-              <TabsContent value="integrations" className="m-0 flex-1 overflow-auto">
-                <Card className="bg-black/40 border-white/10">
-                  <CardContent className="pt-6">
-                    <div className="space-y-3">
+              <TabsContent value="integrations" className="m-0 flex-1 min-h-0 flex flex-col overflow-hidden">
+                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                  <CardContent className="pt-6 h-full flex flex-col min-h-0">
+                    <div className="space-y-3 flex-1 min-h-0 overflow-y-auto">
                       <div className="flex items-center gap-2 mb-2">
                         <Zap className="h-4 w-4 text-yellow-400" />
                         <span className="text-sm font-medium">

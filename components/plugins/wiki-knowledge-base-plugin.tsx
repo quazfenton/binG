@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
 import { Badge } from '../ui/badge';
 import { 
-  FileText, Search, Plus, Trash2, Link as LinkIcon, Download,
+  FileText, Search, Plus, Trash2, Link as LinkIcon, Download, Upload,
   BookOpen, Network, XCircle, Save, Tag, Calendar
 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
@@ -24,23 +24,69 @@ interface Note {
   modified: string;
 }
 
-export default function WikiKnowledgeBasePlugin({ onClose }: PluginProps) {
-  const [notes, setNotes] = useState<Note[]>([
-    {
-      id: '1',
-      title: 'Getting Started',
-      content: '# Welcome to Wiki\n\nThis is your personal knowledge base. Use [[links]] to connect notes.',
-      tags: ['tutorial', 'guide'],
-      links: [],
-      created: '2024-01-15',
-      modified: '2024-01-15'
+const WIKI_STORAGE_KEY = 'wiki-knowledge-base-notes';
+
+const defaultNotes: Note[] = [
+  {
+    id: '1',
+    title: 'Getting Started',
+    content: '# Welcome to Wiki\n\nThis is your personal knowledge base. Use [[links]] to connect notes.',
+    tags: ['tutorial', 'guide'],
+    links: [],
+    created: '2024-01-15',
+    modified: '2024-01-15'
+  }
+];
+
+function loadNotesFromStorage(): Note[] {
+  try {
+    const stored = localStorage.getItem(WIKI_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
     }
-  ]);
+  } catch {}
+  return defaultNotes;
+}
+
+export default function WikiKnowledgeBasePlugin({ onClose }: PluginProps) {
+  const [notes, setNotes] = useState<Note[]>(loadNotesFromStorage);
   const [activeNote, setActiveNote] = useState<Note | null>(notes[0]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [newTag, setNewTag] = useState('');
+
+  useEffect(() => {
+    localStorage.setItem(WIKI_STORAGE_KEY, JSON.stringify(notes));
+  }, [notes]);
+
+  const importNotes = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const imported = JSON.parse(event.target?.result as string);
+          if (Array.isArray(imported) && imported.length > 0) {
+            setNotes(imported);
+            setActiveNote(imported[0]);
+            toast.success('Notes imported');
+          } else {
+            throw new Error('Invalid format');
+          }
+        } catch {
+          toast.error('Failed to import notes');
+        }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
 
   const createNote = () => {
     const newNote: Note = {
@@ -177,10 +223,16 @@ export default function WikiKnowledgeBasePlugin({ onClose }: PluginProps) {
               ))}
             </div>
 
-            <Button variant="outline" onClick={exportAllNotes} className="w-full">
-              <Download className="w-4 h-4 mr-2" />
-              Export All
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={exportAllNotes} className="flex-1">
+                <Download className="w-4 h-4 mr-2" />
+                Export All
+              </Button>
+              <Button variant="outline" onClick={importNotes} className="flex-1">
+                <Upload className="w-4 h-4 mr-2" />
+                Import
+              </Button>
+            </div>
           </div>
 
           <div className="col-span-3">

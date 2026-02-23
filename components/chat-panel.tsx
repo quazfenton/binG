@@ -5,7 +5,7 @@ import { type Message } from "@/types";
 import { toast } from "sonner";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import MessageBubble from "@/components/message-bubble";
-import AccessibilityControls from "@/components/accessibility-controls";
+import Settings from "@/components/settings";
 import CodePreviewPanel from "@/components/code-preview-panel";
 import { LLMProvider } from "@/types";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
@@ -213,10 +213,10 @@ export function ChatPanel({
         </div>
       )}
 
-      {/* Conditionally render AccessibilityControls as overlay */}
+      {/* Conditionally render Settings as overlay */}
       {isAccessibilityOptionsOpen && (
         <div className="absolute inset-0 z-50">
-          <AccessibilityControls
+          <Settings
             onClose={handleToggleAccessibilityOptions}
             messages={messages}
             voiceEnabled={voiceEnabled}

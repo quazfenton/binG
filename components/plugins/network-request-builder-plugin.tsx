@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { Switch } from '../ui/switch';
 import { Label } from '../ui/label';
-import { XCircle, Send, Plus, Trash2, Loader2, Shield, Lock, Library } from 'lucide-react';
+import { XCircle, Send, Plus, Trash2, Loader2, Shield, Lock, Library, History } from 'lucide-react';
 import { toast } from 'sonner';
 import type { PluginProps } from './plugin-manager';
 
@@ -37,6 +37,8 @@ export const NetworkRequestBuilderPlugin: React.FC<PluginProps> = ({ onClose, on
   const [isLoading, setIsLoading] = useState(false);
   const [useEncryption, setUseEncryption] = useState(false);
   const [encryptionKey, setEncryptionKey] = useState('');
+  const [timeout, setTimeout_] = useState(30000);
+  const [requestHistory, setRequestHistory] = useState<Array<{ method: HttpMethod; url: string; headers: Header[]; body: string; timestamp: number }>>([]);
 
   const addHeader = () => {
     setHeaders([...headers, { id: Date.now(), key: '', value: '' }]);
@@ -72,20 +74,25 @@ export const NetworkRequestBuilderPlugin: React.FC<PluginProps> = ({ onClose, on
       let requestBody = body;
       if (useEncryption) {
         if (!encryptionKey.trim()) {
-          toast.warning('Encryption key is missing.');
+          toast.warning('Encryption key is missing. Skipping encryption.');
+        } else {
+          requestBody = btoa(JSON.stringify({ payload: body, timestamp: Date.now() }));
+          requestHeaders.append('X-Encryption-Type', 'base64-mock');
+          toast.info('Payload has been "encrypted".');
         }
-        // This is a mock encryption for demonstration.
-        // In a real app, use a robust library like crypto-js.
-        requestBody = btoa(JSON.stringify({ payload: body, timestamp: Date.now() }));
-        requestHeaders.append('X-Encryption-Type', 'base64-mock');
-        toast.info('Payload has been "encrypted".');
       }
+
+      const controller = new AbortController();
+      const timeoutId = globalThis.setTimeout(() => controller.abort(), timeout);
 
       const res = await fetch(url, {
         method,
         headers: requestHeaders,
         body: ['GET', 'HEAD'].includes(method) ? undefined : requestBody,
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       const responseHeaders: Record<string, string> = {};
       res.headers.forEach((value, key) => {
@@ -114,11 +121,14 @@ export const NetworkRequestBuilderPlugin: React.FC<PluginProps> = ({ onClose, on
 
       setResponse(result);
       onResult?.({ request: { url, method }, response: result });
+      setRequestHistory(prev => [{ method, url, headers: [...headers], body, timestamp: Date.now() }, ...prev].slice(0, 10));
       toast.success('Request successful!');
 
     } catch (err) {
       let errorMessage = 'An unknown error occurred.';
-      if (err instanceof TypeError) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        errorMessage = `Request timed out after ${timeout}ms.`;
+      } else if (err instanceof TypeError) {
         errorMessage = 'Network error or CORS issue. Check the browser console for more details. The target server may need to configure CORS headers.';
       } else if (err instanceof Error) {
         errorMessage = err.message;
@@ -128,7 +138,7 @@ export const NetworkRequestBuilderPlugin: React.FC<PluginProps> = ({ onClose, on
     } finally {
       setIsLoading(false);
     }
-  }, [url, method, headers, body, useEncryption, encryptionKey, onResult]);
+  }, [url, method, headers, body, useEncryption, encryptionKey, timeout, onResult]);
 
   return (
     <div className="h-full flex flex-col p-4 space-y-4 bg-black/30 backdrop-blur-sm border border-white/20 rounded-lg text-white">
@@ -159,6 +169,14 @@ export const NetworkRequestBuilderPlugin: React.FC<PluginProps> = ({ onClose, on
           onChange={(e) => setUrl(e.target.value)}
           className="flex-1 bg-white/10 border-white/20"
         />
+        <Input
+          type="number"
+          placeholder="Timeout (ms)"
+          value={timeout}
+          onChange={(e) => setTimeout_(Number(e.target.value))}
+          className="w-[100px] bg-white/10 border-white/20 text-xs"
+          title="Request timeout in ms"
+        />
         <Button onClick={handleSendRequest} disabled={isLoading} className="bg-cyan-600 hover:bg-cyan-700">
           {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
         </Button>
@@ -171,6 +189,7 @@ export const NetworkRequestBuilderPlugin: React.FC<PluginProps> = ({ onClose, on
           <TabsTrigger value="encryption">Encryption</TabsTrigger>
           <TabsTrigger value="response">Response</TabsTrigger>
           <TabsTrigger value="presets" className="flex items-center gap-1"><Library className="w-4 h-4" /> Presets</TabsTrigger>
+          <TabsTrigger value="history" className="flex items-center gap-1"><History className="w-4 h-4" /> History</TabsTrigger>
         </TabsList>
 
         <TabsContent value="headers" className="flex-1 overflow-y-auto p-2 space-y-2">
@@ -263,6 +282,25 @@ export const NetworkRequestBuilderPlugin: React.FC<PluginProps> = ({ onClose, on
             ))}
           </div>
           <p className="text-xs text-white/60">Tip: Many public APIs support CORS and can be tested directly. For others, use a server proxy.</p>
+        </TabsContent>
+
+        <TabsContent value="history" className="flex-1 min-h-0 p-4 space-y-2 bg-black/20 rounded-b-md overflow-y-auto">
+          {requestHistory.length === 0 ? (
+            <p className="text-gray-500 text-sm">No request history yet.</p>
+          ) : (
+            requestHistory.map((entry, idx) => (
+              <button key={idx} className="w-full text-left p-3 bg-white/5 border border-white/10 rounded hover:bg-white/10 transition" onClick={() => {
+                setMethod(entry.method);
+                setUrl(entry.url);
+                setHeaders(entry.headers.map((h, i) => ({ ...h, id: Date.now() + i })));
+                setBody(entry.body);
+                toast.success('Loaded from history');
+              }}>
+                <div className="text-sm font-medium">{entry.method} <span className="text-white/70">{entry.url}</span></div>
+                <div className="text-xs text-white/40 mt-1">{new Date(entry.timestamp).toLocaleString()}</div>
+              </button>
+            ))
+          )}
         </TabsContent>
       </Tabs>
     </div>
