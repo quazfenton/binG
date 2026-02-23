@@ -5,7 +5,7 @@ import { useEnhancedChat } from "@/hooks/use-enhanced-chat"; // Import enhanced 
 import type { ChatHistory } from "@/types";
 
 import InteractionPanel from "@/components/interaction-panel";
-import AccessibilityControls from "@/components/accessibility-controls";
+import Settings from "@/components/settings";
 import ChatHistoryModal from "@/components/chat-history-modal";
 import { ChatPanel } from "@/components/chat-panel";
 import CodePreviewPanel from "@/components/code-preview-panel";
@@ -45,7 +45,7 @@ export default function ConversationInterface() {
 /**
  * Render the main conversation interface with chat and code-mode features, providers/models selection, history, voice integration, streaming, code previews, and advertisement flow.
  *
- * This component manages UI state, event handlers, and side-effect wiring for embedding, provider initialization, chat history persistence, code-service integration (project files, diffs, and commands), voice events, streaming state, and modal/panel visibility. It composes ChatPanel, InteractionPanel, CodePreviewPanel, CodeMode, ChatHistoryModal, and AccessibilityControls and exposes handlers for chat submission, code actions, provider rotation, and history management.
+ * This component manages UI state, event handlers, and side-effect wiring for embedding, provider initialization, chat history persistence, code-service integration (project files, diffs, and commands), voice events, streaming state, and modal/panel visibility. It composes ChatPanel, InteractionPanel, CodePreviewPanel, CodeMode, ChatHistoryModal, and Settings and exposes handlers for chat submission, code actions, provider rotation, and history management.
  *
  * @returns A JSX element that renders the conversation interface and its associated panels and controls.
  */
@@ -954,9 +954,9 @@ function ConversationInterfaceContent() {
         />
       )}
 
-      {/* Accessibility Controls Modal */}
+      {/* Settings Modal */}
       {showAccessibility && (
-        <AccessibilityControls
+        <Settings
           onClose={() => setShowAccessibility(false)}
           onLogin={setIsLoggedIn}
         />

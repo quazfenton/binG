@@ -72,9 +72,35 @@ export const PluginMarketplace: React.FC<PluginMarketplaceProps> = ({
     filterAndSortPlugins();
   }, [plugins, searchTerm, selectedCategory, sortBy, showOnlyFree, showOnlyCompatible]);
 
+  const STORAGE_KEY = 'plugin-marketplace-installed';
+
+  const getInstalledFromStorage = (): string[] => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const saveInstalledToStorage = (ids: string[]) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+    } catch {
+      // localStorage unavailable
+    }
+  };
+
   const loadMarketplacePlugins = () => {
     // Simulate marketplace data - in real implementation, this would fetch from an API
-    const installedPlugins = enhancedPluginManager.getAllPlugins().map(p => p.id);
+    let installedPlugins: string[] = [];
+    try {
+      installedPlugins = enhancedPluginManager.getAllPlugins().map(p => p.id);
+    } catch {
+      // manager may not have plugins
+    }
+    const storedInstalled = getInstalledFromStorage();
+    const allInstalled = [...new Set([...installedPlugins, ...storedInstalled])];
     
     const marketplaceData: MarketplacePlugin[] = [
       {
@@ -95,7 +121,7 @@ export const PluginMarketplace: React.FC<PluginMarketplaceProps> = ({
         dependencies: [],
         permissions: ['storage'],
         price: 0,
-        installed: installedPlugins.includes('calculator'),
+        installed: allInstalled.includes('calculator'),
         compatible: true
       },
       {
@@ -116,7 +142,7 @@ export const PluginMarketplace: React.FC<PluginMarketplaceProps> = ({
         dependencies: [],
         permissions: ['clipboard'],
         price: 0,
-        installed: installedPlugins.includes('json-validator'),
+        installed: allInstalled.includes('json-validator'),
         compatible: true
       },
       {
@@ -137,7 +163,7 @@ export const PluginMarketplace: React.FC<PluginMarketplaceProps> = ({
         dependencies: [],
         permissions: ['network', 'clipboard'],
         price: 0,
-        installed: installedPlugins.includes('url-utilities'),
+        installed: allInstalled.includes('url-utilities'),
         compatible: true
       },
       // Simulated third-party plugins
@@ -257,13 +283,15 @@ export const PluginMarketplace: React.FC<PluginMarketplaceProps> = ({
 
   const handleInstall = async (plugin: MarketplacePlugin) => {
     try {
-      // Simulate installation process
-      console.log(`Installing plugin: ${plugin.name}`);
-      
       // Update plugin status
-      setPlugins(prev => prev.map(p => 
-        p.id === plugin.id ? { ...p, installed: true } : p
-      ));
+      setPlugins(prev => {
+        const updated = prev.map(p =>
+          p.id === plugin.id ? { ...p, installed: true } : p
+        );
+        const installedIds = updated.filter(p => p.installed).map(p => p.id);
+        saveInstalledToStorage(installedIds);
+        return updated;
+      });
 
       onInstall?.(plugin.id);
     } catch (error) {
@@ -301,6 +329,7 @@ export const PluginMarketplace: React.FC<PluginMarketplaceProps> = ({
             <div>
               <h1 className="text-2xl font-bold">Plugin Marketplace</h1>
               <p className="text-white/60">Discover and install plugins to extend functionality</p>
+              <p className="text-xs text-white/40 mt-1">Catalog last updated: Jan 20, 2024</p>
             </div>
           </div>
           

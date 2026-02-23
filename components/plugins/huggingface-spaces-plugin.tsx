@@ -22,6 +22,12 @@ const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, ini
   const [initImageUrl, setInitImageUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedImages, setGeneratedImages] = useState<string[]>([]);
+  const [spaceUrl, setSpaceUrl] = useState('');
+  const [hfToken, setHfToken] = useState('');
+  const [apiModel, setApiModel] = useState('');
+  const [apiInput, setApiInput] = useState('');
+  const [apiResponse, setApiResponse] = useState('');
+  const [apiLoading, setApiLoading] = useState(false);
   
   const models = [
     { id: 'stability-ai/sdxl', name: 'Stable Diffusion XL' },
@@ -32,6 +38,39 @@ const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, ini
   const styles = ['realistic', 'cinematic', 'artistic', 'cartoon', 'anime', 'painting', '3d-render', 'isometric', 'low-poly'];
   const dimensionOptions = ['512x512', '768x768', '1024x1024', '512x768', '768x512', '640x960', '960x640'];
   
+  const spaceEmbedUrl = (() => {
+    if (!spaceUrl.trim()) return '';
+    const match = spaceUrl.match(/huggingface\.co\/spaces\/([^\/]+)\/([^\/\s?#]+)/);
+    if (match) return `https://${match[1]}-${match[2]}.hf.space`;
+    return spaceUrl.trim();
+  })();
+
+  const runInference = async () => {
+    setApiLoading(true);
+    setApiResponse('');
+    try {
+      const res = await fetch(`https://api-inference.huggingface.co/models/${apiModel}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${hfToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ inputs: apiInput }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `API error: ${res.statusText}`);
+      }
+      const data = await res.json();
+      setApiResponse(JSON.stringify(data, null, 2));
+    } catch (e: any) {
+      toast.error(e?.message || 'Inference failed');
+      setApiResponse(`Error: ${e?.message}`);
+    } finally {
+      setApiLoading(false);
+    }
+  };
+
   const generateImage = async () => {
     if (!prompt.trim()) {
       toast.error('Prompt is required');
@@ -248,18 +287,65 @@ const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, ini
           <TabsContent value="spaces" className="pt-4">
             <div className="space-y-3">
               <label className="text-sm font-medium">Hugging Face Space URL</label>
-              <Input placeholder="https://huggingface.co/spaces/owner/space-name" />
+              <Input
+                placeholder="https://huggingface.co/spaces/owner/space-name"
+                value={spaceUrl}
+                onChange={(e) => setSpaceUrl(e.target.value)}
+              />
               <div className="rounded border border-white/10 overflow-hidden h-[420px]">
-                <iframe className="w-full h-full" src="https://huggingface.co/spaces/yuntian-deng/ChatGPT4" allow="clipboard-read; clipboard-write; microphone; camera; autoplay; encrypted-media" />
+                {spaceEmbedUrl ? (
+                  <iframe className="w-full h-full" src={spaceEmbedUrl} allow="clipboard-read; clipboard-write; microphone; camera; autoplay; encrypted-media" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-white/50">
+                    Enter a Space URL above to load it
+                  </div>
+                )}
               </div>
               <p className="text-xs text-white/60">Tip: many Spaces support query parameters. We can enhance this to pass input programmatically based on Space configuration.</p>
             </div>
           </TabsContent>
 
           <TabsContent value="api" className="pt-4">
-            <div className="space-y-3">
-              <p className="text-sm text-white/80">Call Hugging Face inference endpoints directly via our backend proxy or a user token.</p>
-              <p className="text-xs text-white/60">Future work: add model browser and examples for text, audio, and vision.</p>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm font-medium mb-2 block">HF API Token</label>
+                <Input
+                  type="password"
+                  value={hfToken}
+                  onChange={(e) => setHfToken(e.target.value)}
+                  placeholder="hf_..."
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-2 block">Model ID</label>
+                <Input
+                  value={apiModel}
+                  onChange={(e) => setApiModel(e.target.value)}
+                  placeholder="e.g. gpt2, facebook/bart-large-cnn"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium mb-2 block">Input Text</label>
+                <Textarea
+                  value={apiInput}
+                  onChange={(e) => setApiInput(e.target.value)}
+                  placeholder="Enter text to send to the model..."
+                  rows={4}
+                />
+              </div>
+              <Button
+                onClick={runInference}
+                disabled={!hfToken || !apiModel || !apiInput || apiLoading}
+                className="w-full"
+              >
+                <TerminalSquare className="w-4 h-4 mr-2" />
+                {apiLoading ? 'Running...' : 'Run Inference'}
+              </Button>
+              {apiResponse && (
+                <div className="bg-black/20 rounded border border-white/10 p-3 max-h-60 overflow-y-auto">
+                  <pre className="text-xs whitespace-pre-wrap">{apiResponse}</pre>
+                </div>
+              )}
             </div>
           </TabsContent>
         </Tabs>

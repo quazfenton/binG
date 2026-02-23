@@ -28,6 +28,7 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   const [selectedFile, setSelectedFile] = useState<{ name: string; content: string } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [totalTreeCount, setTotalTreeCount] = useState(0);
   const [octokit, setOctokit] = useState<Octokit | null>(null);
   const [token, setToken] = useState('');
 
@@ -42,14 +43,15 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
 
   const parseRepoUrl = (url: string): { owner: string; repo: string } | null => {
     try {
-      const urlObject = new URL(url);
+      const cleaned = url.split('#')[0].split('?')[0].replace(/\/+$/, '');
+      const urlObject = new URL(cleaned);
       const pathParts = urlObject.pathname.split('/').filter(Boolean);
       if (pathParts.length >= 2) {
-        return { owner: pathParts[0], repo: pathParts[1] };
+        return { owner: pathParts[0], repo: pathParts[1].replace(/\.git$/, '') };
       }
     } catch (e) {
-      // Not a full URL, try to parse as owner/repo
-      const parts = url.split('/');
+      const cleaned = url.split('#')[0].split('?')[0].replace(/\/+$/, '');
+      const parts = cleaned.split('/').filter(Boolean);
       if (parts.length === 2) {
         return { owner: parts[0], repo: parts[1] };
       }
@@ -57,9 +59,23 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     return null;
   };
 
+  const ghFetch = useCallback(async (url: string) => {
+    const headers: HeadersInit = { 'Accept': 'application/vnd.github.v3+json' };
+    if (token) headers['Authorization'] = `token ${token}`;
+    const res = await fetch(url, { headers });
+    if (res.status === 403) {
+      const retryAfter = res.headers.get('retry-after');
+      throw new Error(
+        `GitHub API rate limit exceeded.${retryAfter ? ` Try again in ${retryAfter}s.` : ''} ${token ? '' : 'Add a token for higher limits (5000 req/hour).'}`
+      );
+    }
+    if (!res.ok) throw new Error(`GitHub API error: ${res.statusText}`);
+    return res.json();
+  }, [token]);
+
   const fetchRepoData = useCallback(async () => {
-    if (!repoUrl || !octokit) {
-      setError('Please enter a repository URL and a GitHub token.');
+    if (!repoUrl) {
+      setError('Please enter a repository URL.');
       return;
     }
     const parsed = parseRepoUrl(repoUrl);
@@ -73,36 +89,56 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     setRepoData(null);
     setTree([]);
     setSelectedFile(null);
+    setTotalTreeCount(0);
 
     try {
       const { owner, repo } = parsed;
-      const { data: repoDetails } = await octokit.rest.repos.get({ owner, repo });
-      setRepoData(repoDetails);
 
-      const { data: treeData } = await octokit.rest.git.getTree({
-        owner,
-        repo,
-        tree_sha: repoDetails.default_branch,
-        recursive: '1',
-      });
-      
-      const files = treeData.tree.map((item: any) => ({
-        name: item.path.split('/').pop(),
-        path: item.path,
-        type: item.type === 'tree' ? 'dir' : ('file' as 'file' | 'dir'),
-        download_url: null,
-      }));
-      setTree(files);
+      if (octokit) {
+        const { data: repoDetails } = await octokit.rest.repos.get({ owner, repo });
+        setRepoData(repoDetails);
 
+        const { data: treeData } = await octokit.rest.git.getTree({
+          owner,
+          repo,
+          tree_sha: repoDetails.default_branch,
+          recursive: '1',
+        });
+
+        const allFiles = treeData.tree.map((item: any) => ({
+          name: item.path.split('/').pop(),
+          path: item.path,
+          type: item.type === 'tree' ? 'dir' : ('file' as 'file' | 'dir'),
+          download_url: null,
+        }));
+        setTotalTreeCount(allFiles.length);
+        setTree(allFiles.slice(0, 100));
+      } else {
+        const repoDetails = await ghFetch(`https://api.github.com/repos/${owner}/${repo}`);
+        setRepoData(repoDetails);
+
+        const treeData = await ghFetch(
+          `https://api.github.com/repos/${owner}/${repo}/git/trees/${repoDetails.default_branch}?recursive=1`
+        );
+
+        const allFiles = treeData.tree.map((item: any) => ({
+          name: item.path.split('/').pop(),
+          path: item.path,
+          type: item.type === 'tree' ? 'dir' : ('file' as 'file' | 'dir'),
+          download_url: null,
+        }));
+        setTotalTreeCount(allFiles.length);
+        setTree(allFiles.slice(0, 100));
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to fetch repository data.');
     } finally {
       setIsLoading(false);
     }
-  }, [repoUrl, octokit]);
+  }, [repoUrl, octokit, ghFetch]);
 
   const fetchFileContent = async (path: string) => {
-    if (!repoData || !octokit) return;
+    if (!repoData) return;
     const parsed = parseRepoUrl(repoData.html_url);
     if (!parsed) return;
 
@@ -110,10 +146,18 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     setError(null);
     try {
       const { owner, repo } = parsed;
-      const { data } = await octokit.rest.repos.getContent({ owner, repo, path });
-      if (typeof (data as any).content === 'string') {
-        const content = atob((data as any).content);
-        setSelectedFile({ name: (data as any).name, content });
+      if (octokit) {
+        const { data } = await octokit.rest.repos.getContent({ owner, repo, path });
+        if (typeof (data as any).content === 'string') {
+          const content = atob((data as any).content);
+          setSelectedFile({ name: (data as any).name, content });
+        }
+      } else {
+        const data = await ghFetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`);
+        if (typeof data.content === 'string') {
+          const content = atob(data.content);
+          setSelectedFile({ name: data.name, content });
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Failed to fetch file content.');
@@ -138,7 +182,7 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
       
       <CardContent className="flex-1 overflow-y-auto p-4">
         <div className="mb-4">
-          <label className="text-sm font-medium mb-2 block">GitHub Personal Access Token</label>
+          <label className="text-sm font-medium mb-2 block">GitHub Personal Access Token (optional)</label>
           <Input
             type="password"
             value={token}
@@ -156,7 +200,7 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
               placeholder="owner/repo or full URL"
               className="bg-gray-800 border-gray-700"
             />
-            <Button onClick={fetchRepoData} disabled={!repoUrl || isLoading || !octokit}>
+            <Button onClick={fetchRepoData} disabled={!repoUrl || isLoading}>
               {isLoading ? 'Loading...' : 'Fetch'}
             </Button>
           </div>
@@ -195,6 +239,9 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-[calc(100vh-450px)]">
               <div className="bg-black/20 p-4 rounded border border-white/10">
                 <h3 className="font-medium mb-2">File Explorer</h3>
+                {totalTreeCount > 100 && (
+                  <p className="text-xs text-white/60 mb-2">Showing first {tree.length} of {totalTreeCount} files</p>
+                )}
                 <ScrollArea className="h-full pr-4">
                   {tree.map(item => (
                     <div key={item.path} className="flex items-center gap-2 py-1">

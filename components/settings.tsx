@@ -23,14 +23,14 @@ import {
   LogIn,
   LogOut,
   Settings as SettingsIcon,
-  Crown,
   Mail,
 } from "lucide-react";
 import ModalLoginForm from "@/components/auth/modal-login-form";
 import ModalSignupForm from "@/components/auth/modal-signup-form";
 import { useAuth } from "@/contexts/auth-context";
+import { useTheme } from "next-themes";
 
-interface AccessibilityControlsProps {
+interface SettingsProps {
   onClose: () => void;
   messages: Message[];
   isProcessing?: boolean;
@@ -38,13 +38,13 @@ interface AccessibilityControlsProps {
   onVoiceToggle?: (enabled: boolean) => void;
 }
 
-export default function AccessibilityControls({
+export default function Settings({
   onClose,
   messages,
   isProcessing = false,
   voiceEnabled = false,
   onVoiceToggle,
-}: AccessibilityControlsProps) {
+}: SettingsProps) {
   const [textSize, setTextSize] = useState(100);
   const [highContrast, setHighContrast] = useState(false);
   const [screenReader, setScreenReader] = useState(false);
@@ -59,51 +59,9 @@ export default function AccessibilityControls({
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authError, setAuthError] = useState<string>('');
   const { isAuthenticated, user, login, logout, register, getApiKeys, setApiKeys, isLoading } = useAuth();
-  const [currentTheme, setCurrentTheme] = useState('default'); // Keep theme state local for now
-
-  // Theme definitions
-  const themes: { [key: string]: { name: string; primary: string; secondary: string; accent: string; background: string; description: string; } } = {
-    default: {
-      name: 'Dark Default',
-      primary: '#8b5cf6',
-      secondary: '#ec4899',
-      accent: '#06b6d4',
-      background: 'bg-black',
-      description: 'Classic dark theme'
-    },
-    pink: {
-      name: 'Pink Noir',
-      primary: '#ec4899',
-      secondary: '#f97316',
-      accent: '#8b5cf6',
-      background: 'bg-gray-900',
-      description: 'Pink and orange accents'
-    },
-    blue: {
-      name: 'Ocean Deep',
-      primary: '#0ea5e9',
-      secondary: '#06b6d4',
-      accent: '#3b82f6',
-      background: 'bg-slate-900',
-      description: 'Deep blue tones'
-    },
-    green: {
-      name: 'Matrix',
-      primary: '#10b981',
-      secondary: '#059669',
-      accent: '#34d399',
-      background: 'bg-gray-900',
-      description: 'Green matrix style'
-    },
-    purple: {
-      name: 'Cosmic',
-      primary: '#8b5cf6',
-      secondary: '#a855f7',
-      accent: '#c084fc',
-      background: 'bg-indigo-950',
-      description: 'Purple cosmic theme'
-    }
-  };
+  
+  // Use next-themes for theme management
+  const { theme, setTheme, themes, resolvedTheme } = useTheme();
 
   const speechSynthesis = useRef<SpeechSynthesis | null>(null);
   const recognition = useRef<SpeechRecognition | null>(null);
@@ -281,9 +239,9 @@ export default function AccessibilityControls({
           transition: all 0.3s ease;
         }
         .custom-toggle.active {
-          background: linear-gradient(45deg, ${themes[currentTheme].primary}, ${themes[currentTheme].secondary});
-          border-color: ${themes[currentTheme].primary};
-          box-shadow: 0 0 8px ${themes[currentTheme].primary}40;
+          background: linear-gradient(45deg, #8b5cf6, #ec4899);
+          border-color: #8b5cf6;
+          box-shadow: 0 0 8px #8b5cf640;
         }
         .custom-toggle-slider {
           width: 18px;
@@ -417,43 +375,69 @@ export default function AccessibilityControls({
         <div className="bg-black/30 rounded-lg p-4 border border-white/10">
           <div className="flex items-center gap-2 mb-4">
             <Palette className="h-4 w-4" />
-            <h3 className="font-medium">Themes</h3>
-            {!isAuthenticated && (
-              <div className="ml-auto">
-                <Crown className="h-3 w-3 text-yellow-400" />
-              </div>
-            )}
+            <h3 className="font-medium">Theme</h3>
           </div>
 
-          <div className="grid grid-cols-1 gap-2">
-            {Object.entries(themes).map(([key, theme]) => (
-              <button
-                key={key}
-                onClick={() => isAuthenticated && setCurrentTheme(key)}
-                disabled={!isAuthenticated && key !== 'default'}
-                className={`flex items-center gap-3 p-3 rounded-lg border transition-all duration-200 ${currentTheme === key
-                    ? 'border-white/30 bg-white/5'
-                    : 'border-white/10 hover:border-white/20 hover:bg-white/5'
-                  } ${!isAuthenticated && key !== 'default' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-              >
-                <div
-                  className="w-6 h-6 rounded border border-white/20"
-                  style={{
-                    background: `linear-gradient(45deg, ${theme.primary}, ${theme.secondary})`
-                  }}
-                />
-                <div className="flex-1 text-left">
-                  <div className="text-sm font-medium">{theme.name}</div>
-                  <div className="text-xs text-gray-400">{theme.description}</div>
-                </div>
-                {currentTheme === key && (
-                  <div className="w-2 h-2 bg-white rounded-full" />
-                )}
-                {!isAuthenticated && key !== 'default' && (
-                  <Crown className="h-3 w-3 text-yellow-400" />
-                )}
-              </button>
-            ))}
+          <div className="grid grid-cols-3 gap-2">
+            {/* Light Mode Button */}
+            <button
+              onClick={() => setTheme('light')}
+              className={`flex flex-col items-center gap-1.5 p-2.5 rounded-lg border transition-all ${
+                theme === 'light'
+                  ? 'border-white/30 bg-white/10'
+                  : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+              }`}
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41-1.41M19.07 4.93l-1.41 1.41" />
+              </svg>
+              <span className="text-xs font-medium">Light</span>
+              {theme === 'light' && (
+                <div className="w-1.5 h-1.5 bg-white rounded-full" />
+              )}
+            </button>
+
+            {/* Dark Mode Button */}
+            <button
+              onClick={() => setTheme('dark')}
+              className={`flex flex-col items-center gap-1.5 p-2.5 rounded-lg border transition-all ${
+                theme === 'dark'
+                  ? 'border-white/30 bg-white/10'
+                  : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+              }`}
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+              <span className="text-xs font-medium">Dark</span>
+              {theme === 'dark' && (
+                <div className="w-1.5 h-1.5 bg-white rounded-full" />
+              )}
+            </button>
+
+            {/* System Mode Button - toggles to dark (default) */}
+            <button
+              onClick={() => setTheme('dark')}
+              className={`flex flex-col items-center gap-1.5 p-2.5 rounded-lg border transition-all ${
+                theme === 'dark'
+                  ? 'border-white/30 bg-white/10'
+                  : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+              }`}
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                <path d="M8 21h8M12 17v4" />
+              </svg>
+              <span className="text-xs font-medium">Default</span>
+              {theme === 'dark' && (
+                <div className="w-1.5 h-1.5 bg-white rounded-full" />
+              )}
+            </button>
+          </div>
+
+          <div className="mt-3 text-xs text-gray-400 text-center">
+            Current: <span className="text-white font-medium capitalize">{resolvedTheme || theme}</span>
           </div>
         </div>
 

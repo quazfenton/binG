@@ -23,7 +23,10 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreview, setVideoPreview] = useState<string>('');
   const [processing, setProcessing] = useState(false);
+  const [memeTopText, setMemeTopText] = useState('');
+  const [memeBottomText, setMemeBottomText] = useState('');
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const memeCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -86,14 +89,67 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
   const trimVideo = async () => {
     setProcessing(true);
     try {
-      // Simulate video processing
+      // Simulated trim — actual video processing happens client-side
       await new Promise(resolve => setTimeout(resolve, 2000));
-      toast.success('Video trimmed');
+      toast.success('Video trimmed (simulated — client-side processing)');
     } catch (err) {
       toast.error('Processing failed');
     } finally {
       setProcessing(false);
     }
+  };
+
+  const generateMeme = () => {
+    if (!imagePreview) {
+      toast.error('Upload an image first');
+      return;
+    }
+    const canvas = memeCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      const fontSize = Math.max(canvas.width / 12, 24);
+      ctx.font = `bold ${fontSize}px Impact, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'white';
+      ctx.strokeStyle = 'black';
+      ctx.lineWidth = fontSize / 12;
+
+      if (memeTopText) {
+        ctx.strokeText(memeTopText.toUpperCase(), canvas.width / 2, fontSize + 10);
+        ctx.fillText(memeTopText.toUpperCase(), canvas.width / 2, fontSize + 10);
+      }
+      if (memeBottomText) {
+        ctx.strokeText(memeBottomText.toUpperCase(), canvas.width / 2, canvas.height - 20);
+        ctx.fillText(memeBottomText.toUpperCase(), canvas.width / 2, canvas.height - 20);
+      }
+      toast.success('Meme generated');
+    };
+    img.src = imagePreview;
+  };
+
+  const downloadMeme = () => {
+    const canvas = memeCanvasRef.current;
+    if (!canvas) return;
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'meme.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success('Meme downloaded');
+    });
   };
 
   return (
@@ -120,13 +176,11 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
 
           <TabsContent value="image" className="grid grid-cols-2 gap-4 pt-4">
             <div className="space-y-3">
-              <label>
-                <Button variant="outline" className="w-full" as="span">
-                  <Upload className="w-4 h-4 mr-2" />
-                  Upload Image
-                </Button>
-                <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
-              </label>
+              <Button variant="outline" className="w-full" onClick={() => document.getElementById('image-upload')?.click()}>
+                <Upload className="w-4 h-4 mr-2" />
+                Upload Image
+              </Button>
+              <input id="image-upload" type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
 
               {imagePreview && (
                 <>
@@ -199,13 +253,11 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
           </TabsContent>
 
           <TabsContent value="video" className="space-y-3 pt-4">
-            <label>
-              <Button variant="outline" className="w-full" as="span">
-                <Upload className="w-4 h-4 mr-2" />
-                Upload Video
-              </Button>
-              <input type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
-            </label>
+            <Button variant="outline" className="w-full" onClick={() => document.getElementById('video-upload')?.click()}>
+              <Upload className="w-4 h-4 mr-2" />
+              Upload Video
+            </Button>
+            <input id="video-upload" type="file" accept="video/*" onChange={handleVideoUpload} className="hidden" />
 
             {videoPreview && (
               <>
@@ -235,13 +287,36 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
           </TabsContent>
 
           <TabsContent value="meme" className="space-y-3 pt-4">
-            <Card className="bg-white/5">
-              <CardContent className="p-4 text-center text-gray-400">
-                <Type className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>Meme generator coming soon</p>
-                <p className="text-xs mt-2">Add text to images with custom fonts and positioning</p>
-              </CardContent>
-            </Card>
+            {!imagePreview ? (
+              <Card className="bg-white/5">
+                <CardContent className="p-4 text-center text-gray-400">
+                  <ImageIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                  <p>Upload an image first in the Image tab</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <>
+                <Input
+                  placeholder="Top text"
+                  value={memeTopText}
+                  onChange={(e) => setMemeTopText(e.target.value)}
+                />
+                <Input
+                  placeholder="Bottom text"
+                  value={memeBottomText}
+                  onChange={(e) => setMemeBottomText(e.target.value)}
+                />
+                <Button onClick={generateMeme} className="w-full">
+                  <Type className="w-4 h-4 mr-2" />
+                  Generate Meme
+                </Button>
+                <canvas ref={memeCanvasRef} className="w-full rounded" />
+                <Button onClick={downloadMeme} variant="outline" className="w-full">
+                  <Download className="w-4 h-4 mr-2" />
+                  Download Meme
+                </Button>
+              </>
+            )}
           </TabsContent>
         </Tabs>
       </CardContent>

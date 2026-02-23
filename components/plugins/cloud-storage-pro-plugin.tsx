@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
@@ -8,7 +8,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
 import { Badge } from '../ui/badge';
 import { 
   Cloud, Folder, File, Upload, Download, Trash2, Share2,
-  Eye, Search, RefreshCw, Loader2, XCircle, HardDrive
+  Eye, Search, RefreshCw, Loader2, XCircle, HardDrive, Info
 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
 import { toast } from 'sonner';
@@ -21,20 +21,48 @@ interface CloudFile {
   modified: string;
   provider: string;
   shared: boolean;
+  content?: string;
 }
 
 const PROVIDERS = ['Google Drive', 'Dropbox', 'OneDrive', 'S3', 'IPFS'];
+const STORAGE_KEY = 'cloud-storage-pro-files';
+const MAX_STORED_FILE_SIZE = 1024 * 1024; // 1MB
+
+const DEFAULT_FILES: CloudFile[] = [
+  { id: '1', name: 'Documents', type: 'folder', size: 0, modified: '2 days ago', provider: 'Google Drive', shared: false },
+  { id: '2', name: 'project.zip', type: 'file', size: 2048000, modified: '1 hour ago', provider: 'Google Drive', shared: true },
+  { id: '3', name: 'report.pdf', type: 'file', size: 512000, modified: '3 days ago', provider: 'Google Drive', shared: false }
+];
+
+const loadFilesFromStorage = (): CloudFile[] => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch {}
+  return DEFAULT_FILES;
+};
+
+const isTextFile = (name: string): boolean => {
+  const textExtensions = ['.txt', '.md', '.json', '.csv', '.xml', '.html', '.css', '.js', '.ts', '.yml', '.yaml', '.log', '.env', '.cfg', '.ini', '.toml'];
+  return textExtensions.some(ext => name.toLowerCase().endsWith(ext));
+};
 
 export default function CloudStorageProPlugin({ onClose }: PluginProps) {
   const [activeProvider, setActiveProvider] = useState('Google Drive');
-  const [files, setFiles] = useState<CloudFile[]>([
-    { id: '1', name: 'Documents', type: 'folder', size: 0, modified: '2 days ago', provider: 'Google Drive', shared: false },
-    { id: '2', name: 'project.zip', type: 'file', size: 2048000, modified: '1 hour ago', provider: 'Google Drive', shared: true },
-    { id: '3', name: 'report.pdf', type: 'file', size: 512000, modified: '3 days ago', provider: 'Google Drive', shared: false }
-  ]);
+  const [files, setFiles] = useState<CloudFile[]>(loadFilesFromStorage);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<CloudFile | null>(null);
+  const [previewContent, setPreviewContent] = useState<string | null>(null);
+
+  const persistFiles = useCallback((newFiles: CloudFile[]) => {
+    setFiles(newFiles);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(newFiles));
+    } catch {
+      toast.error('Storage quota exceeded');
+    }
+  }, []);
 
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '-';
@@ -61,23 +89,46 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
       const file = e.target.files[0];
       if (!file) return;
       
-      const newFile: CloudFile = {
-        id: Date.now().toString(),
-        name: file.name,
-        type: 'file',
-        size: file.size,
-        modified: 'Just now',
-        provider: activeProvider,
-        shared: false
+      const reader = new FileReader();
+      reader.onload = () => {
+        const content = file.size <= MAX_STORED_FILE_SIZE ? (reader.result as string) : undefined;
+        const newFile: CloudFile = {
+          id: Date.now().toString(),
+          name: file.name,
+          type: 'file',
+          size: file.size,
+          modified: 'Just now',
+          provider: activeProvider,
+          shared: false,
+          content
+        };
+        persistFiles([...files, newFile]);
+        toast.success(content ? 'File uploaded and stored locally' : 'File metadata saved (too large to store content)');
       };
-      setFiles([...files, newFile]);
-      toast.success('File uploaded');
+      if (file.size <= MAX_STORED_FILE_SIZE) {
+        reader.readAsDataURL(file);
+      } else {
+        reader.onload = () => {
+          const newFile: CloudFile = {
+            id: Date.now().toString(),
+            name: file.name,
+            type: 'file',
+            size: file.size,
+            modified: 'Just now',
+            provider: activeProvider,
+            shared: false
+          };
+          persistFiles([...files, newFile]);
+          toast.success('File metadata saved (too large to store content)');
+        };
+        reader.readAsArrayBuffer(file.slice(0, 0)); // trigger onload without reading full file
+      }
     };
     input.click();
   };
 
   const deleteFile = (id: string) => {
-    setFiles(files.filter(f => f.id !== id));
+    persistFiles(files.filter(f => f.id !== id));
     toast.success('File deleted');
   };
 
@@ -88,7 +139,31 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
   };
 
   const downloadFile = (file: CloudFile) => {
-    toast.success(`Downloading ${file.name}`);
+    if (file.content) {
+      const a = document.createElement('a');
+      a.href = file.content;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast.success(`Downloaded ${file.name}`);
+    } else {
+      toast.info(`No stored content for ${file.name} — file metadata only`);
+    }
+  };
+
+  const previewFile = (file: CloudFile) => {
+    setSelectedFile(file);
+    if (file.content && isTextFile(file.name)) {
+      try {
+        const base64 = file.content.split(',')[1];
+        setPreviewContent(atob(base64));
+      } catch {
+        setPreviewContent(null);
+      }
+    } else {
+      setPreviewContent(null);
+    }
   };
 
   const filteredFiles = files.filter(f => 
@@ -128,6 +203,10 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
           </div>
 
           <div className="col-span-3 space-y-3">
+            <div className="flex items-center gap-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-300">
+              <Info className="w-4 h-4 flex-shrink-0" />
+              <span>Local storage mode — files stored in browser. Real cloud providers require configuration.</span>
+            </div>
             <div className="flex gap-2">
               <Input
                 placeholder="Search files..."
@@ -167,7 +246,7 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
                       )}
 
                       <div className="flex gap-1">
-                        <Button size="icon" variant="ghost" onClick={() => setSelectedFile(file)}>
+                        <Button size="icon" variant="ghost" onClick={() => previewFile(file)}>
                           <Eye className="w-3 h-3" />
                         </Button>
                         <Button size="icon" variant="ghost" onClick={() => downloadFile(file)}>
@@ -216,7 +295,20 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
                       <span className="text-gray-400">Provider:</span>
                       <span>{selectedFile.provider}</span>
                     </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">Stored:</span>
+                      <span>{selectedFile.content ? 'Yes' : 'Metadata only'}</span>
+                    </div>
                   </div>
+                  {previewContent && (
+                    <div className="mt-3">
+                      <div className="text-xs text-gray-400 mb-1">Content Preview</div>
+                      <pre className="p-2 bg-black/30 rounded text-xs font-mono max-h-48 overflow-auto whitespace-pre-wrap break-all">
+                        {previewContent.slice(0, 5000)}
+                        {previewContent.length > 5000 && '\n... (truncated)'}
+                      </pre>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             )}
