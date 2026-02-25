@@ -151,6 +151,9 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
 
       const outputData = await ffmpeg.readFile(outputName);
       const outputBlob = new Blob([outputData], { type: 'video/mp4' });
+      if (videoPreview) {
+        URL.revokeObjectURL(videoPreview);
+      }
       const outputUrl = URL.createObjectURL(outputBlob);
       setVideoPreview(outputUrl);
       toast.success('Video trimmed successfully');
