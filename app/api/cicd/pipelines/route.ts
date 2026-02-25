@@ -1,7 +1,20 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    // SECURITY: Require authentication to prevent unauthorized access to CI/CD data
+    const authResult = await resolveRequestAuth(req, {
+      allowAnonymous: false,
+    });
+
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     const endpoint = process.env.CICD_PIPELINES_API_URL;
     if (!endpoint) {
       return NextResponse.json({ error: 'CICD_PIPELINES_API_URL is not configured' }, { status: 501 });

@@ -1,7 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 export async function GET(req: NextRequest) {
   try {
+    // SECURITY: Require authentication to prevent unauthorized access to cloud resources
+    const authResult = await resolveRequestAuth(req, {
+      allowAnonymous: false,
+    });
+
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     const endpoint = process.env.CLOUD_RESOURCES_API_URL;
     if (!endpoint) {
       return NextResponse.json(

@@ -1,19 +1,50 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 const loadDocker = async () => {
-  const importAny = (m: string) => new Function('moduleName', 'return import(moduleName)')(m) as Promise<any>;
-  const mod = await importAny('dockerode');
+  // Standard dynamic import - no eval-like constructs
+  const mod = await import('dockerode');
   return mod.default;
 };
 
+/**
+ * Validates container ID format.
+ * Docker container IDs are 64-character hex strings (often truncated to 12).
+ */
+const validateContainerId = (id: string): boolean => {
+  return /^[a-f0-9]{12,64}$/.test(id.toLowerCase());
+};
+
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // SECURITY: Require authentication to prevent unauthorized container manipulation
+    const authResult = await resolveRequestAuth(req, {
+      allowAnonymous: false,
+    });
+
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     const { id } = await params;
+
+    // SECURITY: Validate container ID format
+    if (!validateContainerId(id)) {
+      return NextResponse.json(
+        { error: 'Invalid container ID format. Must be a 12-64 character hex string.' },
+        { status: 400 }
+      );
+    }
+
     const Docker = await loadDocker();
-    const docker = new Docker({ socketPath: process.env.DOCKER_SOCKET || '/var/run/docker.sock' });
+    // Let dockerode use its default socket detection (handles DOCKER_HOST, Windows pipes, etc.)
+    const docker = new Docker();
     const container = docker.getContainer(id);
     await container.start();
     return NextResponse.json({ success: true });

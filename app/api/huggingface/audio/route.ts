@@ -1,5 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+/**
+ * Validates HuggingFace model identifier format.
+ * Prevents path traversal and SSRF attacks.
+ * Format: [org/]model-name where org and model are alphanumeric with -_.
+ */
+const validateModelId = (model: string): boolean => {
+  // Match: "model-name" or "org/model-name"
+  return /^[a-zA-Z0-9][a-zA-Z0-9._-]*(\/[a-zA-Z0-9][a-zA-Z0-9._-]*)?$/.test(model);
+};
+
 export async function POST(req: NextRequest) {
   try {
     const token = process.env.HUGGINGFACE_API_TOKEN;
@@ -13,6 +23,14 @@ export async function POST(req: NextRequest) {
     const audio = formData.get('audio') as File | null;
     if (!model) {
       return NextResponse.json({ error: 'model is required' }, { status: 400 });
+    }
+
+    // SECURITY: Validate model identifier to prevent path traversal/SSRF
+    if (!validateModelId(model)) {
+      return NextResponse.json(
+        { error: 'Invalid model identifier format' },
+        { status: 400 }
+      );
     }
 
     let upstream: Response;

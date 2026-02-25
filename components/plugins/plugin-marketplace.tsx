@@ -132,10 +132,9 @@ export const PluginMarketplace: React.FC<PluginMarketplaceProps> = ({
         installed: allInstalled.includes(plugin.id),
         compatible: plugin.compatible !== false,
       }));
-      if (normalized.length > 0) {
-        setPlugins(normalized);
-        return;
-      }
+      // Set plugins regardless of length - empty array is valid result
+      setPlugins(normalized);
+      return;
     } catch {
       // fallback to local catalog below
     }

@@ -17,12 +17,14 @@ export async function GET() {
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('state', state);
+
   const response = NextResponse.redirect(authUrl);
-  response.cookies.set('oauth_state', state, {
+  response.cookies.set('notion_oauth_state', state, {
     httpOnly: true,
-    secure: true,
+    secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: 600 // 10 minutes
+    path: '/api/oauth/notion/callback',
+    maxAge: 60 * 5, // 5 minutes
   });
   return response;
 }

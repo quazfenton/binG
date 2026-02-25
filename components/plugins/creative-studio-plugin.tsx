@@ -38,9 +38,8 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
     const loadFfmpeg = async () => {
       try {
         // Dynamic import avoids hard compile dependency until package is installed.
-        const importAny = (m: string) => new Function('moduleName', 'return import(moduleName)')(m) as Promise<any>;
-        const ffmpegMod = await importAny('@ffmpeg/ffmpeg');
-        const utilMod = await importAny('@ffmpeg/util');
+        const ffmpegMod = await import('@ffmpeg/ffmpeg');
+        const utilMod = await import('@ffmpeg/util');
         const instance = new ffmpegMod.FFmpeg();
         await instance.load({
           coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js',
@@ -134,11 +133,12 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
     }
 
     setProcessing(true);
+    const inputName = `input-${Date.now()}.mp4`;
+    const outputName = `output-${Date.now()}.mp4`;
+    
     try {
       const ffmpeg = ffmpegRef.current;
       const fetchFile = fetchFileRef.current;
-      const inputName = `input-${Date.now()}.mp4`;
-      const outputName = `output-${Date.now()}.mp4`;
 
       await ffmpeg.writeFile(inputName, await fetchFile(videoFile));
       await ffmpeg.exec([
@@ -151,19 +151,26 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
 
       const outputData = await ffmpeg.readFile(outputName);
       const outputBlob = new Blob([outputData], { type: 'video/mp4' });
-      if (videoPreview) {
-        URL.revokeObjectURL(videoPreview);
-      }
       const outputUrl = URL.createObjectURL(outputBlob);
-      setVideoPreview(outputUrl);
+      setVideoPreview(prev => {
+        if (prev) URL.revokeObjectURL(prev);
+        return outputUrl;
+      });
       toast.success('Video trimmed successfully');
-
-      await ffmpeg.deleteFile(inputName);
-      await ffmpeg.deleteFile(outputName);
     } catch (err) {
       console.error('Video trim error:', err);
       toast.error('Processing failed');
     } finally {
+      // Always cleanup WASM file handles to prevent memory leaks
+      try {
+        const ffmpeg = ffmpegRef.current;
+        if (ffmpeg) {
+          await ffmpeg.deleteFile(inputName).catch(() => {});
+          await ffmpeg.deleteFile(outputName).catch(() => {});
+        }
+      } catch (cleanupErr) {
+        console.error('Cleanup error:', cleanupErr);
+      }
       setProcessing(false);
     }
   };

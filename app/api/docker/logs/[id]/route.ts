@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 const loadDocker = async () => {
-  const importAny = (m: string) => new Function('moduleName', 'return import(moduleName)')(m) as Promise<any>;
-  const mod = await importAny('dockerode');
+  // Standard dynamic import - no eval-like constructs
+  const mod = await import('dockerode');
   return mod.default;
 };
 
@@ -23,7 +23,8 @@ export async function GET(
     const { id } = await params;
     const limit = Number(new URL(req.url).searchParams.get('tail') || '200');
     const Docker = await loadDocker();
-    const docker = new Docker({ socketPath: process.env.DOCKER_SOCKET || '/var/run/docker.sock' });
+    // Let dockerode use its default socket detection (handles DOCKER_HOST, Windows pipes, etc.)
+    const docker = new Docker();
     const container = docker.getContainer(id);
     const logBuffer = await container.logs({
       stdout: true,
@@ -32,14 +33,33 @@ export async function GET(
       tail: Number.isFinite(limit) ? limit : 200,
     });
 
-    const text = Buffer.isBuffer(logBuffer) ? logBuffer.toString('utf8') : String(logBuffer);
-    const lines = text.split('\n').filter(Boolean);
+    // Docker logs have an 8-byte header per message: [stream(1), reserved(3), length(4)]
+    // We need to strip these headers to get clean log output
+    const parseDockerLog = (buffer: Buffer): string[] => {
+      const lines: string[] = [];
+      let offset = 0;
+      
+      while (offset < buffer.length) {
+        // Skip 8-byte header: stream type (1) + reserved (3) + payload length (4)
+        if (offset + 8 > buffer.length) break;
+        const payloadLength = buffer.readUInt32BE(offset + 4);
+        if (offset + 8 + payloadLength > buffer.length) break;
+        
+        const line = buffer.slice(offset + 8, offset + 8 + payloadLength).toString('utf8').trim();
+        if (line) lines.push(line);
+        offset += 8 + payloadLength;
+      }
+      
+      return lines;
+    };
+
+    const lines = parseDockerLog(logBuffer);
     const entries = lines.map((line) => {
       const timestampMatch = line.match(/^(\d{4}-\d{2}-\d{2}T[^\s]+)\s(.*)$/);
       return {
         timestamp: timestampMatch?.[1] || new Date().toISOString(),
         level: /error|exception|fail/i.test(line) ? 'ERROR' : /warn/i.test(line) ? 'WARN' : 'INFO',
-        message: timestampMatch?.[2] || line,
+        message: timestampMatch?.[2] ?? line,
       };
     });
 

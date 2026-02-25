@@ -22,18 +22,36 @@ export async function POST(req: NextRequest) {
     });
 
     const contentType = response.headers.get('content-type') || '';
-    const payload = contentType.includes('application/json')
-      ? await response.json()
-      : await response.text();
-
+    
     if (!response.ok) {
+      // SECURITY: Log detailed error internally, return generic message to client
+      const payload = contentType.includes('application/json')
+        ? await response.json()
+        : await response.text();
+      console.error('HuggingFace inference failed:', {
+        status: response.status,
+        model,
+        details: payload,
+      });
       return NextResponse.json(
-        { error: (payload as any)?.error || 'HuggingFace inference failed', details: payload },
+        { error: 'HuggingFace inference failed' },
         { status: response.status }
       );
     }
 
-    return NextResponse.json(payload);
+    // Handle binary responses (audio, images, etc.) correctly
+    if (contentType.includes('application/json')) {
+      const payload = await response.json();
+      return NextResponse.json(payload);
+    } else {
+      // Return binary data as-is with correct content type
+      const blob = await response.blob();
+      return new NextResponse(blob, {
+        headers: {
+          'Content-Type': contentType || 'application/octet-stream',
+        },
+      });
+    }
   } catch (error) {
     console.error('HuggingFace inference error:', error);
     return NextResponse.json({ error: 'Failed to run HuggingFace inference' }, { status: 500 });

@@ -75,21 +75,45 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
 
   const providerPrefix = activeProvider.toLowerCase().replace(/\s+/g, '-');
 
+  const getToken = (): string | null => {
+    return localStorage.getItem('token');
+  };
+
   const refreshFiles = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/storage/list?prefix=${encodeURIComponent(providerPrefix + '/')}`);
+      const token = getToken();
+      if (!token) {
+        setBackendMode(false);
+        // Load local files when not signed in
+        const localFiles = loadFilesFromStorage().filter(f => 
+          f.provider === activeProvider
+        );
+        setFiles(localFiles);
+        toast.info('Using local mode (not signed in for backend storage)');
+        return;
+      }
+      const headers: HeadersInit = { Authorization: `Bearer ${token}` };
+      const res = await fetch(`/api/storage/list?prefix=${encodeURIComponent(providerPrefix + '/')}`, { headers });
       if (!res.ok) {
         setBackendMode(false);
+        // Load local files when backend is unavailable
+        const localFiles = loadFilesFromStorage().filter(f => 
+          f.provider === activeProvider
+        );
+        setFiles(localFiles);
         toast.info('Using local mode (backend unavailable or unauthorized)');
         return;
       }
       const body = await res.json();
       const listed: string[] = body?.data?.files || [];
-      const mapped: CloudFile[] = listed.map((path) => {
-        const name = path.split('/').pop() || path;
+      // Storage service returns paths relative to prefix; reconstruct full path for backend operations
+      const fullPrefix = providerPrefix + '/';
+      const mapped: CloudFile[] = listed.map((relativePath) => {
+        const fullPath = fullPrefix + relativePath;
+        const name = relativePath.split('/').pop() || relativePath;
         return {
-          id: path,
+          id: fullPath,
           name,
           type: 'file',
           size: 0,
@@ -101,6 +125,15 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
       setFiles(mapped);
       setBackendMode(true);
       toast.success('Files refreshed from backend');
+    } catch (err) {
+      // Network error or JSON parse error
+      setBackendMode(false);
+      // Load local files on error
+      const localFiles = loadFilesFromStorage().filter(f => 
+        f.provider === activeProvider
+      );
+      setFiles(localFiles);
+      toast.info('Using local mode (backend unavailable or unauthorized)');
     } finally {
       setLoading(false);
     }
@@ -144,12 +177,18 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
       };
 
       (async () => {
+        const token = getToken();
+        if (!token) {
+          fallbackLocalUpload();
+          return;
+        }
         try {
           const formData = new FormData();
           const path = `${providerPrefix}/${file.name}`;
           formData.append('file', file);
           formData.append('path', path);
-          const res = await fetch('/api/storage/upload', { method: 'POST', body: formData });
+          const headers: HeadersInit = { Authorization: `Bearer ${token}` };
+          const res = await fetch('/api/storage/upload', { method: 'POST', body: formData, headers });
           if (!res.ok) {
             fallbackLocalUpload();
             return;
@@ -168,14 +207,29 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
   const deleteFile = async (id: string) => {
     if (backendMode) {
       try {
-        const res = await fetch(`/api/storage/delete?path=${encodeURIComponent(id)}`, { method: 'DELETE' });
+        const token = getToken();
+        if (!token) {
+          throw new Error('No authentication token');
+        }
+        const res = await fetch(`/api/storage/delete?path=${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
         if (res.ok) {
           await refreshFiles();
           toast.success('File deleted');
           return;
         }
-      } catch {}
+        // Backend delete failed - don't fall through to local deletion
+        toast.error('Failed to delete file from backend storage');
+        return;
+      } catch (err) {
+        // Network error or other exception
+        toast.error('Failed to delete file (connection error)');
+        return;
+      }
     }
+    // Local mode deletion
     persistFiles(files.filter(f => f.id !== id));
     toast.success('File deleted (local mode)');
   };
@@ -183,7 +237,13 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
   const shareFile = async (file: CloudFile) => {
     try {
       if (backendMode) {
-        const res = await fetch(`/api/storage/signed-url?path=${encodeURIComponent(file.id)}`);
+        const token = getToken();
+        if (!token) {
+          throw new Error('No authentication token');
+        }
+        const res = await fetch(`/api/storage/signed-url?path=${encodeURIComponent(file.id)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
         if (res.ok) {
           const body = await res.json();
           const link = body?.data?.signedUrl;
@@ -204,7 +264,13 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
   const downloadFile = async (file: CloudFile) => {
     if (backendMode) {
       try {
-        const res = await fetch(`/api/storage/download?path=${encodeURIComponent(file.id)}`);
+        const token = getToken();
+        if (!token) {
+          throw new Error('No authentication token');
+        }
+        const res = await fetch(`/api/storage/download?path=${encodeURIComponent(file.id)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
         if (res.ok) {
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);

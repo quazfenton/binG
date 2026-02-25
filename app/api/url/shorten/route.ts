@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { secureRandomString } from '@/lib/utils';
-import { urlShortenerStore } from '@/lib/url-shortener/store';
+import { setUrl } from '@/lib/url-shortener/store';
 
 export async function POST(req: NextRequest) {
   try {
@@ -9,14 +9,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'URL required' }, { status: 400 });
     }
 
-    const parsed = new URL(url);
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return NextResponse.json({ error: 'Invalid URL format' }, { status: 400 });
+    }
+
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       return NextResponse.json({ error: 'Only http/https URLs are allowed' }, { status: 400 });
     }
 
     const id = secureRandomString(8).toLowerCase();
     const now = new Date().toISOString();
-    urlShortenerStore.set(id, {
+    setUrl(id, {
       id,
       original: parsed.toString(),
       clicks: 0,

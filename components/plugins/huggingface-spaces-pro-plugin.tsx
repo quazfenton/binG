@@ -200,12 +200,13 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
           steps: imageParams.steps,
           guidance: imageParams.guidance,
           seed: imageParams.seed === '' ? -1 : Number.parseInt(imageParams.seed as string),
-          sampler: imageParams.sampler
+          sampler: imageParams.sampler,
+          numImages: imageParams.numImages,
         })
       });
 
       if (!res.ok) throw new Error('Generation failed');
-      
+
       const data = await res.json();
       const images = Array.isArray(data?.data?.images) ? data.data.images : [];
       if (images.length === 0) throw new Error('No images generated');

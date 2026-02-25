@@ -2,17 +2,58 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 const loadDocker = async () => {
-  const importAny = (m: string) => new Function('moduleName', 'return import(moduleName)')(m) as Promise<any>;
-  const mod = await importAny('dockerode');
+  // Standard dynamic import - no eval-like constructs
+  const mod = await import('dockerode');
   return mod.default;
+};
+
+// Whitelist of allowed commands to prevent command injection
+const allowedCommands = ['ps', 'ls', 'df', 'top', 'free', 'uptime', 'whoami', 'pwd', 'cat', 'tail', 'head', 'grep', 'find', 'du', 'netstat', 'ss', 'ip', 'ifconfig', 'ping', 'curl', 'wget'];
+
+/**
+ * Validates container ID format.
+ * Docker container IDs are 64-character hex strings (often truncated to 12).
+ */
+const validateContainerId = (id: string): boolean => {
+  return /^[a-f0-9]{12,64}$/.test(id.toLowerCase());
+};
+
+/**
+ * Validates and sanitizes the command to prevent command injection.
+ * Only allows whitelisted base commands without shell metacharacters.
+ */
+const validateCommand = (command: string): { valid: boolean; sanitizedCmd?: string[] } => {
+  if (!command || typeof command !== 'string') {
+    return { valid: false };
+  }
+
+  // Block shell metacharacters that could enable injection
+  const dangerousChars = /[$`;|&<>(){}[\]\\!#*?~]/;
+  if (dangerousChars.test(command)) {
+    return { valid: false };
+  }
+
+  // Extract base command (first word)
+  const parts = command.trim().split(/\s+/);
+  const baseCmd = parts[0];
+
+  if (!allowedCommands.includes(baseCmd)) {
+    return { valid: false };
+  }
+
+  return { valid: true, sanitizedCmd: parts };
 };
 
 export async function POST(req: NextRequest) {
   try {
-    const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
+    // SECURITY: Require authentication to prevent unauthorized Docker command execution
+    const authResult = await resolveRequestAuth(req, {
+      allowAnonymous: false,
+    });
+
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
-        { error: 'Unauthorized: valid authentication token required' },
+        { error: 'Authentication required' },
         { status: 401 }
       );
     }
@@ -22,11 +63,29 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'containerId and command are required' }, { status: 400 });
     }
 
+    // SECURITY: Validate containerId format to prevent targeting arbitrary containers
+    if (!validateContainerId(containerId)) {
+      return NextResponse.json(
+        { error: 'Invalid containerId format. Must be a 12-64 character hex string.' },
+        { status: 400 }
+      );
+    }
+
+    // Validate command against whitelist
+    const validation = validateCommand(command);
+    if (!validation.valid) {
+      return NextResponse.json(
+        { error: 'Command not allowed or contains invalid characters' },
+        { status: 403 }
+      );
+    }
+
     const Docker = await loadDocker();
-    const docker = new Docker({ socketPath: process.env.DOCKER_SOCKET || '/var/run/docker.sock' });
+    // Let dockerode use its default socket detection (handles DOCKER_HOST, Windows pipes, etc.)
+    const docker = new Docker();
     const container = docker.getContainer(containerId);
     const exec = await container.exec({
-      Cmd: ['sh', '-lc', String(command)],
+      Cmd: validation.sanitizedCmd!,
       AttachStdout: true,
       AttachStderr: true,
     });

@@ -7,9 +7,8 @@ type NpmSearchResponse = {
       description?: string;
       version?: string;
       date?: string;
-      author?: { name?: string };
+      publisher?: { username?: string };
       keywords?: string[];
-      dependencies?: Record<string, string>;
     };
     score?: { final?: number };
   }>;
@@ -36,7 +35,7 @@ export async function GET(req: NextRequest) {
         name: pkg.name || '',
         description: pkg.description || 'No description',
         version: pkg.version || '0.0.0',
-        author: pkg.author?.name || 'Unknown',
+        author: pkg.publisher?.username || 'Unknown',
         category,
         rating: Math.min(5, Math.max(1, Number((score * 5).toFixed(1)))),
         downloads: 0,
@@ -45,7 +44,7 @@ export async function GET(req: NextRequest) {
         verified: false,
         featured: false,
         tags: pkg.keywords || [],
-        dependencies: pkg.dependencies ? Object.keys(pkg.dependencies) : [],
+        // NPM Search API doesn't include dependencies; would need separate registry.npmjs.org/{pkg} call
         permissions: ['network'],
         screenshots: [],
         price: 0,

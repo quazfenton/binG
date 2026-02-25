@@ -135,34 +135,36 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url: input }),
         });
-        if (res.ok) {
-          const body = await res.json();
-          shortened = {
-            original: body.original,
-            shortened: body.shortened,
-            clicks: body.clicks || 0,
-            created: body.created || new Date().toISOString(),
-            reachable: null,
-          };
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          toast.error(errorData.error || 'Failed to shorten URL');
+          setIsProcessing(false);
+          return;
         }
-      } catch {
-        // fallback below
-      }
-
-      if (!shortened) {
+        const body = await res.json();
+        if (!body.shortened) {
+          toast.error('Invalid response from server');
+          setIsProcessing(false);
+          return;
+        }
         shortened = {
-          original: input,
-          shortened: input,
-          clicks: 0,
-          created: new Date().toISOString(),
-          reachable: null
+          original: body.original,
+          shortened: body.shortened,
+          clicks: body.clicks || 0,
+          created: body.created || new Date().toISOString(),
+          reachable: null,
         };
+      } catch (err: any) {
+        toast.error(err.message || 'Network error');
+        setIsProcessing(false);
+        return;
       }
 
       const newUrls = [shortened, ...shortenedUrls.slice(0, 9)];
       persistShortenedUrls(newUrls);
       setAnalysis({ valid: true, url: validation.url });
       onResult?.(shortened);
+      setIsProcessing(false);
 
       // Non-blocking reachability check via HEAD request
       fetch(input, { method: 'HEAD', mode: 'no-cors' })

@@ -1,19 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 const loadDocker = async () => {
-  const importAny = (m: string) => new Function('moduleName', 'return import(moduleName)')(m) as Promise<any>;
-  const mod = await importAny('dockerode');
+  // Standard dynamic import - no eval-like constructs
+  const mod = await import('dockerode');
   return mod.default;
 };
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // SECURITY: Require authentication to prevent unauthorized container manipulation
+    const authResult = await resolveRequestAuth(req, {
+      allowAnonymous: false,
+    });
+
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     const { id } = await params;
     const Docker = await loadDocker();
-    const docker = new Docker({ socketPath: process.env.DOCKER_SOCKET || '/var/run/docker.sock' });
+    // Let dockerode use its default socket detection (handles DOCKER_HOST, Windows pipes, etc.)
+    const docker = new Docker();
     const container = docker.getContainer(id);
     await container.stop();
     return NextResponse.json({ success: true });

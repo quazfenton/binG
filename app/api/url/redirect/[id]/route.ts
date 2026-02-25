@@ -1,17 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { urlShortenerStore } from '@/lib/url-shortener/store';
+import { getUrl, incrementClicks } from '@/lib/url-shortener/store';
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const stored = urlShortenerStore.get(id);
+  const stored = getUrl(id);
   if (!stored) {
-    return NextResponse.redirect(new URL('/404', process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'));
+    // Derive origin from request URL for proper 404 redirect in all environments
+    const origin = new URL(req.url).origin;
+    return NextResponse.redirect(new URL('/404', origin));
   }
 
-  stored.clicks += 1;
-  urlShortenerStore.set(id, stored);
+  incrementClicks(id);
   return NextResponse.redirect(stored.original);
 }

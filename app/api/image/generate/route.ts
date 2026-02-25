@@ -11,6 +11,7 @@ type GenerateBody = {
   seed?: number
   model?: string
   initImageUrl?: string
+  numImages?: number
 }
 
 export async function POST(req: NextRequest) {
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
       seed,
       model = 'stability-ai/sdxl',
       initImageUrl,
+      numImages = 1,
     } = body
 
     if (!prompt || !prompt.trim()) {
@@ -62,6 +64,8 @@ export async function POST(req: NextRequest) {
     input['guidance_scale'] = guidance
     if (typeof seed === 'number') input['seed'] = seed
     if (initImageUrl) input['image'] = initImageUrl
+    // Support generating multiple images (model-dependent)
+    if (numImages > 1) input['num_images'] = numImages
 
     const output = (await replicate.run(resolvedModel, { input })) as any
 
