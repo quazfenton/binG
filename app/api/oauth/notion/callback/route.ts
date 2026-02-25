@@ -5,12 +5,17 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const code = searchParams.get('code');
     const error = searchParams.get('error');
+    const state = searchParams.get('state');
+    const cookieState = req.cookies.get('notion_oauth_state')?.value;
 
     if (error) {
       return NextResponse.json({ error }, { status: 400 });
     }
     if (!code) {
       return NextResponse.json({ error: 'No authorization code provided' }, { status: 400 });
+    }
+    if (!state || !cookieState || state !== cookieState) {
+      return NextResponse.json({ error: 'Invalid OAuth state' }, { status: 400 });
     }
 
     const clientId = process.env.NOTION_CLIENT_ID;
