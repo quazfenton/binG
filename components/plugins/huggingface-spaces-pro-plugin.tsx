@@ -193,22 +193,23 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: imageParams.prompt,
-          negative_prompt: imageParams.negativePrompt,
+          negativePrompt: imageParams.negativePrompt,
           model: imageParams.model,
           width: imageParams.width,
           height: imageParams.height,
-          num_inference_steps: imageParams.steps,
-          guidance_scale: imageParams.guidance,
+          steps: imageParams.steps,
+          guidance: imageParams.guidance,
           seed: imageParams.seed === '' ? -1 : Number.parseInt(imageParams.seed as string),
-          sampler: imageParams.sampler,
-          num_images: imageParams.numImages
+          sampler: imageParams.sampler
         })
       });
 
       if (!res.ok) throw new Error('Generation failed');
       
       const data = await res.json();
-      setGeneratedImages(prev => [...prev, ...data.images]);
+      const images = Array.isArray(data?.data?.images) ? data.data.images : [];
+      if (images.length === 0) throw new Error('No images generated');
+      setGeneratedImages(prev => [...prev, ...images]);
       toast.success('Images generated successfully');
     } catch (err: any) {
       toast.error(err.message);

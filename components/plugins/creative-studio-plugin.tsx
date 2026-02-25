@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
@@ -23,10 +23,43 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreview, setVideoPreview] = useState<string>('');
   const [processing, setProcessing] = useState(false);
+  const [ffmpegReady, setFfmpegReady] = useState(false);
+  const [startTime, setStartTime] = useState(0);
+  const [endTime, setEndTime] = useState(10);
   const [memeTopText, setMemeTopText] = useState('');
   const [memeBottomText, setMemeBottomText] = useState('');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const memeCanvasRef = useRef<HTMLCanvasElement>(null);
+  const ffmpegRef = useRef<any>(null);
+  const fetchFileRef = useRef<((input: File | Blob) => Promise<Uint8Array>) | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadFfmpeg = async () => {
+      try {
+        // Dynamic import avoids hard compile dependency until package is installed.
+        const importAny = (m: string) => new Function('moduleName', 'return import(moduleName)')(m) as Promise<any>;
+        const ffmpegMod = await importAny('@ffmpeg/ffmpeg');
+        const utilMod = await importAny('@ffmpeg/util');
+        const instance = new ffmpegMod.FFmpeg();
+        await instance.load({
+          coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js',
+          wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm',
+        });
+        if (!mounted) return;
+        ffmpegRef.current = instance;
+        fetchFileRef.current = utilMod.fetchFile;
+        setFfmpegReady(true);
+      } catch (error) {
+        console.warn('FFmpeg load failed:', error);
+      }
+    };
+
+    loadFfmpeg();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -87,12 +120,45 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
   };
 
   const trimVideo = async () => {
+    if (!videoFile) {
+      toast.error('Upload a video first');
+      return;
+    }
+    if (!ffmpegRef.current || !fetchFileRef.current) {
+      toast.error('FFmpeg not ready. Install @ffmpeg/ffmpeg and @ffmpeg/util.');
+      return;
+    }
+    if (endTime <= startTime) {
+      toast.error('End time must be greater than start time');
+      return;
+    }
+
     setProcessing(true);
     try {
-      // Simulated trim — actual video processing happens client-side
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      toast.success('Video trimmed (simulated — client-side processing)');
+      const ffmpeg = ffmpegRef.current;
+      const fetchFile = fetchFileRef.current;
+      const inputName = `input-${Date.now()}.mp4`;
+      const outputName = `output-${Date.now()}.mp4`;
+
+      await ffmpeg.writeFile(inputName, await fetchFile(videoFile));
+      await ffmpeg.exec([
+        '-i', inputName,
+        '-ss', String(startTime),
+        '-to', String(endTime),
+        '-c', 'copy',
+        outputName,
+      ]);
+
+      const outputData = await ffmpeg.readFile(outputName);
+      const outputBlob = new Blob([outputData], { type: 'video/mp4' });
+      const outputUrl = URL.createObjectURL(outputBlob);
+      setVideoPreview(outputUrl);
+      toast.success('Video trimmed successfully');
+
+      await ffmpeg.deleteFile(inputName);
+      await ffmpeg.deleteFile(outputName);
     } catch (err) {
+      console.error('Video trim error:', err);
       toast.error('Processing failed');
     } finally {
       setProcessing(false);
@@ -270,11 +336,11 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-sm mb-2 block">Start Time (s)</label>
-                    <Input type="number" defaultValue={0} min={0} />
+                    <Input type="number" value={startTime} min={0} onChange={(e) => setStartTime(Number(e.target.value || 0))} />
                   </div>
                   <div>
                     <label className="text-sm mb-2 block">End Time (s)</label>
-                    <Input type="number" defaultValue={10} min={0} />
+                    <Input type="number" value={endTime} min={0} onChange={(e) => setEndTime(Number(e.target.value || 0))} />
                   </div>
                 </div>
 
@@ -282,6 +348,11 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
                   {processing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Scissors className="w-4 h-4 mr-2" />}
                   Trim Video
                 </Button>
+                {!ffmpegReady && (
+                  <p className="text-xs text-yellow-300">
+                    Loading FFmpeg engine. If this stays unavailable, install `@ffmpeg/ffmpeg` and `@ffmpeg/util`.
+                  </p>
+                )}
               </>
             )}
           </TabsContent>

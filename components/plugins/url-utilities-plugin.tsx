@@ -128,13 +128,36 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
         return;
       }
 
-      const shortened: ShortenedUrl = {
-        original: input,
-        shortened: `https://short.ly/${secureRandomString(8).toLowerCase()}`,
-        clicks: 0,
-        created: new Date().toISOString(),
-        reachable: null
-      };
+      let shortened: ShortenedUrl | null = null;
+      try {
+        const res = await fetch('/api/url/shorten', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: input }),
+        });
+        if (res.ok) {
+          const body = await res.json();
+          shortened = {
+            original: body.original,
+            shortened: body.shortened,
+            clicks: body.clicks || 0,
+            created: body.created || new Date().toISOString(),
+            reachable: null,
+          };
+        }
+      } catch {
+        // fallback below
+      }
+
+      if (!shortened) {
+        shortened = {
+          original: input,
+          shortened: `https://short.ly/${secureRandomString(8).toLowerCase()}`,
+          clicks: 0,
+          created: new Date().toISOString(),
+          reachable: null
+        };
+      }
 
       const newUrls = [shortened, ...shortenedUrls.slice(0, 9)];
       persistShortenedUrls(newUrls);

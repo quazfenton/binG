@@ -30,6 +30,13 @@ interface Statistics {
   count: number;
 }
 
+interface TrainingResult {
+  algorithm: string;
+  summary?: string;
+  metrics?: Record<string, number | string>;
+  raw?: unknown;
+}
+
 export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
   const [data, setData] = useState<DataRow[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
@@ -37,6 +44,8 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
   const [selectedColumn, setSelectedColumn] = useState<string>('');
   const [statistics, setStatistics] = useState<Record<string, Statistics>>({});
   const [loading, setLoading] = useState(false);
+  const [selectedAlgorithm, setSelectedAlgorithm] = useState<'linear' | 'kmeans' | 'logistic' | 'rf'>('linear');
+  const [trainingResult, setTrainingResult] = useState<TrainingResult | null>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -102,11 +111,46 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
   const trainModel = async () => {
     setLoading(true);
     try {
-      // Simulate model training
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      toast.info('Model training simulation complete. Connect TensorFlow.js for real ML training.');
+      const numericColumns = columns.filter(col =>
+        data.every(row => typeof row[col] === 'number')
+      );
+
+      if (numericColumns.length < 2) {
+        throw new Error('Need at least 2 numeric columns for training');
+      }
+
+      const featureColumns = numericColumns.slice(0, -1);
+      const targetColumn = numericColumns[numericColumns.length - 1];
+      const features = data.map(row => featureColumns.map(col => Number(row[col])));
+      const labels = data.map(row => Number(row[targetColumn]));
+
+      const res = await fetch('/api/modal/train', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          algorithm: selectedAlgorithm,
+          features,
+          labels,
+          featureColumns,
+          targetColumn
+        })
+      });
+
+      const body = await res.json();
+      if (!res.ok) {
+        throw new Error(body?.error || 'Training failed');
+      }
+
+      const result: TrainingResult = {
+        algorithm: selectedAlgorithm,
+        summary: body?.data?.summary,
+        metrics: body?.data?.metrics,
+        raw: body?.data?.raw
+      };
+      setTrainingResult(result);
+      toast.success(body?.data?.summary || 'Model training complete');
     } catch (err) {
-      toast.error('Training failed');
+      toast.error(err instanceof Error ? err.message : 'Training failed');
     } finally {
       setLoading(false);
     }
@@ -317,7 +361,7 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
                 <CardTitle className="text-sm">Train Model</CardTitle>
               </CardHeader>
               <CardContent className="p-3 space-y-3">
-                <Select>
+                <Select value={selectedAlgorithm} onValueChange={(v: 'linear' | 'kmeans' | 'logistic' | 'rf') => setSelectedAlgorithm(v)}>
                   <SelectTrigger><SelectValue placeholder="Select algorithm" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="linear">Linear Regression</SelectItem>
@@ -331,6 +375,28 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
                   {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
                   Train Model
                 </Button>
+
+                {trainingResult && (
+                  <Card className="bg-black/20 border border-white/10">
+                    <CardHeader className="p-3">
+                      <CardTitle className="text-sm">Training Result</CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-3 text-xs space-y-2">
+                      <div><span className="text-gray-400">Algorithm:</span> {trainingResult.algorithm}</div>
+                      {trainingResult.summary && <div><span className="text-gray-400">Summary:</span> {trainingResult.summary}</div>}
+                      {trainingResult.metrics && (
+                        <div className="space-y-1">
+                          {Object.entries(trainingResult.metrics).map(([k, v]) => (
+                            <div key={k} className="flex justify-between">
+                              <span className="text-gray-400">{k}</span>
+                              <span>{String(v)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

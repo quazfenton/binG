@@ -169,7 +169,8 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const startContainer = async (id: string) => {
     setLoading(true);
     try {
-      await fetch(`/api/docker/start/${id}`, { method: 'POST' });
+      const res = await fetch(`/api/docker/start/${id}`, { method: 'POST' });
+      if (!res.ok) throw new Error('Start failed');
       toast.success('Container started');
       loadContainers();
     } catch (err) {
@@ -184,7 +185,8 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const stopContainer = async (id: string) => {
     setLoading(true);
     try {
-      await fetch(`/api/docker/stop/${id}`, { method: 'POST' });
+      const res = await fetch(`/api/docker/stop/${id}`, { method: 'POST' });
+      if (!res.ok) throw new Error('Stop failed');
       toast.success('Container stopped');
       loadContainers();
     } catch (err) {
@@ -200,7 +202,8 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
     if (!confirm('Are you sure you want to remove this container?')) return;
     setLoading(true);
     try {
-      await fetch(`/api/docker/remove/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/docker/remove/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Remove failed');
       toast.success('Container removed');
       loadContainers();
     } catch (err) {
@@ -221,6 +224,7 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ containerId: selectedContainer, command })
       });
+      if (!res.ok) throw new Error('Execution failed');
       const data = await res.json();
       setCommandOutput(data.output);
       toast.success('Command executed');
@@ -236,11 +240,12 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const deployCompose = async () => {
     setLoading(true);
     try {
-      await fetch('/api/docker/compose', {
+      const res = await fetch('/api/docker/compose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ compose: composeFile })
       });
+      if (!res.ok) throw new Error('Compose deploy failed');
       toast.success('Compose deployed');
       loadContainers();
     } catch (err) {
@@ -254,7 +259,8 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const restartPipeline = async (id: string) => {
     setLoading(true);
     try {
-      await fetch(`/api/cicd/restart/${id}`, { method: 'POST' });
+      const res = await fetch(`/api/cicd/restart/${id}`, { method: 'POST' });
+      if (!res.ok) throw new Error('Restart failed');
       toast.success('Pipeline restarted');
       loadPipelines();
     } catch (err) {
