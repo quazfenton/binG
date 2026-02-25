@@ -152,7 +152,7 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
       if (!shortened) {
         shortened = {
           original: input,
-          shortened: `https://short.ly/${secureRandomString(8).toLowerCase()}`,
+          shortened: input,
           clicks: 0,
           created: new Date().toISOString(),
           reachable: null
