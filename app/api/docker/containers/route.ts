@@ -18,8 +18,10 @@ export async function GET(req: NextRequest) {
     }
 
     const Docker = await loadDocker();
-    // Let dockerode use its default socket detection (handles DOCKER_HOST, Windows pipes, etc.)
-    const docker = new Docker();
+    // Respect DOCKER_SOCKET env var for custom socket paths, otherwise use dockerode defaults
+    const docker = new Docker(
+      process.env.DOCKER_SOCKET ? { socketPath: process.env.DOCKER_SOCKET } : undefined
+    );
     const containers = await docker.listContainers({ all: true });
     const formatted = containers.map((c: any) => ({
       id: String(c.Id || '').slice(0, 12),

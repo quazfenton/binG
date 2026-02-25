@@ -8,7 +8,8 @@ const loadDocker = async () => {
 };
 
 // Whitelist of allowed commands to prevent command injection
-const allowedCommands = ['ps', 'ls', 'df', 'top', 'free', 'uptime', 'whoami', 'pwd', 'cat', 'tail', 'head', 'grep', 'find', 'du', 'netstat', 'ss', 'ip', 'ifconfig', 'ping', 'curl', 'wget'];
+// Note: Network utilities (curl, wget) are excluded to prevent data exfiltration
+const allowedCommands = ['ps', 'ls', 'df', 'top', 'free', 'uptime', 'whoami', 'pwd', 'cat', 'tail', 'head', 'grep', 'find', 'du', 'netstat', 'ss', 'ip', 'ifconfig', 'ping'];
 
 /**
  * Validates container ID format.
@@ -81,8 +82,10 @@ export async function POST(req: NextRequest) {
     }
 
     const Docker = await loadDocker();
-    // Let dockerode use its default socket detection (handles DOCKER_HOST, Windows pipes, etc.)
-    const docker = new Docker();
+    // Respect DOCKER_SOCKET env var for custom socket paths, otherwise use dockerode defaults
+    const docker = new Docker(
+      process.env.DOCKER_SOCKET ? { socketPath: process.env.DOCKER_SOCKET } : undefined
+    );
     const container = docker.getContainer(containerId);
     const exec = await container.exec({
       Cmd: validation.sanitizedCmd!,

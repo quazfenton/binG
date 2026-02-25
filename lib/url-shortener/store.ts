@@ -7,7 +7,17 @@ type StoredUrl = {
 };
 
 // Maximum number of URLs to keep in memory (LRU eviction)
-const MAX_STORE_SIZE = parseInt(process.env.URL_SHORTENER_MAX_STORE_SIZE || '10000', 10);
+// Guard against invalid env values - default to 10000 if non-numeric or non-positive
+const MAX_STORE_SIZE = (() => {
+  const envValue = process.env.URL_SHORTENER_MAX_STORE_SIZE;
+  if (!envValue) return 10000;
+  const parsed = parseInt(envValue, 10);
+  if (isNaN(parsed) || parsed <= 0) {
+    console.warn(`Invalid URL_SHORTENER_MAX_STORE_SIZE: "${envValue}". Using default 10000.`);
+    return 10000;
+  }
+  return Math.min(parsed, 1000000); // Cap at 1M to prevent memory exhaustion
+})();
 
 declare global {
   // eslint-disable-next-line no-var

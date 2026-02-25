@@ -23,8 +23,10 @@ export async function GET(
     const { id } = await params;
     const limit = Number(new URL(req.url).searchParams.get('tail') || '200');
     const Docker = await loadDocker();
-    // Let dockerode use its default socket detection (handles DOCKER_HOST, Windows pipes, etc.)
-    const docker = new Docker();
+    // Respect DOCKER_SOCKET env var for custom socket paths, otherwise use dockerode defaults
+    const docker = new Docker(
+      process.env.DOCKER_SOCKET ? { socketPath: process.env.DOCKER_SOCKET } : undefined
+    );
     const container = docker.getContainer(id);
     const logBuffer = await container.logs({
       stdout: true,
@@ -33,23 +35,38 @@ export async function GET(
       tail: Number.isFinite(limit) ? limit : 200,
     });
 
-    // Docker logs have an 8-byte header per message: [stream(1), reserved(3), length(4)]
-    // We need to strip these headers to get clean log output
+    // Docker logs have an 8-byte header per message when TTY is disabled:
+    // [stream(1), reserved(3), length(4)]
+    // For TTY-enabled containers, logs are raw text without headers.
+    // Detect format by checking if first byte is a valid stream type (0=stdin, 1=stdout, 2=stderr)
     const parseDockerLog = (buffer: Buffer): string[] => {
       const lines: string[] = [];
-      let offset = 0;
       
-      while (offset < buffer.length) {
-        // Skip 8-byte header: stream type (1) + reserved (3) + payload length (4)
-        if (offset + 8 > buffer.length) break;
-        const payloadLength = buffer.readUInt32BE(offset + 4);
-        if (offset + 8 + payloadLength > buffer.length) break;
-        
-        const line = buffer.slice(offset + 8, offset + 8 + payloadLength).toString('utf8').trim();
-        if (line) lines.push(line);
-        offset += 8 + payloadLength;
+      // Detect multiplexed format: first byte should be 0, 1, or 2 (stream type)
+      // and bytes 5-8 should contain a reasonable payload length
+      const isMultiplexed = buffer.length >= 8 &&
+        (buffer[0] === 0 || buffer[0] === 1 || buffer[0] === 2) &&
+        buffer.readUInt32BE(4) <= buffer.length - 8;
+
+      if (isMultiplexed) {
+        // Parse multiplexed format with 8-byte headers
+        let offset = 0;
+        while (offset < buffer.length) {
+          if (offset + 8 > buffer.length) break;
+          const payloadLength = buffer.readUInt32BE(offset + 4);
+          if (offset + 8 + payloadLength > buffer.length) break;
+
+          const line = buffer.slice(offset + 8, offset + 8 + payloadLength).toString('utf8').trim();
+          if (line) lines.push(line);
+          offset += 8 + payloadLength;
+        }
+      } else {
+        // Raw text format (TTY mode) - split directly
+        const text = buffer.toString('utf8');
+        const rawLines = text.split('\n').filter(Boolean);
+        lines.push(...rawLines);
       }
-      
+
       return lines;
     };
 
