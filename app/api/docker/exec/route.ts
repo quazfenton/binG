@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 const loadDocker = async () => {
   const importAny = (m: string) => new Function('moduleName', 'return import(moduleName)')(m) as Promise<any>;
@@ -8,6 +9,14 @@ const loadDocker = async () => {
 
 export async function POST(req: NextRequest) {
   try {
+    const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Unauthorized: valid authentication token required' },
+        { status: 401 }
+      );
+    }
+
     const { containerId, command } = await req.json();
     if (!containerId || !command) {
       return NextResponse.json({ error: 'containerId and command are required' }, { status: 400 });
