@@ -113,8 +113,49 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unable to read error');
+        let payload: any = null;
+        try {
+          payload = JSON.parse(errorText);
+        } catch {
+          payload = null;
+        }
+
+        const authRequired =
+          response.status === 401 &&
+          (payload?.status === 'auth_required' ||
+            payload?.error?.type === 'auth_required' ||
+            payload?.data?.requiresAuth === true);
+
+        if (authRequired) {
+          const content =
+            payload?.error?.message ||
+            payload?.message ||
+            `Authentication is required to continue.`;
+          const messageMetadata = {
+            requiresAuth: true,
+            authUrl: payload?.authUrl || payload?.data?.authUrl,
+            toolName: payload?.toolName || payload?.data?.toolName,
+            provider: payload?.provider || payload?.data?.provider
+          };
+
+          setMessages(prev => prev.map(msg =>
+            msg.id === assistantMessage.id
+              ? { ...msg, content, metadata: { ...(msg.metadata || {}), ...messageMetadata } }
+              : msg
+          ));
+          setIsLoading(false);
+          if (options.onFinish && currentMessageRef.current) {
+            options.onFinish({
+              ...currentMessageRef.current,
+              content,
+              metadata: messageMetadata
+            });
+          }
+          return;
+        }
+
         console.error('[DEBUG] useEnhancedChat: HTTP error', response.status, errorText);
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}${payload?.error?.message ? ` - ${payload.error.message}` : ''}`);
       }
 
       // Some auth-required responses are returned as JSON, not SSE.

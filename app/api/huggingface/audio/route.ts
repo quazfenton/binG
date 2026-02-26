@@ -55,8 +55,20 @@ export async function POST(req: NextRequest) {
     }
 
     if (!upstream.ok) {
-      const err = await upstream.text();
-      return NextResponse.json({ error: err || 'Audio inference failed' }, { status: upstream.status });
+      // SECURITY: Log detailed error internally, return generic message to client
+      const errorContentType = upstream.headers.get('content-type') || '';
+      const errorPayload = errorContentType.includes('application/json')
+        ? await upstream.json()
+        : await upstream.text();
+      console.error('HuggingFace audio failed:', {
+        status: upstream.status,
+        model,
+        details: errorPayload,
+      });
+      return NextResponse.json(
+        { error: 'Audio inference failed' },
+        { status: upstream.status }
+      );
     }
 
     const contentType = upstream.headers.get('content-type') || 'audio/mpeg';

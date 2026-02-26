@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from "react"
 import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Button } from "@/components/ui/button"
@@ -248,7 +249,7 @@ export default function MessageBubble({
       <div
         className={`
           message-bubble-responsive relative transition-all duration-200
-          ${isUser ? "bg-purple-600 text-white" : "bg-black border border-white/20 text-white"}
+          ${isUser ? "text-white" : "border"}
           ${streamingDisplay.isStreaming ? "border-purple-500/50 shadow-lg shadow-purple-500/20" : ""}
           ${streamingDisplay.isAnimating ? "animate-pulse-subtle" : ""}
           ${layout.isMobile ? 'rounded-xl touch-friendly' : 'rounded-2xl'}
@@ -261,6 +262,9 @@ export default function MessageBubble({
           maxWidth: layout.isMobile ? 'calc(100vw - 2.25rem)' : dynamicStyles.maxWidth,
           padding: dynamicStyles.padding,
           fontSize: dynamicStyles.fontSize,
+          backgroundColor: isUser ? 'var(--user-bubble-bg)' : 'var(--assistant-bubble-bg)',
+          color: isUser ? 'var(--user-bubble-text)' : 'var(--assistant-bubble-text)',
+          borderColor: isUser ? 'transparent' : 'var(--assistant-bubble-border)',
           wordBreak: dynamicStyles.overflowStrategy === 'wrap' ? 'break-word' : 'normal',
           overflowWrap: dynamicStyles.overflowStrategy === 'wrap' ? 'break-word' : 'normal',
           whiteSpace: contentAnalysis.hasCodeBlocks && layout.isMobile ? 'pre' : 'pre-wrap'
@@ -288,10 +292,11 @@ export default function MessageBubble({
 
         {/* Main content */}
         <ReactMarkdown
-              className={`prose prose-invert transition-opacity duration-200 ${
-                useCompactLayout ? 'prose-sm' : 'prose-base'
-              } ${layout.isMobile ? 'prose-sm' : 'prose-base'}`}
-              components={{
+          remarkPlugins={[remarkGfm]}
+          className={`prose prose-invert transition-opacity duration-200 ${
+            useCompactLayout ? 'prose-sm' : 'prose-base'
+          } ${layout.isMobile ? 'prose-sm' : 'prose-base'}`}
+          components={{
                 code({ node, className, children, ...props }) {
                   const match = /language-(\w+)/.exec(className || "");
                   return node && !node.properties.inline && match ? (
@@ -358,17 +363,69 @@ export default function MessageBubble({
                   </blockquote>
                 ),
                 a: ({ children, href, ...props }) => (
-                  <a 
-                    href={href} 
+                  <a
+                    href={href}
                     className={`text-purple-300 hover:text-purple-200 underline ${
-                      layout.isMobile && dynamicStyles.overflowStrategy === 'ellipsis' 
-                        ? 'truncate inline-block max-w-full' 
+                      layout.isMobile && dynamicStyles.overflowStrategy === 'ellipsis'
+                        ? 'truncate inline-block max-w-full'
                         : 'break-all'
                     }`}
                     {...props}
                   >
                     {children}
                   </a>
+                ),
+                table: ({ children }) => (
+                  <div className="table-wrapper">
+                    <table className="w-full border-collapse">
+                      {children}
+                    </table>
+                  </div>
+                ),
+                thead: ({ children }) => (
+                  <thead>
+                    {children}
+                  </thead>
+                ),
+                tbody: ({ children }) => (
+                  <tbody>
+                    {children}
+                  </tbody>
+                ),
+                tr: ({ children }) => (
+                  <tr>
+                    {children}
+                  </tr>
+                ),
+                th: ({ children }) => (
+                  <th>
+                    {children}
+                  </th>
+                ),
+                td: ({ children }) => (
+                  <td>
+                    {children}
+                  </td>
+                ),
+                h1: ({ children }) => (
+                  <h1 className="text-2xl font-bold mb-4 pb-2 border-b border-purple-500/30">
+                    {children}
+                  </h1>
+                ),
+                h2: ({ children }) => (
+                  <h2 className="text-xl font-semibold mb-3 pb-1 border-b border-purple-500/20">
+                    {children}
+                  </h2>
+                ),
+                h3: ({ children }) => (
+                  <h3 className="text-lg font-semibold mb-2">
+                    {children}
+                  </h3>
+                ),
+                h4: ({ children }) => (
+                  <h4 className="text-base font-semibold mb-2">
+                    {children}
+                  </h4>
                 ),
               }}
             >
@@ -466,6 +523,7 @@ export default function MessageBubble({
                     layout.isMobile ? 'p-2' : 'p-3'
                   }`}>
                     <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
                       className={`text-white/70 prose prose-invert max-w-none ${
                         layout.isMobile ? 'prose-xs text-xs' : 'prose-sm text-sm'
                       }`}
@@ -496,6 +554,68 @@ export default function MessageBubble({
                           <p className={`${useCompactLayout ? 'mb-1' : 'mb-2'} ${layout.isMobile ? 'text-xs' : 'text-sm'}`}>
                             {children}
                           </p>
+                        ),
+                        table: ({ children }) => (
+                          <div className="table-wrapper">
+                            <table className="w-full border-collapse text-xs">
+                              {children}
+                            </table>
+                          </div>
+                        ),
+                        thead: ({ children }) => (
+                          <thead>
+                            {children}
+                          </thead>
+                        ),
+                        tbody: ({ children }) => (
+                          <tbody>
+                            {children}
+                          </tbody>
+                        ),
+                        tr: ({ children }) => (
+                          <tr>
+                            {children}
+                          </tr>
+                        ),
+                        th: ({ children }) => (
+                          <th className="text-left font-semibold py-1 px-2 border-b border-white/20">
+                            {children}
+                          </th>
+                        ),
+                        td: ({ children }) => (
+                          <td className="py-1 px-2 border-b border-white/10">
+                            {children}
+                          </td>
+                        ),
+                        h1: ({ children }) => (
+                          <h1 className="text-sm font-bold mb-2 pb-1 border-b border-white/20">
+                            {children}
+                          </h1>
+                        ),
+                        h2: ({ children }) => (
+                          <h2 className="text-xs font-semibold mb-1">
+                            {children}
+                          </h2>
+                        ),
+                        h3: ({ children }) => (
+                          <h3 className="text-xs font-semibold mb-1">
+                            {children}
+                          </h3>
+                        ),
+                        ul: ({ children }) => (
+                          <ul className="list-disc list-inside mb-2 pl-2 text-xs">
+                            {children}
+                          </ul>
+                        ),
+                        ol: ({ children }) => (
+                          <ol className="list-decimal list-inside mb-2 pl-2 text-xs">
+                            {children}
+                          </ol>
+                        ),
+                        li: ({ children }) => (
+                          <li className="mb-0.5">
+                            {children}
+                          </li>
                         ),
                       }}
                     >

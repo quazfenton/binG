@@ -11,12 +11,24 @@ import ConversationInterface from "@/components/conversation-interface";
 
 export default function ChatBox() {
   const [mounted, setMounted] = useState(false)
+  const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url"
 
   // Only render the 3D interface after component has mounted on the client
   useEffect(() => {
     setMounted(true)
     // Initialize cache cleanup
     startCacheCleanup()
+
+    // Apply persisted or env-provided custom background media URL.
+    const root = document.documentElement
+    const saved = localStorage.getItem(CUSTOM_BG_MEDIA_KEY)
+    const fallback = process.env.NEXT_PUBLIC_BG_MEDIA_URL || ""
+    const mediaUrl = (saved || fallback).trim()
+
+    if (mediaUrl) {
+      root.style.setProperty("--app-bg-media", `url("${mediaUrl}")`)
+      root.style.setProperty("--app-bg-media-opacity", "0.12")
+    }
   }, [])
 
   if (!mounted) {

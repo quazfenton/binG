@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -29,6 +30,7 @@ import ModalLoginForm from "@/components/auth/modal-login-form";
 import ModalSignupForm from "@/components/auth/modal-signup-form";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "next-themes";
+import { toast } from "sonner";
 
 interface SettingsProps {
   onClose: () => void;
@@ -37,6 +39,41 @@ interface SettingsProps {
   voiceEnabled?: boolean;
   onVoiceToggle?: (enabled: boolean) => void;
 }
+
+const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url";
+const USER_BUBBLE_BG_KEY = "user_bubble_bg";
+const USER_BUBBLE_TEXT_KEY = "user_bubble_text";
+const ASSISTANT_BUBBLE_BG_KEY = "assistant_bubble_bg";
+const ASSISTANT_BUBBLE_TEXT_KEY = "assistant_bubble_text";
+const ASSISTANT_BUBBLE_BORDER_KEY = "assistant_bubble_border";
+
+const applyCustomBackgroundMedia = (value: string) => {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (!value) {
+    root.style.setProperty("--app-bg-media", "none");
+    root.style.setProperty("--app-bg-media-opacity", "0");
+    return;
+  }
+  root.style.setProperty("--app-bg-media", `url("${value}")`);
+  root.style.setProperty("--app-bg-media-opacity", "0.12");
+};
+
+const applyBubbleColors = (colors: {
+  userBg?: string;
+  userText?: string;
+  assistantBg?: string;
+  assistantText?: string;
+  assistantBorder?: string;
+}) => {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (colors.userBg) root.style.setProperty("--user-bubble-bg", colors.userBg);
+  if (colors.userText) root.style.setProperty("--user-bubble-text", colors.userText);
+  if (colors.assistantBg) root.style.setProperty("--assistant-bubble-bg", colors.assistantBg);
+  if (colors.assistantText) root.style.setProperty("--assistant-bubble-text", colors.assistantText);
+  if (colors.assistantBorder) root.style.setProperty("--assistant-bubble-border", colors.assistantBorder);
+};
 
 const THEME_OPTIONS = [
   { id: "dark", label: "Dark", swatch: "bg-neutral-900" },
@@ -62,6 +99,12 @@ export default function Settings({
   const [speechRate, setSpeechRate] = useState(1);
   const [speechVolume, setSpeechVolume] = useState(0.8);
   const [isListening, setIsListening] = useState(false);
+  const [customBgUrl, setCustomBgUrl] = useState("");
+  const [userBubbleBg, setUserBubbleBg] = useState("#7c3aed");
+  const [userBubbleText, setUserBubbleText] = useState("#ffffff");
+  const [assistantBubbleBg, setAssistantBubbleBg] = useState("#000000");
+  const [assistantBubbleText, setAssistantBubbleText] = useState("#ffffff");
+  const [assistantBubbleBorder, setAssistantBubbleBorder] = useState("#ffffff");
 
   // State for managing auth modal visibility and mode
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -122,6 +165,36 @@ export default function Settings({
         recognition.current.stop();
       }
     };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = localStorage.getItem(CUSTOM_BG_MEDIA_KEY) || "";
+    setCustomBgUrl(saved);
+    // Preserve env-provided/default media when no custom URL is saved.
+    if (saved.trim()) {
+      applyCustomBackgroundMedia(saved);
+    }
+
+    const savedUserBg = localStorage.getItem(USER_BUBBLE_BG_KEY) || "";
+    const savedUserText = localStorage.getItem(USER_BUBBLE_TEXT_KEY) || "";
+    const savedAssistantBg = localStorage.getItem(ASSISTANT_BUBBLE_BG_KEY) || "";
+    const savedAssistantText = localStorage.getItem(ASSISTANT_BUBBLE_TEXT_KEY) || "";
+    const savedAssistantBorder = localStorage.getItem(ASSISTANT_BUBBLE_BORDER_KEY) || "";
+
+    if (savedUserBg) setUserBubbleBg(savedUserBg);
+    if (savedUserText) setUserBubbleText(savedUserText);
+    if (savedAssistantBg) setAssistantBubbleBg(savedAssistantBg);
+    if (savedAssistantText) setAssistantBubbleText(savedAssistantText);
+    if (savedAssistantBorder) setAssistantBubbleBorder(savedAssistantBorder);
+
+    applyBubbleColors({
+      userBg: savedUserBg || undefined,
+      userText: savedUserText || undefined,
+      assistantBg: savedAssistantBg || undefined,
+      assistantText: savedAssistantText || undefined,
+      assistantBorder: savedAssistantBorder || undefined,
+    });
   }, []);
 
   // Screen reader functionality
@@ -201,6 +274,48 @@ export default function Settings({
     setShowAuthModal(false);
     setAuthError('');
     setAuthMode('login');
+  };
+
+  const handleApplyCustomBg = () => {
+    const trimmed = customBgUrl.trim();
+    if (!trimmed) {
+      applyCustomBackgroundMedia("");
+      if (typeof window !== "undefined") localStorage.removeItem(CUSTOM_BG_MEDIA_KEY);
+      toast.success("Custom background cleared");
+      return;
+    }
+    try {
+      new URL(trimmed);
+      if (typeof window !== "undefined") localStorage.setItem(CUSTOM_BG_MEDIA_KEY, trimmed);
+      applyCustomBackgroundMedia(trimmed);
+      toast.success("Custom ambient background applied");
+    } catch {
+      toast.error("Invalid background media URL");
+    }
+  };
+
+  const handleClearCustomBg = () => {
+    setCustomBgUrl("");
+    if (typeof window !== "undefined") localStorage.removeItem(CUSTOM_BG_MEDIA_KEY);
+    applyCustomBackgroundMedia("");
+  };
+
+  const handleApplyBubbleColors = () => {
+    applyBubbleColors({
+      userBg: userBubbleBg,
+      userText: userBubbleText,
+      assistantBg: assistantBubbleBg,
+      assistantText: assistantBubbleText,
+      assistantBorder: assistantBubbleBorder,
+    });
+    if (typeof window !== "undefined") {
+      localStorage.setItem(USER_BUBBLE_BG_KEY, userBubbleBg);
+      localStorage.setItem(USER_BUBBLE_TEXT_KEY, userBubbleText);
+      localStorage.setItem(ASSISTANT_BUBBLE_BG_KEY, assistantBubbleBg);
+      localStorage.setItem(ASSISTANT_BUBBLE_TEXT_KEY, assistantBubbleText);
+      localStorage.setItem(ASSISTANT_BUBBLE_BORDER_KEY, assistantBubbleBorder);
+    }
+    toast.success("Message bubble colors updated");
   };
 
   return (
@@ -355,7 +470,7 @@ export default function Settings({
               <div className="flex gap-2">
                 <Button
                   size="sm"
-                  className="flex-1 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                  className="flex-1 bg-gradient-to-r from-gray-900 to-gray-700 hover:from-black hover:to-gray-800"
                   onClick={() => handleAuthSwitch('signup')}
                   disabled={isLoading}
                 >
@@ -414,6 +529,56 @@ export default function Settings({
             Current: <span className="text-white font-medium capitalize">{resolvedTheme || theme}</span>
             <span className="mx-2">•</span>
             Available: <span className="text-white font-medium">{themes.length}</span>
+          </div>
+
+          <div className="mt-4 space-y-2">
+            <Label htmlFor="custom-bg-url" className="text-xs text-white/70">
+              Custom Ambient GIF/Image URL
+            </Label>
+            <Input
+              id="custom-bg-url"
+              value={customBgUrl}
+              onChange={(e) => setCustomBgUrl(e.target.value)}
+              placeholder="https://.../background.gif"
+              className="bg-black/30 border-white/20 text-xs"
+            />
+            <div className="flex gap-2">
+              <Button size="sm" className="flex-1" onClick={handleApplyCustomBg}>
+                Apply
+              </Button>
+              <Button size="sm" variant="outline" className="flex-1" onClick={handleClearCustomBg}>
+                Clear
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-2">
+            <Label className="text-xs text-white/70">Message Bubble Colors</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label htmlFor="user-bubble-bg" className="text-[11px] text-white/60">Your Bubble</Label>
+                <Input id="user-bubble-bg" type="color" value={userBubbleBg} onChange={(e) => setUserBubbleBg(e.target.value)} className="h-8 p-1 bg-black/30 border-white/20" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="user-bubble-text" className="text-[11px] text-white/60">Your Text</Label>
+                <Input id="user-bubble-text" type="color" value={userBubbleText} onChange={(e) => setUserBubbleText(e.target.value)} className="h-8 p-1 bg-black/30 border-white/20" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="assistant-bubble-bg" className="text-[11px] text-white/60">Assistant Bubble</Label>
+                <Input id="assistant-bubble-bg" type="color" value={assistantBubbleBg} onChange={(e) => setAssistantBubbleBg(e.target.value)} className="h-8 p-1 bg-black/30 border-white/20" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="assistant-bubble-text" className="text-[11px] text-white/60">Assistant Text</Label>
+                <Input id="assistant-bubble-text" type="color" value={assistantBubbleText} onChange={(e) => setAssistantBubbleText(e.target.value)} className="h-8 p-1 bg-black/30 border-white/20" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="assistant-bubble-border" className="text-[11px] text-white/60">Assistant Border</Label>
+              <Input id="assistant-bubble-border" type="color" value={assistantBubbleBorder} onChange={(e) => setAssistantBubbleBorder(e.target.value)} className="h-8 p-1 bg-black/30 border-white/20" />
+            </div>
+            <Button size="sm" className="w-full" onClick={handleApplyBubbleColors}>
+              Apply Bubble Colors
+            </Button>
           </div>
         </div>
 

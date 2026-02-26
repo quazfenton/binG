@@ -29,6 +29,7 @@ export interface CodeModeActions {
   processCodePrompt: (prompt: string, context?: any) => Promise<string>;
   clearError: () => void;
   resetSession: () => void;
+  refreshProjectStructure: () => Promise<void>;
 }
 
 export interface CodePromptContext {
@@ -51,18 +52,7 @@ export function useInteractionCodeMode() {
     mode: 'basic',
     selectedFiles: [],
     attachedFiles: {},
-    projectStructure: [
-      'src/components/App.tsx',
-      'src/utils/helpers.ts',
-      'package.json',
-      'README.md',
-      'src/styles/globals.css',
-      'src/hooks/use-api.ts',
-      'src/lib/utils.ts',
-      'src/types/index.ts',
-      'tailwind.config.js',
-      'next.config.js',
-    ],
+    projectStructure: [],
     isProcessing: false,
     error: null,
     sessionActive: false,
@@ -221,6 +211,42 @@ export function useInteractionCodeMode() {
       sessionActive: false,
     }));
   }, [integrationState.currentSession, integrationActions]);
+  const fetchProjectFiles = useCallback(async () => {
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const sessionRes = await fetch('/api/sandbox/session', { headers });
+      const { session } = await sessionRes.json();
+      
+      if (!session?.sandboxId) {
+        console.warn('No active sandbox session for file listing');
+        return;
+      }
+      
+      const execRes = await fetch('/api/sandbox/execute', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          command: 'find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/.next/*" | sed "s|^./||" | head -100',
+          sandboxId: session.sandboxId
+        })
+      });
+      
+      const { stdout } = await execRes.json();
+      if (stdout) {
+        const files = stdout.split('\n').filter(Boolean);
+        if (files.length > 0) {
+          setState(prev => ({ ...prev, projectStructure: files }));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch project files:', err);
+    }
+  }, []);
 
   const actions: CodeModeActions = {
     setMode,
@@ -231,6 +257,7 @@ export function useInteractionCodeMode() {
     processCodePrompt,
     clearError,
     resetSession,
+    refreshProjectStructure: fetchProjectFiles,
   };
 
   return [state, actions] as const;

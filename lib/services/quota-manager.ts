@@ -1,8 +1,11 @@
 /**
  * Quota Manager - Tracks tool/sandbox call usage per provider and disables
  * providers when monthly quotas are reached to prevent overages.
- * 
+ *
  * Uses SQLite database for persistent storage across server restarts.
+ * 
+ * NOTE: Quotas ONLY apply to tool and sandbox providers (composio, arcade, nango, 
+ * daytona, runloop, microsandbox, e2b). Regular LLM chat requests are NOT tracked.
  */
 
 import { getDatabase } from '@/lib/database/connection';
@@ -18,14 +21,15 @@ export interface ProviderQuota {
 }
 
 // Default monthly limits (can be overridden via env vars)
+// These are ONLY for tool/sandbox providers - NOT regular LLM chat
 const DEFAULT_QUOTAS: Record<string, number> = {
-  composio: 20000,
-  arcade: 10000,
-  nango: 10000,
-  daytona: 5000,
-  runloop: 5000,
-  microsandbox: 10000,
-  e2b: 1000,  // E2B sandbox sessions per month (free tier: 1000 hours/month)
+  composio: 20000,    // Tool calls
+  arcade: 10000,      // Tool calls
+  nango: 10000,       // Tool calls
+  daytona: 5000,      // Sandbox sessions
+  runloop: 5000,      // Sandbox sessions
+  microsandbox: 10000, // Sandbox sessions
+  e2b: 1000,          // E2B sandbox sessions per month (free tier: 1000 hours/month)
 };
 
 class QuotaManager {

@@ -642,6 +642,11 @@ export default function InteractionPanel({
   ];
 
   const [showFileSelector, setShowFileSelector] = useState(false);
+  useEffect(() => {
+    if (showFileSelector && codeModeActions?.refreshProjectStructure) {
+      codeModeActions.refreshProjectStructure();
+    }
+  }, [showFileSelector, codeModeActions]);
   const [showMultiModelComparison, setShowMultiModelComparison] =
     useState(false);
 
@@ -1426,13 +1431,7 @@ export default function InteractionPanel({
                             <h5 className="text-xs font-medium mb-1">
                               Project Files
                             </h5>
-                            {[
-                              "src/components/App.tsx",
-                              "src/utils/helpers.ts",
-                              "package.json",
-                              "README.md",
-                              "src/styles/globals.css",
-                            ].map((file) => (
+                            {codeModeState.projectStructure.map((file) => (
                               <div
                                 key={file}
                                 className="flex items-center gap-2 text-xs p-1 hover:bg-white/10 rounded"

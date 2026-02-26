@@ -285,12 +285,15 @@ class PriorityRequestRouter {
           continue;
         }
 
-        // Perform health check
-        const isHealthy = await endpoint.healthCheck();
-        if (!isHealthy) {
-          console.warn(`[Router] ${endpoint.name} health check failed, trying next`);
-          fallbackChain.push(`${endpoint.name} (unhealthy)`);
-          continue;
+        // Skip health check for original-system (regular chat) to avoid latency
+        // Health checks are still performed for tool/sandbox endpoints
+        if (endpoint.name !== 'original-system') {
+          const isHealthy = await endpoint.healthCheck();
+          if (!isHealthy) {
+            console.warn(`[Router] ${endpoint.name} health check failed, trying next`);
+            fallbackChain.push(`${endpoint.name} (unhealthy)`);
+            continue;
+          }
         }
 
         // Process request

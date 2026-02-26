@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useCallback } from 'react';
+import { toast } from 'sonner';
 import { secureRandomString } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -129,7 +130,7 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
       }
 
       let shortened: ShortenedUrl | null = null;
-      let backendError = false;
+      let useLocalFallback = false;
       
       try {
         const res = await fetch('/api/url/shorten', {
@@ -138,30 +139,32 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
           body: JSON.stringify({ url: input }),
         });
         if (!res.ok) {
+          // HTTP error (4xx/5xx) - show actual error, don't fall back
           const errorData = await res.json().catch(() => ({}));
-          // Don't show error yet - fall back to local shortening
-          backendError = true;
-        } else {
-          const body = await res.json();
-          if (!body.shortened) {
-            backendError = true;
-          } else {
-            shortened = {
-              original: body.original,
-              shortened: body.shortened,
-              clicks: body.clicks || 0,
-              created: body.created || new Date().toISOString(),
-              reachable: null,
-            };
-          }
+          toast.error(errorData.error || 'Failed to shorten URL');
+          setIsProcessing(false);
+          return;
         }
+        const body = await res.json();
+        if (!body.shortened) {
+          toast.error('Invalid response from server');
+          setIsProcessing(false);
+          return;
+        }
+        shortened = {
+          original: body.original,
+          shortened: body.shortened,
+          clicks: body.clicks || 0,
+          created: body.created || new Date().toISOString(),
+          reachable: null,
+        };
       } catch (err: any) {
-        // Network error - fall back to local shortening
-        backendError = true;
+        // Network error (offline, CORS, server down) - fall back to local shortening
+        useLocalFallback = true;
       }
 
-      // Fallback to local short-link generation when backend is unavailable
-      if (backendError) {
+      // Fallback to local short-link generation when backend is unreachable
+      if (useLocalFallback) {
         const shortId = secureRandomString(8).toLowerCase();
         const baseUrl = window.location.origin;
         shortened = {
@@ -171,7 +174,7 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
           created: new Date().toISOString(),
           reachable: null,
         };
-        toast.info('Backend unavailable. Created local short-link (not persisted to server).');
+        toast.info('Backend unreachable. Created local short-link (not persisted to server).');
       }
 
       const newUrls = [shortened, ...shortenedUrls.slice(0, 9)];

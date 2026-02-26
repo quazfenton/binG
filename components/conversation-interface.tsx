@@ -846,14 +846,26 @@ function ConversationInterfaceContent() {
   };
 
   return (
-    <div className="relative w-full h-screen bg-black overflow-hidden touch-pan-y">
+    <div className="relative w-full h-screen overflow-hidden touch-pan-y z-[1]">
       {/* Subtle animated background */}
-      <div className="absolute inset-0 opacity-20">
-        <div className="absolute inset-0 bg-gradient-to-br from-gray-900/30 via-black to-gray-800/20"></div>
+      <div className="absolute inset-0 opacity-45">
+        <div
+          className="absolute inset-0"
+          style={{ background: "var(--app-scene-overlay)" }}
+        />
         <div className="absolute inset-0 animate-pulse-slow">
-          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-gray-700/10 rounded-full blur-3xl animate-float-slow"></div>
-          <div className="absolute top-3/4 right-1/4 w-80 h-80 bg-gray-600/10 rounded-full blur-3xl animate-float-reverse"></div>
-          <div className="absolute bottom-1/4 left-1/2 w-64 h-64 bg-gray-800/10 rounded-full blur-3xl animate-float-slow"></div>
+          <div
+            className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full blur-3xl animate-float-slow"
+            style={{ backgroundColor: "var(--app-orb-1)" }}
+          />
+          <div
+            className="absolute top-3/4 right-1/4 w-80 h-80 rounded-full blur-3xl animate-float-reverse"
+            style={{ backgroundColor: "var(--app-orb-2)" }}
+          />
+          <div
+            className="absolute bottom-1/4 left-1/2 w-64 h-64 rounded-full blur-3xl animate-float-slow"
+            style={{ backgroundColor: "var(--app-orb-3)" }}
+          />
         </div>
       </div>
       <div className="flex flex-col md:flex-row h-full min-h-0">

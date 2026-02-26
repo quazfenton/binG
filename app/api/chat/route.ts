@@ -160,15 +160,15 @@ export async function POST(request: NextRequest) {
       
       console.log(`[DEBUG] Chat API: Request handled by ${routerResponse.source} (priority ${routerResponse.priority}) - Actual: ${actualProvider}/${actualModel}`);
       
-      // Check for auth_required in response
-      if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
+// Check for auth_required in response
+if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
         return NextResponse.json({
           status: 'auth_required',
           authUrl: routerResponse.data.authUrl,
           toolName: routerResponse.data.toolName,
           provider: routerResponse.data.provider || 'unknown',
           message: `Please authorize ${routerResponse.data.toolName} to continue`
-        });
+        }, { status: 401 });
       }
       
       // Process response through unified handler
@@ -230,14 +230,17 @@ export async function POST(request: NextRequest) {
       }
 
       // Handle non-streaming response
-      return NextResponse.json({
-        success: unifiedResponse.success,
-        data: unifiedResponse.data,
-        commands: unifiedResponse.commands,
-        metadata: unifiedResponse.metadata,
-        timestamp: unifiedResponse.metadata?.timestamp
-      });
-      
+      const responseStatus = unifiedResponse.success ? 200 : 500;
+      return NextResponse.json(
+        {
+          success: unifiedResponse.success,
+          data: unifiedResponse.data,
+          commands: unifiedResponse.commands,
+          metadata: unifiedResponse.metadata,
+          timestamp: unifiedResponse.metadata?.timestamp
+        },
+        { status: responseStatus }
+      );
     } catch (routerError) {
       const routerErrorObj = routerError as Error;
       // Log which providers were tried from the fallback chain
@@ -267,7 +270,8 @@ export async function POST(request: NextRequest) {
         timestamp: new Date().toISOString()
       }, { status: 503 }); // Service Unavailable - indicates temporary issue
     }
-  } catch (error) {
+  }
+  catch (error) {
     // Skip verbose logging for expected "not configured" errors
     const errorMessage = error instanceof Error ? error.message : String(error);
     const isNotConfiguredError = errorMessage.includes('not configured');

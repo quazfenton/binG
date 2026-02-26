@@ -30,17 +30,28 @@ export function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 
     return '';
   };
 
-  const text = extractText(lastUserContent);
-  const recentUserContext = userMessages
-    .slice(-3)
-    .map((m) => extractText(m.content))
-    .join(' ')
-    .trim();
-  const combinedText = `${recentUserContext} ${text}`.trim();
-  
-  if (!combinedText.trim()) return 'chat';
-  
-  const lowerText = combinedText.toLowerCase();
+  const text = extractText(lastUserContent).trim();
+  if (!text) return 'chat';
+
+  const lowerText = text.toLowerCase();
+
+  // Knowledge/advice requests should remain plain chat even if they mention
+  // "tool calls", "SDK", etc. (e.g. "how to use mistral agent sdk for tool calls?")
+  const KNOWLEDGE_PATTERNS = [
+    /^\s*(how|what|why|when|where|can|could|would|should|is|are|do|does)\b/i,
+    /\b(explain|guide|tutorial|docs|documentation|example|examples|best practice|overview)\b/i,
+    /\b(how to use|how do i use|how can i use|how does)\b/i,
+  ];
+  const ACTION_PATTERNS = [
+    /\b(send|draft|compose|create|post|upload|deploy|open|start|launch|execute|run)\b/i,
+    /\bfor me\b/i,
+    /\bnow\b/i,
+  ];
+  const looksLikeKnowledgeRequest = KNOWLEDGE_PATTERNS.some((p) => p.test(lowerText));
+  const explicitlyActionable = ACTION_PATTERNS.some((p) => p.test(lowerText));
+  if (looksLikeKnowledgeRequest && !explicitlyActionable) {
+    return 'chat';
+  }
 
   // Tool intent patterns (third-party service actions)
   const TOOL_PATTERNS = [

@@ -141,8 +141,36 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
 
       const featureColumns = numericColumns.slice(0, -1);
       const targetColumn = numericColumns[numericColumns.length - 1];
-      const features = data.map(row => featureColumns.map(col => Number(row[col])));
-      const labels = data.map(row => Number(row[targetColumn]));
+      
+      // Build features and labels, filtering out rows with missing/invalid values
+      const features: number[][] = [];
+      const labels: number[] = [];
+      
+      for (const row of data) {
+        // Extract feature values for this row
+        const featureValues = featureColumns.map(col => {
+          const value = row[col];
+          const num = typeof value === 'number' ? value : Number(value);
+          return Number.isFinite(num) ? num : null;
+        });
+        
+        // Extract target value
+        const targetValue = row[targetColumn];
+        const targetNum = typeof targetValue === 'number' ? targetValue : Number(targetValue);
+        const target = Number.isFinite(targetNum) ? targetNum : null;
+        
+        // Skip rows with any invalid values (complete-case analysis)
+        if (featureValues.some(v => v === null) || target === null) {
+          continue;
+        }
+        
+        features.push(featureValues as number[]);
+        labels.push(target);
+      }
+      
+      if (features.length === 0) {
+        throw new Error('No complete rows found after filtering invalid values');
+      }
 
       const res = await fetch('/api/modal/train', {
         method: 'POST',
