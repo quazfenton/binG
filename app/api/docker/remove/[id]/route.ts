@@ -19,7 +19,7 @@ const validateContainerId = (id: string): boolean => {
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   try {
     const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
@@ -30,7 +30,7 @@ export async function DELETE(
       );
     }
 
-    const { id } = await params;
+    const { id } = params;
 
     // SECURITY: Validate container ID format
     if (!validateContainerId(id)) {

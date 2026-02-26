@@ -4,10 +4,10 @@ import { createAuditLogger, type AuditLogger } from '@/lib/audit/audit-logger';
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   let auditLogger: AuditLogger | null = null;
-  
+
   try {
     // SECURITY: Require authentication to prevent unauthorized pipeline restarts
     const authResult = await resolveRequestAuth(req, {
@@ -22,7 +22,7 @@ export async function POST(
     }
 
     auditLogger = createAuditLogger(req, authResult.userId);
-    const { id } = await params;
+    const { id } = params;
 
     // AUDIT: Log restart attempt
     auditLogger.log({

@@ -17,7 +17,7 @@ const validateContainerId = (id: string): boolean => {
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   try {
     // SECURITY: Require authentication to prevent unauthorized container manipulation
@@ -32,7 +32,7 @@ export async function POST(
       );
     }
 
-    const { id } = await params;
+    const { id } = params;
 
     // SECURITY: Validate container ID format
     if (!validateContainerId(id)) {

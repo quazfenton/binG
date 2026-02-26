@@ -244,7 +244,7 @@ export default function MessageBubble({
   }
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} ${useCompactLayout ? 'mb-3' : 'mb-6'} group w-full`}>
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"} ${useCompactLayout ? 'mb-3' : 'mb-6'} group w-full px-1`}>
       <div
         className={`
           message-bubble-responsive relative transition-all duration-200
@@ -258,7 +258,7 @@ export default function MessageBubble({
           ${layout.isPortrait ? 'portrait-layout' : 'landscape-layout'}
         `}
         style={{
-          maxWidth: dynamicStyles.maxWidth,
+          maxWidth: layout.isMobile ? 'calc(100vw - 2.25rem)' : dynamicStyles.maxWidth,
           padding: dynamicStyles.padding,
           fontSize: dynamicStyles.fontSize,
           wordBreak: dynamicStyles.overflowStrategy === 'wrap' ? 'break-word' : 'normal',
@@ -276,8 +276,8 @@ export default function MessageBubble({
         {/* Thinking indicator - shown at start of streaming */}
         {isStreaming && streamingDisplay.showLoadingIndicator && (
           <div className="flex items-center gap-2 text-white/60 mb-2">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span className="text-sm animate-pulse">Thinking...</span>
+            <Loader2 className="w-4 h-4 thinking-spinner" />
+            <span className="text-sm thinking-pulse">Thinking...</span>
           </div>
         )}
 
@@ -510,7 +510,7 @@ export default function MessageBubble({
           variant="ghost"
           size="icon"
           className={`
-            button-responsive absolute -right-2 top-1/2 transform -translate-y-1/2
+            button-responsive absolute ${layout.isMobile ? 'right-1 top-1' : '-right-2 top-1/2 -translate-y-1/2'}
             ${layout.isMobile ? 'opacity-70' : 'opacity-0 group-hover:opacity-100'} 
             transition-all duration-200 bg-black/80 hover:bg-black/90 border border-white/20
             ${layout.isMobile ? 'h-10 w-10' : 'h-6 w-6'}

@@ -111,9 +111,29 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
   const trainModel = async () => {
     setLoading(true);
     try {
-      const numericColumns = columns.filter(col =>
-        data.every(row => typeof row[col] === 'number')
-      );
+      // Detect numeric columns with tolerance for missing/non-numeric values
+      const numericColumns = columns.filter(col => {
+        const values = data.map(row => row[col]);
+        const totalCount = values.length;
+        if (totalCount === 0) return false;
+
+        let numericCount = 0;
+        for (const value of values) {
+          // Treat missing/empty as tolerable but not numeric
+          if (value === null || value === undefined || value === '') {
+            continue;
+          }
+          const num = typeof value === 'number' ? value : Number(value);
+          if (!Number.isNaN(num) && Number.isFinite(num)) {
+            numericCount += 1;
+          }
+        }
+
+        // Allow up to 10% non-numeric/missing values in an otherwise numeric column
+        const numericRatio = numericCount / totalCount;
+        const MIN_NUMERIC_RATIO = 0.9;
+        return numericRatio >= MIN_NUMERIC_RATIO;
+      });
 
       if (numericColumns.length < 2) {
         throw new Error('Need at least 2 numeric columns for training');
@@ -372,7 +392,7 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
                 </Select>
 
                 <Button onClick={trainModel} disabled={loading || data.length === 0} className="w-full">
-                  {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
+                  {loading ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Play className="w-4 h-4 mr-2" />}
                   Train Model
                 </Button>
 

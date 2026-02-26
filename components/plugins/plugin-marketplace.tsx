@@ -65,8 +65,9 @@ export const PluginMarketplace: React.FC<PluginMarketplaceProps> = ({
   const [selectedPlugin, setSelectedPlugin] = useState<MarketplacePlugin | null>(null);
 
   useEffect(() => {
+    // Reload marketplace plugins when search term or category changes
     void loadMarketplacePlugins();
-  }, []);
+  }, [searchTerm, selectedCategory]);
 
   useEffect(() => {
     filterAndSortPlugins();

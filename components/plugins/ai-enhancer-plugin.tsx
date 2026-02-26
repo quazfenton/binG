@@ -165,7 +165,7 @@ export const AIEnhancerPlugin: React.FC<PluginProps> = ({
               className="w-full bg-purple-600 hover:bg-purple-700"
             >
               {isProcessing ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 mr-2 thinking-spinner" />
               ) : (
                 <Sparkles className="w-4 h-4 mr-2" />
               )}
@@ -201,7 +201,7 @@ export const AIEnhancerPlugin: React.FC<PluginProps> = ({
           <div className="flex-1 bg-black/30 border border-gray-700 rounded-lg p-3 text-sm overflow-y-auto">
             {isProcessing && !enhanced ? (
               <div className="flex items-center justify-center h-full text-white/50">
-                <Loader2 className="w-6 h-6 animate-spin" />
+                <Loader2 className="w-6 h-6 thinking-spinner" />
               </div>
             ) : enhanced ? (
               <pre className="whitespace-pre-wrap font-mono text-xs">{enhanced}</pre>

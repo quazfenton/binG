@@ -7,9 +7,17 @@ const loadDocker = async () => {
   return mod.default;
 };
 
+/**
+ * Validates container ID format.
+ * Docker container IDs are 64-character hex strings (often truncated to 12).
+ */
+const validateContainerId = (id: string): boolean => {
+  return /^[a-f0-9]{12,64}$/.test(id.toLowerCase());
+};
+
 export async function POST(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   try {
     // SECURITY: Require authentication to prevent unauthorized container manipulation
@@ -24,7 +32,16 @@ export async function POST(
       );
     }
 
-    const { id } = await params;
+    const { id } = params;
+
+    // SECURITY: Validate container ID format
+    if (!validateContainerId(id)) {
+      return NextResponse.json(
+        { error: 'Invalid container ID format' },
+        { status: 400 }
+      );
+    }
+
     const Docker = await loadDocker();
     // Respect DOCKER_SOCKET env var for custom socket paths, otherwise use dockerode defaults
     const docker = new Docker(

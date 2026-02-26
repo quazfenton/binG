@@ -129,6 +129,8 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
       }
 
       let shortened: ShortenedUrl | null = null;
+      let backendError = false;
+      
       try {
         const res = await fetch('/api/url/shorten', {
           method: 'POST',
@@ -137,27 +139,39 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
         });
         if (!res.ok) {
           const errorData = await res.json().catch(() => ({}));
-          toast.error(errorData.error || 'Failed to shorten URL');
-          setIsProcessing(false);
-          return;
+          // Don't show error yet - fall back to local shortening
+          backendError = true;
+        } else {
+          const body = await res.json();
+          if (!body.shortened) {
+            backendError = true;
+          } else {
+            shortened = {
+              original: body.original,
+              shortened: body.shortened,
+              clicks: body.clicks || 0,
+              created: body.created || new Date().toISOString(),
+              reachable: null,
+            };
+          }
         }
-        const body = await res.json();
-        if (!body.shortened) {
-          toast.error('Invalid response from server');
-          setIsProcessing(false);
-          return;
-        }
+      } catch (err: any) {
+        // Network error - fall back to local shortening
+        backendError = true;
+      }
+
+      // Fallback to local short-link generation when backend is unavailable
+      if (backendError) {
+        const shortId = secureRandomString(8).toLowerCase();
+        const baseUrl = window.location.origin;
         shortened = {
-          original: body.original,
-          shortened: body.shortened,
-          clicks: body.clicks || 0,
-          created: body.created || new Date().toISOString(),
+          original: input,
+          shortened: `${baseUrl}/local/${shortId}`,
+          clicks: 0,
+          created: new Date().toISOString(),
           reachable: null,
         };
-      } catch (err: any) {
-        toast.error(err.message || 'Network error');
-        setIsProcessing(false);
-        return;
+        toast.info('Backend unavailable. Created local short-link (not persisted to server).');
       }
 
       const newUrls = [shortened, ...shortenedUrls.slice(0, 9)];
@@ -289,7 +303,7 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
                   className={mode === 'validate' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-green-600 hover:bg-green-700'}
                 >
                   {isProcessing ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <Loader2 className="w-4 h-4 thinking-spinner" />
                   ) : mode === 'validate' ? (
                     <>
                       <CheckCircle className="w-4 h-4 mr-2" />
@@ -493,7 +507,7 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
               >
                 {isProcessing ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 mr-2 thinking-spinner" />
                     Validating...
                   </>
                 ) : (

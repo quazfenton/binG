@@ -266,19 +266,29 @@ export default function InteractionPanel({
   // Panel state
   const [panelHeight, setPanelHeight] = useState(() => {
     if (typeof window !== "undefined" && window.innerWidth <= 768) {
-      return Math.min(250, window.innerHeight * 0.4);
+      return Math.min(420, window.innerHeight * 0.58);
     }
     return 320; // Increased from 280 to ensure input is always visible
   });
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const prevPanelHeightRef = useRef<number | null>(null);
   const getPanelMaxHeight = useCallback(() => {
     if (typeof window === "undefined") {
       return 600;
     }
     return Math.max(240, window.innerHeight - 60);
+  }, []);
+
+  const getPanelMinHeight = useCallback(() => {
+    if (typeof window === "undefined") return 240;
+    return window.innerWidth <= 768 ? 320 : 240;
+  }, []);
+
+  const toggleMinimized = useCallback(() => {
+    setIsMinimized((prev) => !prev);
   }, []);
 
   // Handle plugin result
@@ -1095,7 +1105,7 @@ export default function InteractionPanel({
         style={{
           bottom: bottomPosition,
           height: isMinimized
-            ? "60px"
+            ? "56px"
             : isExpanded
               ? "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)"
               : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
@@ -1119,6 +1129,7 @@ export default function InteractionPanel({
             isDragging ? 'bg-white/40 cursor-ns-resize' : 'bg-transparent cursor-default'
           }`}
           style={{ zIndex: 50 }}
+          onDoubleClick={toggleMinimized}
           onMouseDown={(e) => {
             setIsExpanded(false);
             setIsDragging(true);
@@ -1128,7 +1139,7 @@ export default function InteractionPanel({
             const handleMouseMove = (e: MouseEvent) => {
               const delta = startY - e.clientY;
               setPanelHeight(
-                Math.max(240, Math.min(getPanelMaxHeight(), startHeight + delta)),
+                Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), startHeight + delta)),
               );
             };
 
@@ -1153,7 +1164,22 @@ export default function InteractionPanel({
           }}
         />
 
-        <div className="p-2 sm:p-3 h-full overflow-hidden flex flex-col relative" style={{ cursor: 'default' }}>
+        <div className="p-2 sm:p-3 h-full overflow-y-auto sm:overflow-hidden flex flex-col relative" style={{ cursor: 'default' }}>
+          {/* Minimize Button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleMinimized}
+            className="absolute top-1 right-8 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
+            title={isMinimized ? "Reopen panel" : "Hide panel"}
+          >
+            {isMinimized ? (
+              <ArrowDownToLine className="w-3 h-3 rotate-180" />
+            ) : (
+              <ArrowDownToLine className="w-3 h-3" />
+            )}
+          </Button>
+
           {/* Expand/Minimize Button - Far Top Right Corner */}
           <Button
             variant="ghost"
@@ -1171,7 +1197,7 @@ export default function InteractionPanel({
           </Button>
 
           {/* Header - Compact layout */}
-          <div className="flex justify-between items-center mb-1 mt-5 px-1">
+          <div className="flex justify-between items-center mb-1 mt-3 sm:mt-5 px-1" onDoubleClick={toggleMinimized}>
             <div className="flex items-center gap-2">
               <div className="">
                 <Sparkles className="h-3 w-3 text-white" />
@@ -1185,11 +1211,26 @@ export default function InteractionPanel({
             </div>
           </div>
 
+          {isMinimized && (
+            <div className="mt-1 flex items-center justify-between px-1">
+              <span className="text-xs text-white/70">Panel hidden</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={toggleMinimized}
+                className="h-7 px-2 text-xs bg-black/40 border-white/20 hover:bg-white/10"
+                title="Reopen interaction panel"
+              >
+                Reopen
+              </Button>
+            </div>
+          )}
+
           {!isMinimized && (
             <Tabs value={activeTab} onValueChange={(value) => onActiveTabChange?.(value as "chat" | "code" | "extras" | "integrations" | "shell")} className="flex-1 flex flex-col min-h-0">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
-                <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
-                  <TabsList className="bg-black/40">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2 sticky top-0 z-20 bg-black/70 backdrop-blur-sm py-1">
+                <div className="w-full sm:w-auto overflow-x-auto no-scrollbar">
+                  <TabsList className="bg-black/40 w-max min-w-full sm:min-w-0 sm:w-auto">
                     <TabsTrigger value="chat" className="text-xs sm:text-sm">
                       <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                       <span className="hidden sm:inline">Chat</span>
@@ -1213,13 +1254,13 @@ export default function InteractionPanel({
                   </TabsList>
                 </div>
 
-                <div className="flex space-x-1 sm:space-x-2 flex-shrink-0">
+                <div className="grid grid-cols-4 gap-1 w-full sm:w-auto sm:flex sm:space-x-2 flex-shrink-0">
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={onNewChat}
                     title="New Chat"
-                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                    className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
                   >
                     <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
@@ -1228,7 +1269,7 @@ export default function InteractionPanel({
                     size="sm"
                     onClick={toggleHistory}
                     title="Chat History"
-                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                    className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
                   >
                     <History className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
@@ -1237,7 +1278,7 @@ export default function InteractionPanel({
                     size="sm"
                     onClick={toggleAccessibility}
                     title="Accessibility Options"
-                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                    className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
                   >
                     <Settings className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
@@ -1246,7 +1287,7 @@ export default function InteractionPanel({
                     size="sm"
                     onClick={toggleCodePreview}
                     title="Code Preview"
-                    className={`h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
+                    className={`h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
                       hasCodeBlocks
                         ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse"
                         : ""
@@ -1262,7 +1303,7 @@ export default function InteractionPanel({
               </div>
 
               {/* Provider/Model Selection - Restored */}
-              <div className="flex items-center gap-2 mb-3 text-xs text-white/60">
+              <div className="flex items-center gap-2 mb-2 text-xs text-white/60">
                 <Select
                   value={`${currentProvider}:${currentModel}`}
                   onValueChange={(value) => {
@@ -1271,7 +1312,7 @@ export default function InteractionPanel({
                     onProviderChange(provider, model);
                   }}
                 >
-                  <SelectTrigger className="w-[280px] bg-black/40 border-white/20">
+                  <SelectTrigger className="w-full sm:w-[280px] bg-black/40 border-white/20">
                     <SelectValue placeholder="Select a model" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1455,7 +1496,7 @@ export default function InteractionPanel({
                       disabled={isProcessing || !input.trim()}
                     >
                       {isProcessing ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <Loader2 className="h-4 w-4 thinking-spinner" />
                       ) : (
                         <>
                           <Send className="h-4 w-4 mr-2" />
@@ -1563,7 +1604,7 @@ export default function InteractionPanel({
                       disabled={isProcessing || !input.trim()}
                     >
                       {isProcessing ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <Loader2 className="h-4 w-4 thinking-spinner" />
                       ) : (
                         <>
                           <Send className="h-4 w-4 mr-2" />

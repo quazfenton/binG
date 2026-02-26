@@ -360,7 +360,7 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
       case 'stopped':
         return <Square className="w-4 h-4 text-gray-400" />;
       default:
-        return <Loader2 className="w-4 h-4 text-yellow-400 animate-spin" />;
+        return <Loader2 className="w-4 h-4 text-yellow-400 thinking-spinner" />;
     }
   };
 
@@ -635,7 +635,7 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
 
             <div className="flex gap-2">
               <Button onClick={deployCompose} disabled={!composeFile || loading}>
-                {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                {loading ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Upload className="w-4 h-4 mr-2" />}
                 Deploy Compose
               </Button>
               <Button variant="outline" onClick={() => setComposeFile('')}>

@@ -1,12 +1,12 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-/* Import responsive utilities */
+/* Import responsive utilities - MUST be first per CSS spec */
 @import '../styles/responsive.css';
 
 /* xterm.js terminal styles */
 @import '@xterm/xterm/css/xterm.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 /* Mobile-first CSS optimizations and safe area support */
 
@@ -102,6 +102,15 @@
         transition-duration: 0.01ms !important;
         scroll-behavior: auto !important;
     }
+
+    /* Keep essential waiting indicators functional */
+    .thinking-spinner {
+        animation: thinking-spin 1.6s linear infinite !important;
+    }
+
+    .thinking-pulse {
+        animation: none !important;
+    }
 }
 
 /* High contrast mode support */
@@ -138,12 +147,21 @@
     background: rgba(0, 0, 0, 0.3);
 }
 
+.no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
 /* Dark mode scrollbar */
-.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+:where(.dark, .midnight) .custom-scrollbar::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.2);
 }
 
-.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+:where(.dark, .midnight) .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.3);
 }
 
@@ -256,7 +274,7 @@
     animation: loading 1.5s infinite;
 }
 
-.dark .skeleton {
+:where(.dark, .midnight) .skeleton {
     background: linear-gradient(90deg, #374151 25%, #4b5563 50%, #374151 75%);
     background-size: 200% 100%;
 }
@@ -365,9 +383,127 @@
     --ring: 252 87% 60%;
 }
 
+/* Ocean mode */
+.ocean {
+    --background: 201 67% 96%;
+    --foreground: 203 57% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 203 57% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 203 57% 15%;
+    --primary: 199 89% 48%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 200 59% 91%;
+    --secondary-foreground: 203 57% 15%;
+    --muted: 200 59% 91%;
+    --muted-foreground: 203 25% 35%;
+    --accent: 187 85% 40%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 200 35% 80%;
+    --input: 200 35% 80%;
+    --ring: 199 89% 48%;
+}
+
+/* Forest mode */
+.forest {
+    --background: 120 35% 95%;
+    --foreground: 143 45% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 143 45% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 143 45% 14%;
+    --primary: 142 71% 35%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 120 26% 89%;
+    --secondary-foreground: 143 45% 14%;
+    --muted: 120 26% 89%;
+    --muted-foreground: 143 20% 34%;
+    --accent: 159 64% 33%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 120 18% 78%;
+    --input: 120 18% 78%;
+    --ring: 142 71% 35%;
+}
+
+/* Sepia mode */
+.sepia {
+    --background: 35 55% 94%;
+    --foreground: 26 38% 18%;
+    --card: 35 50% 98%;
+    --card-foreground: 26 38% 18%;
+    --popover: 35 50% 98%;
+    --popover-foreground: 26 38% 18%;
+    --primary: 24 60% 45%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 33 40% 86%;
+    --secondary-foreground: 26 38% 18%;
+    --muted: 33 40% 86%;
+    --muted-foreground: 26 20% 38%;
+    --accent: 42 65% 52%;
+    --accent-foreground: 26 38% 18%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 31 26% 74%;
+    --input: 31 26% 74%;
+    --ring: 24 60% 45%;
+}
+
+/* Midnight mode */
+.midnight {
+    --background: 230 32% 10%;
+    --foreground: 220 40% 95%;
+    --card: 230 28% 13%;
+    --card-foreground: 220 40% 95%;
+    --popover: 230 28% 13%;
+    --popover-foreground: 220 40% 95%;
+    --primary: 260 85% 66%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 230 20% 20%;
+    --secondary-foreground: 220 40% 95%;
+    --muted: 230 20% 20%;
+    --muted-foreground: 220 18% 70%;
+    --accent: 280 72% 58%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 62.8% 40%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 230 18% 25%;
+    --input: 230 18% 25%;
+    --ring: 260 85% 66%;
+}
+
 body {
-    background-color: black;
-    color: white;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+}
+
+/* Force hardcoded dark utility classes to flip in non-dark themes */
+:where(.light, .ocean, .forest, .sepia) body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+}
+
+:where(.light, .ocean, .forest, .sepia) [class*="bg-black"] {
+    background-color: hsl(var(--background)) !important;
+}
+
+:where(.light, .ocean, .forest, .sepia) [class*="text-white"] {
+    color: hsl(var(--foreground)) !important;
+}
+
+:where(.light, .ocean, .forest, .sepia) [class*="border-white"] {
+    border-color: hsl(var(--border) / 0.5) !important;
+}
+
+:where(.light, .ocean, .forest, .sepia) [class*="bg-white/"] {
+    background-color: hsl(var(--secondary)) !important;
+}
+
+:where(.light, .ocean, .forest, .sepia) [class*="text-gray-"] {
+    color: hsl(var(--muted-foreground)) !important;
 }
 
 /* Mobile viewport fixes */
@@ -448,6 +584,37 @@ body {
         transform: scale(0.95);
         opacity: 0.5;
     }
+}
+
+/* Dedicated waiting-state animations to avoid utility conflicts */
+@keyframes thinking-spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes thinking-pulse {
+    0%,
+    100% {
+        opacity: 0.5;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+.thinking-spinner {
+    animation: thinking-spin 0.9s linear infinite !important;
+    will-change: transform;
+    transition: none !important;
+}
+
+.thinking-pulse {
+    animation: thinking-pulse 1.2s ease-in-out infinite !important;
+    will-change: opacity;
 }
 
 @keyframes fade-in {
@@ -664,7 +831,7 @@ body {
         flex-wrap: wrap;
     }
 
-    .min-h-[60px] {
+    .min-h-60px-print {
         min-height: 50px;
     }
 }

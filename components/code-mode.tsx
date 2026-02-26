@@ -537,7 +537,7 @@ export default function CodeMode({
               className="bg-green-600 hover:bg-green-700"
             >
               {isProcessing ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="h-4 w-4 mr-2 thinking-spinner" />
               ) : (
                 <Check className="h-4 w-4 mr-2" />
               )}
@@ -840,7 +840,7 @@ export default function CodeMode({
                 className="bg-blue-600 hover:bg-blue-700"
               >
                 {isProcessing ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  <Loader2 className="h-4 w-4 mr-2 thinking-spinner" />
                 ) : (
                   <Send className="h-4 w-4 mr-2" />
                 )}

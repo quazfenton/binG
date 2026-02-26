@@ -7,9 +7,21 @@ const loadDocker = async () => {
   return mod.default;
 };
 
+/**
+ * Validates container ID format.
+ * Docker container IDs are 64-character hex strings (often truncated to 12).
+ */
+const validateContainerId = (id: string): boolean => {
+  return /^[a-f0-9]{12,64}$/.test(id.toLowerCase());
+};
+
+// Maximum number of log lines to return (prevents expensive log pulls)
+const MAX_TAIL_LIMIT = 1000;
+const DEFAULT_TAIL_LIMIT = 200;
+
 export async function GET(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } }
 ) {
   try {
     const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
@@ -20,8 +32,35 @@ export async function GET(
       );
     }
 
-    const { id } = await params;
-    const limit = Number(new URL(req.url).searchParams.get('tail') || '200');
+    const { id } = params;
+
+    // SECURITY: Validate container ID format
+    if (!validateContainerId(id)) {
+      return NextResponse.json(
+        { error: 'Invalid container ID format' },
+        { status: 400 }
+      );
+    }
+
+    // Parse and validate tail parameter
+    const url = new URL(req.url);
+    const tailParam = url.searchParams.get('tail');
+    let limit: number;
+
+    if (tailParam === null) {
+      limit = DEFAULT_TAIL_LIMIT;
+    } else {
+      const parsed = Number(tailParam);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        return NextResponse.json(
+          { error: 'Invalid "tail" parameter; must be a positive number' },
+          { status: 400 }
+        );
+      }
+      // Clamp to maximum to prevent expensive log pulls
+      limit = Math.min(parsed, MAX_TAIL_LIMIT);
+    }
+
     const Docker = await loadDocker();
     // Respect DOCKER_SOCKET env var for custom socket paths, otherwise use dockerode defaults
     const docker = new Docker(
@@ -32,7 +71,7 @@ export async function GET(
       stdout: true,
       stderr: true,
       timestamps: true,
-      tail: Number.isFinite(limit) ? limit : 200,
+      tail: limit,
     });
 
     // Docker logs have an 8-byte header per message when TTY is disabled:

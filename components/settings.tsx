@@ -38,6 +38,15 @@ interface SettingsProps {
   onVoiceToggle?: (enabled: boolean) => void;
 }
 
+const THEME_OPTIONS = [
+  { id: "dark", label: "Dark", swatch: "bg-neutral-900" },
+  { id: "light", label: "Light", swatch: "bg-white border border-black/10" },
+  { id: "ocean", label: "Ocean", swatch: "bg-sky-500" },
+  { id: "forest", label: "Forest", swatch: "bg-emerald-600" },
+  { id: "sepia", label: "Sepia", swatch: "bg-amber-700" },
+  { id: "midnight", label: "Midnight", swatch: "bg-indigo-800" },
+] as const;
+
 export default function Settings({
   onClose,
   messages,
@@ -379,65 +388,32 @@ export default function Settings({
           </div>
 
           <div className="grid grid-cols-3 gap-2">
-            {/* Light Mode Button */}
-            <button
-              onClick={() => setTheme('light')}
-              className={`flex flex-col items-center gap-1.5 p-2.5 rounded-lg border transition-all ${
-                theme === 'light'
-                  ? 'border-white/30 bg-white/10'
-                  : 'border-white/10 hover:border-white/20 hover:bg-white/5'
-              }`}
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="4" />
-                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41-1.41M19.07 4.93l-1.41 1.41" />
-              </svg>
-              <span className="text-xs font-medium">Light</span>
-              {theme === 'light' && (
-                <div className="w-1.5 h-1.5 bg-white rounded-full" />
-              )}
-            </button>
-
-            {/* Dark Mode Button */}
-            <button
-              onClick={() => setTheme('dark')}
-              className={`flex flex-col items-center gap-1.5 p-2.5 rounded-lg border transition-all ${
-                theme === 'dark'
-                  ? 'border-white/30 bg-white/10'
-                  : 'border-white/10 hover:border-white/20 hover:bg-white/5'
-              }`}
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-              </svg>
-              <span className="text-xs font-medium">Dark</span>
-              {theme === 'dark' && (
-                <div className="w-1.5 h-1.5 bg-white rounded-full" />
-              )}
-            </button>
-
-            {/* System Mode Button - toggles to dark (default) */}
-            <button
-              onClick={() => setTheme('dark')}
-              className={`flex flex-col items-center gap-1.5 p-2.5 rounded-lg border transition-all ${
-                theme === 'dark'
-                  ? 'border-white/30 bg-white/10'
-                  : 'border-white/10 hover:border-white/20 hover:bg-white/5'
-              }`}
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-                <path d="M8 21h8M12 17v4" />
-              </svg>
-              <span className="text-xs font-medium">Default</span>
-              {theme === 'dark' && (
-                <div className="w-1.5 h-1.5 bg-white rounded-full" />
-              )}
-            </button>
+            {THEME_OPTIONS.map((option) => {
+              const isActive = theme === option.id;
+              return (
+                <button
+                  key={option.id}
+                  onClick={() => setTheme(option.id)}
+                  className={`flex flex-col items-center gap-1.5 p-2.5 rounded-lg border transition-all ${
+                    isActive
+                      ? 'border-white/30 bg-white/10'
+                      : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+                  }`}
+                >
+                  <span className={`w-5 h-5 rounded-full ${option.swatch}`} />
+                  <span className="text-xs font-medium">{option.label}</span>
+                  {isActive && (
+                    <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           <div className="mt-3 text-xs text-gray-400 text-center">
             Current: <span className="text-white font-medium capitalize">{resolvedTheme || theme}</span>
+            <span className="mx-2">•</span>
+            Available: <span className="text-white font-medium">{themes.length}</span>
           </div>
         </div>
 

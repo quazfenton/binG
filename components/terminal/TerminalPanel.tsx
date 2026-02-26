@@ -809,19 +809,19 @@ export default function TerminalPanel({
       animate={{ y: 0, opacity: 1 }}
       exit={{ y: 100, opacity: 0 }}
       className={`fixed bottom-0 left-0 right-0 z-50 bg-black/95 border-t border-white/10 backdrop-blur-sm flex flex-col ${
-        isExpanded ? 'h-[80vh]' : 'h-[400px]'
+        isExpanded ? 'h-[80vh]' : 'h-[55vh] sm:h-[400px]'
       }`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/50 shrink-0">
-        <div className="flex items-center gap-3 flex-1">
+      <div className="flex items-center justify-between px-2 sm:px-4 py-2 border-b border-white/10 bg-black/50 shrink-0 gap-2">
+        <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0 overflow-hidden">
           <div className="flex items-center gap-2">
             <TerminalIcon className="w-4 h-4 text-green-400" />
             <span className="text-sm font-medium text-white">Terminal</span>
           </div>
 
           {/* Terminal tabs */}
-          <div className="flex items-center gap-1 ml-4">
+          <div className="hidden sm:flex items-center gap-1 ml-4">
             {terminals.map((terminal) => (
               <div
                 key={terminal.id}
@@ -864,7 +864,7 @@ export default function TerminalPanel({
           </div>
 
           {activeTerminal && (
-            <div className="flex items-center gap-2 text-xs ml-auto">
+            <div className="hidden sm:flex items-center gap-2 text-xs ml-auto">
               <span className={`flex items-center gap-1 ${
                 activeTerminal.sandboxInfo.status === 'active' ? 'text-green-400' :
                 activeTerminal.sandboxInfo.status === 'creating' ? 'text-yellow-400' :
@@ -892,7 +892,7 @@ export default function TerminalPanel({
           )}
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           <Button
             variant="ghost"
             size="sm"
@@ -908,7 +908,7 @@ export default function TerminalPanel({
             variant="ghost"
             size="sm"
             onClick={copyOutput}
-            className="text-white/60 hover:text-white"
+            className="text-white/60 hover:text-white hidden sm:inline-flex"
           >
             <Copy className="w-4 h-4" />
           </Button>
@@ -916,7 +916,7 @@ export default function TerminalPanel({
             variant="ghost"
             size="sm"
             onClick={() => clearTerminal()}
-            className="text-white/60 hover:text-white"
+            className="text-white/60 hover:text-white hidden sm:inline-flex"
           >
             <Trash2 className="w-4 h-4" />
           </Button>

@@ -355,7 +355,7 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
                 </div>
 
                 <Button onClick={trimVideo} disabled={processing} className="w-full">
-                  {processing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Scissors className="w-4 h-4 mr-2" />}
+                  {processing ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Scissors className="w-4 h-4 mr-2" />}
                   Trim Video
                 </Button>
                 {!ffmpegReady && (
