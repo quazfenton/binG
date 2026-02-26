@@ -21,7 +21,7 @@ const DEFAULT_TAIL_LIMIT = 200;
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
@@ -32,7 +32,7 @@ export async function GET(
       );
     }
 
-    const { id } = params;
+    const { id } = await params;
 
     // SECURITY: Validate container ID format
     if (!validateContainerId(id)) {

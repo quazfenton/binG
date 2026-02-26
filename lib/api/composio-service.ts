@@ -379,14 +379,14 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                 try {
                   result = await composio.tools.execute(toolSlug, {
                     userId: request.userId,
-                    arguments: toolArgs,
+                    toolParams: toolArgs,
                     dangerouslySkipVersionCheck: true,
                   });
                 } catch {
                   // Backward-compatible payload shape fallback
                   result = await composio.tools.execute(toolSlug, {
                     connectedAccountId: request.userId,
-                    input: toolArgs,
+                    toolParams: toolArgs,
                   });
                 }
 
@@ -561,7 +561,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         }
 
         // Get connected accounts
-        const connectedAccounts = await composio.connectedAccounts.list({ userId: request.userId });
+        const connectedAccounts = await composio.connectedAccounts.list({ userIds: [request.userId] });
         const connectedItems = connectedAccounts?.items || [];
 
         // Deterministic auth fallback:
@@ -670,7 +670,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
       try {
         const { Composio } = await import('@composio/core');
         const composio = new Composio({ apiKey: config.apiKey });
-        const accounts = await composio.connectedAccounts.list({ userId });
+        const accounts = await composio.connectedAccounts.list({ userIds: [userId] });
         return accounts?.items || [];
       } catch (error: any) {
         console.error('[ComposioService] Failed to get connected accounts:', error.message);
@@ -686,8 +686,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         // some SDK versions reject list() with optional fields shaping.
         try {
           const connectionRequest = await composio.connectedAccounts.initiate({
-            userId,
-            integrationId: toolkit.toLowerCase(),
+            userId: userId,
+            integrationSlug: toolkit.toLowerCase(),
           });
           const directUrl = connectionRequest?.redirectUrl || connectionRequest?.url;
           if (directUrl) return directUrl;

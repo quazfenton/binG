@@ -81,7 +81,7 @@ const nextConfig = {
         (warning) => {
           const moduleName = typeof warning.module === 'string' ? warning.module : (warning.module?.resource || '');
           const message = warning.message || '';
-          
+
           if (moduleName && moduleName.includes('require-in-the-middle')) {
             return true;
           }

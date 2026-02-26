@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useRef, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
@@ -83,14 +83,105 @@ export default function MessageBubble({
   responsive = true,
   overflow,
   onAuthPromptDismiss,
-  userId
+  userId: _userId
 }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const [showReasoning, setShowReasoning] = useState(false)
   const [showStreamingControls, setShowStreamingControls] = useState(false)
   const [authDismissed, setAuthDismissed] = useState(false)
+  const [isApplyingEditAction, setIsApplyingEditAction] = useState(false)
+  const [fileEditDecision, setFileEditDecision] = useState<"auto_applied" | "accepted" | "denied" | "reverted_with_conflicts" | null>(null)
 
   const isUser = message.role === "user"
+
+  const fileEditInfo = useMemo(() => {
+    const metadataFilesystem = (message.metadata as any)?.filesystem;
+    if (!metadataFilesystem || typeof metadataFilesystem !== "object") return null;
+    const txId = typeof metadataFilesystem.transactionId === "string" ? metadataFilesystem.transactionId : "";
+    if (!txId) return null;
+    return {
+      transactionId: txId,
+      applied: Array.isArray(metadataFilesystem.applied) ? metadataFilesystem.applied : [],
+      errors: Array.isArray(metadataFilesystem.errors) ? metadataFilesystem.errors : [],
+      status: typeof metadataFilesystem.status === "string" ? metadataFilesystem.status : "auto_applied",
+    };
+  }, [message.metadata]);
+
+  useEffect(() => {
+    if (fileEditInfo?.status) {
+      setFileEditDecision(fileEditInfo.status);
+    }
+  }, [fileEditInfo?.status]);
+
+  const buildRequestHeaders = useCallback((): HeadersInit => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    if (typeof window !== "undefined") {
+      const token = localStorage.getItem("token");
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const anonymousSessionId = localStorage.getItem("anonymous_session_id");
+      if (anonymousSessionId) {
+        headers["x-anonymous-session-id"] = anonymousSessionId;
+      }
+    }
+
+    return headers;
+  }, []);
+
+  const handleAcceptEdits = useCallback(async () => {
+    if (!fileEditInfo?.transactionId || isApplyingEditAction) return;
+    setIsApplyingEditAction(true);
+    try {
+      const response = await fetch("/api/filesystem/edits/accept", {
+        method: "POST",
+        headers: buildRequestHeaders(),
+        body: JSON.stringify({ transactionId: fileEditInfo.transactionId }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.error || `Failed to accept edits (${response.status})`);
+      }
+      setFileEditDecision("accepted");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to accept edits";
+      console.error(message);
+    } finally {
+      setIsApplyingEditAction(false);
+    }
+  }, [buildRequestHeaders, fileEditInfo?.transactionId, isApplyingEditAction]);
+
+  const handleDenyEdits = useCallback(async () => {
+    if (!fileEditInfo?.transactionId || isApplyingEditAction) return;
+    setIsApplyingEditAction(true);
+    try {
+      const response = await fetch("/api/filesystem/edits/deny", {
+        method: "POST",
+        headers: buildRequestHeaders(),
+        body: JSON.stringify({
+          transactionId: fileEditInfo.transactionId,
+          reason: "User denied AI file edits from chat UI",
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.error || `Failed to deny edits (${response.status})`);
+      }
+      const txStatus = payload?.data?.transaction?.status;
+      setFileEditDecision(
+        txStatus === "reverted_with_conflicts" ? "reverted_with_conflicts" : "denied",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to deny edits";
+      console.error(message);
+    } finally {
+      setIsApplyingEditAction(false);
+    }
+  }, [buildRequestHeaders, fileEditInfo?.transactionId, isApplyingEditAction]);
   
   const layout = useResponsiveLayout()
   
@@ -270,9 +361,13 @@ export default function MessageBubble({
           whiteSpace: contentAnalysis.hasCodeBlocks && layout.isMobile ? 'pre' : 'pre-wrap'
         }}
         onMouseEnter={() => !layout.isMobile && setShowStreamingControls(true)}
-        onMouseLeave={() => !layout.isMobile && setShowStreamingControls(false)}
-        {...touchHandlers}
-        onKeyDown={(e) => handleKeyDown(e, handleCopy)}
+        onMouseLeave={() => {
+          if (!layout.isMobile) {
+            setShowStreamingControls(false)
+          }
+        }}
+        {...(touchHandlers as any)}
+        onKeyDown={(e) => handleKeyDown(e.nativeEvent as KeyboardEvent, handleCopy)}
         tabIndex={0}
         role="article"
         aria-label={`${isUser ? 'User' : 'Assistant'} message`}
@@ -297,9 +392,10 @@ export default function MessageBubble({
             useCompactLayout ? 'prose-sm' : 'prose-base'
           } ${layout.isMobile ? 'prose-sm' : 'prose-base'}`}
           components={{
-                code({ node, className, children, ...props }) {
+                code({ className, children, ...props }) {
                   const match = /language-(\w+)/.exec(className || "");
-                  return node && !node.properties.inline && match ? (
+                  const isInline = Boolean((props as any).inline);
+                  return !isInline && match ? (
                     <div className={`${layout.isMobile ? 'text-xs' : 'text-sm'} ${contentAnalysis.hasCodeBlocks && layout.isMobile ? 'overflow-x-auto' : ''}`}>
                       <SyntaxHighlighter
                         style={vscDarkPlus as any}
@@ -430,7 +526,58 @@ export default function MessageBubble({
               }}
             >
               {isUser ? message.content : mainContent}
-            </ReactMarkdown>
+        </ReactMarkdown>
+
+        {!isUser && fileEditInfo && (
+          <div className="mt-3 rounded-lg border border-white/15 bg-black/25 p-2 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-white/80">
+                File edits: {fileEditInfo.applied.length} applied
+              </span>
+              <span className="text-white/60">
+                {fileEditDecision === "reverted_with_conflicts"
+                  ? "Reverted with conflicts"
+                  : fileEditDecision === "denied"
+                    ? "Denied and reverted"
+                    : fileEditDecision === "accepted" || fileEditDecision === "auto_applied"
+                      ? "Auto accepted"
+                      : "Pending"}
+              </span>
+            </div>
+            {fileEditInfo.applied.length > 0 && (
+              <div className="mt-1 text-white/55">
+                {fileEditInfo.applied.slice(0, 4).map((edit: any) => (
+                  <div key={`${edit.path}-${edit.version}`} className="truncate">
+                    {edit.path}
+                  </div>
+                ))}
+                {fileEditInfo.applied.length > 4 && (
+                  <div>+{fileEditInfo.applied.length - 4} more</div>
+                )}
+              </div>
+            )}
+            <div className="mt-2 flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-[11px]"
+                onClick={handleAcceptEdits}
+                disabled={isApplyingEditAction || fileEditDecision === "accepted"}
+              >
+                Accept
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                className="h-7 px-2 text-[11px]"
+                onClick={handleDenyEdits}
+                disabled={isApplyingEditAction || fileEditDecision === "denied"}
+              >
+                Deny + Revert
+              </Button>
+            </div>
+          </div>
+        )}
 
             {streamingDisplay.isStreaming && streamingDisplay.progress > 0 && (
               <div className="absolute -bottom-1 left-0 right-0 h-0.5 bg-white/10 rounded-full overflow-hidden">
@@ -528,9 +675,10 @@ export default function MessageBubble({
                         layout.isMobile ? 'prose-xs text-xs' : 'prose-sm text-sm'
                       }`}
                       components={{
-                        code: ({ node, inline, className, children, ...props }) => {
+                        code: ({ className, children, ...props }) => {
                           const match = /language-(\w+)/.exec(className || "");
-                          return node && !node.properties.inline && match ? (
+                          const isInline = Boolean((props as any).inline);
+                          return !isInline && match ? (
                             <SyntaxHighlighter
                               style={vscDarkPlus as any}
                               language={match[1]}
@@ -641,7 +789,7 @@ export default function MessageBubble({
             minWidth: layout.isMobile ? dynamicStyles.touchTargetSize : 'auto'
           }}
           onClick={handleCopy}
-          onKeyDown={(e) => handleKeyDown(e, handleCopy)}
+                      onKeyDown={(e) => handleKeyDown(e.nativeEvent as KeyboardEvent, handleCopy)}
           aria-label="Copy message content"
           title="Copy message"
         >

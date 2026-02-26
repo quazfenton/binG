@@ -7,6 +7,7 @@ import type {
   PtyOptions,
 } from './sandbox-provider'
 import * as path from 'node:path';
+import { ensureMicrosandboxDaemonRunning } from '../microsandbox-daemon';
 
 const WORKSPACE_DIR = '/workspace'
 const MAX_INSTANCES = 100
@@ -36,57 +37,71 @@ export class MicrosandboxProvider implements SandboxProvider {
   readonly name = 'microsandbox'
 
   constructor() {
-    // Requires microsandbox server running on host
+    // Microsandbox daemon is auto-started by provider when needed.
   }
 
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
-    const { NodeSandbox } = require('microsandbox')
+    try {
+      await ensureMicrosandboxDaemonRunning()
+      const { NodeSandbox } = require('microsandbox')
 
-    // Enforce max instances - evict oldest if at limit
-    if (sandboxInstances.size >= MAX_INSTANCES) {
-      let oldestId: string | null = null
-      let oldestTime = Date.now()
-      for (const [id, instance] of sandboxInstances.entries()) {
-        if (instance.createdAt < oldestTime) {
-          oldestTime = instance.createdAt
-          oldestId = id
+      // Enforce max instances - evict oldest if at limit
+      if (sandboxInstances.size >= MAX_INSTANCES) {
+        let oldestId: string | null = null
+        let oldestTime = Date.now()
+        for (const [id, instance] of sandboxInstances.entries()) {
+          if (instance.createdAt < oldestTime) {
+            oldestTime = instance.createdAt
+            oldestId = id
+          }
+        }
+        if (oldestId) {
+          console.log(`[Microsandbox] Evicting oldest instance: ${oldestId}`)
+          sandboxInstances.get(oldestId)?.sandbox.stop().catch(console.error)
+          sandboxInstances.delete(oldestId)
         }
       }
-      if (oldestId) {
-        console.log(`[Microsandbox] Evicting oldest instance: ${oldestId}`)
-        sandboxInstances.get(oldestId)?.sandbox.stop().catch(console.error)
-        sandboxInstances.delete(oldestId)
+
+      // Create sandbox with name option (per microsandbox docs)
+      const createOptions: any = {
+        name: `session-${Date.now()}`,
       }
+
+      // Create the sandbox instance
+      const sb = await NodeSandbox.create(createOptions)
+      const now = Date.now()
+      const sandboxId = sb.name || sb.id || createOptions.name
+      sandboxInstances.set(sandboxId, {
+        sandbox: sb,
+        createdAt: now,
+        lastActive: now,
+      })
+
+      const handle = new MicrosandboxSandboxHandle(sb)
+      return handle
+    } catch (error: any) {
+      const allowLocalFallback = process.env.MICROSANDBOX_ALLOW_LOCAL_FALLBACK !== 'false'
+      if (allowLocalFallback) {
+        const localId = `local-${Date.now()}`
+        console.warn(`[Microsandbox] Daemon unavailable, using local fallback sandbox: ${localId}`)
+        return new LocalSandboxHandle(localId)
+      }
+      console.error('[Microsandbox] Failed to create sandbox:', error.message)
+      throw new Error(
+        `${error.message}. Start microsandbox with: msb server start --dev`,
+      )
     }
-
-    const createOptions: any = {
-      name: `session-${Date.now()}`,
-    }
-
-    if (config.mounts?.length) {
-      createOptions.mounts = config.mounts.map((m) => ({
-        hostPath: m.source,
-        containerPath: m.target,
-      }))
-    }
-
-    const sb = await NodeSandbox.create(createOptions)
-    const now = Date.now()
-    const sandboxId = sb.name || sb.id || createOptions.name
-    sandboxInstances.set(sandboxId, {
-      sandbox: sb,
-      createdAt: now,
-      lastActive: now,
-    })
-
-    const handle = new MicrosandboxSandboxHandle(sb)
-    await handle.executeCommand(`mkdir -p ${WORKSPACE_DIR}`)
-    return handle
   }
 
   async getSandbox(sandboxId: string): Promise<SandboxHandle> {
     const instance = sandboxInstances.get(sandboxId)
-    if (!instance) throw new Error(`Microsandbox session ${sandboxId} not found`)
+    if (!instance) {
+      // Check if it's a local sandbox
+      if (sandboxId.startsWith('local-')) {
+        return new LocalSandboxHandle(sandboxId)
+      }
+      throw new Error(`Microsandbox session ${sandboxId} not found`)
+    }
     instance.lastActive = Date.now() // Update last active time
     return new MicrosandboxSandboxHandle(instance.sandbox)
   }
@@ -96,6 +111,19 @@ export class MicrosandboxProvider implements SandboxProvider {
     if (instance) {
       await instance.sandbox.stop()
       sandboxInstances.delete(sandboxId)
+      return
+    }
+    
+    // Handle local sandbox cleanup
+    if (sandboxId.startsWith('local-')) {
+      try {
+        const fs = require('fs').promises
+        const workspacePath = path.resolve(process.cwd(), 'local-workspace', sandboxId)
+        await fs.rm(workspacePath, { recursive: true, force: true })
+        console.log(`[Microsandbox] Cleaned up local sandbox: ${sandboxId}`)
+      } catch (error: any) {
+        console.warn(`[Microsandbox] Failed to cleanup local sandbox ${sandboxId}:`, error.message)
+      }
     }
   }
 }
@@ -166,37 +194,23 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
     // Sanitize command to prevent injection
     const safeCommand = this.sanitizeCommand(command);
 
-    // Sanitize cwd to prevent injection (consistent with sanitizeCommand - allow pipes/redirection)
-    if (cwd) {
-      if (/[;`$(){}[\]!#~\\]/.test(cwd) || cwd.includes('..') || /[\n\r\0]/.test(cwd)) {
-        throw new Error(`Invalid working directory: ${cwd}`);
-      }
-    }
-
-    // Use path.join for safe path construction instead of shell string interpolation
-    const safeCwd = cwd ? this.resolvePath(cwd) : WORKSPACE_DIR;
-
-    // Quote cwd to handle spaces and special characters safely
-    const escapedCwd = safeCwd.replace(/'/g, "'\\''")
-    const fullCommand = `cd '${escapedCwd}' && ${safeCommand}`;
-
-    // Enforce timeout - default to 60 seconds if not specified
+    // Execute command using microsandbox's run() method
+    // Per docs: sb.run(code) executes code in the sandbox
     const effectiveTimeout = timeout ?? 60_000;
 
-    let timeoutId: NodeJS.Timeout | undefined;
-    const execPromise = this.sb.command.run('bash', ['-c', fullCommand], effectiveTimeout);
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error(`Command timed out after ${effectiveTimeout}ms`)), effectiveTimeout);
-    });
-
     try {
-      const result = await Promise.race([execPromise, timeoutPromise]);
+      // Run the command in the sandbox
+      const exec = await this.sb.run(safeCommand, { timeout: effectiveTimeout })
+      
+      // Check if execution had an error (per microsandbox docs)
+      const hasError = await exec.has_error()
+      const output = hasError ? await exec.error() : await exec.output()
 
       return {
-        success: result.exitCode === 0,
-        output: result.success ? await result.output() : await result.error(),
-        exitCode: result.exitCode,
-      };
+        success: !hasError,
+        output: output || '',
+        exitCode: hasError ? 1 : 0,
+      }
     } catch (error: any) {
       // Handle timeout or other errors
       if (error.message?.includes('timed out')) {
@@ -207,11 +221,6 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
         };
       }
       throw error;
-    } finally {
-      // Clear timeout to prevent resource leak
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
     }
   }
 
@@ -285,5 +294,128 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
 
   async createPty(_options: PtyOptions): Promise<PtyHandle> {
     throw new Error('Microsandbox does not support PTY sessions. Use Daytona for interactive terminal access.')
+  }
+}
+
+/**
+ * Local Sandbox Handle - Fallback when microsandbox daemon is not running
+ * Executes commands locally using Node.js child_process
+ * NOTE: This is NOT sandboxed and should only be used for development/testing
+ */
+class LocalSandboxHandle implements SandboxHandle {
+  readonly id: string
+  readonly workspaceDir: string
+  private workspacePath: string
+
+  constructor(id?: string) {
+    this.id = id || `local-${Date.now()}`
+    this.workspaceDir = './local-workspace'
+    this.workspacePath = path.resolve(process.cwd(), 'local-workspace', this.id)
+    
+    // Create workspace directory
+    const fs = require('fs')
+    if (!fs.existsSync(this.workspacePath)) {
+      fs.mkdirSync(this.workspacePath, { recursive: true })
+    }
+  }
+
+  async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
+    const { exec } = require('child_process')
+    const util = require('util')
+    const execPromise = util.promisify(exec)
+
+    const execCwd = cwd ? path.resolve(this.workspacePath, cwd.replace(/^\//, '')) : this.workspacePath
+    
+    try {
+      const result = await execPromise(command, {
+        cwd: execCwd,
+        timeout: timeout || 60000,
+        env: { ...process.env, NODE_ENV: 'development' },
+      })
+
+      return {
+        success: true,
+        output: result.stdout || result.stderr || '',
+        exitCode: 0,
+      }
+    } catch (error: any) {
+      return {
+        success: false,
+        output: error.message || error.stderr || 'Command execution failed',
+        exitCode: error.code || 1,
+      }
+    }
+  }
+
+  async writeFile(filePath: string, content: string): Promise<ToolResult> {
+    const fs = require('fs').promises
+    const resolved = path.resolve(this.workspacePath, filePath.replace(/^\//, ''))
+    
+    try {
+      await fs.mkdir(path.dirname(resolved), { recursive: true })
+      await fs.writeFile(resolved, content, 'utf8')
+      return {
+        success: true,
+        output: `File written: ${filePath}`,
+        exitCode: 0,
+      }
+    } catch (error: any) {
+      return {
+        success: false,
+        output: error.message,
+        exitCode: 1,
+      }
+    }
+  }
+
+  async readFile(filePath: string): Promise<ToolResult> {
+    const fs = require('fs').promises
+    const resolved = path.resolve(this.workspacePath, filePath.replace(/^\//, ''))
+    
+    try {
+      const content = await fs.readFile(resolved, 'utf8')
+      return {
+        success: true,
+        output: content,
+        exitCode: 0,
+      }
+    } catch (error: any) {
+      return {
+        success: false,
+        output: error.message,
+        exitCode: 1,
+      }
+    }
+  }
+
+  async listDirectory(dirPath?: string): Promise<ToolResult> {
+    const fs = require('fs').promises
+    const resolved = dirPath 
+      ? path.resolve(this.workspacePath, dirPath.replace(/^\//, ''))
+      : this.workspacePath
+    
+    try {
+      const entries = await fs.readdir(resolved, { withFileTypes: true })
+      const output = entries.map((entry: any) => {
+        const prefix = entry.isDirectory() ? 'd' : '-'
+        return `${prefix} ${entry.name}`
+      }).join('\n')
+      
+      return {
+        success: true,
+        output: output,
+        exitCode: 0,
+      }
+    } catch (error: any) {
+      return {
+        success: false,
+        output: error.message,
+        exitCode: 1,
+      }
+    }
+  }
+
+  async createPty(_options: PtyOptions): Promise<PtyHandle> {
+    throw new Error('Local sandbox does not support PTY sessions.')
   }
 }

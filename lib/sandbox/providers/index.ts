@@ -1,7 +1,7 @@
 import type { SandboxProvider } from './sandbox-provider'
 import { DaytonaProvider } from './daytona-provider'
 
-export type SandboxProviderType = 'daytona' | 'runloop' | 'microsandbox' | 'e2b'
+export type SandboxProviderType = 'daytona' | 'runloop' | 'microsandbox' | 'e2b' | 'mistral'
 
 let cachedProvider: SandboxProvider | null = null
 let cachedE2BProvider: any = null
@@ -38,10 +38,18 @@ export function getSandboxProvider(type?: SandboxProviderType): SandboxProvider 
         throw new Error(`E2B provider not available: ${error.message}`)
       }
       break
+    case 'mistral': {
+      const { MistralCodeInterpreterProvider } = require('./mistral-code-interpreter-provider')
+      cachedProvider = new MistralCodeInterpreterProvider()
+      break
+    }
     default:
       throw new Error(`Unknown sandbox provider: ${providerType}`)
   }
 
+  if (!cachedProvider) {
+    throw new Error(`Failed to initialize sandbox provider: ${providerType}`)
+  }
   return cachedProvider
 }
 

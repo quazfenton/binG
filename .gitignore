@@ -28,6 +28,9 @@ venv/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local sandbox workspace (development fallback)
+/local-workspace
 .aider*
 
 node_modules*

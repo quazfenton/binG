@@ -1,0 +1,183 @@
+{
+  "root": "project",
+  "version": 39,
+  "updatedAt": "2026-02-26T12:10:16.307Z",
+  "files": [
+    {
+      "path": "project/gradientBG.html",
+      "content": "<!DOCTYPE html>\r\n<html lang=\"en\">\r\n<head>\r\n    <meta charset=\"UTF-8\">\r\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\r\n    <title>Glider Ambient Background</title>\r\n    <style>\r\n        * { margin: 0; padding: 0; box-sizing: border-box; }\r\n\r\n        body, html {\r\n            height: 100%;\r\n            width: 100%;\r\n            background-color: #050505; /* Solid black base */\r\n            display: flex;\r\n            justify-content: center;\r\n            align-items: center;\r\n            overflow: hidden;\r\n            font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\r\n        }\r\n\r\n        /* 1. THE MEDIA LAYER (GIF or Image) */\r\n        .bg-media {\r\n            position: fixed;\r\n            inset: -10%; /* Extra space for the blur and movement */\r\n            z-index: 1;\r\n            width: 120%;\r\n            height: 120%;\r\n            object-fit: cover;\r\n            \r\n            /* ADJUST THESE: \r\n               blur(100px) creates the \"cloud\" effect. \r\n               brightness(0.3) keeps it dark enough for white text. */\r\n            filter: blur(100px) brightness(0.35) saturate(1.2);\r\n            \r\n            pointer-events: none;\r\n            \r\n            /* Slow, organic movement so the background isn't static */\r\n            animation: ambient-drift 40s infinite alternate ease-in-out;\r\n        }\r\n\r\n        @keyframes ambient-drift {\r\n            0% { transform: translate(0, 0) scale(1); }\r\n            100% { transform: translate(-2%, -2%) scale(1.05); }\r\n        }\r\n\r\n        /* 2. THE GLOW OVERLAY (Static Gradient) */\r\n        .bg-glow {\r\n            position: fixed;\r\n            inset: 0;\r\n            z-index: 2;\r\n            /* Creates the \"spotlight\" centered behind the input */\r\n            background: radial-gradient(\r\n                circle at 50% 45%, \r\n                rgba(30, 30, 40, 0.4) 0%, \r\n                rgba(5, 5, 5, 1) 80%\r\n            );\r\n            pointer-events: none;\r\n        }\r\n\r\n        /* 3. THE NOISE LAYER (Texture) */\r\n        .bg-noise {\r\n            position: fixed;\r\n            inset: 0;\r\n            z-index: 3;\r\n            background-image: url(\"data:image/svg+xml,%3Csvg viewBox='0 0 250 250' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E\");\r\n            opacity: 0.1; \r\n            mix-blend-mode: overlay;\r\n            pointer-events: none;\r\n        }\r\n\r\n        /* UI CONTENT */\r\n        .content {\r\n            position: relative;\r\n            z-index: 10;\r\n            width: 100%;\r\n            max-width: 600px;\r\n            padding: 20px;\r\n        }\r\n\r\n        .search-input {\r\n            width: 100%;\r\n            background: rgba(255, 255, 255, 0.03); /* Translucent glass */\r\n            backdrop-filter: blur(15px); /* Blurs the background media even more */\r\n            border: 1px solid rgba(255, 255, 255, 0.08);\r\n            border-radius: 14px;\r\n            padding: 20px 24px;\r\n            font-size: 19px;\r\n            color: #fff;\r\n            outline: none;\r\n            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.6);\r\n            transition: all 0.3s ease;\r\n        }\r\n\r\n        .search-input::placeholder {\r\n            color: #444;\r\n        }\r\n\r\n        .search-input:focus {\r\n            background: rgba(255, 255, 255, 0.05);\r\n            border: 1px solid rgba(255, 255, 255, 0.15);\r\n        }\r\n    </style>\r\n</head>\r\n<body>\r\n\r\n    <img class=\"bg-media\" src=\"https://media.tenor.com/CWaT-F5vNb8AAAAM/sky-gif.gif\" alt=\"\">\r\n    \r\n    <div class=\"bg-glow\"></div>\r\n    <div class=\"bg-noise\"></div>\r\n\r\n    <div class=\"content\">\r\n \r\n    </div>\r\n\r\n</body>\r\n</html>",
+      "language": "html",
+      "lastModified": "2026-02-26T12:10:16.307Z",
+      "version": 1,
+      "size": 3829
+    },
+    {
+      "path": "project/index.html",
+      "content": "\nPATCH project/index.html\n<<<\n--- a/project/index.html\n+++ b/project/index.html\n@@ -3,7 +3,7 @@\n   <head>\n     <meta charset=\"UTF-8\" />\n     <link rel=\"icon\" type=\"image/svg+xml\" href=\"/vite.svg\" />\n     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\n-    <title>Vite + React</title>\n+    <title>React Snake Game</title>\n   </head>\n   <body>\n     <div id=\"root\"></div>\n>>>\n",
+      "language": "html",
+      "lastModified": "2026-02-26T10:04:57.003Z",
+      "version": 2,
+      "size": 399
+    },
+    {
+      "path": "project/package.json",
+      "content": "{\n  \"name\": \"bg7-web-app\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"scripts\": {\n    \"start\": \"node server/index.js\",\n    \"dev\": \"concurrently \\\"npm run dev:frontend\\\" \\\"npm run dev:backend\\\"\",\n    \"dev:frontend\": \"vite dev --port 3000\",\n    \"dev:backend\": \"nodemon server/index.js\",\n    \"build\": \"vite build\",\n    \"preview\": \"vite preview\"\n  },\n  \"dependencies\": {\n    \"express\": \"^4.18.2\",\n    \"react\": \"^18.2.0\",\n    \"react-dom\": \"^18.2.0\",\n    \"react-router-dom\": \"^6.22.1\"\n  },\n  \"devDependencies\": {\n    \"@types/react\": \"^18.2.56\",\n    \"@types/react-dom\": \"^18.2.19\",\n    \"@vitejs/plugin-react\": \"^4.2.1\",\n    \"autoprefixer\": \"^10.4.17\",\n    \"concurrently\": \"^8.2.2\",\n    \"nodemon\": \"^3.0.2\",\n    \"postcss\": \"^8.4.35\",\n    \"tailwindcss\": \"^3.4.1\",\n    \"vite\": \"^5.1.0\"\n  }\n}",
+      "language": "json",
+      "lastModified": "2026-02-26T09:37:35.004Z",
+      "version": 1,
+      "size": 782
+    },
+    {
+      "path": "project/postcss.config.js",
+      "content": "module.exports = {\n  plugins: {\n    tailwindcss: {},\n    autoprefixer: {},\n  },\n}",
+      "language": "javascript",
+      "lastModified": "2026-02-26T09:37:35.023Z",
+      "version": 1,
+      "size": 81
+    },
+    {
+      "path": "project/server/index.js",
+      "content": "const express = require('express')\nconst path = require('path')\nconst app = express()\nconst PORT = process.env.PORT || 5000\n\n// Middleware\napp.use(express.json())\n\n// API routes\napp.get('/api/data', (req, res) => {\n  res.json({\n    message: \"Hello from the backend!\",\n    timestamp: new Date().toISOString(),\n    data: {\n      version: \"1.0.0\",\n      features: [\"React\", \"Express\", \"Tailwind CSS\"]\n    }\n  })\n})\n\n// Serve static files from the React app\nif (process.env.NODE_ENV === 'production') {\n  app.use(express.static(path.join(__dirname, '../dist')))\n\n  // Handle React routing, return all requests to React app\n  app.get('*', (req, res) => {\n    res.sendFile(path.join(__dirname, '../dist', 'index.html'))\n  })\n}\n\napp.listen(PORT, () => {\n  console.log(`Server running on port ${PORT}`)\n})",
+      "language": "javascript",
+      "lastModified": "2026-02-26T09:37:35.057Z",
+      "version": 1,
+      "size": 797
+    },
+    {
+      "path": "project/sessions/draft-anon_1772089847632_GowPej69n/constants.py",
+      "content": "# Game settings\nSCREEN_WIDTH = 600\nSCREEN_HEIGHT = 400\nGRID_SIZE = 20\nGRID_WIDTH = SCREEN_WIDTH // GRID_SIZE\nGRID_HEIGHT = SCREEN_HEIGHT // GRID_SIZE\nSNAKE_SPEED = 10 # Frames per second\n\n# Colors (RGB)\nWHITE = (255, 255, 255)\nGREEN = (0, 255, 0)\nRED = (255, 0, 0)\nBLACK = (0, 0, 0)\nGRAY = (50, 50, 50)",
+      "language": "python",
+      "lastModified": "2026-02-26T10:56:08.588Z",
+      "version": 1,
+      "size": 302
+    },
+    {
+      "path": "project/sessions/draft-anon_1772089847632_GowPej69n/food.py",
+      "content": "import pygame\nimport random\nfrom constants import GRID_SIZE, GRID_WIDTH, GRID_HEIGHT, RED\n\nclass Food:\n    def __init__(self):\n        self.position = (0, 0)\n        self.randomize_position()\n\n    def randomize_position(self, occupied_positions=None):\n        if occupied_positions is None:\n            occupied_positions = []\n        while True:\n            x = random.randint(0, GRID_WIDTH - 1)\n            y = random.randint(0, GRID_HEIGHT - 1)\n            if (x, y) not in occupied_positions:\n                self.position = (x, y)\n                break\n\n    def draw(self, screen):\n        x, y = self.position\n        rect = pygame.Rect(x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE)\n        pygame.draw.rect(screen, RED, rect)",
+      "language": "python",
+      "lastModified": "2026-02-26T10:56:08.601Z",
+      "version": 1,
+      "size": 738
+    },
+    {
+      "path": "project/sessions/draft-anon_1772089847632_GowPej69n/game.py",
+      "content": "import pygame\nimport sys\nfrom constants import SCREEN_WIDTH, SCREEN_HEIGHT, SNAKE_SPEED, BLACK, WHITE, GRAY, GRID_SIZE\nfrom snake import Snake\nfrom food import Food\n\nclass Game:\n    def __init__(self):\n        pygame.init()\n        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))\n        pygame.display.set_caption(\"Snake Game\")\n        self.clock = pygame.time.Clock()\n        self.font = pygame.font.Font(None, 36)\n\n        self.running = True\n        self.game_over = False\n        self.score = 0\n\n        self.snake = Snake()\n        self.food = Food()\n        self._reset_game()\n\n    def _reset_game(self):\n        self.snake = Snake()\n        self.food.randomize_position(self.snake.get_body())\n        self.game_over = False\n        self.score = 0\n\n    def _handle_input(self):\n        for event in pygame.event.get():\n            if event.type == pygame.QUIT:\n                self.running = False\n            elif event.type == pygame.KEYDOWN:\n                if self.game_over:\n                    if event.key == pygame.K_r:\n                        self._reset_game()\n                else:\n                    if event.key == pygame.K_UP:\n                        self.snake.change_direction((0, -1))\n                    elif event.key == pygame.K_DOWN:\n                        self.snake.change_direction((0, 1))\n                    elif event.key == pygame.K_LEFT:\n                        self.snake.change_direction((-1, 0))\n                    elif event.key == pygame.K_RIGHT:\n                        self.snake.change_direction((1, 0))\n\n    def _update_game_state(self):\n        if self.game_over:\n            return\n\n        if not self.snake.move(): # Returns False if self-collision occurs\n            self.game_over = True\n            return\n\n        if self.snake.check_collision(): # Wall collision\n            self.game_over = True\n            return\n\n        if self.snake.get_head_position() == self.food.position:\n            self.snake.grow()\n            self.score += 1\n            self.food.randomize_position(self.snake.get_body())\n\n    def _draw_elements(self):\n        self.screen.fill(BLACK)\n\n        # Draw grid\n        for x in range(0, SCREEN_WIDTH, GRID_SIZE):\n            pygame.draw.line(self.screen, GRAY, (x, 0), (x, SCREEN_HEIGHT))\n        for y in range(0, SCREEN_HEIGHT, GRID_SIZE):\n            pygame.draw.line(self.screen, GRAY, (0, y), (SCREEN_WIDTH, y))\n\n        self.snake.draw(self.screen)\n        self.food.draw(self.screen)\n\n        score_text = self.font.render(f\"Score: {self.score}\", True, WHITE)\n        self.screen.blit(score_text, (5, 5))\n\n        if self.game_over:\n            game_over_text = self.font.render(\"GAME OVER! Press 'R' to Restart\", True, WHITE)\n            text_rect = game_over_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))\n            self.screen.blit(game_over_text, text_rect)\n\n        pygame.display.flip()\n\n    def run(self):\n        while self.running:\n            self._handle_input()\n            self._update_game_state()\n            self._draw_elements()\n            self.clock.tick(SNAKE_SPEED) # Control game speed\n\n        pygame.quit()\n        sys.exit()",
+      "language": "python",
+      "lastModified": "2026-02-26T10:56:08.604Z",
+      "version": 1,
+      "size": 3178
+    },
+    {
+      "path": "project/sessions/draft-anon_1772089847632_GowPej69n/main.py",
+      "content": "from game import Game\n\nif __name__ == \"__main__\":\n    game = Game()\n    game.run()",
+      "language": "python",
+      "lastModified": "2026-02-26T10:56:08.607Z",
+      "version": 1,
+      "size": 82
+    },
+    {
+      "path": "project/sessions/draft-anon_1772089847632_GowPej69n/requirements.txt",
+      "content": "pygame",
+      "language": "text",
+      "lastModified": "2026-02-26T10:56:08.610Z",
+      "version": 1,
+      "size": 6
+    },
+    {
+      "path": "project/sessions/draft-anon_1772089847632_GowPej69n/snake.py",
+      "content": "import pygame\nfrom collections import deque\nimport random\nfrom constants import GRID_SIZE, GRID_WIDTH, GRID_HEIGHT, GREEN, BLACK, WHITE\n\nclass Snake:\n    def __init__(self):\n        self.body = deque()\n        self.head_x = GRID_WIDTH // 2\n        self.head_y = GRID_HEIGHT // 2\n        self.body.append((self.head_x, self.head_y))\n        self.direction = (1, 0)  # (dx, dy) - initial direction: right\n        self.grow_pending = False\n\n    def move(self):\n        self.head_x += self.direction[0]\n        self.head_y += self.direction[1]\n\n        new_head = (self.head_x, self.head_y)\n\n        # Check for self-collision before adding new head\n        if new_head in self.body:\n            return False # Game over\n\n        self.body.appendleft(new_head) # Add new head to the front\n\n        if self.grow_pending:\n            self.grow_pending = False\n        else:\n            self.body.pop() # Remove tail if not growing\n\n        return True # Snake moved successfully\n\n    def grow(self):\n        self.grow_pending = True\n\n    def change_direction(self, new_dir):\n        # Prevent reversing direction immediately\n        if (new_dir[0] * -1, new_dir[1] * -1) != self.direction:\n            self.direction = new_dir\n\n    def check_collision(self):\n        # Wall collision\n        if not (0 <= self.head_x < GRID_WIDTH and 0 <= self.head_y < GRID_HEIGHT):\n            return True\n        # Self collision (checked in move method)\n        return False\n\n    def get_head_position(self):\n        return (self.head_x, self.head_y)\n\n    def get_body(self):\n        return list(self.body)\n\n    def draw(self, screen):\n        for i, segment in enumerate(self.body):\n            x, y = segment\n            rect = pygame.Rect(x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE)\n            if i == 0: # Head\n                pygame.draw.rect(screen, GREEN, rect)\n                pygame.draw.rect(screen, BLACK, rect, 2) # Border for head\n            else:\n                pygame.draw.rect(screen, GREEN, rect)",
+      "language": "python",
+      "lastModified": "2026-02-26T10:56:08.596Z",
+      "version": 1,
+      "size": 2005
+    },
+    {
+      "path": "project/sessions/draft-chat_1772105722988_hISwey9AT/--- a/project/gradientBG.html",
+      "content": "",
+      "language": "html",
+      "lastModified": "2026-02-26T11:37:59.146Z",
+      "version": 1,
+      "size": 0
+    },
+    {
+      "path": "project/sessions/draft-chat_1772106570809_UmhAzJf7t/index.html",
+      "content": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Glider Ambient Game</title>\n    <link rel=\"stylesheet\" href=\"style.css\">\n    <style>\n        /* Base styles */\n        * { margin: 0; padding: 0; box-sizing: border-box; }\n\n        body, html {\n            height: 100%;\n            width: 100%;\n            background-color: #050505; /* Solid black base */\n            display: flex;\n            justify-content: center;\n            align-items: center;\n            overflow: hidden;\n            font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif;\n        }\n\n        /* 1. THE MEDIA LAYER (GIF or Image) */\n        .bg-media {\n            position: fixed;\n            inset: -10%; /* Extra space for the blur and movement */\n            z-index: 1;\n            width: 120%;\n            height: 120%;\n            object-fit: cover;\n            \n            /* ADJUST THESE: \n               blur(100px) creates the \"cloud\" effect. \n               brightness(0.3) keeps it dark enough for white text. */\n            filter: blur(100px) brightness(0.35) saturate(1.2);\n            \n            pointer-events: none;\n            \n            /* Slow, organic movement so the background isn't static */\n            animation: ambient-drift 40s infinite alternate ease-in-out;\n        }\n\n        @keyframes ambient-drift {\n            0% { transform: translate(0, 0) scale(1); }\n            100% { transform: translate(-2%, -2%) scale(1.05); }\n        }\n\n        /* 2. THE GLOW OVERLAY (Static Gradient) */\n        .bg-glow {\n            position: fixed;\n            inset: 0;\n            z-index: 2;\n            /* Creates the \"spotlight\" centered behind the input */\n            background: radial-gradient(\n                circle at 50% 45%, \n                rgba(30, 30, 40, 0.4) 0%, \n                rgba(5, 5, 5, 1) 80%\n            );\n            pointer-events: none;\n        }\n\n        /* 3. THE NOISE LAYER (Texture) */\n        .bg-noise {\n            position: fixed;\n            inset: 0;\n            z-index: 3;\n            background-image: url(\"data:image/svg+xml,%3Csvg viewBox='0 0 250 250' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E\");\n            opacity: 0.1; \n            mix-blend-mode: overlay;\n            pointer-events: none;\n        }\n    </style>\n</head>\n<body>\n\n    <img class=\"bg-media\" src=\"https://media.tenor.com/CWaT-F5vNb8AAAAM/sky-gif.gif\" alt=\"Ambient background\">\n    \n    <div class=\"bg-glow\"></div>\n    <div class=\"bg-noise\"></div>\n\n    <canvas id=\"gameCanvas\"></canvas>\n\n    <script src=\"script.js\"></script>\n</body>\n</html>",
+      "language": "html",
+      "lastModified": "2026-02-26T11:50:05.048Z",
+      "version": 1,
+      "size": 2901
+    },
+    {
+      "path": "project/sessions/draft-chat_1772106570809_UmhAzJf7t/script.js",
+      "content": "const canvas = document.getElementById('gameCanvas');\nconst ctx = canvas.getContext('2d');\n\nlet W, H;\n\nfunction resizeCanvas() {\n    W = canvas.width = window.innerWidth * 0.8; // Make canvas 80% of window width\n    H = canvas.height = window.innerHeight * 0.8; // Make canvas 80% of window height\n}\n\nwindow.addEventListener('resize', resizeCanvas);\nresizeCanvas(); // Initial resize\n\n// --- Game State ---\nconst player = {\n    x: W / 2,\n    y: H / 2,\n    size: 20,\n    color: 'rgba(255, 255, 255, 0.8)',\n    speed: 5,\n    vx: 0,\n    vy: 0,\n    maxSpeed: 8,\n    friction: 0.9, // How much velocity decays each frame\n    acceleration: 0.5,\n    trail: [],\n    trailLength: 20,\n    trailColor: 'rgba(100, 150, 255, 0.5)',\n};\n\nconst keys = {};\nwindow.addEventListener('keydown', (e) => {\n    keys[e.key] = true;\n});\nwindow.addEventListener('keyup', (e) => {\n    keys[e.key] = false;\n});\n\n// --- Particles (Stars) ---\nconst particles = [];\nconst numParticles = 100;\n\nfunction createParticles() {\n    for (let i = 0; i < numParticles; i++) {\n        particles.push({\n            x: Math.random() * W,\n            y: Math.random() * H,\n            size: Math.random() * 2 + 0.5,\n            color: `rgba(255, 255, 255, ${Math.random() * 0.5 + 0.3})`,\n            speed: Math.random() * 0.5 + 0.1,\n            direction: Math.random() * Math.PI * 2, // 0 to 2PI\n            driftX: (Math.random() - 0.5) * 0.2, // Subtle horizontal drift\n            driftY: (Math.random() - 0.5) * 0.2, // Subtle vertical drift\n            opacity: Math.random() * 0.5 + 0.3,\n            blinkTimer: Math.random() * 100,\n        });\n    }\n}\n\n// --- Game Loop ---\nfunction update() {\n    // Player movement\n    let targetVx = 0;\n    let targetVy = 0;\n\n    if (keys['ArrowUp'] || keys['w']) targetVy -= player.acceleration;\n    if (keys['ArrowDown'] || keys['s']) targetVy += player.acceleration;\n    if (keys['ArrowLeft'] || keys['a']) targetVx -= player.acceleration;\n    if (keys['ArrowRight'] || keys['d']) targetVx += player.acceleration;\n\n    player.vx += targetVx;\n    player.vy += targetVy;\n\n    // Apply friction\n    player.vx *= player.friction;\n    player.vy *= player.friction;\n\n    // Limit speed\n    const currentSpeed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);\n    if (currentSpeed > player.maxSpeed) {\n        player.vx = (player.vx / currentSpeed) * player.maxSpeed;\n        player.vy = (player.vy / currentSpeed) * player.maxSpeed;\n    }\n\n    player.x += player.vx;\n    player.y += player.vy;\n\n    // Keep player within canvas bounds\n    player.x = Math.max(player.size / 2, Math.min(W - player.size / 2, player.x));\n    player.y = Math.max(player.size / 2, Math.min(H - player.size / 2, player.y));\n\n    // Update player trail\n    player.trail.push({ x: player.x, y: player.y });\n    if (player.trail.length > player.trailLength) {\n        player.trail.shift();\n    }\n\n    // Update particles\n    particles.forEach(p => {\n        p.x += Math.cos(p.direction) * p.speed + p.driftX;\n        p.y += Math.sin(p.direction) * p.speed + p.driftY;\n\n        // Wrap particles around if they go off-screen\n        if (p.x < 0) p.x = W;\n        if (p.x > W) p.x = 0;\n        if (p.y < 0) p.y = H;\n        if (p.y > H) p.y = 0;\n\n        // Subtle blinking effect\n        p.blinkTimer += 0.1;\n        p.opacity = (Math.sin(p.blinkTimer) * 0.2 + 0.8) * (p.size / 2.5); // Smaller particles blink less dramatically\n    });\n}\n\nfunction draw() {\n    ctx.clearRect(0, 0, W, H); // Clear canvas for next frame\n\n    // Draw particles\n    particles.forEach(p => {\n        ctx.beginPath();\n        ctx.arc(p.x, p.y, p.size / 2, 0, Math.PI * 2);\n        ctx.fillStyle = `rgba(255, 255, 255, ${p.opacity})`;\n        ctx.fill();\n    });\n\n    // Draw player trail\n    if (player.trail.length > 1) {\n        ctx.beginPath();\n        ctx.moveTo(player.trail[0].x, player.trail[0].y);\n        for (let i = 1; i < player.trail.length; i++) {\n            ctx.lineTo(player.trail[i].x, player.trail[i].y);\n        }\n        ctx.strokeStyle = player.trailColor;\n        ctx.lineWidth = player.size * 0.6; // Trail width relative to player size\n        ctx.lineCap = 'round';\n        ctx.lineJoin = 'round';\n        ctx.stroke();\n    }\n\n    // Draw player\n    ctx.beginPath();\n    // A simple triangle for a glider\n    // Default angle points right, adjust to point forward based on velocity\n    const angle = Math.atan2(player.vy, player.vx); \n    const p1x = player.x + Math.cos(angle) * player.size;\n    const p1y = player.y + Math.sin(angle) * player.size;\n    const p2x = player.x + Math.cos(angle - Math.PI * 0.75) * player.size * 0.7;\n    const p2y = player.y + Math.sin(angle - Math.PI * 0.75) * player.size * 0.7;\n    const p3x = player.x + Math.cos(angle + Math.PI * 0.75) * player.size * 0.7;\n    const p3y = player.y + Math.sin(angle + Math.PI * 0.75) * player.size * 0.7;\n\n    ctx.moveTo(p1x, p1y);\n    ctx.lineTo(p2x, p2y);\n    ctx.lineTo(p3x, p3y);\n    ctx.closePath();\n    \n    ctx.fillStyle = player.color;\n    ctx.shadowBlur = 15;\n    ctx.shadowColor = 'rgba(100, 150, 255, 0.7)'; // Glow effect\n    ctx.fill();\n    ctx.shadowBlur = 0; // Reset shadow for other drawings\n}\n\nfunction gameLoop() {\n    update();\n    draw();\n    requestAnimationFrame(gameLoop);\n}\n\n// Initialize particles and start game\ncreateParticles();\ngameLoop();",
+      "language": "javascript",
+      "lastModified": "2026-02-26T11:50:05.056Z",
+      "version": 1,
+      "size": 5325
+    },
+    {
+      "path": "project/sessions/draft-chat_1772106570809_UmhAzJf7t/style.css",
+      "content": "canvas {\n    position: absolute;\n    top: 50%;\n    left: 50%;\n    transform: translate(-50%, -50%);\n    z-index: 10; /* Above all background layers */\n    background: transparent; /* Ensure canvas background is transparent */\n    border-radius: 10px; /* Optional: subtle rounding */\n    /* Add a subtle border or shadow if desired */\n    /* border: 1px solid rgba(255, 255, 255, 0.05); */\n    /* box-shadow: 0 0 30px rgba(0, 0, 0, 0.5); */\n}",
+      "language": "css",
+      "lastModified": "2026-02-26T11:50:05.053Z",
+      "version": 1,
+      "size": 441
+    },
+    {
+      "path": "project/sessions/draft-chat_1772107112573_T6HzhBuNk/.gitignore",
+      "content": ".env\n__pycache__/\n*.png\n*.jpg\n*.jpeg\n*.gif\n*.bmp\n*.tiff\n*.webp",
+      "language": "text",
+      "lastModified": "2026-02-26T11:59:07.481Z",
+      "version": 1,
+      "size": 62
+    },
+    {
+      "path": "project/src/App.css",
+      "content": "\n/* You can add any global app-specific styles here,\n   but most styling is handled by Tailwind CSS classes in App.jsx */\n",
+      "language": "css",
+      "lastModified": "2026-02-26T10:04:57.000Z",
+      "version": 2,
+      "size": 122
+    },
+    {
+      "path": "project/src/App.jsx",
+      "content": "\n```jsx\nimport { useState } from 'react';\nimport './App.css'; // Keep existing CSS import if any specific styles are needed later\n\nfunction App() {\n  const [score, setScore] = useState(0);\n  const [clicksRemaining, setClicksRemaining] = useState(10); // A simple game mechanic: 10 clicks\n  const [gameOver, setGameOver] = useState(false);\n\n  const handleClick = () => {\n    if (gameOver) return;\n\n    setScore(prevScore => prevScore + 1);\n    setClicksRemaining(prevClicks => {\n      const newClicks = prevClicks - 1;\n      if (newClicks <= 0) {\n        setGameOver(true);\n      }\n      return newClicks;\n    });\n  };\n\n  const resetGame = () => {\n    setScore(0);\n    setClicksRemaining(10);\n    setGameOver(false);\n  };\n\n  return (\n    <div className=\"min-h-screen bg-gradient-to-br from-indigo-900 to-purple-800 flex items-center justify-center p-4\">\n      <div className=\"bg-white rounded-xl shadow-2xl p-8 md:p-12 w-full max-w-lg text-center transform hover:scale-105 transition-transform duration-300 ease-in-out\">\n        <h1 className=\"text-4xl md:text-5xl font-extrabold text-gray-800 mb-6 animate-pulse\">\n          Clicker Game!\n        </h1>\n\n        <div className=\"mb-8\">\n          <p className=\"text-2xl md:text-3xl text-gray-700 font-semibold\">\n            Score: <span className=\"text-indigo-600\">{score}</span>\n          </p>\n          <p className=\"text-xl md:text-2xl text-gray-600 mt-2\">\n            Clicks Remaining: <span className=\"text-purple-600\">{clicksRemaining}</span>\n          </p>\n        </div>\n\n        {!gameOver ? (\n          <button\n            onClick={handleClick}\n            className=\"bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-bold py-4 px-8 rounded-full shadow-lg hover:from-blue-600 hover:to-indigo-700 active:scale-95 transition-all duration-200 ease-in-out transform hover:-translate-y-1 focus:outline-none focus:ring-4 focus:ring-blue-300\"\n          >\n            Click Me!\n          </button>\n        ) : (\n          <div className=\"mt-8\">\n            <p className=\"text-3xl md:text-4xl font-bold text-red-600 mb-4 animate-bounce\">\n              Game Over!\n            </p>\n            <button\n              onClick={resetGame}\n              className=\"bg-green-500 text-white font-bold py-3 px-6 rounded-full shadow-md hover:bg-green-600 active:scale-95 transition-all duration-200 ease-in-out focus:outline-none focus:ring-4 focus:ring-green-300\"\n            >\n              Play Again\n            </button>\n          </div>\n        )}\n\n        <p className=\"text-sm text-gray-500 mt-10\">\n          A basic web game built with React and Tailwind CSS.\n        </p>\n      </div>\n    </div>\n  );\n}\n\nexport default App;\n```\n",
+      "language": "jsx",
+      "lastModified": "2026-02-26T10:08:21.901Z",
+      "version": 3,
+      "size": 2687
+    },
+    {
+      "path": "project/src/index.css",
+      "content": "@tailwind base;\n@tailwind components;\n@tailwind utilities;\n\nbody {\n  font-family: 'Inter', sans-serif;\n  margin: 0;\n  padding: 0;\n}",
+      "language": "css",
+      "lastModified": "2026-02-26T09:37:35.041Z",
+      "version": 1,
+      "size": 131
+    },
+    {
+      "path": "project/src/main.jsx",
+      "content": "import React from 'react'\nimport ReactDOM from 'react-dom/client'\nimport App from './App'\nimport './index.css'\n\nReactDOM.createRoot(document.getElementById('root')).render(\n  <React.StrictMode>\n    <App />\n  </React.StrictMode>,\n)",
+      "language": "jsx",
+      "lastModified": "2026-02-26T09:37:35.032Z",
+      "version": 1,
+      "size": 230
+    },
+    {
+      "path": "project/tailwind.config.js",
+      "content": "/** @type {import('tailwindcss').Config} */\nmodule.exports = {\n  content: [\n    \"./index.html\",\n    \"./src/**/*.{js,ts,jsx,tsx}\",\n  ],\n  theme: {\n    extend: {},\n  },\n  plugins: [],\n}",
+      "language": "javascript",
+      "lastModified": "2026-02-26T09:37:35.026Z",
+      "version": 1,
+      "size": 183
+    },
+    {
+      "path": "project/vite.config.js",
+      "content": "import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\n\nexport default defineConfig({\n  plugins: [react()],\n  server: {\n    port: 3000,\n    proxy: {\n      '/api': {\n        target: 'http://localhost:5000',\n        changeOrigin: true,\n        secure: false\n      }\n    }\n  }\n})",
+      "language": "javascript",
+      "lastModified": "2026-02-26T09:37:35.019Z",
+      "version": 1,
+      "size": 298
+    }
+  ]
+}

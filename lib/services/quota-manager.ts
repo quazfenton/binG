@@ -5,7 +5,7 @@
  * Uses SQLite database for persistent storage across server restarts.
  * 
  * NOTE: Quotas ONLY apply to tool and sandbox providers (composio, arcade, nango, 
- * daytona, runloop, microsandbox, e2b). Regular LLM chat requests are NOT tracked.
+ * daytona, runloop, microsandbox, e2b, mistral). Regular LLM chat requests are NOT tracked.
  */
 
 import { getDatabase } from '@/lib/database/connection';
@@ -30,6 +30,7 @@ const DEFAULT_QUOTAS: Record<string, number> = {
   runloop: 5000,      // Sandbox sessions
   microsandbox: 10000, // Sandbox sessions
   e2b: 1000,          // E2B sandbox sessions per month (free tier: 1000 hours/month)
+  mistral: 2000,      // Mistral code interpreter sessions
 };
 
 class QuotaManager {
@@ -436,12 +437,13 @@ class QuotaManager {
    */
   getSandboxProviderChain(primary: string): string[] {
     const explicitChains: Record<string, string[]> = {
-      daytona: ['daytona', 'runloop', 'microsandbox', 'e2b'],
-      runloop: ['runloop', 'microsandbox', 'daytona', 'e2b'],
-      microsandbox: ['microsandbox', 'runloop', 'daytona', 'e2b'],
-      e2b: ['e2b', 'daytona', 'runloop', 'microsandbox'],
+      daytona: ['daytona', 'runloop', 'microsandbox', 'e2b', 'mistral'],
+      runloop: ['runloop', 'microsandbox', 'daytona', 'e2b', 'mistral'],
+      microsandbox: ['microsandbox', 'runloop', 'daytona', 'e2b', 'mistral'],
+      e2b: ['e2b', 'daytona', 'runloop', 'microsandbox', 'mistral'],
+      mistral: ['mistral', 'microsandbox', 'runloop', 'daytona', 'e2b'],
     };
-    const base = explicitChains[primary] || [primary, 'daytona', 'runloop', 'microsandbox', 'e2b'];
+    const base = explicitChains[primary] || [primary, 'daytona', 'runloop', 'microsandbox', 'e2b', 'mistral'];
     const deduped = Array.from(new Set(base));
     return deduped.filter(provider => this.isAvailable(provider));
   }

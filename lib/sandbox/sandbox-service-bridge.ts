@@ -6,7 +6,12 @@
 
 // Import types from canonical source to avoid duplication
 import type { WorkspaceSession, SandboxConfig } from './types';
-import { getSession as storeGetSession, getSessionByUserId as storeGetSessionByUserId } from './session-store';
+import {
+  getSession as storeGetSession,
+  getSessionByUserId as storeGetSessionByUserId,
+  getAllActiveSessions,
+} from './session-store';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 
 // Track pending session creations to prevent race conditions
 const pendingCreations = new Map<string, Promise<WorkspaceSession>>();
@@ -14,6 +19,7 @@ const pendingCreations = new Map<string, Promise<WorkspaceSession>>();
 export class SandboxServiceBridge {
   private initialized = false;
   private sandboxService: any = null;
+  private mountedFilesystemVersionBySandbox = new Map<string, number>();
 
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
@@ -62,6 +68,7 @@ export class SandboxServiceBridge {
   }
 
   async executeCommand(sandboxId: string, command: string, cwd?: string) {
+    await this.ensureVirtualFilesystemMounted(sandboxId);
     await this.ensureInitialized();
     return this.sandboxService.executeCommand(sandboxId, command, cwd);
   }
@@ -84,6 +91,7 @@ export class SandboxServiceBridge {
   async destroyWorkspace(sessionId: string, sandboxId: string): Promise<void> {
     await this.ensureInitialized();
     await this.sandboxService.destroyWorkspace(sessionId, sandboxId);
+    this.mountedFilesystemVersionBySandbox.delete(sandboxId);
   }
 
   getSession(sessionId: string): WorkspaceSession | undefined {
@@ -92,6 +100,36 @@ export class SandboxServiceBridge {
 
   getSessionByUserId(userId: string): WorkspaceSession | undefined {
     return storeGetSessionByUserId(userId);
+  }
+
+  getSessionBySandboxId(sandboxId: string): WorkspaceSession | undefined {
+    return getAllActiveSessions().find((session) => session.sandboxId === sandboxId);
+  }
+
+  private async ensureVirtualFilesystemMounted(sandboxId: string): Promise<void> {
+    const session = this.getSessionBySandboxId(sandboxId);
+    if (!session?.userId) {
+      return;
+    }
+
+    try {
+      const currentVersion = await virtualFilesystem.getWorkspaceVersion(session.userId);
+      const mountedVersion = this.mountedFilesystemVersionBySandbox.get(sandboxId);
+
+      if (mountedVersion === currentVersion) {
+        return;
+      }
+
+      const snapshot = await virtualFilesystem.exportWorkspace(session.userId);
+      for (const file of snapshot.files) {
+        await this.writeFile(sandboxId, file.path, file.content);
+      }
+
+      this.mountedFilesystemVersionBySandbox.set(sandboxId, currentVersion);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown mount error';
+      console.warn(`[SandboxBridge] Failed to mount virtual filesystem to sandbox ${sandboxId}: ${message}`);
+    }
   }
 }
 

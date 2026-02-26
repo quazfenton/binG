@@ -34,6 +34,11 @@ const PORT_PATTERNS = [
 ]
 
 export class TerminalManager {
+  private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
+    if (sandboxId.startsWith('mistral-')) return 'mistral'
+    return null
+  }
+
   private getFallbackProviderType(): SandboxProviderType | null {
     if (process.env.SANDBOX_ENABLE_FALLBACK !== 'true') return null
     const fallbackType = (process.env.SANDBOX_FALLBACK_PROVIDER || 'microsandbox') as SandboxProviderType
@@ -45,6 +50,17 @@ export class TerminalManager {
   private async resolveHandleForSandbox(
     sandboxId: string,
   ): Promise<{ handle: SandboxHandle; providerType: SandboxProviderType }> {
+    const inferredProvider = this.inferProviderFromSandboxId(sandboxId)
+    if (inferredProvider) {
+      try {
+        const provider = getSandboxProvider(inferredProvider)
+        const handle = await provider.getSandbox(sandboxId)
+        return { handle, providerType: inferredProvider }
+      } catch {
+        // Continue to generic probing.
+      }
+    }
+
     const primaryType = (process.env.SANDBOX_PROVIDER || 'daytona') as SandboxProviderType
     
     // Track tried providers to avoid duplicates
@@ -70,7 +86,7 @@ export class TerminalManager {
     
     // Try all known providers to locate the sandbox (supports quota-based fallbacks)
     // This is critical because sandbox-service can create sandboxes on any provider via fallback
-    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'microsandbox', 'e2b']
+    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'microsandbox', 'e2b', 'mistral']
     for (const providerType of allProviders) {
       const result = await tryProvider(providerType)
       if (result) return result

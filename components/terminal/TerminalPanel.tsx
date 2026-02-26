@@ -34,7 +34,7 @@ interface TerminalInstance {
   id: string;
   name: string;
   sandboxInfo: SandboxInfo;
-  xtermRef: React.RefObject<HTMLDivElement>;
+  xtermRef: React.RefObject<HTMLDivElement | null>;
   terminal: any | null;      // xterm Terminal instance
   fitAddon: any | null;      // FitAddon instance
   eventSource: EventSource | null;
@@ -96,7 +96,8 @@ export default function TerminalPanel({
   const terminalsRef = useRef<TerminalInstance[]>([]);
   terminalsRef.current = terminals;
   const preConnectLineBufferRef = useRef<Record<string, string>>({});
-  const preConnectQueueRef = useRef<Record<string, string[]>>({});
+  const localShellCwdRef = useRef<Record<string, string>>({});
+  const reconnectCooldownUntilRef = useRef<Record<string, number>>({});
 
   // Auto-create terminal when panel opens and no terminals exist
   useEffect(() => {
@@ -190,7 +191,8 @@ export default function TerminalPanel({
     };
 
     preConnectLineBufferRef.current[newTerminal.id] = '';
-    preConnectQueueRef.current[newTerminal.id] = [];
+    localShellCwdRef.current[newTerminal.id] = 'project';
+    reconnectCooldownUntilRef.current[newTerminal.id] = 0;
     setTerminals(prev => [...prev, newTerminal]);
     setActiveTerminalId(newTerminal.id);
     return newTerminal.id;
@@ -203,7 +205,8 @@ export default function TerminalPanel({
       terminal.terminal?.dispose();
     }
     delete preConnectLineBufferRef.current[terminalId];
-    delete preConnectQueueRef.current[terminalId];
+    delete localShellCwdRef.current[terminalId];
+    delete reconnectCooldownUntilRef.current[terminalId];
 
     setTerminals(prev => {
       const updated = prev.filter(t => t.id !== terminalId);
@@ -222,6 +225,103 @@ export default function TerminalPanel({
       t.id === terminalId ? { ...t, ...updates } : t
     ));
   }, []);
+
+  const resolveLocalPath = useCallback((cwd: string, input: string): string => {
+    const raw = (input || '').trim().replace(/\\/g, '/');
+    const base = raw.startsWith('project') ? raw : `${cwd}/${raw}`.replace(/\/+/g, '/');
+    const parts = base.split('/').filter(Boolean);
+    const stack: string[] = [];
+    for (const part of parts) {
+      if (part === '.') continue;
+      if (part === '..') {
+        if (stack.length > 1) stack.pop();
+        continue;
+      }
+      stack.push(part);
+    }
+    if (stack.length === 0 || stack[0] !== 'project') {
+      return 'project';
+    }
+    return stack.join('/');
+  }, []);
+
+  const executeLocalShellCommand = useCallback(async (
+    terminalId: string,
+    command: string,
+    write: (text: string) => void,
+  ) => {
+    const cwd = localShellCwdRef.current[terminalId] || 'project';
+    const [cmd, ...args] = command.trim().split(/\s+/);
+    const arg = args.join(' ').trim();
+
+    const headers = getAuthHeaders();
+    const fetchJson = async (url: string, options?: RequestInit) => {
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          ...(options?.headers || {}),
+          ...headers,
+          ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
+        },
+        credentials: 'include',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.success === false) {
+        throw new Error(payload?.error || `Request failed (${response.status})`);
+      }
+      return payload?.data;
+    };
+
+    if (!cmd) return;
+    if (cmd === 'help') {
+      write('Local shell commands: pwd, ls, cd, cat, clear, help\r\n');
+      return;
+    }
+    if (cmd === 'clear') {
+      write('\x1bc');
+      return;
+    }
+    if (cmd === 'pwd') {
+      write(`${cwd}\r\n`);
+      return;
+    }
+    if (cmd === 'cd') {
+      const nextPath = resolveLocalPath(cwd, arg || 'project');
+      await fetchJson(`/api/filesystem/list?path=${encodeURIComponent(nextPath)}`);
+      localShellCwdRef.current[terminalId] = nextPath;
+      return;
+    }
+    if (cmd === 'ls') {
+      const targetPath = arg ? resolveLocalPath(cwd, arg) : cwd;
+      const data = await fetchJson(`/api/filesystem/list?path=${encodeURIComponent(targetPath)}`);
+      const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
+      if (nodes.length === 0) {
+        write('(empty)\r\n');
+        return;
+      }
+      for (const node of nodes) {
+        write(`${node.type === 'directory' ? 'd' : '-'} ${node.name}${node.type === 'directory' ? '/' : ''}\r\n`);
+      }
+      return;
+    }
+    if (cmd === 'cat') {
+      if (!arg) {
+        write('cat: missing file path\r\n');
+        return;
+      }
+      const filePath = resolveLocalPath(cwd, arg);
+      const data = await fetchJson('/api/filesystem/read', {
+        method: 'POST',
+        body: JSON.stringify({ path: filePath }),
+      });
+      const content = typeof data?.content === 'string' ? data.content : '';
+      write(`${content.replace(/\n/g, '\r\n')}${content.endsWith('\n') ? '' : '\r\n'}`);
+      return;
+    }
+
+    write(`Command not available in local shell: ${cmd}\r\n`);
+    write('Use sandbox terminal for full command execution.\r\n');
+  }, [resolveLocalPath]);
 
   // Initialize xterm.js for a terminal instance when its container mounts
   const initXterm = useCallback(async (terminalId: string, containerEl: HTMLDivElement) => {
@@ -269,23 +369,25 @@ export default function TerminalPanel({
       terminal.loadAddon(new WebLinksAddon());
 
       terminal.open(containerEl);
+      containerEl.addEventListener('click', () => terminal.focus());
 
       // Initial fit after a frame
       requestAnimationFrame(() => {
         try { fitAddon.fit(); } catch { /* ignore */ }
+        terminal.focus();
       });
 
-      // Show friendly welcome message - sandbox connects lazily on first command
+      // Show friendly welcome message - local shell is available immediately.
       terminal.writeln('\x1b[1;32m● Terminal ready\x1b[0m');
-      terminal.writeln('\x1b[90mType a command to connect to sandbox...\x1b[0m');
-      terminal.writeln('\x1b[90mSandbox will initialize automatically on first command\x1b[0m');
+      terminal.writeln('\x1b[90mLocal filesystem shell is active immediately.\x1b[0m');
+      terminal.writeln('\x1b[90mSandbox connects in background on first command.\x1b[0m');
       terminal.writeln('');
       terminal.writeln('\x1b[36mQuick commands:\x1b[0m');
       terminal.writeln('  \x1b[32mls\x1b[0m - List files');
       terminal.writeln('  \x1b[32mpwd\x1b[0m - Show current directory');
-      terminal.writeln('  \x1b[32mnode --version\x1b[0m - Check Node.js version');
+      terminal.writeln('  \x1b[32mcat <file>\x1b[0m - Read file');
       terminal.writeln('');
-      terminal.write('local$ ');
+      terminal.write('project$ ');
 
       updateTerminalState(terminalId, { terminal, fitAddon });
 
@@ -303,15 +405,15 @@ export default function TerminalPanel({
 
         // If not connected yet, trigger sandbox initialization
         if (term.sandboxInfo.status === 'none' || !term.isConnected) {
-          if (term.sandboxInfo.status !== 'creating') {
+          const reconnectAllowedAt = reconnectCooldownUntilRef.current[terminalId] || 0;
+          if (term.sandboxInfo.status !== 'creating' && Date.now() >= reconnectAllowedAt) {
             connectTerminal(terminalId);
           }
 
-          // Pre-connect local line editor + queue so terminal remains usable
-          // while sandbox provisioning is in progress.
+          // Local line-editor mode so terminal remains usable while sandbox is provisioning.
           const buffer = preConnectLineBufferRef.current[terminalId] ?? '';
           let nextBuffer = buffer;
-          let queuedCommand: string | null = null;
+          let localCommand: string | null = null;
 
           for (const ch of data) {
             if (ch === '\r' || ch === '\n') {
@@ -319,12 +421,11 @@ export default function TerminalPanel({
               const command = nextBuffer.trim();
               nextBuffer = '';
               if (command) {
-                const queue = preConnectQueueRef.current[terminalId] ?? [];
-                queue.push(command);
-                preConnectQueueRef.current[terminalId] = queue;
-                queuedCommand = command;
+                localCommand = command;
+              } else {
+                const cwd = localShellCwdRef.current[terminalId] || 'project';
+                term.terminal?.write(`${cwd}$ `);
               }
-              term.terminal?.write('local$ ');
             } else if (ch === '\u007f') {
               if (nextBuffer.length > 0) {
                 nextBuffer = nextBuffer.slice(0, -1);
@@ -337,8 +438,19 @@ export default function TerminalPanel({
           }
 
           preConnectLineBufferRef.current[terminalId] = nextBuffer;
-          if (queuedCommand) {
-            term.terminal?.writeln('\x1b[90m[queued] command will run once sandbox is connected\x1b[0m');
+          if (localCommand) {
+            void executeLocalShellCommand(
+              terminalId,
+              localCommand,
+              (text) => term.terminal?.write(text),
+            )
+              .catch((err) => {
+                term.terminal?.writeln(`\x1b[31m${err instanceof Error ? err.message : String(err)}\x1b[0m`);
+              })
+              .finally(() => {
+                const cwd = localShellCwdRef.current[terminalId] || 'project';
+                term.terminal?.write(`${cwd}$ `);
+              });
           }
           return;
         }
@@ -395,18 +507,6 @@ export default function TerminalPanel({
       // Silently ignore resize failures
     }
   }, []);
-
-  const flushPreConnectQueue = useCallback(async (terminalId: string, sessionId: string) => {
-    const queue = preConnectQueueRef.current[terminalId];
-    if (!queue || queue.length === 0) return;
-
-    const toRun = [...queue];
-    preConnectQueueRef.current[terminalId] = [];
-
-    for (const command of toRun) {
-      await sendInput(sessionId, `${command}\n`);
-    }
-  }, [sendInput]);
 
   // Connect terminal to sandbox PTY
   const connectTerminal = useCallback(async (terminalId: string) => {
@@ -520,15 +620,11 @@ export default function TerminalPanel({
                 sendResize(sessionId, currentTerm.terminal.cols, currentTerm.terminal.rows);
               }
 
-              flushPreConnectQueue(terminalId, sessionId).then(async () => {
-                const pendingBuffer = preConnectLineBufferRef.current[terminalId];
-                if (pendingBuffer) {
-                  await sendInput(sessionId, pendingBuffer);
-                }
-                preConnectLineBufferRef.current[terminalId] = '';
-              }).catch(() => {
-                // Keep stream alive even if queue flush fails
-              });
+              const pendingBuffer = preConnectLineBufferRef.current[terminalId];
+              if (pendingBuffer) {
+                void sendInput(sessionId, pendingBuffer);
+              }
+              preConnectLineBufferRef.current[terminalId] = '';
               break;
             }
 
@@ -611,7 +707,8 @@ export default function TerminalPanel({
                   termMut.isConnected = false;
                 }
                 currentTerm.eventSource?.close();
-                currentTerm.terminal.writeln('\x1b[90mPress any key to retry...\x1b[0m');
+                reconnectCooldownUntilRef.current[terminalId] = Date.now() + 5_000;
+                currentTerm.terminal.writeln('\x1b[90mSandbox unavailable. Local shell remains active.\x1b[0m');
               }
               break;
 
@@ -662,10 +759,11 @@ export default function TerminalPanel({
         termMut.sandboxInfo = { status: 'error' };
         termMut.isConnected = false;
       }
-      term.terminal?.writeln(`\x1b[31m✗ Failed to connect: ${errMsg}\x1b[0m`);
-      term.terminal?.writeln('\x1b[90mPress any key to retry...\x1b[0m');
+      reconnectCooldownUntilRef.current[terminalId] = Date.now() + 5_000;
+      term.terminal?.writeln(`\x1b[31m✗ Failed to connect sandbox: ${errMsg}\x1b[0m`);
+      term.terminal?.writeln('\x1b[90mUsing local shell mode. Background reconnect will retry.\x1b[0m');
     }
-  }, [userId, updateTerminalState, sendResize, flushPreConnectQueue, sendInput]);
+  }, [userId, updateTerminalState, sendResize, sendInput]);
 
   // Ref callback to mount xterm when DOM element is available
   const setXtermContainer = useCallback((terminalId: string) => (el: HTMLDivElement | null) => {
@@ -984,7 +1082,7 @@ export default function TerminalPanel({
           <span>
             {activeTerminal.isConnected
               ? `PTY ${activeTerminal.terminal?.cols || 0}×${activeTerminal.terminal?.rows || 0}`
-              : 'Press any key to connect'
+              : 'Local shell mode (sandbox reconnecting)'
             }
           </span>
           {activeTerminal.sandboxInfo.sandboxId && (

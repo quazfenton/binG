@@ -370,7 +370,7 @@ class PriorityRequestRouter {
     // Return a final emergency response
     return {
       success: false,
-      content: "I apologize, but I'm currently unable to process your request due to technical difficulties. Please try again in a moment.",
+      content: "Sorry, but I can't process your request due to technical difficulties. Please try again in a moment.",
       source: 'emergency-fallback',
       priority: 999,
       fallbackChain,

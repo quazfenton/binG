@@ -1,8 +1,8 @@
 # API Endpoints Reference - Complete Documentation
 
-**Version:** 2.0 (Security Hardening Release)  
-**Last Updated:** February 25, 2026  
-**Total Endpoints:** 90+
+**Version:** 2.1 (Virtual Filesystem Release)
+**Last Updated:** February 26, 2026
+**Total Endpoints:** 95+
 
 ---
 
@@ -16,13 +16,14 @@
 6. [🤖 CI/CD Pipelines](#-cicd-pipelines)
 7. [🎨 OAuth Integrations](#-oauth-integrations)
 8. [🖼️ AI & Media](#-ai--media)
-9. [🛠️ Tools & Utilities](#-tools--utilities)
-10. [👤 User Management](#-user-management)
-11. [🔗 URL Services](#-url-services)
-12. [📡 Webhooks & Integrations](#-webhooks--integrations)
-13. [🏥 System & Health](#-system--health)
-14. [Security Summary](#security-summary)
-15. [Configuration](#configuration)
+9. [📁 Virtual Filesystem](#-virtual-filesystem)
+10. [🛠️ Tools & Utilities](#-tools--utilities)
+11. [👤 User Management](#-user-management)
+12. [🔗 URL Services](#-url-services)
+13. [📡 Webhooks & Integrations](#-webhooks--integrations)
+14. [🏥 System & Health](#-system--health)
+15. [Security Summary](#security-summary)
+16. [Configuration](#configuration)
 
 ---
 
@@ -663,6 +664,268 @@ grep, find, du, netstat, ss, ip, ifconfig, ping
 **Purpose:** Generate LiveKit token for voice  
 **Body:** `{ "roomName": "room", "participantName": "user" }`  
 **Response:** `{ "token": "...", "url": "wss://..." }`
+
+---
+
+## 📁 Virtual Filesystem
+
+**Documentation:** See [Virtual Filesystem API Guide](./VIRTUAL_FILESYSTEM_API_GUIDE.md) for complete details.
+
+The Virtual Filesystem provides sandbox-independent, persistent file storage with per-user isolation. Supports both authenticated and anonymous users.
+
+### Architecture
+
+- **Service:** `lib/virtual-filesystem/virtual-filesystem-service.ts`
+- **Types:** `lib/virtual-filesystem/filesystem-types.ts`
+- **Auth:** `lib/virtual-filesystem/resolve-filesystem-owner.ts`
+- **Storage:** `data/virtual-filesystem/{hash}.json`
+
+### Owner Resolution
+
+Automatically resolves file ownership via priority chain:
+1. **JWT Token** → User UUID
+2. **Session Cookie** → User UUID
+3. **Anonymous** → `'anon:public'`
+4. **Fallback** → `'anon:public'`
+
+### Security Features
+
+- ✅ Path traversal prevention (`..` blocked)
+- ✅ Null byte injection prevention
+- ✅ Max path length (1024 chars)
+- ✅ Atomic writes (tmp + rename)
+- ✅ Write queue serialization
+
+---
+
+### GET /api/filesystem/list
+
+**Purpose:** List directory contents  
+**Authentication:** Optional (supports anonymous)  
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | string | `'project'` | Directory to list |
+
+**Example Request:**
+```bash
+GET /api/filesystem/list?path=project/src
+Authorization: Bearer {token}
+```
+
+**Example Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "path": "project/src",
+    "nodes": [
+      {
+        "type": "directory",
+        "name": "components",
+        "path": "project/src/components"
+      },
+      {
+        "type": "file",
+        "name": "index.ts",
+        "path": "project/src/index.ts",
+        "language": "typescript",
+        "size": 1024,
+        "lastModified": "2026-02-26T10:30:00.000Z"
+      }
+    ]
+  },
+  "owner_source": "jwt"
+}
+```
+
+---
+
+### POST /api/filesystem/read
+
+**Purpose:** Read file content  
+**Authentication:** Optional (supports anonymous)  
+**Body:**
+```json
+{
+  "path": "project/src/index.ts"
+}
+```
+
+**Example Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "path": "project/src/index.ts",
+    "content": "export const app = require('./app');\napp.start();",
+    "language": "typescript",
+    "lastModified": "2026-02-26T10:30:00.000Z",
+    "version": 5,
+    "size": 45
+  }
+}
+```
+
+**Error Responses:**
+```json
+// 404 Not Found
+{ "success": false, "error": "File not found: project/src/index.ts" }
+
+// 400 Bad Request
+{ "success": false, "error": "path is required" }
+```
+
+---
+
+### POST /api/filesystem/write
+
+**Purpose:** Create or update file  
+**Authentication:** Optional (supports anonymous)  
+**Body:**
+```json
+{
+  "path": "project/src/utils/helper.ts",
+  "content": "export function helper() {\n  return 'Hello';\n}"
+}
+```
+
+**Example Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "path": "project/src/utils/helper.ts",
+    "version": 1,
+    "language": "typescript",
+    "size": 48,
+    "lastModified": "2026-02-26T10:45:00.000Z"
+  }
+}
+```
+
+**Behavior Notes:**
+- Creates parent directories automatically (virtual)
+- Increments version on updates
+- Auto-detects language from extension
+- Atomic writes prevent corruption
+
+**Error Responses:**
+```json
+// 400 Bad Request
+{ "success": false, "error": "path is required" }
+
+// 400 Bad Request (security)
+{ "success": false, "error": "Path traversal is not allowed: project/../etc/passwd" }
+```
+
+---
+
+### POST /api/filesystem/delete
+
+**Purpose:** Delete file or directory (recursive)  
+**Authentication:** Optional (supports anonymous)  
+**Body:**
+```json
+{
+  "path": "project/src/utils"
+}
+```
+
+**Example Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "deletedCount": 5
+  }
+}
+```
+
+**Behavior Notes:**
+- Deleting directory removes all nested files
+- Returns count of deleted items
+- No error if path doesn't exist (returns `deletedCount: 0`)
+
+---
+
+### GET /api/filesystem/search
+
+**Purpose:** Search files by name, path, or content  
+**Authentication:** Optional (supports anonymous)  
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `q` | string | - | Search query (required) |
+| `path` | string | `'project'` | Scope to path |
+| `limit` | number | `25` | Max results (1-200) |
+
+**Example Request:**
+```bash
+GET /api/filesystem/search?q=helper&path=project/src&limit=10
+```
+
+**Example Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "query": "helper",
+    "path": "project/src",
+    "results": [
+      {
+        "path": "project/src/utils/helper.ts",
+        "name": "helper.ts",
+        "language": "typescript",
+        "score": 200,
+        "snippet": "...export function helper() { return 'Hello'; }...",
+        "lastModified": "2026-02-26T10:45:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+**Scoring Algorithm:**
+
+| Match Type | Score |
+|------------|-------|
+| Exact filename match | +120 |
+| Query in filename | +80 |
+| Query in full path | +40 |
+| Query in content | +20 |
+
+Results sorted by score (descending), then path.
+
+---
+
+### TypeScript Service API
+
+Direct usage without HTTP:
+
+```typescript
+import { virtualFilesystem } from '@/lib/virtual-filesystem';
+
+// Read
+const file = await virtualFilesystem.readFile('user123', 'project/src/index.ts');
+
+// Write
+await virtualFilesystem.writeFile('user123', 'project/src/new.ts', 'content');
+
+// List
+const listing = await virtualFilesystem.listDirectory('user123', 'project');
+
+// Search
+const results = await virtualFilesystem.search('user123', 'helper', { limit: 10 });
+
+// Delete
+await virtualFilesystem.deletePath('user123', 'project/src/old');
+
+// Export
+const snapshot = await virtualFilesystem.exportWorkspace('user123');
+```
 
 ---
 

@@ -4,7 +4,7 @@ import { createAuditLogger, type AuditLogger } from '@/lib/audit/audit-logger';
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   let auditLogger: AuditLogger | null = null;
 
@@ -22,7 +22,7 @@ export async function POST(
     }
 
     auditLogger = createAuditLogger(req, authResult.userId);
-    const { id } = params;
+    const { id } = await params;
 
     // AUDIT: Log restart attempt
     auditLogger.log({

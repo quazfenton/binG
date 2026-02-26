@@ -3,9 +3,9 @@ import { getUrl, incrementClicks } from '@/lib/url-shortener/store';
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id } = params;
+  const { id } = await params;
   const stored = getUrl(id);
   if (!stored) {
     // Derive origin from request URL for proper 404 redirect in all environments
