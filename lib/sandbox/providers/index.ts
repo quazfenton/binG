@@ -401,7 +401,7 @@ export {
 // ===========================================
 export {
   E2BTemplateBuilder,
-  createTemplateBuilder,
+  createE2BTemplateBuilder,
   quickBuildTemplate,
   TemplatePresets,
   type TemplateConfig,

@@ -35,7 +35,6 @@ export interface SyncStatus {
 
 /**
  * Trigger sync for specific connection
- * Note: Nango v4 API uses positional arguments
  */
 export async function triggerSync(config: SyncConfig): Promise<{
   success: boolean;
@@ -50,10 +49,10 @@ export async function triggerSync(config: SyncConfig): Promise<{
       };
     }
 
-    // Nango v4 API: triggerSync(providerConfigKey, syncs, connectionId, syncMode)
+    // @ts-ignore - Nango v4 API
     const syncMode = config.fullResync ? 'full_refresh' : 'incremental';
-
-    // @ts-ignore - Nango v4 API\n    await (nango as any).triggerSync(
+    
+    await (nango as any).triggerSync(
       config.providerConfigKey,
       [config.syncName],
       config.connectionId,
@@ -84,7 +83,6 @@ export async function getSyncStatus(config: SyncConfig): Promise<SyncStatus> {
       };
     }
 
-    // Nango v4 API: syncStatus(providerConfigKey, syncName, connectionId)
     const status = await nango.syncStatus(
       config.providerConfigKey,
       config.syncName,
@@ -123,7 +121,6 @@ export async function getSyncRecords(
       };
     }
 
-    // Nango v4 API: getRecords(providerConfigKey, connectionId, model, options)
     const records = await (nango as any).getRecords(
       config.providerConfigKey,
       config.connectionId,
@@ -163,7 +160,6 @@ export async function listSyncs(connectionId: string): Promise<{
       };
     }
 
-    // Nango v4 API: isSync(connectionId) returns sync status
     const syncs = await (nango as any).isSync(connectionId);
     
     if (!syncs || typeof syncs !== 'object') {
@@ -173,7 +169,6 @@ export async function listSyncs(connectionId: string): Promise<{
       };
     }
 
-    // Convert sync object to array
     const syncArray = Object.entries(syncs).map(([name, status]: [string, any]) => ({
       name,
       status: status.status || 'unknown',
@@ -208,14 +203,12 @@ export async function startContinuousSync(
     providerConfigKey: provider,
     connectionId: userId,
     syncName,
-    fullResync: false, // Incremental sync
+    fullResync: false,
   });
 }
 
 /**
  * Get sync history for connection
- * Note: Nango v4 doesn't have direct sync history API
- * This is a placeholder for future implementation
  */
 export async function getSyncHistory(
   connectionId: string,
@@ -232,8 +225,6 @@ export async function getSyncHistory(
   error?: string;
 }> {
   try {
-    // Nango v4 doesn't expose sync history directly
-    // This would require custom implementation or webhook tracking
     return {
       success: false,
       error: 'Sync history not available in Nango v4 API. Use webhooks to track sync events.',

@@ -32,21 +32,25 @@ class AuthCache {
   }
 
   /**
-   * Invalidate cache entry for a specific key
-   * Used when user logs out to prevent stale auth results
+   * Invalidate all cached auth tokens for a user
+   * Called when user logs out to prevent stale auth results
    */
-  invalidate(key: string): void {
-    this.cache.delete(key);
+  invalidateAllForUser(userId: string): void {
+    for (const key of this.cache.keys()) {
+      if (key.includes(`:${userId}:`) || key.endsWith(`:${userId}`)) {
+        this.cache.delete(key)
+      }
+    }
   }
 
   /**
    * Invalidate cache entries matching a session ID
-   * Used when session is destroyed
+   * Called when session is destroyed
    */
   invalidateSession(sessionId: string): void {
     for (const key of this.cache.keys()) {
       if (key.includes(`:${sessionId}:`)) {
-        this.cache.delete(key);
+        this.cache.delete(key)
       }
     }
   }
@@ -57,13 +61,17 @@ class AuthCache {
   invalidateAnonymous(anonId: string): void {
     for (const key of this.cache.keys()) {
       if (key.includes(`:anon:${anonId}`) || key.endsWith(`:${anonId}`)) {
-        this.cache.delete(key);
+        this.cache.delete(key)
       }
     }
   }
 
+  /**
+   * Clear entire cache
+   * Use with caution - affects all users
+   */
   clear(): void {
-    this.cache.clear();
+    this.cache.clear()
   }
 
   /**
@@ -73,7 +81,38 @@ class AuthCache {
     return {
       size: this.cache.size,
       keys: Array.from(this.cache.keys()),
-    };
+    }
+  }
+
+  /**
+   * Sanitize error messages to prevent credential leakage
+   * Removes API keys, tokens, passwords, and secrets from error messages
+   */
+  static sanitizeError(error: any): string {
+    const message = error?.message || String(error)
+    
+    // Remove potential secrets from error messages
+    const sanitized = message
+      // API keys (various formats)
+      .replace(/sk-[a-zA-Z0-9]{20,}/g, '[REDACTED_API_KEY]')
+      .replace(/key-[a-zA-Z0-9]{20,}/g, '[REDACTED_API_KEY]')
+      // Bearer tokens
+      .replace(/Bearer\s+[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+/g, 'Bearer [REDACTED_TOKEN]')
+      // JWT tokens
+      .replace(/eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+/g, '[REDACTED_JWT]')
+      // Passwords in various formats
+      .replace(/password[=:]\s*[^\s,;]+/gi, 'password=[REDACTED]')
+      .replace(/pwd[=:]\s*[^\s,;]+/gi, 'pwd=[REDACTED]')
+      // Secrets
+      .replace(/secret[=:]\s*[^\s,;]+/gi, 'secret=[REDACTED]')
+      .replace(/api[_-]?key[=:]\s*[^\s,;]+/gi, 'api_key=[REDACTED]')
+      // Tokens
+      .replace(/token[=:]\s*[^\s,;]+/gi, 'token=[REDACTED]')
+      .replace(/access[_-]?token[=:]\s*[^\s,;]+/gi, 'access_token=[REDACTED]')
+      // Private keys
+      .replace(/-----BEGIN\s+\w+\s+PRIVATE\s+KEY-----[\s\S]+?-----END\s+\w+\s+PRIVATE\s+KEY-----/g, '[REDACTED_PRIVATE_KEY]')
+    
+    return sanitized
   }
 }
 
@@ -120,9 +159,9 @@ export async function resolveRequestAuth(
 
   // CRITICAL FIX: Include multiple factors in cache key to prevent collision attacks
   // Previous implementation only used authorization header, allowing cache poisoning
-  const authHeader = req.headers.get('authorization') || '';
-  const sessionId = req.cookies.get('session_id')?.value || '';
-  const anonId = options.anonymousSessionId ?? req.headers.get(anonymousHeaderName) || '';
+  const authHeader = req.headers.get('authorization') || ''
+  const sessionId = req.cookies.get('session_id')?.value || ''
+  const anonId = options.anonymousSessionId || req.headers.get(anonymousHeaderName) || ''
   
   // Create unique cache key from all auth factors
   const cacheKey = `auth:${authHeader}:${sessionId}:${anonId}`;

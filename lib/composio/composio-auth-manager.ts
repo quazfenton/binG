@@ -39,12 +39,11 @@ export class ComposioAuthManager {
 
   /**
    * Get or create auth config for toolkit
-   * Note: New Composio SDK uses different API structure
    */
   async getOrCreateAuthConfig(toolkit: string, authMode: string = 'OAUTH2'): Promise<AuthConfigInfo> {
     try {
-      // List existing auth configs for this toolkit
-      const response = // @ts-ignore - Composio SDK API\n      await (this.composio.authConfigs as any).list({
+      // @ts-ignore - Composio SDK API
+      const response = await this.composio.authConfigs.list({
         toolkit: toolkit,
       });
 
@@ -60,8 +59,6 @@ export class ComposioAuthManager {
         };
       }
 
-      // Note: Creating auth configs typically requires admin access
-      // For most use cases, use existing configs from Composio platform
       throw new Error(
         `Auth config for '${toolkit}' not found. Please create it in Composio dashboard first.`
       );
@@ -79,10 +76,10 @@ export class ComposioAuthManager {
     authMode: string = 'OAUTH2'
   ): Promise<ConnectedAccountInfo> {
     try {
-      // Check for existing connected account
+      // @ts-ignore - Composio SDK API
       const response = await this.composio.connectedAccounts.list({
         userIds: [userId],
-        toolkit: toolkit,
+        toolkitSlugs: [toolkit],
       });
 
       const items = (response as any).items || [];
@@ -99,7 +96,6 @@ export class ComposioAuthManager {
         };
       }
 
-      // No existing account - user needs to authenticate
       throw new Error(
         `No connected account found for user '${userId}' and toolkit '${toolkit}'. ` +
         `Please initiate OAuth flow first.`
@@ -114,6 +110,7 @@ export class ComposioAuthManager {
    */
   async listConnectedAccounts(userId: string): Promise<ConnectedAccountInfo[]> {
     try {
+      // @ts-ignore - Composio SDK API
       const response = await this.composio.connectedAccounts.list({
         userIds: [userId],
       });
@@ -138,7 +135,8 @@ export class ComposioAuthManager {
    */
   async getAuthConfig(toolkit: string): Promise<AuthConfigInfo | null> {
     try {
-      const response = // @ts-ignore - Composio SDK API\n      await (this.composio.authConfigs as any).list({
+      // @ts-ignore - Composio SDK API
+      const response = await this.composio.authConfigs.list({
         toolkit: toolkit,
       });
 
@@ -165,7 +163,8 @@ export class ComposioAuthManager {
    */
   async listAuthConfigs(): Promise<AuthConfigInfo[]> {
     try {
-      const response = // @ts-ignore - Composio SDK API\n      await (this.composio.authConfigs as any).list({});
+      // @ts-ignore - Composio SDK API
+      const response = await this.composio.authConfigs.list({});
 
       const items = (response as any).items || [];
 
@@ -209,6 +208,7 @@ export class ComposioAuthManager {
    */
   async isAccountActive(accountId: string): Promise<boolean> {
     try {
+      // @ts-ignore - Composio SDK API
       const response = await this.composio.connectedAccounts.list({
         userIds: [accountId],
       });
@@ -220,7 +220,6 @@ export class ComposioAuthManager {
         return false;
       }
 
-      // Check status
       if (account.status !== 'ACTIVE') {
         return false;
       }
@@ -236,7 +235,8 @@ export class ComposioAuthManager {
    */
   async listToolkits(): Promise<Array<{ slug: string; name: string; description?: string }>> {
     try {
-      const response = await this.composio.toolkits.list({});
+      // @ts-ignore - Composio SDK API
+      const response = await (this.composio.toolkits as any).list({});
       const items = (response as any).items || [];
 
       return items.map((t: any) => ({
