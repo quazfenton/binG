@@ -48,16 +48,84 @@ export class ToolExecutor {
     this.context = { ...this.context, ...updates };
   }
 
+  /**
+   * Get tool-specific timeout
+   */
+  private getToolTimeout(toolName: string): number {
+    const timeouts: Record<string, number> = {
+      readFile: 5000,
+      listFiles: 5000,
+      createFile: 10000,
+      applyDiff: 15000,
+      astDiff: 15000,
+      execShell: 120000, // 2 minutes for shell commands
+      syntaxCheck: 30000,
+      discovery: 60000,
+      createPlan: 30000,
+      commit: 30000,
+      rollback: 30000,
+      default: 60000, // 1 minute default
+    };
+    return timeouts[toolName] || timeouts.default;
+  }
+
+  /**
+   * Check sandbox health before execution
+   */
+  private async checkSandboxHealth(): Promise<{ healthy: boolean; error?: string }> {
+    if (!this.context.sandboxHandle) {
+      return { healthy: true }; // No sandbox, skip health check
+    }
+
+    try {
+      const result = await this.context.sandboxHandle.executeCommand(
+        'echo health',
+        this.context.sandboxHandle.workspaceDir || '/workspace',
+        2000
+      );
+      return { healthy: result.success };
+    } catch (error: any) {
+      return { 
+        healthy: false, 
+        error: `Sandbox health check failed: ${error.message}` 
+      };
+    }
+  }
+
   async execute(toolName: string, params: Record<string, any>): Promise<ToolResult> {
     const startTime = Date.now();
     const timestamp = new Date();
 
     try {
+      // SANDBOX HEALTH CHECK: Check before executing (skip for lightweight ops)
+      const lightweightOps = ['readFile', 'listFiles', 'history'];
+      if (!lightweightOps.includes(toolName) && this.context.sandboxHandle) {
+        const health = await this.checkSandboxHealth();
+        if (!health.healthy) {
+          return {
+            success: false,
+            error: health.error || 'Sandbox unhealthy',
+            blocked: true,
+          };
+        }
+      }
+
       if (this.config.enableLogging) {
         console.log(`[ToolExecutor] Executing ${toolName}`, params);
       }
 
-      const result = await this.executeTool(toolName, params);
+      // TIMEOUT ENFORCEMENT: Wrap execution with timeout
+      const timeoutMs = this.getToolTimeout(toolName);
+      const timeoutPromise = new Promise<ToolResult>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Tool ${toolName} timed out after ${timeoutMs}ms`)),
+          timeoutMs
+        )
+      );
+
+      const executionPromise = this.executeTool(toolName, params);
+      const result = await Promise.race([executionPromise, timeoutPromise]);
+      
       const duration = Date.now() - startTime;
 
       if (this.config.enableMetrics) {

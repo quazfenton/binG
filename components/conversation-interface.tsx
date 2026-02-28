@@ -132,12 +132,19 @@ export default function ConversationInterface() {
   useEffect(() => {
     setCurrentMode(activeTab);
 
-    // Auto-open terminal when shell tab is selected
-    if (activeTab === 'shell' && !showTerminal) {
-      setShowTerminal(true);
-      setTerminalMinimized(false);
+    // Auto-open and auto-connect terminal when shell tab is selected
+    if (activeTab === 'shell') {
+      if (!showTerminal) {
+        setShowTerminal(true);
+        setTerminalMinimized(false);
+      }
+      // Auto-connect after a short delay to allow terminal to initialize
+      setTimeout(() => {
+        // Trigger auto-connect by dispatching a custom event
+        window.dispatchEvent(new CustomEvent('terminal-auto-connect'));
+      }, 500);
     }
-    
+
     // Auto-focus terminal when shell tab is selected
     if (activeTab === 'shell' && showTerminal) {
       setTimeout(() => {

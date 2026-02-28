@@ -27,6 +27,7 @@ import type {
   EnvServiceConfig,
 } from './sandbox-provider'
 import { quotaManager } from '@/lib/services/quota-manager'
+import { SandboxSecurityManager } from '../security-manager'
 import { syncVfsSnapshotToSprite, syncChangedFilesToSprite, type TarSyncFile } from './sprites-tar-sync'
 import { SpritesCheckpointManager, createCheckpointManager, type RetentionPolicy } from './sprites-checkpoint-manager'
 
@@ -439,52 +440,21 @@ export class SpritesSandboxHandle implements SandboxHandle {
     }
   }
 
-  private sanitizeCommand(command: string): string {
-    // Block ALL shell metacharacters including pipes and redirects
-    // This prevents command injection via: echo "hi" | bash, ls > file, cat < file, etc.
-    const dangerousChars = /[;`$(){}[\]!#~\\|>&]/
-    if (dangerousChars.test(command)) {
-      throw new Error('Command contains disallowed characters for security')
-    }
-    if (/[\n\r\0]/.test(command)) {
-      throw new Error('Command contains invalid control characters')
-    }
-    return command
-  }
-
-  private resolvePath(filePath: string): string {
-    const normalized = filePath.replace(/\\/g, '/')
-    if (normalized.includes('..') || normalized.includes('\0')) {
-      throw new Error(`Invalid file path: ${filePath}`)
-    }
-    if (filePath.startsWith('/')) {
-      const resolved = filePath
-      // Allow common system paths for package installation
-      if (resolved.startsWith('/home/sprite') || resolved.startsWith('/opt') || resolved.startsWith('/usr/local')) {
-        return resolved
-      }
-      if (!resolved.startsWith(WORKSPACE_DIR)) {
-        throw new Error(`Path traversal detected: ${filePath}`)
-      }
-      return resolved
-    }
-    const resolved = `${WORKSPACE_DIR}/${normalized}`
-    if (!resolved.startsWith(WORKSPACE_DIR)) {
-      throw new Error(`Path traversal detected: ${filePath}`)
-    }
-    return resolved
-  }
+  // Note: sanitizeCommand and resolvePath removed - using centralized SandboxSecurityManager instead
 
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
-    const safeCommand = this.sanitizeCommand(command)
     const effectiveTimeout = timeout ?? 60_000
 
     try {
+      // ✅ ENHANCED: Use centralized security validation
+      const sanitized = SandboxSecurityManager.validateAndSanitizeCommand(command)
+      
       // Use execFile for direct command execution (no shell)
       // For shell features, wrap in bash -c
-      const result = await this.sprite.execFile('bash', ['-c', safeCommand], {
+      const result = await this.sprite.execFile('bash', ['-c', sanitized], {
         cwd: cwd || WORKSPACE_DIR,
         maxBuffer: 1024 * 1024, // 1MB buffer
+        timeout: effectiveTimeout,
       })
 
       return {
@@ -493,6 +463,16 @@ export class SpritesSandboxHandle implements SandboxHandle {
         exitCode: result.exitCode,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Sprites] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+          exitCode: 1,
+        }
+      }
+      
       if (error.message?.includes('timed out') || error.code === 'TIMEOUT') {
         return {
           success: false,
@@ -515,26 +495,40 @@ export class SpritesSandboxHandle implements SandboxHandle {
   }
 
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(filePath)
-
     try {
+      // ✅ ENHANCED: Use centralized security validation
+      const { resolvedPath, validatedContent } = SandboxSecurityManager.validateWriteFile(
+        filePath,
+        content,
+        WORKSPACE_DIR
+      )
+
       // Use exec to write file (Sprites doesn't have fs.write in older SDK versions)
-      const escapedContent = content.replace(/'/g, "'\\''")
-      const escapedPath = resolved.replace(/'/g, "'\\''")
-      
+      const escapedContent = validatedContent.replace(/'/g, "'\\''")
+      const escapedPath = resolvedPath.replace(/'/g, "'\\''")
+
       // Create directory if needed
-      const dir = resolved.substring(0, resolved.lastIndexOf('/'))
-      await this.executeCommand(`mkdir -p '${dir}'`)
-      
+      await this.executeCommand(`mkdir -p '${escapedPath.substring(0, escapedPath.lastIndexOf('/'))}'`)
+
       // Write file content
       await this.executeCommand(`printf '%s' '${escapedContent}' > '${escapedPath}'`)
-      
+
       return {
         success: true,
-        output: `File written: ${resolved}`,
+        output: `File written: ${resolvedPath}`,
         exitCode: 0,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Sprites] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+          exitCode: 1,
+        }
+      }
+      
       return {
         success: false,
         output: error.message,
@@ -544,9 +538,10 @@ export class SpritesSandboxHandle implements SandboxHandle {
   }
 
   async readFile(filePath: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(filePath)
-
     try {
+      // ✅ ENHANCED: Validate path before reading
+      const resolved = SandboxSecurityManager.resolvePath(WORKSPACE_DIR, filePath)
+      
       const result = await this.executeCommand(`cat '${resolved}'`)
       return {
         success: result.success,
@@ -554,6 +549,16 @@ export class SpritesSandboxHandle implements SandboxHandle {
         exitCode: result.exitCode,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Sprites] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+          exitCode: 1,
+        }
+      }
+      
       return {
         success: false,
         output: error.message,
@@ -563,12 +568,23 @@ export class SpritesSandboxHandle implements SandboxHandle {
   }
 
   async listDirectory(dirPath?: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(dirPath || '.')
-
     try {
+      // ✅ ENHANCED: Validate path before listing
+      const resolved = SandboxSecurityManager.resolvePath(WORKSPACE_DIR, dirPath || '.')
+      
       const result = await this.executeCommand(`ls -la '${resolved}'`)
       return result
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Sprites] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+          exitCode: 1,
+        }
+      }
+      
       return {
         success: false,
         output: error.message,
@@ -660,8 +676,10 @@ export class SpritesSandboxHandle implements SandboxHandle {
   }
 
   /**
-   * Create a service (auto-restart on wake)
-   * Sprites-specific feature
+   * Create a service with auto-start on wake
+   * 
+   * Services automatically restart when Sprite wakes from hibernation.
+   * This is the RECOMMENDED way to run persistent services (web servers, etc.)
    */
   async createService(config: ServiceConfig): Promise<ServiceInfo> {
     if (!this.enableAutoServices) {
@@ -669,19 +687,43 @@ export class SpritesSandboxHandle implements SandboxHandle {
     }
 
     try {
-      const service = await this.sprite.services.create(config.name, {
-        cmd: config.command,
-        args: config.args || [],
-      })
+      const { exec } = await import('child_process')
+      const util = await import('util')
+      const execPromise = util.promisify(exec)
+
+      // Build command with options
+      let cmd = `sprite-env services create ${config.name} -s ${this.id} --cmd "${config.command}"`
+      
+      if (config.args && config.args.length > 0) {
+        cmd += ` --args "${config.args.join(' ')}"`
+      }
+
+      if (config.workingDir) {
+        cmd += ` --workdir "${config.workingDir}"`
+      }
+
+      if (config.autoStart !== false) {
+        cmd += ' --autostart'
+      }
+
+      // Add environment variables
+      if (config.env) {
+        for (const [key, value] of Object.entries(config.env)) {
+          cmd += ` --env ${key}=${value}`
+        }
+      }
+
+      await execPromise(cmd)
 
       return {
-        id: service.id,
+        id: config.name,
         name: config.name,
         status: 'running',
         port: config.port,
         url: config.port ? `${this.metadata.url}:${config.port}` : undefined,
       }
     } catch (error: any) {
+      console.error('[Sprites] Service creation failed:', error.message)
       throw new Error(`Failed to create service: ${error.message}`)
     }
   }
@@ -741,28 +783,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
     }
   }
 
-  /**
-   * Restart a service
-   * Sprites-specific feature
-   */
-  async restartService(serviceName: string): Promise<{ success: boolean; error?: string }> {
-    try {
-      const { exec } = await import('child_process')
-      const util = await import('util')
-      const execPromise = util.promisify(exec)
-
-      await execPromise(
-        `sprite-env services restart ${serviceName} -s ${this.id}`
-      )
-
-      return { success: true }
-    } catch (error: any) {
-      return {
-        success: false,
-        error: `Failed to restart service: ${error.message}`
-      }
-    }
-  }
+  // Note: restartService removed - use sprites-provider-enhanced.ts version instead
 
   /**
    * Configure HTTP service for auto-suspend/resume
@@ -1018,75 +1039,6 @@ export class SpritesSandboxHandle implements SandboxHandle {
   }
 
   /**
-   * Create a service with auto-start on wake
-   * 
-   * Services automatically restart when Sprite wakes from hibernation.
-   * This is the RECOMMENDED way to run persistent services (web servers, etc.)
-   * 
-   * @param name - Service name
-   * @param command - Command to run (e.g., 'node')
-   * @param args - Command arguments (e.g., ['server.js'])
-   * @param options - Service options
-   */
-  async createService(
-    name: string,
-    command: string,
-    args: string[],
-    options?: {
-      autoStart?: boolean
-      workingDir?: string
-      env?: Record<string, string>
-    }
-  ): Promise<{
-    success: boolean
-    serviceId: string
-    message?: string
-  }> {
-    try {
-      const { exec } = await import('child_process')
-      const util = await import('util')
-      const execPromise = util.promisify(exec)
-
-      // Build command with options
-      let cmd = `sprite-env services create ${name} -s ${this.id} --cmd ${command}`
-      
-      if (args.length > 0) {
-        cmd += ` --args "${args.join(' ')}"`
-      }
-
-      if (options?.workingDir) {
-        cmd += ` --workdir ${options.workingDir}`
-      }
-
-      if (options?.autoStart !== false) {
-        cmd += ' --autostart'
-      }
-
-      // Add environment variables
-      if (options?.env) {
-        for (const [key, value] of Object.entries(options.env)) {
-          cmd += ` --env ${key}=${value}`
-        }
-      }
-
-      const { stdout, stderr } = await execPromise(cmd)
-
-      return {
-        success: true,
-        serviceId: name,
-        message: stdout || `Service ${name} created successfully`,
-      }
-    } catch (error: any) {
-      console.error('[Sprites] Service creation failed:', error.message)
-      return {
-        success: false,
-        serviceId: name,
-        message: `Failed to create service: ${error.message}`,
-      }
-    }
-  }
-
-  /**
    * Start a service
    */
   async startService(name: string): Promise<{
@@ -1140,35 +1092,6 @@ export class SpritesSandboxHandle implements SandboxHandle {
       return {
         success: false,
         message: `Failed to stop service: ${error.message}`,
-      }
-    }
-  }
-
-  /**
-   * Restart a service
-   */
-  async restartService(name: string): Promise<{
-    success: boolean
-    message?: string
-  }> {
-    try {
-      const { exec } = await import('child_process')
-      const util = await import('util')
-      const execPromise = util.promisify(exec)
-
-      await execPromise(
-        `sprite-env services restart ${name} -s ${this.id}`
-      )
-
-      return {
-        success: true,
-        message: `Service ${name} restarted`,
-      }
-    } catch (error: any) {
-      console.error('[Sprites] Service restart failed:', error.message)
-      return {
-        success: false,
-        message: `Failed to restart service: ${error.message}`,
       }
     }
   }

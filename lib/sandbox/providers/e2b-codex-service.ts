@@ -326,15 +326,70 @@ export function createCodexService(
 
   /**
    * Run with image input
+   * 
+   * Enhanced with image format and size validation
    */
   async function runWithImage(
     config: CodexExecutionConfig & { imageData?: Buffer }
   ): Promise<CodexExecutionResult> {
     if (!config.imagePath) {
-      throw new Error('imagePath is required for runWithImage')
+      throw new Error('imagePath is required for runWithImage');
     }
 
-    return run(config)
+    // Validate and write image if data provided
+    if ('imageData' in config && config.imageData) {
+      const imageFormat = getImageFormat(config.imageData);
+      const validFormats = ['png', 'jpeg', 'gif', 'webp'];
+      
+      if (!validFormats.includes(imageFormat)) {
+        throw new Error(
+          `Unsupported image format: ${imageFormat}. Supported formats: ${validFormats.join(', ')}`
+        );
+      }
+      
+      // Validate size (max 10MB)
+      const maxSize = 10 * 1024 * 1024;
+      if (config.imageData.length > maxSize) {
+        throw new Error(
+          `Image too large: ${(config.imageData.length / 1024 / 1024).toFixed(2)}MB (max 10MB)`
+        );
+      }
+      
+      // Write image to sandbox
+      try {
+        await sandbox.files.write(config.imagePath, config.imageData);
+        console.log(`[Codex] Image written to ${config.imagePath} (${imageFormat}, ${(config.imageData.length / 1024).toFixed(2)}KB)`);
+      } catch (writeError: any) {
+        throw new Error(`Failed to write image to sandbox: ${writeError.message}`);
+      }
+    }
+
+    return run(config);
+  }
+
+  /**
+   * Detect image format from buffer magic bytes
+   */
+  function getImageFormat(buffer: Buffer): string {
+    if (buffer.length < 4) {
+      return 'unknown';
+    }
+    
+    // Check magic bytes for common image formats
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+      return 'png';
+    }
+    if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+      return 'jpeg';
+    }
+    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) {
+      return 'gif';
+    }
+    if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) {
+      return 'webp';
+    }
+    
+    return 'unknown';
   }
 
   return {

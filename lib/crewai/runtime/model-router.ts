@@ -220,3 +220,6 @@ export const modelRouter = new ModelRouter();
 export function createModelRouter(config: ModelRouterConfig): ModelRouter {
   return new ModelRouter(config);
 }
+
+// Alias for backwards compatibility
+export const getModel = modelRouter.getModel.bind(modelRouter);

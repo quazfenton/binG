@@ -2,8 +2,48 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { terminalManager } from '@/lib/sandbox/terminal-manager';
+import { checkCommandSecurity } from '@/lib/terminal/terminal-security';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('TerminalInputAPI');
 
 export const runtime = 'nodejs';
+
+/**
+ * Rate limiter for terminal commands
+ * Prevents DoS attacks via rapid command execution
+ * Max 10 commands per second per user
+ */
+const commandRateLimiter = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(userId: string): { allowed: boolean; retryAfter?: number } {
+  const now = Date.now();
+  const userLimit = commandRateLimiter.get(userId) || { count: 0, resetAt: now + 1000 };
+
+  if (now > userLimit.resetAt) {
+    userLimit.count = 0;
+    userLimit.resetAt = now + 1000;
+  }
+
+  if (userLimit.count >= 10) { // Max 10 commands/second
+    const retryAfter = Math.ceil((userLimit.resetAt - now) / 1000);
+    return { allowed: false, retryAfter };
+  }
+
+  userLimit.count++;
+  commandRateLimiter.set(userId, userLimit);
+  return { allowed: true };
+}
+
+// Cleanup old entries every minute to prevent memory leaks
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, limit] of commandRateLimiter.entries()) {
+    if (now > limit.resetAt + 60000) {
+      commandRateLimiter.delete(userId);
+    }
+  }
+}, 60000);
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,6 +52,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token, session, or anonymous session required' },
         { status: 401 }
+      );
+    }
+
+    // Check rate limit
+    const rateLimitResult = checkRateLimit(authResult.userId);
+    if (!rateLimitResult.allowed) {
+      return NextResponse.json(
+        { 
+          error: 'Rate limit exceeded. Too many terminal commands.',
+          retryAfter: rateLimitResult.retryAfter,
+        },
+        { 
+          status: 429,
+          headers: {
+            'Retry-After': String(rateLimitResult.retryAfter || 1),
+            'X-RateLimit-Limit': '10',
+            'X-RateLimit-Remaining': '0',
+          },
+        }
       );
     }
 
@@ -25,6 +84,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Server-side command security validation
+    // Only validate complete commands (ending with newline)
+    if (data.endsWith('\n')) {
+      const command = data.trim();
+      const securityResult = checkCommandSecurity(command);
+      
+      if (!securityResult.allowed) {
+        logger.warn('Blocked dangerous command', {
+          command: command.substring(0, 100), // Truncate for logging
+          reason: securityResult.reason,
+          severity: securityResult.severity,
+          userId: authResult.userId,
+          sessionId,
+        });
+        
+        return NextResponse.json(
+          {
+            error: 'Command blocked for security reasons',
+            reason: securityResult.reason,
+            severity: securityResult.severity,
+          },
+          { status: 403 }
+        );
+      }
+    }
+
     const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
     if (!userSession || userSession.sessionId !== sessionId) {
       return NextResponse.json(
@@ -36,7 +121,7 @@ export async function POST(req: NextRequest) {
     await terminalManager.sendInput(sessionId, data);
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[Terminal Input] Error:', error);
+    logger.error('Terminal input error', error as Error);
     return NextResponse.json({ error: 'Failed to send input' }, { status: 500 });
   }
 }

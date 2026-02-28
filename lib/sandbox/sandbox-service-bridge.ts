@@ -7,9 +7,9 @@
  * - Automatic tar-pipe sync for Sprites provider (10x faster for 10+ files)
  * - Incremental sync with file hashing
  * - Provider-aware filesystem mounting
+ * - Standardized snapshotting and rollback
  */
 
-// Import types from canonical source to avoid duplication
 import type { WorkspaceSession, SandboxConfig } from './types';
 import {
   getSession as storeGetSession,
@@ -18,6 +18,7 @@ import {
 } from './session-store';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { sandboxFilesystemSync } from './sandbox-filesystem-sync';
+import { sandboxPersistenceManager } from './persistence-manager';
 
 // Track pending session creations to prevent race conditions
 const pendingCreations = new Map<string, Promise<WorkspaceSession>>();
@@ -116,6 +117,26 @@ export class SandboxServiceBridge {
   }
 
   /**
+   * Create a state snapshot of the sandbox
+   */
+  async createSnapshot(sandboxId: string, label?: string) {
+    const provider = this.inferProviderFromSandboxId(sandboxId);
+    const providerObj = await this.getProvider(provider);
+    const handle = await providerObj.getSandbox(sandboxId);
+    return sandboxPersistenceManager.createSnapshot(handle, label);
+  }
+
+  /**
+   * Rollback sandbox to a specific snapshot
+   */
+  async rollback(sandboxId: string, snapshotId: string) {
+    const provider = this.inferProviderFromSandboxId(sandboxId);
+    const providerObj = await this.getProvider(provider);
+    const handle = await providerObj.getSandbox(sandboxId);
+    return sandboxPersistenceManager.rollback(handle, snapshotId);
+  }
+
+  /**
    * Infer provider type from sandbox ID
    */
   private inferProviderFromSandboxId(sandboxId: string): string | null {
@@ -130,10 +151,13 @@ export class SandboxServiceBridge {
     return null;
   }
 
+  private async getProvider(name: string | null) {
+    const { getSandboxProvider } = await import('./providers');
+    return getSandboxProvider((name as any) || 'e2b');
+  }
+
   /**
    * Mount virtual filesystem to sandbox with provider-specific optimization
-   * - Sprites: Uses tar-pipe sync for 10+ files (10x faster)
-   * - Other providers: Uses individual file writes
    */
   private async ensureVirtualFilesystemMounted(sandboxId: string): Promise<void> {
     const session = this.getSessionBySandboxId(sandboxId);
@@ -151,50 +175,16 @@ export class SandboxServiceBridge {
 
       const snapshot = await virtualFilesystem.exportWorkspace(session.userId);
       const provider = this.inferProviderFromSandboxId(sandboxId);
+      const providerObj = await this.getProvider(provider);
+      const handle = await providerObj.getSandbox(sandboxId);
 
-      // Use tar-pipe sync for Sprites with 10+ files
-      if (provider === 'sprites' && snapshot.files.length >= this.tarPipeThreshold) {
-        try {
-          // Dynamic import to avoid circular dependencies
-          const { getSandboxProvider } = await import('./providers');
-          const spritesProvider = getSandboxProvider('sprites');
-          const handle = await spritesProvider.getSandbox(sandboxId);
+      // Attempt incremental sync first for efficiency
+      const syncResult = await sandboxPersistenceManager.syncIncremental(handle, snapshot.files);
+      console.log(`[SandboxBridge] Incremental sync to ${provider}: ${syncResult.synced} written, ${syncResult.skipped} skipped in ${syncResult.duration}ms`);
 
-          if (handle && typeof handle.syncVfs === 'function') {
-            const result = await (handle as any).syncVfs(snapshot);
-            console.log(
-              `[SandboxBridge] Tar-pipe sync to Sprites: ${result.filesSynced} files in ${result.duration}ms (${result.method})`
-            );
-            this.mountedFilesystemVersionBySandbox.set(sandboxId, currentVersion);
-            return;
-          }
-        } catch (error: any) {
-          console.warn(`[SandboxBridge] Tar-pipe sync failed, falling back to individual writes: ${error.message}`);
-          // Fall through to individual writes
-        }
-      }
-
-      // Individual writes for other providers or small projects
-      let successCount = 0;
-      for (const file of snapshot.files) {
-        try {
-          await this.writeFile(sandboxId, file.path, file.content);
-          successCount++;
-        } catch (error: any) {
-          console.warn(`[SandboxBridge] Failed to write file ${file.path}: ${error.message}`);
-        }
-      }
-
-      if (successCount === snapshot.files.length) {
-        this.mountedFilesystemVersionBySandbox.set(sandboxId, currentVersion);
-      } else {
-        console.warn(
-          `[SandboxBridge] Partial mount: ${successCount}/${snapshot.files.length} files synced`
-        );
-      }
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'Unknown mount error';
-      console.warn(`[SandboxBridge] Failed to mount virtual filesystem to sandbox ${sandboxId}: ${message}`);
+      this.mountedFilesystemVersionBySandbox.set(sandboxId, currentVersion);
+    } catch (error: any) {
+      console.warn(`[SandboxBridge] Mounting failed: ${error.message}`);
     }
   }
 }

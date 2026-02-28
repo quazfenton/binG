@@ -12,7 +12,7 @@
  * - Error tracking
  */
 
-import { getDatabase } from '@/lib/database';
+import { getDatabase } from '@/lib/database/connection';
 
 export interface ChatRequestLog {
   id: string;

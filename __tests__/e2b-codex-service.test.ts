@@ -261,7 +261,7 @@ describe('E2B Codex Service', () => {
 
   describe('runWithImage', () => {
     it('should execute with image input', async () => {
-      const imageData = Buffer.from('fake-image-data')
+      const imageData = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) // Valid PNG header
       
       mockSandbox.files.write.mockResolvedValue(undefined)
       mockSandbox.commands.run.mockResolvedValue({
@@ -495,7 +495,7 @@ describe('E2B Codex Service', () => {
     })
 
     it('should handle image-to-code workflow', async () => {
-      const mockImageData = Buffer.from('mock-ui-design')
+      const imageData = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
       
       mockSandbox.files.write.mockResolvedValue(undefined)
       mockSandbox.commands.run.mockResolvedValue({
@@ -509,13 +509,13 @@ describe('E2B Codex Service', () => {
       const result = await codexService.runWithImage({
         prompt: 'Implement this React component',
         imagePath: '/design.png',
-        imageData: mockImageData,
+        imageData,
         fullAuto: true,
         workingDir: '/home/user/project',
       })
 
       expect(result.exitCode).toBe(0)
-      expect(mockSandbox.files.write).toHaveBeenCalledWith('/design.png', mockImageData)
+      expect(mockSandbox.files.write).toHaveBeenCalledWith('/design.png', imageData)
     })
   })
 
@@ -550,7 +550,7 @@ describe('E2B Codex Service', () => {
       await expect(codexService.runWithImage({
         prompt: 'Task',
         imagePath: '/image.png',
-        imageData: Buffer.from('data'),
+        imageData: Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
         fullAuto: true,
       })).rejects.toThrow('Disk full')
     })

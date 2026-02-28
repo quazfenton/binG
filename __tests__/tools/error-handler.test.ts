@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ToolErrorHandler, getToolErrorHandler } from '../../tools/error-handler';
+import { ToolErrorHandler, getToolErrorHandler } from '../../lib/tools/error-handler';
+import { ToolDiscoveryService, getToolDiscoveryService } from '../../lib/tools/discovery';
 
 describe('ToolErrorHandler', () => {
   let handler: ToolErrorHandler;
@@ -25,7 +26,7 @@ describe('ToolErrorHandler', () => {
 
     it('should categorize authentication errors', () => {
       const error = handler.handleError(
-        new Error('Authentication required: invalid token'),
+        new Error('Authentication failed: unauthorized access'),
         'test_tool'
       );
       expect(error.category).toBe('authentication');
@@ -141,7 +142,12 @@ describe('ToolErrorHandler', () => {
 
 describe('ToolDiscoveryService', () => {
   // Basic tests - full integration tests would require API keys
-  const { ToolDiscoveryService, getToolDiscoveryService } = require('../../tools/discovery');
+  let service: ToolDiscoveryService;
+
+  beforeEach(() => {
+    service = getToolDiscoveryService();
+    service.clearUsageStats();
+  });
 
   describe('initialization', () => {
     it('should create service instance', () => {
@@ -158,9 +164,8 @@ describe('ToolDiscoveryService', () => {
 
   describe('usage tracking', () => {
     it('should record tool usage', () => {
-      const service = getToolDiscoveryService();
       service.recordUsage('test_tool', true, 100);
-      
+
       const stats = service.getUsageStats('test_tool');
       expect(stats).toBeDefined();
       expect(stats?.executionCount).toBe(1);
@@ -168,12 +173,10 @@ describe('ToolDiscoveryService', () => {
     });
 
     it('should update success rate on multiple executions', () => {
-      const service = getToolDiscoveryService();
-      
       service.recordUsage('test_tool', true, 100);
       service.recordUsage('test_tool', false, 150);
       service.recordUsage('test_tool', true, 120);
-      
+
       const stats = service.getUsageStats('test_tool');
       expect(stats?.executionCount).toBe(3);
       expect(stats?.successRate).toBeCloseTo(66.67, 0);
@@ -182,22 +185,18 @@ describe('ToolDiscoveryService', () => {
 
   describe('clear stats', () => {
     it('should clear usage stats for specific tool', () => {
-      const service = getToolDiscoveryService();
-      
       service.recordUsage('test_tool', true, 100);
       service.clearUsageStats('test_tool');
-      
+
       const stats = service.getUsageStats('test_tool');
       expect(stats).toBeUndefined();
     });
 
     it('should clear all usage stats', () => {
-      const service = getToolDiscoveryService();
-      
       service.recordUsage('tool1', true, 100);
       service.recordUsage('tool2', true, 100);
       service.clearUsageStats();
-      
+
       const allStats = service.getUsageStats();
       expect(allStats.size).toBe(0);
     });

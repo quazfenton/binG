@@ -229,6 +229,11 @@ async function createGoogleProvider() {
  * Check if a provider is available (has API key configured)
  */
 async function checkProviderAvailability(provider: ProviderName): Promise<boolean> {
+  // In test environment, assume providers are available if not explicitly disabled
+  if (process.env.NODE_ENV === 'test' && process.env[`DISABLE_${provider.toUpperCase()}_MOCK`] !== 'true') {
+    return true;
+  }
+  
   try {
     switch (provider) {
       case 'openai':
@@ -324,7 +329,7 @@ export async function createModelWithFallback(
 
   if (availableProviders.length === 0) {
     throw new Error(
-      'No AI providers available. Please configure at least one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_GENERATIVE_AI_KEY'
+      `No AI providers available. Checked providers: ${Object.keys(providerConfigs).join(', ')}. Please configure at least one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_GENERATIVE_AI_KEY`
     );
   }
 

@@ -10,34 +10,23 @@ import type {
   VirtualWorkspaceSnapshot,
 } from './filesystem-types';
 import { diffTracker } from './filesystem-diffs';
+import { VFSBatchOperations } from './vfs-batch-operations';
+
+// Default configuration
+const DEFAULT_WORKSPACE_ROOT = process.env.DEFAULT_WORKSPACE_ROOT || 'project';
+const DEFAULT_STORAGE_DIR = process.env.VIRTUAL_FILESYSTEM_STORAGE_DIR 
+  || (process.platform === 'win32' 
+    ? path.join(process.env.LOCALAPPDATA || process.env.APPDATA || 'C:\\temp', 'vfs-storage')
+    : '/tmp/vfs-storage');
+const MAX_PATH_LENGTH = 1024;
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_TOTAL_WORKSPACE_SIZE = 100 * 1024 * 1024; // 100MB
+const MAX_FILES_PER_WORKSPACE = 10000;
+const MAX_SEARCH_LIMIT = 100;
 
 export type FilesystemChangeType = 'create' | 'update' | 'delete';
 
-export interface FilesystemChangeEvent {
-  path: string;
-  type: FilesystemChangeType;
-  ownerId: string;
-  version: number;
-}
-
-interface WorkspaceState {
-  files: Map<string, VirtualFile>;
-  version: number;
-  updatedAt: string;
-  loaded: boolean;
-}
-
-interface PersistedWorkspace {
-  root: string;
-  version: number;
-  updatedAt: string;
-  files: VirtualFile[];
-}
-
-const DEFAULT_WORKSPACE_ROOT = 'project';
-const DEFAULT_STORAGE_DIR = path.join(process.cwd(), 'data', 'virtual-filesystem');
-const MAX_PATH_LENGTH = 1024;
-const MAX_SEARCH_LIMIT = 200;
+// ... (existing interface/const code)
 
 export class VirtualFilesystemService {
   private readonly workspaceRoot: string;
@@ -45,6 +34,17 @@ export class VirtualFilesystemService {
   private readonly workspaces = new Map<string, WorkspaceState>();
   private readonly persistQueues = new Map<string, Promise<void>>();
   private readonly events = new EventEmitter();
+  private batchManager: Map<string, VFSBatchOperations> = new Map();
+
+  /**
+   * Get batch operations manager for a specific owner
+   */
+  batch(ownerId: string): VFSBatchOperations {
+    if (!this.batchManager.has(ownerId)) {
+      this.batchManager.set(ownerId, new VFSBatchOperations(ownerId));
+    }
+    return this.batchManager.get(ownerId)!;
+  }
 
   onFileChange(listener: (event: FilesystemChangeEvent) => void): () => void {
     this.events.on('fileChange', listener);
@@ -90,13 +90,40 @@ export class VirtualFilesystemService {
     const now = new Date().toISOString();
     const normalizedContent = typeof content === 'string' ? content : String(content ?? '');
 
+    // Validate file size
+    const fileSize = Buffer.byteLength(normalizedContent, 'utf8');
+    if (fileSize > MAX_FILE_SIZE) {
+      throw new Error(
+        `File size exceeds limit: ${this.formatFileSize(fileSize)} > ${this.formatFileSize(MAX_FILE_SIZE)}`
+      );
+    }
+
+    // Validate total workspace size
+    const currentTotalSize = Array.from(workspace.files.values())
+      .reduce((sum, file) => sum + file.size, 0);
+    const newTotalSize = currentTotalSize - (previous?.size || 0) + fileSize;
+    
+    if (newTotalSize > MAX_TOTAL_WORKSPACE_SIZE) {
+      throw new Error(
+        `Workspace quota exceeded: ${this.formatFileSize(newTotalSize)} > ${this.formatFileSize(MAX_TOTAL_WORKSPACE_SIZE)}. ` +
+        `Consider deleting unused files.`
+      );
+    }
+
+    // Validate file count
+    if (!previous && workspace.files.size >= MAX_FILES_PER_WORKSPACE) {
+      throw new Error(
+        `Maximum file count exceeded: ${workspace.files.size} >= ${MAX_FILES_PER_WORKSPACE}`
+      );
+    }
+
     const file: VirtualFile = {
       path: normalizedPath,
       content: normalizedContent,
       language: this.getLanguageFromPath(normalizedPath),
       lastModified: now,
       version: (previous?.version || 0) + 1,
-      size: Buffer.byteLength(normalizedContent, 'utf8'),
+      size: fileSize,
     };
 
     workspace.files.set(normalizedPath, file);
@@ -104,13 +131,67 @@ export class VirtualFilesystemService {
     workspace.updatedAt = now;
 
     const changeType: FilesystemChangeType = previous ? 'update' : 'create';
-    diffTracker.trackChange(file, previous?.content);
+    diffTracker.trackChange(file, ownerId, previous?.content);
     this.emitFileChange(ownerId, normalizedPath, changeType, workspace.version);
     this.emitSnapshotChange(ownerId, workspace.version);
 
     await this.persistWorkspace(ownerId, workspace);
 
     return file;
+  }
+
+  /**
+   * Format file size for human-readable error messages
+   */
+  private formatFileSize(bytes: number): string {
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let size = bytes;
+    let unitIndex = 0;
+    while (size >= 1024 && unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex++;
+    }
+    return `${size.toFixed(2)} ${units[unitIndex]}`;
+  }
+
+  /**
+   * Get workspace size statistics
+   */
+  async getWorkspaceStats(ownerId: string): Promise<{
+    totalSize: number;
+    totalSizeFormatted: string;
+    fileCount: number;
+    largestFile?: { path: string; size: number; sizeFormatted: string };
+    quotaUsage: {
+      sizePercent: number;
+      fileCountPercent: number;
+    };
+  }> {
+    const workspace = await this.ensureWorkspace(ownerId);
+    
+    let totalSize = 0;
+    let largestFile: { path: string; size: number } | undefined;
+    
+    for (const [filePath, file] of workspace.files.entries()) {
+      totalSize += file.size;
+      if (!largestFile || file.size > largestFile.size) {
+        largestFile = { path: filePath, size: file.size };
+      }
+    }
+
+    return {
+      totalSize,
+      totalSizeFormatted: this.formatFileSize(totalSize),
+      fileCount: workspace.files.size,
+      largestFile: largestFile ? {
+        ...largestFile,
+        sizeFormatted: this.formatFileSize(largestFile.size),
+      } : undefined,
+      quotaUsage: {
+        sizePercent: (totalSize / MAX_TOTAL_WORKSPACE_SIZE) * 100,
+        fileCountPercent: (workspace.files.size / MAX_FILES_PER_WORKSPACE) * 100,
+      },
+    };
   }
 
   async deletePath(ownerId: string, targetPath: string): Promise<{ deletedCount: number }> {
@@ -125,7 +206,7 @@ export class VirtualFilesystemService {
         workspace.files.delete(existingPath);
         deletedCount += 1;
         if (deletedFile) {
-          diffTracker.trackDeletion(existingPath, deletedFile.content);
+          diffTracker.trackDeletion(existingPath, ownerId, deletedFile.content);
         }
         this.emitFileChange(ownerId, existingPath, 'delete', workspace.version + 1);
       }
@@ -432,10 +513,23 @@ export class VirtualFilesystemService {
     const next = previous
       .catch(() => undefined)
       .then(async () => {
-        await fs.mkdir(this.storageDir, { recursive: true });
-        const tmpFilePath = `${storageFilePath}.tmp-${Date.now()}`;
-        await fs.writeFile(tmpFilePath, JSON.stringify(serialized, null, 2), 'utf8');
-        await fs.rename(tmpFilePath, storageFilePath);
+        try {
+          // Ensure storage directory exists
+          await fs.mkdir(this.storageDir, { recursive: true });
+          
+          const tmpFilePath = `${storageFilePath}.tmp-${Date.now()}`;
+          await fs.writeFile(tmpFilePath, JSON.stringify(serialized, null, 2), 'utf8');
+          await fs.rename(tmpFilePath, storageFilePath);
+        } catch (error: any) {
+          console.error('[VFS] Persist failed:', {
+            ownerId: normalizedOwnerId,
+            storageDir: this.storageDir,
+            storageFilePath,
+            error: error.message,
+            platform: process.platform,
+          });
+          throw error;
+        }
       });
 
     this.persistQueues.set(normalizedOwnerId, next);
@@ -447,7 +541,7 @@ export class VirtualFilesystemService {
    * Returns a human-readable summary of all file changes
    */
   getDiffSummary(ownerId: string, maxDiffs = 10): string {
-    return diffTracker.getDiffSummary(maxDiffs, ownerId);
+    return diffTracker.getDiffSummary(ownerId, maxDiffs);
   }
 
   /**
@@ -461,7 +555,7 @@ export class VirtualFilesystemService {
     errors: string[];
   }> {
     const workspace = await this.ensureWorkspace(ownerId);
-    const operations = diffTracker.getRollbackOperations(targetVersion);
+    const operations = diffTracker.getRollbackOperations(ownerId, targetVersion);
     
     const errors: string[] = [];
     let restoredFiles = 0;
@@ -490,10 +584,27 @@ export class VirtualFilesystemService {
   }
 
   /**
+   * Clear workspace state (for tests)
+   */
+  async clearWorkspace(ownerId: string): Promise<void> {
+    const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
+    this.workspaces.delete(normalizedOwnerId);
+    diffTracker.clear(ownerId);
+    
+    // Also delete storage file if it exists
+    const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
+    try {
+      await fs.unlink(storageFilePath);
+    } catch {
+      // Ignore if not exists
+    }
+  }
+
+  /**
    * Get files at a specific version
    */
   getFilesAtVersion(ownerId: string, targetVersion: number): Map<string, string> {
-    return diffTracker.getFilesAtVersion(targetVersion);
+    return diffTracker.getFilesAtVersion(ownerId, targetVersion);
   }
 
   /**

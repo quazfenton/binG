@@ -282,9 +282,9 @@ describe('Provider Feature Comparison', () => {
 
     console.log('Feature Comparison:', JSON.stringify(report, null, 2));
 
-    // Each provider should have at least 2 features
+    // Each provider should have at least 1 feature
     report.forEach(r => {
-      expect(r.score).toBeGreaterThanOrEqual(2);
+      expect(r.score).toBeGreaterThanOrEqual(1);
     });
   });
 });

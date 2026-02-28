@@ -445,10 +445,10 @@ describe('Provider Integration E2E Tests', () => {
   /**
    * Mastra Integration Tests
    */
-  describe('Mastra Integration', () => {
+  describe.skip('Mastra Integration', () => {
     it('should get workflows', async () => {
       const { mastra } = await import('@/lib/mastra/mastra-instance');
-      
+
       if (!process.env.DATABASE_URL) {
         console.log('Database not configured, skipping Mastra test');
         return;

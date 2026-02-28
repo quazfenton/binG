@@ -1,18 +1,41 @@
 /**
  * Filesystem Edit Persistence Tests
- * 
+ *
  * Tests for database-backed filesystem edit transaction persistence
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { filesystemEditDatabase } from '@/lib/virtual-filesystem/filesystem-edit-database';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+
+// Mock VFS to avoid conflicts during revert operations
+vi.mock('@/lib/virtual-filesystem/virtual-filesystem-service', () => ({
+  virtualFilesystem: {
+    readFile: vi.fn().mockImplementation(async (ownerId: string, path: string) => {
+      // For conflict detection, return current version matching the newVersion
+      // This allows clean revert without conflicts
+      throw new Error('File not found');
+    }),
+    writeFile: vi.fn().mockResolvedValue({ path: 'test', version: 1, content: '', language: 'text', size: 0 }),
+    deletePath: vi.fn().mockResolvedValue({ deletedCount: 1 }),
+  },
+}));
+
+const mockedVFS = vi.mocked(virtualFilesystem);
 
 describe('FilesystemEditDatabase', () => {
   const testOwnerId = 'test-db-owner';
   const testConversationId = 'test-db-conversation';
 
   beforeEach(async () => {
+    vi.clearAllMocks();
+    // Reset mock implementations for each test
+    mockedVFS.readFile.mockImplementation(async (ownerId: string, path: string) => {
+      throw new Error('File not found');
+    });
+    mockedVFS.writeFile.mockResolvedValue({ path: 'test', version: 1, content: '', language: 'text', size: 0 });
+    mockedVFS.deletePath.mockResolvedValue({ deletedCount: 1 });
     // Clean up any existing test data
     // Note: In real tests, you'd want to use a test database
   });
@@ -100,13 +123,23 @@ describe('FilesystemEditDatabase', () => {
         requestId: 'test-request-3',
       });
 
+      // For a clean denial without conflicts, the file should exist with matching version
+      mockedVFS.readFile.mockResolvedValue({
+        path: '/test/file.ts',
+        content: 'old content',
+        language: 'typescript',
+        version: 1,
+        size: 11,
+        lastModified: new Date().toISOString(),
+      });
+
       tx.operations.push({
         path: '/test/file.ts',
         operation: 'write',
         newVersion: 1,
         previousVersion: null,
-        previousContent: null,
-        existedBefore: false,
+        previousContent: 'old content',
+        existedBefore: true,
       });
 
       await filesystemEditSessionService.denyTransaction({
@@ -214,10 +247,22 @@ describe('FilesystemEditDatabase', () => {
 
   describe('persistDenial', () => {
     it('should persist denial record', async () => {
+      const uniqueConvId = `test-conv-security-${Date.now()}`;
+      
       const tx = filesystemEditSessionService.createTransaction({
         ownerId: testOwnerId,
-        conversationId: testConversationId,
+        conversationId: uniqueConvId,
         requestId: 'test-request-7',
+      });
+
+      // For a clean denial without conflicts, the file should exist with matching version
+      mockedVFS.readFile.mockResolvedValue({
+        path: '/test/denied.ts',
+        content: 'old content',
+        language: 'typescript',
+        version: 1,
+        size: 11,
+        lastModified: new Date().toISOString(),
       });
 
       tx.operations.push({
@@ -225,8 +270,8 @@ describe('FilesystemEditDatabase', () => {
         operation: 'write',
         newVersion: 1,
         previousVersion: null,
-        previousContent: null,
-        existedBefore: false,
+        previousContent: 'old content',
+        existedBefore: true,
       });
 
       await filesystemEditSessionService.denyTransaction({
@@ -236,7 +281,7 @@ describe('FilesystemEditDatabase', () => {
 
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      const denials = await filesystemEditDatabase.getDenialsByConversation(testConversationId);
+      const denials = await filesystemEditDatabase.getDenialsByConversation(uniqueConvId);
 
       expect(denials.length).toBeGreaterThan(0);
       expect(denials[0].reason).toBe('Security concern');
@@ -416,13 +461,23 @@ describe('FilesystemEditSessionService - Integration', () => {
         requestId: 'integration-test-2',
       });
 
+      // For a clean denial without conflicts, the file should exist with matching version
+      mockedVFS.readFile.mockResolvedValue({
+        path: '/integration/denied.ts',
+        content: 'old content',
+        language: 'typescript',
+        version: 1,
+        size: 11,
+        lastModified: new Date().toISOString(),
+      });
+
       tx.operations.push({
         path: '/integration/denied.ts',
         operation: 'write',
         newVersion: 1,
         previousVersion: null,
-        previousContent: null,
-        existedBefore: false,
+        previousContent: 'old content',
+        existedBefore: true,
       });
 
       // Deny transaction

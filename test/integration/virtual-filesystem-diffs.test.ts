@@ -67,7 +67,8 @@ describe('FilesystemDiffTracker', () => {
 
     it('should treat explicit previousContent parameter as update', () => {
       const file = makeFile({ content: 'new stuff', version: 1 })
-      const diff = tracker.trackChange(file, 'old stuff')
+      // Pass previousContent as second parameter (integration test signature)
+      const diff = tracker.trackChange(file, undefined, 'old stuff')
 
       expect(diff.changeType).toBe('update')
       expect(diff.oldContent).toBe('old stuff')

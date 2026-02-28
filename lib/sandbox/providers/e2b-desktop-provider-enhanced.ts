@@ -86,8 +86,8 @@ export class DesktopSandboxHandle {
    */
   async screenshot(): Promise<Buffer> {
     try {
-      const img = await this.sandbox.screen.capture()
-      return img.toBuffer()
+      const img = await this.sandbox.screenshot()
+      return img
     } catch (error: any) {
       console.error('[E2B Desktop] Screenshot error:', error)
       throw error
@@ -109,7 +109,7 @@ export class DesktopSandboxHandle {
    */
   async moveMouse(x: number, y: number): Promise<ToolResult> {
     try {
-      await this.sandbox.mouse.move({ x, y })
+      await this.sandbox.moveMouse(x, y)
       return { success: true, output: `Mouse moved to (${x}, ${y})` }
     } catch (error: any) {
       return { success: false, output: error.message }
@@ -121,10 +121,13 @@ export class DesktopSandboxHandle {
    */
   async leftClick(x?: number, y?: number, button: 'left' | 'right' | 'middle' = 'left'): Promise<ToolResult> {
     try {
-      if (x !== undefined && y !== undefined) {
-        await this.sandbox.mouse.move({ x, y })
+      if (button === 'left') {
+        await this.sandbox.leftClick(x, y)
+      } else if (button === 'right') {
+        await this.sandbox.rightClick(x, y)
+      } else if (button === 'middle') {
+        await this.sandbox.middleClick(x, y)
       }
-      await this.sandbox.mouse.click({ x, y, button })
       return { success: true, output: `${button} click at (${x ?? 'current'}, ${y ?? 'current'})` }
     } catch (error: any) {
       return { success: false, output: error.message }
@@ -143,10 +146,7 @@ export class DesktopSandboxHandle {
    */
   async doubleClick(x?: number, y?: number): Promise<ToolResult> {
     try {
-      if (x !== undefined && y !== undefined) {
-        await this.sandbox.mouse.move({ x, y })
-      }
-      await this.sandbox.mouse.click({ x, y, button: 'left', count: 2 })
+      await this.sandbox.doubleClick(x, y)
       return { success: true, output: `Double click at (${x ?? 'current'}, ${y ?? 'current'})` }
     } catch (error: any) {
       return { success: false, output: error.message }
@@ -158,10 +158,7 @@ export class DesktopSandboxHandle {
    */
   async drag(startX: number, startY: number, endX: number, endY: number): Promise<ToolResult> {
     try {
-      await this.sandbox.mouse.drag({
-        from: { x: startX, y: startY },
-        to: { x: endX, y: endY },
-      })
+      await this.sandbox.drag([startX, startY], [endX, endY])
       return { success: true, output: `Dragged from (${startX}, ${startY}) to (${endX}, ${endY})` }
     } catch (error: any) {
       return { success: false, output: error.message }
@@ -173,7 +170,7 @@ export class DesktopSandboxHandle {
    */
   async scroll(direction: 'up' | 'down' | 'left' | 'right', ticks: number = 1): Promise<ToolResult> {
     try {
-      await this.sandbox.mouse.scroll({ direction, ticks })
+      await this.sandbox.scroll(direction, ticks)
       return { success: true, output: `Scrolled ${direction} ${ticks} tick(s)` }
     } catch (error: any) {
       return { success: false, output: error.message }
@@ -187,7 +184,7 @@ export class DesktopSandboxHandle {
    */
   async type(text: string): Promise<ToolResult> {
     try {
-      await this.sandbox.keyboard.type(text)
+      await this.sandbox.write(text)
       return { success: true, output: `Typed: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}` }
     } catch (error: any) {
       return { success: false, output: error.message }
@@ -201,7 +198,7 @@ export class DesktopSandboxHandle {
     try {
       const keys = Array.isArray(key) ? key : [key]
       for (const k of keys) {
-        await this.sandbox.keyboard.press(k)
+        await this.sandbox.press(k)
       }
       return { success: true, output: `Pressed: ${keys.join(' + ')}` }
     } catch (error: any) {

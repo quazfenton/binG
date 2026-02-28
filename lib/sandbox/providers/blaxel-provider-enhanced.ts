@@ -26,7 +26,7 @@ import type {
 } from './sandbox-provider'
 import { quotaManager } from '@/lib/services/quota-manager'
 import { blaxelAsyncManager, verifyWebhookFromRequest } from './blaxel-async'
-import { getDatabase } from '@/lib/database'
+import { getDatabase } from '@/lib/database/connection';
 
 const WORKSPACE_DIR = '/workspace'
 const MAX_INSTANCES = 50
@@ -78,7 +78,7 @@ export class BlaxelProvider implements SandboxProvider {
     if (this.client) return this.client
 
     try {
-      const blaxelSdk = await import('@blaxel/sdk')
+      const blaxelSdk = await import('@blaxel/core')
       this.client = new blaxelSdk.default({
         apiKey: this.apiKey,
         workspace: this.workspace,

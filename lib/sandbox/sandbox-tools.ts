@@ -244,7 +244,7 @@ const BLOCKED_PATTERNS = [
   /systemctl\s+enable/,          // Systemd service (persistence)
 ]
 
-export function validateCommand(command: string): { valid: boolean; reason?: string } {
+export function validateCommandSecurity(command: string): { valid: boolean; reason?: string } {
   // Normalize Unicode to detect homoglyph attacks (NFKC normalization)
   const normalizedCommand = command.normalize('NFKC')
   

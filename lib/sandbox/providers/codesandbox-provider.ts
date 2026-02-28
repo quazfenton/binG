@@ -19,6 +19,7 @@
 
 import { resolve, relative, dirname } from 'node:path'
 import { quotaManager } from '@/lib/services/quota-manager'
+import { SandboxSecurityManager } from '../security-manager'
 import type { ToolResult, PreviewInfo } from '../types'
 import type {
   SandboxProvider,
@@ -152,15 +153,77 @@ export class CodeSandboxProvider implements SandboxProvider {
 
     try {
       const sdk: CodeSandboxSDK = new CodeSandbox(this.apiKey)
-      const sandbox: CSBSandbox = await sdk.sandboxes.resume(sandboxId)
+      
+      // First try to resume (handles hibernated sandboxes)
+      let sandbox: CSBSandbox
+      let wasHibernated = false
+      
+      try {
+        sandbox = await sdk.sandboxes.resume(sandboxId)
+        wasHibernated = true
+        console.log(`[CodeSandbox] Resumed hibernated sandbox ${sandboxId}`)
+      } catch (resumeError: any) {
+        // If resume fails because it's already running, get the sandbox directly
+        if (resumeError.message?.includes('already running') || 
+            resumeError.message?.includes('not hibernated')) {
+          sandbox = await sdk.sandboxes.get(sandboxId)
+          console.log(`[CodeSandbox] Connected to running sandbox ${sandboxId}`)
+        } else {
+          throw resumeError
+        }
+      }
+      
       const client: CSBClient = await sandbox.connect()
+      
+      // Wait for sandbox to be fully ready after resume
+      if (wasHibernated) {
+        await this.waitForSandboxReady(client)
+      }
 
       console.log(`[CodeSandbox] Connected to sandbox ${sandboxId}`)
       return new CodeSandboxHandle(sandboxId, client, sdk)
     } catch (error: any) {
+      // Handle specific hibernation errors
+      if (error.message?.includes('hibernated')) {
+        // Try explicit wake endpoint
+        try {
+          const sdk: CodeSandboxSDK = new CodeSandbox(this.apiKey)
+          await sdk.sandboxes.wake(sandboxId)
+          const sandbox = await sdk.sandboxes.resume(sandboxId)
+          const client: CSBClient = await sandbox.connect()
+          await this.waitForSandboxReady(client)
+          console.log(`[CodeSandbox] Woke and connected to sandbox ${sandboxId}`)
+          return new CodeSandboxHandle(sandboxId, client, sdk)
+        } catch (wakeError: any) {
+          console.error(`[CodeSandbox] Wake failed:`, wakeError.message)
+        }
+      }
+      
       console.error(`[CodeSandbox] Failed to get sandbox ${sandboxId}:`, error)
       throw error
     }
+  }
+
+  /**
+   * Wait for sandbox to be fully ready after wake/hibernation
+   * Polls with echo command until sandbox responds
+   */
+  private async waitForSandboxReady(client: CSBClient, timeoutMs = 30000): Promise<void> {
+    const start = Date.now()
+    const pollInterval = 500 // 500ms
+    
+    while (Date.now() - start < timeoutMs) {
+      try {
+        await client.commands.run('echo ready', { cwd: WORKSPACE_DIR, timeout: 2000 })
+        console.log(`[CodeSandbox] Sandbox became ready after ${Date.now() - start}ms`)
+        return
+      } catch {
+        // Sandbox not ready yet, wait and retry
+        await new Promise(r => setTimeout(r, pollInterval))
+      }
+    }
+    
+    throw new Error(`Sandbox did not become ready within ${timeoutMs}ms after wake`)
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
@@ -191,6 +254,8 @@ interface CodeSandboxHandleOptions {
   commandTimeout?: number
 }
 
+import { CodeSandboxAdvancedIntegration } from './codesandbox-advanced'
+
 class CodeSandboxHandle implements SandboxHandle {
   readonly id: string
   readonly workspaceDir = WORKSPACE_DIR
@@ -198,18 +263,43 @@ class CodeSandboxHandle implements SandboxHandle {
   private sdk: CodeSandboxSDK
   private terminalSessions = new Map<string, { terminal: any; outputBuffer: string[] }>()
   private commandTimeout: number
+  private advancedIntegration: CodeSandboxAdvancedIntegration
 
   constructor(id: string, client: CSBClient, sdk: CodeSandboxSDK, options?: CodeSandboxHandleOptions) {
     this.id = id
     this.client = client
     this.sdk = sdk
     this.commandTimeout = options?.commandTimeout || MAX_COMMAND_TIMEOUT
+    this.advancedIntegration = new CodeSandboxAdvancedIntegration(id)
+    this.advancedIntegration.setHandle(this)
+  }
+
+  async createSnapshot(label?: string): Promise<any> {
+    return this.advancedIntegration.createSnapshot(label)
+  }
+
+  async rollbackToSnapshot(snapshotId: string): Promise<void> {
+    return this.advancedIntegration.rollbackToSnapshot(snapshotId)
+  }
+
+  async listSnapshots(): Promise<any[]> {
+    return this.advancedIntegration.listSnapshots()
+  }
+
+  async deleteSnapshot(snapshotId: string): Promise<void> {
+    // Advanced integration doesn't have delete, but we can clear the map entry if we had access
+    // For now, this is a placeholder
+    console.warn('[CodeSandbox] deleteSnapshot not fully implemented')
   }
 
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
     try {
-      const output = await this.client.commands.run(command, {
+      // ✅ ENHANCED: Use combined validation and sanitization
+      const sanitized = SandboxSecurityManager.validateAndSanitizeCommand(command)
+      
+      const output = await this.client.commands.run(sanitized, {
         cwd: cwd || this.workspaceDir,
+        timeout: timeout || this.commandTimeout,
       })
 
       return {
@@ -218,6 +308,15 @@ class CodeSandboxHandle implements SandboxHandle {
         exitCode: 0,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[CodeSandbox] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       // CodeSandbox SDK throws CommandError with exitCode and output
       if (error.exitCode !== undefined) {
         return {
@@ -236,10 +335,15 @@ class CodeSandboxHandle implements SandboxHandle {
 
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(filePath)
+      // ✅ ENHANCED: Use combined validation for path and content
+      const { resolvedPath, validatedContent } = SandboxSecurityManager.validateWriteFile(
+        filePath,
+        content,
+        this.workspaceDir
+      )
 
       // Ensure parent directory exists
-      const dir = dirname(resolved)
+      const dir = dirname(resolvedPath)
       if (dir !== '/' && dir !== '.') {
         try {
           await this.client.fs.mkdir(dir, true)
@@ -248,13 +352,22 @@ class CodeSandboxHandle implements SandboxHandle {
         }
       }
 
-      await this.client.fs.writeTextFile(resolved, content)
+      await this.client.fs.writeTextFile(resolvedPath, validatedContent)
 
       return {
         success: true,
-        output: `File written: ${resolved}`,
+        output: `File written: ${resolvedPath}`,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[CodeSandbox] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       console.error('[CodeSandbox] Write file error:', error)
       return {
         success: false,
@@ -265,7 +378,7 @@ class CodeSandboxHandle implements SandboxHandle {
 
   async readFile(filePath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(filePath)
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath)
       const content = await this.client.fs.readTextFile(resolved)
 
       return {
@@ -283,7 +396,7 @@ class CodeSandboxHandle implements SandboxHandle {
 
   async listDirectory(dirPath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(dirPath)
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath)
       const entries = await this.client.fs.readdir(resolved)
 
       const formatted = entries
@@ -305,7 +418,7 @@ class CodeSandboxHandle implements SandboxHandle {
 
   async writeFileBinary(filePath: string, content: Uint8Array): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(filePath)
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath)
 
       const dir = dirname(resolved)
       if (dir !== '/' && dir !== '.') {
@@ -333,7 +446,7 @@ class CodeSandboxHandle implements SandboxHandle {
 
   async readFileBinary(filePath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(filePath)
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath)
       const content = await this.client.fs.readFile(resolved)
 
       return {
@@ -353,7 +466,7 @@ class CodeSandboxHandle implements SandboxHandle {
   async batchWrite(files: Array<{ path: string; content: string | Uint8Array }>): Promise<ToolResult> {
     try {
       const formattedFiles = files.map(f => ({
-        path: this.resolvePath(f.path),
+        path: SandboxSecurityManager.resolvePath(this.workspaceDir, f.path),
         content: f.content,
       }))
 
@@ -374,8 +487,8 @@ class CodeSandboxHandle implements SandboxHandle {
 
   async copyFile(sourcePath: string, destPath: string): Promise<ToolResult> {
     try {
-      const resolvedSrc = this.resolvePath(sourcePath)
-      const resolvedDest = this.resolvePath(destPath)
+      const resolvedSrc = SandboxSecurityManager.resolvePath(this.workspaceDir, sourcePath)
+      const resolvedDest = SandboxSecurityManager.resolvePath(this.workspaceDir, destPath)
 
       await this.client.fs.copy(resolvedSrc, resolvedDest)
 
@@ -394,8 +507,8 @@ class CodeSandboxHandle implements SandboxHandle {
 
   async renameFile(oldPath: string, newPath: string): Promise<ToolResult> {
     try {
-      const resolvedOld = this.resolvePath(oldPath)
-      const resolvedNew = this.resolvePath(newPath)
+      const resolvedOld = SandboxSecurityManager.resolvePath(this.workspaceDir, oldPath)
+      const resolvedNew = SandboxSecurityManager.resolvePath(this.workspaceDir, newPath)
 
       await this.client.fs.rename(resolvedOld, resolvedNew)
 
@@ -414,7 +527,7 @@ class CodeSandboxHandle implements SandboxHandle {
 
   async removeFile(filePath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(filePath)
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath)
 
       await this.client.fs.remove(resolved)
 
@@ -433,145 +546,12 @@ class CodeSandboxHandle implements SandboxHandle {
 
   async downloadAsZip(path: string): Promise<{ downloadUrl: string }> {
     try {
-      const resolved = this.resolvePath(path)
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, path)
       const { downloadUrl } = await this.client.fs.download(resolved)
       return { downloadUrl }
     } catch (error: any) {
       console.error('[CodeSandbox] Download error:', error)
       throw new Error(`Failed to generate download URL: ${error.message}`)
-    }
-  }
-
-  // File watching support
-  private _watchIntervals = new Map<string, NodeJS.Timeout>()
-
-  async watchFile(filePath: string, callback: (event: string, path: string) => void): Promise<ToolResult> {
-    try {
-      const resolved = this.resolvePath(filePath)
-      let previousContent: string | null = null
-      let previousExists = false
-
-      // Initial read
-      try {
-        previousContent = await this.client.fs.readFile(resolved, 'utf8')
-        previousExists = true
-      } catch {
-        // File may not exist yet
-      }
-
-      // Poll for changes every 2 seconds
-      const interval = setInterval(async () => {
-        try {
-          const currentContent = await this.client.fs.readFile(resolved, 'utf8')
-          
-          if (!previousExists) {
-            callback('add', filePath)
-            previousExists = true
-            previousContent = currentContent
-          } else if (currentContent !== previousContent) {
-            callback('change', filePath)
-            previousContent = currentContent
-          }
-        } catch {
-          if (previousExists) {
-            callback('unlink', filePath)
-            previousExists = false
-            previousContent = null
-          }
-        }
-      }, 2000)
-
-      this._watchIntervals.set(filePath, interval)
-
-      return { success: true, output: `Watching file: ${filePath}` }
-    } catch (error: any) {
-      return {
-        success: false,
-        output: `Failed to watch file: ${error.message}`,
-      }
-    }
-  }
-
-  async watchDirectory(dirPath: string, callback: (event: string, path: string) => void): Promise<ToolResult> {
-    try {
-      const resolved = this.resolvePath(dirPath)
-      let previousFiles = new Map<string, string>()
-
-      // Initial listing
-      try {
-        const entries = await this.client.fs.readdir(resolved)
-        entries.forEach((e: any) => previousFiles.set(e.name, e.path))
-      } catch {
-        // Directory may not exist yet
-      }
-
-      // Poll for changes every 3 seconds
-      const interval = setInterval(async () => {
-        try {
-          const entries = await this.client.fs.readdir(resolved)
-          const currentFiles = new Map(entries.map((e: any) => [e.name, e.path]))
-
-          // Check for additions
-          currentFiles.forEach((path, name) => {
-            if (!previousFiles.has(name)) {
-              callback('add', `${dirPath}/${name}`)
-            }
-          })
-
-          // Check for removals
-          previousFiles.forEach((path, name) => {
-            if (!currentFiles.has(name)) {
-              callback('unlink', `${dirPath}/${name}`)
-            }
-          })
-
-          previousFiles = currentFiles
-        } catch {
-          callback('unlinkDir', dirPath)
-          clearInterval(interval)
-        }
-      }, 3000)
-
-      this._watchIntervals.set(dirPath, interval)
-
-      return { success: true, output: `Watching directory: ${dirPath}` }
-    } catch (error: any) {
-      return {
-        success: false,
-        output: `Failed to watch directory: ${error.message}`,
-      }
-    }
-  }
-
-  async unwatchFile(filePath: string): Promise<ToolResult> {
-    try {
-      const interval = this._watchIntervals.get(filePath)
-      if (interval) {
-        clearInterval(interval)
-        this._watchIntervals.delete(filePath)
-      }
-      return { success: true, output: `Stopped watching file: ${filePath}` }
-    } catch (error: any) {
-      return {
-        success: false,
-        output: `Failed to unwatch file: ${error.message}`,
-      }
-    }
-  }
-
-  async unwatchDirectory(dirPath: string): Promise<ToolResult> {
-    try {
-      const interval = this._watchIntervals.get(dirPath)
-      if (interval) {
-        clearInterval(interval)
-        this._watchIntervals.delete(dirPath)
-      }
-      return { success: true, output: `Stopped watching directory: ${dirPath}` }
-    } catch (error: any) {
-      return {
-        success: false,
-        output: `Failed to unwatch directory: ${error.message}`,
-      }
     }
   }
 
@@ -780,14 +760,12 @@ class CodeSandboxHandle implements SandboxHandle {
       await terminal.open({ cols, rows })
 
       // Buffer for output and subscribe to terminal output events
-      const outputBuffer: string[] = []
       terminal.onOutput((data: string) => {
-        outputBuffer.push(data)
         // Forward output as Uint8Array to match the PtyOptions.onData signature
         options.onData(new TextEncoder().encode(data))
       })
 
-      this.terminalSessions.set(sessionId, { terminal, outputBuffer })
+      this.terminalSessions.set(sessionId, { terminal, outputBuffer: [] })
 
       console.log(`[CodeSandbox] Created PTY session ${sessionId} (shell: ${terminal.id})`)
 
@@ -834,40 +812,6 @@ class CodeSandboxHandle implements SandboxHandle {
     }
     this.terminalSessions.delete(sessionId)
     console.log(`[CodeSandbox] Killed PTY session ${sessionId}`)
-  }
-
-  private resolvePath(filePath: string): string {
-    // Normalize path separators
-    const normalized = filePath.replace(/\\/g, '/')
-    
-    // SECURITY: Block path traversal attempts
-    if (normalized.includes('..') || normalized.includes('\0')) {
-      throw new Error(`Path traversal rejected: ${filePath}`)
-    }
-    
-    // Resolve absolute paths
-    if (filePath.startsWith('/')) {
-      const resolved = resolve(filePath)
-      
-      // SECURITY: Ensure path stays within workspace
-      const rel = relative(this.workspaceDir, resolved)
-      if (rel.startsWith('..') || resolved === '..' || resolve(this.workspaceDir, rel) !== resolved) {
-        throw new Error(`Path traversal rejected: ${filePath}`)
-      }
-      
-      return resolved
-    }
-    
-    // Resolve relative paths
-    const resolved = resolve(this.workspaceDir, filePath)
-    
-    // SECURITY: Double-check path is within workspace
-    const rel = relative(this.workspaceDir, resolved)
-    if (rel.startsWith('..') || resolved === '..' || resolve(this.workspaceDir, rel) !== resolved) {
-      throw new Error(`Path traversal rejected: ${filePath}`)
-    }
-    
-    return resolved
   }
 
   async watchDirectory(

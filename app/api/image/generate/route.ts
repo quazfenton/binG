@@ -53,6 +53,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 })
     }
 
+    // ✅ FIX 1: Early API key validation - check if ANY provider is configured
+    const hasMistralKey = !!process.env.MISTRAL_API_KEY
+    const hasReplicateKey = !!process.env.REPLICATE_API_TOKEN
+    
+    if (!hasMistralKey && !hasReplicateKey) {
+      clearTimeout(timeoutId)
+      return NextResponse.json(
+        { 
+          error: 'No image generation providers configured. Please set MISTRAL_API_KEY or REPLICATE_API_TOKEN in your environment variables.' 
+        },
+        { status: 503 }
+      )
+    }
+
     // Get the registry with all providers
     const registry = getDefaultRegistry()
 

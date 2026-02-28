@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { UnifiedErrorHandler, getErrorHandler, handleError, createValidationError, createAuthError } from '../../error-handler';
+import { UnifiedErrorHandler, getErrorHandler, handleError, createValidationError, createAuthError } from '@/lib/utils/error-handler';
 
 describe('Unified Error Handler', () => {
   beforeEach(() => {

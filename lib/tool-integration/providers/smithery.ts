@@ -37,6 +37,22 @@ export interface SmitheryConfig {
   apiKey?: string;
   servers?: SmitheryServerConfig[];
   timeout?: number;
+  enableHealthChecks?: boolean;
+  healthCheckInterval?: number; // ms
+  autoDisableOnFailures?: number; // Number of failures before auto-disable
+}
+
+/**
+ * Server health status
+ */
+export interface ServerHealth {
+  serverId: string;
+  healthy: boolean;
+  lastCheck: number;
+  latency: number;
+  consecutiveFailures: number;
+  lastError?: string;
+  toolCount?: number;
 }
 
 /**
@@ -49,10 +65,17 @@ export class SmitheryProvider implements ToolProvider {
   private tools = new Map<string, SmitheryTool>();
   private client: any = null;
   private initialized = false;
+  
+  // Health tracking
+  private serverHealth = new Map<string, ServerHealth>();
+  private healthCheckTimer?: NodeJS.Timeout;
 
   constructor(config: SmitheryConfig = {}) {
     this.config = {
       timeout: 30000,
+      enableHealthChecks: config.enableHealthChecks ?? true,
+      healthCheckInterval: config.healthCheckInterval ?? 60000, // 1 minute
+      autoDisableOnFailures: config.autoDisableOnFailures ?? 3,
       ...config,
     };
 
@@ -61,6 +84,11 @@ export class SmitheryProvider implements ToolProvider {
       for (const server of config.servers) {
         this.registerServer(server);
       }
+    }
+
+    // Start health checks if enabled
+    if (this.config.enableHealthChecks) {
+      this.startHealthChecks();
     }
   }
 
@@ -106,6 +134,216 @@ export class SmitheryProvider implements ToolProvider {
         this.tools.delete(key);
       }
     }
+    // Remove health tracking
+    this.serverHealth.delete(serverId);
+  }
+
+  /**
+   * Start periodic health checks for all servers
+   */
+  private startHealthChecks(): void {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+    }
+
+    this.healthCheckTimer = setInterval(() => {
+      for (const [serverId] of this.servers.entries()) {
+        this.checkServerHealth(serverId).catch(err => {
+          console.warn(`[SmitheryProvider] Health check failed for ${serverId}:`, err.message);
+        });
+      }
+    }, this.config.healthCheckInterval);
+
+    // Don't prevent process exit
+    this.healthCheckTimer.unref?.();
+
+    console.log(`[SmitheryProvider] Health checks started (interval: ${this.config.healthCheckInterval}ms)`);
+  }
+
+  /**
+   * Stop health checks
+   */
+  stopHealthChecks(): void {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = undefined;
+      console.log('[SmitheryProvider] Health checks stopped');
+    }
+  }
+
+  /**
+   * Check health of a server
+   * 
+   * Checks:
+   * - Connectivity (ping/health endpoint)
+   * - Response latency
+   * - Tool availability
+   * 
+   * Auto-disables server after consecutive failures
+   */
+  async checkServerHealth(serverId: string): Promise<ServerHealth> {
+    const server = this.servers.get(serverId);
+    if (!server) {
+      return {
+        serverId,
+        healthy: false,
+        lastCheck: Date.now(),
+        latency: 0,
+        consecutiveFailures: 999,
+        lastError: 'Server not found',
+      };
+    }
+
+    const startTime = Date.now();
+    let health: ServerHealth;
+
+    try {
+      // Try health endpoint first
+      const healthUrl = `${server.url}/health`;
+      const response = await fetch(healthUrl, {
+        method: 'GET',
+        headers: {
+          ...(server.authToken ? { Authorization: `Bearer ${server.authToken}` } : {}),
+          'Accept': 'application/json',
+        },
+        signal: AbortSignal.timeout(5000), // 5 second timeout
+      });
+
+      const latency = Date.now() - startTime;
+      const healthy = response.ok;
+
+      // Get current failure count
+      const currentHealth = this.serverHealth.get(serverId);
+      const consecutiveFailures = healthy 
+        ? 0 
+        : (currentHealth?.consecutiveFailures || 0) + 1;
+
+      health = {
+        serverId,
+        healthy,
+        lastCheck: Date.now(),
+        latency,
+        consecutiveFailures,
+        toolCount: currentHealth?.toolCount,
+      };
+
+      if (!healthy) {
+        health.lastError = `Health check failed: ${response.status} ${response.statusText}`;
+      }
+
+    } catch (error: any) {
+      const latency = Date.now() - startTime;
+      const currentHealth = this.serverHealth.get(serverId);
+      const consecutiveFailures = (currentHealth?.consecutiveFailures || 0) + 1;
+
+      health = {
+        serverId,
+        healthy: false,
+        lastCheck: Date.now(),
+        latency,
+        consecutiveFailures,
+        lastError: error.message || 'Health check failed',
+        toolCount: currentHealth?.toolCount,
+      };
+    }
+
+    // Update health tracking
+    this.serverHealth.set(serverId, health);
+
+    // Auto-disable after consecutive failures
+    if (health.consecutiveFailures >= this.config.autoDisableOnFailures) {
+      server.enabled = false;
+      console.warn(
+        `[SmitheryProvider] Auto-disabled server ${serverId} after ${health.consecutiveFailures} consecutive failures`
+      );
+    }
+
+    // Log health status
+    if (health.healthy) {
+      console.log(`[SmitheryProvider] ${serverId} healthy (latency: ${health.latency}ms)`);
+    } else {
+      console.warn(`[SmitheryProvider] ${serverId} unhealthy: ${health.lastError}`);
+    }
+
+    return health;
+  }
+
+  /**
+   * Get health status for all servers
+   */
+  getAllServerHealth(): Map<string, ServerHealth> {
+    return new Map(this.serverHealth);
+  }
+
+  /**
+   * Get health status for specific server
+   */
+  getServerHealth(serverId: string): ServerHealth | undefined {
+    return this.serverHealth.get(serverId);
+  }
+
+  /**
+   * Get healthy servers
+   */
+  getHealthyServers(): SmitheryServerConfig[] {
+    const healthy: SmitheryServerConfig[] = [];
+    
+    for (const [serverId, server] of this.servers.entries()) {
+      const health = this.serverHealth.get(serverId);
+      if (health?.healthy && server.enabled !== false) {
+        healthy.push(server);
+      }
+    }
+    
+    return healthy;
+  }
+
+  /**
+   * Get unhealthy servers
+   */
+  getUnhealthyServers(): SmitheryServerConfig[] {
+    const unhealthy: SmitheryServerConfig[] = [];
+    
+    for (const [serverId, server] of this.servers.entries()) {
+      const health = this.serverHealth.get(serverId);
+      if (!health?.healthy || server.enabled === false) {
+        unhealthy.push(server);
+      }
+    }
+    
+    return unhealthy;
+  }
+
+  /**
+   * Manually enable a disabled server
+   */
+  enableServer(serverId: string): boolean {
+    const server = this.servers.get(serverId);
+    if (!server) return false;
+    
+    server.enabled = true;
+    
+    // Reset failure count
+    const health = this.serverHealth.get(serverId);
+    if (health) {
+      health.consecutiveFailures = 0;
+      this.serverHealth.set(serverId, health);
+    }
+    
+    console.log(`[SmitheryProvider] Manually enabled server ${serverId}`);
+    return true;
+  }
+
+  /**
+   * Manually disable a server
+   */
+  disableServer(serverId: string): boolean {
+    const server = this.servers.get(serverId);
+    if (!server) return false;
+    
+    server.enabled = false;
+    console.log(`[SmitheryProvider] Manually disabled server ${serverId}`);
+    return true;
   }
 
   /**

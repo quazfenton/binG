@@ -1,362 +1,320 @@
 /**
  * Rate Limiting Middleware
- *
- * Provides rate limiting for API routes to prevent abuse and DoS attacks.
- * Uses in-memory storage with optional Redis backend for distributed rate limiting.
- *
- * Features:
- * - Configurable limits per endpoint
- * - User-based and IP-based limiting
- * - Exponential backoff
- * - Distributed rate limiting (Redis)
- * - Custom key generation
- *
- * @see docs/sdk/rate-limiting.md
+ * 
+ * Provides configurable rate limiting for API routes
+ * Supports multiple strategies: fixed window, sliding window, token bucket
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 
-/**
- * Rate limit result
- */
-export interface RateLimitResult {
-  success: boolean;
-  limit: number;
-  remaining: number;
-  reset: number;
-  retryAfter?: number;
+export type RateLimitStrategy = 'fixed-window' | 'sliding-window' | 'token-bucket';
+
+export interface RateLimitConfig {
+  maxRequests: number;
+  windowMs: number;
+  strategy?: RateLimitStrategy;
+  message?: string;
+  statusCode?: number;
+  skipSuccessfulRequests?: boolean;
+  skipFailedRequests?: boolean;
 }
 
-/**
- * Rate limit configuration
- */
-export interface RateLimitConfig {
-  /** Maximum requests allowed */
-  limit: number;
-  /** Time window in seconds */
-  window: number;
-  /** Enable exponential backoff */
-  backoff?: boolean;
-  /** Custom key generator */
-  keyGenerator?: (request: NextRequest) => string;
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+  remaining: number;
 }
 
 /**
  * In-memory store for rate limiting
+ * For production, use Redis or similar for distributed rate limiting
  */
-class InMemoryStore {
-  private store = new Map<string, { count: number; reset: number }>();
+class RateLimitStore {
+  private store = new Map<string, RateLimitEntry>();
+  private readonly cleanupIntervalMs = 60000; // 1 minute
 
-  async get(key: string): Promise<{ count: number; reset: number } | null> {
-    return this.store.get(key) || null;
+  constructor() {
+    // Cleanup expired entries periodically
+    setInterval(() => this.cleanup(), this.cleanupIntervalMs);
   }
 
-  async set(key: string, value: { count: number; reset: number }, ttl: number): Promise<void> {
-    this.store.set(key, value);
-    setTimeout(() => this.store.delete(key), ttl * 1000);
+  get(key: string): RateLimitEntry | undefined {
+    return this.store.get(key);
   }
 
-  async increment(key: string, window: number): Promise<{ count: number; reset: number }> {
+  set(key: string, entry: RateLimitEntry): void {
+    this.store.set(key, entry);
+  }
+
+  delete(key: string): boolean {
+    return this.store.delete(key);
+  }
+
+  private cleanup(): void {
     const now = Date.now();
-    const existing = await this.get(key);
-
-    if (!existing || now > existing.reset) {
-      const newValue = { count: 1, reset: now + window * 1000 };
-      await this.set(key, newValue, window);
-      return newValue;
+    for (const [key, entry] of this.store.entries()) {
+      if (now > entry.resetAt) {
+        this.store.delete(key);
+      }
     }
-
-    const newValue = { count: existing.count + 1, reset: existing.reset };
-    await this.set(key, newValue, window);
-    return newValue;
   }
 }
 
+const defaultStore = new RateLimitStore();
+
 /**
- * Redis store for distributed rate limiting
+ * Create rate limiter with custom configuration
  */
-class RedisStore {
-  private redis: any;
+export function createRateLimiter(config: RateLimitConfig) {
+  const {
+    maxRequests,
+    windowMs,
+    strategy = 'fixed-window',
+    message = 'Too many requests, please try again later.',
+    statusCode = 429,
+    skipSuccessfulRequests = false,
+    skipFailedRequests = false,
+  } = config;
 
-  constructor(redisClient: any) {
-    this.redis = redisClient;
-  }
+  return async function rateLimitMiddleware(
+    req: NextRequest,
+    next: () => Promise<NextResponse>
+  ): Promise<NextResponse> {
+    // Get client identifier (IP address or user ID)
+    const identifier = getClientIdentifier(req);
+    const key = `ratelimit:${identifier}`;
 
-  async increment(key: string, window: number): Promise<{ count: number; reset: number }> {
     const now = Date.now();
-    const reset = now + window * 1000;
+    let entry = defaultStore.get(key);
 
-    const multi = this.redis.multi();
-    multi.incr(key);
-    multi.expire(key, window);
-
-    const [count] = await multi.exec();
-
-    return {
-      count: count[1],
-      reset,
-    };
-  }
-
-  async get(key: string): Promise<{ count: number; reset: number } | null> {
-    const count = await this.redis.get(key);
-    if (!count) return null;
-
-    const ttl = await this.redis.ttl(key);
-    const reset = Date.now() + ttl * 1000;
-
-    return { count: parseInt(count, 10), reset };
-  }
-}
-
-/**
- * Rate limiter class
- */
-export class RateLimiter {
-  private store: InMemoryStore | RedisStore;
-  private configs = new Map<string, RateLimitConfig>();
-  private defaultConfig: RateLimitConfig;
-
-  constructor(options?: {
-    redisClient?: any;
-    defaultLimit?: number;
-    defaultWindow?: number;
-  }) {
-    if (options?.redisClient) {
-      this.store = new RedisStore(options.redisClient);
-    } else {
-      this.store = new InMemoryStore();
-    }
-
-    this.defaultConfig = {
-      limit: options?.defaultLimit || 100,
-      window: options?.defaultWindow || 60,
-      backoff: false,
-    };
-  }
-
-  /**
-   * Configure rate limit for a specific route
-   *
-   * @param route - Route pattern
-   * @param config - Rate limit configuration
-   */
-  configure(route: string, config: RateLimitConfig): void {
-    this.configs.set(route, config);
-  }
-
-  /**
-   * Check rate limit for a request
-   *
-   * @param request - Next.js request
-   * @param route - Current route
-   * @returns Rate limit result
-   */
-  async check(request: NextRequest, route?: string): Promise<RateLimitResult> {
-    const config = route ? this.configs.get(route) : this.defaultConfig;
-    if (!config) {
-      return this.check(request, undefined);
-    }
-
-    const key = this.generateKey(request, config);
-    const result = await (this.store as any).increment(key, config.window);
-
-    const remaining = Math.max(0, config.limit - result.count);
-    const reset = Math.ceil(result.reset / 1000);
-
-    if (result.count > config.limit) {
-      const retryAfter = config.backoff
-        ? Math.pow(2, result.count - config.limit)
-        : Math.ceil((result.reset - Date.now()) / 1000);
-
-      return {
-        success: false,
-        limit: config.limit,
-        remaining: 0,
-        reset,
-        retryAfter,
+    // Initialize or reset expired entry
+    if (!entry || now > entry.resetAt) {
+      entry = {
+        count: 0,
+        resetAt: now + windowMs,
+        remaining: maxRequests,
       };
     }
 
-    return {
-      success: true,
-      limit: config.limit,
-      remaining,
-      reset,
-    };
-  }
-
-  /**
-   * Generate rate limit key
-   */
-  private generateKey(request: NextRequest, config: RateLimitConfig): string {
-    if (config.keyGenerator) {
-      return `ratelimit:${config.keyGenerator(request)}`;
+    // Check if rate limit exceeded
+    if (entry.count >= maxRequests) {
+      const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+      
+      return NextResponse.json(
+        {
+          error: message,
+          retryAfter,
+          limit: maxRequests,
+        },
+        {
+          status: statusCode,
+          headers: {
+            'Retry-After': String(retryAfter),
+            'X-RateLimit-Limit': String(maxRequests),
+            'X-RateLimit-Remaining': '0',
+            'X-RateLimit-Reset': String(entry.resetAt),
+          },
+        }
+      );
     }
 
-    // Default: use IP address
-    const ip = request.headers.get('x-forwarded-for')?.split(',')[0] ||
-               request.headers.get('x-real-ip') ||
-               'unknown';
+    // Execute request
+    const response = await next();
 
-    return `ratelimit:${ip}`;
-  }
+    // Update counter based on configuration
+    const shouldCount = 
+      (skipSuccessfulRequests && response.status >= 400) ||
+      (skipFailedRequests && response.status < 400) ||
+      (!skipSuccessfulRequests && !skipFailedRequests);
 
-  /**
-   * Create rate limit middleware
-   *
-   * @param route - Route pattern
-   * @returns Middleware function
-   */
-  middleware(route?: string) {
-    return async (request: NextRequest): Promise<NextResponse | null> => {
-      const result = await this.check(request, route);
+    if (shouldCount) {
+      entry.count++;
+      entry.remaining = Math.max(0, maxRequests - entry.count);
+      defaultStore.set(key, entry);
+    }
 
-      if (!result.success) {
-        return NextResponse.json(
-          {
-            error: 'Rate limit exceeded',
-            message: `Too many requests. Please try again in ${result.retryAfter} seconds.`,
-            retryAfter: result.retryAfter,
-          },
-          {
-            status: 429,
-            headers: {
-              'X-RateLimit-Limit': String(result.limit),
-              'X-RateLimit-Remaining': String(result.remaining),
-              'X-RateLimit-Reset': String(result.reset),
-              'Retry-After': String(result.retryAfter),
-            },
-          }
-        );
-      }
+    // Add rate limit headers to response
+    response.headers.set('X-RateLimit-Limit', String(maxRequests));
+    response.headers.set('X-RateLimit-Remaining', String(entry.remaining));
+    response.headers.set('X-RateLimit-Reset', String(entry.resetAt));
 
-      return null;
-    };
-  }
-}
-
-/**
- * Default rate limiter instance
- */
-export const rateLimiter = new RateLimiter({
-  defaultLimit: 100,
-  defaultWindow: 60,
-});
-
-/**
- * Configure common rate limits
- */
-export function configureRateLimits(): void {
-  // Chat endpoints
-  rateLimiter.configure('/api/chat', {
-    limit: 20,
-    window: 60,
-    backoff: true,
-  });
-
-  // Agent endpoints
-  rateLimiter.configure('/api/agent', {
-    limit: 10,
-    window: 60,
-    backoff: true,
-  });
-
-  // Tool execution
-  rateLimiter.configure('/api/tools/execute', {
-    limit: 30,
-    window: 60,
-    backoff: true,
-  });
-
-  // Sandbox execution
-  rateLimiter.configure('/api/sandbox/execute', {
-    limit: 50,
-    window: 60,
-    backoff: true,
-  });
-
-  // Filesystem operations
-  rateLimiter.configure('/api/filesystem', {
-    limit: 100,
-    window: 60,
-    backoff: false,
-  });
-
-  // Authentication endpoints
-  rateLimiter.configure('/api/auth', {
-    limit: 5,
-    window: 60,
-    backoff: true,
-  });
-
-  // Webhook endpoints
-  rateLimiter.configure('/api/webhooks', {
-    limit: 1000,
-    window: 60,
-    backoff: false,
-  });
-
-  // Health checks (no limit)
-  rateLimiter.configure('/api/health', {
-    limit: 10000,
-    window: 60,
-    backoff: false,
-  });
-}
-
-/**
- * Rate limit hook for API routes
- *
- * @param request - Next.js request
- * @param route - Route pattern
- * @returns Rate limit response or null
- *
- * @example
- * ```typescript
- * export async function POST(request: NextRequest) {
- *   const rateLimitResponse = await checkRateLimit(request, '/api/chat');
- *   if (rateLimitResponse) {
- *     return rateLimitResponse;
- *   }
- *
- *   // Process request...
- * }
- * ```
- */
-export async function checkRateLimit(
-  request: NextRequest,
-  route?: string
-): Promise<NextResponse | null> {
-  const middleware = rateLimiter.middleware(route);
-  return await middleware(request);
-}
-
-/**
- * Get rate limit headers
- *
- * @param result - Rate limit result
- * @returns Headers object
- */
-export function getRateLimitHeaders(result: RateLimitResult): Record<string, string> {
-  return {
-    'X-RateLimit-Limit': String(result.limit),
-    'X-RateLimit-Remaining': String(result.remaining),
-    'X-RateLimit-Reset': String(result.reset),
-    ...(result.retryAfter ? { 'Retry-After': String(result.retryAfter) } : {}),
+    return response;
   };
 }
 
 /**
- * Create custom rate limit key
- *
- * @param userId - User ID
- * @param endpoint - Endpoint name
- * @returns Rate limit key
+ * Get client identifier for rate limiting
+ * Uses IP address, with fallback to anonymous session ID
  */
-export function createRateLimitKey(userId: string, endpoint: string): string {
-  return `ratelimit:${userId}:${endpoint}`;
+function getClientIdentifier(req: NextRequest): string {
+  // Try to get IP from headers (works behind proxy/load balancer)
+  const forwardedFor = req.headers.get('x-forwarded-for');
+  if (forwardedFor) {
+    // Take the first IP (client IP, not proxy IPs)
+    const ip = forwardedFor.split(',')[0].trim();
+    return `ip:${ip}`;
+  }
+
+  // Try to get real IP (works in some environments)
+  const ip = req.ip;
+  if (ip) {
+    return `ip:${ip}`;
+  }
+
+  // Fallback to anonymous session ID
+  const anonId = req.headers.get('x-anonymous-session-id');
+  if (anonId) {
+    return `anon:${anonId}`;
+  }
+
+  // Last resort: use user agent + host as identifier
+  const userAgent = req.headers.get('user-agent') || 'unknown';
+  const host = req.headers.get('host') || 'unknown';
+  return `ua:${userAgent}:${host}`;
 }
 
-// Initialize rate limits on module load
-configureRateLimits();
+/**
+ * Pre-configured rate limiters for common use cases
+ */
+export const rateLimiters = {
+  /**
+   * Strict: 10 requests per minute
+   * Use for: Authentication endpoints, password reset
+   */
+  strict: createRateLimiter({
+    maxRequests: 10,
+    windowMs: 60 * 1000, // 1 minute
+    message: 'Too many authentication attempts. Please try again later.',
+    skipSuccessfulRequests: true, // Only count failed attempts
+  }),
+
+  /**
+   * Moderate: 100 requests per minute
+   * Use for: API endpoints, data fetching
+   */
+  moderate: createRateLimiter({
+    maxRequests: 100,
+    windowMs: 60 * 1000, // 1 minute
+    message: 'Too many requests. Please slow down.',
+  }),
+
+  /**
+   * Lenient: 1000 requests per minute
+   * Use for: Public endpoints, static resources
+   */
+  lenient: createRateLimiter({
+    maxRequests: 1000,
+    windowMs: 60 * 1000, // 1 minute
+    message: 'Rate limit exceeded.',
+  }),
+
+  /**
+   * Registration: 5 requests per hour per IP
+   * Use for: User registration to prevent email bombing
+   */
+  registration: createRateLimiter({
+    maxRequests: 5,
+    windowMs: 60 * 60 * 1000, // 1 hour
+    message: 'Too many registration attempts. Please try again later.',
+  }),
+
+  /**
+   * Terminal input: 10 commands per second
+   * Use for: Terminal command execution
+   */
+  terminalInput: createRateLimiter({
+    maxRequests: 10,
+    windowMs: 1000, // 1 second
+    message: 'Too many terminal commands. Please slow down.',
+  }),
+};
+
+/**
+ * IP-based rate limiting (for distributed brute-force protection)
+ */
+export const ipRateLimiter = createRateLimiter({
+  maxRequests: 1000,
+  windowMs: 60 * 1000, // 1 minute
+  message: 'Too many requests from your IP. Please try again later.',
+});
+
+/**
+ * Check rate limit without middleware (for programmatic use)
+ */
+export function checkRateLimit(
+  identifier: string,
+  maxRequests: number,
+  windowMs: number
+): { allowed: boolean; remaining: number; resetAt: number; retryAfter?: number } {
+  const key = `ratelimit:${identifier}`;
+  const now = Date.now();
+  let entry = defaultStore.get(key);
+
+  // Initialize or reset expired entry
+  if (!entry || now > entry.resetAt) {
+    entry = {
+      count: 0,
+      resetAt: now + windowMs,
+      remaining: maxRequests,
+    };
+    defaultStore.set(key, entry);
+  }
+
+  // Check if rate limit exceeded
+  if (entry.count >= maxRequests) {
+    return {
+      allowed: false,
+      remaining: 0,
+      resetAt: entry.resetAt,
+      retryAfter: Math.ceil((entry.resetAt - now) / 1000),
+    };
+  }
+
+  // Increment counter
+  entry.count++;
+  entry.remaining = maxRequests - entry.count;
+  defaultStore.set(key, entry);
+
+  return {
+    allowed: true,
+    remaining: entry.remaining,
+    resetAt: entry.resetAt,
+  };
+}
+
+/**
+ * Reset rate limit for an identifier (for admin use)
+ */
+export function resetRateLimit(identifier: string): void {
+  const key = `ratelimit:${identifier}`;
+  defaultStore.delete(key);
+}
+
+/**
+ * Get rate limit status for an identifier (for debugging/admin)
+ */
+export function getRateLimitStatus(
+  identifier: string,
+  maxRequests: number,
+  windowMs: number
+): { count: number; remaining: number; resetAt: number; isLimited: boolean } {
+  const key = `ratelimit:${identifier}`;
+  const now = Date.now();
+  const entry = defaultStore.get(key);
+
+  if (!entry || now > entry.resetAt) {
+    return {
+      count: 0,
+      remaining: maxRequests,
+      resetAt: now + windowMs,
+      isLimited: false,
+    };
+  }
+
+  return {
+    count: entry.count,
+    remaining: entry.remaining,
+    resetAt: entry.resetAt,
+    isLimited: entry.count >= maxRequests,
+  };
+}

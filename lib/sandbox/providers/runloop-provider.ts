@@ -5,6 +5,7 @@ import type {
   SandboxCreateConfig,
 } from "./sandbox-provider";
 import * as path from "node:path";
+import { SandboxSecurityManager } from "../security-manager";
 
 const WORKSPACE_DIR = "/home/user/workspace";
 const MAX_COMMAND_TIMEOUT = 120;
@@ -17,14 +18,13 @@ export class RunloopProvider implements SandboxProvider {
     const { RunloopSDK } = require("@runloop/api-client");
     const apiKey = process.env.RUNLOOP_API_KEY;
     if (!apiKey) {
-      throw new Error("RUNLOOP_API_KEY environment variable is required");
+      console.warn("[RunloopProvider] RUNLOOP_API_KEY not set.");
     }
-    this.client = new RunloopSDK({
-      apiKey,
-    });
+    this.client = apiKey ? new RunloopSDK({ apiKey }) : null;
   }
 
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
+    if (!this.client) throw new Error("Runloop API key not configured");
     const devbox = await this.client.devbox.create({
       blueprint: "standard",
     });
@@ -35,11 +35,13 @@ export class RunloopProvider implements SandboxProvider {
   }
 
   async getSandbox(sandboxId: string): Promise<SandboxHandle> {
+    if (!this.client) throw new Error("Runloop API key not configured");
     const devbox = await this.client.devbox.get(sandboxId);
     return new RunloopSandboxHandle(devbox, this.client);
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
+    if (!this.client) return;
     const devbox = await this.client.devbox.get(sandboxId);
     await devbox.shutdown();
   }
@@ -47,9 +49,10 @@ export class RunloopProvider implements SandboxProvider {
 
 class RunloopSandboxHandle implements SandboxHandle {
   readonly id: string;
-  readonly workspaceDir = '/home/user/workspace';
+  readonly workspaceDir = WORKSPACE_DIR;
   private devbox: any;
   private client: any;
+  private portCache = new Map<number, PreviewInfo>();
 
   constructor(devbox: any, client: any) {
     this.devbox = devbox;
@@ -57,93 +60,15 @@ class RunloopSandboxHandle implements SandboxHandle {
     this.client = client;
   }
 
-  /**
-   * Sanitize command to prevent shell injection
-   */
-  private sanitizeCommand(command: string): string {
-    // Block ALL shell metacharacters including pipes and redirects
-    // This prevents command injection via: echo "hi" | bash, ls > file, cat < file, etc.
-    // Blocked: ; (command separator), ` (command substitution), $ (variable expansion),
-    //          () (subshell), {} (brace expansion), [] (glob/range), ! (history),
-    //          # (comment injection), ~ (home dir), \ (escape), | (pipe), > (redirect), < (redirect), & (background)
-    const dangerousChars = /[;`$(){}[\]!#~\\|>&]/;
-    if (dangerousChars.test(command)) {
-      throw new Error("Command contains disallowed characters for security");
-    }
-    if (/[\n\r\0]/.test(command)) {
-      throw new Error("Command contains invalid control characters");
-    }
-    return command;
-  }
-
-  /**
-   * Resolve and validate path to prevent path traversal attacks
-   */
-  private resolvePath(filePath: string): string {
-    // Normalize path separators
-    const normalized = filePath.replace(/\\/g, "/");
-
-    // Reject path traversal attempts
-    if (normalized.includes("..") || normalized.includes("\0")) {
-      throw new Error(`Invalid file path: ${filePath}`);
-    }
-
-    // Reject absolute paths that aren't already in workspace
-    if (filePath.startsWith("/")) {
-      // Ensure it's within workspace
-      const resolved = path.resolve(normalized);
-      if (!resolved.startsWith(WORKSPACE_DIR)) {
-        throw new Error(`Path traversal detected: ${filePath}`);
-      }
-      return resolved;
-    }
-
-    // For relative paths, resolve within workspace
-    const resolved = path.resolve(WORKSPACE_DIR, normalized);
-
-    // Double-check the resolved path is within workspace
-    if (!resolved.startsWith(WORKSPACE_DIR)) {
-      throw new Error(`Path traversal detected: ${filePath}`);
-    }
-
-    return resolved;
-  }
-
-  async executeCommand(
-    command: string,
-    cwd?: string,
-    timeout?: number
-  ): Promise<ToolResult> {
-    // Sanitize command to prevent injection
-    const safeCommand = this.sanitizeCommand(command);
-
-    // Sanitize cwd to prevent injection (consistent with sanitizeCommand - allow pipes/redirection)
-    if (cwd) {
-      if (
-        /[;`$(){}\[\]!#~\\]/.test(cwd) ||
-        cwd.includes("..") ||
-        /[\n\r\0]/.test(cwd)
-      ) {
-        throw new Error(`Invalid working directory: ${cwd}`);
-      }
-    }
-
-    // Use resolved safe path instead of shell string interpolation
-    const safeCwd = cwd ? this.resolvePath(cwd) : WORKSPACE_DIR;
-
-    // Apply timeout - use provided timeout or default to MAX_COMMAND_TIMEOUT
+  async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
+    const sanitized = SandboxSecurityManager.sanitizeCommand(command);
+    const safeCwd = cwd ? SandboxSecurityManager.resolvePath(this.workspaceDir, cwd) : this.workspaceDir;
     const effectiveTimeout = timeout ?? MAX_COMMAND_TIMEOUT;
 
-    // Shell-quote safeCwd to handle spaces and special characters
-    const escapedCwd = safeCwd.replace(/'/g, "'\\''");
-
-    // Execute with explicit cwd using sanitized values
-    const fullCommand = `cd '${escapedCwd}' && ${safeCommand}`;
-
     const result = await this.devbox.cmd.exec({
-      command: fullCommand,
+      command: `cd '${safeCwd.replace(/'/g, "'\\''")}' && ${sanitized}`,
       shell: "/bin/bash",
-      timeout: effectiveTimeout * 1000, // Convert to milliseconds
+      timeout: effectiveTimeout * 1000,
     });
 
     const stdout = await result.stdout();
@@ -157,72 +82,60 @@ class RunloopSandboxHandle implements SandboxHandle {
   }
 
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(filePath);
+    const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath);
     const dir = path.dirname(resolved);
 
-    // Shell-quote paths for safety (handle spaces and special characters)
-    const escapedDir = dir.replace(/'/g, "'\\''");
-    const escapedPath = resolved.replace(/'/g, "'\\''");
-    
-    // Create directory - bypass sanitizeCommand since we control the paths
-    const mkdirCmd = `mkdir -p '${escapedDir}'`;
-    const mkdirResult = await this.devbox.cmd.exec({ 
-      command: mkdirCmd, 
-      shell: "/bin/bash",
-      timeout: MAX_COMMAND_TIMEOUT * 1000,
-    });
-    const mkdirStderr = await mkdirResult.stderr();
-    if (mkdirResult.exit_code !== 0) {
-      return { success: false, output: mkdirStderr || 'Failed to create directory', exitCode: mkdirResult.exit_code };
-    }
+    await this.devbox.cmd.exec({ command: `mkdir -p '${dir.replace(/'/g, "'\\''")}'`, shell: "/bin/bash" });
 
-    // Write file content - bypass sanitizeCommand since we control the paths
-    const escaped = content.replace(/'/g, "'\\''");
-    const writeCmd = `printf '%s' '${escaped}' > '${escapedPath}'`;
-    const writeResult = await this.devbox.cmd.exec({ 
-      command: writeCmd, 
+    const escapedContent = content.replace(/'/g, "'\\''");
+    const result = await this.devbox.cmd.exec({
+      command: `printf '%s' '${escapedContent}' > '${resolved.replace(/'/g, "'\\''")}'`,
       shell: "/bin/bash",
-      timeout: MAX_COMMAND_TIMEOUT * 1000,
     });
-    const writeStderr = await writeResult.stderr();
-    return { 
-      success: writeResult.exit_code === 0, 
-      output: writeResult.exit_code === 0 ? `File written: ${resolved}` : writeStderr,
-      exitCode: writeResult.exit_code 
+
+    return {
+      success: result.exit_code === 0,
+      output: result.exit_code === 0 ? `File written: ${resolved}` : await result.stderr(),
+      exitCode: result.exit_code,
     };
   }
 
   async readFile(filePath: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(filePath);
-    const escapedPath = resolved.replace(/'/g, "'\\''");
-    const result = await this.devbox.cmd.exec({ 
-      command: `cat '${escapedPath}'`, 
+    const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath);
+    const result = await this.devbox.cmd.exec({
+      command: `cat '${resolved.replace(/'/g, "'\\''")}'`,
       shell: "/bin/bash",
-      timeout: MAX_COMMAND_TIMEOUT * 1000,
     });
-    const stdout = await result.stdout();
-    const stderr = await result.stderr();
     return {
       success: result.exit_code === 0,
-      output: stdout + (stderr ? `\n${stderr}` : ''),
+      output: await result.stdout() + (await result.stderr()),
       exitCode: result.exit_code,
     };
   }
 
   async listDirectory(dirPath: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(dirPath);
-    const escapedPath = resolved.replace(/'/g, "'\\''");
-    const result = await this.devbox.cmd.exec({ 
-      command: `ls -la '${escapedPath}'`, 
+    const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath);
+    const result = await this.devbox.cmd.exec({
+      command: `ls -la '${resolved.replace(/'/g, "'\\''")}'`,
       shell: "/bin/bash",
-      timeout: MAX_COMMAND_TIMEOUT * 1000,
     });
-    const stdout = await result.stdout();
-    const stderr = await result.stderr();
     return {
       success: result.exit_code === 0,
-      output: stdout + (stderr ? `\n${stderr}` : ''),
+      output: await result.stdout() + (await result.stderr()),
       exitCode: result.exit_code,
     };
+  }
+
+  async getPreviewLink(port: number): Promise<PreviewInfo> {
+    const cached = this.portCache.get(port);
+    if (cached) return cached;
+    try {
+      const portInfo = await this.devbox.ports.get(port);
+      const preview = { port, url: portInfo.url || `https://${this.id}-${port}.runloop.dev`, token: portInfo.token };
+      this.portCache.set(port, preview);
+      return preview;
+    } catch {
+      return { port, url: `https://${this.id}-${port}.runloop.dev` };
+    }
   }
 }

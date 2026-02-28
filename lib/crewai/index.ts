@@ -34,7 +34,7 @@ export type { TaskConfig, TaskOutput, FileInput } from './tasks/task';
 
 // Crew orchestration
 export { Crew } from './crew/crew';
-export type { CrewConfig, CrewOutput, ProcessType, StreamChunk, CrewKnowledgeSource } from './crew/crew';
+export type { CrewConfig, CrewOutput, ProcessType, CrewKnowledgeSource } from './crew/crew';
 
 // Events
 export * from './crew/events';

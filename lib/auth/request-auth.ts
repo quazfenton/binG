@@ -119,7 +119,7 @@ class AuthCache {
 const authCache = new AuthCache();
 
 // Export for use in auth-service for cache invalidation on logout
-export { authCache };
+export { authCache, AuthCache };
 
 export interface ResolvedRequestAuth {
   success: boolean;

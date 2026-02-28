@@ -612,6 +612,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                     content: `Authorization required for ${kitName}. Please connect your account.`,
                     requiresAuth: true,
                     authUrl,
+                    toolName: kitName,
+                    provider: kitName.toLowerCase(),
                     authToolkit: kitName,
                     metadata: { ...getSessionMetadata(session), toolsUsed: toolCalls.map((t: any) => t.function?.name) },
                   };
@@ -645,6 +647,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                     content: `Authorization required for ${kitName}. Please connect your account.`,
                     requiresAuth: true,
                     authUrl,
+                    toolName: kitName,
+                    provider: kitName.toLowerCase(),
                     authToolkit: kitName,
                     metadata: { ...getSessionMetadata(session), toolsUsed: toolCalls.map((t: any) => t.function?.name) },
                   };
@@ -732,6 +736,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                     content: `Authorization required for ${kitName}. Please connect your account.`,
                     requiresAuth: true,
                     authUrl,
+                    toolName: kitName,
+                    provider: kitName.toLowerCase(),
                     authToolkit: kitName,
                     metadata: { ...getSessionMetadata(session), toolsUsed: toolCalls.map((t: any) => t.function?.name) },
                   };
@@ -748,6 +754,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                     content: `Authorization required for ${kitName}. Please connect your account.`,
                     requiresAuth: true,
                     authUrl,
+                    toolName: kitName,
+                    provider: kitName.toLowerCase(),
                     authToolkit: kitName,
                     metadata: { ...getSessionMetadata(session), toolsUsed: toolCalls.map((t: any) => t.function?.name) },
                   };
@@ -788,6 +796,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
               content: `Authorization required for ${inferredToolkit}. Please connect your account to proceed.`,
               requiresAuth: true,
               authUrl,
+              toolName: inferredToolkit,
+              provider: inferredToolkit.toLowerCase(),
               authToolkit: inferredToolkit,
               metadata: {
                 ...getSessionMetadata(session),
@@ -840,6 +850,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
               content: `Authorization required for ${toolkit}. Please connect your account to use this feature.`,
               requiresAuth: true,
               authUrl,
+              toolName: toolkit,
+              provider: toolkit.toLowerCase(),
               authToolkit: toolkit,
               metadata: { executionTime: Date.now() - startTime },
             };
@@ -849,6 +861,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
               content: 'Authorization required. Please connect your account to use this feature.',
               requiresAuth: true,
               authUrl: buildFallbackAuthUrl('google'),
+              toolName: 'google',
+              provider: 'google',
               metadata: { executionTime: Date.now() - startTime },
             };
           }

@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { blockSensitiveFiles } from './lib/security/file-access-blocker';
+import { generateAndStoreNonces, generateCspHeader } from './lib/security/nonce-generator';
 
 /**
  * Next.js Middleware
- * 
+ *
  * This middleware runs on every request and:
  * 1. Blocks access to sensitive files (.db, .env, etc.)
- * 2. Can add authentication checks, rate limiting, etc.
+ * 2. Generates cryptographic nonces for CSP
+ * 3. Adds security headers with nonce-based CSP
+ * 4. Can add authentication checks, rate limiting, etc.
  */
 
 export function middleware(request: NextRequest) {
@@ -16,9 +19,22 @@ export function middleware(request: NextRequest) {
     return blockedResponse;
   }
 
-  // Add security headers to all responses
+  // Generate unique nonces for this request
+  const requestId = request.headers.get('x-request-id') || 
+                    request.headers.get('x-correlation-id') ||
+                    `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  
+  const nonces = generateAndStoreNonces(requestId);
+
+  // Create response
   const response = NextResponse.next();
 
+  // Add nonce to headers for use in components
+  response.headers.set('x-csp-nonce-script', nonces.script);
+  response.headers.set('x-csp-nonce-style', nonces.style);
+  response.headers.set('x-request-id', requestId);
+
+  // Add security headers to all responses
   // Prevent MIME type sniffing
   response.headers.set('X-Content-Type-Options', 'nosniff');
 
@@ -31,11 +47,37 @@ export function middleware(request: NextRequest) {
   // Referrer policy
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
 
-  // Content Security Policy - restrict resource loading
-  response.headers.set(
-    'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'none';"
-  );
+  // Content Security Policy with nonce-based script/style control
+  // In development, use a more permissive CSP for compatibility
+  const isDev = process.env.NODE_ENV !== 'production';
+  
+  if (isDev) {
+    // Development CSP - more permissive for debugging
+    response.headers.set(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https:; font-src 'self' data: https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';"
+    );
+  } else {
+    // Production CSP with strict nonces
+    const cspHeader = generateCspHeader(nonces, {
+      reportUri: '/api/csp-report',
+      reportTo: 'csp-endpoint',
+      upgradeInsecureRequests: true,
+    });
+    response.headers.set('Content-Security-Policy', cspHeader);
+
+    // Report-To header for CSP reporting (modern browsers)
+    response.headers.set(
+      'Report-To',
+      JSON.stringify({
+        group: 'csp-endpoint',
+        max_age: 31536000, // 1 year
+        endpoints: [
+          { url: '/api/csp-report' }
+        ]
+      })
+    );
+  }
 
   // Permissions Policy - restrict browser features
   response.headers.set(

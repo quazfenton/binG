@@ -492,6 +492,14 @@ export class TerminalManager {
 
     if (command === 'clear') {
       conn.onData('\x1bc')
+      
+      // Update session history for clear command too
+      const session = getTerminalSession(conn.sessionId)
+      if (session) {
+        const newHistory = [...session.history, command].slice(-100)
+        updateTerminalSession(conn.sessionId, { history: newHistory })
+      }
+      
       emitEvent(conn.sandboxId, 'command_output', {
         sessionId: conn.sessionId,
         command: 'clear',
@@ -502,6 +510,14 @@ export class TerminalManager {
 
     if (command === 'pwd') {
       conn.onData(`${conn.cwd}\r\n`)
+      
+      // Update session history for pwd command too
+      const session = getTerminalSession(conn.sessionId)
+      if (session) {
+        const newHistory = [...session.history, command].slice(-100)
+        updateTerminalSession(conn.sessionId, { history: newHistory })
+      }
+      
       emitEvent(conn.sandboxId, 'command_output', {
         sessionId: conn.sessionId,
         command: 'pwd',
@@ -525,7 +541,14 @@ export class TerminalManager {
       } else if (result.output) {
         conn.onData(`${result.output}\r\n`)
       }
-      
+
+      // Update session history for cd command too
+      const session = getTerminalSession(conn.sessionId)
+      if (session) {
+        const newHistory = [...session.history, command].slice(-100)
+        updateTerminalSession(conn.sessionId, { history: newHistory })
+      }
+
       emitEvent(conn.sandboxId, 'command_output', {
         sessionId: conn.sessionId,
         command,

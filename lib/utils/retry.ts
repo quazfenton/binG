@@ -257,7 +257,7 @@ export class CircuitBreaker {
   isOpen(): boolean {
     if (this.state === 'open') {
       // Check if reset timeout has passed
-      if (Date.now() - this.lastFailureTime > this.resetTimeoutMs) {
+      if (Date.now() - this.lastFailureTime >= this.resetTimeoutMs) {
         this.state = 'half-open';
         return false;
       }

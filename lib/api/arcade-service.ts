@@ -75,8 +75,8 @@ export class ArcadeService {
 
     try {
       // Try dynamic import for Arcade SDK
-      const { Arcade } = await import('@arcadeai/core');
-      
+      const { Arcade } = await import('@arcadeai/arcadejs');
+
       this.client = new Arcade({
         apiKey: this.config.apiKey,
         baseUrl: this.config.baseUrl,
@@ -292,6 +292,8 @@ export class ArcadeService {
         success: false,
         requiresAuth: true,
         authUrl: auth.authUrl,
+        toolName: toolName,
+        provider: this.extractToolkit(toolName).toLowerCase(),
         error: 'Authorization required',
       };
     }
@@ -318,11 +320,13 @@ export class ArcadeService {
         // Get auth URL for the toolkit
         const toolkit = this.extractToolkit(toolName);
         const authUrl = await this.getAuthUrl(toolkit, userId);
-        
+
         return {
           success: false,
           requiresAuth: true,
           authUrl,
+          toolName: toolName,
+          provider: toolkit.toLowerCase(),
           error: `Authorization required for ${toolName}`,
         };
       }

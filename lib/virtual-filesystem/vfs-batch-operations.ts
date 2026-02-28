@@ -9,6 +9,7 @@
 
 import type { VirtualFile } from './filesystem-types';
 import { virtualFilesystem } from './virtual-filesystem-service';
+import { sandboxPersistenceManager } from '@/lib/sandbox/persistence-manager';
 
 /**
  * Batch file operation
@@ -137,7 +138,7 @@ export interface SearchReplaceResult {
 
 /**
  * VFS Batch Operations Manager
- * 
+ *
  * Provides efficient batch file operations.
  */
 export class VFSBatchOperations {
@@ -148,23 +149,59 @@ export class VFSBatchOperations {
   }
 
   /**
+   * Execute batch write with incremental optimization
+   */
+  async batchWriteIncremental(
+    operations: BatchFileOperation[],
+    sandboxId?: string
+  ): Promise<BatchOperationResult> {
+    const startTime = Date.now();
+    const processed: BatchOperationResult['processed'] = [];
+    let successful = 0;
+    let skipped = 0;
+
+    for (const op of operations) {
+      try {
+        // Use persistence manager if sandboxId is provided for incremental sync
+        if (sandboxId && op.type !== 'delete') {
+          const syncResult = await sandboxPersistenceManager.syncIncremental(
+            { id: sandboxId } as any, 
+            [{ path: op.path, content: op.content }]
+          );
+          
+          if (syncResult.skipped > 0) {
+            skipped++;
+            processed.push({ path: op.path, success: true });
+            continue;
+          }
+        }
+
+        // Standard write
+        if (op.type === 'delete') {
+          await virtualFilesystem.deletePath(this.ownerId, op.path);
+        } else {
+          await virtualFilesystem.writeFile(this.ownerId, op.path, op.content);
+        }
+
+        processed.push({ path: op.path, success: true });
+        successful++;
+      } catch (err: any) {
+        processed.push({ path: op.path, success: false, error: err.message });
+      }
+    }
+
+    return {
+      success: processed.every(p => p.success),
+      processed,
+      totalFiles: operations.length,
+      successful,
+      failed: operations.length - successful - skipped,
+      duration: Date.now() - startTime,
+    };
+  }
+
+  /**
    * Execute batch file write operations
-   * 
-   * @param operations - Array of file operations
-   * @returns Batch operation result
-   * 
-   * @example
-   * ```typescript
-   * const batch = new VFSBatchOperations('user-123');
-   * 
-   * const result = await batch.batchWrite([
-   *   { path: 'src/index.ts', content: '...' },
-   *   { path: 'src/utils.ts', content: '...' },
-   *   { path: 'src/types.ts', content: '...' },
-   * ]);
-   * 
-   * console.log(`Processed ${result.successful}/${result.totalFiles} files`);
-   * ```
    */
   async batchWrite(operations: BatchFileOperation[]): Promise<BatchOperationResult> {
     const startTime = Date.now();

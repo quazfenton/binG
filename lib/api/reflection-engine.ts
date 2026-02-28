@@ -97,7 +97,8 @@ class ReflectionEngine {
    * Perform multi-perspective reflection on content
    */
   async reflect(content: string, context?: Record<string, any>): Promise<ReflectionResult[]> {
-    if (!this.config.enabled || !content) {
+    const isEnabled = process.env.FAST_AGENT_REFLECTION_ENABLED !== 'false' && this.config.enabled;
+    if (!isEnabled || !content) {
       return [];
     }
 
@@ -264,9 +265,17 @@ Provide specific, actionable improvements and rate your confidence (0-1).
    * Check if reflection is needed based on quality threshold
    */
   shouldReflect(qualityScore?: number): boolean {
-    if (!this.config.enabled) return false;
+    const isEnabled = process.env.FAST_AGENT_REFLECTION_ENABLED !== 'false' && this.config.enabled;
+    if (!isEnabled) return false;
     if (!qualityScore) return true; // Reflect if no score available
     return qualityScore < this.config.qualityThreshold;
+  }
+
+  /**
+   * Update engine configuration
+   */
+  updateConfig(config: Partial<ReflectionConfig>): void {
+    this.config = { ...this.config, ...config };
   }
 
   /**

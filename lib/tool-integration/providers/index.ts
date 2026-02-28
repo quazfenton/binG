@@ -247,67 +247,19 @@ export class ComposioToolProvider implements ToolProvider {
     }
 
     try {
-      const toolSlug = String(request.input?.toolSlug || request.config.toolName || '').trim();
-      const session = await this.createSessionIfSupported(request);
-
+      // Handle different types of Composio requests
       if (request.toolKey === 'composio.search_tools') {
-        const searchQuery = String(request.input?.search || '').trim().toLowerCase();
-        const limit = Number(request.input?.limit || 20);
-        let tools: any = null;
-
-        if (session && typeof session.tools === 'function') {
-          tools = await session.tools();
-        } else {
-          tools = await (this.client as any).tools.get(request.context.userId, {
-            ...(searchQuery ? { search: searchQuery } : {}),
-            ...(this.getToolkitsFromRequest(request)?.length
-              ? { toolkits: this.getToolkitsFromRequest(request) }
-              : {}),
-            limit,
-          });
-        }
-
-        const normalized = Array.isArray(tools?.items) ? tools.items : Array.isArray(tools) ? tools : [];
-        const filtered = searchQuery
-          ? normalized.filter((tool: any) => {
-              const haystack = `${tool?.slug || ''} ${tool?.name || ''} ${tool?.description || ''}`.toLowerCase();
-              return haystack.includes(searchQuery);
-            })
-          : normalized;
-
-        return {
-          success: true,
-          output: filtered.slice(0, Number.isFinite(limit) ? limit : 20),
-          provider: this.name,
-        };
+        return await this.handleSearchTools(request);
+      } else if (request.toolKey === 'composio.execute_tool') {
+        return await this.handleExecuteTool(request);
+      } else if (request.toolKey === 'composio.agentic_loop') {
+        return await this.handleAgenticLoop(request);
+      } else if (request.toolKey === 'composio.mcp_config') {
+        return await this.handleMcpConfig(request);
       }
 
-      const args = request.input?.arguments || request.input || {};
-      const result = await (this.client as any).tools.execute(toolSlug, {
-        userId: request.context.userId,
-        arguments: args,
-        dangerouslySkipVersionCheck: true,
-      });
-
-      const authRequired = result?.successful === false && /auth|required|connect/i.test(JSON.stringify(result));
-      return {
-        success: !authRequired,
-        output: {
-          ...result,
-          ...(session?.mcp?.url
-            ? {
-                mcp: {
-                  url: session.mcp.url,
-                  headers: session.mcp.headers,
-                },
-              }
-            : {}),
-        },
-        error: authRequired ? 'Authorization required for Composio tool' : undefined,
-        authRequired,
-        authUrl: authRequired ? buildProviderAuthUrl(String(toolSlug).split('_')[0].toLowerCase()) : undefined,
-        provider: this.name,
-      };
+      // Default to tool execution
+      return await this.handleExecuteTool(request);
     } catch (error: any) {
       const message = String(error?.message || 'Composio tool execution failed');
       const authRequired = /auth|required|connect/i.test(message);
@@ -316,6 +268,158 @@ export class ComposioToolProvider implements ToolProvider {
         error: message,
         authRequired,
         authUrl: authRequired ? buildProviderAuthUrl('google') : undefined,
+        provider: this.name,
+      };
+    }
+  }
+
+  /**
+   * Handle tool search requests
+   */
+  private async handleSearchTools(request: ProviderExecutionRequest): Promise<ToolExecutionResult> {
+    const searchQuery = String(request.input?.search || '').trim().toLowerCase();
+    const limit = Number(request.input?.limit || 20);
+    const session = await this.createSessionIfSupported(request);
+    
+    let tools: any = null;
+
+    if (session && typeof session.tools === 'function') {
+      tools = await session.tools();
+    } else {
+      tools = await (this.client as any).tools.get(request.context.userId, {
+        ...(searchQuery ? { search: searchQuery } : {}),
+        ...(this.getToolkitsFromRequest(request)?.length
+          ? { toolkits: this.getToolkitsFromRequest(request) }
+          : {}),
+        limit,
+      });
+    }
+
+    const normalized = Array.isArray(tools?.items) ? tools.items : Array.isArray(tools) ? tools : [];
+    const filtered = searchQuery
+      ? normalized.filter((tool: any) => {
+          const haystack = `${tool?.slug || ''} ${tool?.name || ''} ${tool?.description || ''}`.toLowerCase();
+          return haystack.includes(searchQuery);
+        })
+      : normalized;
+
+    return {
+      success: true,
+      output: filtered.slice(0, Number.isFinite(limit) ? limit : 20),
+      provider: this.name,
+    };
+  }
+
+  /**
+   * Handle individual tool execution
+   */
+  private async handleExecuteTool(request: ProviderExecutionRequest): Promise<ToolExecutionResult> {
+    const toolSlug = String(request.input?.toolSlug || request.config.toolName || '').trim();
+    const session = await this.createSessionIfSupported(request);
+    
+    const args = request.input?.arguments || request.input || {};
+    const result = await (this.client as any).tools.execute(toolSlug, {
+      userId: request.context.userId,
+      arguments: args,
+      dangerouslySkipVersionCheck: true,
+    });
+
+    const authRequired = result?.successful === false && /auth|required|connect/i.test(JSON.stringify(result));
+    return {
+      success: !authRequired,
+      output: {
+        ...result,
+        ...(session?.mcp?.url
+          ? {
+              mcp: {
+                url: session.mcp.url,
+                headers: session.mcp.headers,
+              },
+            }
+          : {}),
+      },
+      error: authRequired ? 'Authorization required for Composio tool' : undefined,
+      authRequired,
+      authUrl: authRequired ? buildProviderAuthUrl(String(toolSlug).split('_')[0].toLowerCase()) : undefined,
+      provider: this.name,
+    };
+  }
+
+  /**
+   * Handle agentic loop with multiple tool calls
+   */
+  private async handleAgenticLoop(request: ProviderExecutionRequest): Promise<ToolExecutionResult> {
+    const { task, model, maxIterations = 10 } = request.input || {};
+    if (!task) {
+      return {
+        success: false,
+        error: 'Task is required for agentic loop',
+        provider: this.name,
+      };
+    }
+
+    try {
+      // This would integrate with AI provider to run the full agentic loop
+      // For now, we'll simulate the functionality
+      const session = await this.createSessionIfSupported(request);
+      const tools = await session.tools();
+      
+      // In a full implementation, this would:
+      // 1. Initialize an AI agent with the tools
+      // 2. Run the agent with the given task
+      // 3. Handle the complete loop including tool execution and result processing
+      
+      return {
+        success: true,
+        output: {
+          task,
+          toolsUsed: tools.slice(0, 5), // Return first 5 tools as example
+          status: 'agentic_loop_initiated',
+          mcpConfig: session?.mcp ? {
+            url: session.mcp.url,
+            headers: session.mcp.headers,
+          } : undefined,
+        },
+        provider: this.name,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: `Agentic loop failed: ${error.message}`,
+        provider: this.name,
+      };
+    }
+  }
+
+  /**
+   * Handle MCP configuration requests
+   */
+  private async handleMcpConfig(request: ProviderExecutionRequest): Promise<ToolExecutionResult> {
+    try {
+      const session = await this.createSessionIfSupported(request);
+      
+      if (!session?.mcp) {
+        return {
+          success: false,
+          error: 'MCP configuration not available for this session',
+          provider: this.name,
+        };
+      }
+
+      return {
+        success: true,
+        output: {
+          mcp: {
+            url: session.mcp.url,
+            headers: session.mcp.headers,
+          },
+        },
+        provider: this.name,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: `MCP config retrieval failed: ${error.message}`,
         provider: this.name,
       };
     }

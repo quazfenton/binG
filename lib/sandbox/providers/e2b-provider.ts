@@ -21,8 +21,9 @@
 
 import { resolve, relative, join, dirname } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import { quotaManager } from '@/lib/services/quota-manager'
-import { e2bDesktopProvider, type DesktopHandle, type E2BDesktopConfig } from './e2b-desktop-provider'
+import { quotaManager } from '../../services/quota-manager'
+import { SandboxSecurityManager } from '../security-manager'
+import { E2BDesktopProvider, type DesktopHandle, type E2BDesktopConfig } from './e2b-desktop-provider'
 import { 
   createAmpService, 
   type E2BAmpService, 
@@ -417,11 +418,14 @@ class E2BSandboxHandle implements SandboxHandle {
    */
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
     try {
+      // ✅ ENHANCED: Use centralized security validation
+      const sanitized = SandboxSecurityManager.validateAndSanitizeCommand(command)
+      
       const workingDir = cwd || this.workspaceDir
       const cmdTimeout = Math.min(timeout || E2B_MAX_COMMAND_TIMEOUT, E2B_MAX_COMMAND_TIMEOUT)
 
       // Run command via sandbox.commands
-      const result = await this.sandbox.commands.run(command, {
+      const result = await this.sandbox.commands.run(sanitized, {
         cwd: workingDir,
         timeout: cmdTimeout,
       })
@@ -432,6 +436,16 @@ class E2BSandboxHandle implements SandboxHandle {
         exitCode: result.exitCode,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+          exitCode: -1,
+        }
+      }
+      
       console.error('[E2B] Command execution error:', error)
       return {
         success: false,
@@ -471,10 +485,15 @@ class E2BSandboxHandle implements SandboxHandle {
    */
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(filePath)
+      // ✅ ENHANCED: Use centralized security validation
+      const { resolvedPath, validatedContent } = SandboxSecurityManager.validateWriteFile(
+        filePath,
+        content,
+        this.workspaceDir
+      )
 
       // Ensure directory exists
-      const dir = dirname(resolved)
+      const dir = dirname(resolvedPath)
       if (dir !== '/') {
         // Shell-escape the directory path to prevent command injection
         const escapedDir = dir.replace(/'/g, "'\\''")
@@ -482,13 +501,22 @@ class E2BSandboxHandle implements SandboxHandle {
       }
 
       // Write file using sandbox filesystem
-      await this.sandbox.files.write(resolved, content)
+      await this.sandbox.files.write(resolvedPath, validatedContent)
 
       return {
         success: true,
-        output: `File written: ${resolved}`,
+        output: `File written: ${resolvedPath}`,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       console.error('[E2B] Write file error:', error)
       return {
         success: false,
@@ -502,7 +530,8 @@ class E2BSandboxHandle implements SandboxHandle {
    */
   async readFile(filePath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(filePath)
+      // ✅ ENHANCED: Validate path before reading
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath)
       const content = await this.sandbox.files.read(resolved)
 
       return {
@@ -510,6 +539,15 @@ class E2BSandboxHandle implements SandboxHandle {
         output: content,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       console.error('[E2B] Read file error:', error)
       return {
         success: false,
@@ -523,12 +561,13 @@ class E2BSandboxHandle implements SandboxHandle {
    */
   async listDirectory(dirPath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(dirPath)
+      // ✅ ENHANCED: Validate path before listing
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath)
 
       // Use ls command for directory listing with shell-escaped path
       const escapedPath = resolved.replace(/'/g, "'\\''")
       const result = await this.sandbox.commands.run(`ls -la '${escapedPath}'`)
-      
+
       if (result.exitCode !== 0) {
         return {
           success: false,
@@ -541,6 +580,15 @@ class E2BSandboxHandle implements SandboxHandle {
         output: result.stdout || '(empty directory)',
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       console.error('[E2B] List directory error:', error)
       return {
         success: false,
@@ -554,7 +602,8 @@ class E2BSandboxHandle implements SandboxHandle {
    */
   async uploadFile(localPath: string, sandboxPath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(sandboxPath)
+      // ✅ ENHANCED: Use centralized security validation
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, sandboxPath)
 
       // Read file content as Buffer to support both text and binary files
       const content = await readFile(localPath)
@@ -567,6 +616,15 @@ class E2BSandboxHandle implements SandboxHandle {
         output: `File uploaded: ${resolved}`,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       console.error('[E2B] Upload file error:', error)
       return {
         success: false,
@@ -580,7 +638,8 @@ class E2BSandboxHandle implements SandboxHandle {
    */
   async downloadFile(sandboxPath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(sandboxPath)
+      // ✅ ENHANCED: Validate path before reading
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, sandboxPath)
       const content = await this.sandbox.files.read(resolved)
 
       return {
@@ -588,6 +647,15 @@ class E2BSandboxHandle implements SandboxHandle {
         output: content,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       console.error('[E2B] Download file error:', error)
       return {
         success: false,
@@ -719,8 +787,8 @@ class E2BSandboxHandle implements SandboxHandle {
     dirPath: string,
     callback: (event: FilesystemEvent) => void
   ): Promise<WatchHandle> {
-    const resolved = this.resolvePath(dirPath)
-    
+    const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath)
+
     const watchHandle = await this.sandbox.files.watch(resolved, {
       callback: (event: any) => {
         callback({
@@ -890,23 +958,6 @@ class E2BSandboxHandle implements SandboxHandle {
   }
 
   /**
-   * Resolve and validate file path (prevent path traversal)
-   */
-  private resolvePath(filePath: string): string {
-    const resolved = filePath.startsWith('/')
-      ? resolve(filePath)
-      : resolve(this.workspaceDir, filePath)
-
-    // Ensure path stays within workspace
-    const rel = relative(this.workspaceDir, resolved)
-    if (rel.startsWith('..') || resolved === '..' || resolve(this.workspaceDir, rel) !== resolved) {
-      throw new Error(`Path traversal rejected: ${filePath}`)
-    }
-
-    return resolved
-  }
-
-  /**
    * Get sandbox info
    */
   async getInfo(): Promise<{
@@ -1050,9 +1101,6 @@ class E2BPtyHandle implements PtyHandle {
   }
 }
 
-// Export singleton instance
-export const e2bProvider = new E2BProvider()
-
 /**
  * E2B Git Integration Extensions
  * Based on documentation: https://e2b.mintlify.app/docs/sandbox/git-integration
@@ -1113,7 +1161,7 @@ export class E2BGitIntegration {
    */
   async run(command: string): Promise<ToolResult> {
     try {
-      const result = await this.sandbox.git.run(command)
+      const result = await this.sandbox.commands.run(`git ${command}`)
       return {
         success: result.exitCode === 0,
         output: result.stdout || result.stderr || '',
@@ -1127,6 +1175,29 @@ export class E2BGitIntegration {
       }
     }
   }
+
+  /**
+   * Get git status
+   */
+  async status(): Promise<{ success: boolean; status: any; error?: string }> {
+    try {
+      const result = await this.run('status --json')
+      return {
+        success: result.success,
+        status: result.output ? JSON.parse(result.output) : {},
+      }
+    } catch (error: any) {
+      return { success: false, status: null, error: error.message }
+    }
+  }
+
+  /**
+   * Get git diff
+   */
+  async diff(): Promise<string> {
+    const result = await this.run('diff')
+    return result.output || ''
+  }
 }
 
 /**
@@ -1135,3 +1206,6 @@ export class E2BGitIntegration {
 export function createE2BGitIntegration(sandbox: E2BSandboxType): E2BGitIntegration {
   return new E2BGitIntegration(sandbox)
 }
+
+// Export singleton instance
+export const e2bProvider = new E2BProvider()

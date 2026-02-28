@@ -241,3 +241,6 @@ export function createNangoSyncTools() {
     },
   ];
 }
+
+// Alias for backwards compatibility
+export const nangoSyncTools = createNangoSyncTools;

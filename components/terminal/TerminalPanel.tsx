@@ -12,6 +12,9 @@ import { motion } from 'framer-motion';
 import { saveTerminalSession, getTerminalSessions, addCommandToHistory } from '@/lib/terminal/terminal-storage';
 import { secureRandom, generateSecureId } from '@/lib/utils';
 import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '@/lib/terminal/terminal-security';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('TerminalPanel');
 
 interface TerminalPanelProps {
   userId?: string;
@@ -147,6 +150,7 @@ export default function TerminalPanel({
   const commandHistoryRef = useRef<Record<string, string[]>>({});
   const historyIndexRef = useRef<Record<string, number>>({});
   const lineBufferRef = useRef<Record<string, string>>({});
+  const cursorPosRef = useRef<Record<string, number>>({});
   const editorSessionRef = useRef<Record<string, {
     type: 'nano' | 'vim' | 'vi';
     filePath: string;
@@ -154,7 +158,8 @@ export default function TerminalPanel({
     cursor: number;
   } | null>>({});
   const connectAbortRef = useRef<Record<string, AbortController>>({});
-  
+  const connectTerminalRef = useRef<(terminalId: string) => Promise<void>>();
+
   // Input batching to reduce HTTP overhead (ARCH 4)
   const inputBatchRef = useRef<Record<string, string>>({});
   const inputFlushRef = useRef<Record<string, NodeJS.Timeout>>({});
@@ -215,6 +220,22 @@ export default function TerminalPanel({
     return () => clearTimeout(timer);
   }, [isExpanded, isSplitView, activeTerminalId, isMinimized]);
 
+  // Refit terminal when switching tabs - DO NOT re-initialize
+  useEffect(() => {
+    if (activeTerminalId) {
+      const term = terminalsRef.current.find(t => t.id === activeTerminalId);
+      if (term?.fitAddon && term.terminal) {
+        const timer = setTimeout(() => {
+          try {
+            term.fitAddon.fit();
+            term.terminal.focus();
+          } catch {}
+        }, 50);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [activeTerminalId]);
+
   useEffect(() => {
     const handleResize = () => {
       terminalsRef.current.forEach(t => {
@@ -226,6 +247,18 @@ export default function TerminalPanel({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Listen for auto-connect events from conversation interface
+  useEffect(() => {
+    const handleAutoConnect = () => {
+      if (activeTerminalId) {
+        connectTerminal(activeTerminalId);
+      }
+    };
+
+    window.addEventListener('terminal-auto-connect', handleAutoConnect);
+    return () => window.removeEventListener('terminal-auto-connect', handleAutoConnect);
+  }, [activeTerminalId]);
 
   const createTerminal = useCallback((name?: string, sandboxInfo?: any) => {
     const id = generateSecureId('terminal');
@@ -248,6 +281,7 @@ export default function TerminalPanel({
     commandHistoryRef.current[id] = [];
     historyIndexRef.current[id] = -1;
     lineBufferRef.current[id] = '';
+    cursorPosRef.current[id] = 0;
     editorSessionRef.current[id] = null;
 
     // Load persisted command history
@@ -259,17 +293,19 @@ export default function TerminalPanel({
         historyIndexRef.current[id] = savedSession.commandHistory.length;
       }
     } catch (err) {
-      console.warn('[TerminalPanel] Failed to load command history:', err);
+      logger.warn('Failed to load command history', err);
     }
 
     setTerminals(prev => [...prev, newTerminal]);
     setActiveTerminalId(id);
-    
-    // Auto-connect in background after a tick (allow xterm to init first)
-    setTimeout(() => connectTerminal(id), 500);
-    
+
+    // Auto-connect to sandbox after terminal is created (for better UX)
+    setTimeout(() => {
+      connectTerminal(id);
+    }, 1000);
+
     return id;
-  }, [connectTerminal]);
+  }, []);
 
   const closeTerminal = useCallback((terminalId: string) => {
     const terminal = terminalsRef.current.find(t => t.id === terminalId);
@@ -277,9 +313,20 @@ export default function TerminalPanel({
       terminal.eventSource?.close();
       terminal.websocket?.close();
       terminal.terminal?.dispose();
+      terminal.xtermRef.current = null;
       // Abort any pending connection
       connectAbortRef.current[terminalId]?.abort();
       delete connectAbortRef.current[terminalId];
+      // Clear connection timeout
+      if ((terminal as any).__connectionTimeout) {
+        clearTimeout((terminal as any).__connectionTimeout);
+        delete (terminal as any).__connectionTimeout;
+      }
+      // Clear spinner interval
+      if ((terminal as any).__spinnerInterval) {
+        clearInterval((terminal as any).__spinnerInterval);
+        delete (terminal as any).__spinnerInterval;
+      }
 
       // Flush any pending input and clear timers
       if (inputFlushRef.current[terminalId]) {
@@ -297,7 +344,7 @@ export default function TerminalPanel({
       try {
         addCommandToHistory(terminalId, history);
       } catch (err) {
-        console.warn('[TerminalPanel] Failed to save command history:', err);
+        logger.warn('Failed to save command history', err);
       }
     }
     
@@ -308,6 +355,7 @@ export default function TerminalPanel({
     delete historyIndexRef.current[terminalId];
     delete lineBufferRef.current[terminalId];
     delete editorSessionRef.current[terminalId];
+    delete cursorPosRef.current[terminalId];
 
     setTerminals(prev => {
       const updated = prev.filter(t => t.id !== terminalId);
@@ -450,7 +498,7 @@ export default function TerminalPanel({
         
         // Log blocked command for security monitoring
         if (DEFAULT_SECURITY_CONFIG.logBlockedCommands) {
-          console.warn('[TerminalSecurity] Blocked command:', {
+          logger.warn('Blocked command', {
             command: trimmed,
             reason: securityResult.reason,
             severity: securityResult.severity,
@@ -924,7 +972,9 @@ export default function TerminalPanel({
 
       case 'connect': {
         writeLine('\x1b[33mInitiating sandbox connection...\x1b[0m');
-        return false;
+        // Trigger actual connection
+        connectTerminal(terminalId);
+        return false; // Don't show prompt, connection will handle it
       }
 
       case 'disconnect': {
@@ -1120,9 +1170,89 @@ export default function TerminalPanel({
     }
   }, [updateTerminalState, syncFileToVFS]);
 
+  const sendInput = useCallback(async (sessionId: string, data: string) => {
+    // Check if there's a WebSocket available for this session
+    const term = terminalsRef.current.find(t => t.sandboxInfo.sessionId === sessionId && t.websocket && t.websocket.readyState === WebSocket.OPEN);
+
+    if (term?.websocket) {
+      // Use WebSocket for bidirectional streaming (ARCH 4 improvement)
+      term.websocket.send(JSON.stringify({ type: 'input', data }));
+      return;
+    }
+
+    // Batch keystrokes with 50ms debounce to reduce HTTP overhead while maintaining responsiveness
+    inputBatchRef.current[sessionId] = (inputBatchRef.current[sessionId] || '') + data;
+
+    // Clear existing flush timer
+    if (inputFlushRef.current[sessionId]) {
+      clearTimeout(inputFlushRef.current[sessionId]);
+    }
+
+    // Flush after 50ms (better batching for network latency)
+    inputFlushRef.current[sessionId] = setTimeout(async () => {
+      const batch = inputBatchRef.current[sessionId];
+      if (!batch) return;
+
+      inputBatchRef.current[sessionId] = '';
+
+      try {
+        await fetch('/api/sandbox/terminal/input', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+          credentials: 'include',
+          body: JSON.stringify({ sessionId, data: batch }),
+        });
+      } catch {}
+    }, 50);
+  }, []);
+
+  const sendResize = useCallback(async (sessionId: string, cols: number, rows: number) => {
+    // Check if there's a WebSocket available for this session
+    const term = terminalsRef.current.find(t => t.sandboxInfo.sessionId === sessionId && t.websocket && t.websocket.readyState === WebSocket.OPEN);
+
+    if (term?.websocket) {
+      // Use WebSocket for resize (lower latency)
+      term.websocket.send(JSON.stringify({ type: 'resize', cols, rows }));
+      return;
+    }
+
+    // Fallback to HTTP POST
+    try {
+      await fetch('/api/sandbox/terminal/resize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ sessionId, cols, rows }),
+      });
+    } catch {}
+  }, []);
+
   const initXterm = useCallback(async (terminalId: string, containerEl: HTMLDivElement) => {
     const existing = terminalsRef.current.find(t => t.id === terminalId);
-    if (!existing || existing.terminal) return;
+    
+    // CRITICAL: Prevent double initialization - check multiple times
+    if (!existing) {
+      console.warn('[TerminalPanel] Terminal not found during init:', terminalId);
+      return;
+    }
+    
+    if (existing.terminal) {
+      console.log('[TerminalPanel] Terminal already initialized, skipping:', terminalId);
+      return;
+    }
+    
+    // Set initializing flag to prevent concurrent init attempts
+    if ((existing as any)._initializing) {
+      console.log('[TerminalPanel] Terminal already initializing, skipping:', terminalId);
+      return;
+    }
+    (existing as any)._initializing = true;
 
     try {
       const { Terminal } = await import('@xterm/xterm');
@@ -1172,12 +1302,12 @@ export default function TerminalPanel({
         terminal.focus();
       });
 
-      terminal.writeln('\x1b[1;32m╔═══════════════════════════════════════════════════════════╗\x1b[0m');
-      terminal.writeln('\x1b[1;32m║\x1b[0m  \x1b[1;32m● Terminal Ready\x1b[0m                                  \x1b[1;32m║\x1b[0m');
-      terminal.writeln('\x1b[1;32m║\x1b[0m  \x1b[90mLocal shell mode active immediately.                \x1b[0m\x1b[1;32m║\x1b[0m');
-      terminal.writeln('\x1b[1;32m║\x1b[0m  \x1b[90mType "help" for commands.                         \x1b[0m\x1b[1;32m║\x1b[0m');
-      terminal.writeln('\x1b[1;32m║\x1b[0m  \x1b[90mType "connect" to connect to sandbox.             \x1b[0m\x1b[1;32m║\x1b[0m');
-      terminal.writeln('\x1b[1;32m╚═══════════════════════════════════════════════════════════╝\x1b[0m');
+      // Write welcome message
+      terminal.writeln('');
+      terminal.writeln('\x1b[1;32m● Terminal Ready\x1b[0m');
+      terminal.writeln('\x1b[90m  Local shell mode active immediately.\x1b[0m');
+      terminal.writeln('\x1b[90m  Type "help" for commands.\x1b[0m');
+      terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
       terminal.writeln('');
 
       const cwd = localShellCwdRef.current[terminalId] || 'project';
@@ -1189,6 +1319,8 @@ export default function TerminalPanel({
       if (termRef) {
         termRef.terminal = terminal;
         termRef.fitAddon = fitAddon;
+        // Clear initializing flag
+        (termRef as any)._initializing = false;
       }
 
       terminal.onData((data: string) => {
@@ -1221,13 +1353,112 @@ export default function TerminalPanel({
           return;
         }
 
-        // Use ref for lineBuffer to survive reconnects
+        // Use ref for lineBuffer and cursor position to survive reconnects
         let lineBuffer = lineBufferRef.current[terminalId] || '';
+        let cursorPos = cursorPosRef.current[terminalId] ?? lineBuffer.length;
+
+        if (data === '\u001b[H') {
+          // Home key - move cursor to start
+          cursorPos = 0;
+          cursorPosRef.current[terminalId] = 0;
+          const prompt = getPrompt(term.mode, localShellCwdRef.current[terminalId] || 'project');
+          term.terminal?.write(`\r${prompt}${lineBuffer}\x1b[${prompt.length + 1}G`);
+          return;
+        }
+
+        if (data === '\u001b[F') {
+          // End key - move cursor to end
+          cursorPos = lineBuffer.length;
+          cursorPosRef.current[terminalId] = cursorPos;
+          const prompt = getPrompt(term.mode, localShellCwdRef.current[terminalId] || 'project');
+          term.terminal?.write(`\x1b[G\x1b[${prompt.length + lineBuffer.length + 1}G`);
+          return;
+        }
+
+        if (data === '\u001b[D') {
+          // Left arrow - move cursor left
+          if (cursorPos > 0) {
+            cursorPos--;
+            cursorPosRef.current[terminalId] = cursorPos;
+            term.terminal?.write('\x1b[D');
+          }
+          return;
+        }
+
+        if (data === '\u001b[C') {
+          // Right arrow - move cursor right
+          if (cursorPos < lineBuffer.length) {
+            cursorPos++;
+            cursorPosRef.current[terminalId] = cursorPos;
+            term.terminal?.write('\x1b[C');
+          }
+          return;
+        }
+
+        if (data === '\u007f' || data === '\b') {
+          // Backspace - delete character before cursor
+          if (cursorPos > 0) {
+            const beforeCursor = lineBuffer.slice(0, cursorPos - 1);
+            const afterCursor = lineBuffer.slice(cursorPos);
+            lineBuffer = beforeCursor + afterCursor;
+            lineBufferRef.current[terminalId] = lineBuffer;
+            cursorPos--;
+            cursorPosRef.current[terminalId] = cursorPos;
+            // Clear from cursor to end, then rewrite the rest
+            term.terminal?.write('\x1b[D\x1b[K' + lineBuffer.slice(cursorPos));
+            const moveBack = lineBuffer.length - cursorPos;
+            if (moveBack > 0) {
+              term.terminal?.write(`\x1b[${moveBack}D`);
+            }
+          }
+          return;
+        }
+
+        if (data === '\u007e') {
+          // Delete key - delete character at cursor
+          if (cursorPos < lineBuffer.length) {
+            const beforeCursor = lineBuffer.slice(0, cursorPos);
+            const afterCursor = lineBuffer.slice(cursorPos + 1);
+            lineBuffer = beforeCursor + afterCursor;
+            lineBufferRef.current[terminalId] = lineBuffer;
+            // Clear from cursor to end, then rewrite the rest
+            term.terminal?.write('\x1b[K' + lineBuffer.slice(cursorPos));
+            const moveBack = lineBuffer.length - cursorPos;
+            if (moveBack > 0) {
+              term.terminal?.write(`\x1b[${moveBack}D`);
+            }
+          }
+          return;
+        }
+
+
+        if (data === '\u0015') {
+          // Ctrl+U - clear line from cursor to start
+          if (cursorPos > 0) {
+            lineBuffer = lineBuffer.slice(cursorPos);
+            lineBufferRef.current[terminalId] = lineBuffer;
+            cursorPos = 0;
+            cursorPosRef.current[terminalId] = 0;
+            term.terminal?.write('\r\x1b[K' + getPrompt(term.mode, localShellCwdRef.current[terminalId] || 'project') + lineBuffer);
+          }
+          return;
+        }
+
+        if (data === '\u000b') {
+          // Ctrl+K - clear line from cursor to end
+          if (cursorPos < lineBuffer.length) {
+            lineBuffer = lineBuffer.slice(0, cursorPos);
+            lineBufferRef.current[terminalId] = lineBuffer;
+            term.terminal?.write('\x1b[K');
+          }
+          return;
+        }
 
         if (data === '\r' || data === '\n') {
           term.terminal?.write('\r\n');
           const command = lineBuffer.trim();
           lineBufferRef.current[terminalId] = '';
+          cursorPosRef.current[terminalId] = 0;
 
           if (command) {
             const isConnectCmd = command.trim() === 'connect';
@@ -1263,50 +1494,46 @@ export default function TerminalPanel({
         }
 
         if (data === '\u001b[A') {
+          // Up arrow - previous command in history
           const history = commandHistoryRef.current[terminalId] || [];
-          let idx = historyIndexRef.current[terminalId] ?? -1;
+          let idx = historyIndexRef.current[terminalId] ?? history.length;
           if (idx > 0) {
             idx--;
             historyIndexRef.current[terminalId] = idx;
-            const cmd = history[idx];
-
-            for (let i = 0; i < lineBuffer.length; i++) {
-              term.terminal?.write('\b \b');
-            }
-            lineBufferRef.current[terminalId] = cmd || '';
-            term.terminal?.write(lineBufferRef.current[terminalId]);
+            const cmd = history[idx] || '';
+            // Clear current line and rewrite with history command
+            const prompt = getPrompt(term.mode, localShellCwdRef.current[terminalId] || 'project');
+            term.terminal?.write('\r\x1b[K' + prompt + cmd);
+            lineBufferRef.current[terminalId] = cmd;
+            cursorPosRef.current[terminalId] = cmd.length;
+            // Move cursor back to end of line (after prompt + cmd)
+            term.terminal?.write(`\x1b[${prompt.length + cmd.length + 1}G`);
           }
           return;
         }
 
         if (data === '\u001b[B') {
+          // Down arrow - next command in history
           const history = commandHistoryRef.current[terminalId] || [];
-          let idx = historyIndexRef.current[terminalId] ?? -1;
+          let idx = historyIndexRef.current[terminalId] ?? history.length;
           if (idx < history.length - 1) {
             idx++;
             historyIndexRef.current[terminalId] = idx;
-            const cmd = history[idx];
-
-            for (let i = 0; i < lineBuffer.length; i++) {
-              term.terminal?.write('\b \b');
-            }
-            lineBufferRef.current[terminalId] = cmd || '';
-            term.terminal?.write(lineBufferRef.current[terminalId]);
-          } else if (idx < history.length) {
+            const cmd = history[idx] || '';
+            // Clear current line and rewrite with history command
+            const prompt = getPrompt(term.mode, localShellCwdRef.current[terminalId] || 'project');
+            term.terminal?.write('\r\x1b[K' + prompt + cmd);
+            lineBufferRef.current[terminalId] = cmd;
+            cursorPosRef.current[terminalId] = cmd.length;
+            term.terminal?.write(`\x1b[${prompt.length + cmd.length + 1}G`);
+          } else {
+            // Clear line - no more history
             idx = history.length;
             historyIndexRef.current[terminalId] = idx;
-            for (let i = 0; i < lineBuffer.length; i++) {
-              term.terminal?.write('\b \b');
-            }
+            const prompt = getPrompt(term.mode, localShellCwdRef.current[terminalId] || 'project');
+            term.terminal?.write('\r\x1b[K' + prompt);
             lineBufferRef.current[terminalId] = '';
-          }
-          return;
-        }
-
-        if (data === '\u007f') {
-          if (lineBuffer.length > 0) {
-            lineBufferRef.current[terminalId] = lineBuffer.slice(0, -1);
-            term.terminal?.write('\b \b');
+            cursorPosRef.current[terminalId] = 0;
           }
           return;
         }
@@ -1339,9 +1566,22 @@ export default function TerminalPanel({
           return;
         }
 
-        if (data >= ' ') {
-          lineBufferRef.current[terminalId] = lineBuffer + data;
-          term.terminal?.write(data);
+        if (data >= ' ' || data === '\t') {
+          const beforeCursor = lineBuffer.slice(0, cursorPos);
+          const afterCursor = lineBuffer.slice(cursorPos);
+          lineBuffer = beforeCursor + data + afterCursor;
+          lineBufferRef.current[terminalId] = lineBuffer;
+          cursorPos++;
+          cursorPosRef.current[terminalId] = cursorPos;
+          
+          // Re-render the line from the cursor position onwards
+          term.terminal?.write(data + afterCursor);
+          
+          // Move cursor back if necessary
+          const moveBack = afterCursor.length;
+          if (moveBack > 0) {
+            term.terminal?.write(`\x1b[${moveBack}D`);
+          }
         }
       });
 
@@ -1363,7 +1603,7 @@ export default function TerminalPanel({
       });
 
     } catch (err) {
-      console.error('[TerminalPanel] Failed to load xterm.js:', err);
+      logger.error('Failed to load xterm.js', err as Error);
       toast.error('Failed to initialize terminal. Install @xterm/xterm @xterm/addon-fit @xterm/addon-web-links');
     }
   }, [executeLocalShellCommand, handleEditorInput, updateTerminalState, sendInput, sendResize]);
@@ -1426,73 +1666,14 @@ export default function TerminalPanel({
     }
   }, [sendInput]);
 
-  const sendInput = useCallback(async (sessionId: string, data: string) => {
-    // Check if there's a WebSocket available for this session
-    const term = terminalsRef.current.find(t => t.sandboxInfo.sessionId === sessionId && t.websocket && t.websocket.readyState === WebSocket.OPEN);
-    
-    if (term?.websocket) {
-      // Use WebSocket for bidirectional streaming (ARCH 4 improvement)
-      term.websocket.send(JSON.stringify({ type: 'input', data }));
-      return;
-    }
-
-    // Batch keystrokes with 50ms debounce to reduce HTTP overhead while maintaining responsiveness
-    inputBatchRef.current[sessionId] = (inputBatchRef.current[sessionId] || '') + data;
-
-    // Clear existing flush timer
-    if (inputFlushRef.current[sessionId]) {
-      clearTimeout(inputFlushRef.current[sessionId]);
-    }
-
-    // Flush after 50ms (better batching for network latency)
-    inputFlushRef.current[sessionId] = setTimeout(async () => {
-      const batch = inputBatchRef.current[sessionId];
-      if (!batch) return;
-
-      inputBatchRef.current[sessionId] = '';
-
-      try {
-        await fetch('/api/sandbox/terminal/input', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...getAuthHeaders(),
-          },
-          credentials: 'include',
-          body: JSON.stringify({ sessionId, data: batch }),
-        });
-      } catch {}
-    }, 50);
-  }, []);
-
-  const sendResize = useCallback(async (sessionId: string, cols: number, rows: number) => {
-    // Check if there's a WebSocket available for this session
-    const term = terminalsRef.current.find(t => t.sandboxInfo.sessionId === sessionId && t.websocket && t.websocket.readyState === WebSocket.OPEN);
-    
-    if (term?.websocket) {
-      // Use WebSocket for resize (lower latency)
-      term.websocket.send(JSON.stringify({ type: 'resize', cols, rows }));
-      return;
-    }
-
-    // Fallback to HTTP POST
-    try {
-      await fetch('/api/sandbox/terminal/resize', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders(),
-        },
-        credentials: 'include',
-        body: JSON.stringify({ sessionId, cols, rows }),
-      });
-    } catch {}
-  }, []);
-
   // Spinner animation frames for connecting status
   const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+  // Connection timeout in milliseconds (15 seconds)
+  const CONNECTION_TIMEOUT_MS = 15000;
+
   const connectTerminal = useCallback(async (terminalId: string) => {
+    connectTerminalRef.current = connectTerminal;
     // Abort any pending connection
     connectAbortRef.current[terminalId]?.abort();
     const ac = new AbortController();
@@ -1513,6 +1694,7 @@ export default function TerminalPanel({
     term.terminal?.writeln('');
     term.terminal?.writeln('\x1b[33m⟳ Connecting to sandbox...\x1b[0m');
     term.terminal?.writeln('\x1b[90mThis may take a moment on first connection.\x1b[0m');
+    term.terminal?.writeln('\x1b[90mTimeout after 15s will fall back to command-mode.\x1b[0m');
     term.terminal?.writeln('');
 
     // Start animated spinner during connection
@@ -1530,6 +1712,36 @@ export default function TerminalPanel({
 
     // Store spinner interval reference for cleanup
     (term as any).__spinnerInterval = spinnerInterval;
+
+    // Set connection timeout
+    const connectionTimeout = setTimeout(() => {
+      logger.warn('Connection timeout, falling back to command-mode');
+      const currentTerm = terminalsRef.current.find(t => t.id === terminalId);
+      if (currentTerm && currentTerm.sandboxInfo.status === 'creating') {
+        // Clear spinner
+        if ((currentTerm as any).__spinnerInterval) {
+          clearInterval((currentTerm as any).__spinnerInterval);
+          delete (currentTerm as any).__spinnerInterval;
+        }
+        // Fall back to command-mode
+        const cwd = localShellCwdRef.current[terminalId] || 'project';
+        updateTerminalState(terminalId, {
+          sandboxInfo: { status: 'active' },
+          isConnected: true,
+          mode: 'sandbox-cmd',
+        });
+        currentTerm.sandboxInfo = { status: 'active' };
+        currentTerm.isConnected = true;
+        currentTerm.mode = 'sandbox-cmd';
+        currentTerm.terminal?.writeln('');
+        currentTerm.terminal?.writeln('\x1b[33m⚠ Connection timeout. Using command-mode.\x1b[0m');
+        currentTerm.terminal?.writeln('\x1b[90mCommands execute line-by-line. Type "connect" to retry PTY.\x1b[0m');
+        currentTerm.terminal?.writeln('');
+        currentTerm.terminal?.write(`\x1b[1;32m${cwd.replace(/^project/, '~')}$\x1b[0m `);
+      }
+    }, CONNECTION_TIMEOUT_MS);
+
+    (term as any).__connectionTimeout = connectionTimeout;
 
     try {
       const sessionRes = await fetch('/api/sandbox/terminal', {
@@ -1565,10 +1777,10 @@ export default function TerminalPanel({
           const tokenData = await tokenRes.json();
           connectionToken = tokenData.connectionToken;
         } else {
-          console.warn('[TerminalPanel] Connection token endpoint not available');
+          logger.warn('Connection token endpoint not available');
         }
       } catch (err) {
-        console.warn('[TerminalPanel] Failed to get connection token:', err);
+        logger.warn('Failed to get connection token', err as Error);
       }
 
       // Try WebSocket first if available (WebSocket upgrade for bidirectional streaming)
@@ -1586,8 +1798,14 @@ export default function TerminalPanel({
           const ws = new WebSocket(wsUrl);
           term.websocket = ws;
 
+          // Reconnection state
+          let reconnectAttempts = 0;
+          const MAX_RECONNECT_ATTEMPTS = 5;
+          const INITIAL_RECONNECT_DELAY = 1000; // 1 second
+
           ws.onopen = () => {
-            console.log('[TerminalPanel] WebSocket connected');
+            reconnectAttempts = 0; // Reset on successful connection
+            logger.debug('WebSocket connected', { sessionId, sandboxId });
           };
 
           ws.onmessage = (wsEvent) => {
@@ -1609,6 +1827,11 @@ export default function TerminalPanel({
                   if (termWithSpinner && (termWithSpinner as any).__spinnerInterval) {
                     clearInterval((termWithSpinner as any).__spinnerInterval);
                     delete (termWithSpinner as any).__spinnerInterval;
+                  }
+                  // Clear connection timeout
+                  if (termWithSpinner && (termWithSpinner as any).__connectionTimeout) {
+                    clearTimeout((termWithSpinner as any).__connectionTimeout);
+                    delete (termWithSpinner as any).__connectionTimeout;
                   }
 
                   updateTerminalState(terminalId, {
@@ -1697,6 +1920,11 @@ export default function TerminalPanel({
                     clearInterval((termWithError as any).__spinnerInterval);
                     delete (termWithError as any).__spinnerInterval;
                   }
+                  // Clear connection timeout
+                  if (termWithError && (termWithError as any).__connectionTimeout) {
+                    clearTimeout((termWithError as any).__connectionTimeout);
+                    delete (termWithError as any).__connectionTimeout;
+                  }
 
                   currentTerm.terminal.writeln(`\x1b[31m${msg.data}\x1b[0m`);
                   if (!currentTerm.isConnected) {
@@ -1727,16 +1955,65 @@ export default function TerminalPanel({
           };
 
           ws.onerror = () => {
-            console.warn('[TerminalPanel] WebSocket error, falling back to SSE');
+            logger.warn('WebSocket error, falling back to SSE');
             ws.close();
-            // Fall through to SSE implementation
-            throw new Error('WebSocket failed');
+            // Fall through to SSE implementation - don't throw, just let code continue
           };
 
-          ws.onclose = () => {
+          ws.onclose = (event) => {
             const currentTerm = terminalsRef.current.find(t => t.id === terminalId);
-            if (currentTerm?.isConnected) {
-              currentTerm.terminal?.writeln('\x1b[31m⚠ Connection lost. Reconnecting...\x1b[0m');
+            
+            // Don't reconnect if already in command-mode or explicitly closed
+            if (!currentTerm?.isConnected || currentTerm.mode === 'sandbox-cmd') {
+              return;
+            }
+
+            // Attempt reconnection with exponential backoff
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+              const delay = INITIAL_RECONNECT_DELAY * Math.pow(2, reconnectAttempts);
+              reconnectAttempts++;
+              
+              logger.info('WebSocket closed, attempting reconnection', {
+                attempt: reconnectAttempts,
+                maxAttempts: MAX_RECONNECT_ATTEMPTS,
+                delay,
+              });
+
+              currentTerm.terminal?.writeln(`\x1b[33m⚠ Connection lost. Reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...\x1b[0m`);
+
+              setTimeout(() => {
+                // Reconnect with same parameters
+                const tokenParam = connectionToken
+                  ? `?token=${encodeURIComponent(connectionToken)}`
+                  : '';
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const newWsUrl = `${wsProtocol}//${window.location.host}/api/sandbox/terminal/ws${tokenParam}&sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}`;
+                
+                const newWs = new WebSocket(newWsUrl);
+                currentTerm.websocket = newWs;
+                
+                // Re-attach handlers (simplified - would need to extract handler logic)
+                newWs.onopen = () => {
+                  reconnectAttempts = 0;
+                  logger.debug('WebSocket reconnected');
+                  currentTerm.terminal?.writeln('\x1b[32m✓ Reconnected!\x1b[0m');
+                };
+                newWs.onmessage = ws.onmessage;
+                newWs.onerror = ws.onerror;
+                newWs.onclose = ws.onclose;
+              }, delay);
+            } else {
+              // Max reconnection attempts reached, fall back to command-mode
+              logger.warn('WebSocket reconnection failed, falling back to command-mode');
+              currentTerm.terminal?.writeln('\x1b[31m⚠ Reconnection failed. Falling back to command-mode.\x1b[0m');
+              currentTerm.terminal?.writeln('\x1b[90mType "connect" to retry PTY.\x1b[0m');
+              
+              updateTerminalState(terminalId, {
+                isConnected: false,
+                mode: 'sandbox-cmd',
+              });
+              currentTerm.isConnected = false;
+              currentTerm.mode = 'sandbox-cmd';
             }
           };
 
@@ -1762,7 +2039,7 @@ export default function TerminalPanel({
 
           return; // WebSocket path successful, exit early
         } catch (wsError) {
-          console.warn('[TerminalPanel] WebSocket not available, using SSE fallback');
+          logger.warn('WebSocket not available, using SSE fallback', wsError as Error);
           // Fall through to SSE implementation
         }
       }
@@ -1794,6 +2071,11 @@ export default function TerminalPanel({
               if (termWithSpinner && (termWithSpinner as any).__spinnerInterval) {
                 clearInterval((termWithSpinner as any).__spinnerInterval);
                 delete (termWithSpinner as any).__spinnerInterval;
+              }
+              // Clear connection timeout
+              if (termWithSpinner && (termWithSpinner as any).__connectionTimeout) {
+                clearTimeout((termWithSpinner as any).__connectionTimeout);
+                delete (termWithSpinner as any).__connectionTimeout;
               }
 
               updateTerminalState(terminalId, {
@@ -1882,6 +2164,11 @@ export default function TerminalPanel({
                 clearInterval((termWithError as any).__spinnerInterval);
                 delete (termWithError as any).__spinnerInterval;
               }
+              // Clear connection timeout
+              if (termWithError && (termWithError as any).__connectionTimeout) {
+                clearTimeout((termWithError as any).__connectionTimeout);
+                delete (termWithError as any).__connectionTimeout;
+              }
 
               currentTerm.terminal.writeln(`\x1b[31m${msg.data}\x1b[0m`);
               if (!currentTerm.isConnected) {
@@ -1944,6 +2231,11 @@ export default function TerminalPanel({
         clearInterval((termWithError as any).__spinnerInterval);
         delete (termWithError as any).__spinnerInterval;
       }
+      // Clear connection timeout
+      if (termWithError && (termWithError as any).__connectionTimeout) {
+        clearTimeout((termWithError as any).__connectionTimeout);
+        delete (termWithError as any).__connectionTimeout;
+      }
 
       const errMsg = error instanceof Error ? error.message : 'Unknown error';
       updateTerminalState(terminalId, {
@@ -1965,11 +2257,53 @@ export default function TerminalPanel({
     }
   }, [updateTerminalState, sendResize, sendInput]);
 
+  // Periodic health check for connected terminals
+  // Checks connection status every 30 seconds for active PTY terminals
+  useEffect(() => {
+    const HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
+    
+    const healthCheckInterval = setInterval(() => {
+      terminalsRef.current.forEach(term => {
+        if (term.mode === 'pty' && term.isConnected && term.websocket) {
+          // Check WebSocket readyState
+          if (term.websocket.readyState === WebSocket.CLOSED) {
+            logger.warn('Terminal health check: WebSocket closed', {
+              terminalId: term.id,
+              sandboxId: term.sandboxInfo.sandboxId,
+            });
+            // Trigger reconnection
+            term.websocket = null;
+            term.isConnected = false;
+            updateTerminalState(term.id, { isConnected: false, mode: 'sandbox-cmd' });
+            term.terminal?.writeln('\x1b[31m⚠ Connection lost detected. Type "connect" to reconnect.\x1b[0m');
+          } else if (term.websocket.readyState === WebSocket.CLOSING) {
+            logger.debug('Terminal health check: WebSocket closing', {
+              terminalId: term.id,
+            });
+          }
+        }
+      });
+    }, HEALTH_CHECK_INTERVAL);
+
+    return () => clearInterval(healthCheckInterval);
+  }, [updateTerminalState]);
+
   const setXtermContainer = useCallback((terminalId: string) => (el: HTMLDivElement | null) => {
     if (el) {
       const term = terminalsRef.current.find(t => t.id === terminalId);
-      if (term && !term.terminal) {
+      // CRITICAL FIX: Prevent double initialization
+      // Only init if terminal instance doesn't exist AND we haven't already started init
+      if (term && !term.terminal && !term.xtermRef.current) {
+        term.xtermRef.current = el;
         initXterm(terminalId, el);
+      } else if (term && term.terminal && term.xtermRef.current !== el && el) {
+        // Re-attach if container changed (e.g., tab switch)
+        term.xtermRef.current = el;
+        // Refit terminal to new container
+        try {
+          term.fitAddon?.fit();
+          term.terminal.focus();
+        } catch {}
       }
     }
   }, [initXterm]);
@@ -2059,17 +2393,23 @@ export default function TerminalPanel({
 
   const toggleSplitView = useCallback(() => {
     if (isSplitView) {
-      if (terminals.length > 1) {
-        killTerminal(terminals[terminals.length - 1].id);
-      }
+      // Just disable split view, don't kill terminals
       setIsSplitView(false);
     } else {
+      // Enable split view - create second terminal if needed
       if (terminals.length < 2) {
-        createTerminal('Terminal 2');
+        const newId = createTerminal('Terminal 2');
+        // Ensure the new terminal is initialized
+        setTimeout(() => {
+          const term = terminalsRef.current.find(t => t.id === newId);
+          if (term?.xtermRef.current && !term.terminal) {
+            initXterm(newId, term.xtermRef.current);
+          }
+        }, 100);
       }
       setIsSplitView(true);
     }
-  }, [isSplitView, terminals, killTerminal, createTerminal]);
+  }, [isSplitView, terminals.length, createTerminal, initXterm]);
 
   const getModeIndicator = (mode: TerminalMode, status: string) => {
     switch (mode) {
@@ -2087,6 +2427,58 @@ export default function TerminalPanel({
         return { icon: <WifiOff className="w-3 h-3" />, text: 'Unknown', color: 'text-gray-400' };
     }
   };
+
+  const activeTerminal = terminals.find(t => t.id === activeTerminalId);
+  const modeInfo = activeTerminal ? getModeIndicator(activeTerminal.mode, activeTerminal.sandboxInfo.status) : null;
+
+  // Memoize terminal tab rendering for performance (MUST be before early returns)
+  const renderTerminalTab = useCallback((terminal: TerminalInstance) => {
+    const isActive = activeTerminalId === terminal.id;
+    return (
+      <div
+        key={terminal.id}
+        role="tab"
+        aria-selected={isActive}
+        aria-controls={`terminal-panel-${terminal.id}`}
+        tabIndex={isActive ? 0 : -1}
+        className={`flex items-center gap-2 px-3 py-1 rounded text-xs cursor-pointer transition-colors ${
+          isActive
+            ? 'bg-white/15 text-white'
+            : 'text-white/50 hover:text-white hover:bg-white/5'
+        }`}
+        onClick={() => setActiveTerminalId(terminal.id)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setActiveTerminalId(terminal.id);
+          }
+        }}
+      >
+        <span className="flex items-center gap-1">
+          <span className={`w-1.5 h-1.5 rounded-full ${
+            terminal.mode === 'pty' ? 'bg-green-400 animate-pulse' :
+            terminal.mode === 'connecting' ? 'bg-yellow-400 animate-pulse' :
+            terminal.mode === 'sandbox-cmd' ? 'bg-purple-400' :
+            terminal.mode === 'editor' ? 'bg-orange-400' :
+            'bg-blue-400'
+          }`} />
+          {terminal.name}
+        </span>
+        {terminals.length > 1 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              closeTerminal(terminal.id);
+            }}
+            className="hover:text-red-400 transition-colors"
+            aria-label={`Close ${terminal.name}`}
+          >
+            <X className="w-3 h-3" />
+          </button>
+        )}
+      </div>
+    );
+  }, [activeTerminalId, terminals.length, closeTerminal]);
 
   if (!isOpen) return null;
 
@@ -2122,9 +2514,6 @@ export default function TerminalPanel({
     );
   }
 
-  const activeTerminal = terminals.find(t => t.id === activeTerminalId);
-  const modeInfo = activeTerminal ? getModeIndicator(activeTerminal.mode, activeTerminal.sandboxInfo.status) : null;
-
   return (
     <motion.div
       initial={{ y: 100, opacity: 0 }}
@@ -2133,53 +2522,24 @@ export default function TerminalPanel({
       className={`fixed bottom-0 left-0 right-0 z-50 bg-black/95 border-t border-white/10 backdrop-blur-sm flex flex-col ${
         isExpanded ? 'h-[80vh]' : 'h-[55vh] sm:h-[450px]'
       }`}
+      role="application"
+      aria-label="Terminal panel"
     >
       <div className="flex items-center justify-between px-2 sm:px-4 py-2 border-b border-white/10 bg-black/50 shrink-0 gap-2">
         <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0 overflow-hidden">
           <div className="flex items-center gap-2">
-            <TerminalIcon className="w-4 h-4 text-green-400" />
-            <span className="text-sm font-medium text-white">Terminal</span>
+            <TerminalIcon className="w-4 h-4 text-white/70" />
+            <span className="text-sm font-medium text-white/90">Terminal</span>
           </div>
 
-          <div className="hidden sm:flex items-center gap-1 ml-4">
-            {terminals.map((terminal) => (
-              <div
-                key={terminal.id}
-                className={`flex items-center gap-2 px-3 py-1 rounded-t text-xs cursor-pointer border-b-2 transition-colors ${
-                  activeTerminalId === terminal.id
-                    ? 'bg-white/10 border-green-400 text-white'
-                    : 'border-transparent text-white/50 hover:text-white hover:bg-white/5'
-                }`}
-                onClick={() => setActiveTerminalId(terminal.id)}
-              >
-                <span className="flex items-center gap-1">
-                  <span className={`w-1.5 h-1.5 rounded-full ${
-                    terminal.mode === 'pty' ? 'bg-green-400 animate-pulse' :
-                    terminal.mode === 'connecting' ? 'bg-yellow-400 animate-pulse' :
-                    terminal.mode === 'sandbox-cmd' ? 'bg-purple-400' :
-                    terminal.mode === 'editor' ? 'bg-orange-400' :
-                    'bg-blue-400'
-                  }`} />
-                  {terminal.name}
-                </span>
-                {terminals.length > 1 && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeTerminal(terminal.id);
-                    }}
-                    className="hover:text-red-400 transition-colors"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
-            ))}
+          <div className="hidden sm:flex items-center gap-1 ml-4" role="tablist" aria-label="Terminal tabs">
+            {terminals.map((terminal) => renderTerminalTab(terminal))}
             <Button
               variant="ghost"
               size="sm"
               onClick={() => createTerminal()}
               className="h-6 w-6 p-0 ml-1 text-white/50 hover:text-white"
+              aria-label="Add new terminal"
             >
               <Plus className="w-4 h-4" />
             </Button>
@@ -2217,6 +2577,8 @@ export default function TerminalPanel({
               isSplitView ? 'bg-white/10' : ''
             }`}
             title={isSplitView ? 'Disable split view' : 'Enable split view'}
+            aria-label={isSplitView ? 'Disable split view' : 'Enable split view'}
+            aria-pressed={isSplitView}
           >
             <Split className="w-4 h-4" />
           </Button>
@@ -2225,6 +2587,7 @@ export default function TerminalPanel({
             size="sm"
             onClick={copyOutput}
             className="text-white/60 hover:text-white hidden sm:inline-flex"
+            aria-label="Copy terminal output"
           >
             <Copy className="w-4 h-4" />
           </Button>
@@ -2233,6 +2596,7 @@ export default function TerminalPanel({
             size="sm"
             onClick={() => clearTerminal()}
             className="text-white/60 hover:text-white hidden sm:inline-flex"
+            aria-label="Clear terminal"
           >
             <Trash2 className="w-4 h-4" />
           </Button>
@@ -2242,6 +2606,7 @@ export default function TerminalPanel({
               size="sm"
               onClick={killAllTerminals}
               className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
+              aria-label="Kill all terminals"
             >
               <Square className="w-4 h-4" />
             </Button>
@@ -2252,6 +2617,8 @@ export default function TerminalPanel({
             size="sm"
             onClick={() => setIsExpanded(!isExpanded)}
             className="text-white/60 hover:text-white"
+            aria-label={isExpanded ? 'Collapse terminal' : 'Expand terminal'}
+            aria-expanded={isExpanded}
           >
             {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
           </Button>
@@ -2260,6 +2627,7 @@ export default function TerminalPanel({
             size="sm"
             onClick={onMinimize}
             className="text-white/60 hover:text-white"
+            aria-label="Minimize terminal"
           >
             <Minimize2 className="w-4 h-4" />
           </Button>
@@ -2268,17 +2636,21 @@ export default function TerminalPanel({
             size="sm"
             onClick={onClose}
             className="text-white/60 hover:text-white"
+            aria-label="Close terminal"
           >
             <X className="w-4 h-4" />
           </Button>
         </div>
       </div>
 
-      <div className={`flex flex-1 min-h-0 ${isSplitView ? 'flex-row' : 'flex-col'}`}>
+      <div className={`flex flex-1 min-h-0 w-full ${isSplitView ? 'flex-row' : 'flex-col'}`}>
         {terminals.map((terminal) => (
           <div
             key={terminal.id}
-            className={`flex-1 min-h-0 ${
+            id={`terminal-panel-${terminal.id}`}
+            role="tabpanel"
+            aria-labelledby={`terminal-tab-${terminal.id}`}
+            className={`flex-1 min-h-0 w-full ${
               !isSplitView && activeTerminalId !== terminal.id ? 'hidden' : ''
             } ${
               isSplitView && terminals.length > 1 ? 'border-r border-white/10 last:border-r-0' : ''
@@ -2286,15 +2658,15 @@ export default function TerminalPanel({
           >
             <div
               ref={setXtermContainer(terminal.id)}
-              className="w-full h-full"
-              style={{ padding: '4px' }}
+              className="w-full h-full p-2"
+              aria-label={`${terminal.name} terminal`}
             />
           </div>
         ))}
       </div>
 
       {activeTerminal && (
-        <div className="flex items-center justify-between px-4 py-1.5 border-t border-white/10 bg-black/50 text-[10px] text-white/30 shrink-0">
+        <div className="flex items-center justify-between px-4 py-1.5 border-t border-white/10 bg-black/50 text-[10px] text-white/40 shrink-0">
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-1">
               {modeInfo?.icon}
@@ -2304,7 +2676,7 @@ export default function TerminalPanel({
               <span>PTY {activeTerminal.terminal?.cols || 0}×{activeTerminal.terminal?.rows || 0}</span>
             )}
             {activeTerminal.mode === 'local' && (
-              <span className="text-blue-400/60">Type "help" for commands</span>
+              <span className="text-white/50">Type "help" for commands</span>
             )}
           </div>
           {activeTerminal.sandboxInfo.sandboxId && (

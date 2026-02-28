@@ -64,10 +64,10 @@ export const BLOCKED_FILE_PATTERNS: RegExp[] = [
 
 /**
  * Validate command for security issues
- * 
+ *
  * @param command - Command to validate
  * @returns Validation result with reason if blocked
- * 
+ *
  * @example
  * const validation = validateCommand('rm -rf /');
  * if (!validation.valid) {
@@ -78,12 +78,21 @@ export function validateCommand(command: string): {
   valid: boolean;
   reason?: string;
 } {
+  // Check for Unicode homoglyph attacks (Cyrillic characters that look Latin)
+  const homoglyphPattern = /[\u0400-\u04FF]/; // Cyrillic range
+  if (homoglyphPattern.test(command)) {
+    return {
+      valid: false,
+      reason: `Command blocked: Unicode homoglyph character detected - potential security risk`,
+    };
+  }
+
   // Check against blocked patterns
   for (const pattern of BLOCKED_COMMAND_PATTERNS) {
     if (pattern.test(command)) {
       return {
         valid: false,
-        reason: `Command blocked by security policy: ${command}`,
+        reason: `Command blocked: dangerous operation detected`,
       };
     }
   }

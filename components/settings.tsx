@@ -25,6 +25,7 @@ import {
   LogOut,
   Settings as SettingsIcon,
   Mail,
+  Trophy,
 } from "lucide-react";
 import ModalLoginForm from "@/components/auth/modal-login-form";
 import ModalSignupForm from "@/components/auth/modal-signup-form";
@@ -446,7 +447,7 @@ export default function Settings({
                 <div className="flex items-center gap-1">
                   {user?.subscriptionTier === 'premium' ? (
                     <>
-                      <Crown className="h-3 w-3 text-yellow-400" />
+                      <Trophy className="h-3 w-3 text-yellow-400" />
                       <span className="text-yellow-400">Active</span>
                     </>
                   ) : (

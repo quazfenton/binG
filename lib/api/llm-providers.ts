@@ -16,6 +16,106 @@ import {
 
 import { initializeComposioService, getComposioService, type ComposioService } from './composio-service'
 
+/**
+ * Provider health tracking for automatic fallback
+ */
+export interface ProviderHealth {
+  providerId: string;
+  healthy: boolean;
+  lastError?: string;
+  consecutiveFailures: number;
+  avgLatency: number;
+  lastChecked?: number;
+}
+
+// Provider health tracking map
+const providerHealth = new Map<string, ProviderHealth>();
+
+/**
+ * Record provider request result for health tracking
+ */
+export function recordProviderResult(
+  providerId: string,
+  success: boolean,
+  latencyMs: number = 0
+): void {
+  const health = providerHealth.get(providerId) || {
+    providerId,
+    healthy: true,
+    consecutiveFailures: 0,
+    avgLatency: 0,
+  };
+
+  if (success) {
+    health.consecutiveFailures = 0;
+    health.healthy = true;
+    // Update rolling average latency (10% weight to new value)
+    health.avgLatency = (health.avgLatency * 0.9) + (latencyMs * 0.1);
+  } else {
+    health.consecutiveFailures++;
+    // Mark unhealthy after 3 consecutive failures
+    health.healthy = health.consecutiveFailures < 3;
+    health.lastError = 'Request failed';
+  }
+
+  health.lastChecked = Date.now();
+  providerHealth.set(providerId, health);
+}
+
+/**
+ * Get healthy provider with automatic fallback
+ */
+export async function getHealthyProvider(
+  requestedProvider: string,
+  fallbackOrder: string[] = ['openai', 'anthropic', 'google', 'mistral', 'openrouter']
+): Promise<string> {
+  // Check if requested provider is healthy
+  const health = providerHealth.get(requestedProvider);
+  if (!health || health.healthy) {
+    return requestedProvider;
+  }
+
+  // Find first healthy fallback
+  for (const fallback of fallbackOrder) {
+    if (fallback === requestedProvider) continue;
+
+    const fallbackHealth = providerHealth.get(fallback);
+    if (!fallbackHealth || fallbackHealth.healthy) {
+      console.log(`[LLM] Falling back from ${requestedProvider} to ${fallback}`);
+      return fallback;
+    }
+  }
+
+  // All providers unhealthy, use requested anyway with warning
+  console.warn(`[LLM] All providers unhealthy, using ${requestedProvider} anyway`);
+  return requestedProvider;
+}
+
+/**
+ * Get provider health status
+ */
+export function getProviderHealth(providerId: string): ProviderHealth | undefined {
+  return providerHealth.get(providerId);
+}
+
+/**
+ * Get all provider health statuses
+ */
+export function getAllProviderHealth(): Map<string, ProviderHealth> {
+  return new Map(providerHealth);
+}
+
+/**
+ * Reset provider health (for admin/debugging)
+ */
+export function resetProviderHealth(providerId?: string): void {
+  if (providerId) {
+    providerHealth.delete(providerId);
+  } else {
+    providerHealth.clear();
+  }
+}
+
 export interface LLMProvider {
   id: string
   name: string
@@ -262,6 +362,22 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: true,
     maxTokens: 128000,
     description: 'Mistral AI models including Mistral Large, Small, and Codestral'
+  },
+  azure: {
+    id: 'azure',
+    name: 'Azure OpenAI',
+    models: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Enterprise OpenAI models on Azure'
+  },
+  vertex: {
+    id: 'vertex',
+    name: 'Google Vertex AI',
+    models: ['gemini-1.5-pro', 'gemini-1.5-flash'],
+    supportsStreaming: true,
+    maxTokens: 2000000,
+    description: 'Enterprise Google Gemini models on Vertex AI'
   },
   github: {
     id: 'github',

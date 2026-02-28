@@ -5,7 +5,7 @@
  */
 
 export { composioSessionManager, ComposioSessionManager } from './session-manager';
-export { composioAuthManager, ComposioAuthManager } from './auth-manager';
+export { composioAuthManager, ComposioAuthManager } from './composio-auth-manager';
 export { composioMCPIntegration, createComposioMCPIntegration } from './mcp-integration';
 export { executionHistory, ComposioExecutionHistory, createExecutionHistory, trackExecution } from './execution-history';
 export { toolkitManager, ComposioToolkitManager, createToolkitManager, getAvailableTools } from './toolkit-manager';

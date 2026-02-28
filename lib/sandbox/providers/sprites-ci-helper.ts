@@ -366,6 +366,7 @@ export class SpritesCiHelper {
         steps.push(buildResult)
 
         if (!buildResult.success) {
+          // Continue to collect steps if possible or just return current ones
           return {
             success: false,
             duration: Date.now() - start,

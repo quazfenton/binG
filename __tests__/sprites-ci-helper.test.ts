@@ -8,29 +8,35 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { SpritesCiHelper, createCiHelper, runCi } from '../lib/sandbox/providers/sprites-ci-helper'
 
 // Mock SpritesClient
-vi.mock('@fly/sprites', () => ({
-  SpritesClient: vi.fn().mockImplementation(() => ({
-    sprite: vi.fn().mockImplementation((name: string) => ({
-      exec: vi.fn(),
-      createCheckpoint: vi.fn(),
-      listCheckpoints: vi.fn(),
-      restore: vi.fn(),
-    })),
-  })),
-}))
+vi.mock('@fly/sprites', () => {
+  const mockSprite = {
+    exec: vi.fn(),
+    createCheckpoint: vi.fn(),
+    listCheckpoints: vi.fn(),
+    restore: vi.fn(),
+  };
+
+  const mockClient = {
+    sprite: vi.fn().mockReturnValue(mockSprite),
+    createSprite: vi.fn().mockResolvedValue({ id: 'cp-123' }),
+  };
+
+  return {
+    SpritesClient: vi.fn().mockImplementation(function() {
+      return mockClient;
+    }),
+  };
+})
 
 describe('Sprites CI/CD Helper', () => {
   let ciHelper: SpritesCiHelper
   let mockSprite: any
 
-  beforeEach(() => {
-    mockSprite = {
-      exec: vi.fn(),
-      createCheckpoint: vi.fn(),
-      listCheckpoints: vi.fn(),
-      restore: vi.fn(),
-    }
-
+  beforeEach(async () => {
+    const { SpritesClient } = await import('@fly/sprites')
+    const client = new SpritesClient('token')
+    mockSprite = client.sprite('name')
+    
     ciHelper = createCiHelper('test-token', 'test-sprite')
     // Access private sprite property for testing
     ;(ciHelper as any).sprite = mockSprite
@@ -197,8 +203,8 @@ describe('Sprites CI/CD Helper', () => {
 
       expect(result.success).toBe(false)
       expect(result.error).toContain('Build failed')
-      expect(result.steps).toHaveLength(4)
-      expect(result.steps?.[3].success).toBe(false) // build step failed
+      expect(result.steps).toHaveLength(3) // init, install, build (fails early)
+      expect(result.steps?.[2].success).toBe(false) // build step failed
     })
 
     it('should fail CI if tests fail', async () => {
@@ -326,8 +332,8 @@ describe('Sprites CI/CD Helper', () => {
       const result = await ciHelper.listCiCheckpoints()
 
       expect(result).toHaveLength(2)
-      expect(result[0].id).toBe('cp-1')
-      expect(result[1].id).toBe('cp-2')
+      expect(result[0].id).toBe('cp-2') // Sorted newest first
+      expect(result[1].id).toBe('cp-1')
     })
 
     it('should limit results when specified', async () => {
@@ -382,7 +388,7 @@ describe('Sprites CI/CD Helper', () => {
   describe('Factory Functions', () => {
     it('should create instance via createCiHelper', () => {
       const instance = createCiHelper('token', 'sprite-name')
-      expect(instance).toBeInstanceOf(SpriteCiHelper)
+      expect(instance).toBeInstanceOf(SpritesCiHelper)
     })
 
     it('should run CI via runCi factory function', async () => {

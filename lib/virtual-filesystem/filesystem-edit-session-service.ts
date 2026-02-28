@@ -225,12 +225,37 @@ class FilesystemEditSessionService {
     return tx;
   }
 
+  /**
+   * Record operation with size validation
+   * 
+   * SECURITY: Validates operation count and total transaction size
+   */
   recordOperation(
     transactionId: string,
     operation: FilesystemEditOperationRecord,
   ): void {
     const tx = this.transactions.get(transactionId);
     if (!tx) return;
+
+    // SECURITY: Validate operation count limit
+    const MAX_OPERATIONS_PER_TRANSACTION = 50;
+    if (tx.operations.length >= MAX_OPERATIONS_PER_TRANSACTION) {
+      tx.errors.push(`Too many operations: ${tx.operations.length + 1} (max ${MAX_OPERATIONS_PER_TRANSACTION})`);
+      console.warn(`[FilesystemEditSession] Operation limit exceeded for transaction ${transactionId}`);
+      return;
+    }
+
+    // SECURITY: Validate total transaction size (10MB limit)
+    const MAX_TRANSACTION_SIZE_BYTES = 10 * 1024 * 1024;
+    const currentSize = JSON.stringify([...tx.operations, operation]).length;
+    if (currentSize > MAX_TRANSACTION_SIZE_BYTES) {
+      tx.errors.push(
+        `Transaction too large: ${(currentSize / 1024).toFixed(2)}KB (max ${MAX_TRANSACTION_SIZE_BYTES / 1024}KB)`
+      );
+      console.warn(`[FilesystemEditSession] Transaction size limit exceeded for ${transactionId}`);
+      return;
+    }
+
     tx.operations.push(operation);
   }
 

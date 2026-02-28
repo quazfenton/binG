@@ -13,7 +13,7 @@ import { VirtualFilesystemService } from '@/lib/virtual-filesystem/virtual-files
 import { getSandboxProvider } from '@/lib/sandbox/providers';
 
 const vfs = new VirtualFilesystemService();
-const sandboxProvider = getSandboxProvider();
+const sandboxProvider = getSandboxProvider(); // Uses default from env or 'daytona'
 
 // ===========================================
 // Virtual Filesystem Tools

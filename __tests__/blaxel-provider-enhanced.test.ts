@@ -7,19 +7,26 @@
  * - Callback middleware
  */
 
+// Mock Blaxel SDK - must be before imports
+vi.mock('@blaxel/core', async () => {
+  const actual = await vi.importActual('@blaxel/core');
+  const mockClient = {
+    sandboxes: {
+      create: vi.fn().mockResolvedValue({ name: 'test-sandbox' }),
+      get: vi.fn().mockResolvedValue({ name: 'test-sandbox' }),
+      delete: vi.fn().mockResolvedValue(undefined),
+    },
+  };
+  
+  return {
+    ...(actual || {}),
+    default: vi.fn().mockImplementation(() => mockClient),
+    BlaxelClient: vi.fn().mockImplementation(() => mockClient),
+  };
+});
+
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { BlaxelProvider, verifyCallbackSignature, verifyCallbackMiddleware } from '../lib/sandbox/providers/blaxel-provider'
-
-// Mock Blaxel SDK
-vi.mock('@blaxel/sdk', () => ({
-  BlaxelClient: vi.fn().mockImplementation(() => ({
-    sandboxes: {
-      create: vi.fn(),
-      get: vi.fn(),
-      delete: vi.fn(),
-    },
-  })),
-}))
 
 describe('Blaxel Provider - Enhanced Features', () => {
   let provider: BlaxelProvider

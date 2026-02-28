@@ -1284,24 +1284,51 @@ export default function InteractionPanel({
           )}
 
           {!isMinimized && (
-            <Tabs 
-              value={activeTab} 
+            <Tabs
+              value={activeTab}
               onValueChange={(value) => {
                 // Handle height transition for tall tabs
                 const newTab = value as string;
                 const isNewTabTall = TALL_TABS.includes(newTab);
                 const isCurrentTabTall = activeTab ? TALL_TABS.includes(activeTab) : false;
-                
-                if (isNewTabTall && !isCurrentTabTall) {
-                  // Expanding to tall tab - animate upward
+
+                // Auto-expand panel when switching to tall tabs (smooth animation)
+                if (isNewTabTall && !isExpanded && !isCurrentTabTall) {
+                  // Calculate target height for tall tabs (slightly higher than default)
+                  const targetHeight = window.innerWidth <= 768 
+                    ? Math.min(520, window.innerHeight * 0.65)  // Mobile: 65% of viewport
+                    : 520;  // Desktop: fixed 520px (higher than default 320px)
+                  
+                  // Animate height change
+                  const startHeight = panelHeight;
+                  const startTime = performance.now();
+                  const duration = 300; // 300ms smooth animation
+                  
+                  const animateHeight = (currentTime: number) => {
+                    const elapsed = currentTime - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    
+                    // Ease-out cubic bezier for smooth deceleration
+                    const easeOut = 1 - Math.pow(1 - progress, 3);
+                    
+                    const currentHeight = startHeight + (targetHeight - startHeight) * easeOut;
+                    setPanelHeight(currentHeight);
+                    
+                    if (progress < 1) {
+                      requestAnimationFrame(animateHeight);
+                    } else {
+                      setIsExpanding(false);
+                    }
+                  };
+                  
                   setIsExpanding(true);
-                  setTimeout(() => setIsExpanding(false), 300);
+                  requestAnimationFrame(animateHeight);
                 }
-                
+
                 setPrevTab(activeTab || null);
                 onActiveTabChange?.(value as "chat" | "extras" | "integrations" | "shell");
-              }} 
-              className={`flex-1 flex flex-col min-h-0 ${EXPAND_TRANSITION}`}
+              }}
+              className={`flex-1 flex flex-col min-h-0 transition-all duration-300 ease-out`}
             >
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2 sticky top-0 z-20 bg-black/70 backdrop-blur-sm py-1">
                 <div className="w-full sm:w-auto overflow-x-auto no-scrollbar">

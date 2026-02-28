@@ -342,8 +342,7 @@ describe('Smithery Client', () => {
       await client.listNamespaces({ q: 'github', hasServers: true });
 
       expect(fetch).toHaveBeenCalledWith(
-        expect.stringContaining('q=github'),
-        expect.stringContaining('hasServers=true'),
+        'https://smithery.ai/api/namespaces?q=github&hasServers=true',
         expect.any(Object)
       );
     });

@@ -266,11 +266,13 @@ export class NangoService {
       if (!connection) {
         // Get auth URL
         const authUrl = await this.getAuthUrl(providerConfigKey, userId);
-        
+
         return {
           success: false,
           requiresAuth: true,
           authUrl,
+          toolName: providerConfigKey,
+          provider: providerConfigKey,
           error: `Authorization required for ${providerConfigKey}`,
         };
       }
@@ -290,11 +292,13 @@ export class NangoService {
         // Check if auth error
         if (proxyResponse.status === 401) {
           const authUrl = await this.getAuthUrl(providerConfigKey, userId);
-          
+
           return {
             success: false,
             requiresAuth: true,
             authUrl,
+            toolName: providerConfigKey,
+            provider: providerConfigKey,
             error: 'Authorization expired',
           };
         }
@@ -434,16 +438,76 @@ export class NangoService {
   }
 
   /**
-   * Get service status
+   * Get synced records for a sync name
+   * 
+   * @param userId - User identifier (connection ID)
+   * @param providerConfigKey - Provider configuration key
+   * @param syncName - Name of the sync
+   * @param model - Optional model to filter records
+   * @returns Synced records
    */
-  getStatus(): {
-    initialized: boolean;
-    connectionsCount: number;
-  } {
-    return {
-      initialized: this.initialized,
-      connectionsCount: this.connections.size,
-    };
+  async getRecords(
+    userId: string,
+    providerConfigKey: string,
+    syncName: string,
+    model?: string
+  ): Promise<any[]> {
+    try {
+      await this.initialize();
+
+      if (this.client?.sync) {
+        return await this.client.sync.records({
+          providerConfigKey,
+          connectionId: userId,
+          model: model || syncName,
+        });
+      }
+
+      // HTTP fallback
+      const response = await fetch(
+        `${this.config.host}/sync/records?provider_config_key=${encodeURIComponent(providerConfigKey)}&connection_id=${encodeURIComponent(userId)}&model=${encodeURIComponent(model || syncName)}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.config.secretKey}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to get records: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      return data.records || [];
+    } catch (error: any) {
+      console.error('[NangoService] getRecords failed:', error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Check connection health and validity
+   */
+  async checkConnection(
+    userId: string,
+    providerConfigKey: string
+  ): Promise<{ valid: boolean; error?: string }> {
+    try {
+      const connection = await this.getConnection(userId, providerConfigKey);
+      if (!connection) return { valid: false, error: 'Connection not found' };
+
+      // Simple proxy request to test auth
+      const response = await fetch(
+        `${this.config.host}/connection/${encodeURIComponent(userId)}/${providerConfigKey}/test`,
+        {
+          headers: { 'Authorization': `Bearer ${this.config.secretKey}` },
+        }
+      );
+
+      return { valid: response.ok };
+    } catch (error: any) {
+      return { valid: false, error: error.message };
+    }
   }
 
   /**

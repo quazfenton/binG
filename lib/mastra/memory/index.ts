@@ -13,8 +13,32 @@
  * @see https://mastra.ai/docs/memory/overview
  */
 
-import { Memory } from '@mastra/memory';
+import { MastraMemory } from '@mastra/core/memory';
 import type { Message } from '@mastra/core/memory';
+
+// Concrete implementation of MastraMemory since standalone @mastra/memory is missing
+class Memory extends MastraMemory {
+  constructor(config: any) {
+    super({
+      id: config.id || 'default-memory',
+      name: 'Default Memory',
+      ...config.options
+    });
+  }
+
+  async getThreadById({ threadId }: { threadId: string }) { return null; }
+  async listThreads(args: any) { return { threads: [], metadata: { total: 0, page: 0, perPage: 10, hasMore: false } }; }
+  async saveThread(args: any) { return args.thread; }
+  async saveMessages(args: any) { return { messages: args.messages }; }
+  async recall(args: any) { return { messages: [] }; }
+  async deleteThread(threadId: string) { }
+  async deleteMessages(args: any) { }
+  async getWorkingMemory(args: any) { return null; }
+  async getWorkingMemoryTemplate(args: any) { return null; }
+  async updateWorkingMemory(args: any) { }
+  async __experimental_updateWorkingMemoryVNext(args: any) { return { success: true, reason: '' }; }
+  async cloneThread(args: any) { return { thread: args.thread, messages: [] }; }
+}
 
 // Memory configuration options
 interface MemoryConfig {

@@ -9,7 +9,7 @@
  * - Callback URL integration
  *
  * Documentation: https://docs.blaxel.ai/Jobs/Overview
- * SDK: @blaxel/sdk
+ * SDK: @blaxel/core
  */
 
 import type { ToolResult } from '../types';
@@ -104,7 +104,7 @@ export class BlaxelJobsManager {
 
     try {
       // @ts-ignore - Optional package, only available if @blaxel/sdk is installed
-      const { BlaxelClient } = await import('@blaxel/sdk');
+      const { BlaxelClient } = await import('@blaxel/core');
       this.client = new BlaxelClient({
         apiKey: this.apiKey,
         workspace: this.workspace,
@@ -112,7 +112,7 @@ export class BlaxelJobsManager {
       return this.client;
     } catch (error: any) {
       throw new Error(
-        `Blaxel SDK not available. Install with: npm install @blaxel/sdk. Error: ${error.message}`
+        `Blaxel SDK not available. Install with: npm install @blaxel/core. Error: ${error.message}`
       );
     }
   }

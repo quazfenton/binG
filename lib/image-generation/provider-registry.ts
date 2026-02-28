@@ -174,8 +174,12 @@ export class ImageProviderRegistry {
           errors.push({ provider: providerId, error: err });
 
           const shouldRetry = this.shouldRetry(err, config);
-          
+
           if (!shouldRetry) {
+            // ✅ FIX 4: Add small delay before trying next provider in fallback chain
+            if (fallbackChain.length > 1) {
+              await this.delay(500);
+            }
             console.log(`[ImageProvider] ${providerId} failed, moving to next provider`);
             break;
           }

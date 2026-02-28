@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { SecureLogger, logger, sanitizeForLogging, redactSensitiveData, createModuleLogger } from '../../secure-logger';
+import { SecureLogger, logger, sanitizeForLogging, redactSensitiveData, createModuleLogger } from '@/lib/utils/secure-logger';
 
 describe('Secure Logger', () => {
   beforeEach(() => {

@@ -39,15 +39,26 @@ describe('CrewAI Integration', () => {
       agent.events.on('kickoff:start', startCallback);
       agent.events.on('kickoff:complete', completeCallback);
 
-      await agent.kickoff('Test input');
+      // Mock the run method to return a successful result
+      const runSpy = vi.spyOn(agent as any, 'run').mockResolvedValue({
+        success: true,
+        response: 'Test response',
+        steps: 1,
+        errors: [],
+      } as any);
+
+      const result = await agent.kickoff('Test input');
 
       expect(startCallback).toHaveBeenCalledWith(
         expect.objectContaining({
-          input: 'Test input',
+          input: expect.stringContaining('Test input'),
           role: 'Test Agent',
         })
       );
       expect(completeCallback).toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      
+      runSpy.mockRestore();
     });
 
     it('should handle kickoff errors', async () => {

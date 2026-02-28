@@ -25,6 +25,10 @@ export interface SandboxHandle {
   
   // Extended capabilities (provider-specific, optional)
   getProviderInfo?(): Promise<ProviderInfo>
+  createSnapshot?(label?: string): Promise<any>
+  rollbackToSnapshot?(snapshotId: string): Promise<void>
+  listSnapshots?(): Promise<any[]>
+  deleteSnapshot?(snapshotId: string): Promise<void>
   createCheckpoint?(name?: string): Promise<CheckpointInfo>
   restoreCheckpoint?(checkpointId: string): Promise<void>
   listCheckpoints?(): Promise<CheckpointInfo[]>
@@ -108,6 +112,8 @@ export interface ServiceConfig {
   args?: string[]
   port?: number
   autoStart?: boolean
+  workingDir?: string
+  env?: Record<string, string>
 }
 
 /**

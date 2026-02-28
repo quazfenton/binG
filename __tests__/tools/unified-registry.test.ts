@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { UnifiedToolRegistry, getUnifiedToolRegistry } from '../../tools/registry';
-import { SmitheryProvider } from '../../tool-integration/providers/smithery';
+import { UnifiedToolRegistry, getUnifiedToolRegistry } from '../../lib/tools/registry';
+import { SmitheryProvider } from '../../lib/tool-integration/providers/smithery';
 
 describe('UnifiedToolRegistry', () => {
   let registry: UnifiedToolRegistry;

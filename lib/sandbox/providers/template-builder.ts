@@ -41,7 +41,7 @@ export interface TemplateBuildConfig {
   isPublic?: boolean
 }
 
-export interface TemplateBuildResult {
+export interface GenericTemplateBuildResult {
   success: boolean
   templateId?: string
   templateName?: string
@@ -50,6 +50,9 @@ export interface TemplateBuildResult {
   error?: string
   logs?: string[]
 }
+
+// Alias for backwards compatibility
+export type TemplateBuildResult = GenericTemplateBuildResult;
 
 export interface TemplateInfo {
   id: string

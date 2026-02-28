@@ -42,10 +42,9 @@ describe('E2B Amp Service', () => {
         stderr: '',
       });
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const result = await ampService.execute({
-        apiKey: 'test-key',
-        task: 'Fix TODO comments',
+        prompt: 'Fix TODO comments',
         dangerouslyAllowAll: true,
         streamJson: false,
       });
@@ -70,12 +69,11 @@ describe('E2B Amp Service', () => {
         stderr: '',
       });
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const receivedEvents: any[] = [];
 
       const result = await ampService.execute({
-        apiKey: 'test-key',
-        task: 'Refactor module',
+        prompt: 'Refactor module',
         streamJson: true,
         onEvent: (event) => receivedEvents.push(event),
       });
@@ -99,10 +97,9 @@ describe('E2B Amp Service', () => {
           stderr: '',
         });
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const result = await ampService.execute({
-        apiKey: 'test-key',
-        task: 'Initial task',
+        prompt: 'Initial task',
       });
 
       expect(result.threadId).toBe('thread-123');
@@ -126,10 +123,9 @@ describe('E2B Amp Service', () => {
           stderr: '',
         });
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const result = await ampService.execute({
-        apiKey: 'test-key',
-        task: 'Make changes',
+        prompt: 'Make changes',
       });
 
       expect(result.gitDiff).toContain('diff --git');
@@ -142,10 +138,9 @@ describe('E2B Amp Service', () => {
         stderr: 'Error: Task failed',
       });
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const result = await ampService.execute({
-        apiKey: 'test-key',
-        task: 'Failing task',
+        prompt: 'Failing task',
       });
 
       expect(result.success).toBe(false);
@@ -161,10 +156,9 @@ describe('E2B Amp Service', () => {
         stderr: '',
       });
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const result = await ampService.execute({
-        apiKey: 'test-key',
-        task: 'Task with tokens',
+        prompt: 'Task with tokens',
         streamJson: true,
       });
 
@@ -176,10 +170,9 @@ describe('E2B Amp Service', () => {
     it('should handle timeout', async () => {
       mockSandbox.commands.run.mockRejectedValue(new Error('Command timeout'));
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const result = await ampService.execute({
-        apiKey: 'test-key',
-        task: 'Long running task',
+        prompt: 'Long running task',
         timeout: 1000,
       });
 
@@ -199,7 +192,7 @@ describe('E2B Amp Service', () => {
         stderr: '',
       });
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const threads = await ampService.listThreads();
 
       expect(threads.length).toBe(2);
@@ -213,7 +206,7 @@ describe('E2B Amp Service', () => {
         stderr: '',
       });
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const threads = await ampService.listThreads();
 
       expect(threads.length).toBe(0);
@@ -222,7 +215,7 @@ describe('E2B Amp Service', () => {
     it('should handle thread listing failure', async () => {
       mockSandbox.commands.run.mockRejectedValue(new Error('Failed to list'));
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const threads = await ampService.listThreads();
 
       expect(threads.length).toBe(0);
@@ -237,7 +230,7 @@ describe('E2B Amp Service', () => {
         stderr: '',
       });
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const result = await ampService.continueThread('thread-123', 'Next step');
 
       expect(result.success).toBe(true);
@@ -260,7 +253,7 @@ describe('E2B Amp Service', () => {
         stderr: '',
       });
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const threadId = await ampService.getLatestThreadId();
 
       expect(threadId).toBe('thread-3');
@@ -273,7 +266,7 @@ describe('E2B Amp Service', () => {
         stderr: '',
       });
 
-      const ampService = createAmpService(mockSandbox, 'test-id');
+      const ampService = createAmpService(mockSandbox, 'test-key');
       const threadId = await ampService.getLatestThreadId();
 
       expect(threadId).toBeUndefined();

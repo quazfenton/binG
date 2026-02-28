@@ -1,4 +1,11 @@
 import { vi } from 'vitest'
+import { config } from 'dotenv'
+import { resolve } from 'path'
+
+// Load environment variables from .env file
+config({
+  path: resolve(__dirname, '../.env')
+})
 
 // Only import DOM matchers when running in a browser-like environment
 if (typeof window !== 'undefined') {

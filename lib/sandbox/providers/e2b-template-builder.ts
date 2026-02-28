@@ -227,7 +227,7 @@ export class E2BTemplateBuilder {
       
       // Write README.md
       const readmePath = join(dir, 'README.md');
-      const readme = `# E2B Template: ${this.config.alias}\n\n`;
+      let readme = `# E2B Template: ${this.config.alias}\n\n`;
       readme += `Custom E2B template based on ${this.config.baseTemplate || this.config.baseImage || 'default'}.\n\n`;
       readme += '## Build\n\n';
       readme += '```bash\n';
@@ -345,6 +345,9 @@ export function createTemplateBuilder(
 ): E2BTemplateBuilder {
   return new E2BTemplateBuilder(config, workingDir);
 }
+
+// Alias for backwards compatibility
+export const createE2BTemplateBuilder = createTemplateBuilder;
 
 /**
  * Quick template build helper

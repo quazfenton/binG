@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Card,
@@ -16,6 +16,7 @@ import {
   TabsTrigger,
 } from "../components/ui/tabs";
 import { Button } from "../components/ui/button";
+import { toast } from "sonner";
 import {
   Code as CodeIcon,
   FileText,
@@ -30,7 +31,6 @@ import {
 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Sandpack } from "@codesandbox/sandpack-react";
 import JSZip from "jszip";
 import type { Message } from "../types/index";
 import { parsePatch, applyPatch } from "diff";
@@ -39,6 +39,11 @@ import {
   parseCodeBlocksFromMessages,
   type CodeBlock as ParsedCodeBlock,
 } from "../lib/code-parser";
+
+// Lazy load Sandpack to avoid SSR issues
+const Sandpack = lazy(() => import('@codesandbox/sandpack-react').catch(() => ({
+  Sandpack: () => <div className="p-4 text-center text-yellow-600">Sandpack preview unavailable</div>
+})));
 
 interface CodePreviewPanelProps {
   messages: Message[];
@@ -120,7 +125,7 @@ export default function CodePreviewPanel({
     [commandsByFile],
   );
   
-  const virtualFilesystem = useVirtualFilesystem("project");
+  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath);
   const {
     currentPath: filesystemCurrentPath,
     nodes: filesystemRawNodes,
@@ -336,7 +341,8 @@ export default function CodePreviewPanel({
       };
       setProjectStructure(structure);
     }
-  }, [codeBlocks, messages, projectFiles, scopedPreviewFiles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codeBlocks, scopedPreviewFiles, projectFiles ? Object.keys(projectFiles).join(',') : '']);
 
   const projectStructureWithScopedFiles = useMemo(() => {
     const scopedRelativeFiles = Object.entries(scopedPreviewFiles).reduce(
@@ -583,12 +589,16 @@ export default function CodePreviewPanel({
   const downloadAsZip = async () => {
     const zip = new JSZip();
 
-    // Use project structure files if available
-    if (projectStructure) {
-      Object.entries(projectStructure.files).forEach(([filename, content]) => {
+    // Use merged project structure (includes virtual filesystem files)
+    const structureToUse = projectStructureWithScopedFiles || projectStructure;
+    
+    if (structureToUse && Object.keys(structureToUse.files).length > 0) {
+      // Add all files from project structure
+      Object.entries(structureToUse.files).forEach(([filename, fileData]) => {
+        const content = typeof fileData === 'string' ? fileData : (fileData.content || '');
         zip.file(filename, content);
       });
-    } else {
+    } else if (codeBlocks.length > 0) {
       // Fallback to code blocks
       codeBlocks.forEach((block) => {
         const filename =
@@ -596,6 +606,10 @@ export default function CodePreviewPanel({
           `snippet-${block.index}.${getFileExtension(block.language)}`;
         zip.file(filename, block.code);
       });
+    } else {
+      // No files available
+      toast.error("No files available to download");
+      return;
     }
 
     // Get collected data from codeBlocks
@@ -605,12 +619,12 @@ export default function CodePreviewPanel({
     // Always add README
     const readme = `# Code Project
 
-This project contains ${projectStructure ? Object.keys(projectStructure.files).length : codeBlocks.length} files.
+This project contains ${structureToUse ? Object.keys(structureToUse.files).length : codeBlocks.length} files.
 
 ## Files:
 ${
-  projectStructure
-    ? Object.keys(projectStructure.files)
+  structureToUse
+    ? Object.keys(structureToUse.files)
         .map((filename) => `- ${filename}`)
         .join("\n")
     : codeBlocks
@@ -620,8 +634,8 @@ ${
 
 ## Dependencies:
 ${
-  projectStructure?.dependencies?.length
-    ? projectStructure.dependencies.map((dep) => `- ${dep}`).join("\n")
+  structureToUse?.dependencies?.length
+    ? structureToUse.dependencies.map((dep) => `- ${dep}`).join("\n")
     : "None"
 }
 
@@ -650,13 +664,21 @@ ${nonCodeText}
 `;
     zip.file("README.md", readme);
 
-    const content = await zip.generateAsync({ type: "blob" });
-    const url = URL.createObjectURL(content);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `code-${Date.now()}.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const content = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(content);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `code-${Date.now()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("Download started!");
+    } catch (error) {
+      console.error("Download failed:", error);
+      toast.error("Failed to download ZIP file");
+    }
   };
 
   // Resize handlers
@@ -959,45 +981,54 @@ export default app;`,
         const template = getSandpackTemplate(useStructure.framework);
 
         return (
-          <div className="h-96">
-            <Sandpack
-              template={template as any}
-              theme="dark"
-              options={{
-                showTabs: true,
-                showLineNumbers: true,
-                showNavigator: true,
-                showConsole: true,
-                showRefreshButton: true,
-                autorun: true,
-                recompileMode: "delayed",
-                recompileDelay: 300,
-              }}
-              files={sandpackFiles}
-              customSetup={{
-                dependencies:
-                  useStructure.dependencies?.reduce(
-                    (acc, dep) => {
-                      acc[dep] = "latest";
-                      return acc;
-                    },
-                    {} as Record<string, string>,
-                  ) ||
-                  getPopularDependencies(
-                    Object.values(useStructure.files).join("\n"),
-                    useStructure.framework,
-                  ),
-                devDependencies:
-                  useStructure.devDependencies?.reduce(
-                    (acc, dep) => {
-                      acc[dep] = "latest";
-                      return acc;
-                    },
-                    {} as Record<string, string>,
-                  ) || {},
-              }}
-            />
-          </div>
+          <Suspense fallback={
+            <div className="h-96 flex items-center justify-center bg-gray-900 rounded-lg">
+              <div className="text-center text-gray-400">
+                <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin" />
+                <p>Loading preview...</p>
+              </div>
+            </div>
+          }>
+            <div className="h-96">
+              <Sandpack
+                template={template as any}
+                theme="dark"
+                options={{
+                  showTabs: true,
+                  showLineNumbers: true,
+                  showNavigator: true,
+                  showConsole: true,
+                  showRefreshButton: true,
+                  autorun: true,
+                  recompileMode: "delayed",
+                  recompileDelay: 300,
+                }}
+                files={sandpackFiles}
+                customSetup={{
+                  dependencies:
+                    useStructure.dependencies?.reduce(
+                      (acc, dep) => {
+                        acc[dep] = "latest";
+                        return acc;
+                      },
+                      {} as Record<string, string>,
+                    ) ||
+                    getPopularDependencies(
+                      Object.values(useStructure.files).join("\n"),
+                      useStructure.framework,
+                    ),
+                  devDependencies:
+                    useStructure.devDependencies?.reduce(
+                      (acc, dep) => {
+                        acc[dep] = "latest";
+                        return acc;
+                      },
+                      {} as Record<string, string>,
+                    ) || {},
+                }}
+              />
+            </div>
+          </Suspense>
         );
       } catch (error) {
         return (

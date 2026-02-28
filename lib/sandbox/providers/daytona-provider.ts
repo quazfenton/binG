@@ -85,6 +85,8 @@ export class DaytonaProvider implements SandboxProvider {
   }
 }
 
+import { SandboxSecurityManager } from '../security-manager'
+
 class DaytonaSandboxHandle implements SandboxHandle {
   readonly id: string
   readonly workspaceDir = '/home/daytona/workspace'
@@ -153,41 +155,156 @@ class DaytonaSandboxHandle implements SandboxHandle {
     return this.objectStorageService
   }
 
+  /**
+   * Start screen recording
+   * @see https://www.daytona.io/docs/en/computer-use.md#start-recording
+   */
+  async startRecording(options?: ScreenRecordingRequest): Promise<ToolResult> {
+    const service = this.getComputerUseService()
+    if (!service) throw new Error('Computer Use Service not available')
+    return service.startRecording(options)
+  }
+
+  /**
+   * Stop screen recording
+   */
+  async stopRecording(recordingId: string): Promise<ToolResult> {
+    const service = this.getComputerUseService()
+    if (!service) throw new Error('Computer Use Service not available')
+    return service.stopRecording(recordingId)
+  }
+
+  /**
+   * Take regional screenshot
+   */
+  async takeRegionScreenshot(x: number, y: number, width: number, height: number): Promise<ToolResult> {
+    const service = this.getComputerUseService()
+    if (!service) throw new Error('Computer Use Service not available')
+    return service.takeRegion({ x, y, width, height })
+  }
+
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
-    const response = await this.sandbox.process.executeCommand(
-      command,
-      cwd ?? WORKSPACE_DIR,
-      undefined,
-      timeout ?? MAX_COMMAND_TIMEOUT,
-    )
-    return {
-      success: response.exitCode === 0,
-      output: response.result,
-      exitCode: response.exitCode,
+    try {
+      // ✅ ENHANCED: Use combined validation and sanitization
+      const sanitized = SandboxSecurityManager.validateAndSanitizeCommand(command)
+      
+      const response = await this.sandbox.process.executeCommand(
+        sanitized,
+        cwd ?? this.workspaceDir,
+        undefined,
+        timeout ?? MAX_COMMAND_TIMEOUT,
+      )
+      
+      return {
+        success: response.exitCode === 0,
+        output: response.result,
+        exitCode: response.exitCode,
+      }
+    } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Daytona] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
+      return {
+        success: false,
+        output: error.message || 'Command execution failed',
+        exitCode: -1,
+      }
     }
   }
 
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(filePath)
-    const dir = resolved.substring(0, resolved.lastIndexOf('/'))
-    if (dir) {
-      await this.sandbox.fs.createFolder(dir, '755')
+    try {
+      // ✅ ENHANCED: Use combined validation for path and content
+      const { resolvedPath, validatedContent } = SandboxSecurityManager.validateWriteFile(
+        filePath,
+        content,
+        this.workspaceDir
+      )
+      
+      const dir = resolvedPath.substring(0, resolvedPath.lastIndexOf('/'))
+      if (dir) {
+        await this.sandbox.fs.createFolder(dir, '755')
+      }
+      await this.sandbox.fs.uploadFile(Buffer.from(validatedContent, 'utf-8'), resolvedPath)
+      
+      return { 
+        success: true, 
+        output: `File written: ${resolvedPath}` 
+      }
+    } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Daytona] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
+      return {
+        success: false,
+        output: error.message || 'Failed to write file',
+      }
     }
-    await this.sandbox.fs.uploadFile(Buffer.from(content, 'utf-8'), resolved)
-    return { success: true, output: `File written: ${resolved}` }
   }
 
   async readFile(filePath: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(filePath)
-    const buffer = await this.sandbox.fs.downloadFile(resolved)
-    return { success: true, output: buffer.toString('utf-8') }
+    try {
+      // ✅ ENHANCED: Validate path before reading
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath)
+      const buffer = await this.sandbox.fs.downloadFile(resolved)
+      return { 
+        success: true, 
+        output: buffer.toString('utf-8') 
+      }
+    } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Daytona] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
+      return {
+        success: false,
+        output: error.message || 'Failed to read file',
+      }
+    }
   }
 
   async listDirectory(dirPath: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(dirPath)
-    const files = await this.sandbox.fs.listFiles(resolved)
-    const listing = files.map((f: any) => `${f.isDir ? 'd' : '-'} ${f.name}`).join('\n')
-    return { success: true, output: listing || '(empty directory)' }
+    try {
+      // ✅ ENHANCED: Validate path before listing
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath)
+      const files = await this.sandbox.fs.listFiles(resolved)
+      const listing = files.map((f: any) => `${f.isDir ? 'd' : '-'} ${f.name}`).join('\n')
+      return { 
+        success: true, 
+        output: listing || '(empty directory)' 
+      }
+    } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Daytona] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
+      return {
+        success: false,
+        output: error.message || 'Failed to list directory',
+      }
+    }
   }
 
   async getPreviewLink(port: number): Promise<PreviewInfo> {
@@ -198,7 +315,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
   async createPty(options: PtyOptions): Promise<PtyHandle> {
     const ptyHandle = await this.sandbox.process.createPty({
       id: options.id,
-      cwd: options.cwd ?? WORKSPACE_DIR,
+      cwd: options.cwd ?? this.workspaceDir,
       envs: options.envs ?? { TERM: 'xterm-256color' },
       cols: options.cols ?? 120,
       rows: options.rows ?? 30,
@@ -227,19 +344,6 @@ class DaytonaSandboxHandle implements SandboxHandle {
     if (ptyHandle) {
       await ptyHandle.resize(cols, rows)
     }
-  }
-
-  private resolvePath(filePath: string): string {
-    const resolved = filePath.startsWith('/')
-      ? resolve(filePath)
-      : resolve(WORKSPACE_DIR, filePath);
-    
-    // Ensure path stays within workspace
-    const rel = relative(WORKSPACE_DIR, resolved);
-    if (rel.startsWith('..') || resolve(WORKSPACE_DIR, rel) !== resolved || rel === '..') {
-      throw new Error(`Path traversal rejected: ${filePath}`);
-    }
-    return resolved;
   }
 }
 

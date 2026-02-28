@@ -11,23 +11,60 @@ import { parsePatch, applyPatch } from 'diff';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import type { LLMMessage } from "@/lib/api/llm-providers";
+import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 
 // Note: Fast-Agent now has dedicated endpoint at /api/agent
 // This route uses priority router which includes Fast-Agent as Priority 1
 
+// Rate limiting for chat API: 60 messages per minute per user
+const CHAT_RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
+const CHAT_RATE_LIMIT_MAX = 60;
+
 export async function POST(request: NextRequest) {
   const requestStartTime = Date.now();
   const requestId = generateSecureId('chat');
-  
+
   console.log('[DEBUG] Chat API: Incoming request', { requestId });
 
   // Extract user authentication (JWT or session cookie).
   // Anonymous chat is allowed, but tools/sandbox require authenticated userId.
   const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
   const userId = authResult.userId || 'anonymous';
-  
+
   if (!authResult.success || !authResult.userId) {
     console.log('[DEBUG] Chat API: Anonymous request (no auth token/session)');
+  }
+
+  // RATE LIMITING: Check rate limit before processing
+  // Use user ID for authenticated users, IP for anonymous
+  const rateLimitIdentifier = authResult.userId && authResult.userId !== 'anonymous'
+    ? `user:${authResult.userId}`
+    : `ip:${request.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown'}`;
+  
+  const rateLimitResult = checkRateLimit(
+    rateLimitIdentifier,
+    { windowMs: CHAT_RATE_LIMIT_WINDOW_MS, maxRequests: CHAT_RATE_LIMIT_MAX, message: 'Too many chat messages' },
+    { name: 'free', multiplier: 1, description: 'Free tier' }
+  );
+
+  if (!rateLimitResult.allowed) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: `Rate limit exceeded. Maximum ${CHAT_RATE_LIMIT_MAX} messages per minute.`,
+        retryAfter: rateLimitResult.retryAfter,
+        remaining: rateLimitResult.remaining,
+      },
+      {
+        status: 429,
+        headers: {
+          'Retry-After': String(rateLimitResult.retryAfter || 60),
+          'X-RateLimit-Limit': String(CHAT_RATE_LIMIT_MAX),
+          'X-RateLimit-Remaining': String(rateLimitResult.remaining),
+          'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000 + rateLimitResult.resetAfter / 1000)),
+        },
+      }
+    );
   }
 
   let provider = '';
@@ -1276,10 +1313,6 @@ async function handleError(error: any, requestId: string, provider: string, mode
     model,
     userId,
   });
-}
-      { status: 500 },
-    );
-  }
 }
 
 // Handle preflight requests for CORS

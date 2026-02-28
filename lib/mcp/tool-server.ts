@@ -12,6 +12,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { allTools } from '@/lib/stateful-agent/tools/sandbox-tools';
 import type { SandboxHandle } from '@/lib/sandbox/providers';
+import { SandboxSecurityManager } from '@/lib/sandbox/security-manager';
 
 export interface MCPServerOptions {
   port?: number;
@@ -71,6 +72,9 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     },
     async (params) => {
       try {
+        // SECURITY: Validate path and sanitize search/replace blocks
+        SandboxSecurityManager.resolvePath('/workspace', params.path);
+        
         const result = await allTools.applyDiffTool.execute(params, {
           messages: [],
           toolCallId: crypto.randomUUID(),
@@ -228,7 +232,13 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     },
     async (params) => {
       try {
-        const result = await allTools.execShellTool.execute(params, {
+        // SECURITY: Sanitize shell command
+        const sanitized = SandboxSecurityManager.sanitizeCommand(params.command);
+        
+        const result = await allTools.execShellTool.execute({
+          ...params,
+          command: sanitized
+        }, {
           messages: [],
           toolCallId: crypto.randomUUID(),
         });
@@ -251,10 +261,58 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     }
   );
 
+  // LIST_RESOURCES tool
+  server.tool(
+    'LIST_RESOURCES',
+    'List available data resources (files, docs, DB tables) from the MCP server.',
+    {},
+    async () => {
+      try {
+        const result = await allTools.listFilesTool.execute({ path: '.' }, {
+          messages: [],
+          toolCallId: crypto.randomUUID(),
+        });
+        
+        return {
+          content: [{
+            type: 'text',
+            text: result.output || 'No resources available',
+          }],
+        };
+      } catch (error) {
+        return { content: [{ type: 'text', text: 'Error listing resources' }], isError: true };
+      }
+    }
+  );
+
+  // GET_PROMPT tool
+  server.tool(
+    'GET_PROMPT',
+    'Retrieve a pre-configured system prompt template by name.',
+    {
+      name: { type: 'string', description: 'Name of the prompt to retrieve' },
+      arguments: { type: 'object', description: 'Arguments for the prompt template', optional: true },
+    },
+    async (params) => {
+      // For now, return the basic system prompt
+      return {
+        content: [{
+          type: 'text',
+          text: `Executing prompt: ${params.name}. Context: ${JSON.stringify(params.arguments || {})}`,
+        }],
+      };
+    }
+  );
+
   // Start HTTP transport
   const transport = new StreamableHTTPServerTransport({
     port,
   });
+
+  // Enable capabilities per Smithery docs
+  server.onListTools(async () => ({ tools: server.listTools() }));
+  server.onListResources(async () => ({ resources: [] }));
+  server.onListPrompts(async () => ({ prompts: [] }));
 
   await server.connect(transport);
 

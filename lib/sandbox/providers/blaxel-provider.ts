@@ -10,9 +10,10 @@
  * - Batch jobs
  * - Agent handoffs
  * - Callback webhooks with signature verification
+ * - Encrypted callback secret storage
  *
  * Documentation: https://docs.blaxel.ai/api-reference/compute/create-sandbox
- * SDK: @blaxel/sdk
+ * SDK: @blaxel/core
  * Async Triggers: https://docs.blaxel.ai/Agents/Asynchronous-triggers
  */
 
@@ -32,13 +33,25 @@ import type {
 } from './sandbox-provider'
 import { quotaManager } from '@/lib/services/quota-manager'
 import { blaxelAsyncManager, verifyWebhookFromRequest } from './blaxel-async'
-import { getDatabase } from '@/lib/database'
+import { getDatabase } from '@/lib/database/connection'
+import { encryptSecret, decryptSecret, generateSecureSecret } from '@/lib/utils/crypto'
 
 const WORKSPACE_DIR = '/workspace'
 const MAX_INSTANCES = 50
 const INSTANCE_TTL_MS = 2 * 60 * 60 * 1000 // 2 hours
 
-// Initialize database for callback secrets persistence
+// Encryption key for callback secrets
+const ENCRYPTION_KEY_ENV = process.env.BLAXEL_SECRET_ENCRYPTION_KEY;
+if (!ENCRYPTION_KEY_ENV && process.env.NODE_ENV === 'production') {
+  console.warn('[Blaxel] BLAXEL_SECRET_ENCRYPTION_KEY not set in production. Callback secrets will NOT be encrypted.');
+}
+
+/**
+ * Initialize database for callback secrets persistence with ENCRYPTION
+ * 
+ * SECURITY: Callback secrets are now encrypted using AES-256-GCM
+ * This prevents database compromise from exposing webhook secrets
+ */
 function initializeBlaxelDatabase(): void {
   try {
     const db = getDatabase();
@@ -47,7 +60,7 @@ function initializeBlaxelDatabase(): void {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sandbox_id TEXT NOT NULL,
         agent TEXT NOT NULL,
-        secret TEXT NOT NULL,
+        secret_encrypted TEXT NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(sandbox_id, agent)
       )
@@ -56,7 +69,7 @@ function initializeBlaxelDatabase(): void {
       CREATE INDEX IF NOT EXISTS idx_blaxel_secrets_sandbox
       ON blaxel_callback_secrets(sandbox_id)
     `);
-    console.log('[Blaxel] Database initialized for callback secrets');
+    console.log('[Blaxel] Database initialized for callback secrets (encrypted)');
   } catch (error) {
     console.warn('[Blaxel] Database init failed:', error);
   }
@@ -123,7 +136,7 @@ export class BlaxelProvider implements SandboxProvider {
     if (this.client) return this.client
 
     try {
-      const blaxelSdk = await import('@blaxel/sdk') as any
+      const blaxelSdk = await import('@blaxel/core') as any
       // Create client from SDK - handle various export patterns
       this.client = new blaxelSdk.default({
         apiKey: this.apiKey,
@@ -132,7 +145,7 @@ export class BlaxelProvider implements SandboxProvider {
       return this.client
     } catch (error: any) {
       console.error('[Blaxel] Failed to initialize client:', error.message)
-      throw new Error(`Blaxel SDK not available. Install with: pnpm add @blaxel/sdk. Error: ${error.message}`)
+      throw new Error(`Blaxel SDK not available. Install with: pnpm add @blaxel/core. Error: ${error.message}`)
     }
   }
 
@@ -417,6 +430,8 @@ export class BlaxelProvider implements SandboxProvider {
   }
 }
 
+import { SandboxSecurityManager } from '../security-manager'
+
 class BlaxelSandboxHandle implements SandboxHandle {
   readonly id: string
   readonly workspaceDir = WORKSPACE_DIR
@@ -431,11 +446,11 @@ class BlaxelSandboxHandle implements SandboxHandle {
   }
 
   /**
-   * Execute async trigger with callback
+   * Execute agent request asynchronously with callback
    * 
    * @see https://docs.blaxel.ai/Agents/Asynchronous-triggers
    */
-  async executeAsync(config: {
+  async executeAgentAsync(config: {
     agent: string;
     input: string;
     callbackUrl?: string;
@@ -474,21 +489,24 @@ class BlaxelSandboxHandle implements SandboxHandle {
 
   /**
    * Register callback URL for async execution
-   * 
+   *
+   * SECURITY: Callback secrets are now encrypted before storage
+   * using AES-256-GCM authenticated encryption
+   *
    * @see https://docs.blaxel.ai/Agents/Asynchronous-triggers#verify-a-callback-using-its-signature
    */
   async registerCallback(agent: string, callbackUrl: string): Promise<{ secret: string; success: boolean }> {
     try {
-      // In production, this would call Blaxel API to register callback
-      // For now, generate a secret and store it
-      const secret = crypto.randomUUID();
+      // Generate secure random secret
+      const secret = generateSecureSecret(32); // 64 character hex string
       const key = `${this.id}:${agent}`;
-      
+
+      // Store in memory (unencrypted for quick access)
       BlaxelSandboxHandle.callbackSecrets.set(key, secret);
-      
-      // Also persist to database for recovery
+
+      // Persist to database (ENCRYPTED)
       await this.persistCallbackSecret(key, secret);
-      
+
       return { secret, success: true };
     } catch (error: any) {
       console.error('[Blaxel] Callback registration failed:', error);
@@ -498,90 +516,111 @@ class BlaxelSandboxHandle implements SandboxHandle {
 
   /**
    * Get callback secret for verification
+   * 
+   * SECURITY: Secrets are decrypted on retrieval from database
    */
   async getCallbackSecret(agent: string): Promise<string | null> {
     const key = `${this.id}:${agent}`;
-    
-    // Try memory first
+
+    // Try memory first (already decrypted)
     const cached = BlaxelSandboxHandle.callbackSecrets.get(key);
     if (cached) return cached;
-    
-    // Try database
+
+    // Try database (will decrypt)
     return await this.loadCallbackSecret(key);
   }
 
   /**
-   * Persist callback secret to database
+   * Persist callback secret to database WITH ENCRYPTION
+   * 
+   * SECURITY: Uses AES-256-GCM authenticated encryption
+   * Format: iv:authTag:encryptedData (all hex encoded)
    */
   private async persistCallbackSecret(key: string, secret: string): Promise<void> {
     try {
       const db = getDatabase();
+      
+      // Encrypt the secret before storing
+      const encryptedSecret = ENCRYPTION_KEY_ENV 
+        ? encryptSecret(secret, ENCRYPTION_KEY_ENV)
+        : secret; // Fallback to plaintext if no key (dev only)
+      
       const stmt = db.prepare(`
         INSERT OR REPLACE INTO blaxel_callback_secrets
-        (sandbox_id, agent, secret, created_at)
+        (sandbox_id, agent, secret_encrypted, created_at)
         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
       `);
-      stmt.run(this.id, key, secret);
+      stmt.run(this.id, key, encryptedSecret);
+      
+      if (ENCRYPTION_KEY_ENV) {
+        console.log('[Blaxel] Callback secret encrypted and persisted');
+      }
     } catch (error) {
-      console.warn('[Blaxel] Failed to persist callback secret:', error);
+      console.error('[Blaxel] Failed to persist callback secret:', error);
     }
   }
 
   /**
-   * Load callback secret from database
+   * Load callback secret from database WITH DECRYPTION
+   * 
+   * SECURITY: Decrypts secret on retrieval
+   * Validates encryption format before decryption
    */
   private async loadCallbackSecret(key: string): Promise<string | null> {
     try {
       const db = getDatabase();
-      const stmt = db.prepare('SELECT secret FROM blaxel_callback_secrets WHERE sandbox_id = ? AND agent = ?');
-      const row = stmt.get(this.id, key) as any;
-      return row?.secret || null;
+      const stmt = db.prepare('SELECT secret_encrypted FROM blaxel_callback_secrets WHERE sandbox_id = ? AND agent = ?');
+      const row = stmt.get(this.id, key) as { secret_encrypted: string } | undefined;
+      
+      if (!row?.secret_encrypted) {
+        return null;
+      }
+      
+      const encryptedSecret = row.secret_encrypted;
+      
+      // Check if it's in encrypted format
+      // If not, it's from old unencrypted storage (migration path)
+      if (!encryptedSecret.includes(':')) {
+        console.warn('[Blaxel] Found unencrypted secret, migrating to encrypted storage');
+        // Re-encrypt and update
+        if (ENCRYPTION_KEY_ENV) {
+          const reEncrypted = encryptSecret(encryptedSecret, ENCRYPTION_KEY_ENV);
+          const updateStmt = db.prepare('UPDATE blaxel_callback_secrets SET secret_encrypted = ? WHERE sandbox_id = ? AND agent = ?');
+          updateStmt.run(reEncrypted, this.id, key);
+        }
+        return encryptedSecret;
+      }
+      
+      // Decrypt the secret
+      if (ENCRYPTION_KEY_ENV) {
+        try {
+          const decrypted = decryptSecret(encryptedSecret, ENCRYPTION_KEY_ENV);
+          return decrypted;
+        } catch (decryptError: any) {
+          console.error('[Blaxel] Failed to decrypt callback secret:', decryptError.message);
+          return null;
+        }
+      } else {
+        // Dev mode without encryption key
+        console.warn('[Blaxel] Loading encrypted secret without encryption key (dev mode)');
+        return encryptedSecret;
+      }
     } catch (error) {
-      console.warn('[Blaxel] Failed to load callback secret:', error);
+      console.error('[Blaxel] Failed to load callback secret:', error);
       return null;
     }
   }
 
-  private sanitizeCommand(command: string): string {
-    // Block ALL shell metacharacters including pipes and redirects
-    // This prevents command injection via: echo "hi" | bash, ls > file, cat < file, etc.
-    const dangerousChars = /[;`$(){}[\]!#~\\|>&]/
-    if (dangerousChars.test(command)) {
-      throw new Error('Command contains disallowed characters for security')
-    }
-    if (/[\n\r\0]/.test(command)) {
-      throw new Error('Command contains invalid control characters')
-    }
-    return command
-  }
-
-  private resolvePath(filePath: string): string {
-    const normalized = filePath.replace(/\\/g, '/')
-    if (normalized.includes('..') || normalized.includes('\0')) {
-      throw new Error(`Invalid file path: ${filePath}`)
-    }
-    if (filePath.startsWith('/')) {
-      const resolved = filePath
-      if (!resolved.startsWith(WORKSPACE_DIR)) {
-        throw new Error(`Path traversal detected: ${filePath}`)
-      }
-      return resolved
-    }
-    const resolved = `${WORKSPACE_DIR}/${normalized}`
-    if (!resolved.startsWith(WORKSPACE_DIR)) {
-      throw new Error(`Path traversal detected: ${filePath}`)
-    }
-    return resolved
-  }
-
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
-    const safeCommand = this.sanitizeCommand(command)
     const effectiveTimeout = timeout ?? 60_000
 
     try {
+      // ✅ ENHANCED: Use combined validation and sanitization
+      const sanitized = SandboxSecurityManager.validateAndSanitizeCommand(command)
+      
       // Blaxel sandboxes support run() method for command execution
       const result = await this.sandbox.run({
-        command: ['bash', '-c', safeCommand],
+        command: ['bash', '-c', sanitized],
         timeout: effectiveTimeout,
         cwd: cwd || WORKSPACE_DIR,
       })
@@ -592,6 +631,15 @@ class BlaxelSandboxHandle implements SandboxHandle {
         exitCode: result.exitCode,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Blaxel] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       if (error.message?.includes('timed out') || error.code === 'TIMEOUT') {
         return {
           success: false,
@@ -605,43 +653,72 @@ class BlaxelSandboxHandle implements SandboxHandle {
 
   /**
    * Execute command asynchronously (for long-running tasks)
-   * 
+   *
    * Unlike executeCommand which blocks, this returns immediately
    * and the task runs in the background for up to 15 minutes.
-   * 
-   * @param command - Command to execute
-   * @param options - Async execution options
-   * @returns Execution ID for tracking
+   *
+   * @param config - Async execution configuration
+   * @returns Async execution result
+   *
+   * @see https://docs.blaxel.ai/Agents/Asynchronous-triggers
    */
-  async executeCommandAsync(
-    command: string,
-    options?: {
-      cwd?: string;
-      callbackUrl?: string;
-      timeout?: number;
-    }
-  ): Promise<{
-    executionId: string;
-    status: 'pending' | 'running';
-  }> {
-    const safeCommand = this.sanitizeCommand(command);
-    
+  async executeAsync(
+    config: AsyncExecutionConfig
+  ): Promise<AsyncExecutionResult> {
     try {
-      // Use Blaxel async execution
-      const result = await this.sandbox.runAsync({
-        command: ['bash', '-c', safeCommand],
-        cwd: options?.cwd || WORKSPACE_DIR,
-        timeout: options?.timeout || 900000, // 15 minutes max
-        callbackUrl: options?.callbackUrl,
-      });
+      // ✅ ENHANCED: Use combined validation and sanitization
+      const sanitized = SandboxSecurityManager.validateAndSanitizeCommand(config.command)
+
+      // Use Blaxel async execution via SDK if available
+      if (this.sandbox.runAsync) {
+        const result = await this.sandbox.runAsync({
+          command: ['bash', '-c', sanitized],
+          cwd: (config as any).cwd || WORKSPACE_DIR,
+          timeout: config.timeout || 900000, // 15 minutes max
+          callbackUrl: config.callbackUrl,
+        })
+
+        return {
+          executionId: result.executionId,
+          status: 'started',
+          callbackUrl: config.callbackUrl,
+        }
+      }
+
+      // Fallback to fetch if SDK method not available
+      const apiKey = process.env.BLAXEL_API_KEY
+      const response = await fetch(`${this.metadata.url}?async=true`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          command: sanitized,
+          callbackUrl: config.callbackUrl,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const data = await response.json()
 
       return {
-        executionId: result.executionId,
-        status: 'pending',
-      };
+        executionId: data.executionId,
+        status: 'started',
+        callbackUrl: config.callbackUrl,
+      }
     } catch (error: any) {
-      console.error('[Blaxel] Async execution failed:', error);
-      throw error;
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Blaxel] Security validation failed:', error.message)
+        throw new Error('Security validation failed')
+      }
+      
+      console.error('[Blaxel] Async execution failed:', error.message)
+      throw new Error(`Async execution failed: ${error.message}`)
     }
   }
 
@@ -689,17 +766,32 @@ class BlaxelSandboxHandle implements SandboxHandle {
   }
 
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(filePath)
-
     try {
+      // ✅ ENHANCED: Use combined validation for path and content
+      const { resolvedPath, validatedContent } = SandboxSecurityManager.validateWriteFile(
+        filePath,
+        content,
+        WORKSPACE_DIR
+      )
+
       // Blaxel SDK provides fs.write for file operations
-      await this.sandbox.fs.write(resolved, content)
+      await this.sandbox.fs.write(resolvedPath, validatedContent)
       return {
         success: true,
-        output: `File written: ${resolved}`,
+        output: `File written: ${resolvedPath}`,
         exitCode: 0,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Blaxel] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+          exitCode: 1,
+        }
+      }
+      
       return {
         success: false,
         output: error.message,
@@ -709,9 +801,10 @@ class BlaxelSandboxHandle implements SandboxHandle {
   }
 
   async readFile(filePath: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(filePath)
-
     try {
+      // ✅ ENHANCED: Validate path before reading
+      const resolved = SandboxSecurityManager.resolvePath(WORKSPACE_DIR, filePath)
+      
       const content = await this.sandbox.fs.read(resolved)
       return {
         success: true,
@@ -719,6 +812,16 @@ class BlaxelSandboxHandle implements SandboxHandle {
         exitCode: 0,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Blaxel] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+          exitCode: 1,
+        }
+      }
+      
       return {
         success: false,
         output: error.message,
@@ -728,12 +831,23 @@ class BlaxelSandboxHandle implements SandboxHandle {
   }
 
   async listDirectory(dirPath?: string): Promise<ToolResult> {
-    const resolved = this.resolvePath(dirPath || '.')
-
     try {
+      // ✅ ENHANCED: Validate path before listing
+      const resolved = SandboxSecurityManager.resolvePath(WORKSPACE_DIR, dirPath || '.')
+      
       const result = await this.executeCommand(`ls -la '${resolved}'`)
       return result
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[Blaxel] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+          exitCode: 1,
+        }
+      }
+      
       return {
         success: false,
         output: error.message,
@@ -818,52 +932,14 @@ class BlaxelSandboxHandle implements SandboxHandle {
   }
 
   /**
-   * Execute command asynchronously with optional webhook callback
-   * Ideal for: long-running tasks (up to 15 min), background processing
-   * Note: This is for simple command execution. For agent triggers, use executeAgentAsync().
-   */
-  async executeCommandAsync(config: AsyncExecutionConfig): Promise<AsyncExecutionResult> {
-    try {
-      const apiKey = process.env.BLAXEL_API_KEY
-
-      const response = await fetch(`${this.metadata.url}?async=true`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          command: config.command,
-          callbackUrl: config.callbackUrl,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-      }
-
-      const data = await response.json()
-
-      return {
-        executionId: data.executionId,
-        status: 'started',
-        callbackUrl: config.callbackUrl,
-      }
-    } catch (error: any) {
-      console.error('[Blaxel] Async execution failed:', error.message)
-      throw new Error(`Async execution failed: ${error.message}`)
-    }
-  }
-
-  /**
    * Execute asynchronously with automatic callback signature verification setup
    * Stores callback secret for later verification
    */
-  async executeCommandAsyncWithVerifiedCallback(
+  async executeAsyncWithVerifiedCallback(
     config: AsyncExecutionConfig & { callbackSecret?: string }
   ): Promise<AsyncExecutionResult & { verified: boolean }> {
     try {
-      const result = await this.executeCommandAsync(config)
+      const result = await this.executeAsync(config)
 
       // Store callback secret for later verification if provided
       if (config.callbackSecret) {

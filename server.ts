@@ -42,12 +42,13 @@ interface TerminalSession {
 
 const terminalSessions = new Map<string, TerminalSession>();
 
-app.prepare().then(() => {
-  const server = createServer((req, res) => {
-    const parsedUrl = parse(req.url!, true);
-    handle(req, res, parsedUrl);
-  });
+// Create server instance (must be defined before export)
+const server = createServer((req, res) => {
+  const parsedUrl = parse(req.url!, true);
+  handle(req, res, parsedUrl);
+});
 
+app.prepare().then(() => {
   // WebSocket server for terminal streaming
   const wss = new WebSocketServer({ noServer: true });
 

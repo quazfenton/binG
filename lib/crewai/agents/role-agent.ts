@@ -270,13 +270,21 @@ ${this.backstory}
 
     try {
       const result = await this.run(finalInput);
+      
+      // Extract usage metrics if available from the stateful agent result
+      const usage = (result as any).usage || {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        total_tokens: 0,
+      };
+
       const output: RoleAgentOutput = {
         raw: result.response,
         role: this.role,
         usage_metrics: {
-          total_tokens: 0,
-          prompt_tokens: 0,
-          completion_tokens: 0,
+          total_tokens: usage.total_tokens || (usage.prompt_tokens + usage.completion_tokens),
+          prompt_tokens: usage.prompt_tokens,
+          completion_tokens: usage.completion_tokens,
         },
         execution_time: Date.now() - startTime,
         success: result.success,
@@ -296,13 +304,17 @@ ${this.backstory}
       return output;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
+      
+      // Attempt to extract usage from error if possible (some SDKs include it)
+      const usage = (error as any).usage || { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0 };
+
       const output: RoleAgentOutput = {
         raw: message,
         role: this.role,
         usage_metrics: {
-          total_tokens: 0,
-          prompt_tokens: 0,
-          completion_tokens: 0,
+          total_tokens: usage.total_tokens,
+          prompt_tokens: usage.prompt_tokens,
+          completion_tokens: usage.completion_tokens,
         },
         execution_time: Date.now() - startTime,
         success: false,

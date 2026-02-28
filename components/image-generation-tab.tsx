@@ -166,6 +166,9 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [generationHistory, setGenerationHistory] = useState<GenerationParams[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
+  
+  // Ref to store the generate function to avoid initialization order issues
+  const generateFnRef = useRef<(() => Promise<void>) | null>(null);
 
   // Update dimensions when aspect ratio changes
   const handleAspectRatioChange = useCallback((value: string) => {
@@ -180,66 +183,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
     }
   }, []);
 
-  // Update steps/guidance when quality changes
-  const handleQualityChange = useCallback((value: "low" | "medium" | "high" | "ultra") => {
-    const preset = QUALITY_PRESETS[value];
-    if (preset) {
-      setParams((prev) => ({
-        ...prev,
-        quality: value,
-        steps: preset.steps,
-        guidance: preset.guidance,
-      }));
-    }
-  }, []);
-
-  // Generate random seed
-  const randomizeSeed = useCallback(() => {
-    setParams((prev) => ({
-      ...prev,
-      seed: Math.floor(Math.random() * 2147483647),
-    }));
-  }, []);
-
-  // Download image
-  const downloadImage = useCallback(async (imageUrl: string, index: number) => {
-    try {
-      const response = await fetch(imageUrl);
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `generated-image-${index + 1}-${Date.now()}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-      toast.success("Image downloaded");
-    } catch {
-      toast.error("Failed to download image");
-    }
-  }, []);
-
-  // Copy image prompt
-  const copyPrompt = useCallback(() => {
-    navigator.clipboard.writeText(params.prompt);
-    toast.success("Prompt copied to clipboard");
-  }, [params.prompt]);
-
-  // Reuse image parameters
-  const reuseParameters = useCallback((historyItem: GenerationParams) => {
-    setParams(historyItem);
-    toast.success("Parameters loaded");
-  }, []);
-
-  // Clear all images
-  const clearImages = useCallback(() => {
-    setGeneratedImages([]);
-    setSelectedImage(null);
-    toast.info("Cleared all images");
-  }, []);
-
-  // Generate image
+  // Generate image - stored in ref to avoid initialization order issues
   const handleGenerate = useCallback(async () => {
     if (!params.prompt.trim()) {
       toast.error("Please enter a prompt");
@@ -274,23 +218,31 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
 
       const data = await response.json();
 
+      console.log('[ImageGenerationTab] API Response:', data);
+
       if (!response.ok) {
         throw new Error(data.error || "Failed to generate image");
       }
 
-      if (data.data?.images && data.data.images.length > 0) {
-        setGeneratedImages((prev) => [...data.data.images, ...prev]);
-        setSelectedImage(data.data.images[0]);
-        
+      // Handle different response structures
+      const images = data?.data?.images || data?.images || [];
+      
+      console.log('[ImageGenerationTab] Extracted images:', images);
+
+      if (images && images.length > 0) {
+        setGeneratedImages((prev) => [...images, ...prev]);
+        setSelectedImage(images[0]);
+
         // Save to history
         setGenerationHistory((prev) => [params, ...prev.slice(0, 9)]);
-        
+
         toast.success(
-          `Generated ${data.data.images.length} image${data.data.images.length > 1 ? "s" : ""} using ${data.data.provider}`
+          `Generated ${images.length} image${images.length > 1 ? "s" : ""} using ${data?.data?.provider || data?.provider || 'unknown'}`
         );
-        
-        onImageGenerated?.(data.data.images[0].url);
+
+        onImageGenerated?.(images[0].url);
       } else {
+        console.error('[ImageGenerationTab] No images in response:', data);
         throw new Error("No images were generated");
       }
     } catch (error: any) {
@@ -306,6 +258,11 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
     }
   }, [params, onImageGenerated]);
 
+  // Store generate function in ref for use by keyboard handlers
+  React.useEffect(() => {
+    generateFnRef.current = handleGenerate;
+  }, [handleGenerate]);
+
   // Cancel generation
   const handleCancel = useCallback(() => {
     if (abortControllerRef.current) {
@@ -313,10 +270,113 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
     }
   }, []);
 
+  // Update steps/guidance when quality changes
+  const handleQualityChange = useCallback((value: "low" | "medium" | "high" | "ultra") => {
+    const preset = QUALITY_PRESETS[value];
+    if (preset) {
+      setParams((prev) => ({
+        ...prev,
+        quality: value,
+        steps: preset.steps,
+        guidance: preset.guidance,
+      }));
+    }
+  }, []);
+
+  // Handle keyboard shortcuts - uses ref to avoid initialization order issues
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    // Ctrl+Enter or Cmd+Enter to generate from anywhere
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      if (!isGenerating && params.prompt.trim()) {
+        generateFnRef.current?.();
+      }
+    }
+  }, [isGenerating, params.prompt]);
+
+  // Handle prompt textarea keyboard events
+  const handlePromptKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter without Shift to generate (in textarea)
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (!isGenerating && params.prompt.trim()) {
+        generateFnRef.current?.();
+      }
+    }
+    // Ctrl+Enter or Cmd+Enter also works
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      if (!isGenerating && params.prompt.trim()) {
+        generateFnRef.current?.();
+      }
+    }
+  }, [isGenerating, params.prompt]);
+
+  // Generate random seed
+  const randomizeSeed = useCallback(() => {
+    setParams((prev) => ({
+      ...prev,
+      seed: Math.floor(Math.random() * 2147483647),
+    }));
+  }, []);
+
+  // Download image
+  const downloadImage = useCallback(async (imageUrl: string, index: number) => {
+    try {
+      let blob: Blob;
+
+      // ✅ FIX 5: Handle both base64 data URLs and remote URLs properly
+      if (imageUrl.startsWith('data:')) {
+        // Handle base64 data URL - convert to blob
+        const response = await fetch(imageUrl);
+        blob = await response.blob();
+      } else {
+        // Handle remote URL - fetch with CORS handling
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+        }
+        blob = await response.blob();
+      }
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `generated-image-${index + 1}-${Date.now()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      toast.success("Image downloaded");
+    } catch (error) {
+      console.error("Download error:", error);
+      toast.error("Failed to download image. Try right-clicking and saving manually.");
+    }
+  }, []);
+
+  // Copy image prompt
+  const copyPrompt = useCallback(() => {
+    navigator.clipboard.writeText(params.prompt);
+    toast.success("Prompt copied to clipboard");
+  }, [params.prompt]);
+
+  // Reuse image parameters
+  const reuseParameters = useCallback((historyItem: GenerationParams) => {
+    setParams(historyItem);
+    toast.success("Parameters loaded");
+  }, []);
+
+  // Clear all images
+  const clearImages = useCallback(() => {
+    setGeneratedImages([]);
+    setSelectedImage(null);
+    toast.info("Cleared all images");
+  }, []);
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b">
+      <div className="flex items-center justify-between p-4">
         <div className="flex items-center gap-2">
           <ImageIcon className="w-5 h-5 text-purple-500" />
           <h3 className="font-semibold">Image Generator</h3>
@@ -336,13 +396,13 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden" onKeyDown={handleKeyDown}>
         <div className="h-full grid grid-cols-1 lg:grid-cols-3 gap-4 p-4 overflow-auto">
           {/* Left Panel - Controls */}
           <div className="lg:col-span-1 space-y-4 overflow-auto">
             {/* Prompt */}
-            <Card>
-              <CardContent className="p-4 space-y-3">
+            <Card className="border-0 shadow-none bg-transparent">
+              <CardContent className="p-0 space-y-3">
                 <div className="flex items-center justify-between">
                   <Label className="text-sm font-medium">Prompt</Label>
                   <Button
@@ -360,6 +420,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
                   onChange={(e) =>
                     setParams((prev) => ({ ...prev, prompt: e.target.value }))
                   }
+                  onKeyDown={handlePromptKeyDown}
                   placeholder="Describe the image you want to generate..."
                   className="min-h-[100px] resize-none"
                   disabled={isGenerating}
@@ -369,8 +430,8 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
 
             {/* Negative Prompt (Advanced) */}
             {showAdvanced && (
-              <Card>
-                <CardContent className="p-4 space-y-3">
+              <Card className="border-0 shadow-none bg-transparent">
+                <CardContent className="p-0 space-y-3">
                   <Label className="text-sm font-medium">Negative Prompt</Label>
                   <Textarea
                     value={params.negativePrompt}
@@ -389,8 +450,8 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
             )}
 
             {/* Quick Settings */}
-            <Card>
-              <CardContent className="p-4 space-y-4">
+            <Card className="border-0 shadow-none bg-transparent">
+              <CardContent className="p-0 space-y-4">
                 <div className="space-y-2">
                   <Label className="text-sm font-medium">Aspect Ratio</Label>
                   <Select
@@ -649,8 +710,8 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
           {/* Right Panel - Preview */}
           <div className="lg:col-span-2 space-y-4 overflow-auto">
             {/* Main Preview */}
-            <Card className="min-h-[400px]">
-              <CardContent className="p-4">
+            <Card className="min-h-[400px] border-0 shadow-none bg-transparent">
+              <CardContent className="p-0">
                 {selectedImage ? (
                   <div className="space-y-4">
                     <div className="relative aspect-square max-h-[500px] mx-auto">
@@ -709,8 +770,8 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
 
             {/* Generated Images Gallery */}
             {generatedImages.length > 0 && (
-              <Card>
-                <CardContent className="p-4">
+              <Card className="border-0 shadow-none bg-transparent">
+                <CardContent className="p-0">
                   <div className="flex items-center justify-between mb-4">
                     <h4 className="font-medium flex items-center gap-2">
                       <Layers className="w-4 h-4" />
@@ -730,10 +791,10 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
                       <div
                         key={index}
                         className={cn(
-                          "relative aspect-square rounded-lg overflow-hidden cursor-pointer border-2 transition-colors",
+                          "relative aspect-square rounded-lg overflow-hidden cursor-pointer",
                           selectedImage?.url === image.url
-                            ? "border-purple-500"
-                            : "border-transparent hover:border-muted"
+                            ? "ring-2 ring-purple-500"
+                            : "hover:ring-2 ring-muted"
                         )}
                         onClick={() => setSelectedImage(image)}
                       >
@@ -752,8 +813,8 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
 
             {/* History */}
             {generationHistory.length > 0 && showAdvanced && (
-              <Card>
-                <CardContent className="p-4">
+              <Card className="border-0 shadow-none bg-transparent">
+                <CardContent className="p-0">
                   <h4 className="font-medium flex items-center gap-2 mb-4">
                     <Sliders className="w-4 h-4" />
                     Recent Parameters

@@ -138,9 +138,20 @@ export class MistralAgentProvider implements SandboxProvider {
 
     try {
       // Create agent with configurable tools
-      const tools: Array<{ type: 'code_interpreter' | 'web_search' }> = [{ type: 'code_interpreter' }]
+      const tools: any[] = [{ type: 'code_interpreter' }]
+      
       if (this.config.enableWebSearch) {
         tools.push({ type: 'web_search' })
+      }
+
+      // ADDED: Document Library support for RAG
+      if (process.env.MISTRAL_ENABLE_DOC_LIBRARY === 'true') {
+        tools.push({ 
+          type: 'document_library',
+          document_library: {
+            library_id: process.env.MISTRAL_LIBRARY_ID
+          }
+        })
       }
       
       const agent = await this.createAgentWithTools(tools)
@@ -305,6 +316,8 @@ export class MistralAgentProvider implements SandboxProvider {
   }
 }
 
+import { SandboxSecurityManager } from '../../security-manager'
+
 /**
  * Mistral Agent Sandbox Handle
  */
@@ -339,7 +352,8 @@ class MistralAgentSandboxHandle implements SandboxHandle {
 
     session.lastActive = Date.now()
 
-    const prompt = this.buildCommandPrompt(command, cwd || this.workspaceDir)
+    const sanitized = SandboxSecurityManager.sanitizeCommand(command)
+    const prompt = this.buildCommandPrompt(sanitized, cwd || this.workspaceDir)
 
     try {
       let response: any
@@ -387,56 +401,56 @@ class MistralAgentSandboxHandle implements SandboxHandle {
   }
 
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
+    const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath)
+    
     // Store in virtual filesystem
     if (!this.session.filesystemState) {
       this.session.filesystemState = { files: [], directories: [] }
     }
 
-    const fullPath = filePath.startsWith('/') ? filePath : `${this.workspaceDir}/${filePath}`
-    
     this.session.filesystemState.files.push({
-      path: fullPath,
+      path: resolved,
       size: content.length,
       modifiedAt: Date.now(),
     })
 
     // Execute code to write file
     const pythonCode = `
-with open("${fullPath}", "w") as f:
+with open("${resolved}", "w") as f:
     f.write("""${content}""")
-print(f"File written: {fullPath}")
+print(f"File written: {resolved}")
 `.trim()
 
     return this.executeCommand(pythonCode)
   }
 
   async readFile(filePath: string): Promise<ToolResult> {
-    const fullPath = filePath.startsWith('/') ? filePath : `${this.workspaceDir}/${filePath}`
+    const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath)
     
     // Execute code to read file
     const pythonCode = `
 try:
-    with open("${fullPath}", "r") as f:
+    with open("${resolved}", "r") as f:
         print(f.read())
 except FileNotFoundError:
-    print(f"File not found: ${fullPath}")
+    print(f"File not found: ${resolved}")
 `.trim()
 
     return this.executeCommand(pythonCode)
   }
 
   async listDirectory(dirPath: string): Promise<ToolResult> {
-    const fullPath = dirPath.startsWith('/') ? dirPath : `${this.workspaceDir}/${dirPath}`
+    const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath)
     
     // Execute code to list directory
     const pythonCode = `
 import os
 try:
-    items = os.listdir("${fullPath}")
+    items = os.listdir("${resolved}")
     for item in items:
         print(item)
 except FileNotFoundError:
-    print(f"Directory not found: ${fullPath}")
+    print(f"Directory not found: ${resolved}")
 `.trim()
 
     return this.executeCommand(pythonCode)

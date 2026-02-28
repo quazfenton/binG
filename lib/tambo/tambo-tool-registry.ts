@@ -1,17 +1,16 @@
 /**
  * Tambo Unified Tool Registry
- * 
+ *
  * Single source of truth for all Tambo tools
  * Consolidates:
  * - lib/tambo/tambo-service.ts (registerTool)
  * - components/tambo/tambo-tools.tsx (tamboTools array)
  * - lib/tool-integration/providers/tambo-local-tools.ts (tamboLocalTools)
- * 
+ *
  * @see https://tambo.ai/docs/concepts/tools
  */
 
 import { z } from 'zod';
-import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 
 /**
  * Tambo tool definition with annotations
@@ -157,7 +156,7 @@ export function initializeDefaultTools(): void {
 
   const DEFAULT_OWNER = 'anon:public';
 
-  // Filesystem tools
+  // Filesystem tools (using API routes for server-side execution)
   tamboToolRegistry.registerMany([
     {
       name: 'readFile',
@@ -174,12 +173,18 @@ export function initializeDefaultTools(): void {
       }),
       tool: async ({ path, ownerId }: { path: string; ownerId?: string }) => {
         const owner = ownerId || DEFAULT_OWNER;
-        const file = await virtualFilesystem.readFile(owner, path);
+        const response = await fetch('/api/filesystem/read', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, ownerId: owner }),
+        });
+        const result = await response.json();
+        if (!result.success) throw new Error(result.error || 'Failed to read file');
         return {
-          path: file.path,
-          content: file.content,
-          language: file.language,
-          version: file.version,
+          path: result.data.path,
+          content: result.data.content,
+          language: result.data.language,
+          version: result.data.version,
         };
       },
       annotations: {
@@ -203,12 +208,18 @@ export function initializeDefaultTools(): void {
       }),
       tool: async ({ path, content, ownerId }: { path: string; content: string; ownerId?: string }) => {
         const owner = ownerId || DEFAULT_OWNER;
-        const file = await virtualFilesystem.writeFile(owner, path, content);
+        const response = await fetch('/api/filesystem/write', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, content, ownerId: owner }),
+        });
+        const result = await response.json();
+        if (!result.success) throw new Error(result.error || 'Failed to write file');
         return {
-          path: file.path,
-          version: file.version,
-          language: file.language,
-          size: file.size,
+          path: result.data.path,
+          version: result.data.version,
+          language: result.data.language,
+          size: result.data.size,
         };
       },
       annotations: {
@@ -235,10 +246,13 @@ export function initializeDefaultTools(): void {
       }),
       tool: async ({ path, ownerId }: { path?: string; ownerId?: string }) => {
         const owner = ownerId || DEFAULT_OWNER;
-        const listing = await virtualFilesystem.listDirectory(owner, path);
+        const queryParams = new URLSearchParams({ path: path || 'project', ownerId: owner });
+        const response = await fetch(`/api/filesystem/list?${queryParams.toString()}`);
+        const result = await response.json();
+        if (!result.success) throw new Error(result.error || 'Failed to list directory');
         return {
-          path: listing.path,
-          entries: listing.nodes.map(n => ({
+          path: result.data.path,
+          entries: result.data.nodes.map((n: any) => ({
             name: n.name,
             type: n.type,
             path: n.path,
@@ -262,8 +276,14 @@ export function initializeDefaultTools(): void {
       }),
       tool: async ({ path, ownerId }: { path: string; ownerId?: string }) => {
         const owner = ownerId || DEFAULT_OWNER;
-        const result = await virtualFilesystem.deletePath(owner, path);
-        return { deletedCount: result.deletedCount };
+        const response = await fetch('/api/filesystem/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path, ownerId: owner }),
+        });
+        const result = await response.json();
+        if (!result.success) throw new Error(result.error || 'Failed to delete path');
+        return { deletedCount: result.data.deletedCount };
       },
       annotations: {
         readOnlyHint: false,
@@ -290,9 +310,12 @@ export function initializeDefaultTools(): void {
       }),
       tool: async ({ query, path, ownerId }: { query: string; path?: string; ownerId?: string }) => {
         const owner = ownerId || DEFAULT_OWNER;
-        const results = await virtualFilesystem.search(owner, query, { path });
+        const queryParams = new URLSearchParams({ q: query, path: path || 'project', ownerId: owner });
+        const response = await fetch(`/api/filesystem/search?${queryParams.toString()}`);
+        const result = await response.json();
+        if (!result.success) throw new Error(result.error || 'Search failed');
         return {
-          results: results.map(r => ({
+          results: result.data.results.map((r: any) => ({
             path: r.path,
             name: r.name,
             language: r.language,

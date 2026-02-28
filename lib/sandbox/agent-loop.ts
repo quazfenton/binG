@@ -1,6 +1,6 @@
 import { getLLMProvider } from './providers/llm-factory'
 import { getSandboxProvider } from './providers'
-import { SANDBOX_TOOLS, validateCommand, type ToolName } from './sandbox-tools'
+import { SANDBOX_TOOLS, validateCommandLegacy as validateCommand, type ToolName } from './sandbox-tools'
 import { 
   validateToolInput, 
   WriteFileSchema, 

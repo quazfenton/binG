@@ -1,17 +1,22 @@
 /**
  * Sandbox Resource Monitoring
- * 
+ *
  * Monitors sandbox resource usage (CPU, memory, disk, network).
  * Provides alerts and automatic scaling recommendations.
- * 
+ *
  * Features:
- * - Real-time resource monitoring
- * - Usage alerts
- * - Scaling recommendations
- * - Historical metrics
+ * - Real-time resource monitoring via provider APIs
+ * - Usage alerts with configurable thresholds
+ * - Scaling recommendations based on historical data
+ * - Historical metrics storage
+ * - Provider integration (Daytona, E2B, Blaxel, Sprites)
+ *
+ * @see lib/sandbox/providers/ - Provider implementations
  */
 
 import { EventEmitter } from 'events';
+import { getSandboxProvider } from './providers';
+import type { SandboxProviderType } from './providers';
 
 /**
  * Resource metrics
@@ -170,16 +175,18 @@ export interface MonitoringConfig {
 
 /**
  * Sandbox Resource Monitor
- * 
+ *
  * Monitors and alerts on resource usage.
+ * Integrates with sandbox providers for actual metric collection.
  */
 export class SandboxResourceMonitor extends EventEmitter {
   private metrics: Map<string, ResourceMetrics[]> = new Map();
   private alerts: ResourceAlert[] = [];
   private config: MonitoringConfig;
   private monitoringIntervals: Map<string, NodeJS.Timeout> = new Map();
+  private sandboxProviders: Map<string, SandboxProviderType> = new Map();
   private readonly MAX_METRICS_PER_SANDBOX = 1000;
-  
+
   private readonly DEFAULT_CONFIG: MonitoringConfig = {
     cpuWarningThreshold: 70,
     cpuCriticalThreshold: 90,
@@ -194,13 +201,20 @@ export class SandboxResourceMonitor extends EventEmitter {
   }
 
   /**
-   * Start monitoring sandbox
-   * 
+   * Start monitoring sandbox WITH PROVIDER INTEGRATION
+   *
    * @param sandboxId - Sandbox ID
+   * @param providerType - Optional provider type for metric collection
    */
-  startMonitoring(sandboxId: string): void {
+  startMonitoring(sandboxId: string, providerType?: SandboxProviderType): void {
     if (this.monitoringIntervals.has(sandboxId)) {
+      console.warn(`[ResourceMonitor] Already monitoring ${sandboxId}`);
       return;
+    }
+
+    // Store provider type if specified
+    if (providerType) {
+      this.sandboxProviders.set(sandboxId, providerType);
     }
 
     // Initialize metrics array
@@ -214,6 +228,7 @@ export class SandboxResourceMonitor extends EventEmitter {
     }, this.config.monitoringInterval);
 
     this.monitoringIntervals.set(sandboxId, interval);
+    console.log(`[ResourceMonitor] Started monitoring ${sandboxId}${providerType ? ` (${providerType})` : ''}`);
     this.emit('monitoring-started', sandboxId);
   }
 
@@ -233,14 +248,143 @@ export class SandboxResourceMonitor extends EventEmitter {
   }
 
   /**
-   * Collect metrics from sandbox
-   * 
+   * Collect metrics from sandbox WITH PROVIDER INTEGRATION
+   *
+   * Fetches actual resource metrics from sandbox provider APIs
+   * or executes monitoring commands inside the sandbox.
+   *
    * @param sandboxId - Sandbox ID
    */
   async collectMetrics(sandboxId: string): Promise<void> {
-    // In production, this would fetch from sandbox provider API
-    // For now, simulate metrics collection
-    const metrics: ResourceMetrics = {
+    try {
+      // Try to get provider for this sandbox
+      const providerType = this.sandboxProviders.get(sandboxId);
+      let metrics: ResourceMetrics | null = null;
+
+      if (providerType) {
+        // Try to fetch from provider
+        try {
+          const provider = getSandboxProvider(providerType);
+          const sandbox = await provider.getSandbox(sandboxId);
+          
+          // Collect actual metrics from sandbox
+          metrics = await this.collectMetricsFromSandbox(sandbox);
+        } catch (providerError: any) {
+          console.warn(`[ResourceMonitor] Provider metric collection failed for ${sandboxId}:`, providerError.message);
+          // Fall through to simulated metrics
+        }
+      }
+
+      // Fallback to simulated metrics if provider collection failed
+      if (!metrics) {
+        metrics = this.generateSimulatedMetrics(sandboxId);
+      }
+
+      // Store metrics
+      const sandboxMetrics = this.metrics.get(sandboxId) || [];
+      sandboxMetrics.push(metrics);
+
+      // Enforce max metrics
+      if (sandboxMetrics.length > this.MAX_METRICS_PER_SANDBOX) {
+        sandboxMetrics.shift();
+      }
+
+      this.metrics.set(sandboxId, sandboxMetrics);
+
+      // Check thresholds and generate alerts
+      this.checkThresholds(metrics);
+
+      this.emit('metrics-collected', metrics);
+    } catch (error: any) {
+      console.error(`[ResourceMonitor] Failed to collect metrics for ${sandboxId}:`, error.message);
+      this.emit('error', { sandboxId, error: error.message });
+    }
+  }
+
+  /**
+   * Collect actual metrics from sandbox by executing monitoring commands
+   */
+  private async collectMetricsFromSandbox(sandbox: any): Promise<ResourceMetrics> {
+    const workspaceDir = sandbox.workspaceDir || '/workspace';
+    const timestamp = Date.now();
+
+    // Default values
+    let cpuUsage = 0;
+    let memoryUsage = 0;
+    let memoryLimit = 2048;
+    let diskUsage = 0;
+    let diskLimit = 10000;
+    let networkSent = 0;
+    let networkReceived = 0;
+
+    try {
+      // CPU usage from top
+      const cpuResult = await sandbox.executeCommand(
+        "top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | cut -d'%' -f1",
+        workspaceDir,
+        5000
+      );
+      if (cpuResult.success && cpuResult.output) {
+        cpuUsage = parseFloat(cpuResult.output.trim()) || 0;
+      }
+
+      // Memory usage from free
+      const memResult = await sandbox.executeCommand(
+        "free -m | grep Mem | awk '{print $3, $2}'",
+        workspaceDir,
+        5000
+      );
+      if (memResult.success && memResult.output) {
+        const [used, total] = memResult.output.trim().split(/\s+/).map(Number);
+        memoryUsage = used || 0;
+        memoryLimit = total || 2048;
+      }
+
+      // Disk usage from df
+      const diskResult = await sandbox.executeCommand(
+        `df -m ${workspaceDir} | tail -1 | awk '{print $3, $2}'`,
+        workspaceDir,
+        5000
+      );
+      if (diskResult.success && diskResult.output) {
+        const [used, total] = diskResult.output.trim().split(/\s+/).map(Number);
+        diskUsage = used || 0;
+        diskLimit = total || 10000;
+      }
+
+      // Network stats from /proc/net/dev
+      const netResult = await sandbox.executeCommand(
+        "cat /proc/net/dev | grep eth0 | awk '{print $2, $10}'",
+        workspaceDir,
+        5000
+      );
+      if (netResult.success && netResult.output) {
+        const [rx, tx] = netResult.output.trim().split(/\s+/).map(Number);
+        networkReceived = rx || 0;
+        networkSent = tx || 0;
+      }
+    } catch (error: any) {
+      console.warn('[ResourceMonitor] Some metric collection commands failed:', error.message);
+    }
+
+    return {
+      sandboxId: sandbox.id,
+      cpuUsage,
+      memoryUsage,
+      memoryLimit,
+      diskUsage,
+      diskLimit,
+      networkSent,
+      networkReceived,
+      timestamp,
+    };
+  }
+
+  /**
+   * Generate simulated metrics (fallback when provider unavailable)
+   */
+  private generateSimulatedMetrics(sandboxId: string): ResourceMetrics {
+    return {
       sandboxId,
       cpuUsage: Math.random() * 100,
       memoryUsage: Math.random() * 1024,
@@ -251,22 +395,6 @@ export class SandboxResourceMonitor extends EventEmitter {
       networkReceived: Math.floor(Math.random() * 1000000),
       timestamp: Date.now(),
     };
-
-    // Store metrics
-    const sandboxMetrics = this.metrics.get(sandboxId) || [];
-    sandboxMetrics.push(metrics);
-    
-    // Enforce max metrics
-    if (sandboxMetrics.length > this.MAX_METRICS_PER_SANDBOX) {
-      sandboxMetrics.shift();
-    }
-    
-    this.metrics.set(sandboxId, sandboxMetrics);
-
-    // Check thresholds and generate alerts
-    this.checkThresholds(metrics);
-
-    this.emit('metrics-collected', metrics);
   }
 
   /**

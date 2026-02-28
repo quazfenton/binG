@@ -15,6 +15,7 @@
 
 import { createWorkflow, createStep } from '@mastra/core/workflows';
 import { z } from 'zod';
+import { simulatedOrchestrator } from '../../agent/simulated-orchestration';
 import { getModel } from '../models/model-router';
 import {
   writeFileTool,
@@ -82,6 +83,28 @@ export const WorkflowState = z.object({
 // ===========================================
 
 /**
+ * Step 0: Collective Orchestrator
+ * Checks for external task proposals from other frameworks
+ */
+export const collectiveStep = createStep({
+  id: 'collective',
+  inputSchema: WorkflowInput,
+  outputSchema: z.object({
+    task: z.string(),
+    externalProposals: z.array(z.any()),
+  }),
+  execute: async ({ inputData }) => {
+    const proposals = simulatedOrchestrator.listProposals();
+    const relevant = proposals.filter(p => p.status === 'proposed');
+    
+    return {
+      task: inputData.task,
+      externalProposals: relevant,
+    };
+  },
+});
+
+/**
  * Step 1: Planner
  *
  * Analyzes task and creates execution plan
@@ -95,8 +118,9 @@ export const plannerStep = createStep({
     needsSelfHealing: z.boolean().default(false),
   }),
   stateSchema: WorkflowState,
-  execute: async ({ inputData, state, setState }) => {
+  execute: async ({ inputData, state, setState, getStepResult }) => {
     const { task, ownerId } = inputData;
+    const collectiveResult = getStepResult(collectiveStep);
     const agent = getModel('reasoning');
 
     try {
@@ -106,6 +130,9 @@ export const plannerStep = createStep({
         {
           role: 'system',
           content: `You are a planning agent. Output a JSON plan with steps.
+          
+          COLLECTIVE CONTEXT:
+          ${JSON.stringify(collectiveResult?.externalProposals || [])}
 
 Available tools:
 - WRITE_FILE: Create or update files
@@ -534,6 +561,7 @@ export const codeAgentWorkflow = createWorkflow({
     },
   },
 })
+  .then(collectiveStep)
   .then(plannerStep)
   .then(executorStep)
   .then(criticStep)

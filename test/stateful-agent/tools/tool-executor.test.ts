@@ -11,7 +11,8 @@ describe('ToolExecutor', () => {
       readFile: vi.fn(),
       writeFile: vi.fn(),
       listDirectory: vi.fn(),
-      executeCommand: vi.fn(),
+      executeCommand: vi.fn().mockResolvedValue({ success: true, exitCode: 0, stdout: 'health', stderr: '' }),
+      workspaceDir: '/workspace',
     };
   });
 
@@ -324,12 +325,15 @@ describe('ToolExecutor', () => {
       // syntaxCheckTool returns early without sandbox, so we test with sandbox mock
       const mockSandboxHandle = {
         readFile: vi.fn().mockResolvedValue({ success: true, content: 'function test() {' }),
+        executeCommand: vi.fn().mockResolvedValue({ success: true, exitCode: 0, stdout: 'health', stderr: '' }),
+        workspaceDir: '/workspace',
       };
       executor = createToolExecutor({ sandboxHandle: mockSandboxHandle });
 
       const result = await executor.execute('syntaxCheck', { paths: ['/test.ts'] });
 
       // With sandbox, it should detect unbalanced braces
+      expect(result.output).toBeDefined();
       expect(result.output).toContain('Unbalanced');
     });
 
@@ -345,12 +349,15 @@ describe('ToolExecutor', () => {
     it('should detect invalid JSON', async () => {
       const mockSandboxHandle = {
         readFile: vi.fn().mockResolvedValue({ success: true, content: '{"invalid": }' }),
+        executeCommand: vi.fn().mockResolvedValue({ success: true, exitCode: 0, stdout: 'health', stderr: '' }),
+        workspaceDir: '/workspace',
       };
       executor = createToolExecutor({ sandboxHandle: mockSandboxHandle });
 
       const result = await executor.execute('syntaxCheck', { paths: ['/test.json'] });
 
       expect(result.success).toBe(false);
+      expect(result.output).toBeDefined();
       expect(result.output).toContain('Invalid JSON');
     });
 

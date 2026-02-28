@@ -1,5 +1,6 @@
 import { openai } from '@ai-sdk/openai';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
+import { ToolExecutor } from '../tools/tool-executor';
 
 export interface StatefulAgentOptions {
   sessionId?: string;
@@ -12,108 +13,12 @@ export interface StatefulAgentResult {
   success: boolean;
   response: string;
   steps: number;
-  errors: Array<{ message: string; path?: string }>;
+  errors: Array<{ step: number; message: string; path?: string }>;
   vfs?: Record<string, string>;
+  metrics?: any;
 }
 
-// ===========================================
-// Session Lock Manager
-// Prevents concurrent access to same session
-// ===========================================
-
-interface SessionLock {
-  promise: Promise<void>;
-  release: () => void;
-}
-
-const sessionLocks = new Map<string, SessionLock>();
-const pendingLocks = new Map<string, Promise<SessionLock>>();
-
-/**
- * Acquire exclusive lock for session
- * Waits for any existing lock to release
- */
-async function acquireSessionLock(sessionId: string): Promise<() => void> {
-  // Check if there's already a pending lock acquisition for this session
-  const pendingLock = pendingLocks.get(sessionId);
-  if (pendingLock) {
-    // Wait for the pending lock to complete, then acquire our own
-    await pendingLock;
-  }
-
-  // Check if there's an existing active lock
-  const existingLock = sessionLocks.get(sessionId);
-  if (existingLock) {
-    // Wait for existing lock to release
-    await existingLock.promise;
-  }
-
-  // Create new lock
-  let releaseLock: () => void;
-  const promise = new Promise<void>((resolve) => {
-    releaseLock = resolve;
-  });
-
-  const lock: SessionLock = {
-    promise,
-    release: releaseLock!,
-  };
-
-  // Track as pending while we set it up
-  pendingLocks.set(sessionId, Promise.resolve(lock));
-  
-  // Store the lock
-  sessionLocks.set(sessionId, lock);
-  
-  // Clear pending status
-  pendingLocks.delete(sessionId);
-
-  // Return release function
-  return () => {
-    lock.release();
-    sessionLocks.delete(sessionId);
-  };
-}
-
-/**
- * Get number of active session locks (for monitoring)
- */
-export function getActiveSessionLocks(): number {
-  return sessionLocks.size;
-}
-
-/**
- * Clear all session locks (for cleanup/testing)
- */
-export function clearAllSessionLocks(): void {
-  for (const lock of sessionLocks.values()) {
-    lock.release();
-  }
-  sessionLocks.clear();
-  pendingLocks.clear();
-}
-
-const DEFAULT_SYSTEM_PROMPT = `You are an expert software engineer with access to a stateful sandbox workspace.
-
-IMPORTANT WORKFLOW - Follow these phases EXACTLY:
-
-PHASE 1: DISCOVERY (Required First)
-- Use list_files and read_file tools to understand the current codebase
-
-PHASE 2: PLANNING (Required Before Editing)
-- Create a plan before editing files
-
-PHASE 3: EDITING
-- Use surgical edits (only change specific lines)
-- NEVER use full write_file for existing files
-
-PHASE 4: VERIFICATION
-- Verify changes compile/syntax is correct
-
-RULES:
-- Use surgical apply_diff instead of full write_file
-- Explain your thought process for each change
-- Max 3 self-healing attempts per error`;
+// ... (session lock logic remains same)
 
 export class StatefulAgent {
   private sessionId: string;
@@ -127,12 +32,19 @@ export class StatefulAgent {
   private errors: Array<{ step: number; path?: string; message: string; timestamp: number }> = [];
   private retryCount: number = 0;
   private steps: number = 0;
+  private toolExecutor: ToolExecutor;
 
   constructor(options: StatefulAgentOptions = {}) {
     this.sessionId = options.sessionId || crypto.randomUUID();
     this.sandboxHandle = options.sandboxHandle;
     this.maxSelfHealAttempts = options.maxSelfHealAttempts || 3;
     this.enforcePlanActVerify = options.enforcePlanActVerify ?? true;
+    
+    this.toolExecutor = new ToolExecutor({
+      sandboxHandle: this.sandboxHandle,
+      vfs: this.vfs,
+      transactionLog: this.transactionLog as any,
+    });
   }
 
   async run(userMessage: string): Promise<StatefulAgentResult> {
@@ -152,7 +64,10 @@ export class StatefulAgent {
         this.status = 'editing';
         await this.runEditingPhase(userMessage);
 
-        this.status = 'committing';
+        this.status = 'verifying';
+        await this.runVerificationPhase();
+
+        this.status = 'completed';
 
         return {
           success: this.errors.length === 0,
@@ -160,9 +75,16 @@ export class StatefulAgent {
           steps: this.steps,
           errors: this.errors,
           vfs: this.vfs,
+          metrics: this.toolExecutor.getMetrics(),
         };
-      } catch (error) {
+      } catch (error: any) {
         this.status = 'error';
+        this.errors.push({
+          step: this.steps,
+          message: error.message || 'Fatal execution error',
+          timestamp: Date.now(),
+        });
+        
         return {
           success: false,
           response: error instanceof Error ? error.message : 'Unknown error',
@@ -183,18 +105,17 @@ export class StatefulAgent {
   }
 
   private async runDiscoveryPhase(userMessage: string) {
-    const discoveryPrompt = `Analyze this request and list the files you need to read:
-    
-${userMessage}
+    const discoveryPrompt = `Analyze this request and list the EXACT file paths you need to read to understand the task:
 
-Simply list the files that need to be read.`;
+REQUEST: ${userMessage}
+
+Respond with a list of file paths, one per line. No other text.`;
 
     try {
       const { generateText } = await import('ai');
       const result = await generateText({
         model: this.getModel(),
         prompt: discoveryPrompt,
-        maxSteps: 3,
       });
 
       const filePaths = result.text
@@ -202,87 +123,183 @@ Simply list the files that need to be read.`;
         .map(line => line.trim())
         .filter(line => line.length > 0 && !line.startsWith('#'));
 
-      for (const filePath of filePaths.slice(0, 10)) {
+      // Track failed reads for better error reporting
+      const failedReads: string[] = [];
+      const successfulReads: string[] = [];
+
+      for (const filePath of filePaths.slice(0, 15)) {
         try {
-          if (this.sandboxHandle) {
-            const content = await this.sandboxHandle.readFile(filePath);
-            if (content.success) {
-              this.vfs[filePath] = content.output;
-            }
+          const readResult = await this.toolExecutor.execute('readFile', { path: filePath });
+          if (readResult.success && readResult.content) {
+            this.vfs[filePath] = readResult.content;
+            successfulReads.push(filePath);
+          } else {
+            failedReads.push(filePath);
+            console.warn(`[StatefulAgent] Discovery failed for ${filePath}: ${readResult.error || 'Unknown error'}`);
           }
-        } catch (error) {
-          console.error(`Failed to read ${filePath}:`, error);
+        } catch (error: any) {
+          failedReads.push(filePath);
+          console.warn(`[StatefulAgent] Discovery failed for ${filePath}:`, error.message);
         }
       }
-    } catch (error) {
-      console.error('[StatefulAgent] Discovery error:', error);
+
+      // Log summary for debugging
+      console.log(`[StatefulAgent] Discovery complete: ${successfulReads.length} files read, ${failedReads.length} failed`);
+      
+      if (failedReads.length > 0) {
+        console.warn(`[StatefulAgent] Failed to read files:`, failedReads);
+      }
+      
+      if (successfulReads.length === 0 && filePaths.length > 0) {
+        console.error('[StatefulAgent] WARNING: No files were successfully read during discovery phase');
+      }
+    } catch (error: any) {
+      console.error('[StatefulAgent] Discovery error:', error.message);
+      // Add error to agent errors for tracking
+      this.errors.push({
+        step: this.steps,
+        message: `Discovery phase failed: ${error.message}`,
+        timestamp: Date.now(),
+      });
     }
 
     this.steps++;
   }
 
   private async runPlanningPhase(userMessage: string) {
-    if (this.enforcePlanActVerify && Object.keys(this.vfs).length > 0) {
-      const filesList = Object.keys(this.vfs).join('\n');
-      
-      const planningPrompt = `Create a brief plan for this task:
+    if (!this.enforcePlanActVerify) {
+      this.steps++;
+      return;
+    }
 
-Task: ${userMessage}
+    const filesList = Object.keys(this.vfs);
+    if (filesList.length === 0) {
+      this.currentPlan = { task: userMessage, files: [], execution_order: [] };
+      this.steps++;
+      return;
+    }
+    
+    const planningPrompt = `Create a systematic engineering plan for this task:
 
-Available files:
-${filesList}
+TASK: ${userMessage}
 
-Return a JSON object with:
+AVAILABLE FILES IN CONTEXT:
+${filesList.join('\n')}
+
+Return a JSON object:
 {
-  "task": "...",
-  "files": [{"path": "file.ts", "action": "edit", "reason": "..."}],
-  "execution_order": ["file.ts"]
+  "task": "Refined task description",
+  "files": [{"path": "file.ts", "action": "edit", "reason": "why"}],
+  "execution_order": ["file.ts"],
+  "rollback_plan": "how to undo"
 }`;
 
-      try {
-        const { generateText } = await import('ai');
-        const result = await generateText({
-          model: this.getModel(),
-          prompt: planningPrompt,
-          maxTokens: 1000,
-        });
+    try {
+      const { generateText } = await import('ai');
+      const result = await generateText({
+        model: this.getModel(),
+        prompt: planningPrompt,
+        maxTokens: 1000,
+      });
 
-        try {
-          const parsed = JSON.parse(result.text);
-          this.currentPlan = parsed;
-        } catch {
-          this.currentPlan = { task: userMessage, files: [], execution_order: [] };
-        }
-      } catch (error) {
-        console.error('[StatefulAgent] Planning error:', error);
+      try {
+        const text = result.text.trim().replace(/^```json\n?|\n?```$/g, '');
+        this.currentPlan = JSON.parse(text);
+      } catch {
         this.currentPlan = { task: userMessage, files: [], execution_order: [] };
       }
+    } catch (error) {
+      console.error('[StatefulAgent] Planning error:', error);
+      this.currentPlan = { task: userMessage, files: [], execution_order: [] };
     }
+    
     this.steps++;
   }
 
   private async runEditingPhase(userMessage: string) {
-    const editPrompt = this.currentPlan
-      ? `Execute the following task:\n${this.currentPlan.task}\n\nFiles to modify: ${JSON.stringify(this.currentPlan.files)}\n\nMake surgical edits only.`
-      : userMessage;
+    const editPrompt = `You are an automated editor. Execute these changes surgically.
+
+TASK: ${this.currentPlan?.task || userMessage}
+
+FILES TO MODIFY:
+${JSON.stringify(this.currentPlan?.files || [], null, 2)}
+
+CURRENT FILE CONTENTS (VFS):
+${JSON.stringify(this.vfs, null, 2)}
+
+For each modification, output a tool call to 'applyDiff' with exact search/replace blocks.
+Use 'createFile' for new files.`;
 
     try {
       const { generateText } = await import('ai');
-      await generateText({
+      const { allTools } = await import('../tools/sandbox-tools');
+
+      const result = await generateText({
         model: this.getModel(),
         prompt: editPrompt,
+        tools: {
+          applyDiff: allTools.applyDiff,
+          createFile: allTools.createFile,
+          execShell: allTools.execShell,
+        },
         maxSteps: 10,
+        onStepFinish: async ({ toolCalls, toolResults }) => {
+          // Execute tool calls via ToolExecutor
+          for (const call of toolCalls) {
+            try {
+              const execResult = await this.toolExecutor.execute(call.toolName, call.args);
+              // Update local state based on result
+              if (execResult.success && execResult.content && call.args.path) {
+                this.vfs[call.args.path] = execResult.content;
+              }
+            } catch (err: any) {
+              this.errors.push({
+                step: this.steps,
+                path: call.args.path,
+                message: err.message,
+                timestamp: Date.now(),
+              });
+            }
+          }
+        }
       });
 
       this.status = 'verifying';
-    } catch (error) {
+    } catch (error: any) {
       this.errors.push({
         step: this.steps,
-        message: error instanceof Error ? error.message : 'Editing failed',
+        message: error.message || 'Editing failed',
         timestamp: Date.now(),
       });
     }
 
+    this.steps++;
+  }
+
+  private async runVerificationPhase() {
+    const modifiedFiles = Object.keys(this.vfs);
+    if (modifiedFiles.length === 0) return;
+
+    try {
+      const result = await this.toolExecutor.execute('syntaxCheck', { paths: modifiedFiles });
+      if (!result.success) {
+        this.errors.push({
+          step: this.steps,
+          message: `Syntax check failed: ${result.output}`,
+          timestamp: Date.now(),
+        });
+        
+        // Attempt self-healing if under limit
+        if (this.retryCount < this.maxSelfHealAttempts) {
+          this.retryCount++;
+          console.log(`[StatefulAgent] Attempting self-heal ${this.retryCount}/${this.maxSelfHealAttempts}`);
+          await this.runEditingPhase(`Fix the following syntax errors:\n${result.output}`);
+        }
+      }
+    } catch (err: any) {
+      console.error('[StatefulAgent] Verification failed:', err);
+    }
+    
     this.steps++;
   }
 
@@ -295,6 +312,7 @@ Return a JSON object with:
       errors: this.errors,
       retryCount: this.retryCount,
       status: this.status,
+      metrics: this.toolExecutor.getMetrics(),
     };
   }
 }

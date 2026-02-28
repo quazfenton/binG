@@ -637,20 +637,37 @@ export class Crew {
     }
 
     if (this.manager_llm) {
+      // Look for an existing agent that might fit the role
       const managerCandidate = this.agents.find(
         (agent) => agent.role.toLowerCase().includes('manager') || agent.role.toLowerCase().includes('lead'),
       );
       if (managerCandidate) {
         return managerCandidate;
       }
+
+      // If no manager agent exists but manager_llm is specified, create an internal one
+      const sessionId = `manager-${Date.now()}`;
+      const { RoleAgent } = require('../agents/role-agent');
+      
+      this.manager_agent = new RoleAgent(sessionId, {
+        role: 'Crew Manager',
+        goal: 'Coordinate the crew to complete all tasks efficiently',
+        backstory: 'You are an experienced project manager specialized in AI coordination.',
+        llm: this.manager_llm,
+        allow_delegation: true,
+      });
+
+      this.log(`Created dynamic manager agent using LLM: ${this.manager_llm}`);
+      return this.manager_agent!;
     }
 
     if (this.process === 'hierarchical') {
       throw new Error(
-        'Hierarchical process requires a manager agent instance in this TypeScript runtime. Configure manager_agent explicitly.',
+        'Hierarchical process requires a manager agent instance or manager_llm to be configured.',
       );
     }
 
+    // Default to the first agent for sequential/consensual if no manager specified
     return this.agents[0];
   }
 }

@@ -12,6 +12,7 @@ export interface SecurityCheckResult {
   reason?: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
   blockedPattern?: string;
+  wasObfuscated?: boolean;
 }
 
 /**
@@ -74,6 +75,13 @@ const DANGEROUS_PATTERNS: DangerPattern[] = [
   { pattern: /wget.+\|bash|wget.+\|sh/, reason: 'Download and execute', severity: 'critical' },
   { pattern: /python.*http.*\|/i, reason: 'Python piped execution', severity: 'critical' },
   { pattern: /bash\s+<.*http|sh\s+<.*http/, reason: 'Shell redirect from network', severity: 'critical' },
+  
+  // Reverse shells
+  { pattern: /bash\s+-i\s+>&\s+\/dev\/tcp\//, reason: 'Bash reverse shell', severity: 'critical' },
+  { pattern: /nc\s+-e\s+\/bin\/(ba)?sh/, reason: 'Netcat reverse shell', severity: 'critical' },
+  { pattern: /python\s+-c\s+['"].*socket.*connect/, reason: 'Python reverse shell', severity: 'critical' },
+  { pattern: /perl\s+-e\s+['"].*socket/, reason: 'Perl reverse shell', severity: 'critical' },
+  { pattern: /ruby\s+-rsocket\s+-e/, reason: 'Ruby reverse shell', severity: 'critical' },
 ];
 
 /**
@@ -116,48 +124,142 @@ const PYTHON_DANGEROUS_PATTERNS: DangerPattern[] = [
 ];
 
 /**
+ * Decode and check command for security issues
+ * This function decodes obfuscated commands before checking patterns
+ */
+function decodeAndCheckCommand(command: string): { decoded: string; wasObfuscated: boolean } {
+  let decoded = command;
+  let wasObfuscated = false;
+
+  // Detect and decode base64 encoded commands
+  const base64Pattern = /(?:echo|cat)\s+['"]?([A-Za-z0-9+/=]{20,})['"]?\s*\|\s*base64\s+(-d|--decode)/i;
+  const base64Match = command.match(base64Pattern);
+  if (base64Match && base64Match[1]) {
+    try {
+      const decodedBase64 = Buffer.from(base64Match[1], 'base64').toString('utf-8');
+      decoded = decoded.replace(base64Match[0], decodedBase64);
+      wasObfuscated = true;
+    } catch {
+      // Invalid base64, continue with original
+    }
+  }
+
+  // Detect string concatenation attempts (e.g., 'cu' + 'rl' + ' bash')
+  const concatPattern = /['"][^'"]+['"]\s*\+\s*['"][^'"]+['"]/g;
+  if (concatPattern.test(command)) {
+    try {
+      // Evaluate concatenation safely by extracting and joining strings
+      const strings = command.match(/['"]([^'"]+)['"]/g);
+      if (strings) {
+        const extracted = strings.map(s => s.slice(1, -1)).join('');
+        if (extracted.length > 0) {
+          decoded = decoded.replace(concatPattern, extracted);
+          wasObfuscated = true;
+        }
+      }
+    } catch {
+      // Failed to extract, continue with original
+    }
+  }
+
+  // Detect hex/octal encoding (e.g., \x63\x75\x72\x6c for "curl")
+  const hexPattern = /\\x[0-9a-fA-F]{2}/g;
+  const octalPattern = /\\[0-7]{3}/g;
+  if (hexPattern.test(command) || octalPattern.test(command)) {
+    try {
+      decoded = decoded.replace(hexPattern, (match) => {
+        return String.fromCharCode(parseInt(match.slice(2), 16));
+      }).replace(octalPattern, (match) => {
+        return String.fromCharCode(parseInt(match.slice(1), 8));
+      });
+      wasObfuscated = true;
+    } catch {
+      // Failed to decode, continue with original
+    }
+  }
+
+  // Detect URL encoding (e.g., %63%75%72%6c for "curl")
+  const urlEncodingPattern = /%[0-9a-fA-F]{2}/g;
+  if (urlEncodingPattern.test(command)) {
+    try {
+      decoded = decodeURIComponent(command);
+      wasObfuscated = true;
+    } catch {
+      // Invalid URL encoding, continue with original
+    }
+  }
+
+  // Detect unicode encoding (e.g., \u0063\u0075\u0072\u006c for "curl")
+  const unicodePattern = /\\u[0-9a-fA-F]{4}/g;
+  if (unicodePattern.test(command)) {
+    try {
+      decoded = decoded.replace(unicodePattern, (match) => {
+        return String.fromCharCode(parseInt(match.slice(2), 16));
+      });
+      wasObfuscated = true;
+    } catch {
+      // Failed to decode, continue with original
+    }
+  }
+
+  return { decoded, wasObfuscated };
+}
+
+/**
  * Check if a command contains dangerous patterns
+ * Enhanced with decoding detection to catch obfuscated malicious commands
  */
 export function checkCommandSecurity(command: string): SecurityCheckResult {
-  const trimmed = command.trim().toLowerCase();
-  
-  // Check bash/dangerous patterns
+  // First decode any obfuscated content
+  const { decoded, wasObfuscated } = decodeAndCheckCommand(command);
+  const trimmed = decoded.trim().toLowerCase();
+
+  // If obfuscation was detected, log it (can be configured to block)
+  if (wasObfuscated) {
+    console.warn('[TerminalSecurity] Obfuscation detected in command:', command);
+  }
+
+  // Check bash/dangerous patterns on decoded command
   for (const { pattern, reason, severity } of DANGEROUS_PATTERNS) {
     if (pattern.test(trimmed)) {
       return {
         allowed: false,
-        reason,
-        severity,
+        reason: wasObfuscated ? `Obfuscated: ${reason}` : reason,
+        severity: wasObfuscated ? 'critical' : severity,
         blockedPattern: pattern.source,
       };
     }
   }
-  
+
   // Check Python-specific patterns
   for (const { pattern, reason, severity } of PYTHON_DANGEROUS_PATTERNS) {
     if (pattern.test(trimmed)) {
       return {
         allowed: false,
-        reason,
-        severity,
+        reason: wasObfuscated ? `Obfuscated: ${reason}` : reason,
+        severity: wasObfuscated ? 'critical' : severity,
         blockedPattern: pattern.source,
       };
     }
   }
-  
-  return { allowed: true, severity: 'low' };
+
+  return { allowed: true, severity: 'low', wasObfuscated };
 }
 
 /**
  * Obfuscation detection - patterns that suggest attempt to bypass blocks
  */
 const OBFUSCATION_PATTERNS: Array<{ pattern: RegExp; name: string }> = [
-  { pattern: /\+\s*['"][a-z]['"]\s*\+/, name: 'String concatenation' },
+  { pattern: /['"][^'"]+['"]\s*\+\s*['"][^'"]+['"]/g, name: 'String concatenation' },
   { pattern: /\.\s*join\s*\(/, name: 'String join' },
-  { pattern: /base64\.b64decode|atob\s*\(/, name: 'Base64 decoding' },
+  { pattern: /base64\.b64decode|atob\s*\(|base64\s+(-d|--decode)/i, name: 'Base64 decoding' },
   { pattern: /chr\s*\(\s*\d+\s*\)/, name: 'Character code obfuscation' },
   { pattern: /getattr\s*\(\s*__builtins__/, name: 'Builtin access' },
   { pattern: /__import__\s*\(/, name: 'Dynamic import' },
+  { pattern: /\\x[0-9a-fA-F]{2}/g, name: 'Hex encoding' },
+  { pattern: /\\[0-7]{3}/g, name: 'Octal encoding' },
+  { pattern: /%[0-9a-fA-F]{2}/g, name: 'URL encoding' },
+  { pattern: /\\u[0-9a-fA-F]{4}/g, name: 'Unicode encoding' },
 ];
 
 /**

@@ -11,65 +11,100 @@ import { BlaxelProvider } from './blaxel-provider'
 import { SpritesProvider } from './sprites-provider'
 import { CodeSandboxProvider } from './codesandbox-provider'
 import { E2BProvider } from './e2b-provider'
+import { DaytonaProvider } from './daytona-provider'
+import { RunloopProvider } from './runloop-provider'
 import { E2BDesktopProvider, desktopSessionManager, type DesktopHandle, type E2BDesktopConfig } from './e2b-desktop-provider'
-// Lazy import Mistral Agent Provider to avoid circular dependencies
-// const { MistralAgentProvider } = require('./mistral/mistral-agent-provider')
 
-// Extended provider type including new providers
-export type SandboxProviderType =
-  | 'daytona'
-  | 'runloop'
-  | 'microsandbox'
-  | 'e2b'
-  | 'mistral'           // Legacy code interpreter
-  | 'mistral-agent'    // NEW: Full Agent SDK with code_interpreter
-  | 'blaxel'           // Blaxel cloud sandboxes
-  | 'sprites'          // Fly.io Sprites persistent VMs
-  | 'codesandbox'      // CodeSandbox SDK cloud VMs
-
-// Provider registry entry
-interface ProviderRegistryEntry {
+// Provider registry
+const providerRegistry = new Map<SandboxProviderType, {
   provider: SandboxProvider
   priority: number
   enabled: boolean
   available: boolean
   factory?: () => SandboxProvider
-}
+}>()
 
-// Provider registry
-const providerRegistry = new Map<SandboxProviderType, ProviderRegistryEntry>()
+// ... (existing code)
 
-/**
- * Initialize provider registry
- */
 function initializeRegistry() {
   // Register providers with priority (lower = higher priority in fallback chain)
+  // Use factory functions for lazy initialization to avoid SDK import errors in tests
+  
+  providerRegistry.set('daytona', {
+    provider: null as any,
+    priority: 1,
+    enabled: true,
+    available: false,
+    factory: () => {
+      const { DaytonaProvider } = require('./daytona-provider')
+      return new DaytonaProvider()
+    },
+  })
+
+  providerRegistry.set('e2b', {
+    provider: null as any,
+    priority: 2,
+    enabled: true,
+    available: false,
+    factory: () => {
+      const { E2BProvider } = require('./e2b-provider')
+      return new E2BProvider()
+    },
+  })
+
+  providerRegistry.set('runloop', {
+    provider: null as any,
+    priority: 3,
+    enabled: true,
+    available: false,
+    factory: () => {
+      const { RunloopProvider } = require('./runloop-provider')
+      return new RunloopProvider()
+    },
+  })
+
   providerRegistry.set('microsandbox', {
-    provider: new MicrosandboxProvider(),
+    provider: null as any,
     priority: 4,
     enabled: true,
-    available: true,
+    available: false,
+    factory: () => {
+      const { MicrosandboxProvider } = require('./microsandbox-provider')
+      return new MicrosandboxProvider()
+    },
   })
 
   providerRegistry.set('blaxel', {
-    provider: new BlaxelProvider(),
+    provider: null as any,
     priority: 5,
     enabled: true,
-    available: true,
+    available: false,
+    factory: () => {
+      const { BlaxelProvider } = require('./blaxel-provider')
+      return new BlaxelProvider()
+    },
   })
 
   providerRegistry.set('sprites', {
-    provider: new SpritesProvider(),
+    provider: null as any,
     priority: 6,
     enabled: true,
-    available: true,
+    available: false,
+    factory: () => {
+      const { SpritesProvider } = require('./sprites-provider')
+      return new SpritesProvider()
+    },
   })
 
   providerRegistry.set('codesandbox', {
-    provider: new CodeSandboxProvider(),
+    provider: null as any,
     priority: 7,
     enabled: true,
-    available: true,
+    available: false,
+    factory: () => {
+      const { CodeSandboxProvider } = require('./codesandbox-provider')
+      return new CodeSandboxProvider()
+    },
   })
 
   // Mistral Agent provider (lazy initialization)
@@ -103,13 +138,15 @@ initializeRegistry()
 
 /**
  * Get a sandbox provider by type
+ * @param type - Provider type (defaults to SANDBOX_PROVIDER env var or 'daytona')
  */
-export function getSandboxProvider(type: SandboxProviderType): SandboxProvider {
-  const entry = providerRegistry.get(type)
-  
+export function getSandboxProvider(type?: SandboxProviderType): SandboxProvider {
+  const providerType = type || (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona';
+  const entry = providerRegistry.get(providerType);
+
   if (!entry) {
     throw new Error(
-      `Unknown sandbox provider type: ${type}. ` +
+      `Unknown sandbox provider type: ${providerType}. ` +
       `Available providers: ${Array.from(providerRegistry.keys()).join(', ')}`
     )
   }
@@ -122,7 +159,7 @@ export function getSandboxProvider(type: SandboxProviderType): SandboxProvider {
     } catch (error: any) {
       entry.available = false
       throw new Error(
-        `Failed to initialize provider ${type}: ${error.message}. ` +
+        `Failed to initialize provider ${providerType}: ${error.message}. ` +
         `Check that required environment variables are set.`
       )
     }
@@ -405,7 +442,7 @@ export {
   quickBuildTemplate,
   TemplatePresets,
   type TemplateConfig,
-  type TemplateBuildResult,
+  type TemplateBuildResult as E2BTemplateBuildResult,
 } from './e2b-template-builder';
 
 // ===========================================

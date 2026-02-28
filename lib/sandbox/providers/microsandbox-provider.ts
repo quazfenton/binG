@@ -40,6 +40,14 @@ export class MicrosandboxProvider implements SandboxProvider {
     // Microsandbox daemon is auto-started by provider when needed.
   }
 
+  /**
+   * Create Microsandbox instance
+   * 
+   * SECURITY: Local fallback is DISABLED in production to prevent
+   * command execution without sandbox isolation.
+   * 
+   * In development, local fallback is allowed but shows security warning.
+   */
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
     try {
       await ensureMicrosandboxDaemonRunning()
@@ -80,12 +88,39 @@ export class MicrosandboxProvider implements SandboxProvider {
       const handle = new MicrosandboxSandboxHandle(sb)
       return handle
     } catch (error: any) {
+      // SECURITY: NEVER allow local fallback in production
+      // Local fallback executes commands on host system without isolation
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[Microsandbox] Production error - daemon unavailable:', error.message)
+        throw new Error(
+          `Microsandbox daemon unavailable in production. ` +
+          `This is a critical security requirement. ` +
+          `Start microsandbox with: msb server start --prod`
+        )
+      }
+
+      // Development mode - allow fallback with STRONG security warning
       const allowLocalFallback = process.env.MICROSANDBOX_ALLOW_LOCAL_FALLBACK !== 'false'
       if (allowLocalFallback) {
         const localId = `local-${Date.now()}`
-        console.warn(`[Microsandbox] Daemon unavailable, using local fallback sandbox: ${localId}`)
+        console.warn(`
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║  ⚠️  SECURITY WARNING: Using local fallback sandbox (NO ISOLATION)            ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  This is ONLY safe for local development. Commands will execute on your       ║
+║  host system without any sandbox isolation.                                    ║
+║                                                                                ║
+║  For production or any multi-tenant environment:                               ║
+║  1. Install microsandbox: npm install -g microsandbox                         ║
+║  2. Start daemon: msb server start --dev                                      ║
+║  3. Set MICROSANDBOX_ALLOW_LOCAL_FALLBACK=false                               ║
+║                                                                                ║
+║  This warning will not appear in production - local fallback is blocked.      ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+`)
         return new LocalSandboxHandle(localId)
       }
+      
       console.error('[Microsandbox] Failed to create sandbox:', error.message)
       throw new Error(
         `${error.message}. Start microsandbox with: msb server start --dev`,
@@ -140,20 +175,58 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
 
   /**
    * Sanitize command to prevent shell injection
+   * 
+   * SECURITY: Uses pattern-based blocking instead of blanket metacharacter rejection.
+   * This allows useful shell features (pipes, redirects, variables) while blocking
+   * genuinely dangerous patterns.
+   * 
+   * Blocked patterns:
+   * - Command chaining with dangerous commands (rm, chmod, sudo, etc.)
+   * - Pipe to shell interpreters (| bash, | sh)
+   * - Redirects to system directories (>/dev/, >/etc/)
+   * - Command substitution with binaries ($(/bin/...))
+   * - Null bytes and control characters
    */
   private sanitizeCommand(command: string): string {
-    // Block ALL shell metacharacters including pipes and redirects
-    // This prevents command injection via: echo "hi" | bash, ls > file, cat < file, etc.
-    // Blocked: ; (command separator), ` (command substitution), $ (variable expansion),
-    //          () (subshell), {} (brace expansion), [] (glob/range), ! (history),
-    //          # (comment injection), ~ (home dir), \ (escape), | (pipe), > (redirect), < (redirect), & (background)
-    const dangerousChars = /[;`$(){}[\]!#~\\|>&]/;
-    if (dangerousChars.test(command)) {
-      throw new Error('Command contains disallowed characters for security');
-    }
+    // First check for control characters (always blocked)
     if (/[\n\r\0]/.test(command)) {
       throw new Error('Command contains invalid control characters');
     }
+
+    // Block dangerous command patterns (not individual characters)
+    const dangerousPatterns = [
+      // Dangerous command chaining with ; followed by destructive commands
+      { pattern: /;\s*(rm\s+-rf|chmod\s+777|chown\s+root|sudo|su\s+|kill\s+-9|mkfs|dd\s+if=)/i, reason: 'Dangerous command chaining' },
+      
+      // Pipe to shell interpreters (classic RCE pattern)
+      { pattern: /\|\s*(ba)?sh\b/i, reason: 'Pipe to shell interpreter' },
+      { pattern: /\|\s*(curl|wget).*\|\s*(ba)?sh\b/i, reason: 'Download and execute pattern' },
+      
+      // Redirects to system directories
+      { pattern: />\s*\/(dev|etc|proc|sys|root)\//i, reason: 'Redirect to system directory' },
+      
+      // Command substitution with system binaries
+      { pattern: /\$\([^)]*\/bin\//i, reason: 'Command substitution with system binary' },
+      { pattern: /`[^`]*\/bin\/[^`]*`/, reason: 'Backtick command substitution with system binary' },
+      
+      // Process substitution (bash-specific RCE)
+      { pattern: /<\([^)]*\/bin\//i, reason: 'Process substitution with system binary' },
+      
+      // Eval/exec patterns
+      { pattern: /\beval\b\s*[\(\{]/i, reason: 'Eval execution' },
+      { pattern: /\bexec\b\s*[\(\{]/i, reason: 'Exec execution' },
+      
+      // Fork bomb pattern
+      { pattern: /:\(\)\s*\{\s*:\|\:&\s*\}\s*;/, reason: 'Fork bomb pattern' },
+    ];
+
+    for (const { pattern, reason } of dangerousPatterns) {
+      if (pattern.test(command)) {
+        throw new Error(`Command blocked by security policy: ${reason}`);
+      }
+    }
+
+    // Command is safe to execute
     return command;
   }
 

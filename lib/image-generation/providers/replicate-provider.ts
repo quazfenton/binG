@@ -91,12 +91,14 @@ export class ReplicateImageProvider implements ImageGenerationProvider {
     if (!this.client || !this.apiKey) {
       return false;
     }
-    
+
     try {
-      // Simple health check - try to get a model
-      // Note: Replicate SDK requires auth in constructor, so if we got here, we're configured
+      // ✅ FIX 3: Actually test API connectivity instead of always returning true
+      // Try to list models to verify API access (get requires model name which may not exist)
+      await this.client.models.list();
       return true;
-    } catch {
+    } catch (error) {
+      console.warn('[ReplicateProvider] Health check failed:', error instanceof Error ? error.message : error);
       return false;
     }
   }

@@ -574,7 +574,7 @@ export class BlaxelMcpServer {
     try {
       const { McpServer } = await import('@modelcontextprotocol/sdk/server/index.js')
       const { StreamableHTTPServerTransport } = await import(
-        '@modelcontextprotocol/sdk/server/http.js'
+        '@modelcontextprotocol/sdk/server/streamableHttp.js'
       )
 
       this.server = new McpServer({

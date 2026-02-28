@@ -1,38 +1,30 @@
 {
   "root": "project",
-  "version": 8,
-  "updatedAt": "2026-02-28T03:25:51.359Z",
+  "version": 16,
+  "updatedAt": "2026-02-28T13:10:16.689Z",
   "files": [
     {
       "path": "project/test/file1.ts",
       "content": "content 1",
       "language": "typescript",
-      "lastModified": "2026-02-28T03:25:51.326Z",
-      "version": 1,
+      "lastModified": "2026-02-28T13:10:16.651Z",
+      "version": 2,
       "size": 9
     },
     {
       "path": "project/test/file2.ts",
       "content": "content 2",
       "language": "typescript",
-      "lastModified": "2026-02-28T03:25:51.331Z",
-      "version": 1,
-      "size": 9
-    },
-    {
-      "path": "project/test/rollback.ts",
-      "content": "version 1",
-      "language": "typescript",
-      "lastModified": "2026-02-28T03:25:51.354Z",
-      "version": 4,
+      "lastModified": "2026-02-28T13:10:16.660Z",
+      "version": 2,
       "size": 9
     },
     {
       "path": "project/test/v1.ts",
       "content": "content v2",
       "language": "typescript",
-      "lastModified": "2026-02-28T03:25:51.359Z",
-      "version": 2,
+      "lastModified": "2026-02-28T13:10:16.689Z",
+      "version": 4,
       "size": 10
     }
   ]

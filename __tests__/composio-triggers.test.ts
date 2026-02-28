@@ -336,7 +336,15 @@ describe('Composio Triggers Service', () => {
     it('should verify webhook signature', async () => {
       const crypto = await import('node:crypto');
       const secret = 'test-webhook-secret';
-      const payload = { trigger_id: 'trigger-123' };
+
+      // Set the webhook secret env var
+      vi.stubEnv('COMPOSIO_WEBHOOK_SECRET', secret);
+
+      const payload = { 
+        trigger_id: 'trigger-123',
+        trigger_name: 'github-issue-created',
+        toolkit: 'github'
+      };
       const signature = crypto
         .createHmac('sha256', secret)
         .update(JSON.stringify(payload))
@@ -347,6 +355,8 @@ describe('Composio Triggers Service', () => {
       });
 
       expect(event).not.toBeNull();
+      expect(event?.triggerId).toBe('trigger-123');
+      vi.unstubAllEnvs();
     });
 
     it('should reject invalid signature', async () => {

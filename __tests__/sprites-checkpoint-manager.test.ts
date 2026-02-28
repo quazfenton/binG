@@ -5,6 +5,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { SpritesCheckpointManager, createCheckpointManager } from '../lib/sandbox/providers/sprites-checkpoint-manager'
 
+const mockExec = vi.fn()
+vi.mock('child_process', () => ({
+  exec: mockExec,
+}))
+
 describe('SpritesCheckpointManager', () => {
   let mockHandle: any
   let manager: SpritesCheckpointManager
@@ -28,6 +33,7 @@ describe('SpritesCheckpointManager', () => {
     }
 
     manager = new SpritesCheckpointManager(mockHandle)
+    mockExec.mockImplementation((cmd, cb) => cb(null, { stdout: '', stderr: '' }))
   })
 
   describe('constructor', () => {

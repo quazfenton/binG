@@ -17,6 +17,11 @@ const createMockHandle = () => ({
 
 type MockHandle = ReturnType<typeof createMockHandle>
 
+const mockExec = vi.fn()
+vi.mock('child_process', () => ({
+  exec: mockExec,
+}))
+
 describe('Sprites Checkpoint Manager', () => {
   let checkpointManager: SpritesCheckpointManager
   let mockHandle: MockHandle
@@ -135,10 +140,7 @@ describe('Sprites Checkpoint Manager', () => {
   describe('deleteCheckpoint', () => {
     it('should delete checkpoint successfully', async () => {
       // Mock exec to succeed
-      const mockExec = vi.fn().mockResolvedValue({ stdout: '', stderr: '' })
-      vi.mock('child_process', () => ({
-        exec: mockExec,
-      }))
+      mockExec.mockImplementation((cmd, cb) => cb(null, { stdout: '', stderr: '' }))
 
       await expect(
         checkpointManager.deleteCheckpoint('cp-123')
@@ -146,10 +148,7 @@ describe('Sprites Checkpoint Manager', () => {
     })
 
     it('should handle deletion failures gracefully', async () => {
-      const mockExec = vi.fn().mockRejectedValue(new Error('Checkpoint not found'))
-      vi.mock('child_process', () => ({
-        exec: mockExec,
-      }))
+      mockExec.mockImplementation((cmd, cb) => cb(new Error('Checkpoint not found')))
 
       await expect(
         checkpointManager.deleteCheckpoint('invalid')
@@ -363,7 +362,7 @@ describe('Sprites Checkpoint Manager', () => {
   describe('Factory Function', () => {
     it('should create instance via createCheckpointManager', () => {
       const instance = createCheckpointManager(mockHandle as any)
-      expect(instance).toBeInstanceOf(SpriteCheckpointManager)
+      expect(instance).toBeInstanceOf(SpritesCheckpointManager)
     })
 
     it('should apply custom policy from factory', () => {
