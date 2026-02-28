@@ -29,6 +29,9 @@ export class SandboxService {
 
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
     if (sandboxId.startsWith('mistral-')) return 'mistral'
+    if (sandboxId.startsWith('blaxel-')) return 'blaxel'
+    if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites'
+    if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox'
     return null
   }
 
@@ -114,7 +117,16 @@ export class SandboxService {
 
     // For resolving existing sandboxes, try ALL configured providers (not just quota-available ones)
     // Sandboxes created before quota was hit should remain accessible even if provider is now over quota
-    const allProviderTypes: SandboxProviderType[] = ['daytona', 'runloop', 'microsandbox', 'e2b', 'mistral']
+    const allProviderTypes: SandboxProviderType[] = [
+      'daytona',
+      'runloop',
+      'blaxel',      // NEW
+      'sprites',     // NEW
+      'codesandbox', // NEW: CodeSandbox SDK cloud VMs
+      'microsandbox',
+      'e2b',
+      'mistral'
+    ]
     const configuredProviders: SandboxProviderType[] = []
     
     for (const providerType of allProviderTypes) {

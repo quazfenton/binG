@@ -15,6 +15,61 @@ type MistralSession = {
 }
 
 const WORKSPACE_DIR = '/workspace'
+const SESSION_TTL_MS = 30 * 60 * 1000 // 30 minutes for conversation context
+const MAX_CONVERSATION_AGE_MS = 30 * 60 * 1000 // Reset conversation after 30 min of inactivity
+
+// File-based persistence for conversation IDs (survives server restarts)
+import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+
+const MISTRAL_SESSIONS_DIR = process.env.SESSIONS_DIR || '/tmp/mistral-sessions'
+
+async function ensureSessionsDir(): Promise<void> {
+  if (!existsSync(MISTRAL_SESSIONS_DIR)) {
+    await mkdir(MISTRAL_SESSIONS_DIR, { recursive: true })
+  }
+}
+
+async function saveMistralSession(sandboxId: string, session: MistralSession): Promise<void> {
+  try {
+    await ensureSessionsDir()
+    const filePath = join(MISTRAL_SESSIONS_DIR, `${sandboxId}.json`)
+    await writeFile(filePath, JSON.stringify(session), 'utf-8')
+  } catch (error) {
+    console.warn('[Mistral] Failed to save session:', error)
+  }
+}
+
+async function loadMistralSession(sandboxId: string): Promise<MistralSession | null> {
+  try {
+    const filePath = join(MISTRAL_SESSIONS_DIR, `${sandboxId}.json`)
+    if (!existsSync(filePath)) return null
+    
+    const content = await readFile(filePath, 'utf-8')
+    const session = JSON.parse(content) as MistralSession
+    
+    // Check if session is still valid (not expired)
+    if (Date.now() - session.lastActive > MAX_CONVERSATION_AGE_MS) {
+      return null // Conversation too old, start fresh
+    }
+    
+    return session
+  } catch {
+    return null
+  }
+}
+
+async function deleteMistralSession(sandboxId: string): Promise<void> {
+  try {
+    const filePath = join(MISTRAL_SESSIONS_DIR, `${sandboxId}.json`)
+    const { unlink } = await import('node:fs/promises')
+    await unlink(filePath)
+  } catch {
+    // Best-effort deletion
+  }
+}
+
 const mistralSessions = new Map<string, MistralSession>()
 
 export class MistralCodeInterpreterProvider implements SandboxProvider {
@@ -37,16 +92,28 @@ export class MistralCodeInterpreterProvider implements SandboxProvider {
 
   async createSandbox(_config: SandboxCreateConfig): Promise<SandboxHandle> {
     const sandboxId = `mistral-${randomUUID()}`
-    mistralSessions.set(sandboxId, {
+    const session: MistralSession = {
       sandboxId,
       createdAt: Date.now(),
       lastActive: Date.now(),
-    })
+    }
+    mistralSessions.set(sandboxId, session)
+    await saveMistralSession(sandboxId, session)
     return new MistralCodeInterpreterSandboxHandle(sandboxId, this.client, this.model)
   }
 
   async getSandbox(sandboxId: string): Promise<SandboxHandle> {
     let session = mistralSessions.get(sandboxId)
+    
+    if (!session) {
+      // Try loading from file-based persistence
+      const persisted = await loadMistralSession(sandboxId)
+      if (persisted) {
+        session = persisted
+        mistralSessions.set(sandboxId, session)
+      }
+    }
+    
     if (!session) {
       // Session store persists sandbox IDs, but in-memory provider state is reset on dev
       // recompiles/restarts. Rehydrate a lightweight session so existing IDs remain usable.
@@ -57,12 +124,20 @@ export class MistralCodeInterpreterProvider implements SandboxProvider {
       }
       mistralSessions.set(sandboxId, session)
     }
+    
+    // Check if conversation is too old
+    if (session.conversationId && Date.now() - session.lastActive > MAX_CONVERSATION_AGE_MS) {
+      session.conversationId = undefined // Start fresh conversation
+    }
+    
     session.lastActive = Date.now()
+    await saveMistralSession(sandboxId, session)
     return new MistralCodeInterpreterSandboxHandle(sandboxId, this.client, this.model)
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
     mistralSessions.delete(sandboxId)
+    await deleteMistralSession(sandboxId)
   }
 }
 
@@ -71,6 +146,7 @@ class MistralCodeInterpreterSandboxHandle implements SandboxHandle {
   readonly workspaceDir = WORKSPACE_DIR
   private client: Mistral
   private model: string
+  private fileCache = new Map<string, string>()
 
   constructor(sandboxId: string, client: Mistral, model: string) {
     this.id = sandboxId
@@ -95,14 +171,16 @@ class MistralCodeInterpreterSandboxHandle implements SandboxHandle {
           inputs: prompt,
         })
         session.conversationId = response.conversationId
-      } else {
-        response = await this.client.beta.conversations.append({
-          conversationId: session.conversationId,
-          conversationAppendRequest: { inputs: prompt },
-        })
-      }
+      await saveMistralSession(this.id, session)
+    } else {
+      response = await this.client.beta.conversations.append({
+        conversationId: session.conversationId,
+        conversationAppendRequest: { inputs: prompt },
+      })
+    }
 
-      session.lastActive = Date.now()
+    session.lastActive = Date.now()
+    await saveMistralSession(this.id, session)
 
       const outputText = extractConversationText(response)
       const parsed = parseExecutionEnvelope(outputText)
@@ -125,28 +203,41 @@ class MistralCodeInterpreterSandboxHandle implements SandboxHandle {
     }
   }
 
-  async writeFile(_filePath: string, _content: string): Promise<ToolResult> {
-    return {
-      success: false,
-      output: 'Mistral code interpreter provider does not support direct filesystem writes',
-      exitCode: 1,
-    }
+  async writeFile(filePath: string, content: string): Promise<ToolResult> {
+    const resolvedPath = this.resolvePath(filePath)
+    this.fileCache.set(resolvedPath, content)
+    
+    const escapedContent = content.replace(/'/g, "'\\''").replace(/\n/g, '\\n')
+    const command = `mkdir -p "$(dirname '${resolvedPath}')" && echo -n '${escapedContent}' > '${resolvedPath}'`
+    
+    return this.executeCommand(command)
   }
 
-  async readFile(_filePath: string): Promise<ToolResult> {
-    return {
-      success: false,
-      output: 'Mistral code interpreter provider does not support direct filesystem reads',
-      exitCode: 1,
+  async readFile(filePath: string): Promise<ToolResult> {
+    const resolvedPath = this.resolvePath(filePath)
+    
+    if (this.fileCache.has(resolvedPath)) {
+      return {
+        success: true,
+        output: this.fileCache.get(resolvedPath) || '',
+        exitCode: 0,
+      }
     }
+    
+    return this.executeCommand(`cat '${resolvedPath}' 2>&1`)
   }
 
-  async listDirectory(_dirPath: string): Promise<ToolResult> {
-    return {
-      success: false,
-      output: 'Mistral code interpreter provider does not support directory listing',
-      exitCode: 1,
+  async listDirectory(dirPath: string): Promise<ToolResult> {
+    const resolvedPath = this.resolvePath(dirPath || '.')
+    return this.executeCommand(`ls -la '${resolvedPath}' 2>&1`)
+  }
+
+  private resolvePath(filePath: string): string {
+    const normalized = filePath.replace(/\\/g, '/')
+    if (normalized.startsWith('/')) {
+      return normalized.startsWith(WORKSPACE_DIR) ? normalized : `${WORKSPACE_DIR}/${normalized.replace(/^\/+/, '')}`
     }
+    return `${WORKSPACE_DIR}/${normalized}`
   }
 
   private buildCommandPrompt(command: string, cwd: string): string {

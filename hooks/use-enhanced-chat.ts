@@ -442,6 +442,48 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   ));
                   break;
 
+                case 'reasoning':
+                  if (eventData.reasoning) {
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
+                        ? {
+                            ...msg,
+                            metadata: {
+                              ...(msg.metadata || {}),
+                              reasoning: eventData.reasoning,
+                            },
+                          }
+                        : msg
+                    ));
+                  }
+                  break;
+
+                case 'tool_invocation':
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id !== assistantMessage.id) return msg;
+                    const existing = Array.isArray((msg.metadata as any)?.toolInvocations)
+                      ? ([...(msg.metadata as any).toolInvocations] as any[])
+                      : [];
+                    const idx = existing.findIndex((inv) => inv.toolCallId === eventData.toolCallId && inv.state === eventData.state);
+                    if (idx === -1) {
+                      existing.push({
+                        toolCallId: eventData.toolCallId,
+                        toolName: eventData.toolName,
+                        state: eventData.state,
+                        args: eventData.args || {},
+                        result: eventData.result,
+                      });
+                    }
+                    return {
+                      ...msg,
+                      metadata: {
+                        ...(msg.metadata || {}),
+                        toolInvocations: existing,
+                      },
+                    };
+                  }));
+                  break;
+
                 // Non-content events - just log for debugging in development
                 case 'heartbeat':
                 case 'metrics':

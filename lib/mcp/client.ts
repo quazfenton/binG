@@ -28,6 +28,11 @@ import type {
   MCPEventListener,
   MCPProgress,
   MCPLogMessage,
+  MCPError,
+  MCPConnectionError,
+  MCPTimeoutError,
+  MCPProtocolError,
+  MCPResourceError,
 } from './types'
 import { MCP_PROTOCOL_VERSION } from './types'
 
@@ -67,16 +72,19 @@ export class MCPClient extends EventEmitter {
     reject: (error: Error) => void
     timeout?: NodeJS.Timeout
   }> = new Map()
-  
+
   private process?: ChildProcess
   private messageBuffer: string = ''
   private eventListeners: Map<string, Set<MCPEventListener>> = new Map()
-  
+
   // Cached server data
   private serverInfo: MCPServerInfo | null = null
   private cachedTools: MCPTool[] = []
   private cachedResources: MCPResource[] = []
   private cachedPrompts: MCPPrompt[] = []
+
+  // Resource subscription tracking
+  private subscribedResources: Set<string> = new Set()
 
   constructor(config: MCPTransportConfig) {
     super()
@@ -85,6 +93,20 @@ export class MCPClient extends EventEmitter {
       state: 'disconnected',
       server: null,
     }
+  }
+
+  /**
+   * Get currently subscribed resources
+   */
+  getSubscribedResources(): string[] {
+    return Array.from(this.subscribedResources);
+  }
+
+  /**
+   * Check if subscribed to a resource
+   */
+  isSubscribedToResource(uri: string): boolean {
+    return this.subscribedResources.has(uri);
   }
 
   /**
@@ -416,7 +438,7 @@ export class MCPClient extends EventEmitter {
     timeout: number = 30000
   ): Promise<any> {
     const id = ++this.requestId
-    
+
     const request: MCPRequest = {
       jsonrpc: '2.0',
       id,
@@ -427,7 +449,8 @@ export class MCPClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         this.pendingRequests.delete(id)
-        reject(new Error(`Request timeout: ${method}`))
+        // Use typed timeout error
+        reject(new MCPTimeoutError(`Request timeout: ${method}`, id))
       }, timeout)
 
       this.pendingRequests.set(id, {
@@ -492,6 +515,121 @@ export class MCPClient extends EventEmitter {
     }
   }
 
+  /**
+   * Subscribe to a resource URI for updates
+   * 
+   * @see https://smithery.ai/docs/api-reference/connectmcp/mcp-endpoint
+   * @param uri - Resource URI to subscribe to
+   * @throws {MCPResourceError} If subscription fails
+   */
+  async subscribeResource(uri: string): Promise<void> {
+    try {
+      await this.request('resources/subscribe', { uri });
+      this.subscribedResources.add(uri);
+    } catch (error: any) {
+      throw new MCPResourceError(
+        `Failed to subscribe to resource: ${error.message}`,
+        uri
+      );
+    }
+  }
+
+  /**
+   * Unsubscribe from a resource URI
+   * 
+   * @param uri - Resource URI to unsubscribe from
+   * @throws {MCPResourceError} If unsubscription fails
+   */
+  async unsubscribeResource(uri: string): Promise<void> {
+    try {
+      await this.request('resources/unsubscribe', { uri });
+      this.subscribedResources.delete(uri);
+    } catch (error: any) {
+      throw new MCPResourceError(
+        `Failed to unsubscribe from resource: ${error.message}`,
+        uri
+      );
+    }
+  }
+
+  /**
+   * Send progress notification for long-running operations
+   * 
+   * Validates progress is within valid range before sending
+   * 
+   * @param token - Progress token from request
+   * @param progress - Current progress (0-100)
+   * @param total - Total progress target
+   * @throws {MCPProtocolError} If progress is invalid
+   */
+  async sendProgress(token: string, progress: number, total: number = 100): Promise<void> {
+    // Validate progress
+    if (progress < 0 || progress > total) {
+      throw new MCPProtocolError(
+        `Progress must be between 0 and ${total}, got ${progress}`
+      );
+    }
+
+    await this.notify('notifications/progress', {
+      progressToken: token,
+      progress,
+      total,
+    })
+  }
+
+  /**
+   * Set logging level for server
+   * 
+   * @param level - Log level ('debug', 'info', 'warn', 'error')
+   */
+  async setLogLevel(level: 'debug' | 'info' | 'warn' | 'error'): Promise<void> {
+    await this.notify('logging/setLevel', { level })
+  }
+
+  /**
+   * Cancel a pending request
+   * 
+   * @param requestId - ID of request to cancel
+   */
+  async cancelRequest(requestId: string): Promise<void> {
+    await this.notify('notifications/cancelled', {
+      requestId,
+      reason: 'User cancelled',
+    })
+  }
+
+  /**
+   * Handle log message notification from server
+   */
+  private handleLogMessage(params: any): void {
+    const { level, logger, data } = params
+    const timestamp = new Date().toISOString()
+
+    switch (level) {
+      case 'debug':
+        console.debug(`[MCP:${logger}] ${timestamp} - ${JSON.stringify(data)}`)
+        break
+      case 'info':
+        console.info(`[MCP:${logger}] ${timestamp} - ${JSON.stringify(data)}`)
+        break
+      case 'warn':
+        console.warn(`[MCP:${logger}] ${timestamp} - ${JSON.stringify(data)}`)
+        break
+      case 'error':
+        console.error(`[MCP:${logger}] ${timestamp} - ${JSON.stringify(data)}`)
+        break
+    }
+
+    this.emitEvent({
+      type: 'log',
+      data: { level, logger, data, timestamp },
+      timestamp: new Date()
+    })
+  }
+
+  /**
+   * Handle MCP response
+   */
   private handleResponse(response: MCPResponse): void {
     const pending = this.pendingRequests.get(response.id)
     if (!pending) {
@@ -505,7 +643,26 @@ export class MCPClient extends EventEmitter {
     this.pendingRequests.delete(response.id)
 
     if (response.error) {
-      pending.reject(new Error(response.error.message))
+      // Use typed error based on error code
+      switch (response.error.code) {
+        case -32000: // Server error
+          pending.reject(new MCPServerError(response.error.message, response.error.code))
+          break
+        case -32001: // Resource not found
+          pending.reject(new MCPResourceError(response.error.message))
+          break
+        case -32002: // Tool error
+          pending.reject(new MCPToolError(response.error.message))
+          break
+        case -32600: // Protocol error
+          pending.reject(new MCPProtocolError(response.error.message))
+          break
+        case -32601: // Method not found
+          pending.reject(new MCPProtocolError(`Method not found: ${response.error.message}`))
+          break
+        default:
+          pending.reject(new Error(response.error.message))
+      }
     } else {
       pending.resolve(response.result)
     }
@@ -524,18 +681,14 @@ export class MCPClient extends EventEmitter {
         this.emitEvent({ type: 'prompt_registered', timestamp: new Date() })
         break
       case 'notifications/progress':
-        this.emitEvent({ 
-          type: 'progress', 
+        this.emitEvent({
+          type: 'progress',
           data: notification.params,
           timestamp: new Date()
         })
         break
       case 'notifications/message':
-        this.emitEvent({ 
-          type: 'log', 
-          data: notification.params,
-          timestamp: new Date()
-        })
+        this.handleLogMessage(notification.params)
         break
     }
   }

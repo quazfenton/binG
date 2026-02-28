@@ -2,6 +2,12 @@
 //fix
 import type React from "react";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+
+// Tabs that need taller height when opened
+const TALL_TABS = ['images', 'extras', 'shell'];
+const DEFAULT_TAB_HEIGHT = 'min-h-[200px]';
+const TALL_TAB_HEIGHT = 'min-h-[400px]';
+const EXPAND_TRANSITION = 'transition-all duration-300 ease-out';
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
 import { Switch } from "../components/ui/switch";
@@ -100,6 +106,7 @@ import HuggingFaceSpacesProPlugin from "./plugins/huggingface-spaces-pro-plugin"
 import JsonValidatorPlugin from "./plugins/json-validator-plugin";
 import UrlUtilitiesPlugin from "./plugins/url-utilities-plugin";
 import WikiKnowledgeBasePlugin from "./plugins/wiki-knowledge-base-plugin";
+import ImageGenerationTab from "./image-generation-tab";
 
 // Pop-out plugin windows for Plugins tab
 const popOutPlugins: Plugin[] = [
@@ -222,8 +229,8 @@ interface InteractionPanelProps {
   availableProviders: LLMProvider[];
   onProviderChange: (provider: string, model: string) => void;
   hasCodeBlocks?: boolean;
-  activeTab?: "chat" | "extras" | "integrations" | "shell";
-  onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell") => void;
+  activeTab?: "chat" | "extras" | "integrations" | "shell" | "images";
+  onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell" | "images") => void;
   userId?: string;
   onAttachedFilesChange?: (files: Record<string, AttachedVirtualFile>) => void;
 }
@@ -238,7 +245,7 @@ export default function InteractionPanel({
   onStopGeneration,
   onRetry: _onRetry,
   currentProvider = "openrouter",
-  currentModel = "deepseek/deepseek-r1-0528:free",
+  currentModel = "nvidia/nemotron-3-nano-30b-a3b:free",
   error: _error,
   input,
   setInput,
@@ -265,6 +272,10 @@ export default function InteractionPanel({
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  
+  // Track tall tab transitions for smooth animation
+  const [prevTab, setPrevTab] = useState<string | null>(null);
+  const [isExpanding, setIsExpanding] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prevPanelHeightRef = useRef<number | null>(null);
   const getPanelMaxHeight = useCallback(() => {
@@ -1273,13 +1284,35 @@ export default function InteractionPanel({
           )}
 
           {!isMinimized && (
-            <Tabs value={activeTab} onValueChange={(value) => onActiveTabChange?.(value as "chat" | "extras" | "integrations" | "shell")} className="flex-1 flex flex-col min-h-0">
+            <Tabs 
+              value={activeTab} 
+              onValueChange={(value) => {
+                // Handle height transition for tall tabs
+                const newTab = value as string;
+                const isNewTabTall = TALL_TABS.includes(newTab);
+                const isCurrentTabTall = activeTab ? TALL_TABS.includes(activeTab) : false;
+                
+                if (isNewTabTall && !isCurrentTabTall) {
+                  // Expanding to tall tab - animate upward
+                  setIsExpanding(true);
+                  setTimeout(() => setIsExpanding(false), 300);
+                }
+                
+                setPrevTab(activeTab || null);
+                onActiveTabChange?.(value as "chat" | "extras" | "integrations" | "shell");
+              }} 
+              className={`flex-1 flex flex-col min-h-0 ${EXPAND_TRANSITION}`}
+            >
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2 sticky top-0 z-20 bg-black/70 backdrop-blur-sm py-1">
                 <div className="w-full sm:w-auto overflow-x-auto no-scrollbar">
                   <TabsList className="bg-black/40 w-max min-w-full sm:min-w-0 sm:w-auto">
                     <TabsTrigger value="chat" className="text-xs sm:text-sm">
                       <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                       <span className="hidden sm:inline">Chat</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="images" className="text-xs sm:text-sm">
+                      <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Images</span>
                     </TabsTrigger>
                     <TabsTrigger value="extras" className="text-xs sm:text-sm">
                       <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
@@ -1382,7 +1415,7 @@ export default function InteractionPanel({
               </div>
 
               {/* Tab Content Sections */}
-              <TabsContent value="chat" className="m-0 flex-1 flex flex-col min-h-0 overflow-visible">
+              <TabsContent value="chat" className={`m-0 flex-1 flex flex-col min-h-0 overflow-visible ${activeTab === 'chat' ? DEFAULT_TAB_HEIGHT : ''} ${activeTab && activeTab !== 'chat' && TALL_TABS.includes(activeTab) ? 'min-h-[200px]' : ''} ${EXPAND_TRANSITION}`}>
                 {/* Suggestions - Compact row */}
                 <div className="flex flex-wrap gap-2 mb-2 shrink-0">
                   {chatSuggestions.map((suggestion, index) => (
@@ -1638,8 +1671,27 @@ export default function InteractionPanel({
                 </form>
               </TabsContent>
 
-              {/* Extras Tab Content */}
-              <TabsContent value="extras" className="m-0 flex-1 min-h-0 flex flex-col overflow-hidden">
+              {/* Images Tab Content - Taller height for image generation */}
+              <TabsContent 
+                value="images" 
+                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'images' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
+                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                  <CardContent className="pt-0 h-full flex flex-col min-h-0 overflow-hidden">
+                    <ImageGenerationTab 
+                      onImageGenerated={(imageUrl) => {
+                        toast.success("Image generated successfully!");
+                      }}
+                    />
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* Extras Tab Content - Taller height for prompt templates */}
+              <TabsContent 
+                value="extras" 
+                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'extras' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
                 <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
                   <CardContent className="pt-6 h-full flex flex-col min-h-0">
                     <div className="space-y-4 flex-1 min-h-0 flex flex-col">
@@ -1688,7 +1740,10 @@ export default function InteractionPanel({
               </TabsContent>
 
               {/* Integrations Tab Content */}
-              <TabsContent value="integrations" className="m-0 flex-1 min-h-0 flex flex-col overflow-hidden">
+              <TabsContent 
+                value="integrations" 
+                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'integrations' ? 'min-h-[350px]' : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
                 <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
                   <CardContent className="pt-6 h-full flex flex-col min-h-0">
                     <div className="space-y-3 flex-1 min-h-0 overflow-y-auto">
@@ -1715,8 +1770,11 @@ export default function InteractionPanel({
                 </Card>
               </TabsContent>
 
-              {/* Shell Tab Content */}
-              <TabsContent value="shell" className="m-0 flex-1 overflow-auto">
+              {/* Shell Tab Content - Taller height for terminal */}
+              <TabsContent 
+                value="shell" 
+                className={`m-0 flex-1 overflow-auto ${activeTab === 'shell' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
                 <Card className="bg-white/5 border-white/10 h-full">
                   <CardContent className="pt-4 h-full flex flex-col">
                     <div className="flex items-center justify-between mb-4">

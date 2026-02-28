@@ -5,12 +5,13 @@ import { Button } from '@/components/ui/button';
 import {
   Terminal as TerminalIcon, X, Minimize2, Maximize2, Square,
   Trash2, Copy, ChevronUp, ChevronDown,
-  Cpu, MemoryStick, Plus, Split
+  Cpu, MemoryStick, Plus, Split, Wifi, WifiOff
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 import { saveTerminalSession, getTerminalSessions, addCommandToHistory } from '@/lib/terminal/terminal-storage';
 import { secureRandom, generateSecureId } from '@/lib/utils';
+import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '@/lib/terminal/terminal-security';
 
 interface TerminalPanelProps {
   userId?: string;
@@ -30,15 +31,36 @@ interface SandboxInfo {
   };
 }
 
+type TerminalMode = 'local' | 'connecting' | 'pty' | 'sandbox-cmd' | 'editor';
+
+/*
+  'local' - Local shell simulation in browser
+  'connecting' - Sandbox is being provisioned
+  'pty' - Connected to sandbox via PTY (full terminal)
+  'sandbox-cmd' - Connected to sandbox via command-mode (line-based, no PTY)
+  'editor' - Nano/vim editor overlay active
+*/
+
 interface TerminalInstance {
   id: string;
   name: string;
   sandboxInfo: SandboxInfo;
+  mode: TerminalMode;
   xtermRef: React.RefObject<HTMLDivElement | null>;
-  terminal: any | null;      // xterm Terminal instance
-  fitAddon: any | null;      // FitAddon instance
+  terminal: any | null;
+  fitAddon: any | null;
   eventSource: EventSource | null;
+  websocket: WebSocket | null;
   isConnected: boolean;
+}
+
+interface LocalFileSystem {
+  [path: string]: {
+    type: 'file' | 'directory';
+    content?: string;
+    createdAt: number;
+    modifiedAt: number;
+  };
 }
 
 function getAuthToken(): string | null {
@@ -80,6 +102,29 @@ function getAuthHeaders(): Record<string, string> {
   return headers;
 }
 
+const createInitialFileSystem = (): LocalFileSystem => ({
+  'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+  'project/README.md': { 
+    type: 'file', 
+    content: '# My Project\n\nWelcome to your project!\n\nThis is a local shell simulation.\n',
+    createdAt: Date.now(), 
+    modifiedAt: Date.now() 
+  },
+  'project/package.json': {
+    type: 'file',
+    content: '{\n  "name": "my-project",\n  "version": "1.0.0",\n  "description": "A sample project"\n}\n',
+    createdAt: Date.now(),
+    modifiedAt: Date.now()
+  },
+  'project/src': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+  'project/src/index.js': {
+    type: 'file',
+    content: 'console.log("Hello, World!");\n',
+    createdAt: Date.now(),
+    modifiedAt: Date.now()
+  },
+});
+
 export default function TerminalPanel({
   userId,
   isOpen,
@@ -92,20 +137,32 @@ export default function TerminalPanel({
   const [isExpanded, setIsExpanded] = useState(false);
   const [isSplitView, setIsSplitView] = useState(false);
 
-  // Refs to hold mutable terminal state without triggering re-renders
   const terminalsRef = useRef<TerminalInstance[]>([]);
   terminalsRef.current = terminals;
-  const preConnectLineBufferRef = useRef<Record<string, string>>({});
+  
+  const localFileSystemRef = useRef<LocalFileSystem>(createInitialFileSystem());
   const localShellCwdRef = useRef<Record<string, string>>({});
   const reconnectCooldownUntilRef = useRef<Record<string, number>>({});
+  const commandQueueRef = useRef<Record<string, string[]>>({});
+  const commandHistoryRef = useRef<Record<string, string[]>>({});
+  const historyIndexRef = useRef<Record<string, number>>({});
+  const lineBufferRef = useRef<Record<string, string>>({});
+  const editorSessionRef = useRef<Record<string, {
+    type: 'nano' | 'vim' | 'vi';
+    filePath: string;
+    content: string;
+    cursor: number;
+  } | null>>({});
+  const connectAbortRef = useRef<Record<string, AbortController>>({});
+  
+  // Input batching to reduce HTTP overhead (ARCH 4)
+  const inputBatchRef = useRef<Record<string, string>>({});
+  const inputFlushRef = useRef<Record<string, NodeJS.Timeout>>({});
 
-  // Auto-create terminal when panel opens and no terminals exist
   useEffect(() => {
     if (isOpen && terminals.length === 0) {
-      // Try to restore previous sessions first
       const savedSessions = getTerminalSessions();
       if (savedSessions.length > 0) {
-        // Restore most recent session
         const session = savedSessions[0];
         createTerminal(session.name, session.sandboxInfo);
       } else {
@@ -114,7 +171,6 @@ export default function TerminalPanel({
     }
   }, [isOpen]);
 
-  // Clean up on unmount and when panel closes
   useEffect(() => {
     return () => {
       terminalsRef.current.forEach(t => {
@@ -124,24 +180,21 @@ export default function TerminalPanel({
     };
   }, []);
 
-  // Close sandbox sessions when panel closes (but save session info for reuse)
   useEffect(() => {
     if (!isOpen && terminals.length > 0) {
-      // Close EventSource connections to prevent resource leaks
-      // SSE streams continue in background if not explicitly closed
       terminals.forEach(t => {
         t.eventSource?.close();
+        t.terminal?.dispose();
       });
-      
-      // Save session info before closing sandbox
+
       terminals.forEach(t => {
         saveTerminalSession({
           id: t.id,
           name: t.name,
-          commandHistory: [], // xterm handles this internally
+          commandHistory: commandHistoryRef.current[t.id] || [],
           sandboxInfo: {
             ...t.sandboxInfo,
-            status: 'none' // Mark as closed, but keep sandboxId for reuse
+            status: 'none'
           },
           lastUsed: Date.now()
         });
@@ -149,28 +202,24 @@ export default function TerminalPanel({
     }
   }, [isOpen]);
 
-  // Handle resize when expand state or split view changes
   useEffect(() => {
     const timer = setTimeout(() => {
       terminals.forEach(t => {
         if (t.fitAddon && t.terminal) {
           try {
             t.fitAddon.fit();
-          } catch {
-            // Terminal not yet attached
-          }
+          } catch {}
         }
       });
     }, 100);
     return () => clearTimeout(timer);
   }, [isExpanded, isSplitView, activeTerminalId, isMinimized]);
 
-  // Global resize handler
   useEffect(() => {
     const handleResize = () => {
       terminalsRef.current.forEach(t => {
         if (t.fitAddon && t.terminal) {
-          try { t.fitAddon.fit(); } catch { /* ignore */ }
+          try { t.fitAddon.fit(); } catch {}
         }
       });
     };
@@ -179,34 +228,86 @@ export default function TerminalPanel({
   }, []);
 
   const createTerminal = useCallback((name?: string, sandboxInfo?: any) => {
+    const id = generateSecureId('terminal');
     const newTerminal: TerminalInstance = {
-      id: generateSecureId('terminal'),
+      id,
       name: name || `Terminal ${terminalsRef.current.length + 1}`,
       sandboxInfo: sandboxInfo || { status: 'none' },
+      mode: 'local',
       xtermRef: React.createRef<HTMLDivElement>(),
       terminal: null,
       fitAddon: null,
       eventSource: null,
+      websocket: null,
       isConnected: false,
     };
 
-    preConnectLineBufferRef.current[newTerminal.id] = '';
-    localShellCwdRef.current[newTerminal.id] = 'project';
-    reconnectCooldownUntilRef.current[newTerminal.id] = 0;
+    localShellCwdRef.current[id] = 'project';
+    reconnectCooldownUntilRef.current[id] = 0;
+    commandQueueRef.current[id] = [];
+    commandHistoryRef.current[id] = [];
+    historyIndexRef.current[id] = -1;
+    lineBufferRef.current[id] = '';
+    editorSessionRef.current[id] = null;
+
+    // Load persisted command history
+    try {
+      const savedSessions = getTerminalSessions();
+      const savedSession = savedSessions.find(s => s.id === id);
+      if (savedSession?.commandHistory) {
+        commandHistoryRef.current[id] = savedSession.commandHistory;
+        historyIndexRef.current[id] = savedSession.commandHistory.length;
+      }
+    } catch (err) {
+      console.warn('[TerminalPanel] Failed to load command history:', err);
+    }
+
     setTerminals(prev => [...prev, newTerminal]);
-    setActiveTerminalId(newTerminal.id);
-    return newTerminal.id;
-  }, []);
+    setActiveTerminalId(id);
+    
+    // Auto-connect in background after a tick (allow xterm to init first)
+    setTimeout(() => connectTerminal(id), 500);
+    
+    return id;
+  }, [connectTerminal]);
 
   const closeTerminal = useCallback((terminalId: string) => {
     const terminal = terminalsRef.current.find(t => t.id === terminalId);
     if (terminal) {
       terminal.eventSource?.close();
+      terminal.websocket?.close();
       terminal.terminal?.dispose();
+      // Abort any pending connection
+      connectAbortRef.current[terminalId]?.abort();
+      delete connectAbortRef.current[terminalId];
+
+      // Flush any pending input and clear timers
+      if (inputFlushRef.current[terminalId]) {
+        clearTimeout(inputFlushRef.current[terminalId]);
+      }
+      const pendingInput = inputBatchRef.current[terminalId];
+      if (pendingInput) {
+        delete inputBatchRef.current[terminalId];
+      }
     }
-    delete preConnectLineBufferRef.current[terminalId];
+    
+    // Save command history before cleanup
+    const history = commandHistoryRef.current[terminalId];
+    if (history && history.length > 0) {
+      try {
+        addCommandToHistory(terminalId, history);
+      } catch (err) {
+        console.warn('[TerminalPanel] Failed to save command history:', err);
+      }
+    }
+    
     delete localShellCwdRef.current[terminalId];
     delete reconnectCooldownUntilRef.current[terminalId];
+    delete commandQueueRef.current[terminalId];
+    delete commandHistoryRef.current[terminalId];
+    delete historyIndexRef.current[terminalId];
+    delete lineBufferRef.current[terminalId];
+    delete editorSessionRef.current[terminalId];
 
     setTerminals(prev => {
       const updated = prev.filter(t => t.id !== terminalId);
@@ -221,13 +322,37 @@ export default function TerminalPanel({
   }, [activeTerminalId]);
 
   const updateTerminalState = useCallback((terminalId: string, updates: Partial<TerminalInstance>) => {
+    // Update React state for UI rendering
     setTerminals(prev => prev.map(t =>
       t.id === terminalId ? { ...t, ...updates } : t
     ));
+    
+    // Also update the ref for immediate synchronous access
+    const termRef = terminalsRef.current.find(t => t.id === terminalId);
+    if (termRef) {
+      Object.assign(termRef, updates);
+    }
   }, []);
 
   const resolveLocalPath = useCallback((cwd: string, input: string): string => {
     const raw = (input || '').trim().replace(/\\/g, '/');
+    if (!raw) return cwd;
+    
+    if (raw.startsWith('/')) {
+      const parts = raw.split('/').filter(Boolean);
+      const stack: string[] = [];
+      for (const part of parts) {
+        if (part === '.') continue;
+        if (part === '..') {
+          if (stack.length > 0) stack.pop();
+          continue;
+        }
+        stack.push(part);
+      }
+      const result = stack.join('/');
+      return result.startsWith('project') ? result : `project/${result}`.replace(/\/+/g, '/');
+    }
+    
     const base = raw.startsWith('project') ? raw : `${cwd}/${raw}`.replace(/\/+/g, '/');
     const parts = base.split('/').filter(Boolean);
     const stack: string[] = [];
@@ -245,88 +370,759 @@ export default function TerminalPanel({
     return stack.join('/');
   }, []);
 
+  const syncFileToVFS = useCallback(async (filePath: string, content: string) => {
+    try {
+      await fetch('/api/filesystem/write', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ path: filePath, content }),
+      });
+    } catch {
+      // Best-effort sync; local filesystem remains authoritative in local mode
+    }
+  }, []);
+
+  const getParentPath = (path: string): string => {
+    const parts = path.split('/').filter(Boolean);
+    parts.pop();
+    return parts.join('/') || 'project';
+  };
+
+  const listLocalDirectory = (path: string): string[] => {
+    const fs = localFileSystemRef.current;
+    const entries: string[] = [];
+    const prefix = path === 'project' ? '' : path + '/';
+    
+    for (const key of Object.keys(fs)) {
+      const parent = getParentPath(key);
+      if (parent === path) {
+        const name = key.replace(prefix, '');
+        entries.push(name);
+      }
+    }
+    return entries.sort();
+  };
+
+  const getPrompt = (mode: TerminalMode, cwd: string): string => {
+    const displayCwd = cwd.replace(/^project/, '~');
+    switch (mode) {
+      case 'local':
+        return `\x1b[34m[local]\x1b[0m \x1b[1;32m${displayCwd}$\x1b[0m `;
+      case 'pty':
+        return `\x1b[32m${displayCwd}$\x1b[0m `;
+      case 'sandbox-cmd':
+        return `\x1b[35m[sandbox]\x1b[0m \x1b[1;32m${displayCwd}$\x1b[0m `;
+      case 'connecting':
+        return `\x1b[33m[connecting...]\x1b[0m \x1b[1;32m${displayCwd}$\x1b[0m `;
+      case 'editor':
+        return `\x1b[33m[editor]\x1b[0m \x1b[1;32m${displayCwd}$\x1b[0m `;
+      default:
+        return `\x1b[1;32m${displayCwd}$\x1b[0m `;
+    }
+  };
+
   const executeLocalShellCommand = useCallback(async (
     terminalId: string,
     command: string,
     write: (text: string) => void,
-  ) => {
+    isPtyMode: boolean = false,
+    mode: TerminalMode = 'local'
+  ): Promise<boolean> => {
     const cwd = localShellCwdRef.current[terminalId] || 'project';
-    const [cmd, ...args] = command.trim().split(/\s+/);
-    const arg = args.join(' ').trim();
-
-    const headers = getAuthHeaders();
-    const fetchJson = async (url: string, options?: RequestInit) => {
-      const response = await fetch(url, {
-        ...options,
-        headers: {
-          ...(options?.headers || {}),
-          ...headers,
-          ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
-        },
-        credentials: 'include',
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.success === false) {
-        throw new Error(payload?.error || `Request failed (${response.status})`);
+    const trimmed = command.trim();
+    if (!trimmed) {
+      write(getPrompt(mode, cwd));
+      return true;
+    }
+    
+    // Security check - block dangerous commands in local shell
+    if (!isPtyMode) {
+      const securityResult = checkCommandSecurity(trimmed);
+      if (!securityResult.allowed) {
+        write(formatSecurityWarning(securityResult));
+        write('');
+        const newCwd = localShellCwdRef.current[terminalId] || 'project';
+        write(`\x1b[1;32m${newCwd.replace(/^project/, '~')}$\x1b[0m `);
+        
+        // Log blocked command for security monitoring
+        if (DEFAULT_SECURITY_CONFIG.logBlockedCommands) {
+          console.warn('[TerminalSecurity] Blocked command:', {
+            command: trimmed,
+            reason: securityResult.reason,
+            severity: securityResult.severity,
+            terminalId,
+          });
+        }
+        return true;
       }
-      return payload?.data;
-    };
+      
+      // Check for obfuscation attempts
+      if (DEFAULT_SECURITY_CONFIG.enableObfuscationDetection) {
+        const obfuscation = detectObfuscation(trimmed);
+        if (obfuscation.detected && DEFAULT_SECURITY_CONFIG.blockOnObfuscation) {
+          write(`\x1b[33m⚠️ Obfuscation detected: ${obfuscation.patterns.join(', ')}\x1b[0m\r\n`);
+          write('\x1b[90mThis command was blocked due to suspicious patterns.\x1b[0m\r\n');
+          write('\x1b[90mFor full terminal access, use the sandbox terminal (type "connect").\x1b[0m\r\n');
+          const newCwd = localShellCwdRef.current[terminalId] || 'project';
+          write(`\x1b[1;32m${newCwd.replace(/^project/, '~')}$\x1b[0m `);
+          return true;
+        }
+      }
+    }
+    
+    if (!commandHistoryRef.current[terminalId]) {
+      commandHistoryRef.current[terminalId] = [];
+    }
+    const history = commandHistoryRef.current[terminalId];
+    if (history.length === 0 || history[history.length - 1] !== trimmed) {
+      history.push(trimmed);
+      if (history.length > 100) history.shift();
+    }
+    historyIndexRef.current[terminalId] = history.length;
 
-    if (!cmd) return;
-    if (cmd === 'help') {
-      write('Local shell commands: pwd, ls, cd, cat, clear, help\r\n');
+    const parts = trimmed.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+    const args: string[] = [];
+    for (const p of parts) {
+      if (p.startsWith('"') && p.endsWith('"')) {
+        args.push(p.slice(1, -1));
+      } else if (p.startsWith("'") && p.endsWith("'")) {
+        args.push(p.slice(1, -1));
+      } else {
+        args.push(p);
+      }
+    }
+    
+    const cmd = args[0] || '';
+    const arg1 = args[1] || '';
+    const arg2 = args[2] || '';
+    const allArgs = args.slice(1).join(' ');
+
+    const writeLine = (text: string) => write(text + '\r\n');
+    const writeError = (text: string) => write(`\x1b[31m${text}\x1b[0m\r\n`);
+
+    switch (cmd) {
+      case 'help': {
+        writeLine('\x1b[36m=== Local Shell Commands ===\x1b[0m');
+        writeLine('\x1b[33mFile Operations:\x1b[0m');
+        writeLine('  ls [-l] [path]     List directory contents');
+        writeLine('  pwd                Print working directory');
+        writeLine('  cd <dir>           Change directory');
+        writeLine('  cat <file>         Display file contents');
+        writeLine('  mkdir <dir>        Create directory');
+        writeLine('  touch <file>       Create empty file');
+        writeLine('  rm <file>          Remove file');
+        writeLine('  rmdir <dir>        Remove directory');
+        writeLine('  cp <src> <dst>     Copy file');
+        writeLine('  mv <src> <dst>     Move/rename file');
+        writeLine('  echo <text>        Output text');
+        writeLine('');
+        writeLine('\x1b[33mText Editing:\x1b[0m');
+        writeLine('  nano <file>        Edit file with nano');
+        writeLine('  vim <file>         Edit file with vim');
+        writeLine('  vi <file>          Edit file with vi');
+        writeLine('');
+        writeLine('\x1b[33mSystem:\x1b[0m');
+        writeLine('  clear              Clear terminal');
+        writeLine('  history            Show command history');
+        writeLine('  whoami              Display current user');
+        writeLine('  date               Display current date/time');
+        writeLine('  env                Display environment variables');
+        writeLine('');
+        writeLine('\x1b[33mSandbox:\x1b[0m');
+        writeLine('  connect            Connect to sandbox');
+        writeLine('  disconnect         Disconnect from sandbox');
+        writeLine('  status             Show sandbox status');
+        return true;
+      }
+
+      case 'clear': {
+        write('\x1bc');
+        return true;
+      }
+
+      case 'pwd': {
+        writeLine(cwd.replace(/^project/, '~'));
+        return true;
+      }
+
+      case 'cd': {
+        const target = allArgs || 'project';
+        const nextPath = resolveLocalPath(cwd, target);
+        const fs = localFileSystemRef.current;
+        
+        if (fs[nextPath] && fs[nextPath].type === 'directory') {
+          localShellCwdRef.current[terminalId] = nextPath;
+        } else if (!fs[nextPath]) {
+          writeError(`cd: no such directory: ${target}`);
+        } else {
+          writeError(`cd: not a directory: ${target}`);
+        }
+        return true;
+      }
+
+      case 'ls': {
+        const showLong = arg1 === '-l' || arg1 === '-la' || arg1 === '-al';
+        const target = showLong ? (arg1.startsWith('-') ? arg2 : arg1) : (arg1 || cwd);
+        const targetPath = resolveLocalPath(cwd, target);
+        const fs = localFileSystemRef.current;
+        
+        if (!fs[targetPath]) {
+          writeError(`ls: cannot access '${target}': No such file or directory`);
+          return true;
+        }
+        
+        if (fs[targetPath].type === 'file') {
+          if (showLong) {
+            const info = fs[targetPath];
+            const date = new Date(info.modifiedAt).toLocaleDateString();
+            writeLine(`-rw-r--r--  1 user  staff  ${info.content?.length || 0}  ${date}  ${target}`);
+          } else {
+            writeLine(target);
+          }
+          return true;
+        }
+        
+        const entries = listLocalDirectory(targetPath);
+        if (entries.length === 0) {
+          return true;
+        }
+        
+        if (showLong) {
+          for (const entry of entries) {
+            const entryPath = targetPath === 'project' ? `project/${entry}` : `${targetPath}/${entry}`;
+            const info = fs[entryPath];
+            const prefix = info.type === 'directory' ? 'd' : '-';
+            const date = new Date(info.modifiedAt).toLocaleDateString();
+            const size = info.content?.length || (info.type === 'directory' ? 0 : 4096);
+            writeLine(`${prefix}rw-r--r--  1 user  staff  ${String(size).padStart(5)}  ${date}  ${entry}${info.type === 'directory' ? '/' : ''}`);
+          }
+        } else {
+          const dirs: string[] = [];
+          const files: string[] = [];
+          for (const entry of entries) {
+            const entryPath = targetPath === 'project' ? `project/${entry}` : `${targetPath}/${entry}`;
+            if (fs[entryPath]?.type === 'directory') {
+              dirs.push(`\x1b[34m${entry}/\x1b[0m`);
+            } else {
+              files.push(entry);
+            }
+          }
+          write([...dirs, ...files].join('  '));
+          if (entries.length > 0) write('\r\n');
+        }
+        return true;
+      }
+
+      case 'cat': {
+        if (!arg1) {
+          writeError('cat: missing file operand');
+          return true;
+        }
+        const filePath = resolveLocalPath(cwd, arg1);
+        const fs = localFileSystemRef.current;
+        
+        if (!fs[filePath]) {
+          writeError(`cat: ${arg1}: No such file or directory`);
+          return true;
+        }
+        if (fs[filePath].type === 'directory') {
+          writeError(`cat: ${arg1}: Is a directory`);
+          return true;
+        }
+        const content = fs[filePath].content || '';
+        write(content.replace(/\n/g, '\r\n'));
+        if (!content.endsWith('\n')) write('\r\n');
+        return true;
+      }
+
+      case 'mkdir': {
+        if (!arg1) {
+          writeError('mkdir: missing operand');
+          return true;
+        }
+        const dirs = arg1.includes(' ') ? arg1.split(' ') : [arg1];
+        for (const d of dirs) {
+          const dirPath = resolveLocalPath(cwd, d);
+          const fs = localFileSystemRef.current;
+          
+          if (fs[dirPath]) {
+            writeError(`mkdir: cannot create directory '${d}': File exists`);
+            continue;
+          }
+          
+          const parent = getParentPath(dirPath);
+          if (!fs[parent]) {
+            writeError(`mkdir: cannot create directory '${d}': No such file or directory`);
+            continue;
+          }
+          
+          fs[dirPath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+        }
+        return true;
+      }
+
+      case 'touch': {
+        if (!arg1) {
+          writeError('touch: missing file operand');
+          return true;
+        }
+        const files = arg1.includes(' ') ? arg1.split(' ') : [arg1];
+        const fs = localFileSystemRef.current;
+        
+        for (const f of files) {
+          const filePath = resolveLocalPath(cwd, f);
+          const parent = getParentPath(filePath);
+          
+          if (!fs[parent]) {
+            writeError(`touch: cannot touch '${f}': No such file or directory`);
+            continue;
+          }
+          
+          if (fs[filePath]) {
+            fs[filePath].modifiedAt = Date.now();
+          } else {
+            fs[filePath] = { type: 'file', content: '', createdAt: Date.now(), modifiedAt: Date.now() };
+          }
+        }
+        return true;
+      }
+
+      case 'rm': {
+        if (!arg1) {
+          writeError('rm: missing operand');
+          return true;
+        }
+        const isRecursive = arg1 === '-rf' || arg1 === '-fr' || arg1 === '-r';
+        const target = isRecursive ? arg2 : arg1;
+        const targetPath = resolveLocalPath(cwd, target);
+        const fs = localFileSystemRef.current;
+        
+        if (!fs[targetPath]) {
+          writeError(`rm: cannot remove '${target}': No such file or directory`);
+          return true;
+        }
+        
+        if (fs[targetPath].type === 'directory') {
+          if (!isRecursive) {
+            writeError(`rm: cannot remove '${target}': Is a directory`);
+            return true;
+          }
+        }
+        
+        delete fs[targetPath];
+        return true;
+      }
+
+      case 'rmdir': {
+        if (!arg1) {
+          writeError('rmdir: missing operand');
+          return true;
+        }
+        const dirPath = resolveLocalPath(cwd, arg1);
+        const fs = localFileSystemRef.current;
+        
+        if (!fs[dirPath]) {
+          writeError(`rmdir: failed to remove '${arg1}': No such file or directory`);
+          return true;
+        }
+        
+        if (fs[dirPath].type !== 'directory') {
+          writeError(`rmdir: failed to remove '${arg1}': Not a directory`);
+          return true;
+        }
+        
+        const entries = listLocalDirectory(dirPath);
+        if (entries.length > 0) {
+          writeError(`rmdir: failed to remove '${arg1}': Directory not empty`);
+          return true;
+        }
+        
+        delete fs[dirPath];
+        return true;
+      }
+
+      case 'cp': {
+        if (!arg1 || !arg2) {
+          writeError('cp: missing file operand');
+          return true;
+        }
+        const srcPath = resolveLocalPath(cwd, arg1);
+        const dstPath = resolveLocalPath(cwd, arg2);
+        const fs = localFileSystemRef.current;
+        
+        if (!fs[srcPath]) {
+          writeError(`cp: cannot stat '${arg1}': No such file or directory`);
+          return true;
+        }
+        
+        if (fs[srcPath].type === 'directory') {
+          writeError(`cp: cannot copy directory '${arg1}': Not implemented`);
+          return true;
+        }
+        
+        const dstParent = getParentPath(dstPath);
+        if (!fs[dstParent]) {
+          writeError(`cp: cannot create file '${arg2}': No such file or directory`);
+          return true;
+        }
+        
+        fs[dstPath] = {
+          type: 'file',
+          content: fs[srcPath].content,
+          createdAt: Date.now(),
+          modifiedAt: Date.now()
+        };
+        return true;
+      }
+
+      case 'mv': {
+        if (!arg1 || !arg2) {
+          writeError('mv: missing file operand');
+          return true;
+        }
+        const srcPath = resolveLocalPath(cwd, arg1);
+        const dstPath = resolveLocalPath(cwd, arg2);
+        const fs = localFileSystemRef.current;
+        
+        if (!fs[srcPath]) {
+          writeError(`mv: cannot stat '${arg1}': No such file or directory`);
+          return true;
+        }
+        
+        const dstParent = getParentPath(dstPath);
+        if (!fs[dstParent]) {
+          writeError(`mv: cannot move '${arg1}': No such file or directory`);
+          return true;
+        }
+        
+        fs[dstPath] = { ...fs[srcPath], modifiedAt: Date.now() };
+        delete fs[srcPath];
+        return true;
+      }
+
+      case 'echo': {
+        let text = allArgs;
+        if ((text.startsWith('"') && text.endsWith('"')) || 
+            (text.startsWith("'") && text.endsWith("'"))) {
+          text = text.slice(1, -1);
+        }
+        
+        if (arg1 === '>' && arg2) {
+          const filePath = resolveLocalPath(cwd, arg2);
+          const fs = localFileSystemRef.current;
+          const parent = getParentPath(filePath);
+          
+          if (!fs[parent]) {
+            writeError(`echo: cannot write to '${arg2}': No such file or directory`);
+            return true;
+          }
+          
+          const echoContent = text.replace(/\\n/g, '\n');
+          fs[filePath] = {
+            type: 'file',
+            content: echoContent,
+            createdAt: fs[filePath]?.createdAt || Date.now(),
+            modifiedAt: Date.now()
+          };
+          syncFileToVFS(filePath, echoContent);
+        } else {
+          writeLine(text.replace(/\\n/g, '\n').replace(/\\t/g, '\t'));
+        }
+        return true;
+      }
+
+      case 'whoami': {
+        writeLine(userId ? userId : 'anonymous');
+        return true;
+      }
+
+      case 'date': {
+        writeLine(new Date().toString());
+        return true;
+      }
+
+      case 'env': {
+        writeLine('HOME=/home/user');
+        writeLine('USER=user');
+        writeLine('PATH=/usr/local/bin:/usr/bin:/bin');
+        writeLine('SHELL=/bin/bash');
+        writeLine('TERM=xterm-256color');
+        return true;
+      }
+
+      case 'history': {
+        const history = commandHistoryRef.current[terminalId] || [];
+        history.forEach((cmd, i) => {
+          writeLine(`  ${i + 1}  ${cmd}`);
+        });
+        return true;
+      }
+
+      case 'nano':
+      case 'vim':
+      case 'vi': {
+        const filePath = resolveLocalPath(cwd, arg1);
+        const fs = localFileSystemRef.current;
+        
+        if (!arg1) {
+          writeError(`${cmd}: missing file operand`);
+          return true;
+        }
+        
+        const parent = getParentPath(filePath);
+        if (!fs[parent] && parent !== 'project') {
+          writeError(`${cmd}: ${arg1}: No such file or directory`);
+          return true;
+        }
+        
+        const existing = fs[filePath];
+        const content = existing?.content || '';
+        
+        editorSessionRef.current[terminalId] = {
+          filePath,
+          content,
+          cursorLine: 0,
+          cursorCol: 0,
+          lines: content.split('\n'),
+          originalContent: content
+        };
+        
+        const mode = cmd === 'vim' || cmd === 'vi' ? 'NORMAL' : 'EDITOR';
+        write(`\x1b[2J\x1b[H`);
+        writeLine(`\x1b[1;32m ${cmd === 'nano' ? 'Nano' : 'Vim'} - ${arg1}\x1b[0m`);
+        writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+        
+        const maxLines = 15;
+        const displayLines = editorSessionRef.current[terminalId].lines.slice(0, maxLines);
+        displayLines.forEach((line, i) => {
+          const prefix = i === 0 ? '> ' : '  ';
+          writeLine(`${prefix}${line || ''}`);
+        });
+        
+        if (editorSessionRef.current[terminalId].lines.length > maxLines) {
+          writeLine(`\x1b[90m... ${editorSessionRef.current[terminalId].lines.length - maxLines} more lines ...\x1b[0m`);
+        }
+        
+        writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+        
+        if (cmd === 'nano') {
+          writeLine('\x1b[36m^G Get Help  ^O WriteOut  ^R Read File  ^Y Prev Pg  ^C Cur Pos\x1b[0m');
+          writeLine('\x1b[36m^X Exit       ^K Cut        ^U Paste      ^J Justify   ^T To Spell\x1b[0m');
+        } else {
+          writeLine('\x1b[33mNORMAL MODE\x1b[0m - Press \x1b[32mi\x1b[0m to insert, \x1b[32m:w\x1b[0m to save, \x1b[32m:q\x1b[0m to quit');
+        }
+        
+        writeLine(`\x1b[90mFile: ${arg1} | Lines: ${editorSessionRef.current[terminalId].lines.length}\x1b[0m`);
+        
+        updateTerminalState(terminalId, { mode: 'command-mode' });
+        return true;
+      }
+
+      case 'connect': {
+        writeLine('\x1b[33mInitiating sandbox connection...\x1b[0m');
+        return false;
+      }
+
+      case 'disconnect': {
+        const term = terminalsRef.current.find(t => t.id === terminalId);
+        if (term?.isConnected) {
+          term.eventSource?.close();
+          term.isConnected = false;
+          updateTerminalState(terminalId, { isConnected: false, sandboxInfo: { status: 'none' }, mode: 'local' });
+          writeLine('\x1b[90mDisconnected from sandbox.\x1b[0m');
+        }
+        return true;
+      }
+
+      case 'status': {
+        const term = terminalsRef.current.find(t => t.id === terminalId);
+        if (!term) return true;
+        
+        writeLine('\x1b[36m=== Terminal Status ===\x1b[0m');
+        writeLine(`  Mode:      ${term.mode}`);
+        writeLine(`  Connected: ${term.isConnected ? '\x1b[32myes\x1b[0m' : '\x1b[31mno\x1b[0m'}`);
+        if (term.sandboxInfo) {
+          writeLine(`  Status:    ${term.sandboxInfo.status}`);
+          if (term.sandboxInfo.sandboxId) {
+            writeLine(`  Sandbox:   ${term.sandboxInfo.sandboxId}`);
+          }
+          if (term.sandboxInfo.sessionId) {
+            writeLine(`  Session:   ${term.sandboxInfo.sessionId}`);
+          }
+          if (term.sandboxInfo.resources) {
+            writeLine(`  CPU:       ${term.sandboxInfo.resources.cpu}`);
+            writeLine(`  Memory:    ${term.sandboxInfo.resources.memory}`);
+          }
+        }
+        return true;
+      }
+
+      default: {
+        writeError(`command not found: ${cmd}`);
+        writeLine('\x1b[90mType "help" for available commands.\x1b[0m');
+        return true;
+      }
+    }
+  }, [resolveLocalPath, userId, updateTerminalState, syncFileToVFS]);
+
+  const handleEditorInput = useCallback((
+    terminalId: string,
+    input: string,
+    write: (text: string) => void
+  ) => {
+    const session = editorSessionRef.current[terminalId];
+    if (!session) return;
+
+    const writeLine = (text: string) => write(text + '\r\n');
+
+    if (input === '\x1b[A') {
+      if (session.cursorLine > 0) session.cursorLine--;
       return;
     }
-    if (cmd === 'clear') {
-      write('\x1bc');
+    if (input === '\x1b[B') {
+      if (session.cursorLine < session.lines.length - 1) session.cursorLine++;
       return;
     }
-    if (cmd === 'pwd') {
-      write(`${cwd}\r\n`);
+    if (input === '\x1b[D') {
+      if (session.cursorCol > 0) session.cursorCol--;
       return;
     }
-    if (cmd === 'cd') {
-      const nextPath = resolveLocalPath(cwd, arg || 'project');
-      await fetchJson(`/api/filesystem/list?path=${encodeURIComponent(nextPath)}`);
-      localShellCwdRef.current[terminalId] = nextPath;
+    if (input === '\x1b[C') {
+      const line = session.lines[session.cursorLine] || '';
+      if (session.cursorCol < line.length) session.cursorCol++;
       return;
     }
-    if (cmd === 'ls') {
-      const targetPath = arg ? resolveLocalPath(cwd, arg) : cwd;
-      const data = await fetchJson(`/api/filesystem/list?path=${encodeURIComponent(targetPath)}`);
-      const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
-      if (nodes.length === 0) {
-        write('(empty)\r\n');
+
+    if (input === '\r' || input === '\n') {
+      writeLine('');
+      
+      const currentLine = session.lines[session.cursorLine] || '';
+      if (currentLine.startsWith(':')) {
+        const cmd = currentLine.slice(1).trim();
+        
+        if (cmd === 'q' || cmd === 'q!') {
+          editorSessionRef.current[terminalId] = null;
+          updateTerminalState(terminalId, { mode: 'local' });
+          const cwd = localShellCwdRef.current[terminalId] || 'project';
+          writeLine(`\x1b[90mExit without saving.\x1b[0m`);
+          write(getPrompt('editor', cwd));
+          return;
+        }
+        
+        if (cmd === 'wq' || cmd === 'x' || cmd === 'w') {
+          const fs = localFileSystemRef.current;
+          const fileContent = session.lines.join('\n');
+          fs[session.filePath] = {
+            type: 'file',
+            content: fileContent,
+            createdAt: fs[session.filePath]?.createdAt || Date.now(),
+            modifiedAt: Date.now()
+          };
+          syncFileToVFS(session.filePath, fileContent);
+          writeLine(`\x1b[32m"${session.filePath}" ${session.lines.length}L ${fileContent.length}C written\x1b[0m`);
+          
+          if (cmd === 'wq' || cmd === 'x') {
+            editorSessionRef.current[terminalId] = null;
+            updateTerminalState(terminalId, { mode: 'local' });
+            const cwd = localShellCwdRef.current[terminalId] || 'project';
+            write(getPrompt('editor', cwd));
+          } else {
+            session.originalContent = session.lines.join('\n');
+            session.cursorLine = 0;
+            session.cursorCol = 0;
+            writeLine('\x1b[33mNORMAL MODE\x1b[0m');
+          }
+          return;
+        }
+        
+        if (cmd === 'w') {
+          writeLine('\x1b[90mUse :w to save or :wq to save and quit\x1b[0m');
+          return;
+        }
+        
+        writeLine(`\x1b[31mUnknown command: ${cmd}\x1b[0m`);
+        session.lines[session.cursorLine] = '';
         return;
       }
-      for (const node of nodes) {
-        write(`${node.type === 'directory' ? 'd' : '-'} ${node.name}${node.type === 'directory' ? '/' : ''}\r\n`);
+      
+      if (session.cursorLine < session.lines.length) {
+        session.lines[session.cursorLine] = currentLine;
       }
-      return;
-    }
-    if (cmd === 'cat') {
-      if (!arg) {
-        write('cat: missing file path\r\n');
-        return;
+      session.cursorLine++;
+      if (session.cursorLine >= session.lines.length) {
+        session.lines.push('');
       }
-      const filePath = resolveLocalPath(cwd, arg);
-      const data = await fetchJson('/api/filesystem/read', {
-        method: 'POST',
-        body: JSON.stringify({ path: filePath }),
+      session.cursorCol = 0;
+      
+      const maxLines = 15;
+      const displayLines = session.lines.slice(0, maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m Nano - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((line, i) => {
+        const prefix = i === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${line || ''}`);
       });
-      const content = typeof data?.content === 'string' ? data.content : '';
-      write(`${content.replace(/\n/g, '\r\n')}${content.endsWith('\n') ? '' : '\r\n'}`);
+      if (session.lines.length > maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      writeLine(`\x1b[90mFile: ${session.filePath.split('/').pop()} | Lines: ${session.lines.length}\x1b[0m`);
       return;
     }
 
-    write(`Command not available in local shell: ${cmd}\r\n`);
-    write('Use sandbox terminal for full command execution.\r\n');
-  }, [resolveLocalPath]);
+    if (input === '\x1b' || input === '\x03') {
+      editorSessionRef.current[terminalId] = null;
+      updateTerminalState(terminalId, { mode: 'local' });
+      const cwd = localShellCwdRef.current[terminalId] || 'project';
+      writeLine('');
+      writeLine('\x1b[90mEditor closed.\x1b[0m');
+      write(getPrompt('editor', cwd));
+      return;
+    }
 
-  // Initialize xterm.js for a terminal instance when its container mounts
+    if (input === '\x7f') {
+      if (session.cursorCol > 0) {
+        const line = session.lines[session.cursorLine] || '';
+        session.lines[session.cursorLine] = line.slice(0, -1) + line.slice(session.cursorCol);
+        session.cursorCol--;
+      }
+      return;
+    }
+
+    if (input >= ' ') {
+      const line = session.lines[session.cursorLine] || '';
+      const before = line.slice(0, session.cursorCol);
+      const after = line.slice(session.cursorCol);
+      session.lines[session.cursorLine] = before + input + after;
+      session.cursorCol++;
+      
+      const maxLines = 15;
+      const displayLines = session.lines.slice(0, maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m Nano - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const prefix = i === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      writeLine(`\x1b[90mFile: ${session.filePath.split('/').pop()} | Lines: ${session.lines.length}\x1b[0m`);
+    }
+  }, [updateTerminalState, syncFileToVFS]);
+
   const initXterm = useCallback(async (terminalId: string, containerEl: HTMLDivElement) => {
     const existing = terminalsRef.current.find(t => t.id === terminalId);
-    if (!existing || existing.terminal) return; // Already initialized
+    if (!existing || existing.terminal) return;
 
     try {
       const { Terminal } = await import('@xterm/xterm');
@@ -371,96 +1167,194 @@ export default function TerminalPanel({
       terminal.open(containerEl);
       containerEl.addEventListener('click', () => terminal.focus());
 
-      // Initial fit after a frame
       requestAnimationFrame(() => {
-        try { fitAddon.fit(); } catch { /* ignore */ }
+        try { fitAddon.fit(); } catch {}
         terminal.focus();
       });
 
-      // Show friendly welcome message - local shell is available immediately.
-      terminal.writeln('\x1b[1;32m● Terminal ready\x1b[0m');
-      terminal.writeln('\x1b[90mLocal filesystem shell is active immediately.\x1b[0m');
-      terminal.writeln('\x1b[90mSandbox connects in background on first command.\x1b[0m');
+      terminal.writeln('\x1b[1;32m╔═══════════════════════════════════════════════════════════╗\x1b[0m');
+      terminal.writeln('\x1b[1;32m║\x1b[0m  \x1b[1;32m● Terminal Ready\x1b[0m                                  \x1b[1;32m║\x1b[0m');
+      terminal.writeln('\x1b[1;32m║\x1b[0m  \x1b[90mLocal shell mode active immediately.                \x1b[0m\x1b[1;32m║\x1b[0m');
+      terminal.writeln('\x1b[1;32m║\x1b[0m  \x1b[90mType "help" for commands.                         \x1b[0m\x1b[1;32m║\x1b[0m');
+      terminal.writeln('\x1b[1;32m║\x1b[0m  \x1b[90mType "connect" to connect to sandbox.             \x1b[0m\x1b[1;32m║\x1b[0m');
+      terminal.writeln('\x1b[1;32m╚═══════════════════════════════════════════════════════════╝\x1b[0m');
       terminal.writeln('');
-      terminal.writeln('\x1b[36mQuick commands:\x1b[0m');
-      terminal.writeln('  \x1b[32mls\x1b[0m - List files');
-      terminal.writeln('  \x1b[32mpwd\x1b[0m - Show current directory');
-      terminal.writeln('  \x1b[32mcat <file>\x1b[0m - Read file');
-      terminal.writeln('');
-      terminal.write('project$ ');
 
-      updateTerminalState(terminalId, { terminal, fitAddon });
+      const cwd = localShellCwdRef.current[terminalId] || 'project';
+      terminal.write(getPrompt('local', cwd));
 
-      // Store refs on the mutable object for immediate access
+      updateTerminalState(terminalId, { terminal, fitAddon, mode: 'local' });
+
       const termRef = terminalsRef.current.find(t => t.id === terminalId);
       if (termRef) {
         termRef.terminal = terminal;
         termRef.fitAddon = fitAddon;
       }
 
-      // Set up input handler — sends keystrokes to PTY via POST
       terminal.onData((data: string) => {
         const term = terminalsRef.current.find(t => t.id === terminalId);
         if (!term) return;
 
-        // If not connected yet, trigger sandbox initialization
-        if (term.sandboxInfo.status === 'none' || !term.isConnected) {
-          const reconnectAllowedAt = reconnectCooldownUntilRef.current[terminalId] || 0;
-          if (term.sandboxInfo.status !== 'creating' && Date.now() >= reconnectAllowedAt) {
-            connectTerminal(terminalId);
-          }
-
-          // Local line-editor mode so terminal remains usable while sandbox is provisioning.
-          const buffer = preConnectLineBufferRef.current[terminalId] ?? '';
-          let nextBuffer = buffer;
-          let localCommand: string | null = null;
-
-          for (const ch of data) {
-            if (ch === '\r' || ch === '\n') {
-              term.terminal?.write('\r\n');
-              const command = nextBuffer.trim();
-              nextBuffer = '';
-              if (command) {
-                localCommand = command;
-              } else {
-                const cwd = localShellCwdRef.current[terminalId] || 'project';
-                term.terminal?.write(`${cwd}$ `);
-              }
-            } else if (ch === '\u007f') {
-              if (nextBuffer.length > 0) {
-                nextBuffer = nextBuffer.slice(0, -1);
-                term.terminal?.write('\b \b');
-              }
-            } else if (ch >= ' ') {
-              nextBuffer += ch;
-              term.terminal?.write(ch);
-            }
-          }
-
-          preConnectLineBufferRef.current[terminalId] = nextBuffer;
-          if (localCommand) {
-            void executeLocalShellCommand(
-              terminalId,
-              localCommand,
-              (text) => term.terminal?.write(text),
-            )
-              .catch((err) => {
-                term.terminal?.writeln(`\x1b[31m${err instanceof Error ? err.message : String(err)}\x1b[0m`);
-              })
-              .finally(() => {
-                const cwd = localShellCwdRef.current[terminalId] || 'project';
-                term.terminal?.write(`${cwd}$ `);
-              });
+        // PTY mode: forward raw bytes to sandbox, skip local handling
+        if (term.mode === 'pty' && term.sandboxInfo.sessionId) {
+          // Buffer input until connected
+          if (term.sandboxInfo.status === 'active') {
+            void sendInput(term.sandboxInfo.sessionId, data);
+          } else {
+            commandQueueRef.current[terminalId] = [
+              ...(commandQueueRef.current[terminalId] || []),
+              data
+            ];
           }
           return;
         }
 
-        if (term.sandboxInfo.sessionId) {
-          sendInput(term.sandboxInfo.sessionId, data);
+        // Sandbox command-mode: line-based execution
+        if (term.mode === 'sandbox-cmd' && term.sandboxInfo.sessionId) {
+          handleSandboxCmdInput(terminalId, data, term);
+          return;
+        }
+
+        const session = editorSessionRef.current[terminalId];
+        if (session) {
+          handleEditorInput(terminalId, data, (text) => term.terminal?.write(text));
+          return;
+        }
+
+        // Use ref for lineBuffer to survive reconnects
+        let lineBuffer = lineBufferRef.current[terminalId] || '';
+
+        if (data === '\r' || data === '\n') {
+          term.terminal?.write('\r\n');
+          const command = lineBuffer.trim();
+          lineBufferRef.current[terminalId] = '';
+
+          if (command) {
+            const isConnectCmd = command.trim() === 'connect';
+
+            executeLocalShellCommand(
+              terminalId,
+              command,
+              (text) => term.terminal?.write(text),
+              term.mode === 'pty',
+              term.mode
+            ).then((shouldShowPrompt) => {
+              if (shouldShowPrompt && !isConnectCmd) {
+                const newCwd = localShellCwdRef.current[terminalId] || 'project';
+                term.terminal?.write(getPrompt(term.mode, newCwd));
+              } else if (isConnectCmd) {
+                const reconnectAllowedAt = reconnectCooldownUntilRef.current[terminalId] || 0;
+                const remaining = Math.ceil((reconnectAllowedAt - Date.now()) / 1000);
+                if (remaining > 0) {
+                  term.terminal?.writeln(`\x1b[33mReconnect cooldown: ${remaining}s remaining.\x1b[0m`);
+                  const cwd = localShellCwdRef.current[terminalId] || 'project';
+                  term.terminal?.write(getPrompt(term.mode, cwd));
+                } else if (term.sandboxInfo.status !== 'creating' && Date.now() >= reconnectAllowedAt) {
+                  updateTerminalState(terminalId, { mode: 'connecting' });
+                  connectTerminal(terminalId);
+                }
+              }
+            });
+          } else {
+            const newCwd = localShellCwdRef.current[terminalId] || 'project';
+            term.terminal?.write(getPrompt(term.mode, newCwd));
+          }
+          return;
+        }
+
+        if (data === '\u001b[A') {
+          const history = commandHistoryRef.current[terminalId] || [];
+          let idx = historyIndexRef.current[terminalId] ?? -1;
+          if (idx > 0) {
+            idx--;
+            historyIndexRef.current[terminalId] = idx;
+            const cmd = history[idx];
+
+            for (let i = 0; i < lineBuffer.length; i++) {
+              term.terminal?.write('\b \b');
+            }
+            lineBufferRef.current[terminalId] = cmd || '';
+            term.terminal?.write(lineBufferRef.current[terminalId]);
+          }
+          return;
+        }
+
+        if (data === '\u001b[B') {
+          const history = commandHistoryRef.current[terminalId] || [];
+          let idx = historyIndexRef.current[terminalId] ?? -1;
+          if (idx < history.length - 1) {
+            idx++;
+            historyIndexRef.current[terminalId] = idx;
+            const cmd = history[idx];
+
+            for (let i = 0; i < lineBuffer.length; i++) {
+              term.terminal?.write('\b \b');
+            }
+            lineBufferRef.current[terminalId] = cmd || '';
+            term.terminal?.write(lineBufferRef.current[terminalId]);
+          } else if (idx < history.length) {
+            idx = history.length;
+            historyIndexRef.current[terminalId] = idx;
+            for (let i = 0; i < lineBuffer.length; i++) {
+              term.terminal?.write('\b \b');
+            }
+            lineBufferRef.current[terminalId] = '';
+          }
+          return;
+        }
+
+        if (data === '\u007f') {
+          if (lineBuffer.length > 0) {
+            lineBufferRef.current[terminalId] = lineBuffer.slice(0, -1);
+            term.terminal?.write('\b \b');
+          }
+          return;
+        }
+
+        if (data === '\t') {
+          // Basic tab completion
+          const lastWord = lineBuffer.split(' ').pop() || '';
+          if (lastWord) {
+            const cwd = localShellCwdRef.current[terminalId] || 'project';
+            const completions = Object.keys(localFileSystemRef.current)
+              .filter(k => k.startsWith(resolveLocalPath(cwd, lastWord)))
+              .map(k => k.split('/').pop() || k);
+            if (completions.length === 1) {
+              const completion = completions[0].slice(lastWord.length);
+              lineBufferRef.current[terminalId] = lineBuffer + completion;
+              term.terminal?.write(completion);
+            } else if (completions.length > 1) {
+              term.terminal?.write('\r\n' + completions.join('  ') + '\r\n');
+              term.terminal?.write(getPrompt(term.mode, cwd) + lineBuffer);
+            }
+          }
+          return;
+        }
+
+        if (data === '\x03') {
+          term.terminal?.write('^C\r\n');
+          lineBufferRef.current[terminalId] = '';
+          const newCwd = localShellCwdRef.current[terminalId] || 'project';
+          term.terminal?.write(getPrompt(term.mode, newCwd));
+          return;
+        }
+
+        if (data >= ' ') {
+          lineBufferRef.current[terminalId] = lineBuffer + data;
+          term.terminal?.write(data);
         }
       });
 
-      // Handle resize events from FitAddon
+      // Add custom key event handler to intercept arrow keys and prevent viewport scroll
+      terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+        if (event.type !== 'keydown') return true;
+        const t = terminalsRef.current.find(t => t.id === terminalId);
+        if (!t) return true;
+        if (t.mode === 'pty') return true; // Let PTY handle everything
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') return false; // Suppress default xterm scroll
+        return true;
+      });
+
       terminal.onResize(({ cols, rows }: { cols: number; rows: number }) => {
         const term = terminalsRef.current.find(t => t.id === terminalId);
         if (term?.isConnected && term.sandboxInfo.sessionId) {
@@ -472,27 +1366,116 @@ export default function TerminalPanel({
       console.error('[TerminalPanel] Failed to load xterm.js:', err);
       toast.error('Failed to initialize terminal. Install @xterm/xterm @xterm/addon-fit @xterm/addon-web-links');
     }
-  }, []);
+  }, [executeLocalShellCommand, handleEditorInput, updateTerminalState, sendInput, sendResize]);
 
-  // Send input to PTY
-  const sendInput = useCallback(async (sessionId: string, data: string) => {
-    try {
-      await fetch('/api/sandbox/terminal/input', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders(),
-        },
-        credentials: 'include',
-        body: JSON.stringify({ sessionId, data }),
-      });
-    } catch {
-      // Silently ignore individual input failures
+  // Handle sandbox command-mode input (line-based execution)
+  const handleSandboxCmdInput = useCallback((
+    terminalId: string,
+    data: string,
+    term: TerminalInstance
+  ) => {
+    let lineBuffer = lineBufferRef.current[terminalId] || '';
+
+    if (data === '\r' || data === '\n') {
+      term.terminal?.write('\r\n');
+      const command = lineBuffer.trim();
+      lineBufferRef.current[terminalId] = '';
+
+      if (command) {
+        // Add to queue for execution
+        commandQueueRef.current[terminalId] = [
+          ...(commandQueueRef.current[terminalId] || []),
+          command
+        ];
+
+        // Execute via API
+        if (term.sandboxInfo.sessionId) {
+          sendInput(term.sandboxInfo.sessionId, command + '\n');
+        }
+      }
+
+      const cwd = term.sandboxInfo.sessionId ? '/workspace' : '~';
+      term.terminal?.write(`\x1b[1;32m${cwd}$\x1b[0m `);
+      return;
     }
+
+    if (data === '\u007f') { // Backspace
+      if (lineBuffer.length > 0) {
+        lineBufferRef.current[terminalId] = lineBuffer.slice(0, -1);
+        term.terminal?.write('\b \b');
+      }
+      return;
+    }
+
+    if (data === '\t') {
+      // Basic tab completion in command mode
+      return;
+    }
+
+    if (data === '\x03') { // Ctrl+C
+      term.terminal?.write('^C\r\n');
+      lineBufferRef.current[terminalId] = '';
+      const cwd = term.sandboxInfo.sessionId ? '/workspace' : '~';
+      term.terminal?.write(`\x1b[1;32m${cwd}$\x1b[0m `);
+      return;
+    }
+
+    if (data >= ' ') {
+      lineBufferRef.current[terminalId] = lineBuffer + data;
+      term.terminal?.write(data);
+    }
+  }, [sendInput]);
+
+  const sendInput = useCallback(async (sessionId: string, data: string) => {
+    // Check if there's a WebSocket available for this session
+    const term = terminalsRef.current.find(t => t.sandboxInfo.sessionId === sessionId && t.websocket && t.websocket.readyState === WebSocket.OPEN);
+    
+    if (term?.websocket) {
+      // Use WebSocket for bidirectional streaming (ARCH 4 improvement)
+      term.websocket.send(JSON.stringify({ type: 'input', data }));
+      return;
+    }
+
+    // Batch keystrokes with 50ms debounce to reduce HTTP overhead while maintaining responsiveness
+    inputBatchRef.current[sessionId] = (inputBatchRef.current[sessionId] || '') + data;
+
+    // Clear existing flush timer
+    if (inputFlushRef.current[sessionId]) {
+      clearTimeout(inputFlushRef.current[sessionId]);
+    }
+
+    // Flush after 50ms (better batching for network latency)
+    inputFlushRef.current[sessionId] = setTimeout(async () => {
+      const batch = inputBatchRef.current[sessionId];
+      if (!batch) return;
+
+      inputBatchRef.current[sessionId] = '';
+
+      try {
+        await fetch('/api/sandbox/terminal/input', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+          credentials: 'include',
+          body: JSON.stringify({ sessionId, data: batch }),
+        });
+      } catch {}
+    }, 50);
   }, []);
 
-  // Send resize to PTY
   const sendResize = useCallback(async (sessionId: string, cols: number, rows: number) => {
+    // Check if there's a WebSocket available for this session
+    const term = terminalsRef.current.find(t => t.sandboxInfo.sessionId === sessionId && t.websocket && t.websocket.readyState === WebSocket.OPEN);
+    
+    if (term?.websocket) {
+      // Use WebSocket for resize (lower latency)
+      term.websocket.send(JSON.stringify({ type: 'resize', cols, rows }));
+      return;
+    }
+
+    // Fallback to HTTP POST
     try {
       await fetch('/api/sandbox/terminal/resize', {
         method: 'POST',
@@ -503,13 +1486,18 @@ export default function TerminalPanel({
         credentials: 'include',
         body: JSON.stringify({ sessionId, cols, rows }),
       });
-    } catch {
-      // Silently ignore resize failures
-    }
+    } catch {}
   }, []);
 
-  // Connect terminal to sandbox PTY
+  // Spinner animation frames for connecting status
+  const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
   const connectTerminal = useCallback(async (terminalId: string) => {
+    // Abort any pending connection
+    connectAbortRef.current[terminalId]?.abort();
+    const ac = new AbortController();
+    connectAbortRef.current[terminalId] = ac;
+
     const term = terminalsRef.current.find(t => t.id === terminalId);
     if (!term || term.sandboxInfo.status === 'creating' || term.isConnected) return;
 
@@ -518,17 +1506,32 @@ export default function TerminalPanel({
 
     updateTerminalState(terminalId, {
       sandboxInfo: { status: 'creating' },
+      mode: 'connecting',
     });
     term.sandboxInfo = { status: 'creating' };
-    
-    // Show loading message - but don't mention time estimates
+
     term.terminal?.writeln('');
-    term.terminal?.writeln('\x1b[33m⟳ Preparing your sandbox...\x1b[0m');
-    term.terminal?.writeln('\x1b[90mThis only happens once - future terminals will be instant!\x1b[0m');
+    term.terminal?.writeln('\x1b[33m⟳ Connecting to sandbox...\x1b[0m');
+    term.terminal?.writeln('\x1b[90mThis may take a moment on first connection.\x1b[0m');
     term.terminal?.writeln('');
 
+    // Start animated spinner during connection
+    let spinnerFrameIndex = 0;
+    const spinnerInterval = setInterval(() => {
+      const currentTerm = terminalsRef.current.find(t => t.id === terminalId);
+      if (!currentTerm?.terminal || currentTerm.sandboxInfo.status !== 'creating') {
+        clearInterval(spinnerInterval);
+        return;
+      }
+      const frame = spinnerFrames[spinnerFrameIndex % spinnerFrames.length];
+      spinnerFrameIndex++;
+      currentTerm.terminal.write(`\r\x1b[33m${frame}\x1b[0m \x1b[90mProvisioning sandbox environment...\x1b[0m`);
+    }, 80);
+
+    // Store spinner interval reference for cleanup
+    (term as any).__spinnerInterval = spinnerInterval;
+
     try {
-      // Step 1: Ensure sandbox session exists
       const sessionRes = await fetch('/api/sandbox/terminal', {
         method: 'POST',
         headers: {
@@ -536,6 +1539,7 @@ export default function TerminalPanel({
           ...getAuthHeaders(),
         },
         credentials: 'include',
+        signal: ac.signal,
       });
 
       if (!sessionRes.ok) {
@@ -545,9 +1549,7 @@ export default function TerminalPanel({
       const sessionData = await sessionRes.json();
       const { sessionId, sandboxId } = sessionData;
 
-      // Step 2: Get short-lived connection token (avoids passing JWT in URL)
       let connectionToken: string | undefined;
-      let useJwtFallback = false;
       try {
         const tokenRes = await fetch('/api/sandbox/terminal/stream', {
           method: 'POST',
@@ -562,24 +1564,215 @@ export default function TerminalPanel({
         if (tokenRes.ok) {
           const tokenData = await tokenRes.json();
           connectionToken = tokenData.connectionToken;
-        } else if (tokenRes.status === 404 || tokenRes.status === 405) {
-          // Endpoint doesn't support connection tokens - fall back to JWT for backward compatibility
-          useJwtFallback = true;
+        } else {
+          console.warn('[TerminalPanel] Connection token endpoint not available');
         }
-        // For other errors (5xx), don't fall back to JWT to avoid exposing it in logs
       } catch (err) {
         console.warn('[TerminalPanel] Failed to get connection token:', err);
-        // Network error - don't fall back to JWT
       }
 
-      // Step 3: Connect SSE stream (this creates the PTY)
-      // Use connection token if available, otherwise fall back to JWT only for 404/405
-      const tokenParam = connectionToken 
-        ? `&token=${encodeURIComponent(connectionToken)}` 
-        : useJwtFallback && token 
-          ? `&token=${encodeURIComponent(token)}` 
-          : '';
+      // Try WebSocket first if available (WebSocket upgrade for bidirectional streaming)
+      const wsSupported = typeof WebSocket !== 'undefined';
+      
+      if (wsSupported) {
+        try {
+          // Build WebSocket URL with connection token for authentication
+          const tokenParam = connectionToken
+            ? `?token=${encodeURIComponent(connectionToken)}`
+            : '';
+          const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+          const wsUrl = `${wsProtocol}//${window.location.host}/api/sandbox/terminal/ws${tokenParam}&sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}`;
+
+          const ws = new WebSocket(wsUrl);
+          term.websocket = ws;
+
+          ws.onopen = () => {
+            console.log('[TerminalPanel] WebSocket connected');
+          };
+
+          ws.onmessage = (wsEvent) => {
+            try {
+              const msg = JSON.parse(wsEvent.data);
+              const currentTerm = terminalsRef.current.find(t => t.id === terminalId);
+              if (!currentTerm?.terminal) return;
+
+              switch (msg.type) {
+                case 'connected': {
+                  const connectedInfo: SandboxInfo = {
+                    sessionId,
+                    sandboxId,
+                    status: 'active',
+                  };
+
+                  // Clear spinner interval
+                  const termWithSpinner = terminalsRef.current.find(t => t.id === terminalId);
+                  if (termWithSpinner && (termWithSpinner as any).__spinnerInterval) {
+                    clearInterval((termWithSpinner as any).__spinnerInterval);
+                    delete (termWithSpinner as any).__spinnerInterval;
+                  }
+
+                  updateTerminalState(terminalId, {
+                    sandboxInfo: connectedInfo,
+                    isConnected: true,
+                    mode: 'pty',
+                  });
+
+                  const termMut = terminalsRef.current.find(t => t.id === terminalId);
+                  if (termMut) {
+                    termMut.sandboxInfo = connectedInfo;
+                    termMut.isConnected = true;
+                    termMut.mode = 'pty';
+                  }
+
+                  currentTerm.terminal.writeln('');
+                  currentTerm.terminal.writeln('\x1b[1;32m✓ Sandbox connected!\x1b[0m');
+                  currentTerm.terminal.writeln('\x1b[90mYou now have full terminal access.\x1b[0m');
+                  currentTerm.terminal.writeln('');
+
+                  if (currentTerm.terminal) {
+                    sendResize(sessionId, currentTerm.terminal.cols, currentTerm.terminal.rows);
+                  }
+
+                  const queue = commandQueueRef.current[terminalId] || [];
+                  for (const cmd of queue) {
+                    ws.send(JSON.stringify({ type: 'input', data: cmd }));
+                  }
+                  commandQueueRef.current[terminalId] = [];
+                  break;
+                }
+
+                case 'pty':
+                  currentTerm.terminal.write(msg.data);
+                  break;
+
+                case 'agent:tool_start':
+                  currentTerm.terminal.writeln('');
+                  currentTerm.terminal.writeln(`\x1b[1;35m🤖 Agent → ${msg.data.toolName}\x1b[0m`);
+                  if (msg.data.toolName === 'exec_shell' && msg.data.args?.command) {
+                    currentTerm.terminal.writeln(`\x1b[90m   $ ${msg.data.args.command}\x1b[0m`);
+                  }
+                  break;
+
+                case 'agent:tool_result': {
+                  const r = msg.data.result;
+                  if (r?.success) {
+                    currentTerm.terminal.writeln(`\x1b[32m   ✓ Success\x1b[0m`);
+                  } else {
+                    currentTerm.terminal.writeln(`\x1b[31m   ✗ Failed (exit ${r?.exitCode ?? '?'})\x1b[0m`);
+                  }
+                  if (r?.output) {
+                    const lines = r.output.split('\n');
+                    const maxLines = 15;
+                    const display = lines.length > maxLines
+                      ? [...lines.slice(0, maxLines), `\x1b[90m   ... (${lines.length - maxLines} more lines)\x1b[0m`]
+                      : lines;
+                    display.forEach((line: string) => {
+                      currentTerm.terminal.writeln(`\x1b[90m   ${line}\x1b[0m`);
+                    });
+                  }
+                  break;
+                }
+
+                case 'agent:complete':
+                  currentTerm.terminal.writeln('');
+                  currentTerm.terminal.writeln(`\x1b[1;32m🤖 Agent complete (${msg.data.totalSteps ?? 0} steps)\x1b[0m`);
+                  currentTerm.terminal.writeln('');
+                  break;
+
+                case 'port_detected':
+                  currentTerm.terminal.writeln('');
+                  currentTerm.terminal.writeln(`\x1b[1;34m🌐 Preview: ${msg.data.url}\x1b[0m`);
+                  toast.info(`Preview available on port ${msg.data.port}`, {
+                    action: {
+                      label: 'Open',
+                      onClick: () => window.open(msg.data.url, '_blank'),
+                    },
+                  });
+                  break;
+
+                case 'error':
+                  // Clear spinner interval
+                  const termWithError = terminalsRef.current.find(t => t.id === terminalId);
+                  if (termWithError && (termWithError as any).__spinnerInterval) {
+                    clearInterval((termWithError as any).__spinnerInterval);
+                    delete (termWithError as any).__spinnerInterval;
+                  }
+
+                  currentTerm.terminal.writeln(`\x1b[31m${msg.data}\x1b[0m`);
+                  if (!currentTerm.isConnected) {
+                    updateTerminalState(terminalId, {
+                      sandboxInfo: { sessionId, sandboxId, status: 'error' },
+                      isConnected: false,
+                      mode: 'sandbox-cmd',
+                    });
+                    const termMut = terminalsRef.current.find(t => t.id === terminalId);
+                    if (termMut) {
+                      termMut.sandboxInfo = { sessionId, sandboxId, status: 'error' };
+                      termMut.isConnected = false;
+                      termMut.mode = 'sandbox-cmd';
+                    }
+                    ws.close();
+                    reconnectCooldownUntilRef.current[terminalId] = Date.now() + 5000;
+                    currentTerm.terminal.writeln('\x1b[33m⚠ PTY unavailable. Falling back to command-mode.\x1b[0m');
+                    currentTerm.terminal.writeln('\x1b[90mType "connect" to retry PTY.\x1b[0m');
+                    const cwd = localShellCwdRef.current[terminalId] || 'project';
+                    currentTerm.terminal.write(`\x1b[1;32m${cwd.replace(/^project/, '~')}$\x1b[0m `);
+                  }
+                  break;
+
+                case 'ping':
+                  break;
+              }
+            } catch {}
+          };
+
+          ws.onerror = () => {
+            console.warn('[TerminalPanel] WebSocket error, falling back to SSE');
+            ws.close();
+            // Fall through to SSE implementation
+            throw new Error('WebSocket failed');
+          };
+
+          ws.onclose = () => {
+            const currentTerm = terminalsRef.current.find(t => t.id === terminalId);
+            if (currentTerm?.isConnected) {
+              currentTerm.terminal?.writeln('\x1b[31m⚠ Connection lost. Reconnecting...\x1b[0m');
+            }
+          };
+
+          // Update terminal state with WebSocket
+          const pendingSandboxInfo: SandboxInfo = {
+            sessionId,
+            sandboxId,
+            status: 'creating',
+          };
+
+          updateTerminalState(terminalId, {
+            sandboxInfo: pendingSandboxInfo,
+            websocket: ws,
+            isConnected: false,
+          });
+
+          const termMut = terminalsRef.current.find(t => t.id === terminalId);
+          if (termMut) {
+            termMut.sandboxInfo = pendingSandboxInfo;
+            termMut.websocket = ws;
+            termMut.isConnected = false;
+          }
+
+          return; // WebSocket path successful, exit early
+        } catch (wsError) {
+          console.warn('[TerminalPanel] WebSocket not available, using SSE fallback');
+          // Fall through to SSE implementation
+        }
+      }
+
+      // SSE fallback (original implementation)
+      const tokenParam = connectionToken
+        ? `&token=${encodeURIComponent(connectionToken)}`
+        : '';
       const streamUrl = `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}${tokenParam}${anonymousSessionId ? `&anonymousSessionId=${encodeURIComponent(anonymousSessionId)}` : ''}`;
+
       const eventSource = new EventSource(streamUrl);
 
       eventSource.onmessage = (event) => {
@@ -596,35 +1789,40 @@ export default function TerminalPanel({
                 status: 'active',
               };
 
+              // Clear spinner interval
+              const termWithSpinner = terminalsRef.current.find(t => t.id === terminalId);
+              if (termWithSpinner && (termWithSpinner as any).__spinnerInterval) {
+                clearInterval((termWithSpinner as any).__spinnerInterval);
+                delete (termWithSpinner as any).__spinnerInterval;
+              }
+
               updateTerminalState(terminalId, {
                 sandboxInfo: connectedInfo,
                 isConnected: true,
+                mode: 'pty',
               });
 
               const termMut = terminalsRef.current.find(t => t.id === terminalId);
               if (termMut) {
                 termMut.sandboxInfo = connectedInfo;
                 termMut.isConnected = true;
+                termMut.mode = 'pty';
               }
 
               currentTerm.terminal.writeln('');
-              currentTerm.terminal.writeln('\x1b[1;32m✓ Sandbox ready!\x1b[0m');
-              currentTerm.terminal.writeln('\x1b[90mYour isolated development environment is ready to use.\x1b[0m');
+              currentTerm.terminal.writeln('\x1b[1;32m✓ Sandbox connected!\x1b[0m');
+              currentTerm.terminal.writeln('\x1b[90mYou now have full terminal access.\x1b[0m');
               currentTerm.terminal.writeln('');
-
-              if (!userId) {
-                currentTerm.terminal.writeln('\x1b[33m⚠ Dev mode: Anonymous session (sign in for persistence)\x1b[0m');
-              }
 
               if (currentTerm.terminal) {
                 sendResize(sessionId, currentTerm.terminal.cols, currentTerm.terminal.rows);
               }
 
-              const pendingBuffer = preConnectLineBufferRef.current[terminalId];
-              if (pendingBuffer) {
-                void sendInput(sessionId, pendingBuffer);
+              const queue = commandQueueRef.current[terminalId] || [];
+              for (const cmd of queue) {
+                void sendInput(sessionId, cmd);
               }
-              preConnectLineBufferRef.current[terminalId] = '';
+              commandQueueRef.current[terminalId] = [];
               break;
             }
 
@@ -637,11 +1835,6 @@ export default function TerminalPanel({
               currentTerm.terminal.writeln(`\x1b[1;35m🤖 Agent → ${msg.data.toolName}\x1b[0m`);
               if (msg.data.toolName === 'exec_shell' && msg.data.args?.command) {
                 currentTerm.terminal.writeln(`\x1b[90m   $ ${msg.data.args.command}\x1b[0m`);
-              } else if (msg.data.args) {
-                const argStr = Object.entries(msg.data.args)
-                  .map(([k, v]) => `${k}=${typeof v === 'string' && v.length > 80 ? v.slice(0, 80) + '…' : v}`)
-                  .join(', ');
-                currentTerm.terminal.writeln(`\x1b[90m   ${argStr}\x1b[0m`);
               }
               break;
 
@@ -665,27 +1858,15 @@ export default function TerminalPanel({
               break;
             }
 
-            case 'agent:stream':
-              if (msg.data.text) {
-                currentTerm.terminal.write(`\x1b[36m${msg.data.text}\x1b[0m`);
-              }
-              break;
-
             case 'agent:complete':
               currentTerm.terminal.writeln('');
               currentTerm.terminal.writeln(`\x1b[1;32m🤖 Agent complete (${msg.data.totalSteps ?? 0} steps)\x1b[0m`);
               currentTerm.terminal.writeln('');
               break;
 
-            case 'agent:error':
-              currentTerm.terminal.writeln('');
-              currentTerm.terminal.writeln(`\x1b[1;31m🤖 Agent error: ${msg.data.message}\x1b[0m`);
-              currentTerm.terminal.writeln('');
-              break;
-
             case 'port_detected':
               currentTerm.terminal.writeln('');
-              currentTerm.terminal.writeln(`\x1b[1;34m🌐 Preview available: ${msg.data.url}\x1b[0m`);
+              currentTerm.terminal.writeln(`\x1b[1;34m🌐 Preview: ${msg.data.url}\x1b[0m`);
               toast.info(`Preview available on port ${msg.data.port}`, {
                 action: {
                   label: 'Open',
@@ -695,36 +1876,45 @@ export default function TerminalPanel({
               break;
 
             case 'error':
+              // Clear spinner interval
+              const termWithError = terminalsRef.current.find(t => t.id === terminalId);
+              if (termWithError && (termWithError as any).__spinnerInterval) {
+                clearInterval((termWithError as any).__spinnerInterval);
+                delete (termWithError as any).__spinnerInterval;
+              }
+
               currentTerm.terminal.writeln(`\x1b[31m${msg.data}\x1b[0m`);
               if (!currentTerm.isConnected) {
                 updateTerminalState(terminalId, {
                   sandboxInfo: { sessionId, sandboxId, status: 'error' },
                   isConnected: false,
+                  mode: 'sandbox-cmd',
                 });
                 const termMut = terminalsRef.current.find(t => t.id === terminalId);
                 if (termMut) {
                   termMut.sandboxInfo = { sessionId, sandboxId, status: 'error' };
                   termMut.isConnected = false;
+                  termMut.mode = 'sandbox-cmd';
                 }
                 currentTerm.eventSource?.close();
-                reconnectCooldownUntilRef.current[terminalId] = Date.now() + 5_000;
-                currentTerm.terminal.writeln('\x1b[90mSandbox unavailable. Local shell remains active.\x1b[0m');
+                reconnectCooldownUntilRef.current[terminalId] = Date.now() + 5000;
+                currentTerm.terminal.writeln('\x1b[33m⚠ PTY unavailable. Falling back to command-mode.\x1b[0m');
+                currentTerm.terminal.writeln('\x1b[90mType "connect" to retry PTY.\x1b[0m');
+                const cwd = localShellCwdRef.current[terminalId] || 'project';
+                currentTerm.terminal.write(`\x1b[1;32m${cwd.replace(/^project/, '~')}$\x1b[0m `);
               }
               break;
 
             case 'ping':
               break;
           }
-        } catch {
-          // Malformed SSE data
-        }
+        } catch {}
       };
 
       eventSource.onerror = () => {
         const currentTerm = terminalsRef.current.find(t => t.id === terminalId);
         if (currentTerm?.isConnected) {
           currentTerm.terminal?.writeln('\x1b[31m⚠ Connection lost. Reconnecting...\x1b[0m');
-          // EventSource auto-reconnects
         }
       };
 
@@ -740,7 +1930,6 @@ export default function TerminalPanel({
         isConnected: false,
       });
 
-      // Update mutable ref immediately
       const termMut = terminalsRef.current.find(t => t.id === terminalId);
       if (termMut) {
         termMut.sandboxInfo = pendingSandboxInfo;
@@ -749,23 +1938,33 @@ export default function TerminalPanel({
       }
 
     } catch (error) {
+      // Clear spinner interval
+      const termWithError = terminalsRef.current.find(t => t.id === terminalId);
+      if (termWithError && (termWithError as any).__spinnerInterval) {
+        clearInterval((termWithError as any).__spinnerInterval);
+        delete (termWithError as any).__spinnerInterval;
+      }
+
       const errMsg = error instanceof Error ? error.message : 'Unknown error';
       updateTerminalState(terminalId, {
         sandboxInfo: { status: 'error' },
         isConnected: false,
+        mode: 'sandbox-cmd',
       });
       const termMut = terminalsRef.current.find(t => t.id === terminalId);
       if (termMut) {
         termMut.sandboxInfo = { status: 'error' };
         termMut.isConnected = false;
+        termMut.mode = 'sandbox-cmd';
       }
-      reconnectCooldownUntilRef.current[terminalId] = Date.now() + 5_000;
-      term.terminal?.writeln(`\x1b[31m✗ Failed to connect sandbox: ${errMsg}\x1b[0m`);
-      term.terminal?.writeln('\x1b[90mUsing local shell mode. Background reconnect will retry.\x1b[0m');
+      reconnectCooldownUntilRef.current[terminalId] = Date.now() + 5000;
+      term.terminal?.writeln(`\x1b[31m✗ Failed to connect: ${errMsg}\x1b[0m`);
+      term.terminal?.writeln('\x1b[33m⚠ Falling back to command-mode. Type "connect" to retry.\x1b[0m');
+      const cwd = localShellCwdRef.current[terminalId] || 'project';
+      term.terminal?.write(`\x1b[1;32m${cwd.replace(/^project/, '~')}$\x1b[0m `);
     }
-  }, [userId, updateTerminalState, sendResize, sendInput]);
+  }, [updateTerminalState, sendResize, sendInput]);
 
-  // Ref callback to mount xterm when DOM element is available
   const setXtermContainer = useCallback((terminalId: string) => (el: HTMLDivElement | null) => {
     if (el) {
       const term = terminalsRef.current.find(t => t.id === terminalId);
@@ -792,9 +1991,20 @@ export default function TerminalPanel({
 
     try {
       const selection = active.terminal.getSelection();
-      const text = selection || active.terminal.buffer.active.getLine(0)?.translateToString() || '';
-      await navigator.clipboard.writeText(selection || text);
-      toast.success(selection ? 'Selection copied' : 'Copied to clipboard');
+      if (selection) {
+        await navigator.clipboard.writeText(selection);
+        toast.success('Selection copied');
+        return;
+      }
+      const buffer = active.terminal.buffer.active;
+      const lines: string[] = [];
+      for (let i = 0; i < buffer.length; i++) {
+        const line = buffer.getLine(i)?.translateToString();
+        if (line) lines.push(line);
+      }
+      const text = lines.join('\n');
+      await navigator.clipboard.writeText(text);
+      toast.success('Copied to clipboard');
     } catch {
       toast.error('Failed to copy to clipboard');
     }
@@ -818,9 +2028,7 @@ export default function TerminalPanel({
         credentials: 'include',
         body: JSON.stringify({ sessionId: terminal.sandboxInfo.sessionId }),
       });
-    } catch {
-      // Continue with cleanup
-    }
+    } catch {}
     closeTerminal(terminalId);
     toast.success('Terminal closed');
   }, [closeTerminal]);
@@ -839,9 +2047,7 @@ export default function TerminalPanel({
             credentials: 'include',
             body: JSON.stringify({ sessionId: terminal.sandboxInfo.sessionId }),
           });
-        } catch {
-          // Continue
-        }
+        } catch {}
       }
       terminal.terminal?.dispose();
     }
@@ -865,6 +2071,23 @@ export default function TerminalPanel({
     }
   }, [isSplitView, terminals, killTerminal, createTerminal]);
 
+  const getModeIndicator = (mode: TerminalMode, status: string) => {
+    switch (mode) {
+      case 'local':
+        return { icon: <WifiOff className="w-3 h-3" />, text: 'Local', color: 'text-blue-400' };
+      case 'connecting':
+        return { icon: <span className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />, text: 'Connecting...', color: 'text-yellow-400' };
+      case 'pty':
+        return { icon: <Wifi className="w-3 h-3" />, text: 'Connected', color: 'text-green-400' };
+      case 'sandbox-cmd':
+        return { icon: <span className="w-2 h-2 bg-purple-400 rounded-full" />, text: 'Command Mode', color: 'text-purple-400' };
+      case 'editor':
+        return { icon: <span className="w-2 h-2 bg-orange-400 rounded-full" />, text: 'Editor', color: 'text-orange-400' };
+      default:
+        return { icon: <WifiOff className="w-3 h-3" />, text: 'Unknown', color: 'text-gray-400' };
+    }
+  };
+
   if (!isOpen) return null;
 
   if (isMinimized) {
@@ -879,10 +2102,10 @@ export default function TerminalPanel({
           <div className="flex items-center gap-2">
             <TerminalIcon className="w-4 h-4 text-green-400" />
             <span className="text-sm text-white">Terminal</span>
-            {terminals.some(t => t.sandboxInfo.status === 'active') && (
+            {terminals.some(t => t.mode === 'pty') && (
               <span className="text-xs text-green-400 flex items-center gap-1">
                 <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
-                {terminals.filter(t => t.sandboxInfo.status === 'active').length} connected
+                {terminals.filter(t => t.mode === 'pty').length} connected
               </span>
             )}
           </div>
@@ -900,6 +2123,7 @@ export default function TerminalPanel({
   }
 
   const activeTerminal = terminals.find(t => t.id === activeTerminalId);
+  const modeInfo = activeTerminal ? getModeIndicator(activeTerminal.mode, activeTerminal.sandboxInfo.status) : null;
 
   return (
     <motion.div
@@ -907,10 +2131,9 @@ export default function TerminalPanel({
       animate={{ y: 0, opacity: 1 }}
       exit={{ y: 100, opacity: 0 }}
       className={`fixed bottom-0 left-0 right-0 z-50 bg-black/95 border-t border-white/10 backdrop-blur-sm flex flex-col ${
-        isExpanded ? 'h-[80vh]' : 'h-[55vh] sm:h-[400px]'
+        isExpanded ? 'h-[80vh]' : 'h-[55vh] sm:h-[450px]'
       }`}
     >
-      {/* Header */}
       <div className="flex items-center justify-between px-2 sm:px-4 py-2 border-b border-white/10 bg-black/50 shrink-0 gap-2">
         <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0 overflow-hidden">
           <div className="flex items-center gap-2">
@@ -918,7 +2141,6 @@ export default function TerminalPanel({
             <span className="text-sm font-medium text-white">Terminal</span>
           </div>
 
-          {/* Terminal tabs */}
           <div className="hidden sm:flex items-center gap-1 ml-4">
             {terminals.map((terminal) => (
               <div
@@ -932,9 +2154,11 @@ export default function TerminalPanel({
               >
                 <span className="flex items-center gap-1">
                   <span className={`w-1.5 h-1.5 rounded-full ${
-                    terminal.sandboxInfo.status === 'active' ? 'bg-green-400 animate-pulse' :
-                    terminal.sandboxInfo.status === 'creating' ? 'bg-yellow-400 animate-pulse' :
-                    'bg-gray-400'
+                    terminal.mode === 'pty' ? 'bg-green-400 animate-pulse' :
+                    terminal.mode === 'connecting' ? 'bg-yellow-400 animate-pulse' :
+                    terminal.mode === 'sandbox-cmd' ? 'bg-purple-400' :
+                    terminal.mode === 'editor' ? 'bg-orange-400' :
+                    'bg-blue-400'
                   }`} />
                   {terminal.name}
                 </span>
@@ -961,28 +2185,22 @@ export default function TerminalPanel({
             </Button>
           </div>
 
-          {activeTerminal && (
+          {activeTerminal && modeInfo && (
             <div className="hidden sm:flex items-center gap-2 text-xs ml-auto">
-              <span className={`flex items-center gap-1 ${
-                activeTerminal.sandboxInfo.status === 'active' ? 'text-green-400' :
-                activeTerminal.sandboxInfo.status === 'creating' ? 'text-yellow-400' :
-                'text-gray-400'
-              }`}>
-                <span className="w-1.5 h-1.5 bg-current rounded-full animate-pulse" />
-                {activeTerminal.sandboxInfo.status === 'active' ? 'Connected' :
-                 activeTerminal.sandboxInfo.status === 'creating' ? 'Connecting...' :
-                 'Ready'}
+              <span className={`flex items-center gap-1 ${modeInfo.color}`}>
+                {modeInfo.icon}
+                {modeInfo.text}
               </span>
-              {activeTerminal.sandboxInfo.status === 'active' && activeTerminal.sandboxInfo.resources && (
+              {activeTerminal.sandboxInfo.sandboxId && (
                 <>
                   <span className="text-white/30">|</span>
                   <span className="text-white/50 flex items-center gap-1">
                     <Cpu className="w-3 h-3" />
-                    {activeTerminal.sandboxInfo.resources.cpu || '2 vCPU'}
+                    {activeTerminal.sandboxInfo.resources?.cpu || '2 vCPU'}
                   </span>
                   <span className="text-white/50 flex items-center gap-1">
                     <MemoryStick className="w-3 h-3" />
-                    {activeTerminal.sandboxInfo.resources.memory || '4 GB'}
+                    {activeTerminal.sandboxInfo.resources?.memory || '4 GB'}
                   </span>
                 </>
               )}
@@ -1018,7 +2236,7 @@ export default function TerminalPanel({
           >
             <Trash2 className="w-4 h-4" />
           </Button>
-          {terminals.some(t => t.sandboxInfo.status === 'active') && (
+          {terminals.some(t => t.mode === 'pty') && (
             <Button
               variant="ghost"
               size="sm"
@@ -1056,7 +2274,6 @@ export default function TerminalPanel({
         </div>
       </div>
 
-      {/* Terminal Content — xterm.js instances */}
       <div className={`flex flex-1 min-h-0 ${isSplitView ? 'flex-row' : 'flex-col'}`}>
         {terminals.map((terminal) => (
           <div
@@ -1076,15 +2293,20 @@ export default function TerminalPanel({
         ))}
       </div>
 
-      {/* Status bar */}
       {activeTerminal && (
-        <div className="flex items-center justify-between px-4 py-1 border-t border-white/10 bg-black/50 text-[10px] text-white/30 shrink-0">
-          <span>
-            {activeTerminal.isConnected
-              ? `PTY ${activeTerminal.terminal?.cols || 0}×${activeTerminal.terminal?.rows || 0}`
-              : 'Local shell mode (sandbox reconnecting)'
-            }
-          </span>
+        <div className="flex items-center justify-between px-4 py-1.5 border-t border-white/10 bg-black/50 text-[10px] text-white/30 shrink-0">
+          <div className="flex items-center gap-4">
+            <span className="flex items-center gap-1">
+              {modeInfo?.icon}
+              <span className={modeInfo?.color}>{modeInfo?.text}</span>
+            </span>
+            {activeTerminal.isConnected && (
+              <span>PTY {activeTerminal.terminal?.cols || 0}×{activeTerminal.terminal?.rows || 0}</span>
+            )}
+            {activeTerminal.mode === 'local' && (
+              <span className="text-blue-400/60">Type "help" for commands</span>
+            )}
+          </div>
           {activeTerminal.sandboxInfo.sandboxId && (
             <span className="font-mono">{activeTerminal.sandboxInfo.sandboxId.slice(0, 12)}…</span>
           )}

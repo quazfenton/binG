@@ -6,7 +6,7 @@
  */
 
 import type { Tool } from 'ai'
-import { DesktopAction } from './e2b-desktop-provider'
+import { DesktopAction } from './e2b-desktop-provider-enhanced'
 
 /**
  * Computer use tools for desktop interaction

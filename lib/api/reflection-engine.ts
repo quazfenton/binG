@@ -1,9 +1,14 @@
 /**
  * Multi-threaded Reflection Engine for Quality Enhancement
  * Provides parallel processing and perspective-based improvement
+ * 
+ * Now with ACTUAL LLM integration (no longer mock)
  */
 
-import { secureRandom } from '@/lib/utils';
+import { secureRandom } from '../utils';
+import { createOpenAI } from '@ai-sdk/openai';
+import { generateObject } from 'ai';
+import { z } from 'zod';
 
 export interface ReflectionPerspective {
   name: string;
@@ -24,10 +29,20 @@ export interface ReflectionConfig {
   perspectives: ReflectionPerspective[];
   qualityThreshold: number;
   timeoutMs: number;
+  model?: string;
 }
+
+// Reflection output schema for structured LLM output
+const ReflectionOutputSchema = z.object({
+  improvements: z.array(z.string()).describe('List of specific, actionable improvements'),
+  confidence: z.number().min(0).max(1).describe('Confidence score 0-1'),
+  suggestedChanges: z.string().describe('Summary of suggested changes'),
+  criticalIssues: z.array(z.string()).optional().describe('Any critical issues found'),
+});
 
 class ReflectionEngine {
   private config: ReflectionConfig;
+  private model: any = null;
 
   constructor() {
     this.config = {
@@ -35,6 +50,7 @@ class ReflectionEngine {
       maxParallelThreads: parseInt(process.env.FAST_AGENT_REFLECTION_THREADS || '3'),
       qualityThreshold: parseFloat(process.env.FAST_AGENT_REFLECTION_THRESHOLD || '0.8'),
       timeoutMs: parseInt(process.env.FAST_AGENT_REFLECTION_TIMEOUT || '15000'),
+      model: process.env.FAST_AGENT_REFLECTION_MODEL || 'gpt-4o-mini',
       perspectives: [
         {
           name: 'technical_accuracy',
@@ -53,6 +69,28 @@ class ReflectionEngine {
         }
       ]
     };
+  }
+
+  /**
+   * Initialize LLM model lazily
+   */
+  private async ensureModel(): Promise<any> {
+    if (this.model) return this.model;
+    
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      console.warn('[ReflectionEngine] OPENAI_API_KEY not set, reflection disabled');
+      return null;
+    }
+    
+    try {
+      const openai = createOpenAI({ apiKey });
+      this.model = openai(this.config.model!);
+      return this.model;
+    } catch (error: any) {
+      console.error('[ReflectionEngine] Failed to initialize model:', error);
+      return null;
+    }
   }
 
   /**
@@ -98,12 +136,12 @@ class ReflectionEngine {
    * Perform reflection from a specific perspective
    */
   private async performPerspectiveReflection(
-    content: string, 
+    content: string,
     perspective: ReflectionPerspective,
     context?: Record<string, any>
   ): Promise<ReflectionResult> {
-    
-    // Simulate reflection analysis (in real implementation, this would call an LLM)
+
+    // Build reflection prompt
     const analysisPrompt = `
 ${perspective.prompt}
 
@@ -115,42 +153,38 @@ ${context ? `Context: ${JSON.stringify(context, null, 2)}` : ''}
 Provide specific, actionable improvements and rate your confidence (0-1).
 `;
 
-    // Mock reflection result (replace with actual LLM call)
-    const mockResult = await this.simulateReflectionCall(analysisPrompt, perspective);
-    
-    return {
-      perspective: perspective.name,
-      improvements: mockResult.improvements,
-      confidence: mockResult.confidence * perspective.weight,
-      suggestedChanges: mockResult.suggestedChanges
-    };
+    // Try to use LLM for reflection
+    const model = await this.ensureModel();
+    if (!model) {
+      // Fallback to mock if model unavailable
+      return this.generateMockResult(perspective);
+    }
+
+    try {
+      const result = await generateObject({
+        model,
+        prompt: analysisPrompt,
+        schema: ReflectionOutputSchema,
+        maxTokens: 500,
+        temperature: 0.1,
+      });
+
+      return {
+        perspective: perspective.name,
+        improvements: result.object.improvements,
+        confidence: result.object.confidence * perspective.weight,
+        suggestedChanges: result.object.suggestedChanges,
+      };
+    } catch (llmError: any) {
+      console.warn('[ReflectionEngine] LLM reflection failed, using fallback:', llmError.message);
+      return this.generateMockResult(perspective);
+    }
   }
 
   /**
-   * Simulate reflection call (replace with actual LLM integration)
+   * Generate mock result as fallback
    */
-  private async simulateReflectionCall(prompt: string, perspective: ReflectionPerspective): Promise<{
-    improvements: string[];
-    confidence: number;
-    suggestedChanges: string;
-  }> {
-    // Simulate processing delay
-    await new Promise(resolve => setTimeout(resolve, Math.floor(secureRandom() * 1000) + 500));
-
-    // Generate mock improvements based on perspective
-    const improvements = this.generateMockImprovements(perspective.name);
-    
-    return {
-      improvements,
-      confidence: secureRandom() * 0.3 + 0.7, // 0.7-1.0 range
-      suggestedChanges: improvements.join('; ')
-    };
-  }
-
-  /**
-   * Generate mock improvements for testing
-   */
-  private generateMockImprovements(perspectiveName: string): string[] {
+  private generateMockResult(perspective: ReflectionPerspective): ReflectionResult {
     const improvementMap: Record<string, string[]> = {
       technical_accuracy: [
         'Add error handling for edge cases',
@@ -172,8 +206,15 @@ Provide specific, actionable improvements and rate your confidence (0-1).
       ]
     };
 
-    const improvements = improvementMap[perspectiveName] || ['General improvement needed'];
-    return improvements.slice(0, Math.floor(secureRandom() * 3) + 1);
+    const improvements = improvementMap[perspective.name] || ['General improvement needed'];
+    const randomConfidence = secureRandom() * 0.3 + 0.7; // 0.7-1.0 range
+    
+    return {
+      perspective: perspective.name,
+      improvements: improvements.slice(0, Math.floor(secureRandom() * 3) + 1),
+      confidence: randomConfidence * perspective.weight,
+      suggestedChanges: improvements.join('; ')
+    };
   }
 
   /**

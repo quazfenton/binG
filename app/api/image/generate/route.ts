@@ -1,91 +1,153 @@
 import { NextRequest, NextResponse } from 'next/server'
-import Replicate from 'replicate'
+import {
+  getDefaultRegistry,
+  type ImageGenerationParams,
+  type AspectRatio,
+} from '@/lib/image-generation'
 
-type GenerateBody = {
+export interface GenerateBody {
   prompt: string
   negativePrompt?: string
   width?: number
   height?: number
   steps?: number
   guidance?: number
-  seed?: number
+  seed?: number | 'random'
   model?: string
   initImageUrl?: string
   numImages?: number
+  aspectRatio?: AspectRatio
+  quality?: 'low' | 'medium' | 'high' | 'ultra'
+  style?: string
+  sampler?: string
+  provider?: string
+  imageStrength?: number
 }
 
 export async function POST(req: NextRequest) {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 180000) // 3 minute timeout
+
   try {
     const body = (await req.json()) as GenerateBody
     const {
       prompt,
-      negativePrompt = '',
-      width = 768,
-      height = 768,
-      steps = 28,
-      guidance = 4.5,
+      negativePrompt,
+      width,
+      height,
+      steps,
+      guidance,
       seed,
-      model = 'stability-ai/sdxl',
+      model,
       initImageUrl,
       numImages = 1,
+      aspectRatio,
+      quality = 'high',
+      style,
+      sampler,
+      provider: preferredProvider,
+      imageStrength,
     } = body
 
     if (!prompt || !prompt.trim()) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 })
     }
 
-    const apiToken = process.env.REPLICATE_API_TOKEN
-    if (!apiToken) {
-      return NextResponse.json({ error: 'Missing REPLICATE_API_TOKEN' }, { status: 500 })
+    // Get the registry with all providers
+    const registry = getDefaultRegistry()
+
+    // Initialize providers with environment variables
+    registry.initializeAll({
+      mistral: {
+        apiKey: process.env.MISTRAL_API_KEY,
+        baseURL: process.env.MISTRAL_BASE_URL,
+      },
+      replicate: {
+        apiKey: process.env.REPLICATE_API_TOKEN,
+        defaultModel: model,
+      },
+    })
+
+    // Build unified parameters
+    const params: ImageGenerationParams = {
+      prompt: prompt.trim(),
+      negativePrompt,
+      width,
+      height,
+      steps,
+      guidance,
+      seed: seed === 'random' ? Math.floor(Math.random() * 2147483647) : seed,
+      numImages,
+      aspectRatio,
+      quality,
+      style,
+      sampler,
+      initImage: initImageUrl,
+      imageStrength,
+      extra: model ? { model } : {},
     }
 
-    const replicate = new Replicate({ auth: apiToken })
+    let result
 
-    // Model aliases for convenience
-    const modelAliases: Record<string, string> = {
-      'sdxl': 'stability-ai/stable-diffusion-xl-base-1.0',
-      'stability-ai/sdxl': 'stability-ai/stable-diffusion-xl-base-1.0',
-      'flux-schnell': 'black-forest-labs/flux-schnell',
-      'stable-diffusion-3.5': 'stability-ai/stable-diffusion-3.5-large',
+    if (preferredProvider) {
+      // Use specific provider
+      result = await registry.generateWithProvider(preferredProvider, params, controller.signal)
+    } else {
+      // Use fallback chain
+      result = await registry.generateWithFallback(params, undefined, controller.signal)
     }
 
-    const resolvedModel = modelAliases[model] || model
+    clearTimeout(timeoutId)
 
-    // Build input based on common Replicate models
-    const input: Record<string, any> = {
-      prompt,
-    }
-
-    // Try common parameter names across models
-    input['negative_prompt'] = negativePrompt
-    input['width'] = width
-    input['height'] = height
-    input['num_inference_steps'] = steps
-    input['guidance_scale'] = guidance
-    if (typeof seed === 'number') input['seed'] = seed
-    if (initImageUrl) input['image'] = initImageUrl
-    // Support generating multiple images (model-dependent)
-    if (numImages > 1) input['num_images'] = numImages
-
-    const output = (await replicate.run(resolvedModel, { input })) as any
-
-    // Normalize output into an array of image URLs
-    let images: string[] = []
-    if (Array.isArray(output)) {
-      images = output.filter((u) => typeof u === 'string')
-    } else if (output && typeof output === 'object') {
-      if (Array.isArray(output.output)) images = output.output
-      else if (typeof output.image === 'string') images = [output.image]
-      else if (typeof output.url === 'string') images = [output.url]
-    }
-
-    if (!images.length) {
-      return NextResponse.json({ error: 'No images generated' }, { status: 502 })
-    }
-
-    return NextResponse.json({ success: true, data: { images } })
+    return NextResponse.json({
+      success: true,
+      data: {
+        images: result.images?.map((img) => ({
+          url: img.url,
+          width: img.width,
+          height: img.height,
+          seed: img.seed,
+          metadata: img.metadata,
+        })),
+        provider: result.provider,
+        model: result.model,
+        fallbackChain: result.fallbackChain,
+      },
+    })
   } catch (error: any) {
+    clearTimeout(timeoutId)
+
     console.error('Image generation error:', error)
+
+    // Check for specific error types
+    if (error?.type === 'NOT_CONFIGURED') {
+      return NextResponse.json(
+        { error: 'No image generation providers configured. Please check your API keys.' },
+        { status: 503 }
+      )
+    }
+
+    if (error?.type === 'AUTH_FAILED') {
+      return NextResponse.json(
+        { error: 'Authentication failed. Please check your API keys.' },
+        { status: 401 }
+      )
+    }
+
+    if (error?.type === 'RATE_LIMITED') {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Please try again later.' },
+        { status: 429 }
+      )
+    }
+
+    if (error?.type === 'TIMEOUT') {
+      return NextResponse.json(
+        { error: 'Image generation timed out. Please try again with a simpler prompt.' },
+        { status: 504 }
+      )
+    }
+
     return NextResponse.json(
       { error: error?.message || 'Failed to generate image' },
       { status: 500 }
@@ -103,20 +165,3 @@ export async function OPTIONS() {
     },
   })
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

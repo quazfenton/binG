@@ -1,8 +1,26 @@
 # API Endpoints Reference - Complete Documentation
 
-**Version:** 2.1 (Virtual Filesystem Release)
-**Last Updated:** February 26, 2026
-**Total Endpoints:** 95+
+**Version:** 3.0 (Advanced Features Release)
+**Last Updated:** February 27, 2026
+**Total Endpoints:** 100+
+
+## 🆕 New Endpoints (Latest Release)
+
+### Sandbox Advanced Features
+
+| Endpoint | Method | Purpose | Provider |
+|----------|--------|---------|----------|
+| `/api/sandbox/sync` | POST | Sync VFS to sandbox (tar-pipe) | Sprites |
+| `/api/sandbox/checkpoint` | POST | Create/manage checkpoints | Sprites |
+| `/api/sandbox/sshfs` | POST | Mount filesystem via SSHFS | Sprites |
+| `/api/sandbox/files` | POST | File operations | All |
+
+### Rate Limiting
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/rate-limit/status` | GET | Check rate limit status |
+| `/api/rate-limit/reset` | POST | Reset rate limits (admin) |
 
 ---
 
@@ -213,6 +231,50 @@
 
 ---
 
+### POST /api/stateful-agent (NEW - 2026 Architecture)
+**Purpose:** Advanced AI agent with Plan-Act-Verify workflow, self-healing, and multi-provider fallback  
+**Authentication:** Recommended  
+**Body:**
+```json
+{
+  "messages": [
+    { "role": "user", "content": "Add a hello function to utils.ts" }
+  ],
+  "sessionId": "optional-session-id",
+  "stream": false,
+  "useAI_SDK": true,
+  "provider": "openai",
+  "model": "gpt-4o",
+  "maxSteps": 10,
+  "enforcePlanActVerify": true
+}
+```
+**Response:** Agent execution result with VFS snapshot
+
+**Features:**
+- Plan-Act-Verify workflow (Discovery → Planning → Editing → Verification)
+- Self-healing retry on errors (max 3 attempts by default)
+- Multi-provider fallback: OpenAI → Anthropic → Google
+- Human-in-the-loop (HITL) for sensitive operations
+- Checkpoint/resume for long-running tasks
+
+---
+
+### POST /api/stateful-agent/interrupt (NEW)
+**Purpose:** Approve or reject pending human-in-the-loop (HITL) requests  
+**Authentication:** Required  
+**Body:**
+```json
+{
+  "requestId": "req-123",
+  "action": "approve|reject",
+  "reason": "Approved for production deployment"
+}
+```
+**Response:** `{ "success": true, "message": "Request approved" }`
+
+---
+
 ## 🐳 Docker Management
 
 **Security:** All Docker endpoints require authentication and validate container IDs.
@@ -398,8 +460,8 @@ grep, find, du, netstat, ss, ip, ifconfig, ping
 ## 🧪 Sandbox & Code Execution
 
 ### POST /api/sandbox/execute
-**Purpose:** Execute code in isolated sandbox  
-**Authentication:** Required  
+**Purpose:** Execute code in isolated sandbox
+**Authentication:** Required
 **Body:**
 ```json
 {
@@ -421,8 +483,8 @@ grep, find, du, netstat, ss, ip, ifconfig, ping
 ---
 
 ### GET /api/sandbox/session
-**Purpose:** Get/create sandbox session  
-**Authentication:** Required  
+**Purpose:** Get/create sandbox session
+**Authentication:** Required
 **Response:**
 ```json
 {
@@ -435,30 +497,120 @@ grep, find, du, netstat, ss, ip, ifconfig, ping
 ---
 
 ### POST /api/sandbox/terminal
-**Purpose:** Create terminal session  
-**Body:** `{ "sessionId": "sess-abc123", "shell": "bash" }`  
+**Purpose:** Create terminal session
+**Body:** `{ "sessionId": "sess-abc123", "shell": "bash" }`
 **Response:** `{ "terminalId": "term-xyz789", "ready": true }`
 
 ---
 
 ### POST /api/sandbox/terminal/stream
-**Purpose:** Stream terminal output  
-**Body:** `{ "terminalId": "term-xyz789", "data": "ls -la\n" }`  
-**Response:** Terminal output stream
+**Purpose:** Stream terminal output (SSE)
+**Authentication:** Required
+**Query:** `?sessionId={id}&sandboxId={id}`
+**Response:** Server-Sent Events stream
+**Event Types:** `connected`, `pty`, `agent:tool_start`, `agent:tool_result`, `agent:complete`, `port_detected`, `error`
 
 ---
 
 ### POST /api/sandbox/terminal/input
-**Purpose:** Send input to terminal  
-**Body:** `{ "terminalId": "term-xyz789", "input": "cd /app\n" }`  
+**Purpose:** Send input to terminal PTY
+**Authentication:** Required
+**Body:**
+```json
+{
+  "sessionId": "sess-abc123",
+  "data": "ls -la\n"
+}
+```
 **Response:** `{ "success": true }`
 
 ---
 
 ### POST /api/sandbox/terminal/resize
-**Purpose:** Resize terminal  
-**Body:** `{ "terminalId": "term-xyz789", "cols": 80, "rows": 24 }`  
+**Purpose:** Resize terminal PTY
+**Authentication:** Required
+**Body:**
+```json
+{
+  "sessionId": "sess-abc123",
+  "cols": 80,
+  "rows": 24
+}
+```
 **Response:** `{ "success": true }`
+
+---
+
+### POST /api/sandbox/files
+**Purpose:** File operations in sandbox
+**Authentication:** Required
+**Body:**
+```json
+{
+  "sessionId": "sess-abc123",
+  "operation": "write|read|list|delete",
+  "path": "/workspace/file.txt",
+  "content": "..." // for write
+}
+```
+**Response:** File operation result
+
+---
+
+### POST /api/sandbox/sync
+**Purpose:** Sync virtual filesystem to sandbox (tar-pipe for Sprites)
+**Authentication:** Required
+**Body:**
+```json
+{
+  "sessionId": "sess-abc123",
+  "files": [
+    { "path": "src/index.ts", "content": "..." }
+  ],
+  "incremental": true
+}
+```
+**Response:**
+```json
+{
+  "success": true,
+  "filesSynced": 15,
+  "duration": 3200,
+  "method": "tar-pipe"
+}
+```
+
+---
+
+### POST /api/sandbox/checkpoint
+**Purpose:** Create/manage sandbox checkpoints (Sprites)
+**Authentication:** Required
+**Body:**
+```json
+{
+  "sessionId": "sess-abc123",
+  "operation": "create|restore|list|delete",
+  "checkpointId": "cp-xyz", // for restore/delete
+  "name": "before-deploy"  // for create
+}
+```
+**Response:** Checkpoint operation result
+
+---
+
+### POST /api/sandbox/sshfs
+**Purpose:** Mount sandbox filesystem via SSHFS (Sprites)
+**Authentication:** Required
+**Body:**
+```json
+{
+  "sessionId": "sess-abc123",
+  "operation": "mount|unmount",
+  "mountPoint": "/tmp/sprite-mount",
+  "port": 2000
+}
+```
+**Response:** Mount operation result
 
 ---
 

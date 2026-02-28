@@ -4,11 +4,33 @@ import * as crypto from 'crypto';
 import { getDatabase } from '../database/connection';
 import { DatabaseOperations } from '../database/connection';
 import { generateToken } from './jwt';
+import { authCache } from './request-auth';  // Import for cache invalidation
 
 // Session token hashing utilities
 // We hash session tokens before storing them in the database
 // This prevents attackers from using stolen database contents to create valid sessions
-const SESSION_TOKEN_HASH_SECRET = process.env.ENCRYPTION_KEY || 'default-session-secret-change-in-production';
+
+// CRITICAL: Validate ENCRYPTION_KEY is set for session security
+const SESSION_TOKEN_HASH_SECRET = (() => {
+  const key = process.env.ENCRYPTION_KEY;
+  
+  if (!key) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('ENCRYPTION_KEY must be set in production for session token security');
+    }
+    // In development, generate a random key per session (not persistent)
+    console.warn('⚠️  WARNING: ENCRYPTION_KEY not set! Session tokens will not persist across restarts.');
+    console.warn('Set ENCRYPTION_KEY environment variable to a secure 32+ character random string.');
+    return crypto.randomBytes(32);
+  }
+  
+  // Validate key strength
+  if (key.length < 16) {
+    throw new Error('ENCRYPTION_KEY must be at least 16 characters for session security');
+  }
+  
+  return Buffer.from(key);
+})();
 
 /**
  * Hash a session token using HMAC-SHA256
@@ -218,6 +240,11 @@ export class AuthService {
     try {
       // Use raw sessionId to match how sessions are stored
       this.dbOps.deleteSession(sessionId);
+      
+      // CRITICAL: Invalidate auth cache to prevent stale auth results
+      // Without this, cached auth results remain valid for 5 minutes after logout
+      authCache.invalidateSession(sessionId);
+      
       return { success: true };
     } catch (error) {
       console.error('Logout error:', error);

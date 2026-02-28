@@ -142,12 +142,12 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
    * Sanitize command to prevent shell injection
    */
   private sanitizeCommand(command: string): string {
-    // Reject high-risk shell metacharacters, but allow pipes/redirection used by internal tooling
+    // Block ALL shell metacharacters including pipes and redirects
+    // This prevents command injection via: echo "hi" | bash, ls > file, cat < file, etc.
     // Blocked: ; (command separator), ` (command substitution), $ (variable expansion),
     //          () (subshell), {} (brace expansion), [] (glob/range), ! (history),
-    //          # (comment injection), ~ (home dir), \ (escape)
-    // Allowed: | (pipe), > (redirect), < (redirect), & (background)
-    const dangerousChars = /[;`$(){}[\]!#~\\]/;
+    //          # (comment injection), ~ (home dir), \ (escape), | (pipe), > (redirect), < (redirect), & (background)
+    const dangerousChars = /[;`$(){}[\]!#~\\|>&]/;
     if (dangerousChars.test(command)) {
       throw new Error('Command contains disallowed characters for security');
     }

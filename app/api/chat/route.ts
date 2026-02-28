@@ -6,6 +6,7 @@ import { unifiedResponseHandler } from "@/lib/api/unified-response-handler";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
 import { generateSecureId } from '@/lib/utils';
+import { chatRequestLogger } from '@/lib/api/chat-request-logger';
 import { parsePatch, applyPatch } from 'diff';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
@@ -15,18 +16,22 @@ import type { LLMMessage } from "@/lib/api/llm-providers";
 // This route uses priority router which includes Fast-Agent as Priority 1
 
 export async function POST(request: NextRequest) {
-  console.log('[DEBUG] Chat API: Incoming request');
+  const requestStartTime = Date.now();
+  const requestId = generateSecureId('chat');
+  
+  console.log('[DEBUG] Chat API: Incoming request', { requestId });
 
   // Extract user authentication (JWT or session cookie).
   // Anonymous chat is allowed, but tools/sandbox require authenticated userId.
   const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
+  const userId = authResult.userId || 'anonymous';
+  
   if (!authResult.success || !authResult.userId) {
     console.log('[DEBUG] Chat API: Anonymous request (no auth token/session)');
   }
 
   let provider = '';
   let model = '';
-  let requestId: string | undefined;
 
   try {
     const body = await request.json();
@@ -37,7 +42,7 @@ export async function POST(request: NextRequest) {
       model: body.model,
       stream: body.stream,
       bodyKeys: Object.keys(body),
-      userId: authResult.userId // Log the extracted userId
+      userId: authResult.userId
     });
 
     const {
@@ -65,7 +70,16 @@ export async function POST(request: NextRequest) {
     };
     provider = requestedProvider;
     model = requestedModel;
-    requestId = incomingRequestId;
+
+    // Log request start
+    await chatRequestLogger.logRequestStart(
+      incomingRequestId || requestId,
+      userId,
+      provider,
+      model,
+      messages,
+      stream
+    );
 
     // Validate required fields
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -253,6 +267,10 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
         
         // Create streaming events from unified response
         const events = unifiedResponseHandler.createStreamingEvents(clientResponse, streamRequestId);
+        const supplementalAgenticEvents = buildSupplementalAgenticEvents(clientResponse, streamRequestId, events);
+        if (supplementalAgenticEvents.length > 0) {
+          events.splice(Math.max(0, events.length - 1), 0, ...supplementalAgenticEvents);
+        }
         if (
           filesystemEdits &&
           (filesystemEdits.applied.length > 0 ||
@@ -271,30 +289,57 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
         }
         
         const encoder = new TextEncoder();
+        let encoderRef = encoder;  // Reference for cleanup
+        
         const readableStream = new ReadableStream({
           async start(controller) {
+            // Cleanup function for resource management
+            const cleanup = () => {
+              encoderRef = null;
+            };
+
+            // Handle client disconnect
+            if (request.signal) {
+              request.signal.addEventListener('abort', () => {
+                cleanup();
+                console.log(`[DEBUG] Chat API: Stream cancelled by client: ${streamRequestId}`);
+              });
+            }
+
             try {
               // Send events with appropriate delays
               for (let i = 0; i < events.length; i++) {
-                const event = events[i];
-                controller.enqueue(encoder.encode(event));
+                // Check if client disconnected
+                if (request.signal?.aborted) {
+                  cleanup();
+                  return;
+                }
                 
+                const event = events[i];
+                controller.enqueue(encoderRef.encode(event));
+
                 // Add small delays between events for smooth streaming
                 if (i < events.length - 1) {
                   await new Promise(resolve => setTimeout(resolve, 50));
                 }
               }
-              
+
               controller.close();
             } catch (error) {
               console.error('[DEBUG] Chat API: Streaming error:', error);
-              const errorEvent = `event: error\ndata: ${JSON.stringify({
-                requestId: streamRequestId,
-                message: 'Streaming error occurred',
-                canRetry: false
-              })}\n\n`;
-              controller.enqueue(encoder.encode(errorEvent));
+              
+              // Only send error event if client hasn't disconnected
+              if (!request.signal?.aborted) {
+                const errorEvent = `event: error\ndata: ${JSON.stringify({
+                  requestId: streamRequestId,
+                  message: 'Streaming error occurred',
+                  canRetry: true  // Changed to true - most errors are retryable
+                })}\n\n`;
+                controller.enqueue(encoderRef.encode(errorEvent));
+              }
               controller.close();
+            } finally {
+              cleanup();
             }
           },
           cancel() {
@@ -823,6 +868,119 @@ function applyUnifiedDiff(currentContent: string, targetPath: string, rawDiff: s
   return patched;
 }
 
+function buildSupplementalAgenticEvents(response: any, requestId: string, existingEvents: string[] = []): string[] {
+  const events: string[] = [];
+  const hasReasoningEvent = existingEvents.some((event) => String(event).startsWith('event: reasoning'));
+  const hasToolInvocationEvent = existingEvents.some((event) => String(event).startsWith('event: tool_invocation'));
+
+  const reasoning = response?.data?.reasoning || response?.metadata?.reasoning;
+  const toolInvocations = Array.isArray(response?.data?.toolInvocations)
+    ? response.data.toolInvocations
+    : [];
+
+  if (!hasReasoningEvent && typeof reasoning === 'string' && reasoning.trim()) {
+    events.push(`event: reasoning\ndata: ${JSON.stringify({
+      requestId,
+      reasoning: reasoning.trim(),
+      timestamp: Date.now(),
+    })}\n\n`);
+  }
+
+  if (!hasToolInvocationEvent && toolInvocations.length > 0) {
+    const startedAt = new Map<string, number>();
+    for (const invocation of toolInvocations) {
+      const now = Date.now();
+      const toolCallId = invocation?.toolCallId || `tool-${generateSecureId('call')}`;
+      if (invocation?.state === 'call') {
+        startedAt.set(toolCallId, now);
+      }
+      const latencyMs =
+        invocation?.state === 'result'
+          ? now - (startedAt.get(toolCallId) || now)
+          : undefined;
+
+      const payload = {
+        ...invocation,
+        toolCallId,
+        requestId,
+        timestamp: now,
+        ...(typeof latencyMs === 'number' ? { latencyMs } : {}),
+      };
+
+      events.push(`event: tool_invocation\ndata: ${JSON.stringify(payload)}\n\n`);
+      events.push(`event: step_metric\ndata: ${JSON.stringify({
+        requestId,
+        toolCallId,
+        toolName: invocation?.toolName,
+        state: invocation?.state,
+        timestamp: now,
+        ...(typeof latencyMs === 'number' ? { latencyMs } : {}),
+      })}\n\n`);
+    }
+  }
+
+  const sandboxChunks = extractSandboxOutputChunks(toolInvocations);
+  for (const chunk of sandboxChunks) {
+    events.push(`event: sandbox_output\ndata: ${JSON.stringify({
+      requestId,
+      ...chunk,
+      timestamp: Date.now(),
+    })}\n\n`);
+  }
+
+  return events;
+}
+
+function extractSandboxOutputChunks(
+  invocations: Array<{ result?: any; args?: any }>,
+): Array<{ stream: 'stdout' | 'stderr'; chunk: string; toolCallId?: string }> {
+  const chunks: Array<{ stream: 'stdout' | 'stderr'; chunk: string; toolCallId?: string }> = [];
+
+  for (const invocation of invocations) {
+    const result = invocation?.result || {};
+    const output = result?.output;
+    const error = result?.error;
+
+    if (typeof output === 'string' && output.trim()) {
+      for (const part of chunkText(output, 800)) {
+        chunks.push({ stream: 'stdout', chunk: part, toolCallId: (invocation as any)?.toolCallId });
+      }
+    } else if (output && typeof output === 'object') {
+      if (typeof output.stdout === 'string' && output.stdout.trim()) {
+        for (const part of chunkText(output.stdout, 800)) {
+          chunks.push({ stream: 'stdout', chunk: part, toolCallId: (invocation as any)?.toolCallId });
+        }
+      }
+      if (typeof output.stderr === 'string' && output.stderr.trim()) {
+        for (const part of chunkText(output.stderr, 800)) {
+          chunks.push({ stream: 'stderr', chunk: part, toolCallId: (invocation as any)?.toolCallId });
+        }
+      }
+    }
+
+    if (typeof error === 'string' && error.trim()) {
+      for (const part of chunkText(error, 800)) {
+        chunks.push({ stream: 'stderr', chunk: part, toolCallId: (invocation as any)?.toolCallId });
+      }
+    } else if (error && typeof error === 'object' && typeof error.stderr === 'string' && error.stderr.trim()) {
+      for (const part of chunkText(error.stderr, 800)) {
+        chunks.push({ stream: 'stderr', chunk: part, toolCallId: (invocation as any)?.toolCallId });
+      }
+    }
+  }
+
+  return chunks;
+}
+
+function chunkText(input: string, size: number): string[] {
+  const chunks: string[] = [];
+  const normalized = String(input || '');
+  for (let i = 0; i < normalized.length; i += size) {
+    chunks.push(normalized.slice(i, i + size));
+  }
+  return chunks;
+}
+
 async function applyFilesystemEditsFromResponse(input: {
   ownerId: string;
   conversationId: string;
@@ -1060,7 +1218,7 @@ export async function GET() {
   try {
     // Get list of configured provider IDs (checks if API keys are set)
     const configuredProviderIds = llmService.getAvailableProviders().map(p => p.id);
-    
+
     // Return all providers with availability status (based on API key configuration)
     const allProviders = Object.values(PROVIDERS).map(provider => ({
       ...provider,
@@ -1071,9 +1229,9 @@ export async function GET() {
       success: true,
       data: {
         providers: allProviders,
-        defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "openrouter",
+        defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "mistral",
         defaultModel:
-          process.env.DEFAULT_MODEL || "deepseek/deepseek-r1-0528:free",
+          process.env.DEFAULT_MODEL || "mistral-large-latest",
         defaultTemperature: parseFloat(
           process.env.DEFAULT_TEMPERATURE || "0.7",
         ),
@@ -1090,6 +1248,35 @@ export async function GET() {
     console.error("Error fetching providers:", error);
     return NextResponse.json(
       { error: "Failed to fetch available providers" },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * Error handler with logging
+ */
+async function handleError(error: any, requestId: string, provider: string, model: string, userId: string) {
+  const latencyMs = Date.now() - requestStartTime;
+  
+  // Log error
+  await chatRequestLogger.logRequestComplete(
+    requestId,
+    false,
+    undefined,
+    undefined,
+    latencyMs,
+    error.message
+  );
+  
+  // Return error response
+  return errorHandler.handleError(error, {
+    context: 'chat_api',
+    provider,
+    model,
+    userId,
+  });
+}
       { status: 500 },
     );
   }

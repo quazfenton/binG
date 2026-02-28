@@ -1,4 +1,5 @@
 import { virtualFilesystem } from './virtual-filesystem-service';
+import { filesystemEditDatabase } from './filesystem-edit-database';
 
 export type FilesystemEditOperationType = 'write' | 'patch' | 'delete';
 export type FilesystemEditTransactionStatus =
@@ -45,6 +46,164 @@ export interface DenyFilesystemEditResult {
 class FilesystemEditSessionService {
   private transactions = new Map<string, FilesystemEditTransaction>();
   private denialHistoryByConversation = new Map<string, FilesystemEditDenialRecord[]>();
+  private db: ReturnType<typeof getDatabase> | null = null;
+  private initialized = false;
+
+  /**
+   * Initialize database schema for transaction persistence
+   */
+  private ensureInitialized(): void {
+    if (this.initialized) return;
+    
+    try {
+      this.db = getDatabase();
+      // Create table for persisting transactions
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS fs_edit_transactions (
+          id TEXT PRIMARY KEY,
+          owner_id TEXT NOT NULL,
+          conversation_id TEXT NOT NULL,
+          request_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          operations_json TEXT NOT NULL,
+          errors_json TEXT NOT NULL,
+          denied_reason TEXT,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_fs_transactions_owner 
+        ON fs_edit_transactions(owner_id)
+      `);
+      
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_fs_transactions_conversation 
+        ON fs_edit_transactions(conversation_id)
+      `);
+      
+      // Create table for denial history
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS fs_edit_denials (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          transaction_id TEXT NOT NULL,
+          conversation_id TEXT NOT NULL,
+          timestamp TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          paths_json TEXT NOT NULL
+        )
+      `);
+      
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_fs_denials_conversation 
+        ON fs_edit_denials(conversation_id)
+      `);
+      
+      // Load existing transactions from database
+      this.loadTransactionsFromDb();
+      
+      this.initialized = true;
+    } catch (error) {
+      console.warn('[FilesystemEditSession] DB init failed, using in-memory only:', error);
+      this.db = null;
+      this.initialized = true;
+    }
+  }
+
+  /**
+   * Load transactions from database on startup
+   */
+  private loadTransactionsFromDb(): void {
+    if (!this.db) return;
+    
+    try {
+      const stmt = this.db.prepare(`
+        SELECT * FROM fs_edit_transactions 
+        WHERE status IN ('auto_applied', 'accepted') 
+        AND datetime(created_at) > datetime('now', '-24 hours')
+        ORDER BY created_at DESC
+        LIMIT 100
+      `);
+      
+      const rows = stmt.all() as any[];
+      for (const row of rows) {
+        try {
+          const tx: FilesystemEditTransaction = {
+            id: row.id,
+            ownerId: row.owner_id,
+            conversationId: row.conversation_id,
+            requestId: row.request_id,
+            createdAt: row.created_at,
+            status: row.status,
+            operations: JSON.parse(row.operations_json || '[]'),
+            errors: JSON.parse(row.errors_json || '[]'),
+            deniedReason: row.denied_reason,
+          };
+          this.transactions.set(tx.id, tx);
+        } catch (parseError) {
+          console.warn('[FilesystemEditSession] Failed to parse transaction:', parseError);
+        }
+      }
+      console.log(`[FilesystemEditSession] Loaded ${this.transactions.size} transactions from DB`);
+    } catch (error) {
+      console.warn('[FilesystemEditSession] Failed to load transactions:', error);
+    }
+  }
+
+  /**
+   * Persist transaction to database
+   */
+  private persistTransaction(tx: FilesystemEditTransaction): void {
+    if (!this.db) return;
+    
+    try {
+      const stmt = this.db.prepare(`
+        INSERT OR REPLACE INTO fs_edit_transactions 
+        (id, owner_id, conversation_id, request_id, created_at, status, operations_json, errors_json, denied_reason, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `);
+      
+      stmt.run(
+        tx.id,
+        tx.ownerId,
+        tx.conversationId,
+        tx.requestId,
+        tx.createdAt,
+        tx.status,
+        JSON.stringify(tx.operations),
+        JSON.stringify(tx.errors),
+        tx.deniedReason || null
+      );
+    } catch (error) {
+      console.warn('[FilesystemEditSession] Failed to persist transaction:', error);
+    }
+  }
+
+  /**
+   * Persist denial record to database
+   */
+  private persistDenial(record: FilesystemEditDenialRecord): void {
+    if (!this.db) return;
+    
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO fs_edit_denials 
+        (transaction_id, conversation_id, timestamp, reason, paths_json)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      
+      stmt.run(
+        record.transactionId,
+        record.conversationId,
+        record.timestamp,
+        record.reason,
+        JSON.stringify(record.paths)
+      );
+    } catch (error) {
+      console.warn('[FilesystemEditSession] Failed to persist denial:', error);
+    }
+  }
 
   createTransaction(input: {
     ownerId: string;
@@ -81,10 +240,6 @@ class FilesystemEditSessionService {
     tx.errors.push(message);
   }
 
-  getTransaction(transactionId: string): FilesystemEditTransaction | null {
-    return this.transactions.get(transactionId) || null;
-  }
-
   acceptTransaction(transactionId: string): FilesystemEditTransaction | null {
     const tx = this.transactions.get(transactionId);
     if (!tx) return null;
@@ -92,6 +247,10 @@ class FilesystemEditSessionService {
       return tx;
     }
     tx.status = 'accepted';
+    
+    // Persist to database
+    filesystemEditDatabase.persistTransaction(tx);
+    
     return tx;
   }
 
@@ -158,6 +317,11 @@ class FilesystemEditSessionService {
       reason: tx.deniedReason,
       paths: tx.operations.map((op) => op.path),
     };
+    
+    // Persist transaction and denial to database
+    filesystemEditDatabase.persistTransaction(tx);
+    filesystemEditDatabase.persistDenial(denialRecord);
+    
     const denialList = this.denialHistoryByConversation.get(tx.conversationId) || [];
     denialList.push(denialRecord);
     this.denialHistoryByConversation.set(
@@ -173,8 +337,31 @@ class FilesystemEditSessionService {
   }
 
   getRecentDenials(conversationId: string, limit = 3): FilesystemEditDenialRecord[] {
+    // Try database first for persistence
+    const dbDenials = filesystemEditDatabase.getDenialsByConversation(conversationId);
+    if (dbDenials.length > 0) {
+      return dbDenials.slice(-Math.max(1, limit));
+    }
+    
+    // Fallback to in-memory
     const list = this.denialHistoryByConversation.get(conversationId) || [];
     return list.slice(-Math.max(1, limit));
+  }
+  
+  /**
+   * Get transaction by ID (from database or memory)
+   */
+  async getTransaction(transactionId: string): Promise<FilesystemEditTransaction | null> {
+    // Try database first for persistence
+    const dbTx = await filesystemEditDatabase.getTransaction(transactionId);
+    if (dbTx) {
+      // Also keep in memory for quick access
+      this.transactions.set(transactionId, dbTx);
+      return dbTx;
+    }
+    
+    // Fallback to in-memory
+    return this.transactions.get(transactionId) || null;
   }
 }
 

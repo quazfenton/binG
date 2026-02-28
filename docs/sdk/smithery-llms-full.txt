@@ -1,0 +1,3475 @@
+# Create connection
+Source: https://smithery.ai/docs/api-reference/connect/create-connection
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml post /connect/{namespace}
+Create a new MCP connection with an auto-generated ID. Requires API key and namespace ownership.
+
+
+
+# Create or update connection
+Source: https://smithery.ai/docs/api-reference/connect/create-or-update-connection
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml put /connect/{namespace}/{connectionId}
+Create or update an MCP connection with the given ID. mcpUrl is required when creating a new connection, but optional when updating (omit to keep the existing URL). Returns 409 if a different mcpUrl is provided - delete and recreate to change URL. Requires API key and namespace ownership.
+
+
+
+# Delete connection
+Source: https://smithery.ai/docs/api-reference/connect/delete-connection
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml delete /connect/{namespace}/{connectionId}
+Delete a connection and terminate its MCP session. Requires API key and namespace ownership.
+
+
+
+# Get connection
+Source: https://smithery.ai/docs/api-reference/connect/get-connection
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /connect/{namespace}/{connectionId}
+Get details for a specific connection. Requires service token with connections:read scope.
+
+
+
+# List connections
+Source: https://smithery.ai/docs/api-reference/connect/list-connections
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /connect/{namespace}
+List all connections in a namespace. Supports filtering by metadata using `metadata.{key}={value}` query params (e.g., `metadata.userId=alice`).
+
+
+
+# Poll events (unstable)
+Source: https://smithery.ai/docs/api-reference/connectevents/poll-events-unstable
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /connect/{namespace}/{connectionId}/events
+Poll for MCP server events. Returns available events and deletes them atomically (queue semantics). When done is true, no events remain — wait and retry later.
+
+
+
+# MCP endpoint
+Source: https://smithery.ai/docs/api-reference/connectmcp/mcp-endpoint
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml post /connect/{namespace}/{connectionId}/mcp
+Stateless MCP endpoint using Streamable HTTP transport. Accepts JSON-RPC requests and notifications. Session management is handled internally by Connect—clients should not send mcp-session-id headers. Requires service token with mcp scope.
+
+
+
+# Health check
+Source: https://smithery.ai/docs/api-reference/health-check
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /health
+Check if the service is running
+
+
+
+# Create a new namespace
+Source: https://smithery.ai/docs/api-reference/namespaces/create-a-new-namespace
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml put /namespaces/{name}
+Create a new namespace owned by the authenticated user. This endpoint is idempotent - if the namespace already exists and is owned by the user, returns success.
+
+
+
+# Create a new namespace with generated name
+Source: https://smithery.ai/docs/api-reference/namespaces/create-a-new-namespace-with-generated-name
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml post /namespaces
+Create a new namespace with a server-generated human-readable name, owned by the authenticated user
+
+
+
+# Create a server under a namespace (deprecated)
+Source: https://smithery.ai/docs/api-reference/namespaces/create-a-server-under-a-namespace-deprecated
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml put /namespaces/{namespace}/servers/{server}
+**Deprecated:** Use PUT /servers/{namespace}/{server} instead. Create a new server under the specified namespace. This endpoint is idempotent.
+
+
+
+# Delete a namespace
+Source: https://smithery.ai/docs/api-reference/namespaces/delete-a-namespace
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml delete /namespaces/{name}
+Delete a namespace owned by the authenticated user. The namespace must not contain any servers. Skills and connections in the namespace will be deleted automatically.
+
+
+
+# Get user's namespaces or search namespaces
+Source: https://smithery.ai/docs/api-reference/namespaces/get-users-namespaces-or-search-namespaces
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /namespaces
+When called without query params, returns the authenticated user's namespaces (backwards compatible). When query params are provided, searches public namespaces with pagination. Use ownerId to filter by owner, hasServers/hasSkills to filter by content, q for text search.
+
+
+
+# Create a server
+Source: https://smithery.ai/docs/api-reference/servers/create-a-server
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml put /servers/{qualifiedName}
+Create a new server. Idempotent — returns success if the server already exists and is owned by the caller.
+
+
+
+# Delete a server
+Source: https://smithery.ai/docs/api-reference/servers/delete-a-server
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml delete /servers/{qualifiedName}
+Permanently delete a server, its releases, and associated resources.
+
+
+
+# Delete server icon
+Source: https://smithery.ai/docs/api-reference/servers/delete-server-icon
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml delete /servers/{qualifiedName}/icon
+Remove the server's icon.
+
+
+
+# Download server bundle
+Source: https://smithery.ai/docs/api-reference/servers/download-server-bundle
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /servers/{qualifiedName}/download
+Download the MCPB bundle for the latest successful stdio release.
+
+
+
+# Get a release
+Source: https://smithery.ai/docs/api-reference/servers/get-a-release
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /servers/{qualifiedName}/releases/{id}
+Retrieve release details including status, git metadata, pipeline logs, and MCP endpoint URL.
+
+
+
+# Get a server
+Source: https://smithery.ai/docs/api-reference/servers/get-a-server
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /servers/{qualifiedName}
+Retrieve server details including connections, tools, and security status.
+
+
+
+# Get server icon
+Source: https://smithery.ai/docs/api-reference/servers/get-server-icon
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /servers/{qualifiedName}/icon
+Retrieve the server's icon image. Returns the image directly with appropriate content type.
+
+
+
+# List all servers
+Source: https://smithery.ai/docs/api-reference/servers/list-all-servers
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /servers
+Search and browse public MCP servers in the Smithery registry. Supports full-text and semantic search via the `q` parameter, and filtering by deployment status, verification, ownership, and more.
+
+
+
+# List releases
+Source: https://smithery.ai/docs/api-reference/servers/list-releases
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /servers/{qualifiedName}/releases
+List releases ordered by most recent first. Logs are omitted — fetch a specific release to see logs.
+
+
+
+# List runtime logs
+Source: https://smithery.ai/docs/api-reference/servers/list-runtime-logs
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /servers/{qualifiedName}/logs
+Fetch recent runtime logs grouped by invocation.
+
+
+
+# Publish a server
+Source: https://smithery.ai/docs/api-reference/servers/publish-a-server
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml put /servers/{qualifiedName}/releases
+Submit a release via multipart form. Supports hosted (JS module upload), external (URL), stdio (MCPB bundle), and repo (GitHub build) release types.
+
+
+
+# Resume a release
+Source: https://smithery.ai/docs/api-reference/servers/resume-a-release
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml post /servers/{qualifiedName}/releases/{id}/resume
+Resume a paused release (e.g. after OAuth authorization). Use id='latest' to resume the most recent one.
+
+
+
+# Stream release logs
+Source: https://smithery.ai/docs/api-reference/servers/stream-release-logs
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /servers/{qualifiedName}/releases/{id}/stream
+Real-time SSE stream of release logs and status updates.
+
+
+
+# Update a server
+Source: https://smithery.ai/docs/api-reference/servers/update-a-server
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml patch /servers/{qualifiedName}
+Update server metadata such as display name, description, icon, or visibility.
+
+
+
+# Upload server icon
+Source: https://smithery.ai/docs/api-reference/servers/upload-server-icon
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml put /servers/{qualifiedName}/icon
+Upload or replace the server icon. Accepts a single image file via multipart/form-data. Max 1MB. Supported formats: PNG, JPEG, GIF, SVG, WebP.
+
+
+
+# Create a new skill (deprecated)
+Source: https://smithery.ai/docs/api-reference/skills/create-a-new-skill-deprecated
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml post /skills
+**Deprecated:** Use PUT /skills/{namespace}/{slug} instead. Create a new skill by linking a GitHub repository containing a SKILL.md file.
+
+
+
+# Create or update a skill
+Source: https://smithery.ai/docs/api-reference/skills/create-or-update-a-skill
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml put /skills/{namespace}/{slug}
+Idempotent endpoint to create or sync a skill. If the skill does not exist, creates it. If it exists, updates displayName, description, and externalStars from GitHub.
+
+
+
+# Delete a skill
+Source: https://smithery.ai/docs/api-reference/skills/delete-a-skill
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml delete /skills/{namespace}/{slug}
+Delete a skill by namespace and slug. Requires ownership of the namespace.
+
+
+
+# Get a skill
+Source: https://smithery.ai/docs/api-reference/skills/get-a-skill
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /skills/{namespace}/{slug}
+Get a single skill by its namespace and slug.
+
+
+
+# List or search skills
+Source: https://smithery.ai/docs/api-reference/skills/list-or-search-skills
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml get /skills
+Search and browse reusable prompt-based skills. Supports full-text and semantic search via the `q` parameter, and filtering by category, namespace, or slug.
+
+
+
+# Create a service token
+Source: https://smithery.ai/docs/api-reference/tokens/create-a-service-token
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml post /tokens
+Create a service token for machine-to-machine authentication. Accepts API key or bearer token. Optionally apply restrictions.
+
+
+
+# Create uplink token
+Source: https://smithery.ai/docs/api-reference/uplink/create-uplink-token
+
+https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml post /uplink/token
+Create or retrieve an authtoken for uplink connections
+
+
+
+# Overview
+Source: https://smithery.ai/docs/build/index
+
+Publish your MCP servers on Smithery for distribution and analytics.
+
+Smithery helps you distribute your MCP server through the **Smithery Gateway**. When you publish on Smithery, users can discover and connect to your server from any MCP client.
+
+## Why Use Smithery?
+
+* **Distribution** — Get a dedicated server page where users can discover, try, and install your MCP from any client
+* **Analytics** — Track tool calls, monitor usage patterns, and understand how users interact with your server
+* **Spec Compliance** — The Gateway handles MCP protocol compliance, metadata enrichment, and caching automatically
+* **OAuth UI** — Automatic authentication modal generation for servers that require user configuration or API keys
+
+## Already Hosting Your Server?
+
+If you've already deployed an MCP server elsewhere, you can publish it directly on Smithery via the [URL method](/build/publish). Any server exposing Streamable HTTP is compatible.
+
+## Getting Started
+
+<Card title="Publish" icon="rocket" href="/build/publish">
+  Distribute your server via URL or Local.
+</Card>
+
+
+# Publish
+Source: https://smithery.ai/docs/build/publish
+
+Publish your MCP server on Smithery for distribution and analytics.
+
+Publish your MCP server to Smithery Gateway for distribution, analytics, and OAuth UI.
+
+<Tabs>
+  <Tab title="URL" icon="globe">
+    **Bring your own hosting** — Smithery Gateway proxies to your upstream server.
+
+    1. Go to [smithery.ai/new](https://smithery.ai/new)
+    2. Enter your server's public HTTPS URL
+    3. Complete the publishing flow
+
+    ### Requirements
+
+    * Streamable HTTP transport
+    * OAuth support (if auth required)
+
+    <Tip>
+      **No client registration needed.** Smithery handles client registration automatically via [Client ID Metadata Documents](https://modelcontextprotocol.io/specification/draft/basic/authorization#client-id-metadata-documents).
+    </Tip>
+
+    <Tip>
+      **Need a framework or hosting?** Build MCP servers with [xmcp](https://xmcp.dev) or host them on [Gram](https://www.getgram.ai/) — both work with Smithery's URL publishing.
+    </Tip>
+
+    ### Server Scanning
+
+    Smithery scans your server to extract metadata (tools, prompts, resources) for your server page.
+
+    * **Public servers**: Scan completes automatically
+    * **Auth-required servers**: You'll be prompted to authenticate so we can complete the scan
+
+    <Accordion title="Static Server Card (manual metadata)">
+      If automatic scanning can't complete (auth wall, required configuration, or other issues), you can provide server metadata manually via a static server card at `/.well-known/mcp/server-card.json`:
+
+      ```json theme={null}
+      {
+        "serverInfo": {
+          "name": "Your Server Name",
+          "version": "1.0.0"
+        },
+        "authentication": {
+          "required": true,
+          "schemes": ["oauth2"]
+        },
+        "tools": [
+          {
+            "name": "search",
+            "description": "Search for information",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "query": { "type": "string" }
+              },
+              "required": ["query"]
+            }
+          }
+        ],
+        "resources": [],
+        "prompts": []
+      }
+      ```
+
+      **Fields:**
+
+      * `serverInfo` (required): Server name and version
+      * `authentication` (optional): Auth requirements and supported schemes
+      * `tools`, `resources`, `prompts` (optional): Capability definitions per MCP spec
+
+      The schema follows types from [`@modelcontextprotocol/sdk/types.js`](https://github.com/modelcontextprotocol/typescript-sdk). See [SEP-1649](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1649) for the spec proposal.
+    </Accordion>
+
+    <Accordion title="CLI (Advanced)">
+      You can also publish a URL-based server via CLI with a custom config schema:
+
+      ```bash theme={null}
+      smithery mcp publish "https://your-server.com/mcp" -n @your-org/your-server
+      ```
+
+      To specify a config schema, pass it as a JSON string:
+
+      ```bash theme={null}
+      smithery mcp publish "https://your-server.com/mcp" -n @your-org/your-server --config-schema '{"type":"object","properties":{"apiKey":{"type":"string"}}}'
+      ```
+
+      See [Session Configuration](/build/session-config) for JSON Schema format with `x-from` extension.
+    </Accordion>
+  </Tab>
+
+  <Tab title="Local" icon="terminal">
+    **Runs on user's machine** — Distribute via [mcpb](https://github.com/modelcontextprotocol/mcpb) over [stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#stdio).
+
+    ### Deploy
+
+    ```bash theme={null}
+    smithery mcp publish --name @your-org/your-server --transport stdio
+    ```
+
+    Users discover and install your server through Smithery, and it runs on their machine.
+  </Tab>
+</Tabs>
+
+## Troubleshooting
+
+### 403 Forbidden during scan
+
+If your deployment fails with **"Initialization failed with status 403"**, it means your server rejected Smithery's scan request. Common causes:
+
+* **WAF or bot protection** (e.g. Cloudflare Bot Fight Mode) blocking automated requests
+* **Server returning 403 for unauthenticated requests** instead of 401 — per the [MCP auth spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), servers should return 401 to trigger OAuth discovery
+* **IP-based access restrictions** or allowlists that don't include Smithery's IP range
+
+Smithery sends requests with User-Agent `SmitheryBot/1.0 (+https://smithery.ai)`. These requests originate from Cloudflare Workers, which some WAF configurations block by default.
+
+#### Option 1: Ensure your server returns 401 (not 403) for OAuth
+
+If your server requires OAuth, make sure it returns **401 Unauthorized** (not 403 Forbidden) for unauthenticated requests. Smithery uses the 401 response to detect OAuth support per [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728.html).
+
+#### Option 2: Whitelist Smithery requests
+
+<AccordionGroup>
+  <Accordion title="Cloudflare (Free plan / Bot Fight Mode)">
+    Bot Fight Mode on the free plan cannot be bypassed with WAF custom rules. Your options:
+
+    1. **IP Access Rules**: Go to **Security > WAF > Tools > IP Access Rules** and add an Allow rule for Smithery's IP range
+    2. **Disable Bot Fight Mode**: Go to **Security > Bots > Bot Fight Mode** and toggle it off (this disables bot protection for all traffic)
+    3. **Upgrade to Pro**: Pro plan (\$20/mo) unlocks Super Bot Fight Mode with WAF skip rules (see below)
+  </Accordion>
+
+  <Accordion title="Cloudflare (Pro+ / Super Bot Fight Mode)">
+    Create a WAF skip rule to bypass bot protection for Smithery:
+
+    1. Go to **Security > WAF > Custom Rules**
+    2. Create a rule with expression: `(http.user_agent contains "SmitheryBot")`
+    3. Action: **Skip** > select **Super Bot Fight Mode**
+  </Accordion>
+
+  <Accordion title="Other CDN / WAF providers">
+    Add an allow rule for requests matching User-Agent `SmitheryBot/1.0`. The exact steps vary by provider — consult your CDN/WAF documentation for configuring User-Agent-based allow rules.
+  </Accordion>
+</AccordionGroup>
+
+#### Option 3: Publish a static server card
+
+Bypass scanning entirely by serving a `/.well-known/mcp/server-card.json` endpoint on your server. See [Static Server Card](#server-scanning) above.
+
+
+# Smithery CLI
+Source: https://smithery.ai/docs/concepts/cli
+
+Use the Smithery CLI to search, connect, and manage MCP servers and skills from the command line.
+
+<Card title="View the Smithery CLI on GitHub" icon="github" href="https://github.com/smithery-ai/cli">
+  The Smithery CLI connects your agents to thousands of skills and MCP servers
+  directly from the command line.
+</Card>
+
+## Installation
+
+```bash theme={null}
+npm install -g @smithery/cli@latest
+```
+
+Requires Node.js 20+.
+
+## Examples
+
+```bash theme={null}
+# Show the help menu
+smithery --help
+
+# Authenticate with Smithery
+smithery auth login
+
+# Search for MCP servers
+smithery mcp search "github"
+
+# Add an MCP server to a local client (e.g., Claude Desktop)
+smithery mcp add exa --client claude
+
+# Add an MCP server as a remote Smithery Connect connection
+smithery mcp add https://server.smithery.ai/exa --id exa
+
+# List tools from your connected MCP servers
+smithery tool list
+
+# Call a tool
+smithery tool call exa search '{"query": "latest news about MCP"}'
+
+# Search and add skills
+smithery skill search "code review"
+smithery skill add anthropics/frontend-design --agent claude-code
+```
+
+## Reference
+
+### MCP Servers
+
+```bash theme={null}
+smithery mcp search [term]              # Search the Smithery registry
+smithery mcp add <url>                  # Add an MCP connection (remote by default)
+smithery mcp add <url> --client <name>  # Add to a local client (e.g., claude, cursor)
+smithery mcp list                       # List your connections
+smithery mcp remove <ids...>            # Remove connections
+smithery mcp get <id>                   # Get connection details
+smithery mcp update <id>               # Update a connection
+smithery mcp publish <url> -n <name>    # Publish an MCP server to the registry
+```
+
+### Tools
+
+Interact with tools from MCP servers connected via `smithery mcp`.
+
+```bash theme={null}
+smithery tool list [connection]                    # List tools from your connected MCP servers
+smithery tool find [query]                         # Search tools by name or intent
+smithery tool get <connection> <tool>              # Show full details for one tool
+smithery tool call <connection> <tool> [args]      # Call a tool
+```
+
+### Skills
+
+Browse and add skills from the [Smithery Skills Registry](https://smithery.ai/skills).
+
+```bash theme={null}
+smithery skill search [query]                      # Search skills
+smithery skill add <skill> --agent <name>          # Add a skill
+```
+
+### Auth
+
+```bash theme={null}
+smithery auth login                     # Login with Smithery (OAuth)
+smithery auth logout                    # Log out
+smithery auth whoami                    # Check current user
+smithery auth token                     # Mint a service token
+```
+
+### Namespaces
+
+```bash theme={null}
+smithery namespace list                 # List your namespaces
+smithery namespace use <name>           # Set current namespace
+```
+
+### Global Flags
+
+* `--json` - Output as JSON (auto-detected in non-TTY environments)
+* `--table` - Output as table
+* `--verbose` - Show detailed logs for debugging
+* `--help` - Show help message
+
+### Examples
+
+```bash theme={null}
+# Add an MCP server to Claude Desktop
+smithery mcp add mcp-obsidian --client claude
+
+# Add with pre-configured data (skips prompts)
+smithery mcp add mcp-obsidian --client claude --config '{"vaultPath":"path/to/vault"}'
+
+# Remove a server from a client
+smithery mcp remove mcp-obsidian --client claude
+
+# Search for MCP servers with JSON output
+smithery --json mcp search "database"
+
+# List tools from a specific connection
+smithery tool list my-github
+
+# Find tools by intent
+smithery tool find "create issue"
+
+# Call a tool with JSON arguments
+smithery tool call my-github create_issue '{"title":"Bug fix","body":"..."}'
+
+# Login and check auth
+smithery auth login
+smithery auth whoami
+
+# Publish your MCP server
+smithery mcp publish "https://my-server.com" -n @myorg/my-server
+
+# Show help
+smithery --help
+```
+
+### Important Notes
+
+* Use `auth login` to authenticate with Smithery (required for some operations)
+* Remember to restart your AI client after adding or removing servers
+* Use `--verbose` flag for detailed logs when troubleshooting
+* Use `--json` flag for machine-readable output
+
+
+# Namespaces
+Source: https://smithery.ai/docs/concepts/namespaces
+
+Namespaces group your servers, connections, and skills under a shared identifier.
+
+# Namespaces
+
+A namespace is a container for organizing your resources on Smithery. Every server, connection, and skill you create belongs to a namespace.
+
+Namespaces appear in URLs and qualified names. For example, a server published under the `acme` namespace with the slug `weather` is accessible at `smithery.ai/servers/acme/weather`.
+
+## What belongs to a namespace?
+
+| Resource                                  | Description                                               |
+| ----------------------------------------- | --------------------------------------------------------- |
+| **[Servers](/api-reference/servers)**     | MCP servers you publish to the Smithery registry          |
+| **[Connections](/api-reference/connect)** | Managed MCP connections with OAuth and credential storage |
+| **[Skills](/api-reference/skills)**       | Reusable AI skills that reference MCP servers             |
+
+## Creating a namespace
+
+You can create namespaces via the [Namespaces API](/api-reference/namespaces):
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    smithery namespace create my-namespace
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    import Smithery from '@smithery/api'
+
+    const smithery = new Smithery()
+
+    // Specific name
+    await smithery.namespaces.set('my-namespace')
+
+    // Or auto-generated name
+    const namespace = await smithery.namespaces.create()
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    # Auto-generated name
+    curl -X POST https://api.smithery.ai/namespaces \
+      -H "Authorization: Bearer YOUR_API_KEY"
+
+    # Specific name
+    curl -X PUT https://api.smithery.ai/namespaces/my-namespace \
+      -H "Authorization: Bearer YOUR_API_KEY"
+    ```
+  </Tab>
+</Tabs>
+
+Namespace names must be lowercase alphanumeric with hyphens, and are globally unique across Smithery.
+
+## Limits
+
+| Plan          | Max namespaces |
+| ------------- | -------------- |
+| Hobby (free)  | 3              |
+| Pay as you Go | 100            |
+| Custom        | 100+           |
+
+See the [pricing page](https://smithery.ai/pricing) for full plan details.
+
+## Sharing and collaboration
+
+Namespaces act as a shared workspace. Resources within a namespace can be managed by anyone with the appropriate [API key](/use/token-scoping) scoped to that namespace, making them suitable for team collaboration similar to project IDs.
+
+
+# What is MCP?
+Source: https://smithery.ai/docs/concepts/what_is_mcp
+
+What is MCP? How does it work? What does Smithery do with MCP?
+
+<Frame>
+  <img alt="MCP Diagram" />
+</Frame>
+
+# What is MCP?
+
+MCP (Model Context Protocol) is an open standard that enables LLMs to access bespoke tools and context, as long as the LLM supports MCP and the tool implements the MCP protocol.
+
+### Use Cases
+
+Broadly speaking, MCP is useful when you want your LLM to get information from the outside world or perform actions on your behalf:
+
+* **Context**: Context is data that can be used by the LLM that may not be available in the LLM's training data. For example, your LLM might want to search the web or access internal company data.
+* **Tools**: Tools are functions that can be called by the LLM. This can be something like "open a pull request from one branch into main" or "send an email to a specific person".
+
+### Servers, Clients, and Transports
+
+MCP, just like HTTP, is a client-server protocol. The **client** is the LLM, and the **server** exposes tools to the LLM. The client and server communicate over a **transport**, which can be fully local or over the internet.
+
+* **Servers** expose tools to a client.
+* **Clients** can call tools on a server.
+* **Transports** are how the client and server communicate with each other. This can be local (STDIO), over the internet (HTTP), or even over a custom transport.
+
+<Card title="Read the official MCP documentation" icon="scroll" href="https://modelcontextprotocol.io/">
+  Learn more about MCP from the Model Context Protocol website
+  (modelcontextprotocol.io)
+</Card>
+
+# What does Smithery do with MCP?
+
+Smithery is a platform that connects MCP servers with users. We allow users to find the right MCP server for their needs, and we allow developers to publish MCP servers for distribution.
+
+We have a diverse mix of MCP servers, both local (STDIO) and over the internet (HTTP). Here are some popular ones:
+
+* [Desktop Commander](https://smithery.ai/servers/@wonderwhy-er/desktop-commander) (Local, STDIO): Allow apps like Claude Desktop to run terminal commands on your computer.
+* [Exa](https://smithery.ai/servers/exa) (Remote, HTTP): Access live web search results. Do Deep Research, get LinkedIn profiles, and more!
+* [Context7](https://smithery.ai/servers/@upstash/context7-mcp) (Remote, HTTP): Let your IDE agent like Cursor Composer access documentation for your favorite libraries and SDKs.
+* [Browserbase](https://smithery.ai/servers/@browserbasehq/mcp-browserbase) (Remote, HTTP): Use Claude Desktop/Cursor to control a remote web browser.
+
+You can also publish your own MCP servers on Smithery!
+
+<Card title="Publish your MCP server to Smithery" icon="rocket" href="/build/publish">
+  Learn how to publish your MCP server to Smithery for distribution and observability
+</Card>
+
+
+# Build an OAuth-compatible client
+Source: https://smithery.ai/docs/cookbooks/typescript_oauth_client
+
+How to build an OAuth client in Typescript using Next.js
+
+This guide will walk you through the process of building an OAuth-compatible MCP client in Typescript. We'll be using Next.js and the Model Context Protocol SDK.
+It builds off of the [official example from the MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/src/examples/client/simpleOAuthClient.ts).
+
+<CardGroup>
+  <Card title="Show me the repo" icon="github" href="https://github.com/smithery-ai/smithery-cookbook/tree/main/clients/typescript/simple-oauth">
+    View the fully runnable GitHub repo for this example
+  </Card>
+
+  <Card title="Official MCP Docs" icon="scroll" href="https://modelcontextprotocol.io/specification/draft/basic/authorization">
+    View the official MCP docs for authorization
+  </Card>
+</CardGroup>
+
+## 1. Install dependencies
+
+First, create a new Next.js project and install the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk).
+
+```bash theme={null}
+npx create-next-app@latest my-mcp-client
+cd my-mcp-client
+npm install @modelcontextprotocol/sdk
+```
+
+## 2. Create Library Files
+
+You'll want to create a `/lib` directory for common code across your application. This will contain the core logic for the MCP client and the authentication flow.
+
+Then, create the following files in your `/lib` directory:
+
+### Session Store
+
+<Warning>
+  This file contains a simple in-memory session store. For production
+  applications, you should use a more robust solution like Redis or a database.
+</Warning>
+
+```typescript /lib/session-store.ts expandable theme={null}
+import { MCPOAuthClient } from "./oauth-client";
+
+// Simple in-memory session store for demo purposes
+// In production, use Redis, database, or proper session management
+class SessionStore {
+  private clients = new Map<string, MCPOAuthClient>();
+
+  setClient(sessionId: string, client: MCPOAuthClient) {
+    this.clients.set(sessionId, client);
+  }
+
+  getClient(sessionId: string): MCPOAuthClient | null {
+    return this.clients.get(sessionId) || null;
+  }
+
+  removeClient(sessionId: string) {
+    const client = this.clients.get(sessionId);
+    if (client) {
+      client.disconnect();
+      this.clients.delete(sessionId);
+    }
+  }
+
+  generateSessionId(): string {
+    return Math.random().toString(36).substring(2) + Date.now().toString(36);
+  }
+}
+
+export const sessionStore = new SessionStore();
+```
+
+### OAuth Client
+
+This file contains the core logic for the MCP OAuth client.
+
+```typescript /lib/oauth-client.ts expandable theme={null}
+import { URL } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  OAuthClientInformation,
+  OAuthClientInformationFull,
+  OAuthClientMetadata,
+  OAuthTokens,
+} from "@modelcontextprotocol/sdk/shared/auth.js";
+import {
+  CallToolRequest,
+  ListToolsRequest,
+  CallToolResultSchema,
+  ListToolsResultSchema,
+  ListToolsResult,
+  CallToolResult,
+} from "@modelcontextprotocol/sdk/types.js";
+import {
+  OAuthClientProvider,
+  UnauthorizedError,
+} from "@modelcontextprotocol/sdk/client/auth.js";
+
+class InMemoryOAuthClientProvider implements OAuthClientProvider {
+  private _clientInformation?: OAuthClientInformationFull;
+  private _tokens?: OAuthTokens;
+  private _codeVerifier?: string;
+
+  constructor(
+    private readonly _redirectUrl: string | URL,
+    private readonly _clientMetadata: OAuthClientMetadata,
+    onRedirect?: (url: URL) => void
+  ) {
+    this._onRedirect =
+      onRedirect ||
+      ((url) => {
+        console.log(`Redirect to: ${url.toString()}`);
+      });
+  }
+
+  private _onRedirect: (url: URL) => void;
+
+  get redirectUrl(): string | URL {
+    return this._redirectUrl;
+  }
+
+  get clientMetadata(): OAuthClientMetadata {
+    return this._clientMetadata;
+  }
+
+  clientInformation(): OAuthClientInformation | undefined {
+    return this._clientInformation;
+  }
+
+  saveClientInformation(clientInformation: OAuthClientInformationFull): void {
+    this._clientInformation = clientInformation;
+  }
+
+  tokens(): OAuthTokens | undefined {
+    return this._tokens;
+  }
+
+  saveTokens(tokens: OAuthTokens): void {
+    this._tokens = tokens;
+  }
+
+  redirectToAuthorization(authorizationUrl: URL): void {
+    this._onRedirect(authorizationUrl);
+  }
+
+  saveCodeVerifier(codeVerifier: string): void {
+    this._codeVerifier = codeVerifier;
+  }
+
+  codeVerifier(): string {
+    if (!this._codeVerifier) {
+      throw new Error("No code verifier saved");
+    }
+    return this._codeVerifier;
+  }
+}
+
+export class MCPOAuthClient {
+  private client: Client | null = null;
+  private oauthProvider: InMemoryOAuthClientProvider | null = null;
+
+  constructor(
+    private serverUrl: string,
+    private callbackUrl: string,
+    private onRedirect: (url: string) => void
+  ) {}
+
+  async connect(): Promise<void> {
+    const clientMetadata: OAuthClientMetadata = {
+      client_name: "Next.js MCP OAuth Client",
+      redirect_uris: [this.callbackUrl],
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "client_secret_post",
+      scope: "mcp:tools",
+    };
+
+    this.oauthProvider = new InMemoryOAuthClientProvider(
+      this.callbackUrl,
+      clientMetadata,
+      (redirectUrl: URL) => {
+        this.onRedirect(redirectUrl.toString());
+      }
+    );
+
+    this.client = new Client(
+      {
+        name: "nextjs-oauth-client",
+        version: "1.0.0",
+      },
+      { capabilities: {} }
+    );
+
+    await this.attemptConnection();
+  }
+
+  private async attemptConnection(): Promise<void> {
+    if (!this.client || !this.oauthProvider) {
+      throw new Error("Client not initialized");
+    }
+
+    const baseUrl = new URL(this.serverUrl);
+    const transport = new StreamableHTTPClientTransport(baseUrl, {
+      authProvider: this.oauthProvider,
+    });
+
+    try {
+      await this.client.connect(transport);
+    } catch (error) {
+      if (error instanceof UnauthorizedError) {
+        throw new Error("OAuth authorization required");
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  async finishAuth(authCode: string): Promise<void> {
+    if (!this.client || !this.oauthProvider) {
+      throw new Error("Client not initialized");
+    }
+
+    const baseUrl = new URL(this.serverUrl);
+    const transport = new StreamableHTTPClientTransport(baseUrl, {
+      authProvider: this.oauthProvider,
+    });
+
+    await transport.finishAuth(authCode);
+    await this.client.connect(transport);
+  }
+
+  async listTools(): Promise<ListToolsResult> {
+    if (!this.client) {
+      throw new Error("Not connected to server");
+    }
+
+    const request: ListToolsRequest = {
+      method: "tools/list",
+      params: {},
+    };
+
+    return await this.client.request(request, ListToolsResultSchema);
+  }
+
+  async callTool(
+    toolName: string,
+    toolArgs: Record<string, unknown>
+  ): Promise<CallToolResult> {
+    if (!this.client) {
+      throw new Error("Not connected to server");
+    }
+
+    const request: CallToolRequest = {
+      method: "tools/call",
+      params: {
+        name: toolName,
+        arguments: toolArgs,
+      },
+    };
+
+    return await this.client.request(request, CallToolResultSchema);
+  }
+
+  disconnect(): void {
+    this.client = null;
+    this.oauthProvider = null;
+  }
+}
+```
+
+## 3. Create OAuth API Routes
+
+Next, you'll want to create a few API routes to handle the OAuth flow.
+
+Create the following API routes in a directory at `/app/api/mcp`:
+
+* `/app/api/mcp/auth/connect` - Initiates the connection to the MCP server.
+* `/app/api/mcp/auth/callback` - Handles the OAuth callback from the MCP server.
+* `/app/api/mcp/auth/finish` - Finalizes the OAuth flow and stores the tokens.
+* `/app/api/mcp/auth/disconnect` - Disconnects from the MCP server.
+
+### Initialize the OAuth flow
+
+This endpoint initiates the connection to the MCP server.
+
+```typescript /app/api/mcp/auth/connect/route.ts expandable theme={null}
+import { NextRequest, NextResponse } from "next/server";
+import { MCPOAuthClient } from "@/lib/oauth-client";
+import { sessionStore } from "@/lib/session-store";
+
+interface ConnectRequestBody {
+  serverUrl: string;
+  callbackUrl: string;
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body: ConnectRequestBody = await request.json();
+    const { serverUrl, callbackUrl } = body;
+
+    if (!serverUrl || !callbackUrl) {
+      return NextResponse.json(
+        { error: "Server URL and callback URL are required" },
+        { status: 400 }
+      );
+    }
+
+    const sessionId = sessionStore.generateSessionId();
+    let authUrl: string | null = null;
+
+    const client = new MCPOAuthClient(
+      serverUrl,
+      callbackUrl,
+      (redirectUrl: string) => {
+        authUrl = redirectUrl;
+      }
+    );
+
+    try {
+      await client.connect();
+      // If we get here, connection succeeded without OAuth
+      sessionStore.setClient(sessionId, client);
+      return NextResponse.json({ success: true, sessionId });
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        if (error.message === "OAuth authorization required" && authUrl) {
+          // Store client for later use
+          sessionStore.setClient(sessionId, client);
+          return NextResponse.json(
+            { requiresAuth: true, authUrl, sessionId },
+            { status: 401 }
+          );
+        } else {
+          return NextResponse.json(
+            { error: error.message || "Unknown error" },
+            { status: 500 }
+          );
+        }
+      }
+    }
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}
+```
+
+### Handle the OAuth callback
+
+This is the OAuth callback endpoint.
+
+```typescript /app/api/mcp/auth/callback/route.ts expandable theme={null}
+import { NextRequest, NextResponse } from "next/server";
+
+export async function GET(request: NextRequest) {
+  const searchParams = request.nextUrl.searchParams;
+  const code = searchParams.get("code");
+  const error = searchParams.get("error");
+
+  if (code) {
+    const html = `
+      <html>
+        <body>
+          <h1>Authorization Successful!</h1>
+          <p>You can close this window and return to the app.</p>
+          <script>
+            // Send the auth code to the parent window
+            if (window.opener) {
+              window.opener.postMessage({ type: 'oauth-success', code: '${code}' }, '*');
+              window.close();
+            } else {
+              // Fallback: redirect to main app with code
+              window.location.href = '/?code=${code}';
+            }
+          </script>
+        </body>
+      </html>
+    `;
+
+    return new NextResponse(html, {
+      headers: { "Content-Type": "text/html" },
+    });
+  } else if (error) {
+    const html = `
+      <html>
+        <body>
+          <h1>Authorization Failed</h1>
+          <p>Error: ${error}</p>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'oauth-error', error: '${error}' }, '*');
+              window.close();
+            } else {
+              // Fallback: redirect to main app with error
+              window.location.href = '/?error=${error}';
+            }
+          </script>
+        </body>
+      </html>
+    `;
+
+    return new NextResponse(html, {
+      headers: { "Content-Type": "text/html" },
+    });
+  }
+
+  return new NextResponse("Bad request", { status: 400 });
+}
+```
+
+### Finalize the OAuth flow
+
+This endpoint finalizes the OAuth flow.
+
+```typescript /app/api/mcp/auth/finish/route.ts expandable theme={null}
+import { NextRequest, NextResponse } from "next/server";
+import { sessionStore } from "@/lib/session-store";
+
+interface FinishAuthRequestBody {
+  authCode: string;
+  sessionId: string;
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body: FinishAuthRequestBody = await request.json();
+    const { authCode, sessionId } = body;
+
+    if (!authCode || !sessionId) {
+      return NextResponse.json(
+        { error: "Authorization code and session ID are required" },
+        { status: 400 }
+      );
+    }
+
+    const client = sessionStore.getClient(sessionId);
+
+    if (!client) {
+      return NextResponse.json(
+        { error: "No active OAuth session found" },
+        { status: 400 }
+      );
+    }
+
+    await client.finishAuth(authCode);
+
+    return NextResponse.json({ success: true });
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}
+```
+
+### Disconnect from the MCP server
+
+This endpoint disconnects from the MCP server.
+
+```typescript /app/api/mcp/auth/disconnect/route.ts expandable theme={null}
+import { NextRequest, NextResponse } from "next/server";
+import { sessionStore } from "@/lib/session-store";
+
+interface DisconnectRequestBody {
+  sessionId: string;
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body: DisconnectRequestBody = await request.json();
+    const { sessionId } = body;
+
+    if (!sessionId) {
+      return NextResponse.json(
+        { error: "Session ID is required" },
+        { status: 400 }
+      );
+    }
+
+    sessionStore.removeClient(sessionId);
+
+    return NextResponse.json({ success: true });
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}
+```
+
+## 4. List/Call Tools
+
+Next, you'll want to create a few API routes to handle actually using the tools provided by the MCP server. Create the following API routes in a directory at `/app/api/mcp`:
+
+* `/app/api/mcp/tool/list` - Lists the available tools on the MCP server.
+* `/app/api/mcp/tool/call` - Calls a tool on the MCP server.
+
+### List the available tools
+
+This endpoint lists the available tools on the MCP server.
+
+```typescript /app/api/mcp/tool/list/route.ts expandable theme={null}
+import { NextRequest, NextResponse } from "next/server";
+import { sessionStore } from "@/lib/session-store";
+
+export async function GET(request: NextRequest) {
+  try {
+    const sessionId = request.nextUrl.searchParams.get("sessionId");
+
+    if (!sessionId) {
+      return NextResponse.json(
+        { error: "Session ID is required" },
+        { status: 400 }
+      );
+    }
+
+    const client = sessionStore.getClient(sessionId);
+
+    if (!client) {
+      return NextResponse.json(
+        { error: "Not connected to server" },
+        { status: 400 }
+      );
+    }
+
+    const result = await client.listTools();
+
+    return NextResponse.json({ tools: result.tools || [] });
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}
+```
+
+### Call a tool
+
+This endpoint calls a tool on the MCP server.
+
+```typescript /app/api/mcp/tool/call/route.ts expandable theme={null}
+import { NextRequest, NextResponse } from "next/server";
+import { sessionStore } from "@/lib/session-store";
+
+interface CallToolRequestBody {
+  toolName: string;
+  toolArgs?: Record<string, unknown>;
+  sessionId: string;
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const body: CallToolRequestBody = await request.json();
+    const { toolName, toolArgs, sessionId } = body;
+
+    if (!toolName || !sessionId) {
+      return NextResponse.json(
+        { error: "Tool name and session ID are required" },
+        { status: 400 }
+      );
+    }
+
+    const client = sessionStore.getClient(sessionId);
+
+    if (!client) {
+      return NextResponse.json(
+        { error: "Not connected to server" },
+        { status: 400 }
+      );
+    }
+
+    const result = await client.callTool(toolName, toolArgs || {});
+
+    return NextResponse.json({ result });
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}
+```
+
+## 5. Build the UI
+
+Now, you'll want to build the UI to call these endpoints. You can use the following code to get started:
+
+```typescript /app/page.tsx expandable theme={null}
+"use client";
+
+import { useState } from "react";
+
+interface SchemaProperty {
+  type?: string;
+  description?: string;
+  default?: unknown;
+}
+
+interface Tool {
+  name: string;
+  description?: string;
+  inputSchema?: {
+    type: "object";
+    properties?: Record<string, SchemaProperty>;
+    required?: string[];
+  };
+}
+
+export default function Home() {
+  const [serverUrl, setServerUrl] = useState(
+    "https://exa.run.tools"
+  );
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [tools, setTools] = useState<Tool[]>([]);
+  const [selectedTool, setSelectedTool] = useState("");
+  const [toolArgs, setToolArgs] = useState("{}");
+  const [toolResult, setToolResult] = useState<object | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [jsonError, setJsonError] = useState<string | null>(null);
+
+  const generateDefaultArgs = (tool: Tool): string => {
+    if (!tool.inputSchema?.properties) {
+      return "{}";
+    }
+
+    const defaultArgs: Record<string, unknown> = {};
+
+    Object.entries(tool.inputSchema.properties).forEach(([key, schema]) => {
+      switch (schema.type) {
+        case "string":
+          defaultArgs[key] = schema.default || "";
+          break;
+        case "number":
+        case "integer":
+          defaultArgs[key] = schema.default || 0;
+          break;
+        case "boolean":
+          defaultArgs[key] = schema.default || false;
+          break;
+        case "array":
+          defaultArgs[key] = schema.default || [];
+          break;
+        case "object":
+          defaultArgs[key] = schema.default || {};
+          break;
+        default:
+          defaultArgs[key] = schema.default || null;
+      }
+    });
+
+    return JSON.stringify(defaultArgs, null, 2);
+  };
+
+  const handleToolSelect = (toolName: string) => {
+    setSelectedTool(toolName);
+    setJsonError(null);
+
+    if (toolName) {
+      const tool = tools.find((t) => t.name === toolName);
+      if (tool) {
+        setToolArgs(generateDefaultArgs(tool));
+      }
+    } else {
+      setToolArgs("{}");
+    }
+  };
+
+  const handleArgsChange = (value: string) => {
+    setToolArgs(value);
+
+    // Validate JSON syntax
+    try {
+      if (value.trim()) {
+        JSON.parse(value);
+      }
+      setJsonError(null);
+    } catch (e) {
+      setJsonError(e instanceof Error ? e.message : "Invalid JSON");
+    }
+  };
+
+  const getCallbackUrl = () => {
+    return `${window.location.origin}/api/mcp/auth/callback`;
+  };
+
+  const handleConnect = async () => {
+    if (!serverUrl) return;
+
+    setLoading(true);
+    setError(null);
+    setJsonError(null);
+
+    try {
+      const response = await fetch("/api/mcp/auth/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serverUrl, callbackUrl: getCallbackUrl() }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        if (data.requiresAuth && data.authUrl && data.sessionId) {
+          setSessionId(data.sessionId);
+          // Open authorization URL in a popup
+          const popup = window.open(
+            data.authUrl,
+            "oauth-popup",
+            "width=600,height=700,scrollbars=yes,resizable=yes"
+          );
+
+          // Listen for messages from the popup
+          const messageHandler = async (event: MessageEvent) => {
+            if (event.origin !== window.location.origin) return;
+
+            if (event.data.type === "oauth-success") {
+              popup?.close();
+
+              try {
+                const finishResponse = await fetch("/api/mcp/auth/finish", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    authCode: event.data.code,
+                    sessionId: data.sessionId,
+                  }),
+                });
+
+                if (finishResponse.ok) {
+                  setIsConnected(true);
+                  await loadTools(data.sessionId);
+                } else {
+                  const errorData = await finishResponse.json();
+                  setError(
+                    `Failed to complete authentication: ${errorData.error}`
+                  );
+                }
+              } catch (err) {
+                setError(`Failed to complete authentication: ${err}`);
+              }
+
+              window.removeEventListener("message", messageHandler);
+            } else if (event.data.type === "oauth-error") {
+              popup?.close();
+              setError(`OAuth failed: ${event.data.error}`);
+              window.removeEventListener("message", messageHandler);
+            }
+          };
+
+          window.addEventListener("message", messageHandler);
+        } else {
+          setError(data.error || "Connection failed");
+        }
+      } else {
+        setSessionId(data.sessionId);
+        setIsConnected(true);
+        await loadTools(data.sessionId);
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(`Connection failed: ${err.message}`);
+      } else {
+        setError(`Connection failed: ${err}`);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadTools = async (currentSessionId?: string) => {
+    const sid = currentSessionId || sessionId;
+    if (!sid) return;
+
+    try {
+      const response = await fetch(`/api/mcp/tool/list?sessionId=${sid}`);
+      const data = await response.json();
+
+      if (response.ok) {
+        setTools(data.tools || []);
+      } else {
+        setError(`Failed to load tools: ${data.error}`);
+      }
+    } catch (err) {
+      setError(`Failed to load tools: ${err}`);
+    }
+  };
+
+  const handleCallTool = async () => {
+    if (!selectedTool) return;
+
+    setLoading(true);
+    setError(null);
+    setToolResult(null);
+
+    try {
+      let args = {};
+      if (toolArgs.trim()) {
+        args = JSON.parse(toolArgs);
+      }
+
+      const response = await fetch("/api/mcp/tool/call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          toolName: selectedTool,
+          toolArgs: args,
+          sessionId,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setToolResult(data.result);
+      } else {
+        setError(`Tool call failed: ${data.error}`);
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(`Tool call failed: ${err.message}`);
+      } else {
+        setError(`Tool call failed: ${err}`);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    try {
+      if (sessionId) {
+        await fetch("/api/mcp/auth/disconnect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+        });
+      }
+    } catch {
+      // Ignore disconnect errors
+    }
+
+    setSessionId(null);
+    setIsConnected(false);
+    setTools([]);
+    setSelectedTool("");
+    setToolResult(null);
+    setJsonError(null);
+  };
+
+  return (
+    <div className="font-sans min-h-screen p-8 max-w-4xl mx-auto">
+      <h1 className="text-3xl font-bold mb-8">MCP OAuth Client</h1>
+
+      {error && (
+        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+          {error}
+        </div>
+      )}
+
+      {!isConnected ? (
+        <div className="space-y-4">
+          <div>
+            <label
+              htmlFor="serverUrl"
+              className="block text-sm font-medium mb-2"
+            >
+              MCP Server URL:
+            </label>
+            <input
+              id="serverUrl"
+              type="text"
+              value={serverUrl}
+              onChange={(e) => setServerUrl(e.target.value)}
+              placeholder="http://localhost:3000/mcp"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <button
+            onClick={handleConnect}
+            disabled={!serverUrl || loading}
+            className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? "Connecting..." : "Connect"}
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div className="text-green-600 font-medium">
+              ✅ Connected to {serverUrl}
+            </div>
+            <button
+              onClick={handleDisconnect}
+              className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600"
+            >
+              Disconnect
+            </button>
+          </div>
+
+          <div>
+            <h2 className="text-xl font-semibold mb-4">Call Tool</h2>
+            <div className="space-y-4">
+              <div>
+                <label
+                  htmlFor="toolSelect"
+                  className="block text-sm font-medium mb-2"
+                >
+                  Select Tool:
+                </label>
+                <select
+                  id="toolSelect"
+                  value={selectedTool}
+                  onChange={(e) => handleToolSelect(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select a tool...</option>
+                  {tools.map((tool, index) => (
+                    <option key={index} value={tool.name}>
+                      {tool.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedTool &&
+                (() => {
+                  const tool = tools.find((t) => t.name === selectedTool);
+                  return tool?.inputSchema?.properties ? (
+                    <div className="bg-blue-50 p-3 rounded-md">
+                      <h4 className="text-sm font-medium text-blue-800 mb-2">
+                        Expected Parameters:
+                      </h4>
+                      <div className="space-y-1">
+                        {Object.entries(tool.inputSchema.properties).map(
+                          ([key, schema]) => (
+                            <div key={key} className="text-sm">
+                              <span className="font-medium text-blue-700">
+                                {key}
+                              </span>
+                              {tool.inputSchema?.required?.includes(key) && (
+                                <span className="text-red-500 ml-1">*</span>
+                              )}
+                              <span className="text-gray-600 ml-2">
+                                ({schema.type || "any"})
+                              </span>
+                              {schema.description && (
+                                <div className="text-gray-500 ml-4 text-xs">
+                                  {schema.description}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
+
+              <div>
+                <label
+                  htmlFor="toolArgs"
+                  className="block text-sm font-medium mb-2"
+                >
+                  Arguments (JSON):
+                </label>
+                <textarea
+                  id="toolArgs"
+                  value={toolArgs}
+                  onChange={(e) => handleArgsChange(e.target.value)}
+                  placeholder="{}"
+                  rows={3}
+                  className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 ${
+                    jsonError
+                      ? "border-red-300 focus:ring-red-500"
+                      : "border-gray-300 focus:ring-blue-500"
+                  }`}
+                />
+                {jsonError && (
+                  <div className="mt-1 text-sm text-red-600">{jsonError}</div>
+                )}
+              </div>
+
+              <button
+                onClick={handleCallTool}
+                disabled={!selectedTool || loading || !!jsonError}
+                className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? "Calling..." : "Call Tool"}
+              </button>
+            </div>
+          </div>
+
+          {toolResult && (
+            <div>
+              <h2 className="text-xl font-semibold mb-4">Tool Result</h2>
+              <div className="bg-gray-100 p-4 rounded-md">
+                <pre className="whitespace-pre-wrap text-sm">
+                  {JSON.stringify(toolResult, null, 2)}
+                </pre>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <h2 className="text-xl font-semibold mb-4">Available Tools</h2>
+            {tools.length > 0 ? (
+              <div className="space-y-2">
+                {tools.map((tool, index) => (
+                  <div
+                    key={index}
+                    className="p-3 border border-gray-200 rounded-md"
+                  >
+                    <div className="font-medium">{tool.name}</div>
+                    {tool.description && (
+                      <div className="text-sm text-gray-600 mt-1">
+                        {tool.description}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-gray-500">No tools available</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+## Putting it all together
+
+With these files in place, your Next.js application can now interact with an MCP server.
+
+### Authentication Endpoints
+
+* **Connect:** `POST /api/mcp/auth/connect` with `serverUrl` and `callbackUrl` in the body. The `callbackUrl` should point to `/api/mcp/auth/callback`.
+* **List Tools:** `GET /api/mcp/tool/list?sessionId=<sessionId>`
+* **Call Tool:** `POST /api/mcp/tool/call` with `toolName`, `toolArgs`, and `sessionId` in the body.
+* **Disconnect:** `POST /api/mcp/auth/disconnect` with `sessionId` in the body.
+
+### Tool Endpoints
+
+* **List Tools:** `GET /api/mcp/tool/list?sessionId=<sessionId>`
+* **Call Tool:** `POST /api/mcp/tool/call` with `toolName`, `toolArgs`, and `sessionId` in the body.
+
+Here's what your directory structure should look like:
+
+```
+mcp-oauth-client/
+  |-- next-env.d.ts
+  |-- next.config.ts
+  |-- package-lock.json
+  |-- package.json
+  |-- README.md
+  |-- src/
+  |   |-- app/
+  |   |   |-- api/
+  |   |   |   |-- mcp/
+  |   |   |   |   |-- auth/
+  |   |   |   |   |   |-- callback/
+  |   |   |   |   |   |   |-- route.ts
+  |   |   |   |   |   |-- connect/
+  |   |   |   |   |   |   |-- route.ts
+  |   |   |   |   |   |-- disconnect/
+  |   |   |   |   |   |   |-- route.ts
+  |   |   |   |   |   |-- finish/
+  |   |   |   |   |       |-- route.ts
+  |   |   |   |   |-- tool/
+  |   |   |   |   |   |-- call/
+  |   |   |   |   |   |   |-- route.ts
+  |   |   |   |   |   |-- list/
+  |   |   |   |   |       |-- route.ts
+  |   |   |   |-- page.tsx
+  |   |-- lib/
+  |       |-- oauth-client.ts
+  |       |-- session-store.ts
+  |-- tsconfig.json
+```
+
+
+# Connect to servers
+Source: https://smithery.ai/docs/getting_started/quickstart_connect
+
+Connect to an MCP server
+
+# One-click Connect to Smithery Servers
+
+Smithery lets you add an authenticated connection to an MCP server in one click. Try [Exa](https://smithery.ai/servers/exa) for free to search the web.
+
+<img alt="One-click Connect" />
+
+This will run an `npx` command that will start a local STDIO server that will hit the remote server on Smithery.
+For more information on the CLI, see our [GitHub repo](https://github.com/smithery-ai/cli).
+
+# Use Chat to Try Out Servers
+
+The [Smithery Chat](https://smithery.ai/chat) lets you try out servers without installing them!
+You can also use the Chat to try external servers. Just click "Add Servers", paste in the server URL, and click "Connect".
+
+<img alt="Chat" />
+
+Chat is fully MCP compliant, including features like OAuth for secure authentication.
+
+
+# Introduction
+Source: https://smithery.ai/docs/index
+
+Smithery is the largest open marketplace of [Model Context Protocol](https://modelcontextprotocol.io/docs/getting-started/intro) (MCP) servers. Discover and use MCP servers that enable LLMs to search the web, access databases, and much more.
+
+## What can I do with Smithery?
+
+You can use Smithery to find, use, and publish MCP servers. Popular MCP servers on Smithery include:
+
+* [Exa](https://smithery.ai/servers/exa) - Search the live web, access LinkedIn profiles, do deep research, and more
+* [Context7](https://smithery.ai/servers/@upstash/context7-mcp) - Reference the latest docs for most major SDKs and frameworks directly in Cursor or Claude Code
+* [Browserbase](https://smithery.ai/servers/@browserbasehq/mcp-browserbase) - Control a remote web browser using [Stagehand](https://stagehand.dev)
+
+<Card title="What is MCP? What does Smithery actually do?" icon="library-big" href="/concepts/what_is_mcp">
+  Learn more about MCP and how to use Smithery in our concepts section
+</Card>
+
+## Quickstarts
+
+<CardGroup>
+  <Card title="Smithery Connect" icon="plug-zap" href="/use/connect">
+    Add MCP servers to your app with managed OAuth and credentials
+  </Card>
+
+  <Card title="Publish MCP Servers" icon="rocket" href="/build/publish">
+    Publish your MCP servers to Smithery for distribution and observability
+  </Card>
+</CardGroup>
+
+## LLM-Friendly Docs
+
+The Smithery documentation is available in multiple LLM-friendly formats:
+
+### MCP Server
+
+The Smithery docs are accessible via MCP at `https://smithery.ai/docs/mcp`. You can also use the [Context7 MCP server](https://smithery.ai/servers/@upstash/context7-mcp) to search the Smithery documentation.
+
+### Agent Scaffolds
+
+Reference implementations for building agents with Smithery:
+
+* [Basic Scaffold](https://github.com/smithery-ai/sdk/blob/main/examples/basic-server/AGENTS.md) - Build basic MCP servers
+* [ChatGPT App](https://github.com/smithery-ai/sdk/blob/main/examples/open-ai-hello-server/AGENTS.md) - Build ChatGPT apps
+
+### Markdown Format
+
+Any page can be accessed as markdown by appending `.md` to the URL. For example, this page becomes `https://smithery.ai/docs/index.md`. You can also copy any page as markdown directly from the documentation.
+
+
+# Vercel AI SDK Integration
+Source: https://smithery.ai/docs/integrations/vercel_ai_sdk
+
+Integrate MCP servers with Vercel AI SDK using Smithery Connect
+
+The [Vercel AI SDK](https://ai-sdk.dev/docs/ai-sdk-core/mcp-tools) has built-in support for MCP servers. This guide shows how to use Smithery Connect with the AI SDK to add MCP tools to your AI applications.
+
+## Installation
+
+```bash theme={null}
+npm install ai @ai-sdk/mcp @ai-sdk/anthropic @smithery/api
+```
+
+## Quick Start
+
+Use `createConnection` from `@smithery/api/mcp` to get a transport for the AI SDK's MCP client:
+
+```typescript theme={null}
+import { createMCPClient } from '@ai-sdk/mcp';
+import { generateText } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
+import { createConnection } from '@smithery/api/mcp';
+
+const { transport } = await createConnection({
+  mcpUrl: 'https://exa.run.tools',
+});
+
+const mcpClient = await createMCPClient({ transport });
+const tools = await mcpClient.tools();
+
+const { text } = await generateText({
+  model: anthropic('claude-sonnet-4-20250514'),
+  tools,
+  prompt: 'Search for the latest news about MCP.',
+});
+
+await mcpClient.close();
+```
+
+Smithery Connect handles OAuth, token refresh, and connection management automatically.
+
+## Streaming Responses
+
+Use `streamText` for streaming responses. Close the client in `onFinish`:
+
+```typescript theme={null}
+import { createMCPClient } from '@ai-sdk/mcp';
+import { streamText } from 'ai';
+import { anthropic } from '@ai-sdk/anthropic';
+import { createConnection } from '@smithery/api/mcp';
+
+const { transport } = await createConnection({
+  mcpUrl: 'https://exa.run.tools',
+});
+
+const mcpClient = await createMCPClient({ transport });
+const tools = await mcpClient.tools();
+
+const result = await streamText({
+  model: anthropic('claude-sonnet-4-20250514'),
+  tools,
+  prompt: 'Search the web for the latest AI news',
+  onFinish: async () => {
+    await mcpClient.close();
+  },
+});
+```
+
+## Multiple MCP Servers
+
+Connect to multiple servers and aggregate their tools:
+
+```typescript theme={null}
+import { createMCPClient } from '@ai-sdk/mcp';
+import { createConnection } from '@smithery/api/mcp';
+
+const servers = [
+  'https://exa.run.tools',
+  'https://gmail.run.tools',
+];
+
+const clients = await Promise.all(
+  servers.map(async (mcpUrl) => {
+    const { transport } = await createConnection({ mcpUrl });
+    return createMCPClient({ transport });
+  })
+);
+
+// Aggregate tools from all servers
+const allTools = Object.assign({}, ...(await Promise.all(clients.map(c => c.tools()))));
+```
+
+## Learn More
+
+* [Connect to MCPs](/use/connect) — Full guide including OAuth handling, multi-user setups, and service tokens
+* [Token Scoping](/use/token-scoping) — Secure browser and mobile access
+* [Vercel AI SDK MCP Documentation](https://ai-sdk.dev/docs/ai-sdk-core/mcp-tools)
+
+
+# Connect to MCPs
+Source: https://smithery.ai/docs/use/connect
+
+Manage MCP connections with a simple REST API - OAuth, tokens, and sessions handled for you.
+
+**Smithery Connect** is Smithery's managed service for connecting to MCP servers. Instead of implementing the MCP protocol directly, handling OAuth flows, and managing credentials yourself, Smithery Connect provides a simple REST interface that handles all of this for you.
+
+## Why Smithery Connect?
+
+Smithery Connect lets you add MCP server integrations to your app without managing the complexity yourself:
+
+* **Zero OAuth configuration** — No redirect URIs, client IDs, or secrets to configure. Smithery maintains OAuth apps for popular integrations.
+* **Automatic token refresh** — Tokens refresh automatically before expiry. If a refresh fails, the connection status changes to `auth_required`.
+* **Secure credential storage** — Credentials are encrypted and write-only. They can be used to make requests but never read back.
+* **Stateless for you** — Smithery Connect manages connection lifecycle. Make requests without worrying about reconnects, keepalives, or session state.
+* **Scoped service tokens** — Mint short-lived tokens for browser or mobile clients to call tools directly, scoped to specific users and namespaces.
+
+## Quick Start
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    # 1. Log in to Smithery
+    smithery auth login
+
+    # 2. Connect to the Exa search server
+    smithery mcp add https://server.smithery.ai/exa --id exa
+
+    # 3. List available tools
+    smithery tool list exa
+
+    # 4. Call a tool
+    smithery tool call exa search '{"query": "latest news about MCP"}'
+    ```
+  </Tab>
+
+  <Tab title="AI SDK" icon="sparkles">
+    ```bash theme={null}
+    npm install @smithery/api @ai-sdk/mcp ai @ai-sdk/anthropic
+    ```
+
+    ```typescript theme={null}
+    import { createMCPClient } from '@ai-sdk/mcp';
+    import { generateText } from 'ai';
+    import { anthropic } from '@ai-sdk/anthropic';
+    import { createConnection } from '@smithery/api/mcp';
+
+    const { transport } = await createConnection({
+      mcpUrl: 'https://exa.run.tools',
+    });
+
+    const mcpClient = await createMCPClient({ transport });
+    const tools = await mcpClient.tools();
+
+    const { text } = await generateText({
+      model: anthropic('claude-sonnet-4-20250514'),
+      tools,
+      prompt: 'Search for the latest news about MCP.',
+    });
+
+    await mcpClient.close();
+    ```
+  </Tab>
+
+  <Tab title="MCP TypeScript SDK" icon="braces">
+    ```bash theme={null}
+    npm install @smithery/api @modelcontextprotocol/sdk
+    ```
+
+    ```typescript theme={null}
+    import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+    import { createConnection } from '@smithery/api/mcp';
+
+    const { transport } = await createConnection({
+      mcpUrl: 'https://exa.run.tools',
+    });
+
+    // Connect using the MCP SDK Client
+    const mcpClient = new Client({ name: 'my-app', version: '1.0.0' });
+    await mcpClient.connect(transport);
+
+    // Use the MCP SDK's ergonomic API
+    const { tools } = await mcpClient.listTools();
+    const result = await mcpClient.callTool({
+      name: 'search',
+      arguments: { query: 'latest news about MCP' }
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Servers with Configuration
+
+Some MCP servers require configuration like API keys or project IDs. How you pass each config value depends on the server's schema — some values go as **headers** (typically API keys), while others go as **query parameters** in the MCP URL.
+
+Check the server's page on [smithery.ai](https://smithery.ai) to see what configuration it requires and where each value should go.
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    # Add a server with config (API key as header, project ID as query param)
+    smithery mcp add \
+      '@browserbasehq/mcp-browserbase?browserbaseProjectId=your-project-id' \
+      --id my-browserbase \
+      --headers '{"browserbaseApiKey": "your-browserbase-api-key"}'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    import Smithery from '@smithery/api';
+    import { createConnection } from '@smithery/api/mcp';
+
+    const smithery = new Smithery();
+
+    // 1. Create a connection with the server's config
+    //    - API keys go in `headers`
+    //    - Other config goes as query params in `mcpUrl`
+    const conn = await smithery.connections.set('my-browserbase', {
+      namespace: 'my-app',
+      mcpUrl: 'https://browserbase.run.tools?browserbaseProjectId=your-project-id',
+      headers: {
+        'browserbaseApiKey': 'your-browserbase-api-key',
+      },
+    });
+    // conn.status.state === "connected" — ready to use immediately
+
+    // 2. Get a transport for the connection
+    const { transport } = await createConnection({
+      client: smithery,
+      namespace: 'my-app',
+      connectionId: conn.connectionId,
+    });
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    curl -X POST "https://api.smithery.ai/connect/my-app" \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "mcpUrl": "https://browserbase.run.tools?browserbaseProjectId=your-project-id",
+        "headers": {
+          "browserbaseApiKey": "your-browserbase-api-key"
+        }
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+Unlike OAuth-based servers that return `auth_required`, servers configured with API keys return `connected` immediately.
+
+<Note>
+  Each server's config schema specifies whether a field is passed as a **header** or **query parameter** via the `x-from` metadata. See [Session Configuration](/build/session-config) for details on how servers declare their config transport.
+</Note>
+
+## Multi-User Setup
+
+When your agent serves multiple users, you'll need to track which connections belong to which user. Use the `metadata` field to associate connections with your users, then filter by metadata to retrieve a specific user's connections.
+
+### 1. Create a Connection for a User
+
+When a user wants to connect an integration (e.g., GitHub), create a connection with their `userId` in metadata:
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    smithery mcp add https://server.smithery.ai/github \
+      --id user-123-github \
+      --name "GitHub" \
+      --metadata '{"userId": "user-123"}'
+
+    # If OAuth is required, the CLI outputs the auth URL:
+    # → auth_required
+    # → https://auth.smithery.ai/...
+    # Visit the URL to authorize
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const conn = await smithery.connections.set('user-123-github', {
+      namespace: 'my-app',
+      mcpUrl: 'https://github.run.tools',
+      name: 'GitHub',
+      metadata: { userId: 'user-123' }
+    });
+
+    if (conn.status === 'auth_required') {
+      // Redirect user to complete OAuth
+      redirect(conn.authorizationUrl);
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### 2. List a User's Connections
+
+When your agent needs to know what tools are available for a user, list their connections:
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    smithery mcp list --metadata '{"userId": "user-123"}'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const connections = await smithery.connections.list('my-app', {
+      metadata: { userId: 'user-123' }
+    });
+
+    // Show the user their connected integrations
+    for (const conn of connections.data) {
+      console.log(`${conn.name}: ${conn.status}`);
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### 3. Use Tools Across Connections
+
+Create MCP clients for each connection and aggregate their tools:
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    # List tools for a connection
+    smithery tool list user-123-github
+
+    # Call a tool
+    smithery tool call user-123-github search_repositories \
+      '{"query": "mcp"}'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const allTools = [];
+
+    for (const conn of connections.data) {
+      if (conn.status === 'connected') {
+        const { transport } = await createConnection({
+          namespace: 'my-app',
+          connectionId: conn.connectionId,
+        });
+        const client = await createMCPClient({ transport });
+        allTools.push(...await client.tools());
+      }
+    }
+
+    // Now your agent has tools from all the user's connected integrations
+    const { text } = await generateText({
+      model: anthropic('claude-sonnet-4-20250514'),
+      tools: allTools,
+      prompt: userMessage,
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Core Concepts
+
+### Namespaces
+
+A namespace is a globally unique identifier that groups your connections. Create one namespace per application or environment (e.g., `my-app`, `my-app-staging`). If you don't specify a namespace, the SDK uses your first existing namespace or creates one automatically.
+
+### Connections
+
+A connection is a long-lived session to an MCP server that persists until terminated. Each connection:
+
+* Has a `connectionId` (developer-defined or auto-generated)
+* Stores credentials securely (write-only—credentials can never be read back, only used to execute requests)
+* Can include custom `metadata` for filtering (e.g., `userId` to associate connections with your users)
+* Returns `serverInfo` with the MCP server's name and version
+
+<Accordion title="createConnection Options">
+  | Option         | Type        | Description                                                                                  |
+  | -------------- | ----------- | -------------------------------------------------------------------------------------------- |
+  | `client`       | `Smithery?` | The Smithery client instance. If not provided, auto-created using `SMITHERY_API_KEY` env var |
+  | `mcpUrl`       | `string?`   | The MCP server URL. Required when `connectionId` is not provided                             |
+  | `namespace`    | `string?`   | If omitted, uses first existing namespace or creates one                                     |
+  | `connectionId` | `string?`   | If omitted, an ID is auto-generated                                                          |
+
+  Returns a `SmitheryConnection` with `{ transport, connectionId, url }`.
+  Throws `SmitheryAuthorizationError` if OAuth authorization is required (see [Handling Authorization](#handling-authorization)).
+</Accordion>
+
+### Connection Status
+
+When you create or retrieve a connection, it includes a `status` field:
+
+| Status          | Description                                                                  |
+| --------------- | ---------------------------------------------------------------------------- |
+| `connected`     | Connection is ready to use                                                   |
+| `auth_required` | OAuth authorization needed. Includes `authorizationUrl` to redirect the user |
+| `error`         | Connection failed. Includes error `message`                                  |
+
+### Authentication
+
+Smithery Connect uses two authentication methods:
+
+| Token             | Use Case                | Access                                |
+| ----------------- | ----------------------- | ------------------------------------- |
+| **API Key**       | Backend only            | Full namespace access                 |
+| **Service Token** | Browser, mobile, agents | Scoped access to specific connections |
+
+Get your API key from [smithery.ai/account/api-keys](https://smithery.ai/account/api-keys).
+
+<Warning>
+  Never expose your API key to untrusted clients or agents. Use scoped service tokens for browser and mobile apps.
+</Warning>
+
+### OAuth Flow
+
+When an MCP server requires OAuth:
+
+1. Create a connection—the response status will be `auth_required` with an `authorizationUrl`
+2. Redirect the user to `authorizationUrl`
+3. User completes OAuth with the upstream provider (e.g., GitHub)
+4. User is redirected back to your app
+5. The connection is now ready—subsequent requests will succeed
+
+You don't need to register OAuth apps, configure redirect URIs, or handle token exchange. Smithery manages the OAuth relationship with upstream providers and stores credentials securely on your behalf.
+
+### Handling Authorization
+
+When using the SDK, `createConnection()` throws a `SmitheryAuthorizationError` if the MCP server requires OAuth. The error contains the URL to redirect the user to and the connection ID to retry with after authorization completes.
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    # Connect to a server that requires OAuth
+    smithery mcp add https://server.smithery.ai/github
+
+    # If auth is required, the CLI outputs the authorization URL:
+    # → auth_required
+    # → https://auth.smithery.ai/...
+    # → connection_id: abc-123-github
+    # Visit the URL to authorize, then retry
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    import { createConnection, SmitheryAuthorizationError } from '@smithery/api/mcp';
+
+    try {
+      const { transport } = await createConnection({
+        mcpUrl: 'https://github.run.tools',
+      });
+
+      // Connection succeeded — use transport as normal
+      const mcpClient = await createMCPClient({ transport });
+      const tools = await mcpClient.tools();
+    } catch (error) {
+      if (error instanceof SmitheryAuthorizationError) {
+        // Redirect the user to complete OAuth
+        // error.authorizationUrl — where to send the user
+        // error.connectionId — save this to retry after auth completes
+        redirect(error.authorizationUrl);
+      }
+      throw error;
+    }
+    ```
+  </Tab>
+</Tabs>
+
+After the user completes authorization and returns to your app, retry with the saved `connectionId`:
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    # After authorization, the connection is ready
+    smithery tool list abc-123-github
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const { transport } = await createConnection({
+      connectionId: savedConnectionId,
+    });
+
+    const mcpClient = await createMCPClient({ transport });
+    const tools = await mcpClient.tools();
+    ```
+  </Tab>
+</Tabs>
+
+## Service Tokens
+
+Service tokens let you safely use the Smithery Connect from browsers, mobile apps, and AI agents without exposing your API key. Your backend mints a scoped token, then your client uses it to call tools directly.
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    smithery auth token --policy '[{
+      "namespaces": "my-app",
+      "resources": "connections",
+      "operations": ["read", "execute"],
+      "metadata": { "userId": "user-123" },
+      "ttl": "1h"
+    }]'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    // Create a token scoped to a specific user's connections
+    const { token } = await smithery.tokens.create({
+      policy: [
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: ['read', 'execute'],
+          metadata: { userId: 'user-123' },
+          ttl: '1h',
+        },
+      ],
+    })
+
+    // Send `token` to your client — safe for browser use
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    curl -X POST https://api.smithery.ai/tokens \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "policy": [
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": ["read", "execute"],
+            "metadata": { "userId": "user-123" },
+            "ttl": "1h"
+          }
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+This token can only access connections in `my-app` where `metadata.userId` matches `user-123`. Initialize the client with the token:
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    # Use the scoped token to call tools
+    SMITHERY_API_KEY=$TOKEN smithery tool list user-123-github
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const smithery = new Smithery({ apiKey: token })
+
+    const { transport } = await createConnection({
+      client: smithery,
+      namespace: 'my-app',
+      connectionId: 'user-123-github',
+    })
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Need workspace-level scoping, read-only tokens, or token narrowing? See [Token Scoping](/use/token-scoping) for the full guide.
+</Note>
+
+## Advanced
+
+For full API documentation, see the [Smithery Connect Reference](/api-reference/connect/).
+
+### Direct MCP Calls
+
+Call MCP methods directly via the Streamable HTTP endpoint:
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    # List available tools
+    smithery tool list user-123-github
+
+    # Call a tool
+    smithery tool call user-123-github search_repositories \
+      '{"query": "mcp"}'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    // List available tools
+    const tools = await smithery.connections.mcp.call('user-123-github', {
+      namespace: 'my-app',
+      method: 'tools/list',
+      params: {}
+    });
+
+    // Call a tool
+    const result = await smithery.connections.mcp.call('user-123-github', {
+      namespace: 'my-app',
+      method: 'tools/call',
+      params: {
+        name: 'search_repositories',
+        arguments: { query: 'mcp' }
+      }
+    });
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    # List available tools
+    curl -X POST https://api.smithery.ai/connect/my-app/user-123-github/mcp \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}'
+
+    # Call a tool
+    curl -X POST https://api.smithery.ai/connect/my-app/user-123-github/mcp \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+          "name": "search_repositories",
+          "arguments": { "query": "mcp" }
+        }
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+
+# Deep Linking
+Source: https://smithery.ai/docs/use/deep-linking
+
+Deep links provide a seamless way to integrate Smithery MCPs into supported clients.
+
+Deep links provide a seamless way to integrate Smithery MCPs into supported clients.
+When a user clicks a deep link from our server page, the client automatically configures the MCP with the correct settings.
+
+To get started with integration, please contact us at [contact@smithery.ai](mailto:contact@smithery.ai) or join our [Discord community](https://discord.gg/sKd9uycgH9) for support.
+
+<img alt="Magic Link Integration Flow" />
+
+## Protocol Specification
+
+Deep links use the following URL format:
+
+```typescript theme={null}
+`${clientScheme}://{optionalDeepLinkHandler}/mcp/install?name=${encodeURIComponent(displayName)}&config=${encodeURIComponent(config)}`
+
+// Example:
+// cursor://anysphere.cursor-deeplink/mcp/install?<server-display-name>&<base64-encoded-json-config>
+```
+
+| **Component**        | **Description**                                       |
+| :------------------- | :---------------------------------------------------- |
+| `{client-schema}://` | Protocol scheme                                       |
+| `{optional-handler}` | Deeplink handler                                      |
+| `/mcp/install`       | Path                                                  |
+| `name`               | Query parameter for the server name                   |
+| `config`             | Query parameter for base64 encoded JSON configuration |
+
+The `config` parameter contains a URL-encoded JSON object with the following schema:
+
+```typescript theme={null}
+interface StdioMCPConfig {
+  type: "stdio";
+  command: string; // Example: "npx"
+  args: string[];  // Command line arguments for the MCP CLI
+}
+
+// Note: The configuration does not require an "env" field because
+// Smithery automatically handles sensitive data through saved configurations.
+
+interface HttpMCPConfig {
+  type: "http";
+  url: string;    // URL of the MCP server
+}
+
+type MCPConfig = StdioMCPConfig | HttpMCPConfig;
+```
+
+The configuration fields are detailed in the table below:
+
+| Field   | Description                                                                                                                                       | Example                                                                    |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| type    | Server connection type                                                                                                                            | `"stdio"` or `"http"`                                                      |
+| command | Command to start the server executable (required for stdio type). The command needs to be available on your system path or contain its full path. | `"npx"`                                                                    |
+| args    | Array of arguments passed to the command (required for stdio type).                                                                               | `["-y", "@smithery/cli@latest", "run", "@wonderwhy-er/desktop-commander"]` |
+| url     | URL of the MCP server (required for http type)                                                                                                    | `"https://exa.run.tools"`                                                  |
+
+## Example Configurations
+
+### stdio-based Configuration:
+
+```json theme={null}
+{
+  "type": "stdio",
+  "command": "npx",
+  "args": ["-y", "@smithery/cli@latest", "run", "@wonderwhy-er/desktop-commander"]
+}
+```
+
+### HTTP-based Configuration:
+
+```json theme={null}
+{
+  "type": "http",
+  "url": "https://exa.run.tools"
+}
+```
+
+## Handling Deep links
+
+When your client receives a deeplink:
+
+1. Parse the URL-encoded config parameter using `decodeURIComponent`
+2. Parse the resulting string as JSON
+3. Create the transport with provided arguments
+
+Example implementation:
+
+### Deeplink Handler
+
+```typescript theme={null}
+// Parse deeplink and return name and config
+function handleDeepLink(url: string) {
+  const urlObj = new URL(url)
+  const name = urlObj.searchParams.get('name')
+  const config = JSON.parse(decodeURIComponent(urlObj.searchParams.get('config')))
+  return { config, name }
+}
+```
+
+### Stdio Example
+
+```typescript theme={null}
+// Example with stdio transport
+async function setupStdioMCP(url: string) {
+  const config = handleDeepLink(url)
+  const transport = new StdioClientTransport({
+    command: config.command,
+    args: config.args
+  })
+  
+  const client = new Client({ name: "Test client" })
+  await client.connect(transport)
+  return client
+}
+```
+
+### HTTP Example
+
+```typescript theme={null}
+// Example with HTTP transport
+async function setupHttpMCP(url: string) {
+  const config = handleDeepLink(url)
+  const transport = new StreamableHTTPClientTransport(config.url)
+  
+  const client = new Client({ name: "Test client" })
+  await client.connect(transport)
+  return client
+}
+```
+
+
+# Overview
+Source: https://smithery.ai/docs/use/index
+
+Learn how to integrate MCP servers into your AI agents with Smithery Connect.
+
+Smithery provides AI agent developers with access to a large ecosystem of Model Context Protocol (MCP) servers. Whether you're building chatbots, background agents, or AI copilots, **Smithery Connect** simplifies MCP integration through a managed service.
+
+## Why Smithery Connect?
+
+* **Zero OAuth configuration** — No redirect URIs, client IDs, or secrets to manage
+* **Automatic token refresh** — Credentials stay valid without manual intervention
+* **Secure credential storage** — Encrypted, write-only storage for API keys and tokens
+* **Stateless for you** — Connection lifecycle managed automatically
+
+<Card title="Connect to MCPs" icon="plug-zap" href="/use/connect">
+  Add MCP servers to your app with a simple REST API
+</Card>
+
+## Advanced Topics
+
+<Card title="Token Scoping" icon="shield" href="/use/token-scoping">
+  Secure browser and mobile access with scoped service tokens
+</Card>
+
+
+# Listing Your Client
+Source: https://smithery.ai/docs/use/listing_your_client
+
+Get your MCP client listed on Smithery for easy discovery and installation by end users
+
+We offer client developers the opportunity to have their MCP clients listed on server pages within the Smithery platform. This provides easy installation and discovery for end users looking to connect to MCP servers.
+
+<img alt="MCP Clients" />
+
+## Benefits of Getting Listed
+
+When your client is listed on Smithery:
+
+* **Increased Visibility**: Your client appears on relevant server pages, making it easier for users to discover
+* **Easy Installation**: Users can quickly install and connect your client to servers using [deep linking](/use/deep-linking) or the [Smithery CLI](/concepts/cli)
+* **Better User Experience**: Simplified onboarding process for users wanting to use MCP servers
+
+## How to Get Listed
+
+To get your MCP client listed on Smithery, please contact us at [contact@smithery.ai](mailto:contact@smithery.ai) or join our [Discord community](https://discord.gg/sKd9uycgH9) for support.
+
+## Attribution Requirements
+
+To maintain the quality and discoverability of the MCP ecosystem, we require attribution back to Smithery. You can fulfill this requirement in one of the following ways:
+
+### Option 1: Registry API Integration
+
+Integrate directly with our registry to help users discover more servers:
+
+* Use our [Registry API](/concepts/registry_search_servers) to fetch and display available servers
+* This creates a seamless experience for users to explore MCP servers
+
+### Option 2: Backlink Integration
+
+Include a link back to Smithery to help users explore more servers:
+
+* Add a "Explore more servers" link that directs users to [smithery.ai](https://smithery.ai)
+* This can be placed in your client's interface, or settings
+
+
+# Token Scoping
+Source: https://smithery.ai/docs/use/token-scoping
+
+Control which connections and operations a token can access — by user, workspace, or any custom dimension.
+
+<Warning>
+  **Preview** — Token Scoping is in preview. API surface may change.
+  [Join our Discord](https://discord.gg/Afd38S5p9A) for support and feedback.
+</Warning>
+
+Service tokens let you safely expose Smithery to browsers, mobile apps, and AI agents without leaking your API key. Each token carries **constraints** that restrict which namespaces, resources, operations, and metadata it can access.
+
+For general Smithery Connect setup, see [Smithery Connect](/use/connect).
+
+## Scope a Token to a User
+
+When your app serves multiple users, you'll want each user's token to only access their own connections. You do this by tagging connections with `metadata` (e.g., `{ userId: "user-123" }`) when you create them, then creating a token with the same metadata constraint. The token will only be able to see connections whose metadata matches.
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    smithery auth token --policy '[{
+      "namespaces": "my-app",
+      "resources": "connections",
+      "operations": ["read", "execute"],
+      "metadata": { "userId": "user-123" },
+      "ttl": "1h"
+    }]'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const { token, expiresAt } = await smithery.tokens.create({
+      policy: [
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: ['read', 'execute'],
+          metadata: { userId: 'user-123' },
+          ttl: '1h',
+        },
+      ],
+    })
+
+    // Send `token` to your client — safe for browser use
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    curl -X POST https://api.smithery.ai/tokens \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "policy": [
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": ["read", "execute"],
+            "metadata": { "userId": "user-123" },
+            "ttl": "1h"
+          }
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+This token can list and call tools on connections in `my-app` where `metadata.userId` is `user-123` — nothing else. Even if the client tries to access another user's connection, the request is denied.
+
+You can also match on multiple metadata fields at once. Fields within a single metadata object are AND'd, so the token below only matches connections where both `userId` and `tier` match:
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    smithery auth token --policy '[{
+      "namespaces": "my-app",
+      "resources": "connections",
+      "operations": ["read", "execute"],
+      "metadata": { "userId": "user-123", "tier": "pro" },
+      "ttl": "1h"
+    }]'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const { token } = await smithery.tokens.create({
+      policy: [
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: ['read', 'execute'],
+          metadata: { userId: 'user-123', tier: 'pro' },
+          ttl: '1h',
+        },
+      ],
+    })
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    curl -X POST https://api.smithery.ai/tokens \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "policy": [
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": ["read", "execute"],
+            "metadata": { "userId": "user-123", "tier": "pro" },
+            "ttl": "1h"
+          }
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+## Multi-Level Access (Workspace / Org)
+
+Real apps often have multiple access levels. For example, a user should see:
+
+* Their own connections
+* Connections shared with their workspace
+* Global connections configured by an admin
+
+Pass **multiple constraints** in the `policy` array. Each constraint is an independent grant — the token can access anything that matches **any** of them.
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    smithery auth token --policy '[
+      {
+        "namespaces": "my-app",
+        "resources": "connections",
+        "operations": ["read", "execute"],
+        "metadata": { "userId": "user-123" },
+        "ttl": "1h"
+      },
+      {
+        "namespaces": "my-app",
+        "resources": "connections",
+        "operations": ["read", "execute"],
+        "metadata": { "workspaceId": "ws-acme" },
+        "ttl": "1h"
+      },
+      {
+        "namespaces": "my-app",
+        "resources": "connections",
+        "operations": ["read", "execute"],
+        "metadata": { "scope": "global" },
+        "ttl": "1h"
+      }
+    ]'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const { token } = await smithery.tokens.create({
+      policy: [
+        // Grant 1: user's own connections
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: ['read', 'execute'],
+          metadata: { userId: 'user-123' },
+          ttl: '1h',
+        },
+        // Grant 2: workspace-shared connections
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: ['read', 'execute'],
+          metadata: { workspaceId: 'ws-acme' },
+          ttl: '1h',
+        },
+        // Grant 3: global connections (admin-configured)
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: ['read', 'execute'],
+          metadata: { scope: 'global' },
+          ttl: '1h',
+        },
+      ],
+    })
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    curl -X POST https://api.smithery.ai/tokens \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "policy": [
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": ["read", "execute"],
+            "metadata": { "userId": "user-123" },
+            "ttl": "1h"
+          },
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": ["read", "execute"],
+            "metadata": { "workspaceId": "ws-acme" },
+            "ttl": "1h"
+          },
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": ["read", "execute"],
+            "metadata": { "scope": "global" },
+            "ttl": "1h"
+          }
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+The token holder sees connections matching **any** of the three grants. This replaces the need for separate tokens per access level.
+
+<Note>
+  For this to work, tag your connections with the right metadata when you create them:
+
+  * User connections: `metadata: { userId: 'user-123' }`
+  * Workspace connections: `metadata: { workspaceId: 'ws-acme' }`
+  * Global connections: `metadata: { scope: 'global' }`
+</Note>
+
+## Narrow a Token
+
+You can create a narrower token from an existing service token. The new token can only have **equal or fewer** permissions — it cannot exceed the parent token's scope.
+
+This is useful when your backend holds a broad token and needs to hand out more restricted tokens per request. For example, using the multi-level token from the previous section as the starting point:
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    # Narrow the broad token to just one user's connections
+    SMITHERY_API_KEY=$BROAD_SERVICE_TOKEN smithery auth token \
+      --policy '[{
+        "resources": "connections",
+        "operations": "read",
+        "metadata": { "userId": "user-123" },
+        "ttl": "20m"
+      }]'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    // Broad token from earlier — covers user, workspace, and global connections
+    const smitheryWithBroadToken = new Smithery({ apiKey: token })
+
+    // Narrow it to just this user's connections, read-only, shorter TTL
+    const { token: userToken } = await smitheryWithBroadToken.tokens.create({
+      policy: [
+        {
+          resources: 'connections',
+          operations: 'read',
+          metadata: { userId: 'user-123' },
+          ttl: '20m',
+        },
+      ],
+    })
+
+    // userToken can only read user-123's connections —
+    // the workspace and global grants from the parent are excluded
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    # Narrow the broad token to just one user's connections
+    curl -X POST https://api.smithery.ai/tokens \
+      -H "Authorization: Bearer $BROAD_SERVICE_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "policy": [
+          {
+            "resources": "connections",
+            "operations": "read",
+            "metadata": { "userId": "user-123" },
+            "ttl": "20m"
+          }
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+**When to use this:** Your backend mints one broad token at startup (e.g., all connections in a namespace). Per request, it narrows that token for the specific user or context before passing it to client code.
+
+## Operation Scoping
+
+Control what operations a token can perform on each resource.
+
+| Resource      | Operations      | Description                         |
+| ------------- | --------------- | ----------------------------------- |
+| `connections` | `read`          | List and get connections            |
+| `connections` | `write`         | Create and delete connections       |
+| `connections` | `execute`       | Call MCP tools through a connection |
+| `servers`     | `read`, `write` | Server metadata and configuration   |
+| `namespaces`  | `read`, `write` | Namespace management                |
+
+### Read-Only Dashboard Token
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    smithery auth token --policy '[{
+      "namespaces": "my-app",
+      "resources": "connections",
+      "operations": "read",
+      "ttl": "1h"
+    }]'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const { token } = await smithery.tokens.create({
+      policy: [
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: 'read',
+          ttl: '1h',
+        },
+      ],
+    })
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    curl -X POST https://api.smithery.ai/tokens \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "policy": [
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": "read",
+            "ttl": "1h"
+          }
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+### Execute-Only Agent Token
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    smithery auth token --policy '[{
+      "namespaces": "my-app",
+      "resources": "connections",
+      "operations": "execute",
+      "metadata": { "userId": "user-123" },
+      "ttl": "30m"
+    }]'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const { token } = await smithery.tokens.create({
+      policy: [
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: 'execute',
+          metadata: { userId: 'user-123' },
+          ttl: '30m',
+        },
+      ],
+    })
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    curl -X POST https://api.smithery.ai/tokens \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "policy": [
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": "execute",
+            "metadata": { "userId": "user-123" },
+            "ttl": "30m"
+          }
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+### Multi-Resource Token
+
+A single token can grant access to multiple resources by passing multiple constraints in the `policy` array:
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    smithery auth token --policy '[
+      {
+        "namespaces": "my-app",
+        "resources": "connections",
+        "operations": ["read", "execute"],
+        "metadata": { "userId": "user-123" },
+        "ttl": "1h"
+      },
+      {
+        "namespaces": "my-app",
+        "resources": "servers",
+        "operations": "read",
+        "ttl": "1h"
+      }
+    ]'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const { token } = await smithery.tokens.create({
+      policy: [
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: ['read', 'execute'],
+          metadata: { userId: 'user-123' },
+          ttl: '1h',
+        },
+        {
+          namespaces: 'my-app',
+          resources: 'servers',
+          operations: 'read',
+          ttl: '1h',
+        },
+      ],
+    })
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    curl -X POST https://api.smithery.ai/tokens \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "policy": [
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": ["read", "execute"],
+            "metadata": { "userId": "user-123" },
+            "ttl": "1h"
+          },
+          {
+            "namespaces": "my-app",
+            "resources": "servers",
+            "operations": "read",
+            "ttl": "1h"
+          }
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+## MCP Request Matching (Experimental)
+
+<Warning>
+  **Unstable** — MCP request matching is experimental. The `rpcReqMatch` field shape may change in future releases.
+</Warning>
+
+By default, a token with `connections:execute` can invoke **any** tool through a connection. The `rpcReqMatch` field lets you restrict *which* JSON-RPC requests a token can make, gating at the request level.
+
+Match rules inspect the JSON-RPC body. Keys are dot-paths (e.g. `params.name` targets the tool name in a `tools/call` request). Values are **regex patterns**. All entries within a constraint are AND'd.
+
+### Allow Only Specific Tools
+
+<Tabs>
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const { token } = await smithery.tokens.create({
+      policy: [
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: 'execute',
+          metadata: { userId: 'user-123' },
+          rpcReqMatch: { 'params.name': '^(search|get_page)$' },
+          ttl: '1h',
+        },
+      ],
+    })
+
+    // This token can only call the "search" and "get_page" tools — nothing else
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    curl -X POST https://api.smithery.ai/tokens \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "policy": [
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": "execute",
+            "metadata": { "userId": "user-123" },
+            "rpcReqMatch": { "params.name": "^(search|get_page)$" },
+            "ttl": "1h"
+          }
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+### Mixed Permissions: Read + Restricted Execute
+
+A token that can list connections freely but only execute specific tools requires two constraints — one for read access and one for restricted execute:
+
+<Tabs>
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    const { token } = await smithery.tokens.create({
+      policy: [
+        // Grant 1: list connections (no rpcReqMatch restriction)
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: 'read',
+          metadata: { userId: 'user-123' },
+          ttl: '1h',
+        },
+        // Grant 2: execute only "search" tool
+        {
+          namespaces: 'my-app',
+          resources: 'connections',
+          operations: 'execute',
+          metadata: { userId: 'user-123' },
+          rpcReqMatch: { 'params.name': '^search$' },
+          ttl: '1h',
+        },
+      ],
+    })
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    curl -X POST https://api.smithery.ai/tokens \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "policy": [
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": "read",
+            "metadata": { "userId": "user-123" },
+            "ttl": "1h"
+          },
+          {
+            "namespaces": "my-app",
+            "resources": "connections",
+            "operations": "execute",
+            "metadata": { "userId": "user-123" },
+            "rpcReqMatch": { "params.name": "^search$" },
+            "ttl": "1h"
+          }
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+### Match Patterns
+
+Match values are **regex patterns**. Use anchors (`^...$`) for exact match:
+
+| Pattern                  | Example Values                    | Meaning               |
+| ------------------------ | --------------------------------- | --------------------- |
+| `"^search$"`             | `"search"`                        | Exact match           |
+| `"^(search\|get_page)$"` | `"search"`, `"get_page"`          | One of several values |
+| `"^create_"`             | `"create_issue"`, `"create_user"` | Prefix match          |
+| `".*"`                   | anything                          | Match all             |
+
+Match entries are AND'd within a constraint. Multiple `rpcReqMatch` keys mean the request must satisfy **all** of them:
+
+```typescript theme={null}
+rpcReqMatch: {
+  'params.name': '^create_issue$',
+  'params.arguments.repo': '^my-org/my-repo$',
+}
+// Only allows tools/call where name is "create_issue" AND repo is "my-org/my-repo"
+```
+
+<Note>
+  Dot-separated paths match into the JSON-RPC request body. For a `tools/call` request like `{"method":"tools/call","params":{"name":"search","arguments":{"query":"test"}}}`, the path `params.name` matches `"search"` and `params.arguments.query` matches `"test"`.
+</Note>
+
+## Constraint Reference
+
+The `policy` array contains **constraints** — each one is a self-contained grant describing what the token can access.
+
+```typescript theme={null}
+interface Constraint {
+  namespaces?: string | string[]
+  resources?: 'connections' | 'servers' | 'namespaces' | 'skills'
+    | ('connections' | 'servers' | 'namespaces' | 'skills')[]
+  operations?: 'read' | 'write' | 'execute'
+    | ('read' | 'write' | 'execute')[]
+  metadata?: Record<string, string>
+    | Record<string, string>[]
+  rpcReqMatch?: Record<string, string>  // experimental — regex patterns for MCP request matching
+  ttl?: string | number  // e.g., "1h", "30m", "20s", 3600
+}
+```
+
+Two rules govern every constraint:
+
+* **Adding a field narrows** (AND). Each field adds a condition. More fields = more restrictive.
+* **Adding to a list widens** (OR). Each list element adds an alternative. More elements = more permissive.
+
+```typescript theme={null}
+// Adding fields narrows the grant
+{ resources: 'connections' }
+// → any operation on connections
+
+{ resources: 'connections', operations: 'read' }
+// → only read connections
+
+{ resources: 'connections', operations: 'read', metadata: { userId: 'user-123' } }
+// → only read user-123's connections
+
+// Adding to a list widens the grant
+{ operations: ['read', 'write'] }
+// → read OR write
+
+{ metadata: [{ userId: 'user-123' }, { workspaceId: 'ws-acme' }] }
+// → userId=user-123 OR workspaceId=ws-acme
+```
+
+When you pass **multiple constraints** in the `policy` array, each is an independent grant. The token can access anything matching **any** constraint.
+
+<Tabs>
+  <Tab title="CLI" icon="terminal">
+    ```bash theme={null}
+    # Two grants: read alice's connections OR read/write servers
+    smithery auth token --policy '[
+      {
+        "resources": "connections",
+        "operations": "read",
+        "metadata": { "owner": "alice" }
+      },
+      {
+        "resources": "servers",
+        "operations": ["read", "write"]
+      }
+    ]'
+    ```
+  </Tab>
+
+  <Tab title="TypeScript" icon="braces">
+    ```typescript theme={null}
+    // Two grants: read alice's connections OR read/write servers
+    const { token } = await smithery.tokens.create({
+      policy: [
+        {
+          resources: 'connections',
+          operations: 'read',
+          metadata: { owner: 'alice' },
+        },
+        {
+          resources: 'servers',
+          operations: ['read', 'write'],
+        },
+      ],
+    })
+    ```
+  </Tab>
+
+  <Tab title="cURL" icon="globe">
+    ```bash theme={null}
+    # Two grants: read alice's connections OR read/write servers
+    curl -X POST https://api.smithery.ai/tokens \
+      -H "Authorization: Bearer $SMITHERY_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "policy": [
+          {
+            "resources": "connections",
+            "operations": "read",
+            "metadata": { "owner": "alice" }
+          },
+          {
+            "resources": "servers",
+            "operations": ["read", "write"]
+          }
+        ]
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Metadata within a single object is AND'd: `{ owner: 'alice', env: 'prod' }` means owner is alice **and** env is prod. Use a list for OR: `[{ owner: 'alice' }, { env: 'prod' }]` means owner is alice **or** env is prod.
+</Note>
+
+## Security Best Practices
+
+* **Always set a TTL.** Tokens expire after the TTL (max 24 hours). Shorter is better — mint fresh tokens per session.
+* **Scope to the minimum needed.** A token for calling tools only needs `connections:execute`, not `connections:write`.
+* **Use metadata for row-level filtering.** Don't rely on connection IDs alone — metadata constraints are enforced server-side.
+* **Narrow before passing to untrusted code.** If you hand a token to a browser, agent, or sandbox, restrict it to the specific user and operations needed.
+* **Tokens cannot mint other tokens from nothing.** Only API keys or existing tokens can create tokens, and child tokens can never exceed their parent's scope.
+
+

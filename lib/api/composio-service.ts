@@ -34,6 +34,10 @@ export interface ComposioToolResponse {
     sessionId?: string;
     toolsUsed?: string[];
     executionTime?: number;
+    mcp?: {
+      url?: string;
+      headers?: Record<string, string>;
+    };
   };
 }
 
@@ -46,6 +50,200 @@ export interface ComposioServiceConfig {
 }
 
 let composioServiceInstance: ComposioService | null = null;
+
+/**
+ * Composio service with session-based workflow
+ */
+class ComposioServiceImpl implements ComposioService {
+  private composio: any = null;
+  private sessions: Map<string, any> = new Map();
+  private config: ComposioServiceConfig;
+
+  constructor(config: ComposioServiceConfig) {
+    this.config = config;
+  }
+
+  /**
+   * Initialize Composio client
+   */
+  private async ensureComposio(): Promise<void> {
+    if (this.composio) return;
+
+    try {
+      const { Composio } = await import('@composio/core');
+      this.composio = new Composio({
+        apiKey: this.config.apiKey,
+      });
+    } catch (error: any) {
+      throw new Error(`Composio SDK not available: ${error.message}`);
+    }
+  }
+
+  /**
+   * Create session for user
+   */
+  async createSession(userId: string): Promise<any> {
+    await this.ensureComposio();
+    
+    const session = await this.composio.create(userId);
+    this.sessions.set(userId, session);
+    return session;
+  }
+
+  /**
+   * Get session for user
+   */
+  async getSession(userId: string): Promise<any> {
+    await this.ensureComposio();
+    return this.sessions.get(userId);
+  }
+
+  /**
+   * Get tools for session
+   */
+  async getTools(userId: string): Promise<any[]> {
+    const session = await this.getSession(userId);
+    if (!session) {
+      throw new Error('Session not created for user. Call createSession first.');
+    }
+    return session.tools();
+  }
+
+  /**
+   * Execute tool with session context
+   */
+  async executeTool(userId: string, toolName: string, params: any): Promise<any> {
+    const session = await this.getSession(userId);
+    if (!session) {
+      throw new Error('Session not created for user');
+    }
+    return session.execute(toolName, params);
+  }
+
+  /**
+   * Get MCP config for session
+   */
+  async getMCPConfig(userId: string): Promise<{
+    url: string;
+    headers: Record<string, string>;
+  }> {
+    const session = await this.getSession(userId);
+    if (!session) {
+      throw new Error('Session not created for user');
+    }
+    return {
+      url: session.mcp.url,
+      headers: session.mcp.headers,
+    };
+  }
+
+  async healthCheck(): Promise<boolean> {
+    try {
+      await this.ensureComposio();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async processToolRequest(request: ComposioToolRequest): Promise<ComposioToolResponse> {
+    try {
+      // Create or get session
+      let session = await this.getSession(request.userId);
+      if (!session) {
+        session = await this.createSession(request.userId);
+      }
+
+      // Get tools
+      const tools = await this.getTools(request.userId);
+
+      // Execute request
+      const result = await session.execute(request.toolkits?.[0] || 'default', {
+        messages: request.messages,
+        stream: request.stream,
+      });
+
+      return {
+        content: JSON.stringify(result),
+        metadata: getSessionMetadata(session),
+      };
+    } catch (error: any) {
+      return {
+        content: `Error: ${error.message}`,
+        metadata: {
+          sessionId: request.userId,
+          executionTime: 0,
+        },
+      };
+    }
+  }
+
+  async getAvailableToolkits(): Promise<any[]> {
+    await this.ensureComposio();
+    // Return available toolkits from Composio
+    return [];
+  }
+
+  async getConnectedAccounts(userId: string): Promise<any[]> {
+    const session = await this.getSession(userId);
+    if (!session) {
+      return [];
+    }
+    return session.connectedAccounts || [];
+  }
+
+  async getAuthUrl(toolkit: string, userId: string): Promise<string> {
+    const session = await this.getSession(userId);
+    if (!session) {
+      return buildFallbackAuthUrl(toolkit);
+    }
+    return session.getAuthUrl(toolkit);
+  }
+}
+
+function getSessionMetadata(session: any) {
+  const mcpUrl = session?.mcp?.url;
+  const mcpHeaders = session?.mcp?.headers;
+  return {
+    sessionId: session?.id || session?.sessionId,
+    ...(mcpUrl || mcpHeaders
+      ? {
+          mcp: {
+            ...(mcpUrl ? { url: mcpUrl } : {}),
+            ...(mcpHeaders ? { headers: mcpHeaders } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function buildFallbackAuthUrl(toolkit?: string): string {
+  const appBase = process.env.NEXT_PUBLIC_APP_URL || '';
+  const provider = inferProviderFromToolkit(toolkit);
+  const arcadeProviders = ['google', 'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive', 'googlemaps', 'exa', 'twilio', 'spotify', 'vercel', 'railway'];
+  const nangoProviders = ['github', 'slack', 'discord', 'twitter', 'reddit'];
+  
+  if (arcadeProviders.includes(provider)) {
+    return `${appBase}/api/auth/arcade/authorize?provider=${encodeURIComponent(provider)}&redirect=1`;
+  }
+  if (nangoProviders.includes(provider)) {
+    return `${appBase}/api/auth/nango/authorize?provider=${encodeURIComponent(provider)}&redirect=1`;
+  }
+  return `${appBase}/api/auth/oauth/initiate?provider=${encodeURIComponent(provider)}`;
+}
+
+function inferProviderFromToolkit(toolkit?: string): string {
+  const value = String(toolkit || '').toLowerCase();
+  if (!value) return 'google';
+  if (value.includes('gmail') || value.includes('google')) return 'google';
+  if (value.includes('github')) return 'github';
+  if (value.includes('slack')) return 'slack';
+  if (value.includes('notion')) return 'notion';
+  if (value.includes('discord')) return 'discord';
+  if (value.includes('twitter') || value === 'x') return 'twitter';
+  if (value.includes('spotify')) return 'spotify';
+  return value;
+}
 
 /**
  * Initialize Composio service
@@ -90,6 +288,22 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
 
   const selectedModel = llmModel || defaultModels[llmProvider] || defaultModels.openrouter;
   const appBase = process.env.NEXT_PUBLIC_APP_URL || '';
+
+  const getSessionMetadata = (session: any) => {
+    const mcpUrl = session?.mcp?.url;
+    const mcpHeaders = session?.mcp?.headers;
+    return {
+      sessionId: session?.id || session?.sessionId,
+      ...(mcpUrl || mcpHeaders
+        ? {
+            mcp: {
+              ...(mcpUrl ? { url: mcpUrl } : {}),
+              ...(mcpHeaders ? { headers: mcpHeaders } : {}),
+            },
+          }
+        : {}),
+    };
+  };
 
   const inferProviderFromToolkit = (toolkit?: string): string => {
     const value = String(toolkit || '').toLowerCase();
@@ -317,7 +531,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         if (!lastMessage) {
           return {
             content: 'No user message found to process',
-            metadata: { sessionId: session?.id, executionTime: Date.now() - startTime },
+            metadata: { ...getSessionMetadata(session), executionTime: Date.now() - startTime },
           };
         }
 
@@ -379,14 +593,14 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                 try {
                   result = await composio.tools.execute(toolSlug, {
                     userId: request.userId,
-                    toolParams: toolArgs,
+                    arguments: toolArgs,
                     dangerouslySkipVersionCheck: true,
                   });
                 } catch {
                   // Backward-compatible payload shape fallback
                   result = await composio.tools.execute(toolSlug, {
                     connectedAccountId: request.userId,
-                    toolParams: toolArgs,
+                    arguments: toolArgs,
                   });
                 }
 
@@ -399,7 +613,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                     requiresAuth: true,
                     authUrl,
                     authToolkit: kitName,
-                    metadata: { sessionId: session?.id, toolsUsed: toolCalls.map((t: any) => t.function?.name) },
+                    metadata: { ...getSessionMetadata(session), toolsUsed: toolCalls.map((t: any) => t.function?.name) },
                   };
                 }
 
@@ -432,7 +646,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                     requiresAuth: true,
                     authUrl,
                     authToolkit: kitName,
-                    metadata: { sessionId: session?.id, toolsUsed: toolCalls.map((t: any) => t.function?.name) },
+                    metadata: { ...getSessionMetadata(session), toolsUsed: toolCalls.map((t: any) => t.function?.name) },
                   };
                 }
               }
@@ -519,7 +733,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                     requiresAuth: true,
                     authUrl,
                     authToolkit: kitName,
-                    metadata: { sessionId: session?.id, toolsUsed: toolCalls.map((t: any) => t.function?.name) },
+                    metadata: { ...getSessionMetadata(session), toolsUsed: toolCalls.map((t: any) => t.function?.name) },
                   };
                 }
                 functionResponses.push({
@@ -535,7 +749,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                     requiresAuth: true,
                     authUrl,
                     authToolkit: kitName,
-                    metadata: { sessionId: session?.id, toolsUsed: toolCalls.map((t: any) => t.function?.name) },
+                    metadata: { ...getSessionMetadata(session), toolsUsed: toolCalls.map((t: any) => t.function?.name) },
                   };
                 }
                 functionResponses.push({
@@ -576,7 +790,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
               authUrl,
               authToolkit: inferredToolkit,
               metadata: {
-                sessionId: session?.id,
+                ...getSessionMetadata(session),
                 toolsUsed: toolCalls.map((t: any) => t.function?.name),
                 executionTime: Date.now() - startTime,
               },
@@ -593,7 +807,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
           toolCalls,
           connectedAccounts: connectedItems,
           metadata: {
-            sessionId: session?.id,
+            ...getSessionMetadata(session),
             toolsUsed: toolCalls.map((t: any) => t.function?.name),
             executionTime: Date.now() - startTime,
           },
@@ -612,7 +826,7 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
             // Try to extract toolkit name from error message as fallback
             // Filter out error codes like AUTH_REQUIRED to get actual toolkit name
             const toolkitMatches = error.message?.match(/\b[A-Z][A-Z_]+\b/g);
-            const toolkitCandidate = toolkitMatches?.find((match) => 
+            const toolkitCandidate = toolkitMatches?.find((match: string) => 
               match !== 'AUTH_REQUIRED' && match !== 'AUTH_ERROR' && match.length > 2
             );
             if (toolkitCandidate) {
@@ -685,14 +899,26 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         // Prefer direct Composio connection init; skip pre-list query because
         // some SDK versions reject list() with optional fields shaping.
         try {
-          const connectionRequest = await composio.connectedAccounts.initiate({
-            userId: userId,
+          const connectionRequest = await (composio.connectedAccounts as any).initiate({
+            userId,
             integrationSlug: toolkit.toLowerCase(),
           });
-          const directUrl = connectionRequest?.redirectUrl || connectionRequest?.url;
+          const directUrl = (connectionRequest as any)?.redirectUrl || (connectionRequest as any)?.url;
           if (directUrl) return directUrl;
         } catch (initErr: any) {
-          console.warn('[ComposioService] Direct initiate failed, using provider auth fallback:', initErr?.message);
+          try {
+            const connectionRequest = await (composio.connectedAccounts as any).initiate(
+              userId,
+              toolkit.toLowerCase(),
+            );
+            const directUrl = (connectionRequest as any)?.redirectUrl || (connectionRequest as any)?.url;
+            if (directUrl) return directUrl;
+          } catch (secondaryErr: any) {
+            console.warn(
+              '[ComposioService] Direct initiate failed, using provider auth fallback:',
+              secondaryErr?.message || initErr?.message,
+            );
+          }
         }
         return buildFallbackAuthUrl(toolkit);
       } catch (error: any) {

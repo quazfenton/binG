@@ -46,6 +46,18 @@ export class ErrorHandler {
       logLevel: 'error',
       ...config
     };
+    
+    // LOW PRIORITY FIX: Periodic cleanup of error stats to prevent memory leak
+    // Cleanup old stats every hour
+    setInterval(() => {
+      const oneHourAgo = Date.now() - 3600000;
+      for (const [code, timestamp] of this.lastErrors.entries()) {
+        if (timestamp < oneHourAgo) {
+          this.errorCounts.delete(code);
+          this.lastErrors.delete(code);
+        }
+      }
+    }, 3600000);
   }
 
   processError(error: Error, context?: ErrorContext): ProcessedError {

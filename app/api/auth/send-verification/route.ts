@@ -68,6 +68,16 @@ export async function POST(request: NextRequest) {
 
     await emailService.sendVerificationEmail(email, { token, expiresAt, verificationUrl });
 
+    // DEV LOGGING: Log verification link in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log('\n🔐 VERIFICATION EMAIL SENT (Development):');
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log(`📧 To: ${email}`);
+      console.log(`🔗 Click to verify: ${verificationUrl}`);
+      console.log(`⏰ Token expires: ${expiresAt.toLocaleString()}`);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    }
+
     const response = NextResponse.json({
       success: true,
       message: 'If the email exists, a verification link has been sent',

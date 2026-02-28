@@ -1,0 +1,452 @@
+/**
+ * Virtual Filesystem Batch Operations
+ * 
+ * Provides efficient batch file operations for the virtual filesystem.
+ * Reduces overhead by batching multiple operations into single transactions.
+ * 
+ * @see {@link ../virtual-filesystem-service} Base VFS service
+ */
+
+import type { VirtualFile } from './filesystem-types';
+import { virtualFilesystem } from './virtual-filesystem-service';
+
+/**
+ * Batch file operation
+ */
+export interface BatchFileOperation {
+  /**
+   * File path
+   */
+  path: string;
+  
+  /**
+   * File content
+   */
+  content: string;
+  
+  /**
+   * Operation type
+   * @default 'write'
+   */
+  type?: 'write' | 'delete';
+}
+
+/**
+ * Batch operation result
+ */
+export interface BatchOperationResult {
+  /**
+   * Whether batch succeeded
+   */
+  success: boolean;
+  
+  /**
+   * Files processed
+   */
+  processed: Array<{
+    path: string;
+    success: boolean;
+    error?: string;
+  }>;
+  
+  /**
+   * Total files in batch
+   */
+  totalFiles: number;
+  
+  /**
+   * Successful operations
+   */
+  successful: number;
+  
+  /**
+   * Failed operations
+   */
+  failed: number;
+  
+  /**
+   * Execution duration
+   */
+  duration: number;
+  
+  /**
+   * Error message if batch failed
+   */
+  error?: string;
+}
+
+/**
+ * Search and replace configuration
+ */
+export interface SearchReplaceConfig {
+  /**
+   * Pattern to search for
+   */
+  pattern: string;
+  
+  /**
+   * Replacement string
+   */
+  replacement: string;
+  
+  /**
+   * File patterns to include
+   */
+  include?: string[];
+  
+  /**
+   * File patterns to exclude
+   */
+  exclude?: string[];
+  
+  /**
+   * Whether to use regex
+   * @default false
+   */
+  useRegex?: boolean;
+  
+  /**
+   * Whether to replace all occurrences
+   * @default false
+   */
+  replaceAll?: boolean;
+}
+
+/**
+ * Search and replace result
+ */
+export interface SearchReplaceResult {
+  /**
+   * Files modified
+   */
+  modified: Array<{
+    path: string;
+    replacements: number;
+  }>;
+  
+  /**
+   * Total replacements made
+   */
+  totalReplacements: number;
+  
+  /**
+   * Files scanned
+   */
+  filesScanned: number;
+}
+
+/**
+ * VFS Batch Operations Manager
+ * 
+ * Provides efficient batch file operations.
+ */
+export class VFSBatchOperations {
+  private ownerId: string;
+
+  constructor(ownerId: string) {
+    this.ownerId = ownerId;
+  }
+
+  /**
+   * Execute batch file write operations
+   * 
+   * @param operations - Array of file operations
+   * @returns Batch operation result
+   * 
+   * @example
+   * ```typescript
+   * const batch = new VFSBatchOperations('user-123');
+   * 
+   * const result = await batch.batchWrite([
+   *   { path: 'src/index.ts', content: '...' },
+   *   { path: 'src/utils.ts', content: '...' },
+   *   { path: 'src/types.ts', content: '...' },
+   * ]);
+   * 
+   * console.log(`Processed ${result.successful}/${result.totalFiles} files`);
+   * ```
+   */
+  async batchWrite(operations: BatchFileOperation[]): Promise<BatchOperationResult> {
+    const startTime = Date.now();
+    const processed: BatchOperationResult['processed'] = [];
+    let successful = 0;
+    let failed = 0;
+
+    try {
+      for (const op of operations) {
+        try {
+          if (op.type === 'delete') {
+            await virtualFilesystem.deletePath(this.ownerId, op.path);
+          } else {
+            await virtualFilesystem.writeFile(this.ownerId, op.path, op.content);
+          }
+          
+          processed.push({
+            path: op.path,
+            success: true,
+          });
+          successful++;
+        } catch (error: any) {
+          processed.push({
+            path: op.path,
+            success: false,
+            error: error.message,
+          });
+          failed++;
+        }
+      }
+
+      return {
+        success: failed === 0,
+        processed,
+        totalFiles: operations.length,
+        successful,
+        failed,
+        duration: Date.now() - startTime,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        processed,
+        totalFiles: operations.length,
+        successful,
+        failed,
+        duration: Date.now() - startTime,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Execute batch file delete operations
+   * 
+   * @param paths - Array of file paths to delete
+   * @returns Batch operation result
+   */
+  async batchDelete(paths: string[]): Promise<BatchOperationResult> {
+    const operations: BatchFileOperation[] = paths.map(path => ({
+      path,
+      content: '',
+      type: 'delete',
+    }));
+
+    return this.batchWrite(operations);
+  }
+
+  /**
+   * Search and replace across multiple files
+   * 
+   * @param config - Search and replace configuration
+   * @returns Search and replace result
+   * 
+   * @example
+   * ```typescript
+   * const batch = new VFSBatchOperations('user-123');
+   * 
+   * const result = await batch.searchAndReplace({
+   *   pattern: 'oldFunction',
+   *   replacement: 'newFunction',
+   *   include: ['*.ts', '*.tsx'],
+   *   exclude: ['node_modules/**'],
+   *   replaceAll: true,
+   * });
+   * 
+   * console.log(`Modified ${result.modified.length} files`);
+   * ```
+   */
+  async searchAndReplace(config: SearchReplaceConfig): Promise<SearchReplaceResult> {
+    const modified: SearchReplaceResult['modified'] = [];
+    let totalReplacements = 0;
+    let filesScanned = 0;
+
+    try {
+      // Get all files
+      const listing = await virtualFilesystem.listDirectory(this.ownerId);
+      const files = listing.nodes.filter(node => node.type === 'file');
+
+      for (const file of files) {
+        // Check include/exclude patterns
+        if (config.include && !this.matchesPatterns(file.path, config.include)) {
+          continue;
+        }
+        if (config.exclude && this.matchesPatterns(file.path, config.exclude)) {
+          continue;
+        }
+
+        filesScanned++;
+
+        try {
+          // Read file
+          const fileData = await virtualFilesystem.readFile(this.ownerId, file.path);
+          let content = fileData.content;
+          let replacements = 0;
+
+          // Perform replacement
+          if (config.useRegex) {
+            const regex = new RegExp(
+              config.pattern,
+              config.replaceAll ? 'g' : ''
+            );
+            const matches = content.match(regex);
+            replacements = matches ? matches.length : 0;
+            content = content.replace(regex, config.replacement);
+          } else {
+            const index = content.indexOf(config.pattern);
+            if (index !== -1) {
+              replacements = 1;
+              content = content.replace(config.pattern, config.replacement);
+              
+              if (config.replaceAll) {
+                while (content.includes(config.pattern)) {
+                  content = content.replace(config.pattern, config.replacement);
+                  replacements++;
+                }
+              }
+            }
+          }
+
+          // Write back if modified
+          if (replacements > 0) {
+            await virtualFilesystem.writeFile(this.ownerId, file.path, content);
+            
+            modified.push({
+              path: file.path,
+              replacements,
+            });
+            
+            totalReplacements += replacements;
+          }
+        } catch (error: any) {
+          // Skip files that can't be processed
+          console.warn(`[VFSBatchOperations] Failed to process ${file.path}:`, error.message);
+        }
+      }
+
+      return {
+        modified,
+        totalReplacements,
+        filesScanned,
+      };
+    } catch (error: any) {
+      throw new Error(`Search and replace failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Copy multiple files
+   * 
+   * @param files - Array of source/destination pairs
+   * @returns Batch operation result
+   */
+  async batchCopy(files: Array<{ source: string; destination: string }>): Promise<BatchOperationResult> {
+    const startTime = Date.now();
+    const processed: BatchOperationResult['processed'] = [];
+    let successful = 0;
+    let failed = 0;
+
+    try {
+      for (const file of files) {
+        try {
+          const content = await virtualFilesystem.readFile(this.ownerId, file.source);
+          await virtualFilesystem.writeFile(this.ownerId, file.destination, content.content);
+          
+          processed.push({
+            path: `${file.source} -> ${file.destination}`,
+            success: true,
+          });
+          successful++;
+        } catch (error: any) {
+          processed.push({
+            path: `${file.source} -> ${file.destination}`,
+            success: false,
+            error: error.message,
+          });
+          failed++;
+        }
+      }
+
+      return {
+        success: failed === 0,
+        processed,
+        totalFiles: files.length,
+        successful,
+        failed,
+        duration: Date.now() - startTime,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        processed,
+        totalFiles: files.length,
+        successful,
+        failed,
+        duration: Date.now() - startTime,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Move multiple files
+   * 
+   * @param files - Array of source/destination pairs
+   * @returns Batch operation result
+   */
+  async batchMove(files: Array<{ source: string; destination: string }>): Promise<BatchOperationResult> {
+    const copyResult = await this.batchCopy(files);
+    
+    if (copyResult.success) {
+      const deleteResult = await this.batchDelete(files.map(f => f.source));
+      
+      return {
+        ...copyResult,
+        success: deleteResult.success,
+        failed: copyResult.failed + deleteResult.failed,
+        processed: [...copyResult.processed, ...deleteResult.processed],
+      };
+    }
+    
+    return copyResult;
+  }
+
+  /**
+   * Check if path matches any pattern
+   */
+  private matchesPatterns(path: string, patterns: string[]): boolean {
+    return patterns.some(pattern => {
+      // Convert glob pattern to regex
+      const regexPattern = pattern
+        .replace(/\./g, '\\.')
+        .replace(/\*/g, '.*')
+        .replace(/\?/g, '.');
+      
+      const regex = new RegExp(`^${regexPattern}$`);
+      return regex.test(path);
+    });
+  }
+}
+
+/**
+ * Create batch operations manager for owner
+ * 
+ * @param ownerId - Owner ID
+ * @returns Batch operations manager
+ */
+export function createVFSBatchOperations(ownerId: string): VFSBatchOperations {
+  return new VFSBatchOperations(ownerId);
+}
+
+/**
+ * Quick batch write helper
+ * 
+ * @param ownerId - Owner ID
+ * @param files - Array of file operations
+ * @returns Batch operation result
+ */
+export async function quickBatchWrite(
+  ownerId: string,
+  files: BatchFileOperation[]
+): Promise<BatchOperationResult> {
+  const batch = createVFSBatchOperations(ownerId);
+  return await batch.batchWrite(files);
+}

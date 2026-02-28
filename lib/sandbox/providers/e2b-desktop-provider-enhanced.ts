@@ -1,0 +1,635 @@
+/**
+ * E2B Desktop Provider - Enhanced with Session Management, MCP, and Structured Output
+ * 
+ * Provides desktop sandbox environments with VNC streaming and computer use capabilities
+ * for AI agents that need to interact with graphical user interfaces.
+ * 
+ * Enhanced Features (per Deep Codebase Audit):
+ * - Session ID support for conversation persistence
+ * - MCP integration for 200+ Docker MCP tools
+ * - Schema-validated output for reliable pipelines
+ * - Custom system prompts (CLAUDE.md support)
+ * 
+ * Features:
+ * - Ubuntu 22.04 desktop with XFCE environment
+ * - VNC streaming via noVNC (port 6080)
+ * - Mouse control (click, move, drag, scroll)
+ * - Keyboard control (type, press keys)
+ * - Screenshot capture for vision-based agents
+ * - Pre-installed applications (LibreOffice, Firefox, terminal, etc.)
+ * - Automation tools (xdotool, scrot, ffmpeg)
+ *
+ * @see https://e2b.dev/docs/template/examples/desktop
+ * @see https://e2b.dev/docs/computer-use
+ * @see https://github.com/e2b-dev/surf (reference implementation)
+ */
+
+import { quotaManager } from '../../services/quota-manager'
+import type { ToolResult } from '../types'
+
+// Dynamic import type for E2B Desktop SDK
+type DesktopSandbox = any
+
+// Desktop-specific configuration
+const DESKTOP_DEFAULT_RESOLUTION = [1920, 1080] as [number, number]
+const DESKTOP_DEFAULT_TIMEOUT = 300000 // 5 minutes
+
+/**
+ * AMP Session for conversation persistence
+ */
+export interface AmpSession {
+  sessionId: string
+  createdAt: number
+  lastUsed: number
+  task?: string
+}
+
+/**
+ * MCP Configuration for tool integration
+ */
+export interface MCPConfig {
+  [toolName: string]: {
+    apiKey?: string
+    projectId?: string
+    [key: string]: any
+  }
+}
+
+/**
+ * Desktop sandbox handle with enhanced computer use capabilities
+ */
+export class DesktopSandboxHandle {
+  readonly id: string
+  readonly streamUrl?: string
+  private sandbox: DesktopSandbox
+  private ampSessions = new Map<string, AmpSession>()
+  private mcpConfigured = false
+  private mcpUrl?: string
+  private mcpToken?: string
+
+  constructor(sandbox: DesktopSandbox, streamUrl?: string) {
+    this.sandbox = sandbox
+    this.id = sandbox.id || `desktop-${Date.now()}`
+    this.streamUrl = streamUrl
+  }
+
+  /**
+   * Get VNC stream URL for browser-based desktop viewing
+   */
+  getStreamUrl(): string | undefined {
+    return this.streamUrl
+  }
+
+  /**
+   * Take a screenshot of the current desktop state
+   * Returns Buffer containing PNG image data
+   */
+  async screenshot(): Promise<Buffer> {
+    try {
+      const img = await this.sandbox.screen.capture()
+      return img.toBuffer()
+    } catch (error: any) {
+      console.error('[E2B Desktop] Screenshot error:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Take a screenshot and return as base64 (useful for LLM APIs)
+   */
+  async screenshotBase64(): Promise<string> {
+    const buffer = await this.screenshot()
+    return buffer.toString('base64')
+  }
+
+  // ==================== Mouse Actions ====================
+
+  /**
+   * Move mouse to specified coordinates
+   */
+  async moveMouse(x: number, y: number): Promise<ToolResult> {
+    try {
+      await this.sandbox.mouse.move({ x, y })
+      return { success: true, output: `Mouse moved to (${x}, ${y})` }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
+
+  /**
+   * Left click at specified coordinates (or current position)
+   */
+  async leftClick(x?: number, y?: number, button: 'left' | 'right' | 'middle' = 'left'): Promise<ToolResult> {
+    try {
+      if (x !== undefined && y !== undefined) {
+        await this.sandbox.mouse.move({ x, y })
+      }
+      await this.sandbox.mouse.click({ x, y, button })
+      return { success: true, output: `${button} click at (${x ?? 'current'}, ${y ?? 'current'})` }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
+
+  /**
+   * Right click at specified coordinates (or current position)
+   */
+  async rightClick(x?: number, y?: number): Promise<ToolResult> {
+    return this.leftClick(x, y, 'right')
+  }
+
+  /**
+   * Double click at specified coordinates (or current position)
+   */
+  async doubleClick(x?: number, y?: number): Promise<ToolResult> {
+    try {
+      if (x !== undefined && y !== undefined) {
+        await this.sandbox.mouse.move({ x, y })
+      }
+      await this.sandbox.mouse.click({ x, y, button: 'left', count: 2 })
+      return { success: true, output: `Double click at (${x ?? 'current'}, ${y ?? 'current'})` }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
+
+  /**
+   * Drag mouse from start to end coordinates
+   */
+  async drag(startX: number, startY: number, endX: number, endY: number): Promise<ToolResult> {
+    try {
+      await this.sandbox.mouse.drag({
+        from: { x: startX, y: startY },
+        to: { x: endX, y: endY },
+      })
+      return { success: true, output: `Dragged from (${startX}, ${startY}) to (${endX}, ${endY})` }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
+
+  /**
+   * Scroll up or down
+   */
+  async scroll(direction: 'up' | 'down' | 'left' | 'right', ticks: number = 1): Promise<ToolResult> {
+    try {
+      await this.sandbox.mouse.scroll({ direction, ticks })
+      return { success: true, output: `Scrolled ${direction} ${ticks} tick(s)` }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
+
+  // ==================== Keyboard Actions ====================
+
+  /**
+   * Type text (simulates keyboard input)
+   */
+  async type(text: string): Promise<ToolResult> {
+    try {
+      await this.sandbox.keyboard.type(text)
+      return { success: true, output: `Typed: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}` }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
+
+  /**
+   * Press a key or key combination
+   */
+  async press(key: string | string[]): Promise<ToolResult> {
+    try {
+      const keys = Array.isArray(key) ? key : [key]
+      for (const k of keys) {
+        await this.sandbox.keyboard.press(k)
+      }
+      return { success: true, output: `Pressed: ${keys.join(' + ')}` }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
+
+  /**
+   * Press key combination (e.g., Ctrl+C, Alt+Tab)
+   */
+  async hotkey(...keys: string[]): Promise<ToolResult> {
+    try {
+      await this.sandbox.keyboard.hotkey(keys)
+      return { success: true, output: `Hotkey: ${keys.join(' + ')}` }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
+
+  // ==================== Clipboard Actions ====================
+
+  /**
+   * Read clipboard content
+   */
+  async clipboardRead(): Promise<ToolResult> {
+    try {
+      const text = await this.sandbox.clipboard.read()
+      return { success: true, output: text }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
+
+  /**
+   * Write to clipboard
+   */
+  async clipboardWrite(text: string): Promise<ToolResult> {
+    try {
+      await this.sandbox.clipboard.write(text)
+      return { success: true, output: `Clipboard updated (${text.length} chars)` }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
+
+  // ==================== AMP Integration with Sessions ====================
+
+  /**
+   * Run AMP (Amp Code) agent in the desktop sandbox
+   * 
+   * Enhanced features:
+   * - Session persistence for follow-up tasks
+   * - Schema-validated output for reliable pipelines
+   * - Custom system prompts via CLAUDE.md
+   * - Streaming JSON output for real-time monitoring
+   * 
+   * @see https://e2b.dev/docs/agents/amp
+   */
+  async runAmpAgent(
+    task: string,
+    options: {
+      streamJson?: boolean
+      sessionId?: string
+      outputSchema?: any
+      outputSchemaPath?: string
+      systemPrompt?: string
+      onEvent?: (event: any) => void
+      timeout?: number
+    } = {}
+  ): Promise<{
+    success: boolean
+    output: string
+    sessionId?: string
+    events?: any[]
+  }> {
+    const events: any[] = []
+    let sessionId = options.sessionId
+
+    try {
+      // Build AMP command with all options
+      const ampCommandParts = [
+        'amp',
+        '--dangerously-skip-permissions',
+      ]
+
+      // Add session ID for conversation persistence
+      if (options.sessionId) {
+        ampCommandParts.push(`--session-id ${options.sessionId}`)
+      }
+
+      // Add output format
+      ampCommandParts.push(options.streamJson ? '--output-format stream-json' : '--output-format json')
+
+      // Add schema validation for reliable pipelines
+      if (options.outputSchema || options.outputSchemaPath) {
+        const schemaPath = options.outputSchemaPath || '/tmp/output-schema.json'
+        ampCommandParts.push(`--output-schema ${schemaPath}`)
+        
+        // Write schema if provided inline
+        if (options.outputSchema && !options.outputSchemaPath) {
+          await this.sandbox.files.write(schemaPath, JSON.stringify(options.outputSchema))
+        }
+      }
+
+      // Add custom system prompt via CLAUDE.md
+      if (options.systemPrompt) {
+        await this.sandbox.files.write('/home/user/CLAUDE.md', options.systemPrompt)
+        ampCommandParts.push(`--system-prompt "${options.systemPrompt}"`)
+      }
+
+      // Add task
+      ampCommandParts.push('-x', `"${task}"`)
+
+      const ampCommand = ampCommandParts.filter(Boolean).join(' ')
+
+      const result = await this.sandbox.commands.run(ampCommand, {
+        timeout: options.timeout || 300000,
+        onStdout: options.streamJson ? (data: string) => {
+          // Parse streaming JSON events
+          for (const line of data.split('\n').filter(Boolean)) {
+            try {
+              const event = JSON.parse(line)
+              events.push(event)
+              options.onEvent?.(event)
+
+              // Track session ID from result events for continuation
+              if (event.type === 'result' && event.session_id) {
+                sessionId = event.session_id
+                this.ampSessions.set(sessionId, {
+                  sessionId,
+                  createdAt: Date.now(),
+                  lastUsed: Date.now(),
+                  task,
+                })
+              }
+            } catch {
+              // Not JSON, ignore
+            }
+          }
+        } : undefined,
+      })
+
+      return {
+        success: result.exitCode === 0,
+        output: result.stdout || result.stderr || '',
+        sessionId,
+        events: options.streamJson ? events : undefined,
+      }
+    } catch (error: any) {
+      return {
+        success: false,
+        output: error.message,
+        sessionId,
+        events: events.length > 0 ? events : undefined,
+      }
+    }
+  }
+
+  /**
+   * List AMP sessions for conversation persistence
+   */
+  listAmpSessions(): AmpSession[] {
+    return Array.from(this.ampSessions.values())
+  }
+
+  /**
+   * Get MCP gateway URL
+   * 
+   * @see https://e2b.dev/docs/mcp
+   */
+  async getMcpUrl(): Promise<string> {
+    if (this.mcpUrl) {
+      return this.mcpUrl
+    }
+    
+    // Get MCP gateway URL from sandbox
+    this.mcpUrl = `https://mcp.${this.id}.e2b.dev`
+    return this.mcpUrl
+  }
+
+  /**
+   * Get MCP auth token
+   */
+  async getMcpToken(): Promise<string> {
+    if (this.mcpToken) {
+      return this.mcpToken
+    }
+    
+    // Get MCP auth token
+    const result = await this.sandbox.commands.run('e2b mcp token')
+    this.mcpToken = result.stdout.trim()
+    return this.mcpToken
+  }
+
+  /**
+   * Setup MCP tools from Docker MCP Catalog
+   * 
+   * Provides access to 200+ tools from the Docker MCP Catalog
+   * 
+   * @see https://hub.docker.com/mcp
+   */
+  async setupMCP(config: MCPConfig): Promise<{ success: boolean; error?: string }> {
+    try {
+      const mcpUrl = await this.getMcpUrl()
+      const mcpToken = await this.getMcpToken()
+
+      // Add each MCP tool
+      for (const [toolName, toolConfig] of Object.entries(config)) {
+        const envVars = Object.entries(toolConfig)
+          .map(([k, v]) => `${k.toUpperCase()}=${v}`)
+          .join(' ')
+
+        await this.sandbox.commands.run(
+          `claude mcp add --transport http ${toolName} ${mcpUrl} ` +
+          `--header "Authorization: Bearer ${mcpToken}" ` +
+          `--env "${envVars}"`
+        )
+      }
+
+      this.mcpConfigured = true
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  }
+
+  /**
+   * Check if MCP is configured
+   */
+  isMCPConfigured(): boolean {
+    return this.mcpConfigured
+  }
+
+  // ==================== Lifecycle ====================
+
+  /**
+   * Kill the desktop sandbox
+   */
+  async kill(): Promise<void> {
+    try {
+      await this.sandbox.kill()
+      console.log('[E2B Desktop] Sandbox killed')
+    } catch (error: any) {
+      console.error('[E2B Desktop] Kill error:', error)
+    }
+  }
+
+  /**
+   * Get sandbox info
+   */
+  async getInfo(): Promise<{
+    id: string
+    template: string
+    resolution: [number, number]
+    timeout: number
+    streamUrl?: string
+    mcpConfigured: boolean
+    activeSessions: number
+  }> {
+    return {
+      id: this.id,
+      template: 'desktop',
+      resolution: DESKTOP_DEFAULT_RESOLUTION,
+      timeout: DESKTOP_DEFAULT_TIMEOUT,
+      streamUrl: this.streamUrl,
+      mcpConfigured: this.mcpConfigured,
+      activeSessions: this.ampSessions.size,
+    }
+  }
+}
+
+/**
+ * E2B Desktop Provider
+ * Creates and manages desktop sandbox environments
+ */
+export class E2BDesktopProvider {
+  readonly name = 'e2b-desktop'
+  private apiKey?: string
+
+  constructor(apiKey?: string) {
+    this.apiKey = apiKey || process.env.E2B_API_KEY
+
+    if (!this.apiKey) {
+      console.warn('[E2BDesktopProvider] E2B_API_KEY not set')
+    }
+  }
+
+  /**
+   * Create a new desktop sandbox with VNC streaming
+   */
+  async createDesktop(config: {
+    template?: string
+    timeoutMs?: number
+    startStreaming?: boolean
+  } = {}): Promise<DesktopSandboxHandle> {
+    if (!this.apiKey) {
+      throw new Error('E2B_API_KEY is not configured')
+    }
+
+    try {
+      // Dynamic import to avoid requiring @e2b/desktop when not used
+      const { Desktop } = await import('@e2b/desktop')
+
+      const sandbox = await Desktop.create({
+        template: config.template || 'desktop',
+        timeoutMs: config.timeoutMs || DESKTOP_DEFAULT_TIMEOUT,
+      })
+
+      let streamUrl: string | undefined
+
+      // Start VNC streaming if requested
+      if (config.startStreaming !== false) {
+        streamUrl = await sandbox.screen.getStreamUrl()
+        console.log(`[E2BDesktopProvider] VNC stream available at: ${streamUrl}`)
+      }
+
+      // Record usage
+      quotaManager.recordUsage('e2b', 1)
+
+      console.log(`[E2BDesktopProvider] Created desktop sandbox ${sandbox.id}`)
+
+      return new DesktopSandboxHandle(sandbox, streamUrl)
+    } catch (error: any) {
+      console.error('[E2BDesktopProvider] Failed to create desktop:', error)
+      throw new Error(`Failed to create E2B Desktop: ${error.message}`)
+    }
+  }
+}
+
+// Export singleton instance
+export const e2bDesktopProvider = new E2BDesktopProvider()
+
+/**
+ * Desktop session manager for tracking active desktops
+ */
+export const desktopSessionManager = {
+  sessions: new Map<string, DesktopSandboxHandle>(),
+
+  async createSession(sessionId: string, config?: { template?: string }): Promise<DesktopSandboxHandle> {
+    const desktop = await e2bDesktopProvider.createDesktop(config)
+    this.sessions.set(sessionId, desktop)
+    return desktop
+  },
+
+  getSession(sessionId: string): DesktopSandboxHandle | undefined {
+    return this.sessions.get(sessionId)
+  },
+
+  async destroySession(sessionId: string): Promise<void> {
+    const desktop = this.sessions.get(sessionId)
+    if (desktop) {
+      await desktop.kill()
+      this.sessions.delete(sessionId)
+    }
+  },
+
+  getActiveSessions(): string[] {
+    return Array.from(this.sessions.keys())
+  },
+}
+
+/**
+ * Execute desktop command via API route helper
+ */
+export async function executeDesktopCommand(
+  sessionId: string,
+  action: 'screenshot' | 'click' | 'type' | 'keypress' | 'move' | 'drag' | 'clipboard_read' | 'clipboard_write',
+  params: Record<string, any>
+): Promise<ToolResult> {
+  const desktop = desktopSessionManager.getSession(sessionId)
+
+  if (!desktop) {
+    return {
+      success: false,
+      output: `Desktop session not found: ${sessionId}`,
+    }
+  }
+
+  try {
+    switch (action) {
+      case 'screenshot': {
+        const screenshot = await desktop.screenshot()
+        return {
+          success: true,
+          output: `Screenshot captured (${screenshot.length} bytes)`,
+          binary: screenshot,
+        }
+      }
+
+      case 'click': {
+        const { x, y, button = 'left' } = params
+        return await desktop.leftClick(x, y, button)
+      }
+
+      case 'type': {
+        return await desktop.type(params.text || '')
+      }
+
+      case 'keypress': {
+        return await desktop.press(params.key || params.keys || [])
+      }
+
+      case 'move': {
+        return await desktop.moveMouse(params.x || 0, params.y || 0)
+      }
+
+      case 'drag': {
+        return await desktop.drag(params.startX || 0, params.startY || 0, params.endX || 0, params.endY || 0)
+      }
+
+      case 'clipboard_read': {
+        return await desktop.clipboardRead()
+      }
+
+      case 'clipboard_write': {
+        return await desktop.clipboardWrite(params.text || '')
+      }
+
+      default:
+        return {
+          success: false,
+          output: `Unknown desktop action: ${action}`,
+        }
+    }
+  } catch (error: any) {
+    return {
+      success: false,
+      output: `Desktop action failed: ${error.message}`,
+    }
+  }
+}

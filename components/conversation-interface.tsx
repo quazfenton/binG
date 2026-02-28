@@ -110,8 +110,8 @@ export default function ConversationInterface() {
   );
   const [currentModel, setCurrentModel] = useState<string>(
     typeof window !== 'undefined'
-      ? (localStorage.getItem("chat_model") || "deepseek/deepseek-r1-0528:free")
-      : "deepseek/deepseek-r1-0528:free"
+      ? (localStorage.getItem("chat_model") || "nvidia/nemotron-3-nano-30b-a3b:free")
+      : "nvidia/nemotron-3-nano-30b-a3b:free"
   );
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);

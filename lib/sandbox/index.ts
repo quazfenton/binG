@@ -8,3 +8,33 @@ export type { SandboxEvent, SandboxEventType } from './sandbox-events';
 export { terminalManager, TerminalManager } from './terminal-manager';
 export { provisionBaseImage, warmPool, WarmPool } from './base-image';
 export type { BasePackageSet, ProvisionResult } from './base-image';
+export { sandboxFilesystemSync } from './sandbox-filesystem-sync';
+
+// Resource monitoring
+export {
+  SandboxResourceMonitor,
+  createResourceMonitor,
+  quickMonitor,
+} from './resource-monitor';
+
+export type {
+  ResourceMetrics,
+  ResourceAlert,
+  ScalingRecommendation,
+  MonitoringConfig,
+} from './resource-monitor';
+
+// Auto-scaling
+export {
+  AutoScalingManager,
+  createAutoScalingManager,
+  ScalingPresets,
+} from './auto-scaling';
+
+export type {
+  ScalingPolicy,
+  ScalingDecision,
+  ResourceUsage,
+  ScalingPolicyType,
+  ScalingAction,
+} from './auto-scaling';

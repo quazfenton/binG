@@ -1,0 +1,88 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - button "Open Next.js Dev Tools" [ref=e7] [cursor=pointer]:
+    - generic [ref=e10]:
+      - text: Compiling
+      - generic [ref=e11]:
+        - generic [ref=e12]: .
+        - generic [ref=e13]: .
+        - generic [ref=e14]: .
+  - alert [ref=e15]
+  - generic [ref=e16]:
+    - generic [ref=e26]:
+      - generic [ref=e27]:
+        - generic [ref=e28]:
+          - text: "Provider:openrouter|Model:"
+          - generic [ref=e29]: deepseek/deepseek-r1-0528:free
+        - button "History" [ref=e30] [cursor=pointer]
+      - generic [ref=e32]:
+        - article "User message" [ref=e34]:
+          - paragraph [ref=e36]: Hi
+          - button "Copy message content" [ref=e37] [cursor=pointer]:
+            - img
+        - article "Assistant message" [ref=e39]:
+          - generic [ref=e40]:
+            - img [ref=e41]
+            - generic [ref=e43]: Thinking...
+          - button "Copy message content" [ref=e44] [cursor=pointer]:
+            - img
+    - generic [ref=e48]:
+      - button "Hide panel" [ref=e49] [cursor=pointer]:
+        - img
+      - button "Expand height" [ref=e50] [cursor=pointer]:
+        - img
+      - generic [ref=e51]:
+        - generic [ref=e52]:
+          - img [ref=e54]
+          - generic [ref=e56]: compute
+        - img [ref=e58]
+      - generic [ref=e65]:
+        - generic [ref=e66]:
+          - tablist [ref=e68]:
+            - tab "Chat" [selected] [ref=e69] [cursor=pointer]:
+              - img [ref=e70]
+              - generic [ref=e72]: Chat
+            - tab "Images" [ref=e73] [cursor=pointer]:
+              - img [ref=e74]
+              - generic [ref=e78]: Images
+            - tab "Extra" [ref=e79] [cursor=pointer]:
+              - img [ref=e80]
+              - generic [ref=e84]: Extra
+            - tab "Plugins" [ref=e85] [cursor=pointer]:
+              - img [ref=e86]
+              - generic [ref=e88]: Plugins
+            - tab "Shell" [ref=e89] [cursor=pointer]:
+              - img [ref=e90]
+              - generic [ref=e92]: Shell
+          - generic [ref=e93]:
+            - button "New Chat" [ref=e94] [cursor=pointer]:
+              - img
+            - button "Chat History" [ref=e95] [cursor=pointer]:
+              - img
+            - button "Accessibility Options" [ref=e96] [cursor=pointer]:
+              - img
+            - button "Code Preview" [ref=e97] [cursor=pointer]:
+              - img
+        - combobox [ref=e99] [cursor=pointer]:
+          - generic: deepseek/deepseek-r1-0528:free
+          - img [ref=e100]
+        - tabpanel "Chat" [ref=e102]:
+          - generic [ref=e103]:
+            - button "create a business plan" [disabled]
+            - button "plan a workout routine" [disabled]
+            - button "show me something interesting" [disabled]
+            - button "debug this error" [disabled]
+          - generic [ref=e104]:
+            - generic [ref=e105]:
+              - textbox "Type your message..." [disabled] [ref=e106]
+              - generic [ref=e107]:
+                - button "Attach Files" [disabled] [ref=e108]:
+                  - img [ref=e109]
+                - button "Open Cloud Storage Plugin" [disabled] [ref=e111]:
+                  - img [ref=e112]
+            - button "Stop" [ref=e114] [cursor=pointer]:
+              - img
+              - text: Stop
+```

@@ -1,0 +1,85 @@
+---
+title: Tasks
+description: Learn how the CodeSandbox SDK's tasks work.
+---
+
+import { Callout } from 'nextra-theme-docs'
+
+# Tasks
+
+The Tasks API is available under `sandbox.tasks`. It provides methods for listing, retrieving, and running tasks in your sandbox.
+
+### Listing Tasks
+
+You can get all available tasks in your sandbox:
+
+```ts
+// Get all tasks
+const tasks = client.tasks.getAll();
+
+for (const task of tasks) {
+  console.log(`Task: ${task.name} (${task.command})`);
+}
+```
+
+### Running Tasks
+
+You can run a task using its ID:
+
+```ts
+const task = client.tasks.get("dev");
+
+// Will restart the task if already running
+await task.run()
+await task.restart()
+await task.stop()
+
+
+// You can wait for a port to open on the task
+const port = await task.waitForPort()
+console.log(`Preview available at: ${port.host}`);
+```
+
+### Getting Task Information
+
+You can get information about a specific task:
+
+```ts
+// Get a specific task
+const task = client.tasks.get("build");
+
+if (task) {
+  console.log(`Task: ${task.name}`);
+  console.log(`Command: ${task.command}`);
+  // "RUNNING" | "FINISHED" | "ERROR" | "KILLED" | "RESTARTING" | "IDLE
+  console.log(`Status: ${task.status}`);
+  console.log(`Runs at start: ${task.runAtStart}`);
+}
+```
+
+### Opening a Shell
+
+Tasks are an abstraction over commands. You can open the underlying shell to see its current output and listen to output updates.
+
+```ts
+const task = client.tasks.get('dev')
+
+// Output will not be emitted until you open the task
+task.onOutput((output) => {
+  console.log(output)
+})
+const output = await task.open()
+```
+
+### Listen for Port
+
+If your task opens a port, you can listen for it to open:
+
+```ts
+const port = await task.waitForPort()
+console.log(`Preview available at: ${port.host}`);
+```
+
+<Callout>
+A task can theoretically open multiple ports, but currently only the first port is exposed.
+</Callout>

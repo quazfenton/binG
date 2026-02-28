@@ -313,6 +313,13 @@ export default function MessageBubble({
   }
 
   const { reasoning, mainContent } = parseReasoningContent(getContentToDisplay())
+  const metadataReasoning = typeof (message as any).metadata?.reasoning === 'string'
+    ? (message as any).metadata.reasoning
+    : ''
+  const combinedReasoning = [reasoning, metadataReasoning].filter(Boolean).join('\n\n')
+  const toolInvocations = Array.isArray((message as any).metadata?.toolInvocations)
+    ? (message as any).metadata.toolInvocations
+    : []
 
   const handleAuthDismiss = () => {
     setAuthDismissed(true)
@@ -528,6 +535,42 @@ export default function MessageBubble({
               {isUser ? message.content : mainContent}
         </ReactMarkdown>
 
+        {!isUser && toolInvocations.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {toolInvocations.map((tool: any) => {
+              const state = String(tool.state || 'result')
+              const stateClasses =
+                state === 'partial-call'
+                  ? 'bg-amber-50/20 border-amber-300/30 text-amber-100'
+                  : state === 'call'
+                    ? 'bg-blue-50/20 border-blue-300/30 text-blue-100'
+                    : 'bg-emerald-50/20 border-emerald-300/30 text-emerald-100'
+
+              return (
+                <div
+                  key={`${tool.toolCallId}-${state}`}
+                  className={`rounded-md border p-2 text-xs font-mono ${stateClasses}`}
+                >
+                  <div className="mb-1 flex items-center justify-between">
+                    <span>⚙ {tool.toolName}</span>
+                    <span className="uppercase opacity-80">{state}</span>
+                  </div>
+                  {tool.args && (
+                    <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-2 text-[11px]">
+{JSON.stringify(tool.args, null, 2)}
+                    </pre>
+                  )}
+                  {state === 'result' && tool.result && (
+                    <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-2 text-[11px]">
+{JSON.stringify(tool.result, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
         {!isUser && fileEditInfo && (
           <div className="mt-3 rounded-lg border border-white/15 bg-black/25 p-2 text-xs">
             <div className="flex items-center justify-between gap-2">
@@ -643,7 +686,7 @@ export default function MessageBubble({
               </div>
             )}
 
-            {!isUser && reasoning && (
+            {!isUser && combinedReasoning && (
               <div className={`${useCompactLayout ? 'mt-2' : 'mt-4'} border-t border-white/10 ${useCompactLayout ? 'pt-2' : 'pt-3'}`}>
                 <Button
                   variant="ghost"
@@ -767,7 +810,7 @@ export default function MessageBubble({
                         ),
                       }}
                     >
-                      {reasoning}
+                      {combinedReasoning}
                     </ReactMarkdown>
                   </div>
                 )}

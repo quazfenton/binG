@@ -131,9 +131,9 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'openrouter',
     name: 'OpenRouter',
     models: [
-      'openai/gpt-oss-120b:free',
       'deepseek/deepseek-r1-0528:free',
       'qwen/qwen3-coder:free',
+      'openai/gpt-oss-120b:free',
       'z-ai/glm-4.5-air:free',
       'nvidia/nemotron-3-nano-30b-a3b:free',
       'nvidia/nemotron-nano-12b-v2-vl:free',

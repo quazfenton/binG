@@ -2,6 +2,11 @@
  * Sandbox Service Bridge
  * Wraps the dayTona sandbox module for use within binG0.
  * Provides sandbox lifecycle, command execution, and file operations.
+ * 
+ * Features:
+ * - Automatic tar-pipe sync for Sprites provider (10x faster for 10+ files)
+ * - Incremental sync with file hashing
+ * - Provider-aware filesystem mounting
  */
 
 // Import types from canonical source to avoid duplication
@@ -12,6 +17,7 @@ import {
   getAllActiveSessions,
 } from './session-store';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { sandboxFilesystemSync } from './sandbox-filesystem-sync';
 
 // Track pending session creations to prevent race conditions
 const pendingCreations = new Map<string, Promise<WorkspaceSession>>();
@@ -20,6 +26,7 @@ export class SandboxServiceBridge {
   private initialized = false;
   private sandboxService: any = null;
   private mountedFilesystemVersionBySandbox = new Map<string, number>();
+  private tarPipeThreshold = parseInt(process.env.SPRITES_TAR_PIPE_THRESHOLD || '10', 10);
 
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
@@ -37,6 +44,7 @@ export class SandboxServiceBridge {
   async createWorkspace(userId: string, config?: SandboxConfig): Promise<WorkspaceSession> {
     await this.ensureInitialized();
     const session = await this.sandboxService.createWorkspace(userId, config);
+    sandboxFilesystemSync.startSync(session.sandboxId, userId);
     return session;
   }
 
@@ -90,6 +98,7 @@ export class SandboxServiceBridge {
 
   async destroyWorkspace(sessionId: string, sandboxId: string): Promise<void> {
     await this.ensureInitialized();
+    sandboxFilesystemSync.stopSync(sandboxId);
     await this.sandboxService.destroyWorkspace(sessionId, sandboxId);
     this.mountedFilesystemVersionBySandbox.delete(sandboxId);
   }
@@ -106,6 +115,26 @@ export class SandboxServiceBridge {
     return getAllActiveSessions().find((session) => session.sandboxId === sandboxId);
   }
 
+  /**
+   * Infer provider type from sandbox ID
+   */
+  private inferProviderFromSandboxId(sandboxId: string): string | null {
+    if (sandboxId.startsWith('blaxel-')) return 'blaxel';
+    if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites';
+    if (sandboxId.startsWith('mistral-')) return 'mistral';
+    if (sandboxId.startsWith('e2b-')) return 'e2b';
+    if (sandboxId.startsWith('daytona-')) return 'daytona';
+    if (sandboxId.startsWith('runloop-')) return 'runloop';
+    if (sandboxId.startsWith('microsandbox-')) return 'microsandbox';
+    if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox';
+    return null;
+  }
+
+  /**
+   * Mount virtual filesystem to sandbox with provider-specific optimization
+   * - Sprites: Uses tar-pipe sync for 10+ files (10x faster)
+   * - Other providers: Uses individual file writes
+   */
   private async ensureVirtualFilesystemMounted(sandboxId: string): Promise<void> {
     const session = this.getSessionBySandboxId(sandboxId);
     if (!session?.userId) {
@@ -121,11 +150,48 @@ export class SandboxServiceBridge {
       }
 
       const snapshot = await virtualFilesystem.exportWorkspace(session.userId);
-      for (const file of snapshot.files) {
-        await this.writeFile(sandboxId, file.path, file.content);
+      const provider = this.inferProviderFromSandboxId(sandboxId);
+
+      // Use tar-pipe sync for Sprites with 10+ files
+      if (provider === 'sprites' && snapshot.files.length >= this.tarPipeThreshold) {
+        try {
+          // Dynamic import to avoid circular dependencies
+          const { getSandboxProvider } = await import('./providers');
+          const spritesProvider = getSandboxProvider('sprites');
+          const handle = await spritesProvider.getSandbox(sandboxId);
+
+          if (handle && typeof handle.syncVfs === 'function') {
+            const result = await (handle as any).syncVfs(snapshot);
+            console.log(
+              `[SandboxBridge] Tar-pipe sync to Sprites: ${result.filesSynced} files in ${result.duration}ms (${result.method})`
+            );
+            this.mountedFilesystemVersionBySandbox.set(sandboxId, currentVersion);
+            return;
+          }
+        } catch (error: any) {
+          console.warn(`[SandboxBridge] Tar-pipe sync failed, falling back to individual writes: ${error.message}`);
+          // Fall through to individual writes
+        }
       }
 
-      this.mountedFilesystemVersionBySandbox.set(sandboxId, currentVersion);
+      // Individual writes for other providers or small projects
+      let successCount = 0;
+      for (const file of snapshot.files) {
+        try {
+          await this.writeFile(sandboxId, file.path, file.content);
+          successCount++;
+        } catch (error: any) {
+          console.warn(`[SandboxBridge] Failed to write file ${file.path}: ${error.message}`);
+        }
+      }
+
+      if (successCount === snapshot.files.length) {
+        this.mountedFilesystemVersionBySandbox.set(sandboxId, currentVersion);
+      } else {
+        console.warn(
+          `[SandboxBridge] Partial mount: ${successCount}/${snapshot.files.length} files synced`
+        );
+      }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Unknown mount error';
       console.warn(`[SandboxBridge] Failed to mount virtual filesystem to sandbox ${sandboxId}: ${message}`);

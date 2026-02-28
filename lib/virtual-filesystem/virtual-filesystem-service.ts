@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import type {
   VirtualFile,
   VirtualFilesystemDirectoryListing,
@@ -8,6 +9,16 @@ import type {
   VirtualFilesystemSearchResult,
   VirtualWorkspaceSnapshot,
 } from './filesystem-types';
+import { diffTracker } from './filesystem-diffs';
+
+export type FilesystemChangeType = 'create' | 'update' | 'delete';
+
+export interface FilesystemChangeEvent {
+  path: string;
+  type: FilesystemChangeType;
+  ownerId: string;
+  version: number;
+}
 
 interface WorkspaceState {
   files: Map<string, VirtualFile>;
@@ -33,6 +44,25 @@ export class VirtualFilesystemService {
   private readonly storageDir: string;
   private readonly workspaces = new Map<string, WorkspaceState>();
   private readonly persistQueues = new Map<string, Promise<void>>();
+  private readonly events = new EventEmitter();
+
+  onFileChange(listener: (event: FilesystemChangeEvent) => void): () => void {
+    this.events.on('fileChange', listener);
+    return () => { this.events.off('fileChange', listener); };
+  }
+
+  onSnapshotChange(listener: (ownerId: string, version: number) => void): () => void {
+    this.events.on('snapshotChange', listener);
+    return () => { this.events.off('snapshotChange', listener); };
+  }
+
+  private emitFileChange(ownerId: string, filePath: string, type: FilesystemChangeType, version: number): void {
+    this.events.emit('fileChange', { path: filePath, type, ownerId, version });
+  }
+
+  private emitSnapshotChange(ownerId: string, version: number): void {
+    this.events.emit('snapshotChange', ownerId, version);
+  }
 
   constructor(options: { workspaceRoot?: string; storageDir?: string } = {}) {
     this.workspaceRoot = (options.workspaceRoot || DEFAULT_WORKSPACE_ROOT).replace(/^\/+|\/+$/g, '') || DEFAULT_WORKSPACE_ROOT;
@@ -72,6 +102,12 @@ export class VirtualFilesystemService {
     workspace.files.set(normalizedPath, file);
     workspace.version += 1;
     workspace.updatedAt = now;
+
+    const changeType: FilesystemChangeType = previous ? 'update' : 'create';
+    diffTracker.trackChange(file, previous?.content);
+    this.emitFileChange(ownerId, normalizedPath, changeType, workspace.version);
+    this.emitSnapshotChange(ownerId, workspace.version);
+
     await this.persistWorkspace(ownerId, workspace);
 
     return file;
@@ -83,16 +119,22 @@ export class VirtualFilesystemService {
     const normalizedPrefix = `${normalizedPath}/`;
     let deletedCount = 0;
 
-    for (const existingPath of workspace.files.keys()) {
+    for (const existingPath of Array.from(workspace.files.keys())) {
       if (existingPath === normalizedPath || existingPath.startsWith(normalizedPrefix)) {
+        const deletedFile = workspace.files.get(existingPath);
         workspace.files.delete(existingPath);
         deletedCount += 1;
+        if (deletedFile) {
+          diffTracker.trackDeletion(existingPath, deletedFile.content);
+        }
+        this.emitFileChange(ownerId, existingPath, 'delete', workspace.version + 1);
       }
     }
 
     if (deletedCount > 0) {
       workspace.version += 1;
       workspace.updatedAt = new Date().toISOString();
+      this.emitSnapshotChange(ownerId, workspace.version);
       await this.persistWorkspace(ownerId, workspace);
     }
 
@@ -398,6 +440,67 @@ export class VirtualFilesystemService {
 
     this.persistQueues.set(normalizedOwnerId, next);
     await next;
+  }
+
+  /**
+   * Get diff summary for LLM context
+   * Returns a human-readable summary of all file changes
+   */
+  getDiffSummary(ownerId: string, maxDiffs = 10): string {
+    return diffTracker.getDiffSummary(maxDiffs, ownerId);
+  }
+
+  /**
+   * Rollback workspace to a specific version
+   * Restores all files to their state at the target version
+   */
+  async rollbackToVersion(ownerId: string, targetVersion: number): Promise<{
+    success: boolean;
+    restoredFiles: number;
+    deletedFiles: number;
+    errors: string[];
+  }> {
+    const workspace = await this.ensureWorkspace(ownerId);
+    const operations = diffTracker.getRollbackOperations(targetVersion);
+    
+    const errors: string[] = [];
+    let restoredFiles = 0;
+    let deletedFiles = 0;
+
+    for (const op of operations) {
+      try {
+        if (op.operation === 'delete') {
+          await this.deletePath(ownerId, op.path);
+          deletedFiles++;
+        } else if (op.content !== undefined) {
+          await this.writeFile(ownerId, op.path, op.content);
+          restoredFiles++;
+        }
+      } catch (error: any) {
+        errors.push(`Failed to ${op.operation} ${op.path}: ${error.message}`);
+      }
+    }
+
+    return {
+      success: errors.length === 0,
+      restoredFiles,
+      deletedFiles,
+      errors,
+    };
+  }
+
+  /**
+   * Get files at a specific version
+   */
+  getFilesAtVersion(ownerId: string, targetVersion: number): Map<string, string> {
+    return diffTracker.getFilesAtVersion(targetVersion);
+  }
+
+  /**
+   * Get diff tracker instance for advanced operations
+   */
+  getDiffTracker() {
+    return diffTracker;
   }
 }
 

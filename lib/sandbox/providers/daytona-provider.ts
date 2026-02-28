@@ -9,6 +9,9 @@ import type {
   PtyOptions,
   PtyConnectOptions,
 } from './sandbox-provider'
+import { ComputerUseService, createComputerUseService } from './daytona-computer-use-service'
+import { LSPService, createLSPService, type LSPLanguageId } from './daytona-lsp-service'
+import { ObjectStorageService, createObjectStorageService } from './daytona-object-storage-service'
 
 const WORKSPACE_DIR = '/home/daytona/workspace'
 const MAX_COMMAND_TIMEOUT = 120
@@ -87,11 +90,67 @@ class DaytonaSandboxHandle implements SandboxHandle {
   readonly workspaceDir = '/home/daytona/workspace'
   private sandbox: any
   private client: Daytona
+  private computerUseService?: ComputerUseService
+  private lspService?: LSPService
+  private objectStorageService?: ObjectStorageService
 
   constructor(sandbox: any, client: Daytona) {
     this.sandbox = sandbox
     this.id = sandbox.id
     this.client = client
+  }
+
+  /**
+   * Get Computer Use Service for this sandbox
+   * Requires DAYTONA_API_KEY environment variable
+   */
+  getComputerUseService(): ComputerUseService | null {
+    const apiKey = process.env.DAYTONA_API_KEY
+    if (!apiKey) {
+      console.warn('[Daytona] DAYTONA_API_KEY not set, Computer Use Service unavailable')
+      return null
+    }
+    
+    if (!this.computerUseService) {
+      this.computerUseService = createComputerUseService(this.id, apiKey)
+    }
+    
+    return this.computerUseService
+  }
+
+  /**
+   * Get LSP Service for code intelligence
+   * Supports TypeScript, Python, Go, Rust, and more
+   */
+  getLSPService(): LSPService | null {
+    const apiKey = process.env.DAYTONA_API_KEY
+    if (!apiKey) {
+      console.warn('[Daytona] DAYTONA_API_KEY not set, LSP Service unavailable')
+      return null
+    }
+    
+    if (!this.lspService) {
+      this.lspService = createLSPService(this.id, apiKey)
+    }
+    
+    return this.lspService
+  }
+
+  /**
+   * Get Object Storage Service for large file persistence
+   */
+  getObjectStorageService(): ObjectStorageService | null {
+    const apiKey = process.env.DAYTONA_API_KEY
+    if (!apiKey) {
+      console.warn('[Daytona] DAYTONA_API_KEY not set, Object Storage unavailable')
+      return null
+    }
+    
+    if (!this.objectStorageService) {
+      this.objectStorageService = createObjectStorageService(this.id, apiKey)
+    }
+    
+    return this.objectStorageService
   }
 
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {

@@ -1,9 +1,21 @@
 import { getLLMProvider } from './providers/llm-factory'
 import { getSandboxProvider } from './providers'
 import { SANDBOX_TOOLS, validateCommand, type ToolName } from './sandbox-tools'
+import { 
+  validateToolInput, 
+  WriteFileSchema, 
+  ReadFileSchema, 
+  ListDirectorySchema, 
+  ExecShellSchema,
+  validateShellCommand 
+} from './validation-schemas'
+import { createSandboxRateLimiter } from './providers/rate-limiter'
 import type { ToolResult } from './types'
 import type { SandboxHandle } from './providers/sandbox-provider'
 import { sandboxEvents } from './sandbox-events'
+
+// Create rate limiter instance (singleton per process)
+const rateLimiter = createSandboxRateLimiter()
 
 function getSystemPrompt(workspaceDir: string): string {
   return `You are an expert software engineer with access to a Linux sandbox workspace.
@@ -17,6 +29,7 @@ Report results clearly and concisely.`
 interface AgentLoopOptions {
   userMessage: string
   sandboxId: string
+  userId?: string  // Added for rate limiting
   conversationHistory?: any[]
   onToolExecution?: (toolName: string, args: Record<string, any>, result: ToolResult) => void
   onStreamChunk?: (chunk: string) => void
@@ -29,8 +42,9 @@ interface AgentLoopResult {
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
-  const { userMessage, sandboxId, conversationHistory, onToolExecution, onStreamChunk } = options
-  const provider = getSandboxProvider()
+  const { userMessage, sandboxId, userId, conversationHistory, onToolExecution, onStreamChunk } = options
+  const providerType = (process.env.SANDBOX_PROVIDER || 'daytona') as any
+  const provider = getSandboxProvider(providerType)
   const llm = getLLMProvider()
 
   const sandboxHandle = await provider.getSandbox(sandboxId)
@@ -53,7 +67,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       },
       async executeTool(name: string, args: Record<string, any>): Promise<ToolResult> {
         sandboxEvents.emit(sandboxId, 'agent:tool_start', { toolName: name, args })
-        return executeToolOnSandbox(sandboxHandle, name as ToolName, args)
+        return executeToolOnSandbox(sandboxHandle, name as ToolName, args, userId)
       },
     })
 
@@ -75,22 +89,106 @@ async function executeToolOnSandbox(
   sandbox: SandboxHandle,
   toolName: ToolName,
   args: Record<string, any>,
+  userId?: string,
 ): Promise<ToolResult> {
-  switch (toolName) {
-    case 'exec_shell': {
-      const validation = validateCommand(args.command)
-      if (!validation.valid) {
-        return { success: false, output: validation.reason!, exitCode: 1 }
+  try {
+    // Check rate limit before executing tool
+    const rateLimitKey = userId || 'anonymous';
+    let rateLimitResult;
+    
+    switch (toolName) {
+      case 'exec_shell': {
+        // Check rate limit for commands
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'commands');
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          };
+        }
+        
+        // Validate command schema first
+        const validated = validateToolInput(ExecShellSchema, args, 'exec_shell');
+        
+        // Then validate against blocked patterns
+        const commandValidation = validateShellCommand(validated.command, validateCommand);
+        if (!commandValidation.valid) {
+          return { 
+            success: false, 
+            output: commandValidation.reason || 'Command validation failed', 
+            exitCode: 1 
+          };
+        }
+        
+        // Record successful validation for rate limiting
+        await rateLimiter.record(rateLimitKey, 'commands');
+        
+        return sandbox.executeCommand(commandValidation.command!);
       }
-      return sandbox.executeCommand(args.command)
+      
+      case 'write_file': {
+        // Check rate limit for file operations
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps');
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          };
+        }
+        
+        const validated = validateToolInput(WriteFileSchema, args, 'write_file');
+        await rateLimiter.record(rateLimitKey, 'fileOps');
+        return sandbox.writeFile(validated.path, validated.content);
+      }
+      
+      case 'read_file': {
+        // Check rate limit for file operations
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps');
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          };
+        }
+        
+        const validated = validateToolInput(ReadFileSchema, args, 'read_file');
+        await rateLimiter.record(rateLimitKey, 'fileOps');
+        return sandbox.readFile(validated.path);
+      }
+      
+      case 'list_dir': {
+        // Check rate limit for file operations
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps');
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          };
+        }
+        
+        const validated = validateToolInput(ListDirectorySchema, args, 'list_dir');
+        await rateLimiter.record(rateLimitKey, 'fileOps');
+        return sandbox.listDirectory(validated.path);
+      }
+      
+      default:
+        return { success: false, output: `Unknown tool: ${toolName}`, exitCode: 1 };
     }
-    case 'write_file':
-      return sandbox.writeFile(args.path, args.content)
-    case 'read_file':
-      return sandbox.readFile(args.path)
-    case 'list_dir':
-      return sandbox.listDirectory(args.path ?? '.')
-    default:
-      return { success: false, output: `Unknown tool: ${toolName}`, exitCode: 1 }
+  } catch (error: any) {
+    // Log validation errors with context
+    console.error('[AgentLoop] Tool execution failed', {
+      tool: toolName,
+      error: error.message,
+    });
+    
+    return {
+      success: false,
+      output: `Tool '${toolName}' failed: ${error.message}`,
+      exitCode: 1,
+    };
   }
 }

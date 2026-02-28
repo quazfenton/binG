@@ -38,6 +38,8 @@ interface SettingsProps {
   isProcessing?: boolean;
   voiceEnabled?: boolean;
   onVoiceToggle?: (enabled: boolean) => void;
+  livekitEnabled?: boolean;
+  onLivekitToggle?: (enabled: boolean) => void;
 }
 
 const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url";
@@ -90,6 +92,8 @@ export default function Settings({
   isProcessing = false,
   voiceEnabled = false,
   onVoiceToggle,
+  livekitEnabled = false,
+  onLivekitToggle,
 }: SettingsProps) {
   const [textSize, setTextSize] = useState(100);
   const [highContrast, setHighContrast] = useState(false);
@@ -708,6 +712,26 @@ export default function Settings({
                 <div
                   className={`custom-toggle ${voiceEnabled ? 'active' : ''}`}
                   onClick={() => onVoiceToggle && onVoiceToggle(!voiceEnabled)}
+                >
+                  <div className="custom-toggle-slider" />
+                </div>
+              </div>
+            )}
+
+            {/* LiveKit Voice Rooms Toggle */}
+            {onLivekitToggle && (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  {livekitEnabled ? (
+                    <Mic className="h-4 w-4 mr-2 text-green-400" />
+                  ) : (
+                    <MicOff className="h-4 w-4 mr-2" />
+                  )}
+                  <Label htmlFor="livekit-enabled">LiveKit Voice Rooms</Label>
+                </div>
+                <div
+                  className={`custom-toggle ${livekitEnabled ? 'active' : ''}`}
+                  onClick={() => onLivekitToggle && onLivekitToggle(!livekitEnabled)}
                 >
                   <div className="custom-toggle-slider" />
                 </div>
