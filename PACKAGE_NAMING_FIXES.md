@@ -56,12 +56,6 @@ Several packages were using incorrect or outdated names:
 - **Usage:** `import { verifyWebhookFromRequest } from '@blaxel/core'`
 
 ---
-
-## Installation Commands
-
-To install the correct packages:
-
-```bash
 # Remove old packages
 npm uninstall tambo-ai @blaxel/sdk
 
@@ -70,13 +64,6 @@ npm install @tambo-ai/typescript-sdk
 
 # Install correct Blaxel packages
 npm install @blaxel/core @blaxel/vercel
-```
-
-Or with pnpm:
-```bash
-pnpm remove tambo-ai @blaxel/sdk
-pnpm add @tambo-ai/typescript-sdk
-pnpm add -D @blaxel/core @blaxel/vercel
 ```
 
 ---
