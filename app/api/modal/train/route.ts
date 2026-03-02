@@ -10,6 +10,11 @@ type TrainBody = {
 
 export async function POST(req: NextRequest) {
   try {
+    const auth = await resolveRequestAuth(req, { allowAnonymous: false });
+    if (!auth.success || !auth.userId) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
+
     const body = (await req.json()) as TrainBody;
     const { algorithm, features, labels = [], featureColumns = [], targetColumn } = body;
 
