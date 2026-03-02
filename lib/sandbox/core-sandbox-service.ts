@@ -27,6 +27,14 @@ export class SandboxService {
     }
   }
 
+  private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
+    if (sandboxId.startsWith('mistral-')) return 'mistral'
+    if (sandboxId.startsWith('blaxel-')) return 'blaxel'
+    if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites'
+    if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox'
+    return null
+  }
+
   private getCandidateProviderTypes(primary: SandboxProviderType): SandboxProviderType[] {
     const quotaChain = quotaManager.getSandboxProviderChain(primary) as SandboxProviderType[];
     const preferred = Array.from(new Set(quotaChain.length ? quotaChain : [primary]));
@@ -86,6 +94,18 @@ export class SandboxService {
     const cached = this.sandboxProviderById.get(sandboxId)
     if (cached) return cached
 
+    const inferredProvider = this.inferProviderFromSandboxId(sandboxId)
+    if (inferredProvider) {
+      try {
+        const inferred = getSandboxProvider(inferredProvider)
+        await inferred.getSandbox(sandboxId)
+        this.sandboxProviderById.set(sandboxId, inferred)
+        return inferred
+      } catch {
+        // Continue with generic probing below.
+      }
+    }
+
     // Probe primary first.
     try {
       await this.provider.getSandbox(sandboxId)
@@ -97,7 +117,16 @@ export class SandboxService {
 
     // For resolving existing sandboxes, try ALL configured providers (not just quota-available ones)
     // Sandboxes created before quota was hit should remain accessible even if provider is now over quota
-    const allProviderTypes: SandboxProviderType[] = ['daytona', 'runloop', 'microsandbox', 'e2b']
+    const allProviderTypes: SandboxProviderType[] = [
+      'daytona',
+      'runloop',
+      'blaxel',      // NEW
+      'sprites',     // NEW
+      'codesandbox', // NEW: CodeSandbox SDK cloud VMs
+      'microsandbox',
+      'e2b',
+      'mistral'
+    ]
     const configuredProviders: SandboxProviderType[] = []
     
     for (const providerType of allProviderTypes) {

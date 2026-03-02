@@ -36,7 +36,7 @@ export async function GET() {
       data: {
         providers: sortedProviders,
         defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "openrouter",
-        defaultModel: process.env.DEFAULT_MODEL || "deepseek/deepseek-r1-0528:free",
+        defaultModel: process.env.DEFAULT_MODEL || "openrouter/free",
       },
     });
   } catch (error) {

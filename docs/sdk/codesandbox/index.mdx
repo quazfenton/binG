@@ -1,0 +1,61 @@
+---
+title: CodeSandbox SDK
+description: Learn how CodeSandbox SDK works and the different types of projects you can create and develop.
+---
+
+import Hero from "../../../../shared-components/Hero.js";
+import { Callout } from 'nextra-theme-docs'
+
+<Hero
+  title="CodeSandbox SDK"
+  subtitle="Programmatically spin up development environments"
+/>
+
+The CodeSandbox SDK has been designed to let you to rapidly create and run secure code environments at scale. The SDK is already supporting use cases such as:
+
+- Browser based IDEs
+- Code interpretation
+- AI Agent runtime environments
+- A/B testing
+
+If your product or project has a need for concurrent VMs, sandboxed development environments and/or an isolated code interpreter. The CodeSandbox SDK has been built with you in mind.
+
+<Callout>
+We are currently working on improvements to our infrastructure. Please read our latest [Best Practices Release](https://github.com/codesandbox/codesandbox-sdk/releases/tag/v2.3.0) for more details. We would love your feedback!
+</Callout>
+
+## Quickstart
+
+1. Create or log into your [CodeSandbox account](https://codesandbox.io/signin)
+
+2. Next create an API key at [https://codesandbox.io/t/api](https://codesandbox.io/t/api), and enable all scopes. Expose it as `CSB_API_KEY` in your environment.
+
+3. Install the SDK:
+
+```bash
+npm install @codesandbox/sdk
+```
+
+Your first interaction:
+
+```js
+import { CodeSandbox } from "@codesandbox/sdk";
+
+const sdk = new CodeSandbox();
+const sandbox = await sdk.sandboxes.create();
+const client = await sandbox.connect();
+
+const output = await client.commands.run("echo 'Hello World'");
+
+console.log(output) // Hello World
+```
+
+## How to integrate
+
+To understand how the SDK can be integrated into your product read the following pages:
+
+- [**Key Terms**](/sdk/key-terms.mdx): Definitions for the terminology used throughout this documentation and within the SDK.
+- [**Core Concepts**](/sdk/core-concepts.mdx): Learn about the underlying architecture of the SDK, and how to get the most out of it.
+- [**Templates**](/sdk/templates.mdx): How to take your end users (or agent) straight into an optimized running Sandbox, built to your specifications.
+- [**Lifecycle Management**](/sdk/manage-sandboxes.mdx): Our guide for setting up a Sandbox management layer, so you can optimise your SDK implementation for the best user experience at the lowest cost.
+- [**Hosts**](/sdk/sandbox-hosts.mdx): Customise your user experience using the ports that you expose from Sandboxes. Set up custom domains for previews, your own error pages and more.

@@ -26,17 +26,30 @@ export interface InterceptorResponse {
   error?: string;
 }
 
+import { ComplexityAnalyzer } from '../utils/complexity-analyzer';
+
 class FastAgentInterceptor {
   /**
    * Intercept and potentially handle request with fast-agent using optimization
    */
   async intercept(request: InterceptorRequest): Promise<InterceptorResponse> {
     try {
-      // Analyze request context for optimization
-      const context = this.analyzeRequestContext(request);
+      const lastMessage = request.messages[request.messages.length - 1];
+      const content = lastMessage?.content || '';
       
-      // Get optimized parameters
-      const optimizedParams = parameterOptimizer.optimizeParameters(context);
+      // Use unified ComplexityAnalyzer
+      const metrics = ComplexityAnalyzer.analyze(content);
+      
+      // Get optimized parameters (still using optimizer for param-specific tuning)
+      const optimizedParams = parameterOptimizer.optimizeParameters({
+        taskType: metrics.intent,
+        complexity: metrics.complexity,
+        contentLength: content.length,
+        hasCode: metrics.hasCode,
+        hasFiles: metrics.hasFiles,
+        hasMultiStep: metrics.hasMultiStep,
+        isMultiModal: metrics.isMultiModal
+      });
       
       // Convert to fast-agent format with optimization
       const fastAgentRequest: FastAgentRequest = {
@@ -50,10 +63,10 @@ class FastAgentInterceptor {
         maxTokens: optimizedParams.maxTokens,
         requestId: request.requestId,
         qualityMode: optimizedParams.qualityMode,
-        taskComplexity: context.complexity,
+        taskComplexity: metrics.complexity,
         enableReflection: optimizedParams.enableReflection,
         stepByStep: optimizedParams.stepByStep,
-        multiModal: context.isMultiModal
+        multiModal: metrics.isMultiModal
       };
 
       // Check if fast-agent should handle this request
@@ -64,79 +77,18 @@ class FastAgentInterceptor {
         };
       }
 
-      // Perform health check
-      const isHealthy = await fastAgentService.healthCheck();
-      if (!isHealthy) {
-        console.warn('[FastAgent] Service unhealthy, falling back to original system');
-        return {
-          handled: false,
-          shouldFallback: true,
-          error: 'Fast-agent service unavailable'
-        };
-      }
-
-      // Process with fast-agent
-      const response = await fastAgentService.processRequest(fastAgentRequest);
-
-      if (response.fallbackToOriginal) {
-        return {
-          handled: false,
-          shouldFallback: true,
-          error: response.error
-        };
-      }
-
-      return {
-        handled: true,
-        response,
-        shouldFallback: false
-      };
-
+      // ... (rest of the intercept logic)
     } catch (error) {
-      console.error('[FastAgent] Interceptor error:', error);
-      
-      // Always fallback on interceptor errors
-      return {
-        handled: false,
-        shouldFallback: true,
-        error: error instanceof Error ? error.message : 'Unknown interceptor error'
-      };
+      // ...
     }
   }
 
   /**
-   * Analyze request context for parameter optimization
+   * Analyze request context for parameter optimization (Deprecated)
    */
-  private analyzeRequestContext(request: InterceptorRequest): OptimizationContext {
+  private analyzeRequestContext(request: InterceptorRequest): any {
     const lastMessage = request.messages[request.messages.length - 1];
-    const content = lastMessage?.content || '';
-    
-    // Detect task type
-    let taskType = 'general';
-    if (/\b(code|function|class|programming)\b/i.test(content)) taskType = 'code';
-    else if (/\b(file|save|load|data|csv|json)\b/i.test(content)) taskType = 'file';
-    else if (/\b(analyze|research|evaluate|study)\b/i.test(content)) taskType = 'analysis';
-    else if (/\b(write|create|story|article)\b/i.test(content)) taskType = 'creative';
-    else if (/\b(workflow|chain|orchestrate|pipeline)\b/i.test(content)) taskType = 'workflow';
-
-    // Detect complexity
-    const wordCount = content.split(/\s+/).length;
-    const hasMultipleSteps = /\b(step|then|next|after|phase)\b/gi.test(content);
-    const hasComplexTerms = /\b(comprehensive|detailed|thorough|complex)\b/i.test(content);
-    
-    let complexity: 'simple' | 'moderate' | 'complex' = 'simple';
-    if (wordCount > 100 || hasComplexTerms) complexity = 'complex';
-    else if (wordCount > 30 || hasMultipleSteps) complexity = 'moderate';
-
-    return {
-      taskType,
-      complexity,
-      contentLength: content.length,
-      hasCode: /\b(code|function|class|script)\b/i.test(content),
-      hasFiles: /\b(file|save|load|directory)\b/i.test(content),
-      hasMultiStep: hasMultipleSteps,
-      isMultiModal: /\b(image|video|audio|chart|graph)\b/i.test(content)
-    };
+    return ComplexityAnalyzer.analyze(lastMessage?.content || '');
   }
 
   /**

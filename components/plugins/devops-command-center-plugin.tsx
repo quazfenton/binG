@@ -169,13 +169,25 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const startContainer = async (id: string) => {
     setLoading(true);
     try {
-      await fetch(`/api/docker/start/${id}`, { method: 'POST' });
+      const res = await fetch(`/api/docker/start/${id}`, { method: 'POST' });
+      if (!res.ok) {
+        let errorMsg = 'Start failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {}
+        throw new Error(errorMsg);
+      }
       toast.success('Container started');
       loadContainers();
     } catch (err) {
-      // Demo mode: simulate start
-      setContainers(prev => prev.map(c => c.id === id ? { ...c, status: 'running', state: 'Up just now' } : c));
-      toast.success('Container started (demo)');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        setContainers(prev => prev.map(c => c.id === id ? { ...c, status: 'running', state: 'Up just now' } : c));
+        toast.success('Container started (demo)');
+      } else {
+        toast.error(`Failed to start container: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -184,13 +196,25 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const stopContainer = async (id: string) => {
     setLoading(true);
     try {
-      await fetch(`/api/docker/stop/${id}`, { method: 'POST' });
+      const res = await fetch(`/api/docker/stop/${id}`, { method: 'POST' });
+      if (!res.ok) {
+        let errorMsg = 'Stop failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {}
+        throw new Error(errorMsg);
+      }
       toast.success('Container stopped');
       loadContainers();
     } catch (err) {
-      // Demo mode: simulate stop
-      setContainers(prev => prev.map(c => c.id === id ? { ...c, status: 'exited', state: 'Exited (0) just now' } : c));
-      toast.success('Container stopped (demo)');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        setContainers(prev => prev.map(c => c.id === id ? { ...c, status: 'exited', state: 'Exited (0) just now' } : c));
+        toast.success('Container stopped (demo)');
+      } else {
+        toast.error(`Failed to stop container: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -200,13 +224,25 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
     if (!confirm('Are you sure you want to remove this container?')) return;
     setLoading(true);
     try {
-      await fetch(`/api/docker/remove/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/docker/remove/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        let errorMsg = 'Remove failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {}
+        throw new Error(errorMsg);
+      }
       toast.success('Container removed');
       loadContainers();
     } catch (err) {
-      // Demo mode: simulate remove
-      setContainers(prev => prev.filter(c => c.id !== id));
-      toast.success('Container removed (demo)');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        setContainers(prev => prev.filter(c => c.id !== id));
+        toast.success('Container removed (demo)');
+      } else {
+        toast.error(`Failed to remove container: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -221,13 +257,26 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ containerId: selectedContainer, command })
       });
+      if (!res.ok) {
+        let errorMsg = 'Execution failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {}
+        throw new Error(errorMsg);
+      }
       const data = await res.json();
       setCommandOutput(data.output);
       toast.success('Command executed');
     } catch (err) {
-      // Demo mode: simulate command output
-      setCommandOutput(`$ ${command}\n[demo mode] Command simulation not available. Connect Docker API for real execution.`);
-      toast.success('Command simulated (demo)');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        setCommandOutput(`$ ${command}\n[demo mode] Command simulation not available. Connect Docker API for real execution.`);
+        toast.success('Command simulated (demo)');
+      } else {
+        toast.error(`Command execution failed: ${errorMessage}`);
+        setCommandOutput(`$ ${command}\nError: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -236,16 +285,36 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const deployCompose = async () => {
     setLoading(true);
     try {
-      await fetch('/api/docker/compose', {
+      const res = await fetch('/api/docker/compose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ compose: composeFile })
       });
-      toast.success('Compose deployed');
+      
+      if (!res.ok) {
+        // Real backend error - parse and show actual error message
+        let errorMsg = 'Compose deploy failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {
+          // Response might not be JSON
+        }
+        throw new Error(errorMsg);
+      }
+      
+      toast.success('Compose deployed successfully');
       loadContainers();
     } catch (err) {
-      // Demo mode: simulate deploy
-      toast.success('Compose validated (demo mode — connect Docker API to deploy)');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      
+      // Only show demo mode message if we're actually in demo mode
+      // Otherwise, show the real error to avoid misleading the user
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        toast.success('Compose validated (demo mode — connect Docker API to deploy)');
+      } else {
+        toast.error(`Deploy failed: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -254,13 +323,25 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const restartPipeline = async (id: string) => {
     setLoading(true);
     try {
-      await fetch(`/api/cicd/restart/${id}`, { method: 'POST' });
+      const res = await fetch(`/api/cicd/restart/${id}`, { method: 'POST' });
+      if (!res.ok) {
+        let errorMsg = 'Restart failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {}
+        throw new Error(errorMsg);
+      }
       toast.success('Pipeline restarted');
       loadPipelines();
     } catch (err) {
-      // Demo mode: simulate restart
-      setPipelines(prev => prev.map(p => p.id === id ? { ...p, status: 'running', started: 'Just now' } : p));
-      toast.success('Pipeline restarted (demo)');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        setPipelines(prev => prev.map(p => p.id === id ? { ...p, status: 'running', started: 'Just now' } : p));
+        toast.success('Pipeline restarted (demo)');
+      } else {
+        toast.error(`Failed to restart pipeline: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -279,7 +360,7 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
       case 'stopped':
         return <Square className="w-4 h-4 text-gray-400" />;
       default:
-        return <Loader2 className="w-4 h-4 text-yellow-400 animate-spin" />;
+        return <Loader2 className="w-4 h-4 text-yellow-400 thinking-spinner" />;
     }
   };
 
@@ -554,7 +635,7 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
 
             <div className="flex gap-2">
               <Button onClick={deployCompose} disabled={!composeFile || loading}>
-                {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                {loading ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Upload className="w-4 h-4 mr-2" />}
                 Deploy Compose
               </Button>
               <Button variant="outline" onClick={() => setComposeFile('')}>

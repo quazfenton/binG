@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Card,
@@ -15,36 +15,41 @@ import {
   TabsList,
   TabsTrigger,
 } from "../components/ui/tabs";
-import { Input } from "../components/ui/input";
 import { Button } from "../components/ui/button";
+import { toast } from "sonner";
 import {
   Code as CodeIcon,
   FileText,
   Package,
+  FolderOpen,
   Maximize2,
   Minimize2,
   RefreshCw,
   AlertCircle,
   Eye,
   Edit,
-  Check,
-  X,
 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Sandpack } from "@codesandbox/sandpack-react";
 import JSZip from "jszip";
 import type { Message } from "../types/index";
 import { parsePatch, applyPatch } from "diff";
+import { useVirtualFilesystem } from "../hooks/use-virtual-filesystem";
 import {
   parseCodeBlocksFromMessages,
   type CodeBlock as ParsedCodeBlock,
 } from "../lib/code-parser";
 
+// Lazy load Sandpack to avoid SSR issues
+const Sandpack = lazy(() => import('@codesandbox/sandpack-react').catch(() => ({
+  Sandpack: () => <div className="p-4 text-center text-yellow-600">Sandpack preview unavailable</div>
+})));
+
 interface CodePreviewPanelProps {
   messages: Message[];
   isOpen: boolean;
   onClose: () => void;
+  filesystemScopePath?: string;
   // Optional: Inject project files directly (e.g., from code service)
   // DEBUG: This creates dual data sources - to be removed after debugging
   projectFiles?: { [key: string]: string };
@@ -94,6 +99,7 @@ export default function CodePreviewPanel({
   messages,
   isOpen,
   onClose,
+  filesystemScopePath = "project",
   projectFiles,
   commandsByFile = {},
   onApplyAllCommandDiffs,
@@ -102,28 +108,78 @@ export default function CodePreviewPanel({
   onClearFileCommandDiffs,
   onSquashFileCommandDiffs,
 }: CodePreviewPanelProps) {
-  const [detectedFramework, setDetectedFramework] = useState<
-    "react" | "vue" | "vanilla"
-  >("vanilla");
+  const [detectedFramework] = useState<"react" | "vue" | "vanilla">("vanilla");
   const [selectedTab, setSelectedTab] = useState("preview");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [projectStructure, setProjectStructure] =
     useState<ProjectStructure | null>(null);
   const [selectedFileIndex, setSelectedFileIndex] = useState<number>(0);
-  const [editingFileIndex, setEditingFileIndex] = useState<number | null>(null);
-  const [editingFileName, setEditingFileName] = useState<string>("");
   const [panelWidth, setPanelWidth] = useState(800);
   const [isDragging, setIsDragging] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
-  const [diffContent, setDiffContent] = useState<string>("");
-  const [diffErrors, setDiffErrors] = useState<string[]>([]);
-  const [selectedFile, setSelectedFile] = useState<string>("");
+  const [, setDiffErrors] = useState<string[]>([]);
   const pendingFiles = useMemo(
     () => Object.keys(commandsByFile || {}),
     [commandsByFile],
   );
+  
+  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath);
+  const {
+    currentPath: filesystemCurrentPath,
+    nodes: filesystemRawNodes,
+    setCurrentPath: setFilesystemCurrentPath,
+    listDirectory: listFilesystemDirectory,
+    readFile: readFilesystemFile,
+    isLoading: isFilesystemLoading,
+  } = virtualFilesystem;
+  const [selectedFilesystemPath, setSelectedFilesystemPath] = useState<string>("");
+  const [selectedFilesystemLanguage, setSelectedFilesystemLanguage] = useState<string>("text");
+  const [selectedFilesystemContent, setSelectedFilesystemContent] = useState<string>("");
+  const [isFilesystemFileLoading, setIsFilesystemFileLoading] = useState(false);
+  const [scopedPreviewFiles, setScopedPreviewFiles] = useState<Record<string, string>>({});
+
+  const filesystemNodes = useMemo(() => {
+    return [...filesystemRawNodes].sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type === "directory" ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+  }, [filesystemRawNodes]);
+
+  const openFilesystemDirectory = useCallback((path: string) => {
+    // Ensure path doesn't get duplicated "project/project/" prefix
+    const cleanPath = path.replace(/^project\/project\//, 'project/');
+    setFilesystemCurrentPath(cleanPath);
+    void listFilesystemDirectory(cleanPath);
+  }, [listFilesystemDirectory, setFilesystemCurrentPath]);
+
+  const openFilesystemParent = useCallback(() => {
+    const current = filesystemCurrentPath.replace(/\/+$/, "");
+    const parts = current.split("/").filter(Boolean);
+    if (parts.length <= 1 || (parts.length === 1 && parts[0] === 'project')) {
+      openFilesystemDirectory("project");
+      return;
+    }
+    const parentPath = parts.slice(0, -1).join("/");
+    openFilesystemDirectory(parentPath || "project");
+  }, [filesystemCurrentPath, openFilesystemDirectory]);
+
+  const selectFilesystemFile = useCallback(async (path: string) => {
+    setIsFilesystemFileLoading(true);
+    try {
+      // Ensure path doesn't get duplicated prefix
+      const cleanPath = path.replace(/^project\/project\//, 'project/');
+      const file = await readFilesystemFile(cleanPath);
+      setSelectedFilesystemPath(file.path);
+      setSelectedFilesystemLanguage(file.language || "text");
+      setSelectedFilesystemContent(file.content || "");
+    } finally {
+      setIsFilesystemFileLoading(false);
+    }
+  }, [readFilesystemFile]);
 
   const getFileExtension = (language: string): string => {
     const extensions: Record<string, string> = {
@@ -193,7 +249,77 @@ export default function CodePreviewPanel({
     }
   }, [codeBlocks.length, selectedFileIndex]);
 
+  useEffect(() => {
+    if (!isOpen || selectedTab !== "files") {
+      return;
+    }
+    const initializeExplorer = async () => {
+      setSelectedFilesystemPath("");
+      setSelectedFilesystemContent("");
+      setSelectedFilesystemLanguage("text");
+
+      const initialNodes = await listFilesystemDirectory(filesystemScopePath);
+      setFilesystemCurrentPath(filesystemScopePath);
+      if (initialNodes.length > 0) return;
+
+      const sessionsRoot = "project/sessions";
+      const sessionDirectories = (await listFilesystemDirectory(sessionsRoot))
+        .filter((node) => node.type === "directory");
+      if (sessionDirectories.length === 0) return;
+
+      const preferred = sessionDirectories
+        .slice()
+        .sort((a, b) => {
+          const aDraft = a.name.startsWith("draft-chat_") ? 1 : 0;
+          const bDraft = b.name.startsWith("draft-chat_") ? 1 : 0;
+          if (aDraft !== bDraft) return bDraft - aDraft;
+          return b.name.localeCompare(a.name);
+        });
+
+      for (const directory of preferred) {
+        const nodes = await listFilesystemDirectory(directory.path);
+        if (nodes.length > 0) {
+          setFilesystemCurrentPath(directory.path);
+          return;
+        }
+      }
+    };
+
+    void initializeExplorer();
+  }, [filesystemScopePath, isOpen, listFilesystemDirectory, selectedTab, setFilesystemCurrentPath]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    let cancelled = false;
+    const loadScopedFiles = async () => {
+      try {
+        const snapshot = await virtualFilesystem.getSnapshot(filesystemScopePath);
+        if (cancelled) return;
+        const files = (snapshot?.files || []).reduce(
+          (acc, file) => {
+            acc[file.path] = file.content;
+            return acc;
+          },
+          {} as Record<string, string>,
+        );
+        if (!cancelled) {
+          setScopedPreviewFiles(files);
+        }
+      } catch {
+        if (!cancelled) {
+          setScopedPreviewFiles({});
+        }
+      }
+    };
+
+    void loadScopedFiles();
+    return () => { cancelled = true; };
+  }, [filesystemScopePath, isOpen, virtualFilesystem.getSnapshot]);
+
   // Generate project structure for complex projects
+  // Also merge virtual filesystem files for live preview
   useEffect(() => {
     if (codeBlocks.length > 0) {
       // Use the centralized parser to get project structure
@@ -205,12 +331,16 @@ export default function CodePreviewPanel({
         const structure = analyzeProjectStructure(codeBlocks);
         setProjectStructure(structure);
       }
-    } else if (projectFiles && Object.keys(projectFiles).length > 0) {
-      // DEBUG: Use injected projectFiles if no code blocks in messages
-      // This allows code service files to be shown even without message parsing
-      const files = { ...projectFiles };
+    } else if (
+      (projectFiles && Object.keys(projectFiles).length > 0) ||
+      Object.keys(scopedPreviewFiles).length > 0
+    ) {
+      const files = {
+        ...(projectFiles || {}),
+        ...scopedPreviewFiles,
+      };
       const structure: ProjectStructure = {
-        name: 'injected-project',
+        name: 'filesystem-project',
         files,
         framework: 'react',
         bundler: 'vite',
@@ -218,7 +348,42 @@ export default function CodePreviewPanel({
       };
       setProjectStructure(structure);
     }
-  }, [codeBlocks, messages, projectFiles]);
+  }, [codeBlocks, scopedPreviewFiles, projectFiles]);
+
+  const projectStructureWithScopedFiles = useMemo(() => {
+    const scopedRelativeFiles = Object.entries(scopedPreviewFiles).reduce(
+      (acc, [path, content]) => {
+        const relativePath = path.startsWith(`${filesystemScopePath}/`)
+          ? path.slice(filesystemScopePath.length + 1)
+          : path.replace(/^project\//, '');
+        acc[relativePath] = content;
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
+
+    if (projectStructure) {
+      return {
+        ...projectStructure,
+        files: {
+          ...projectStructure.files,
+          ...scopedRelativeFiles,
+        },
+      };
+    }
+
+    if (Object.keys(scopedRelativeFiles).length > 0) {
+      return {
+        name: 'scoped-filesystem-project',
+        files: scopedRelativeFiles,
+        framework: 'react' as const,
+        bundler: 'vite' as const,
+        packageManager: 'npm' as const,
+      };
+    }
+
+    return null;
+  }, [filesystemScopePath, projectStructure, scopedPreviewFiles]);
 
   const applySimpleLineDiff = (
     originalContent: string,
@@ -430,12 +595,16 @@ export default function CodePreviewPanel({
   const downloadAsZip = async () => {
     const zip = new JSZip();
 
-    // Use project structure files if available
-    if (projectStructure) {
-      Object.entries(projectStructure.files).forEach(([filename, content]) => {
+    // Use merged project structure (includes virtual filesystem files)
+    const structureToUse = projectStructureWithScopedFiles || projectStructure;
+    
+    if (structureToUse && Object.keys(structureToUse.files).length > 0) {
+      // Add all files from project structure
+      Object.entries(structureToUse.files).forEach(([filename, fileData]) => {
+        const content = typeof fileData === 'string' ? fileData : (fileData.content || '');
         zip.file(filename, content);
       });
-    } else {
+    } else if (codeBlocks.length > 0) {
       // Fallback to code blocks
       codeBlocks.forEach((block) => {
         const filename =
@@ -443,6 +612,10 @@ export default function CodePreviewPanel({
           `snippet-${block.index}.${getFileExtension(block.language)}`;
         zip.file(filename, block.code);
       });
+    } else {
+      // No files available
+      toast.error("No files available to download");
+      return;
     }
 
     // Get collected data from codeBlocks
@@ -452,12 +625,12 @@ export default function CodePreviewPanel({
     // Always add README
     const readme = `# Code Project
 
-This project contains ${projectStructure ? Object.keys(projectStructure.files).length : codeBlocks.length} files.
+This project contains ${structureToUse ? Object.keys(structureToUse.files).length : codeBlocks.length} files.
 
 ## Files:
 ${
-  projectStructure
-    ? Object.keys(projectStructure.files)
+  structureToUse
+    ? Object.keys(structureToUse.files)
         .map((filename) => `- ${filename}`)
         .join("\n")
     : codeBlocks
@@ -467,8 +640,8 @@ ${
 
 ## Dependencies:
 ${
-  projectStructure?.dependencies?.length
-    ? projectStructure.dependencies.map((dep) => `- ${dep}`).join("\n")
+  structureToUse?.dependencies?.length
+    ? structureToUse.dependencies.map((dep) => `- ${dep}`).join("\n")
     : "None"
 }
 
@@ -497,56 +670,21 @@ ${nonCodeText}
 `;
     zip.file("README.md", readme);
 
-    const content = await zip.generateAsync({ type: "blob" });
-    const url = URL.createObjectURL(content);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `code-${Date.now()}.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // Filename editing functions
-  const startEditingFilename = (index: number, currentFilename: string) => {
-    setEditingFileIndex(index);
-    setEditingFileName(currentFilename);
-  };
-
-  const cancelEditingFilename = () => {
-    setEditingFileIndex(null);
-    setEditingFileName("");
-  };
-
-  const saveFilename = (index: number, newFilename: string) => {
-    if (!newFilename.trim()) {
-      cancelEditingFilename();
-      return;
+    try {
+      const content = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(content);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `code-${Date.now()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("Download started!");
+    } catch (error) {
+      console.error("Download failed:", error);
+      toast.error("Failed to download ZIP file");
     }
-
-    const trimmedFilename = newFilename.trim();
-    const oldFilename = codeBlocks[index]?.filename;
-
-    // Update project structure if it exists
-    if (projectStructure && oldFilename) {
-      const newFiles = { ...projectStructure.files };
-
-      if (newFiles[oldFilename]) {
-        // Move the content to the new filename
-        newFiles[trimmedFilename] = newFiles[oldFilename];
-        delete newFiles[oldFilename];
-
-        setProjectStructure({
-          ...projectStructure,
-          files: newFiles,
-        });
-      }
-    }
-
-    // Force re-render by updating a state that triggers useMemo recalculation
-    // This ensures the preview updates with the new filename
-    setSelectedFileIndex((prev) => (prev === index ? index : prev));
-
-    cancelEditingFilename();
   };
 
   // Resize handlers
@@ -587,6 +725,7 @@ ${nonCodeText}
         document.removeEventListener("mouseup", handleMouseUp);
       };
     }
+    return undefined;
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   // Function to detect popular dependencies from code content (only used when package.json is missing)
@@ -652,8 +791,10 @@ ${nonCodeText}
       }
     };
 
+    const useStructure = projectStructureWithScopedFiles || projectStructure;
+    
     if (
-      projectStructure &&
+      useStructure &&
       [
         "react",
         "vue",
@@ -666,11 +807,11 @@ ${nonCodeText}
         "remix",
         "gatsby",
         "vite",
-      ].includes(projectStructure.framework)
+      ].includes(useStructure.framework)
     ) {
       try {
         // Map files to Sandpack format
-        const sandpackFiles = Object.entries(projectStructure.files).reduce(
+        const sandpackFiles = Object.entries(useStructure.files).reduce(
           (acc, [path, content]) => {
             // Skip empty or invalid files
             if (typeof content !== "string" || !content.trim()) return acc;
@@ -695,7 +836,7 @@ ${nonCodeText}
           );
 
           if (!hasEntryFile) {
-            switch (projectStructure.framework) {
+            switch (useStructure.framework) {
               case "react":
               case "next":
               case "gatsby":
@@ -821,7 +962,7 @@ export default app;`,
                 break;
               default:
                 sandpackFiles["/src/index.js"] = {
-                  code: `console.log('Hello from ${projectStructure.framework}!');`,
+                  code: `console.log('Hello from ${useStructure.framework}!');`,
                 };
                 sandpackFiles["/index.html"] = {
                   code: `<!doctype html>
@@ -843,48 +984,57 @@ export default app;`,
 
         addEntryFileIfMissing();
 
-        const template = getSandpackTemplate(projectStructure.framework);
+        const template = getSandpackTemplate(useStructure.framework);
 
         return (
-          <div className="h-96">
-            <Sandpack
-              template={template as any}
-              theme="dark"
-              options={{
-                showTabs: true,
-                showLineNumbers: true,
-                showNavigator: true,
-                showConsole: true,
-                showRefreshButton: true,
-                autorun: true,
-                recompileMode: "delayed",
-                recompileDelay: 300,
-              }}
-              files={sandpackFiles}
-              customSetup={{
-                dependencies:
-                  projectStructure.dependencies?.reduce(
-                    (acc, dep) => {
-                      acc[dep] = "latest";
-                      return acc;
-                    },
-                    {} as Record<string, string>,
-                  ) ||
-                  getPopularDependencies(
-                    Object.values(projectStructure.files).join("\n"),
-                    projectStructure.framework,
-                  ),
-                devDependencies:
-                  projectStructure.devDependencies?.reduce(
-                    (acc, dep) => {
-                      acc[dep] = "latest";
-                      return acc;
-                    },
-                    {} as Record<string, string>,
-                  ) || {},
-              }}
-            />
-          </div>
+          <Suspense fallback={
+            <div className="h-96 flex items-center justify-center bg-gray-900 rounded-lg">
+              <div className="text-center text-gray-400">
+                <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin" />
+                <p>Loading preview...</p>
+              </div>
+            </div>
+          }>
+            <div className="h-96">
+              <Sandpack
+                template={template as any}
+                theme="dark"
+                options={{
+                  showTabs: true,
+                  showLineNumbers: true,
+                  showNavigator: true,
+                  showConsole: true,
+                  showRefreshButton: true,
+                  autorun: true,
+                  recompileMode: "delayed",
+                  recompileDelay: 300,
+                }}
+                files={sandpackFiles}
+                customSetup={{
+                  dependencies:
+                    useStructure.dependencies?.reduce(
+                      (acc, dep) => {
+                        acc[dep] = "latest";
+                        return acc;
+                      },
+                      {} as Record<string, string>,
+                    ) ||
+                    getPopularDependencies(
+                      Object.values(useStructure.files).join("\n"),
+                      useStructure.framework,
+                    ),
+                  devDependencies:
+                    useStructure.devDependencies?.reduce(
+                      (acc, dep) => {
+                        acc[dep] = "latest";
+                        return acc;
+                      },
+                      {} as Record<string, string>,
+                    ) || {},
+                }}
+              />
+            </div>
+          </Suspense>
         );
       } catch (error) {
         return (
@@ -893,7 +1043,7 @@ export default app;`,
               <AlertCircle className="w-16 h-16 mx-auto mb-4 text-red-400" />
               <p className="text-red-400">Failed to render framework preview</p>
               <p className="text-sm text-gray-600 mt-2">
-                Framework: {projectStructure.framework}
+                Framework: {useStructure.framework}
               </p>
               <p className="text-sm text-gray-600">
                 Error: {(error as Error).message}
@@ -912,14 +1062,44 @@ export default app;`,
 
     // Enhanced vanilla HTML/CSS/JS preview with JSBin-style features
     try {
-      const htmlFile = codeBlocks.find((block) => block.language === "html");
-      const cssFile = codeBlocks.find((block) => block.language === "css");
-      const jsFile = codeBlocks.find(
-        (block) => block.language === "javascript" || block.language === "js",
-      );
-      const tsFile = codeBlocks.find(
-        (block) => block.language === "typescript" || block.language === "ts",
-      );
+      const normalizedFiles = useStructure
+        ? Object.entries(useStructure.files).map(([path, content]) => ({
+            path,
+            lowerPath: path.toLowerCase(),
+            content,
+          }))
+        : [];
+
+      const htmlFromStructure =
+        normalizedFiles.find((file) => file.lowerPath.endsWith(".html"))?.content || null;
+      const cssFromStructure =
+        normalizedFiles.find((file) => file.lowerPath.endsWith(".css"))?.content || null;
+      const jsFromStructure =
+        normalizedFiles.find(
+          (file) =>
+            file.lowerPath.endsWith(".js") ||
+            file.lowerPath.endsWith(".mjs") ||
+            file.lowerPath.endsWith(".cjs"),
+        )?.content || null;
+      const tsFromStructure =
+        normalizedFiles.find((file) => file.lowerPath.endsWith(".ts"))?.content || null;
+
+      const htmlFile = htmlFromStructure
+        ? { code: htmlFromStructure, language: "html" }
+        : codeBlocks.find((block) => block.language === "html");
+      const cssFile = cssFromStructure
+        ? { code: cssFromStructure, language: "css" }
+        : codeBlocks.find((block) => block.language === "css");
+      const jsFile = jsFromStructure
+        ? { code: jsFromStructure, language: "javascript" }
+        : codeBlocks.find(
+            (block) => block.language === "javascript" || block.language === "js",
+          );
+      const tsFile = tsFromStructure
+        ? { code: tsFromStructure, language: "typescript" }
+        : codeBlocks.find(
+            (block) => block.language === "typescript" || block.language === "ts",
+          );
 
       // If no HTML but has other web files, create a basic HTML structure
       if (!htmlFile && (cssFile || jsFile || tsFile)) {
@@ -989,18 +1169,25 @@ export default app;`,
               <p className="text-sm text-gray-600 mt-2">
                 Generate code to enable live preview
               </p>
-              {codeBlocks.length > 0 && (
+              {(codeBlocks.length > 0 || normalizedFiles.length > 0) && (
                 <div className="mt-4">
                   <p className="text-xs text-gray-500 mb-2">
-                    Available code blocks:
+                    Available source files:
                   </p>
                   <div className="flex flex-wrap gap-1 justify-center">
-                    {codeBlocks.map((block, index) => (
+                    {((normalizedFiles.length > 0
+                      ? normalizedFiles.map((file, index) => ({
+                          language: file.path.split(".").pop() || "file",
+                          filename: file.path,
+                          index,
+                        }))
+                      : codeBlocks) as Array<{ language: string; filename: string; index?: number }>
+                    ).map((block, index) => (
                       <span
-                        key={index}
+                        key={`${index}-${block.language}`}
                         className="bg-gray-700 text-gray-300 px-2 py-1 rounded text-xs"
                       >
-                        {block.language}
+                        {block.filename || block.language}
                       </span>
                     ))}
                   </div>
@@ -1180,7 +1367,7 @@ export default app;`,
         .filter(Boolean);
 
       if (diffBlocks.length > 0 && projectStructure) {
-        const newProjectStructure = { ...projectStructure };
+        const newProjectStructure = { ...projectStructure, files: { ...projectStructure.files } };
 
         for (const { path, diff } of diffBlocks) {
           try {
@@ -1218,36 +1405,6 @@ export default app;`,
       setDiffErrors([]);
     }
   }, [isOpen]);
-
-  const handleApplyDiff = () => {
-    if (!diffContent.trim() || !selectedFile || !projectStructure) return;
-
-    try {
-      const unifiedDiff = `--- ${selectedFile}\n+++ ${selectedFile}\n${diffContent}`;
-      const parsedDiff = parsePatch(unifiedDiff);
-
-      if (parsedDiff.length > 0) {
-        const currentContent = projectStructure.files[selectedFile] || "";
-        const patchedContent = applyPatch(currentContent, parsedDiff[0]);
-
-        if (patchedContent !== false) {
-          const newProjectStructure = { ...projectStructure };
-          newProjectStructure.files[selectedFile] = patchedContent;
-          setProjectStructure(newProjectStructure);
-          setDiffContent("");
-          setDiffErrors([]);
-        } else {
-          throw new Error("Failed to apply patch");
-        }
-      }
-    } catch (error) {
-      console.error("Error applying diff:", error);
-      setDiffErrors((prev) => [
-        ...prev,
-        `Failed to apply diff: ${(error as Error).message}`,
-      ]);
-    }
-  };
 
   return (
     <AnimatePresence>
@@ -1291,12 +1448,12 @@ export default app;`,
                     <span className="hidden sm:inline">Download ZIP</span>
                     <span className="sm:hidden">ZIP</span>
                   </button>
-                  {projectStructure && (
+                  {(projectStructureWithScopedFiles || projectStructure) && (
                     <button
                       onClick={() => {
                         localStorage.setItem(
                           "visualEditorProject",
-                          JSON.stringify(projectStructure),
+                          JSON.stringify(projectStructureWithScopedFiles || projectStructure),
                         );
                         window.open("/visual-editor", "_blank");
                       }}
@@ -1365,147 +1522,240 @@ export default app;`,
                     <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 bg-black/30 overflow-y-auto max-h-48 md:max-h-none">
                       <div className="p-2 md:p-4">
                         <h3 className="text-sm font-medium text-gray-300 mb-2">
-                          Files
+                          Filesystem Explorer
                         </h3>
+                        <div className="mb-3 rounded border border-white/10 bg-black/30 p-2">
+                          <div className="mb-2 text-[11px] text-gray-400 break-all">
+                            /{filesystemCurrentPath.replace(/^project\/?/, '') || 'project'}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={openFilesystemParent}
+                            >
+                              Up
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() =>
+                                void listFilesystemDirectory(filesystemCurrentPath)
+                              }
+                            >
+                              Refresh
+                            </Button>
+                          </div>
+                        </div>
                         <div className="space-y-1">
-                          {codeBlocks.map((block, index) => (
+                          {isFilesystemLoading && (
+                            <div className="text-xs text-gray-400 px-2 py-1">
+                              Loading filesystem...
+                            </div>
+                          )}
+                          {!isFilesystemLoading && filesystemNodes.length === 0 && (
+                            <div className="text-xs text-gray-500 px-2 py-1">
+                              No files in current directory.
+                            </div>
+                          )}
+                          {filesystemNodes.map((node) => (
                             <div
-                              className={`flex items-center w-full justify-between p-2 group ${
-                                selectedFileIndex === index
+                              className={`flex items-center w-full justify-between p-2 group cursor-pointer ${
+                                selectedFilesystemPath === node.path
                                   ? "bg-gray-700"
                                   : "hover:bg-gray-800"
                               }`}
-                              key={index}
+                              key={node.path}
+                              onClick={() => {
+                                if (node.type === "directory") {
+                                  openFilesystemDirectory(node.path);
+                                } else {
+                                  void selectFilesystemFile(node.path);
+                                }
+                              }}
                             >
-                              <div
-                                className="flex items-center flex-1 cursor-pointer"
-                                onClick={() => setSelectedFileIndex(index)}
-                              >
-                                <FileText className="w-4 h-4 mr-2 flex-shrink-0" />
-
-                                {editingFileIndex === index ? (
-                                  <div className="flex items-center gap-1 flex-1">
-                                    <Input
-                                      value={editingFileName}
-                                      onChange={(e) =>
-                                        setEditingFileName(e.target.value)
-                                      }
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter") {
-                                          saveFilename(index, editingFileName);
-                                        } else if (e.key === "Escape") {
-                                          cancelEditingFilename();
-                                        }
-                                      }}
-                                      className="h-6 text-xs bg-gray-600 border-gray-500 text-white flex-1"
-                                      autoFocus
-                                      onBlur={() =>
-                                        saveFilename(index, editingFileName)
-                                      }
-                                    />
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={() =>
-                                        saveFilename(index, editingFileName)
-                                      }
-                                      className="h-6 w-6 p-0 text-green-400 hover:text-green-300"
-                                    >
-                                      <Check className="w-3 h-3" />
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      onClick={cancelEditingFilename}
-                                      className="h-6 w-6 p-0 text-red-400 hover:text-red-300"
-                                    >
-                                      <X className="w-3 h-3" />
-                                    </Button>
-                                  </div>
+                              <div className="flex items-center flex-1 min-w-0">
+                                {node.type === "directory" ? (
+                                  <FolderOpen className="w-4 h-4 mr-2 flex-shrink-0 text-yellow-300" />
                                 ) : (
-                                  <span className="truncate flex-1">
-                                    {block.filename}
-                                  </span>
+                                  <FileText className="w-4 h-4 mr-2 flex-shrink-0" />
                                 )}
-                              </div>
-
-                              <div className="flex items-center gap-1">
-                                {editingFileIndex !== index && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      startEditingFilename(
-                                        index,
-                                        block.filename || "",
-                                      );
-                                    }}
-                                    className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-white transition-opacity"
-                                  >
-                                    <Edit className="w-3 h-3" />
-                                  </Button>
-                                )}
-
-                                {block.isError && (
-                                  <span className="text-red-500">
-                                    <AlertCircle className="w-4 h-4" />
-                                  </span>
-                                )}
+                                <span className="truncate flex-1">{node.name}</span>
                               </div>
                             </div>
                           ))}
                         </div>
+
+                        {codeBlocks.length > 0 && (
+                          <div className="mt-4 border-t border-white/10 pt-3">
+                            <h4 className="text-xs font-medium text-gray-400 mb-2">
+                              Generated Snippets
+                            </h4>
+                            <div className="space-y-1">
+                              {codeBlocks.map((block, index) => (
+                                <button
+                                  key={`${block.filename}-${index}`}
+                                  type="button"
+                                  className={`w-full text-left flex items-center p-2 rounded ${
+                                    selectedFileIndex === index
+                                      ? "bg-gray-700"
+                                      : "hover:bg-gray-800"
+                                  }`}
+                                  onClick={() => {
+                                    setSelectedFileIndex(index);
+                                    setSelectedFilesystemPath("");
+                                  }}
+                                >
+                                  <CodeIcon className="w-3 h-3 mr-2 flex-shrink-0" />
+                                  <span className="truncate text-xs">
+                                    {block.filename}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {pendingFiles.length > 0 && (
+                          <div className="mt-4 border-t border-white/10 pt-3">
+                            <h4 className="text-xs font-medium text-gray-400 mb-2">
+                              Pending Diffs ({pendingFiles.length})
+                            </h4>
+                            <div className="flex gap-2 mb-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[11px]"
+                                onClick={onApplyAllCommandDiffs}
+                                disabled={!onApplyAllCommandDiffs}
+                              >
+                                Apply All
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[11px]"
+                                onClick={onClearAllCommandDiffs}
+                                disabled={!onClearAllCommandDiffs}
+                              >
+                                Clear All
+                              </Button>
+                            </div>
+                            <div className="space-y-1">
+                              {pendingFiles.map((path) => (
+                                <div key={path} className="rounded border border-white/10 p-2">
+                                  <div className="truncate text-[11px] text-gray-300">{path}</div>
+                                  <div className="mt-1 flex gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-1 text-[10px]"
+                                      onClick={() => onApplyFileCommandDiffs?.(path)}
+                                    >
+                                      Apply
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-1 text-[10px]"
+                                      onClick={() => onSquashFileCommandDiffs?.(path)}
+                                    >
+                                      Squash
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-1 text-[10px]"
+                                      onClick={() => onClearFileCommandDiffs?.(path)}
+                                    >
+                                      Clear
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 
                     <div className="flex-1 overflow-y-auto">
-                      {codeBlocks.length > 0 && selectedFileIndex !== null && (
+                      {isFilesystemFileLoading ? (
+                        <div className="h-full flex items-center justify-center text-sm text-gray-400">
+                          Loading file...
+                        </div>
+                      ) : selectedFileIndex !== null && codeBlocks[selectedFileIndex] ? (
+                        // Render code block from Generated Snippets
                         <div className="h-full flex flex-col">
-                          {codeBlocks[selectedFileIndex] ? (
-                            <>
-                              <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
-                                <div className="flex items-center gap-2">
-                                  <span className="border border-gray-500 text-gray-300 rounded px-2 py-0.5 text-xs">
-                                    {codeBlocks[selectedFileIndex].language}
-                                  </span>
-                                  <span className="text-sm font-mono text-gray-300">
-                                    {codeBlocks[selectedFileIndex].filename}
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(
-                                        codeBlocks[selectedFileIndex].code,
-                                      );
-                                    }}
-                                  >
-                                    <CodeIcon className="w-4 h-4 mr-1" />
-                                    Copy
-                                  </button>
-                                </div>
-                              </div>
-                              <div className="flex-1 overflow-y-auto bg-black/30">
-                                <SyntaxHighlighter
-                                  style={oneDark as any}
-                                  language={
-                                    codeBlocks[selectedFileIndex].language
-                                  }
-                                  PreTag="div"
-                                  className="!m-0 !bg-gray-900 h-full text-sm"
-                                  showLineNumbers
-                                >
-                                  {codeBlocks[selectedFileIndex].code}
-                                </SyntaxHighlighter>
-                              </div>
-                            </>
-                          ) : (
-                            <div className="flex-1 flex items-center justify-center text-gray-400">
-                              <p>No code block selected</p>
+                          <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="border border-gray-500 text-gray-300 rounded px-2 py-0.5 text-xs">
+                                {codeBlocks[selectedFileIndex].language}
+                              </span>
+                              <span className="text-sm font-mono text-gray-300 truncate">
+                                {codeBlocks[selectedFileIndex].filename || `Snippet ${selectedFileIndex + 1}`}
+                              </span>
                             </div>
-                          )}
+                            <button
+                              className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
+                              onClick={() => {
+                                navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code);
+                              }}
+                            >
+                              <CodeIcon className="w-4 h-4 mr-1" />
+                              Copy
+                            </button>
+                          </div>
+                          <div className="flex-1 overflow-y-auto bg-black/30">
+                            <SyntaxHighlighter
+                              style={oneDark as any}
+                              language={codeBlocks[selectedFileIndex].language}
+                              PreTag="div"
+                              className="!m-0 !bg-gray-900 h-full text-sm"
+                              showLineNumbers
+                            >
+                              {codeBlocks[selectedFileIndex].code}
+                            </SyntaxHighlighter>
+                          </div>
+                        </div>
+                      ) : selectedFilesystemPath ? (
+                        <div className="h-full flex flex-col">
+                          <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="border border-gray-500 text-gray-300 rounded px-2 py-0.5 text-xs">
+                                {selectedFilesystemLanguage}
+                              </span>
+                              <span className="text-sm font-mono text-gray-300 truncate">
+                                {selectedFilesystemPath.replace(/^project\//, '')}
+                              </span>
+                            </div>
+                            <button
+                              className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
+                              onClick={() => {
+                                navigator.clipboard.writeText(selectedFilesystemContent);
+                              }}
+                            >
+                              <CodeIcon className="w-4 h-4 mr-1" />
+                              Copy
+                            </button>
+                          </div>
+                          <div className="flex-1 overflow-y-auto bg-black/30">
+                            <SyntaxHighlighter
+                              style={oneDark as any}
+                              language={selectedFilesystemLanguage}
+                              PreTag="div"
+                              className="!m-0 !bg-gray-900 h-full text-sm"
+                              showLineNumbers
+                            >
+                              {selectedFilesystemContent}
+                            </SyntaxHighlighter>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="h-full flex items-center justify-center text-sm text-gray-500">
+                          Select a file or code snippet to preview.
                         </div>
                       )}
                     </div>
@@ -1516,7 +1766,7 @@ export default app;`,
                   value="structure"
                   className="p-4 h-full overflow-y-auto"
                 >
-                  {projectStructure ? (
+                  {(projectStructureWithScopedFiles || projectStructure) ? (
                     <div className="space-y-4">
                       <div>
                         <h3 className="text-lg font-semibold text-white mb-2">
@@ -1524,7 +1774,7 @@ export default app;`,
                         </h3>
                         <div className="bg-black/40 rounded-lg p-4">
                           <pre className="text-sm text-gray-300">
-                            {Object.keys(projectStructure.files).map(
+                            {Object.keys((projectStructureWithScopedFiles || projectStructure)!.files).map(
                               (filename) => (
                                 <div
                                   key={filename}
@@ -1539,13 +1789,13 @@ export default app;`,
                         </div>
                       </div>
 
-                      {projectStructure.dependencies && (
+                      {(projectStructureWithScopedFiles || projectStructure)?.dependencies && (
                         <div>
                           <h4 className="text-md font-medium text-white mb-2">
                             Dependencies
                           </h4>
                           <div className="flex flex-wrap gap-2">
-                            {projectStructure.dependencies.map((dep) => (
+                            {(projectStructureWithScopedFiles || projectStructure)!.dependencies!.map((dep) => (
                               <span
                                 key={dep}
                                 className="bg-gray-700 text-gray-300 rounded px-2 py-0.5 text-xs"
