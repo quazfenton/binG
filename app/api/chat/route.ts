@@ -332,7 +332,9 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
           async start(controller) {
             // Cleanup function for resource management
             const cleanup = () => {
-              encoderRef = null;
+              // TextEncoder instances do not require explicit cleanup/nullification
+              // for resource management, so removing this avoids potential race
+              // conditions with other uses of encoderRef.
             };
 
             // Handle client disconnect

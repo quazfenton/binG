@@ -91,16 +91,34 @@ export async function POST(req: NextRequest) {
 
     const db = getDatabase();
 
-    // SECURITY: Verify user exists, is active, AND has a valid reset token
-    // This prevents token replay attacks where a captured token could be reused
+    const db = getDatabase();
+
+    // Extract the JWT ID (jti) from the decoded token payload.
+    // This jti is expected to be stored in the database's reset_token column
+    // to link the active reset token to the user and prevent replay attacks.
+    const tokenJti = decoded.jti; 
+    
+    // It's a critical security measure that `jti` is present in the token when issued.
+    if (!tokenJti) {
+      console.error(`[Security] JWT ID (jti) missing from decoded token for userId: ${userId}`);
+      return NextResponse.json(
+        { success: false, error: 'Invalid reset token payload' },
+        { status: 400 }
+      );
+    }
+
+    // SECURITY: Verify user exists, is active, AND has a valid reset token that matches the one provided.
+    // This prevents token replay attacks where a captured token could be reused.
     const user = db.prepare(`
       SELECT id, email, is_active, reset_token, reset_token_expires 
       FROM users WHERE id = ?
     `).get(userId) as any;
 
     if (!user) {
+      // Do not reveal if user exists or not for security reasons (user enumeration).
+      // A user might have been deleted after a token was issued.
       return NextResponse.json(
-        { success: false, error: 'User not found' },
+        { success: false, error: 'Invalid reset token' },
         { status: 400 }
       );
     }
@@ -112,6 +130,34 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // SECURITY: Check if the reset token stored in the database exists and matches the provided token's JTI.
+    // If user.reset_token is NULL, it means the token has already been used or was never issued/invalidated.
+    // If user.reset_token does not match tokenJti, it means a different or invalid token was provided.
+    if (!user.reset_token || user.reset_token !== tokenJti) {
+      console.warn(`[Security] Password reset token mismatch or already used for user ${user.email} (ID: ${userId}). 
+                   Stored JTI: ${user.reset_token}, Provided JTI: ${tokenJti}`);
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: 'This password reset link is invalid or has already been used. Please request a new one.' 
+        },
+        { status: 400 }
+      );
+    }
+
+    // SECURITY: Check if the database-stored reset token has expired.
+    // This is an additional check beyond the JWT's internal 'exp' claim,
+    // allowing for server-side invalidation or shorter effective lifetimes.
+    if (user.reset_token_expires && new Date(user.reset_token_expires) < new Date()) {
+      console.warn(`[Security] Password reset token expired in DB for user ${user.email} (ID: ${userId})`);
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: 'This password reset link has expired. Please request a new one.' 
+        },
+        { status: 400 }
+      );
+    }
     // SECURITY: Check if reset token has already been used or doesn't exist
     // A consumed token will have reset_token set to NULL
     if (!user.reset_token) {
