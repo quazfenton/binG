@@ -300,9 +300,19 @@ export class MistralImageProvider implements ImageGenerationProvider {
           if (chunk.type === 'text' && chunk.text) {
             const urlMatch = chunk.text.match(/https:\/\/[^\s\)]+\.jpg[^\s\)]*|https:\/\/[^\s\)]+\.png[^\s\)]*/i);
             if (urlMatch) {
-              const imageUrl = urlMatch[0];
+              let imageUrl = urlMatch[0];
               console.log('[MistralProvider] Extracted image URL from text:', imageUrl);
-              
+
+              // ✅ FIX: Decode URL-encoded characters (e.g., %3A -> :, %3F -> ?)
+              // Blob storage URLs often have encoded SAS tokens that need decoding
+              try {
+                imageUrl = decodeURIComponent(imageUrl);
+                console.log('[MistralProvider] Decoded image URL:', imageUrl);
+              } catch (e) {
+                // If decoding fails, use original URL
+                console.warn('[MistralProvider] URL decoding failed, using original:', e);
+              }
+
               images.push({
                 url: imageUrl,
                 width: 1024,
@@ -330,9 +340,16 @@ export class MistralImageProvider implements ImageGenerationProvider {
               
               // If file has a direct URL, use it
               if ((fileInfo as any).url) {
-                const imageUrl = (fileInfo as any).url;
+                let imageUrl = (fileInfo as any).url;
                 console.log('[MistralProvider] Using direct URL from file metadata');
-                
+
+                // Decode URL-encoded characters
+                try {
+                  imageUrl = decodeURIComponent(imageUrl);
+                } catch (e) {
+                  console.warn('[MistralProvider] URL decoding failed:', e);
+                }
+
                 images.push({
                   url: imageUrl,
                   width: 1024,
@@ -381,16 +398,54 @@ export class MistralImageProvider implements ImageGenerationProvider {
                   continue;
                 }
               } else if (typeof fileResponse === 'object' && fileResponse !== null) {
-                // Check if it's a ReadableStream (Node.js fetch)
+                // Check if it's a ReadableStream (Node.js fetch) - actually consume it!
                 if (fileResponse instanceof ReadableStream || (fileResponse as any).body instanceof ReadableStream) {
-                  console.log('[MistralProvider] Got ReadableStream, skipping (using URL from text instead)');
-                  continue;
+                  console.log('[MistralProvider] Got ReadableStream, consuming...');
+                  try {
+                    const stream = fileResponse instanceof ReadableStream ? fileResponse : (fileResponse as any).body;
+                    const reader = stream.getReader();
+                    const chunks: Uint8Array[] = [];
+                    
+                    while (true) {
+                      const { done, value } = await reader.read();
+                      if (done) break;
+                      chunks.push(value);
+                    }
+                    
+                    // Combine chunks
+                    const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+                    const buffer = new Uint8Array(totalLength);
+                    let offset = 0;
+                    for (const chunk of chunks) {
+                      buffer.set(chunk, offset);
+                      offset += chunk.length;
+                    }
+                    
+                    if (buffer.length > 1000) {
+                      const base64 = Buffer.from(buffer).toString('base64');
+                      imageUrl = `data:${mimeType};base64,${base64}`;
+                      console.log('[MistralProvider] Consumed ReadableStream to base64, length:', base64.length);
+                    } else {
+                      console.warn('[MistralProvider] ReadableStream produced small response, skipping');
+                      continue;
+                    }
+                  } catch (error) {
+                    console.error('[MistralProvider] Failed to consume ReadableStream:', error);
+                    continue;
+                  }
                 }
-                
                 // Check for URL in response object
-                if ((fileResponse as any).url) {
-                  imageUrl = (fileResponse as any).url;
+                else if ((fileResponse as any).url) {
+                  let url = (fileResponse as any).url;
                   console.log('[MistralProvider] Using URL from response object');
+                  
+                  // Decode URL
+                  try {
+                    url = decodeURIComponent(url);
+                  } catch (e) {
+                    console.warn('[MistralProvider] URL decoding failed:', e);
+                  }
+                  imageUrl = url;
                 } else if ((fileResponse as any).data) {
                   const data = (fileResponse as any).data;
                   if (data instanceof Uint8Array || data instanceof ArrayBuffer) {

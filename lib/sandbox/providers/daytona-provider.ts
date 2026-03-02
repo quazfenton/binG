@@ -32,16 +32,63 @@ export class DaytonaProvider implements SandboxProvider {
   }
 
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
-    // Map language to Daytona image
+    // Map language to Docker image
+    // Using official Docker Hub images - Daytona accepts any valid Docker image reference
+    // See: https://www.daytona.io/docs/en/getting-started.md#create-a-sandbox
     const imageMap: Record<string, string> = {
-      'typescript': 'typescript',
-      'javascript': 'javascript',
-      'python': 'python',
-      'go': 'go',
-      'rust': 'rust',
-      'java': 'java',
+      // TypeScript/JavaScript - Node.js official images
+      'typescript': 'node:20-slim',
+      'javascript': 'node:20-slim',
+      'node': 'node:20-slim',
+      'nodejs': 'node:20-slim',
+      
+      // Python official images
+      'python': 'python:3.11-slim',
+      'python3': 'python:3.11-slim',
+      'py': 'python:3.11-slim',
+      
+      // Go official images
+      'go': 'golang:1.21',
+      'golang': 'golang:1.21',
+      
+      // Rust official images
+      'rust': 'rust:1.74',
+      'rustlang': 'rust:1.74',
+      
+      // Java official images
+      'java': 'eclipse-temurin:17-jre-alpine',
+      'jdk': 'eclipse-temurin:17-jre-alpine',
+      'jvm': 'eclipse-temurin:17-jre-alpine',
+      
+      // C/C++ official images
+      'c': 'gcc:13',
+      'cpp': 'gcc:13',
+      'c++': 'gcc:13',
+      'gcc': 'gcc:13',
+      
+      // Ruby official images
+      'ruby': 'ruby:3.2-slim',
+      'rb': 'ruby:3.2-slim',
+      
+      // PHP official images
+      'php': 'php:8.2-cli',
+      
+      // .NET official images
+      'csharp': 'mcr.microsoft.com/dotnet/sdk:8.0',
+      'dotnet': 'mcr.microsoft.com/dotnet/sdk:8.0',
+      '.net': 'mcr.microsoft.com/dotnet/sdk:8.0',
+      
+      // General purpose / multi-language
+      'ubuntu': 'ubuntu:22.04',
+      'debian': 'debian:bookworm-slim',
+      'alpine': 'alpine:3.19',
+      'bash': 'ubuntu:22.04',
+      'shell': 'ubuntu:22.04',
+      
+      // Daytona official images (if available)
+      'daytona-base': 'daytonaio/sandbox:latest',
     };
-    const image = imageMap[config.language ?? 'typescript'] || 'typescript';
+    const image = imageMap[config.language ?? 'typescript'] || 'node:20-slim';
 
     // Build sandbox creation params
     const createParams: any = {

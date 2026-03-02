@@ -44,6 +44,7 @@ import {
   Shrink,
   ExternalLink,
   Copy,
+  ImageOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -161,14 +162,70 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   });
 
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>([]);
+  const [generatedImages, setGeneratedImages] = useState<GeneratedImage[]>(() => {
+    // Load from localStorage on mount
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('generated-images');
+        if (saved) {
+          return JSON.parse(saved);
+        }
+      } catch (e) {
+        console.warn('[ImageGenerationTab] Failed to load images from localStorage:', e);
+      }
+    }
+    return [];
+  });
   const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [generationHistory, setGenerationHistory] = useState<GenerationParams[]>([]);
+  const [generationHistory, setGenerationHistory] = useState<GenerationParams[]>(() => {
+    // Load from localStorage on mount
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('generation-history');
+        if (saved) {
+          return JSON.parse(saved);
+        }
+      } catch (e) {
+        console.warn('[ImageGenerationTab] Failed to load history from localStorage:', e);
+      }
+    }
+    return [];
+  });
   const abortControllerRef = useRef<AbortController | null>(null);
-  
+
   // Ref to store the generate function to avoid initialization order issues
   const generateFnRef = useRef<(() => Promise<void>) | null>(null);
+
+  // ✅ FIX: Helper to get image URL with CORS proxy fallback for blob storage URLs
+  const getImageUrl = useCallback((imageUrl: string): string => {
+    // Use CORS proxy for blob storage URLs that might have CORS restrictions
+    if (imageUrl.includes('.blob.core.windows.net') || imageUrl.includes('.amazonaws.com')) {
+      const corsProxy = process.env.NEXT_PUBLIC_CORS_PROXY_URL;
+      if (corsProxy) {
+        return `${corsProxy}${encodeURIComponent(imageUrl)}`;
+      }
+    }
+    return imageUrl;
+  }, []);
+
+  // Save generated images to localStorage
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('generated-images', JSON.stringify(generatedImages));
+    } catch (e) {
+      console.warn('[ImageGenerationTab] Failed to save images to localStorage:', e);
+    }
+  }, [generatedImages]);
+
+  // Save generation history to localStorage
+  React.useEffect(() => {
+    try {
+      localStorage.setItem('generation-history', JSON.stringify(generationHistory));
+    } catch (e) {
+      console.warn('[ImageGenerationTab] Failed to save history to localStorage:', e);
+    }
+  }, [generationHistory]);
 
   // Update dimensions when aspect ratio changes
   const handleAspectRatioChange = useCallback((value: string) => {
@@ -230,11 +287,12 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
       console.log('[ImageGenerationTab] Extracted images:', images);
 
       if (images && images.length > 0) {
-        setGeneratedImages((prev) => [...images, ...prev]);
+        // Append new images to the front (newest first), limit to 50 images
+        setGeneratedImages((prev) => [...images, ...prev].slice(0, 50));
         setSelectedImage(images[0]);
 
-        // Save to history
-        setGenerationHistory((prev) => [params, ...prev.slice(0, 9)]);
+        // Save to history (keep last 20)
+        setGenerationHistory((prev) => [params, ...prev.slice(0, 19)]);
 
         toast.success(
           `Generated ${images.length} image${images.length > 1 ? "s" : ""} using ${data?.data?.provider || data?.provider || 'unknown'}`
@@ -323,34 +381,64 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   // Download image
   const downloadImage = useCallback(async (imageUrl: string, index: number) => {
     try {
-      let blob: Blob;
+      let blob: Blob | null = null;
+      let downloadUrl = imageUrl;
 
-      // ✅ FIX 5: Handle both base64 data URLs and remote URLs properly
+      // Handle base64 data URLs
       if (imageUrl.startsWith('data:')) {
-        // Handle base64 data URL - convert to blob
         const response = await fetch(imageUrl);
         blob = await response.blob();
-      } else {
-        // Handle remote URL - fetch with CORS handling
-        const response = await fetch(imageUrl);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+      } 
+      // Handle blob storage URLs with CORS proxy
+      else if (imageUrl.includes('.blob.core.windows.net') || imageUrl.includes('.amazonaws.com')) {
+        const corsProxy = process.env.NEXT_PUBLIC_CORS_PROXY_URL;
+        if (corsProxy) {
+          downloadUrl = `${corsProxy}${encodeURIComponent(imageUrl)}`;
         }
-        blob = await response.blob();
+        // Try to fetch (with or without proxy)
+        try {
+          const response = await fetch(downloadUrl);
+          if (response.ok) {
+            blob = await response.blob();
+          }
+        } catch (fetchError) {
+          console.warn('Direct fetch failed, trying alternative method:', fetchError);
+        }
+      }
+      
+      // If we got a blob, download it
+      if (blob) {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `generated-image-${index + 1}-${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        toast.success("Image downloaded");
+        return;
       }
 
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `generated-image-${index + 1}-${Date.now()}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-      toast.success("Image downloaded");
+      // Fallback: Open image in new tab and let user save manually
+      console.log('[ImageGenerationTab] Opening image in new tab for manual save');
+      const newWindow = window.open(imageUrl, '_blank');
+      if (newWindow) {
+        toast.info("Image opened in new tab - right-click and select 'Save image as...'");
+      } else {
+        // Last resort: just copy the URL
+        await navigator.clipboard.writeText(imageUrl);
+        toast.success("Image URL copied to clipboard (paste in browser to download)");
+      }
     } catch (error) {
       console.error("Download error:", error);
-      toast.error("Failed to download image. Try right-clicking and saving manually.");
+      // Final fallback: open in new tab
+      const newWindow = window.open(imageUrl, '_blank');
+      if (newWindow) {
+        toast.info("Image opened in new tab - right-click and select 'Save image as...'");
+      } else {
+        toast.error("Download failed. Right-click the image and select 'Save image as...'");
+      }
     }
   }, []);
 
@@ -370,7 +458,19 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   const clearImages = useCallback(() => {
     setGeneratedImages([]);
     setSelectedImage(null);
+    setImageErrors(new Set());
+    localStorage.removeItem('generated-images');
+    localStorage.removeItem('generation-history');
     toast.info("Cleared all images");
+  }, []);
+
+  // Image error handler state
+  const [imageErrors, setImageErrors] = useState<Set<string>>(new Set());
+
+  // Image error handler
+  const handleImageError = useCallback((imageUrl: string) => {
+    setImageErrors(prev => new Set(prev).add(imageUrl));
+    console.warn('[ImageGenerationTab] Image failed to load:', imageUrl);
   }, []);
 
   return (
@@ -713,33 +813,46 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
             <Card className="min-h-[400px] border-0 shadow-none bg-transparent">
               <CardContent className="p-0">
                 {selectedImage ? (
-                  <div className="space-y-4">
+                  <>
                     <div className="relative aspect-square max-h-[500px] mx-auto">
-                      <img
-                        src={selectedImage.url}
-                        alt="Generated"
-                        className="w-full h-full object-contain rounded-lg"
-                      />
-                      <div className="absolute top-2 right-2 flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() =>
-                            downloadImage(selectedImage.url, 0)
-                          }
-                        >
-                          <Download className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() =>
-                            window.open(selectedImage.url, "_blank")
-                          }
-                        >
-                          <ExternalLink className="w-4 h-4" />
-                        </Button>
-                      </div>
+                      {imageErrors.has(selectedImage.url) ? (
+                        <div className="w-full h-full flex items-center justify-center bg-muted rounded-lg text-muted-foreground">
+                          <div className="text-center p-4">
+                            <ImageOff className="w-16 h-16 mx-auto mb-4" />
+                            <p>Failed to load image</p>
+                            <p className="text-xs mt-2">The image URL may have expired or have CORS restrictions</p>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <img
+                            src={getImageUrl(selectedImage.url)}
+                            alt="Generated"
+                            className="w-full h-full object-contain rounded-lg"
+                            onError={() => handleImageError(selectedImage.url)}
+                          />
+                          <div className="absolute top-2 right-2 flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() =>
+                                downloadImage(selectedImage.url, 0)
+                              }
+                            >
+                              <Download className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() =>
+                                window.open(getImageUrl(selectedImage.url), "_blank")
+                              }
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </>
+                      )}
                     </div>
                     <div className="flex items-center justify-between text-sm text-muted-foreground">
                       <div className="flex items-center gap-4">
@@ -756,7 +869,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
                         )}
                       </div>
                     </div>
-                  </div>
+                  </>
                 ) : (
                   <div className="flex flex-col items-center justify-center h-[400px] text-muted-foreground">
                     <ImageIcon className="w-16 h-16 mb-4 opacity-20" />
@@ -787,25 +900,42 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
                     </Button>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                    {generatedImages.map((image, index) => (
-                      <div
-                        key={index}
-                        className={cn(
-                          "relative aspect-square rounded-lg overflow-hidden cursor-pointer",
-                          selectedImage?.url === image.url
-                            ? "ring-2 ring-purple-500"
-                            : "hover:ring-2 ring-muted"
-                        )}
-                        onClick={() => setSelectedImage(image)}
-                      >
-                        <img
-                          src={image.url}
-                          alt={`Generated ${index + 1}`}
-                          className="w-full h-full object-cover"
-                        />
-                        <div className="absolute inset-0 bg-black/0 hover:bg-black/20 transition-colors" />
-                      </div>
-                    ))}
+                    {generatedImages.map((image, index) => {
+                      const imageUrl = getImageUrl(image.url);
+                      const hasError = imageErrors.has(image.url);
+                      
+                      return (
+                        <div
+                          key={index}
+                          className={cn(
+                            "relative aspect-square rounded-lg overflow-hidden cursor-pointer",
+                            selectedImage?.url === image.url
+                              ? "ring-2 ring-purple-500"
+                              : "hover:ring-2 ring-muted"
+                          )}
+                          onClick={() => setSelectedImage(image)}
+                        >
+                          {hasError ? (
+                            <div className="w-full h-full flex items-center justify-center bg-muted text-muted-foreground">
+                              <div className="text-center p-2">
+                                <ImageOff className="w-8 h-8 mx-auto mb-2" />
+                                <span className="text-xs">Failed to load</span>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <img
+                                src={imageUrl}
+                                alt={`Generated ${index + 1}`}
+                                className="w-full h-full object-cover"
+                                onError={() => handleImageError(image.url)}
+                              />
+                              <div className="absolute inset-0 bg-black/0 hover:bg-black/20 transition-colors" />
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </CardContent>
               </Card>

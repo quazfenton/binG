@@ -315,7 +315,7 @@ export class UnifiedErrorHandler {
       rate_limit: 60000, // 1 minute
       timeout: 5000, // 5 seconds
       network: 10000, // 10 seconds
-      provider: 15000, // 15 seconds
+      provider: 45000, // 45 seconds
       validation: 0, // Not retryable
       authentication: 0, // Not retryable
       authorization: 0, // Not retryable

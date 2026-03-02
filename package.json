@@ -31,6 +31,8 @@
     "@arcadeai/arcadejs": "^2.2.0",
     "@aws-sdk/client-s3": "^3.990.0",
     "@aws-sdk/s3-request-presigner": "^3.990.0",
+    "@blaxel/core": "^0.2.69",
+    "@blaxel/vercel": "^0.2.69",
     "@codesandbox/sandpack-react": "^2.20.0",
     "@codesandbox/sdk": "^2.4.2",
     "@composio/anthropic": "^0.2.6",
@@ -44,6 +46,7 @@
     "@e2b/desktop": "^2.2.2",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
+    "@fly/sprites": "^0.0.1",
     "@getbrevo/brevo": "^4.0.1",
     "@google/generative-ai": "^0.14.0",
     "@hookform/resolvers": "^3.9.1",
@@ -57,6 +60,7 @@
     "@livekit/components-styles": "^1.1.4",
     "@mastra/core": "^1.8.0",
     "@mistralai/mistralai": "^1.14.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@nangohq/frontend": "^0.69.7",
     "@nangohq/node": "^0.69.5",
     "@radix-ui/react-accordion": "1.2.2",
@@ -158,12 +162,6 @@
     "ws": "^8.19.0",
     "zod": "^3.24.1"
   },
-  "optionalDependencies": {
-    "@blaxel/core": "^0.2.69",
-    "@blaxel/vercel": "^0.2.69",
-    "@fly/sprites": "^0.0.1",
-    "@modelcontextprotocol/sdk": "^1.27.1"
-  },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.1",
     "@playwright/test": "^1.58.2",
@@ -183,10 +181,12 @@
     "@types/ws": "^8.18.1",
     "acorn": "^8.16.0",
     "esprima": "^4.0.1",
+    "node-polyfill-webpack-plugin": "^4.1.0",
     "postcss": "^8.5",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.21.0",
     "typescript": "^5",
+    "unenv": "^1.10.0",
     "vitest": "^4.0.18"
   },
   "pnpm": {

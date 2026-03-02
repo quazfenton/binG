@@ -369,7 +369,7 @@ Use this tool when you need to:
     }
   },
   retries: 2,
-  timeout: 15000, // 15 second timeout
+  timeout: 25000, // 15 second timeout
 });
 
 /**

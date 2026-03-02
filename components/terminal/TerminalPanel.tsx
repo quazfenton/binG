@@ -34,7 +34,7 @@ interface SandboxInfo {
   };
 }
 
-type TerminalMode = 'local' | 'connecting' | 'pty' | 'sandbox-cmd' | 'editor';
+type TerminalMode = 'local' | 'connecting' | 'pty' | 'sandbox-cmd' | 'editor' | 'command-mode';
 
 /*
   'local' - Local shell simulation in browser
@@ -156,6 +156,11 @@ export default function TerminalPanel({
     filePath: string;
     content: string;
     cursor: number;
+    lines: string[];
+    cursorLine: number;
+    cursorCol: number;
+    originalContent: string;
+    clipboard: string;
   } | null>>({});
   const connectAbortRef = useRef<Record<string, AbortController>>({});
   const connectTerminalRef = useRef<(terminalId: string) => Promise<void>>();
@@ -931,12 +936,15 @@ export default function TerminalPanel({
         const content = existing?.content || '';
         
         editorSessionRef.current[terminalId] = {
+          type: cmd as 'nano' | 'vim' | 'vi',
           filePath,
           content,
+          cursor: 0,
           cursorLine: 0,
           cursorCol: 0,
           lines: content.split('\n'),
-          originalContent: content
+          originalContent: content,
+          clipboard: ''
         };
         
         const mode = cmd === 'vim' || cmd === 'vi' ? 'NORMAL' : 'EDITOR';
@@ -1142,6 +1150,194 @@ export default function TerminalPanel({
         session.lines[session.cursorLine] = line.slice(0, -1) + line.slice(session.cursorCol);
         session.cursorCol--;
       }
+      const maxLines = 15;
+      const displayLines = session.lines.slice(0, maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m Nano - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const prefix = i === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      writeLine(`\x1b[90mFile: ${session.filePath.split('/').pop()} | Lines: ${session.lines.length}\x1b[0m`);
+      return;
+    }
+
+    if (input === '\x07') {
+      writeLine('\x1b[36m==== Nano Help ====\x1b[0m');
+      writeLine('\x1b[33m^G\x1b[0m  \x1b[37mDisplay this help     \x1b[33m^X\x1b[0m  \x1b[37mExit editor\x1b[0m');
+      writeLine('\x1b[33m^O\x1b[0m  \x1b[37mSave (WriteOut)       \x1b[33m^K\x1b[0m  \x1b[37mCut line\x1b[0m');
+      writeLine('\x1b[33m^U\x1b[0m  \x1b[37mPaste (Uncut)        \x1b[33m^Y\x1b[0m  \x1b[37mPrevious page\x1b[0m');
+      writeLine('\x1b[33m^C\x1b[0m  \x1b[37mShow cursor position\x1b[0m');
+      const maxLines = 15;
+      const displayLines = session.lines.slice(0, maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m Nano - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const prefix = i === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      writeLine(`\x1b[90mFile: ${session.filePath.split('/').pop()} | Lines: ${session.lines.length}\x1b[0m`);
+      return;
+    }
+
+    if (input === '\x0f') {
+      const fs = localFileSystemRef.current;
+      const fileContent = session.lines.join('\n');
+      fs[session.filePath] = {
+        type: 'file',
+        content: fileContent,
+        createdAt: fs[session.filePath]?.createdAt || Date.now(),
+        modifiedAt: Date.now()
+      };
+      syncFileToVFS(session.filePath, fileContent);
+      writeLine(`\x1b[32m"${session.filePath}" ${session.lines.length}L ${fileContent.length}C written\x1b[0m`);
+      session.originalContent = fileContent;
+      const maxLines = 15;
+      const displayLines = session.lines.slice(0, maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m Nano - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const prefix = i === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      writeLine(`\x1b[90mFile: ${session.filePath.split('/').pop()} | Lines: ${session.lines.length}\x1b[0m`);
+      return;
+    }
+
+    if (input === '\x18') {
+      editorSessionRef.current[terminalId] = null;
+      updateTerminalState(terminalId, { mode: 'local' });
+      const cwd = localShellCwdRef.current[terminalId] || 'project';
+      writeLine('');
+      if (session.lines.join('\n') !== session.originalContent) {
+        writeLine('\x1b[33mSave modified buffer (ANSWERING "No" WILL DESTROY CHANGES) ? \x1b[0m');
+        writeLine('\x1b[90m Y \x1b[0m Yes');
+        writeLine('\x1b[90m N \x1b[0m No');
+        writeLine('\x1b[90m^C \x1b[0m Cancel');
+      } else {
+        writeLine('\x1b[90mExit.\x1b[0m');
+        write(getPrompt('editor', cwd));
+      }
+      return;
+    }
+
+    if (input === '\x0b') {
+      const line = session.lines[session.cursorLine] || '';
+      session.clipboard = (session.clipboard || '') + (session.clipboard ? '\n' : '') + line;
+      session.lines[session.cursorLine] = '';
+      session.cursorCol = 0;
+      const maxLines = 15;
+      const displayLines = session.lines.slice(0, maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m Nano - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const prefix = i === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      writeLine(`\x1b[90mFile: ${session.filePath.split('/').pop()} | Lines: ${session.lines.length}\x1b[0m`);
+      return;
+    }
+
+    if (input === '\x15') {
+      if (session.clipboard) {
+        const lines = session.clipboard.split('\n');
+        const currentLine = session.lines[session.cursorLine] || '';
+        const beforeCursor = currentLine.slice(0, session.cursorCol);
+        const afterCursor = currentLine.slice(session.cursorCol);
+        session.lines[session.cursorLine] = beforeCursor + lines[0] + afterCursor;
+        session.cursorCol = beforeCursor.length + lines[0].length;
+        for (let i = 1; i < lines.length; i++) {
+          session.lines.splice(session.cursorLine + i, 0, lines[i]);
+        }
+        session.cursorLine += lines.length - 1;
+        if (session.cursorLine >= session.lines.length) {
+          session.lines.push('');
+          session.cursorLine = session.lines.length - 1;
+        }
+      }
+      const maxLines = 15;
+      const displayLines = session.lines.slice(0, maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m Nano - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const prefix = i === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      writeLine(`\x1b[90mFile: ${session.filePath.split('/').pop()} | Lines: ${session.lines.length}\x1b[0m`);
+      return;
+    }
+
+    if (input === '\x12') {
+      writeLine('\x1b[90mFile to insert [from ./]: \x1b[0m');
+      const maxLines = 15;
+      const displayLines = session.lines.slice(0, maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m Nano - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const prefix = i === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      writeLine(`\x1b[90mFile: ${session.filePath.split('/').pop()} | Lines: ${session.lines.length}\x1b[0m`);
+      return;
+    }
+
+    if (input === '\x19') {
+      if (session.cursorLine > 0) {
+        session.cursorLine--;
+        const line = session.lines[session.cursorLine] || '';
+        session.cursorCol = Math.min(session.cursorCol, line.length);
+      }
+      const maxLines = 15;
+      const displayLines = session.lines.slice(0, maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m Nano - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const prefix = i === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      writeLine(`\x1b[90mFile: ${session.filePath.split('/').pop()} | Lines: ${session.lines.length}\x1b[0m`);
       return;
     }
 
@@ -1591,6 +1787,15 @@ export default function TerminalPanel({
         const t = terminalsRef.current.find(t => t.id === terminalId);
         if (!t) return true;
         if (t.mode === 'pty') return true; // Let PTY handle everything
+        
+        // Suppress default browser behavior for Ctrl combinations in editor mode
+        if (t.mode === 'editor' || editorSessionRef.current[terminalId]) {
+          const ctrlKeys = ['g', 'o', 'x', 'k', 'u', 'r', 'y', 'c', 'j', 't'];
+          if (event.ctrlKey && ctrlKeys.includes(event.key.toLowerCase())) {
+            return false; // Let xterm handle these Ctrl shortcuts for nano
+          }
+        }
+        
         if (event.key === 'ArrowUp' || event.key === 'ArrowDown') return false; // Suppress default xterm scroll
         return true;
       });
@@ -1657,6 +1862,42 @@ export default function TerminalPanel({
       lineBufferRef.current[terminalId] = '';
       const cwd = term.sandboxInfo.sessionId ? '/workspace' : '~';
       term.terminal?.write(`\x1b[1;32m${cwd}$\x1b[0m `);
+      return;
+    }
+
+    if (data === '\u001b[A') {
+      // Up arrow - previous command in history
+      const history = commandHistoryRef.current[terminalId] || [];
+      let idx = historyIndexRef.current[terminalId] ?? history.length;
+      if (idx > 0) {
+        idx--;
+        historyIndexRef.current[terminalId] = idx;
+        const cmd = history[idx] || '';
+        const cwd = term.sandboxInfo.sessionId ? '/workspace' : '~';
+        term.terminal?.write('\r\x1b[K' + ` ${cwd}$ ` + cmd);
+        lineBufferRef.current[terminalId] = cmd;
+      }
+      return;
+    }
+
+    if (data === '\u001b[B') {
+      // Down arrow - next command in history
+      const history = commandHistoryRef.current[terminalId] || [];
+      let idx = historyIndexRef.current[terminalId] ?? history.length;
+      if (idx < history.length - 1) {
+        idx++;
+        historyIndexRef.current[terminalId] = idx;
+        const cmd = history[idx] || '';
+        const cwd = term.sandboxInfo.sessionId ? '/workspace' : '~';
+        term.terminal?.write('\r\x1b[K' + ` ${cwd}$ ` + cmd);
+        lineBufferRef.current[terminalId] = cmd;
+      } else {
+        idx = history.length;
+        historyIndexRef.current[terminalId] = idx;
+        const cwd = term.sandboxInfo.sessionId ? '/workspace' : '~';
+        term.terminal?.write('\r\x1b[K' + ` ${cwd}$ `);
+        lineBufferRef.current[terminalId] = '';
+      }
       return;
     }
 

@@ -1,41 +1,5 @@
 {
   "version": 1,
-  "updatedAt": "2026-02-27T14:29:32.442Z",
-  "quotas": {
-    "brevo": {
-      "monthlyLimit": 300,
-      "currentUsage": 0,
-      "resetDate": "2026-03-01",
-      "isDisabled": true,
-      "priority": 1
-    },
-    "mailersend": {
-      "monthlyLimit": 3000,
-      "currentUsage": 0,
-      "resetDate": "2026-03-01T05:00:00.000Z",
-      "isDisabled": true,
-      "priority": 2
-    },
-    "resend": {
-      "monthlyLimit": 3000,
-      "currentUsage": 0,
-      "resetDate": "2026-03-01",
-      "isDisabled": true,
-      "priority": 2
-    },
-    "sendgrid": {
-      "monthlyLimit": 3000,
-      "currentUsage": 0,
-      "resetDate": "2026-03-01",
-      "isDisabled": true,
-      "priority": 3
-    },
-    "smtp": {
-      "monthlyLimit": 10000,
-      "currentUsage": 0,
-      "resetDate": "2026-03-01",
-      "isDisabled": true,
-      "priority": 4
-    }
-  }
+  "updatedAt": "2026-03-02T00:00:00.000Z",
+  "quotas": {}
 }

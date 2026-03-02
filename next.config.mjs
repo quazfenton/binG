@@ -1,3 +1,8 @@
+import NodePolyfillPlugin from 'node-polyfill-webpack-plugin';
+import { env, nodeless } from 'unenv';
+
+const { alias: turbopackAlias } = env(nodeless, {});
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   typescript: {
@@ -35,6 +40,9 @@ const nextConfig = {
         as: '*.js',
       },
     },
+    resolveAlias: {
+      ...turbopackAlias,
+    },
   },
   env: {
     DEFAULT_LLM_PROVIDER: process.env.DEFAULT_LLM_PROVIDER,
@@ -62,6 +70,11 @@ const nextConfig = {
     "portkey-ai",
   ],
   webpack: (config, { isServer, dev }) => {
+    // Add Node polyfills for Daytona SDK compatibility
+    if (!isServer) {
+      config.plugins.push(new NodePolyfillPlugin());
+    }
+
     // Suppress specific warnings in development
     if (dev) {
       const existingIgnoreWarnings = config.ignoreWarnings || [];

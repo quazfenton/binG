@@ -137,11 +137,13 @@ export class BlaxelProvider implements SandboxProvider {
 
     try {
       const blaxelSdk = await import('@blaxel/core') as any
-      // Create client from SDK - handle various export patterns
-      this.client = new blaxelSdk.default({
+      // Initialize Blaxel SDK per documentation
+      // https://docs.blaxel.ai/Infrastructure/Middleware#initialize-the-sdk
+      await blaxelSdk.default.initialize({
         apiKey: this.apiKey,
         workspace: this.workspace,
       })
+      this.client = blaxelSdk.default
       return this.client
     } catch (error: any) {
       console.error('[Blaxel] Failed to initialize client:', error.message)

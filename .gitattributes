@@ -3,6 +3,7 @@
 docs/** linguist-documentation=true
 
 # Ignore everything inside the test/ folder for diffs and analysis
-test/** linguist-generated=true
 tests-results/** linguist-generated=true
 deprecated/** linguist-documentation=true
+*.png linguist-generated=true
+*.svg linguist-generated=true

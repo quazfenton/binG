@@ -500,6 +500,9 @@ function sanitizeAssistantDisplayContent(content: string): string {
   next = next.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
   next = next.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
   next = next.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
+  
+  // Remove <fs-actions>...</fs-actions> XML tag blocks (LLM sometimes uses XML instead of code blocks)
+  next = next.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
 
   // Remove raw WRITE/PATCH heredoc command blocks that leak into visible output
   next = next.replace(/(?:^|\n)\s*(WRITE|PATCH)\s+[^\n]+\n<<<\n[\s\S]*?\n>>>(?=\n|$)/g, '\n');
@@ -756,6 +759,8 @@ function extractFencedDiffEdits(content: string): Array<{ path: string; diff: st
 
 function extractFsActionWrites(content: string): Array<{ path: string; content: string }> {
   const writes: Array<{ path: string; content: string }> = [];
+
+  // Extract from ```fs-actions ... ``` code blocks
   const blockRegex = /```fs-actions\s*([\s\S]*?)```/gi;
   let blockMatch: RegExpExecArray | null;
 
@@ -771,11 +776,29 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
     }
   }
 
+  // Also extract from <fs-actions>...</fs-actions> XML tags (LLM sometimes uses XML instead of code blocks)
+  const xmlBlockRegex = /<fs-actions>([\s\S]*?)<\/fs-actions>/gi;
+  let xmlBlockMatch: RegExpExecArray | null;
+
+  while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
+    const blockContent = xmlBlockMatch[1] || '';
+    const writeRegex = /WRITE\s+([^\n]+)\n<<<\n([\s\S]*?)\n>>>/gi;
+    let writeMatch: RegExpExecArray | null;
+    while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
+      const path = writeMatch[1]?.trim();
+      const fileContent = writeMatch[2] ?? '';
+      if (!path) continue;
+      writes.push({ path, content: fileContent });
+    }
+  }
+
   return writes;
 }
 
 function extractFsActionDeletes(content: string): string[] {
   const deletes: string[] = [];
+
+  // Extract from ```fs-actions ... ``` code blocks
   const blockRegex = /```fs-actions\s*([\s\S]*?)```/gi;
   let blockMatch: RegExpExecArray | null;
 
@@ -789,16 +812,48 @@ function extractFsActionDeletes(content: string): string[] {
     }
   }
 
+  // Also extract from <fs-actions>...</fs-actions> XML tags
+  const xmlBlockRegex = /<fs-actions>([\s\S]*?)<\/fs-actions>/gi;
+  let xmlBlockMatch: RegExpExecArray | null;
+
+  while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
+    const blockContent = xmlBlockMatch[1] || '';
+    const deleteRegex = /DELETE\s+([^\n]+)/gi;
+    let deleteMatch: RegExpExecArray | null;
+    while ((deleteMatch = deleteRegex.exec(blockContent)) !== null) {
+      const path = deleteMatch[1]?.trim();
+      if (path) deletes.push(path);
+    }
+  }
+
   return deletes;
 }
 
 function extractFsActionPatches(content: string): Array<{ path: string; diff: string }> {
   const patches: Array<{ path: string; diff: string }> = [];
+
+  // Extract from ```fs-actions ... ``` code blocks
   const blockRegex = /```fs-actions\s*([\s\S]*?)```/gi;
   let blockMatch: RegExpExecArray | null;
 
   while ((blockMatch = blockRegex.exec(content)) !== null) {
     const blockContent = blockMatch[1] || '';
+    const patchRegex = /PATCH\s+([^\n]+)\n<<<\n([\s\S]*?)\n>>>/gi;
+    let patchMatch: RegExpExecArray | null;
+    while ((patchMatch = patchRegex.exec(blockContent)) !== null) {
+      const path = patchMatch[1]?.trim();
+      const diff = patchMatch[2] ?? '';
+      if (!path) continue;
+      patches.push({ path, diff });
+    }
+  }
+
+  // Also extract from <fs-actions>...</fs-actions> XML tags
+  const xmlBlockRegex = /<fs-actions>([\s\S]*?)<\/fs-actions>/gi;
+  let xmlBlockMatch: RegExpExecArray | null;
+
+  while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
+    const blockContent = xmlBlockMatch[1] || '';
     const patchRegex = /PATCH\s+([^\n]+)\n<<<\n([\s\S]*?)\n>>>/gi;
     let patchMatch: RegExpExecArray | null;
     while ((patchMatch = patchRegex.exec(blockContent)) !== null) {

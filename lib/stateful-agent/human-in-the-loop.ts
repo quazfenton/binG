@@ -235,18 +235,39 @@ export function toolNameMatcher(names: string[]): ApprovalCondition {
 
 /**
  * Condition: Check if file path matches pattern
+ * Supports glob patterns including ** for recursive directory matching
  */
 export function filePathMatcher(patterns: string[]): ApprovalCondition {
   return (_toolName: string, _params: any, context?: ApprovalContext) => {
     if (!context?.filePath) return false;
+    const filePath = context.filePath;
+    
     return patterns.some(pattern => {
-      if (pattern.startsWith('*')) {
-        return context.filePath?.endsWith(pattern.slice(1));
+      // Handle ** (recursive directory) patterns
+      if (pattern.includes('**')) {
+        // Convert glob pattern to regex
+        // **/.env* matches .env files in any directory
+        // **/secrets/* matches anything under any secrets/ directory
+        const regexPattern = pattern
+          .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // Escape regex special chars
+          .replace(/\*\*/g, '.*') // ** matches any path segments
+          .replace(/\*/g, '[^/]*'); // * matches within a segment (not across /)
+        const regex = new RegExp(`^${regexPattern}$`);
+        return regex.test(filePath);
       }
-      if (pattern.endsWith('*')) {
-        return context.filePath?.startsWith(pattern.slice(0, -1));
+      
+      // Handle simple * prefix patterns (e.g., *.env)
+      if (pattern.startsWith('*') && !pattern.includes('**')) {
+        return filePath.endsWith(pattern.slice(1));
       }
-      return context.filePath === pattern;
+      
+      // Handle simple * suffix patterns (e.g., .env*)
+      if (pattern.endsWith('*') && !pattern.includes('**')) {
+        return filePath.startsWith(pattern.slice(0, -1));
+      }
+      
+      // Exact match
+      return filePath === pattern;
     });
   };
 }

@@ -292,9 +292,11 @@ export default function CodePreviewPanel({
     if (!isOpen) {
       return;
     }
+    let cancelled = false;
     const loadScopedFiles = async () => {
       try {
         const snapshot = await virtualFilesystem.getSnapshot(filesystemScopePath);
+        if (cancelled) return;
         const files = (snapshot?.files || []).reduce(
           (acc, file) => {
             acc[file.path] = file.content;
@@ -302,14 +304,19 @@ export default function CodePreviewPanel({
           },
           {} as Record<string, string>,
         );
-        setScopedPreviewFiles(files);
+        if (!cancelled) {
+          setScopedPreviewFiles(files);
+        }
       } catch {
-        setScopedPreviewFiles({});
+        if (!cancelled) {
+          setScopedPreviewFiles({});
+        }
       }
     };
 
     void loadScopedFiles();
-  }, [filesystemScopePath, isOpen, messages, virtualFilesystem]);
+    return () => { cancelled = true; };
+  }, [filesystemScopePath, isOpen, virtualFilesystem.getSnapshot]);
 
   // Generate project structure for complex projects
   // Also merge virtual filesystem files for live preview
@@ -341,8 +348,7 @@ export default function CodePreviewPanel({
       };
       setProjectStructure(structure);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [codeBlocks, scopedPreviewFiles, projectFiles ? Object.keys(projectFiles).join(',') : '']);
+  }, [codeBlocks, scopedPreviewFiles, projectFiles]);
 
   const projectStructureWithScopedFiles = useMemo(() => {
     const scopedRelativeFiles = Object.entries(scopedPreviewFiles).reduce(

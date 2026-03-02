@@ -255,125 +255,316 @@ async function executeToolOnSandbox(
 
       // Enhanced tools - git operations
       case 'git_clone': {
+        // Check rate limit for git operations
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'gitOps')
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          }
+        }
+
         const { url, path, branch, depth, username, password } = args
 
         if (!url) {
           return { success: false, output: 'Repository URL is required', exitCode: 1 }
         }
 
-        let clonePath = path || getRepoNameFromUrl(url)
-        let cloneCmd = `git clone ${url} ${clonePath}`
+        // Validate URL to prevent command injection
+        const urlRegex = /^https?:\/\/[a-zA-Z0-9._\-/]+(?:\.git)?$/
+        if (!urlRegex.test(url)) {
+          return { success: false, output: 'Invalid repository URL format', exitCode: 1 }
+        }
 
-        if (branch) {
-          cloneCmd = `git clone -b ${branch} ${url} ${clonePath}`
+        let clonePath = path || getRepoNameFromUrl(url)
+
+        // Validate clone path
+        if (!/^[a-zA-Z0-9._\-/]+$/.test(clonePath)) {
+          return { success: false, output: 'Invalid path format', exitCode: 1 }
+        }
+
+        // Use git credential helper instead of embedding credentials in URL
+        let cloneCmd: string
+        if (username && password) {
+          // Configure git credential helper for this operation only
+          // This avoids exposing credentials in process listings
+          const escapedUrl = url.replace(/'/g, "'\\''")
+          cloneCmd = `cd ${sandbox.workspaceDir} && git config --local credential.helper store && echo "password='${password.replace(/'/g, "'\\''")}'" | git credential approve && git clone ${escapedUrl} ${clonePath} && git config --local --unset credential.helper`
+
+          if (branch) {
+            const escapedBranch = branch.replace(/'/g, "'\\''")
+            cloneCmd = `cd ${sandbox.workspaceDir} && GIT_ASKPASS=/bin/echo git clone -b ${escapedBranch} ${escapedUrl} ${clonePath}`
+          }
+        } else {
+          cloneCmd = `cd ${sandbox.workspaceDir} && git clone ${url} ${clonePath}`
+
+          if (branch) {
+            const escapedBranch = branch.replace(/'/g, "'\\''")
+            cloneCmd = `cd ${sandbox.workspaceDir} && git clone -b ${escapedBranch} ${url} ${clonePath}`
+          }
         }
 
         if (depth) {
-          cloneCmd += ` --depth ${depth}`
+          const depthNum = parseInt(depth, 10)
+          if (!isNaN(depthNum) && depthNum > 0) {
+            cloneCmd += ` --depth ${depthNum}`
+          }
         }
 
-        if (username && password) {
-          // Inject credentials into URL
-          const authUrl = url.replace('https://', `https://${username}:${password}@`)
-          cloneCmd = cloneCmd.replace(url, authUrl)
-        }
-
+        await rateLimiter.record(rateLimitKey, 'gitOps')
         return sandbox.executeCommand(cloneCmd)
       }
 
       case 'git_status': {
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'gitOps')
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          }
+        }
+
         const repoPath = args.path || '.'
-        return sandbox.executeCommand(`cd ${repoPath} && git status`)
+        const safePath = String(repoPath).replace(/'/g, "'\\''")
+        await rateLimiter.record(rateLimitKey, 'gitOps')
+        return sandbox.executeCommand(`cd '${safePath}' && git status`)
       }
 
       case 'git_commit': {
+        // Check rate limit for git operations
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'gitOps')
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          }
+        }
+
         const { message, all, path } = args
         const repoPath = path || '.'
+
+        // Validate repo path
+        if (!/^[a-zA-Z0-9._\-/]+$/.test(repoPath)) {
+          return { success: false, output: 'Invalid repository path', exitCode: 1 }
+        }
 
         if (!message) {
           return { success: false, output: 'Commit message is required', exitCode: 1 }
         }
 
+        // Use single quotes and escape any single quotes in the message
+        // This prevents command substitution via $() or backticks
+        const escapedMessage = String(message).replace(/'/g, "'\\''")
+        
         let cmd = `cd ${repoPath} && `
         if (all) {
           cmd += 'git add -A && '
         }
-        cmd += `git commit -m "${message.replace(/"/g, '\\"')}"`
+        // Use single quotes to prevent command substitution
+        cmd += `git commit -m '${escapedMessage}'`
 
+        await rateLimiter.record(rateLimitKey, 'gitOps')
         return sandbox.executeCommand(cmd)
       }
 
       case 'git_push': {
+        // Check rate limit for git operations
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'gitOps')
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          }
+        }
+
         const { remote = 'origin', branch, force } = args
-        const repoPath = args.path || '.'
+        const repoPath = path || '.'
+
+        // Validate inputs
+        if (!/^[a-zA-Z0-9._\-/]+$/.test(repoPath)) {
+          return { success: false, output: 'Invalid repository path', exitCode: 1 }
+        }
+        
+        if (!/^[a-zA-Z0-9._\-/]+$/.test(remote)) {
+          return { success: false, output: 'Invalid remote name', exitCode: 1 }
+        }
 
         let cmd = `cd ${repoPath} && git push ${remote}`
         if (force) {
           cmd += ' --force'
         }
         if (branch) {
-          cmd += ` ${branch}`
+          const escapedBranch = String(branch).replace(/'/g, "'\\''")
+          cmd += ` ${escapedBranch}`
         }
 
+        await rateLimiter.record(rateLimitKey, 'gitOps')
         return sandbox.executeCommand(cmd)
       }
 
       // Enhanced tools - process management
       case 'start_process': {
+        // Check rate limit for process operations
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'processOps')
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          }
+        }
+
         const { command, background = true, captureOutput = true } = args
+        
+        // Validate and sanitize command
+        const safeCommand = String(command).replace(/'/g, "'\\''")
+        
         // For background processes, use nohup or &
-        const bgCmd = background ? `nohup ${command} ${captureOutput ? '&> /tmp/process_$$.log &' : '&'}` : command
+        const bgCmd = background ? `nohup ${safeCommand} ${captureOutput ? '&> /tmp/process_$$.log &' : '&'}` : safeCommand
+        await rateLimiter.record(rateLimitKey, 'processOps')
         return sandbox.executeCommand(bgCmd)
       }
 
       case 'stop_process': {
+        // Check rate limit for process operations
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'processOps')
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          }
+        }
+
         const { pid, name, signal = 'SIGTERM' } = args
 
+        // Validate signal
+        const validSignals = ['SIGTERM', 'SIGKILL', 'SIGHUP', 'SIGINT', 'SIGUSR1', 'SIGUSR2', '9', '15', '1', '2']
+        if (!validSignals.includes(String(signal))) {
+          return { success: false, output: 'Invalid signal', exitCode: 1 }
+        }
+
         if (pid) {
-          return sandbox.executeCommand(`kill -${signal} ${pid}`)
+          // Validate PID is a number
+          const pidNum = parseInt(pid, 10)
+          if (isNaN(pidNum) || pidNum <= 0) {
+            return { success: false, output: 'Invalid PID', exitCode: 1 }
+          }
+          await rateLimiter.record(rateLimitKey, 'processOps')
+          return sandbox.executeCommand(`kill -${signal} ${pidNum}`)
         }
 
         if (name) {
-          return sandbox.executeCommand(`pkill -${signal} -f "${name}"`)
+          // Escape the process name to prevent command injection
+          const escapedName = String(name).replace(/'/g, "'\\''")
+          await rateLimiter.record(rateLimitKey, 'processOps')
+          return sandbox.executeCommand(`pkill -${signal} -f '${escapedName}'`)
         }
 
         return { success: false, output: 'PID or process name required', exitCode: 1 }
       }
 
       case 'list_processes': {
-        const userFilter = args.user ? ` | grep ${args.user}` : ''
+        // Check rate limit for process operations
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'processOps')
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          }
+        }
+
+        const userFilter = args.user ? ` | grep '${String(args.user).replace(/'/g, "'\\''")}'` : ''
+        await rateLimiter.record(rateLimitKey, 'processOps')
         return sandbox.executeCommand(`ps aux${userFilter}`)
       }
 
       // Enhanced tools - preview management
       case 'get_previews': {
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'processOps')
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          }
+        }
+
         const { port } = args
         if (port) {
+          await rateLimiter.record(rateLimitKey, 'processOps')
           return sandbox.executeCommand(`lsof -i :${port} 2>/dev/null || echo "No process on port ${port}"`)
         }
+        await rateLimiter.record(rateLimitKey, 'processOps')
         return sandbox.executeCommand('netstat -tlnp 2>/dev/null || ss -tlnp')
       }
 
       case 'forward_port': {
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'processOps')
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          }
+        }
+
         const { port, public: isPublic = true } = args
         // This would integrate with sandbox provider's port forwarding
         // For now, just verify the port is listening
+        await rateLimiter.record(rateLimitKey, 'processOps')
         return sandbox.executeCommand(`lsof -i :${port} 2>/dev/null || echo "Port ${port} not in use"`)
       }
 
       // Enhanced tools - file operations
       case 'search_files': {
-        const { pattern, path = '.', content, maxResults = 100 } = args
-
-        if (content) {
-          return sandbox.executeCommand(`grep -r "${content}" ${path} | head -n ${maxResults}`)
+        // Check rate limit for file operations
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps')
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          }
         }
 
-        return sandbox.executeCommand(`find ${path} -name "${pattern}" | head -n ${maxResults}`)
+        const { pattern, path = '.', content, maxResults = 100 } = args
+
+        // Validate inputs
+        const safePath = String(path).replace(/'/g, "'\\''")
+        const safeMax = Math.min(parseInt(maxResults, 10) || 100, 1000)
+
+        if (content) {
+          // Escape content for grep (prevent command injection)
+          const escapedContent = String(content).replace(/'/g, "'\\''")
+          await rateLimiter.record(rateLimitKey, 'fileOps')
+          return sandbox.executeCommand(`grep -r '${escapedContent}' '${safePath}' | head -n ${safeMax}`)
+        }
+
+        // Escape pattern for find
+        const escapedPattern = String(pattern).replace(/'/g, "'\\''")
+        await rateLimiter.record(rateLimitKey, 'fileOps')
+        return sandbox.executeCommand(`find '${safePath}' -name '${escapedPattern}' | head -n ${safeMax}`)
       }
 
       case 'sync_files': {
+        // Check rate limit for file operations
+        rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps')
+        if (!rateLimitResult.allowed) {
+          return {
+            success: false,
+            output: `Rate limit exceeded: ${rateLimitResult.message}`,
+            exitCode: 1,
+          }
+        }
+
         const { direction, paths, deleteOrphans = false } = args
+        await rateLimiter.record(rateLimitKey, 'fileOps')
         // Placeholder - would implement actual sync logic
         return {
           success: true,

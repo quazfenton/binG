@@ -7,9 +7,9 @@ interface WorkflowExecutor {
 const workflowExecutor: WorkflowExecutor = {
   async execute(workflow: string, input: any, config?: any): Promise<any> {
     console.log(`[Workflow] Executing workflow: ${workflow}`);
-    
+
     const workflowUrl = process.env.WORKFLOW_SERVICE_URL;
-    
+
     if (workflowUrl) {
       try {
         const response = await fetch(`${workflowUrl}/execute`, {
@@ -17,18 +17,20 @@ const workflowExecutor: WorkflowExecutor = {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workflow, input, config }),
         });
-        
+
         if (!response.ok) {
-          throw new Error(`Workflow service returned ${response.status}`);
+          const errorText = await response.text().catch(() => 'Unknown error');
+          throw new Error(`Workflow service returned ${response.status}: ${errorText}`);
         }
-        
+
         return await response.json();
       } catch (error) {
         console.error('[Workflow] External service error:', error);
+        throw error; // Re-throw to surface the error to the caller
       }
     }
-    
-    // Mock implementation for development
+
+    // Mock implementation for development (only when no service URL is configured)
     return {
       workflow,
       input,
