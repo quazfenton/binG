@@ -127,7 +127,7 @@ export async function POST(req: NextRequest) {
       requestId,
     });
     
-    return addCORSHeaders(response);
+    return addCORSHeaders(response, undefined, req);
   } catch (error: any) {
     console.error(`[Tools] Execution error (${requestId}):`, error);
     // Don't expose internal error details to clients
