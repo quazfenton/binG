@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 export async function POST(req: NextRequest) {
   try {
+    // SECURITY: Require authentication to prevent unauthorized Docker deployments
+    const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     const { compose } = await req.json();
     if (!compose || typeof compose !== 'string') {
       return NextResponse.json({ error: 'compose yaml is required' }, { status: 400 });

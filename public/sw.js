@@ -80,6 +80,11 @@ self.addEventListener('fetch', (event) => {
   }
 
   // For static assets (CSS, JS, images), cache first, then network
+  // Only cache GET requests - non-GET requests should not be cached
+  if (request.method !== 'GET') {
+    return;
+  }
+  
   event.respondWith(
     caches.match(request).then((cachedResponse) => {
       if (cachedResponse) {

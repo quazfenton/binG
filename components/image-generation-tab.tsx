@@ -422,18 +422,25 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
 
       // Fallback: Open image in new tab and let user save manually
       console.log('[ImageGenerationTab] Opening image in new tab for manual save');
-      const newWindow = window.open(imageUrl, '_blank');
+      // Security: Add noopener,noreferrer to prevent reverse-tabnabbing
+      const newWindow = window.open(imageUrl, '_blank', 'noopener,noreferrer');
       if (newWindow) {
         toast.info("Image opened in new tab - right-click and select 'Save image as...'");
       } else {
         // Last resort: just copy the URL
-        await navigator.clipboard.writeText(imageUrl);
-        toast.success("Image URL copied to clipboard (paste in browser to download)");
+        try {
+          await navigator.clipboard.writeText(imageUrl);
+          toast.success("Image URL copied to clipboard (paste in browser to download)");
+        } catch (clipboardError) {
+          console.error('Clipboard write failed:', clipboardError);
+          toast.error("Failed to copy URL to clipboard");
+        }
       }
     } catch (error) {
       console.error("Download error:", error);
       // Final fallback: open in new tab
-      const newWindow = window.open(imageUrl, '_blank');
+      // Security: Add noopener,noreferrer to prevent reverse-tabnabbing
+      const newWindow = window.open(imageUrl, '_blank', 'noopener,noreferrer');
       if (newWindow) {
         toast.info("Image opened in new tab - right-click and select 'Save image as...'");
       } else {
@@ -443,9 +450,14 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   }, []);
 
   // Copy image prompt
-  const copyPrompt = useCallback(() => {
-    navigator.clipboard.writeText(params.prompt);
-    toast.success("Prompt copied to clipboard");
+  const copyPrompt = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(params.prompt);
+      toast.success("Prompt copied to clipboard");
+    } catch (error) {
+      console.error('Clipboard write failed:', error);
+      toast.error("Failed to copy prompt to clipboard");
+    }
   }, [params.prompt]);
 
   // Reuse image parameters
@@ -845,7 +857,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
                               size="sm"
                               variant="secondary"
                               onClick={() =>
-                                window.open(getImageUrl(selectedImage.url), "_blank")
+                                window.open(getImageUrl(selectedImage.url), "_blank", "noopener,noreferrer")
                               }
                             >
                               <ExternalLink className="w-4 h-4" />

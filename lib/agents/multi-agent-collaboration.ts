@@ -688,10 +688,10 @@ export function createMultiAgentCollaboration(): MultiAgentCollaboration {
 
 /**
  * Quick collaborative execution helper
- * 
+ *
  * Creates a temporary collaboration instance and executes tasks
  * across multiple agents in parallel.
- * 
+ *
  * @param roles - Agent roles to create
  * @param taskDescription - Task description
  * @param context - Optional execution context
@@ -703,12 +703,8 @@ export async function quickCollaborativeExecute(
   context?: any
 ): Promise<CollaborationResult> {
   const collaboration = new MultiAgentCollaboration();
-  
-  // Register agents for each role
-  for (let i = 0; i < roles.length; i++) {
-    collaboration.registerAgent(`quick_agent_${i}`, roles[i]);
-  }
-  
-  // Execute collaboratively
+
+  // Execute collaboratively - agents are created internally by executeCollaborative
+  // No need to pre-register them since executeCollaborative creates its own agents
   return collaboration.executeCollaborative(taskDescription, roles, context);
 }

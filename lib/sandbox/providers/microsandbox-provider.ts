@@ -384,7 +384,7 @@ class LocalSandboxHandle implements SandboxHandle {
     this.id = id || `local-${Date.now()}`
     this.workspaceDir = './local-workspace'
     this.workspacePath = path.resolve(process.cwd(), 'local-workspace', this.id)
-    
+
     // Create workspace directory
     const fs = require('fs')
     if (!fs.existsSync(this.workspacePath)) {
@@ -392,17 +392,78 @@ class LocalSandboxHandle implements SandboxHandle {
     }
   }
 
+  /**
+   * Sanitize command to prevent shell injection (same as MicrosandboxSandboxHandle)
+   */
+  private sanitizeCommand(command: string): string {
+    // Check for control characters
+    if (/[\n\r\0]/.test(command)) {
+      throw new Error('Command contains invalid control characters');
+    }
+
+    // Block dangerous command patterns
+    const dangerousPatterns = [
+      { pattern: /;\s*(rm\s+-rf|chmod\s+777|chown\s+root|sudo|su\s+|kill\s+-9|mkfs|dd\s+if=)/i, reason: 'Dangerous command chaining' },
+      { pattern: /\|\s*(ba)?sh\b/i, reason: 'Pipe to shell interpreter' },
+      { pattern: /\|\s*(curl|wget).*\|\s*(ba)?sh\b/i, reason: 'Download and execute pattern' },
+      { pattern: />\s*\/(dev|etc|proc|sys|root)\//i, reason: 'Redirect to system directory' },
+      { pattern: /\$\([^)]*\/bin\//i, reason: 'Command substitution with system binary' },
+      { pattern: /`[^`]*\/bin\/[^`]*`/, reason: 'Backtick command substitution with system binary' },
+      { pattern: /<\([^)]*\/bin\//i, reason: 'Process substitution with system binary' },
+      { pattern: /\beval\b\s*[\(\{]/i, reason: 'Eval execution' },
+      { pattern: /\bexec\b\s*[\(\{]/i, reason: 'Exec execution' },
+      { pattern: /:\(\)\s*\{\s*:\|\:&\s*\}\s*;/, reason: 'Fork bomb pattern' },
+    ];
+
+    for (const { pattern, reason } of dangerousPatterns) {
+      if (pattern.test(command)) {
+        throw new Error(`Command blocked by security policy: ${reason}`);
+      }
+    }
+
+    return command;
+  }
+
+  /**
+   * Resolve and validate path to prevent path traversal attacks
+   */
+  private resolvePath(filePath: string): string {
+    const normalized = filePath.replace(/\\/g, '/');
+
+    // Reject path traversal attempts
+    if (normalized.includes('..') || normalized.includes('\0')) {
+      throw new Error(`Invalid file path: ${filePath}`);
+    }
+
+    // For relative paths, resolve within workspace
+    const resolved = path.resolve(this.workspacePath, normalized.replace(/^\//, ''));
+
+    // Verify the resolved path is within workspace
+    if (!resolved.startsWith(this.workspacePath)) {
+      throw new Error(`Path traversal detected: ${filePath}`);
+    }
+
+    return resolved;
+  }
+
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
+    // SECURITY: Sanitize command to prevent injection
+    const safeCommand = this.sanitizeCommand(command);
+
     const { exec } = require('child_process')
     const util = require('util')
     const execPromise = util.promisify(exec)
 
     const execCwd = cwd ? path.resolve(this.workspacePath, cwd.replace(/^\//, '')) : this.workspacePath
-    
+
     try {
-      const result = await execPromise(command, {
+      // Convert timeout from seconds to milliseconds (callers pass seconds)
+      // Default to 60 seconds if not specified
+      const timeoutMs = timeout ? timeout * 1000 : 60000;
+
+      const result = await execPromise(safeCommand, {
         cwd: execCwd,
-        timeout: timeout || 60000,
+        timeout: timeoutMs,
         env: { ...process.env, NODE_ENV: 'development' },
       })
 
@@ -422,8 +483,9 @@ class LocalSandboxHandle implements SandboxHandle {
 
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
     const fs = require('fs').promises
-    const resolved = path.resolve(this.workspacePath, filePath.replace(/^\//, ''))
-    
+    // SECURITY: Use resolvePath to prevent path traversal
+    const resolved = this.resolvePath(filePath)
+
     try {
       await fs.mkdir(path.dirname(resolved), { recursive: true })
       await fs.writeFile(resolved, content, 'utf8')
@@ -443,8 +505,9 @@ class LocalSandboxHandle implements SandboxHandle {
 
   async readFile(filePath: string): Promise<ToolResult> {
     const fs = require('fs').promises
-    const resolved = path.resolve(this.workspacePath, filePath.replace(/^\//, ''))
-    
+    // SECURITY: Use resolvePath to prevent path traversal
+    const resolved = this.resolvePath(filePath)
+
     try {
       const content = await fs.readFile(resolved, 'utf8')
       return {
@@ -463,17 +526,18 @@ class LocalSandboxHandle implements SandboxHandle {
 
   async listDirectory(dirPath?: string): Promise<ToolResult> {
     const fs = require('fs').promises
-    const resolved = dirPath 
-      ? path.resolve(this.workspacePath, dirPath.replace(/^\//, ''))
+    // SECURITY: Use resolvePath to prevent path traversal
+    const resolved = dirPath
+      ? this.resolvePath(dirPath)
       : this.workspacePath
-    
+
     try {
       const entries = await fs.readdir(resolved, { withFileTypes: true })
       const output = entries.map((entry: any) => {
         const prefix = entry.isDirectory() ? 'd' : '-'
         return `${prefix} ${entry.name}`
       }).join('\n')
-      
+
       return {
         success: true,
         output: output,

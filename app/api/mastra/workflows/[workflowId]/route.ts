@@ -73,10 +73,10 @@ export async function POST(
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { workflowId: string; runId: string } }
+  { params }: { params: Promise<{ workflowId: string; runId: string }> }
 ) {
   try {
-    const { workflowId, runId } = params;
+    const { workflowId, runId } = await params;
 
     // Get workflow
     const workflow = mastra.getWorkflow(workflowId);

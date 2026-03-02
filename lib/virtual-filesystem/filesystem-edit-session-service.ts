@@ -272,10 +272,13 @@ class FilesystemEditSessionService {
       return tx;
     }
     tx.status = 'accepted';
-    
+
     // Persist to database
     filesystemEditDatabase.persistTransaction(tx);
-    
+
+    // Remove from in-memory map to prevent memory leak (already persisted to DB)
+    this.transactions.delete(transactionId);
+
     return tx;
   }
 

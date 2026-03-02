@@ -171,7 +171,8 @@ export function getAvailableEmbedTypes(): string[] {
 
 /**
  * Validate embed type
+ * Uses Object.prototype.hasOwnProperty.call to avoid prototype pollution
  */
 export function isValidEmbedType(type: string): boolean {
-  return type in EMBED_CONFIGS;
+  return Object.prototype.hasOwnProperty.call(EMBED_CONFIGS, type);
 }

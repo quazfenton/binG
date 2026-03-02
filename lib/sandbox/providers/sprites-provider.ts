@@ -747,8 +747,8 @@ export class SpritesSandboxHandle implements SandboxHandle {
     autoStop?: 'suspend' | 'stop'
   }): Promise<ServiceInfo> {
     try {
+      // Use sprite-env as the executable (not sprite)
       const args = [
-        'sprite-env',
         'services',
         'create',
         config.name,
@@ -774,7 +774,8 @@ export class SpritesSandboxHandle implements SandboxHandle {
         args.push('--auto-stop') // Only saves disk
       }
 
-      const result = await this.sprite.execFile('sprite', args)
+      // Use sprite-env executable (consistent with the rest of the file)
+      const result = await this.sprite.execFile('sprite-env', args)
       const service = JSON.parse(result.stdout)
 
       return {

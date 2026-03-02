@@ -43,16 +43,16 @@ export async function GET(req: NextRequest) {
     }
     
     // Validate parameters
-    const validation = searchRequestSchema.safeParse({ 
-      q: query, 
-      path, 
+    const validation = searchRequestSchema.safeParse({
+      q: query,
+      path,
       limit,
-      ownerId: ownerIdFromQuery 
+      ownerId: ownerIdFromQuery
     });
     if (!validation.success) {
       return NextResponse.json(
-        { 
-          success: false, 
+        {
+          success: false,
           error: 'Invalid request',
           details: validation.error.errors.map(e => ({
             field: e.path.join('.'),
@@ -63,8 +63,21 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Use ownerId from query if provided, otherwise resolve from auth
-    const ownerId = ownerIdFromQuery || (await resolveFilesystemOwner(req)).ownerId;
+    // SECURITY: Always derive ownerId from authenticated request context
+    // Reject any attempt to override ownerId via query parameter
+    const authResolution = await resolveFilesystemOwner(req);
+    const ownerId = authResolution.ownerId;
+
+    // If ownerId was explicitly provided in query, verify it matches authenticated user
+    if (ownerIdFromQuery && ownerIdFromQuery !== ownerId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Unauthorized: cannot search filesystems for other users',
+        },
+        { status: 403 },
+      );
+    }
 
     const results = await virtualFilesystem.search(ownerId, query, { path, limit });
     return NextResponse.json({

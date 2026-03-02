@@ -8,6 +8,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { quotaManager } from '@/lib/services/quota-manager';
 
 /**
@@ -44,6 +45,15 @@ interface QuotaStatusResponse {
  */
 export async function GET(request: NextRequest) {
   try {
+    // SECURITY: Require authentication to prevent unauthorized access to internal quota data
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     const status = quotaManager.getAllStatus();
     
     // Build response
@@ -92,6 +102,15 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
+    // SECURITY: Require authentication to prevent unauthorized quota management
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
     const { provider, action } = body;
 

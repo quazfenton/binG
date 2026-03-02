@@ -135,6 +135,64 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
         return numericRatio >= MIN_NUMERIC_RATIO;
       });
 
+      // K-Means is unsupervised clustering - doesn't need target/labels
+      if (selectedAlgorithm === 'kmeans') {
+        if (numericColumns.length < 2) {
+          throw new Error('Need at least 2 numeric columns for K-Means clustering');
+        }
+
+        const featureColumns = numericColumns;
+        
+        // Build features, filtering out rows with missing/invalid values
+        const features: number[][] = [];
+
+        for (const row of data) {
+          const featureValues = featureColumns.map(col => {
+            const value = row[col];
+            const num = typeof value === 'number' ? value : Number(value);
+            return Number.isFinite(num) ? num : null;
+          });
+
+          // Skip rows with any invalid values
+          if (featureValues.some(v => v === null)) {
+            continue;
+          }
+
+          features.push(featureValues as number[]);
+        }
+
+        if (features.length === 0) {
+          throw new Error('No complete rows found after filtering invalid values');
+        }
+
+        const res = await fetch('/api/modal/train', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            algorithm: selectedAlgorithm,
+            features,
+            featureColumns
+          })
+        });
+
+        const body = await res.json();
+        if (!res.ok) {
+          throw new Error(body?.error || 'Clustering failed');
+        }
+
+        const result: TrainingResult = {
+          algorithm: selectedAlgorithm,
+          summary: body?.data?.summary,
+          metrics: body?.data?.metrics,
+          raw: body?.data?.raw
+        };
+        setTrainingResult(result);
+        toast.success(body?.data?.summary || 'K-Means clustering complete');
+        setLoading(false);
+        return;
+      }
+
+      // Supervised algorithms (linear regression, logistic regression, random forest)
       if (numericColumns.length < 2) {
         throw new Error('Need at least 2 numeric columns for training');
       }
@@ -197,6 +255,7 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
       };
       setTrainingResult(result);
       toast.success(body?.data?.summary || 'Model training complete');
+      setLoading(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Training failed');
     } finally {

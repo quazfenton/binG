@@ -255,7 +255,7 @@ describe('Performance Benchmarks', () => {
       expect(cacheHitTime).toBeLessThan(10); // Cache hit should be very fast
     });
 
-    it('should evict expired cache entries', () => {
+    it('should evict expired cache entries', async () => {
       const cache = new Map<string, { data: any; timestamp: number }>();
       const CACHE_TTL = 100; // 100ms for testing
 
@@ -279,9 +279,8 @@ describe('Performance Benchmarks', () => {
       expect(getCache('key1')).toBe('value1');
 
       // Wait for expiration
-      setTimeout(() => {
-        expect(getCache('key1')).toBeNull();
-      }, CACHE_TTL + 10);
+      await new Promise(resolve => setTimeout(resolve, CACHE_TTL + 10));
+      expect(getCache('key1')).toBeNull();
     });
   });
 

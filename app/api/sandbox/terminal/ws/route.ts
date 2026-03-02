@@ -44,17 +44,33 @@ export async function GET(req: NextRequest) {
   // For deployments with custom WebSocket server, return the WS URL
   const wsProtocol = process.env.WEBSOCKET_PROTOCOL || 'ws';
   const wsHost = process.env.WEBSOCKET_HOST || 'localhost:3001';
-  
-  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-  const wsUrl = `${wsProtocol}://${wsHost}/ws${tokenParam}&sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}`;
 
-  return new Response(JSON.stringify({ 
+  // Build WebSocket URL with properly encoded parameters
+  const wsParams = new URLSearchParams();
+  if (token) {
+    wsParams.set('token', token);
+  }
+  wsParams.set('sessionId', sessionId);
+  wsParams.set('sandboxId', sandboxId);
+  
+  const wsUrl = `${wsProtocol}://${wsHost}/ws?${wsParams.toString()}`;
+
+  // Build SSE fallback URL with properly encoded parameters
+  const sseParams = new URLSearchParams();
+  sseParams.set('sessionId', sessionId);
+  sseParams.set('sandboxId', sandboxId);
+  if (token) {
+    sseParams.set('token', token);
+  }
+  const sseUrl = `/api/sandbox/terminal/stream?${sseParams.toString()}`;
+
+  return new Response(JSON.stringify({
     message: 'WebSocket endpoint - requires custom server for WebSocket upgrade',
     wsUrl,
     instructions: 'Connect to wsUrl using WebSocket client. See docs for custom server setup.',
     fallback: {
       type: 'sse',
-      url: `/api/sandbox/terminal/stream?sessionId=${sessionId}&sandboxId=${sandboxId}${token ? `&token=${token}` : ''}`
+      url: sseUrl
     }
   }), {
     status: 200,

@@ -3,7 +3,14 @@ import { getDatabase } from '@/lib/database/connection';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+// SECURITY: JWT_SECRET is now required - no fallback to predictable default
+// This ensures reset tokens can only be verified with the correct secret
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET) {
+  console.error('[Security] JWT_SECRET environment variable is not set');
+  throw new Error('JWT_SECRET is required but not configured');
+}
 
 /**
  * Password reset confirmation schema

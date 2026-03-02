@@ -84,6 +84,7 @@ export async function POST(request: NextRequest) {
     const readableStream = new ReadableStream({
       async start(controller) {
         const timeout = setTimeout(() => {
+          abortController.abort();
           controller.error(new Error('Stream timeout after 5 minutes'));
         }, 300000); // 5 minute timeout
 
@@ -122,12 +123,12 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error(`[Mastra API] Workflow execution error (${requestId}):`, error);
 
-    // Don't expose internal errors in production
+    // Don't expose internal error details in production
     const isDev = process.env.NODE_ENV === 'development';
-    
+
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : 'Workflow execution failed',
+        error: isDev && error instanceof Error ? error.message : 'Workflow execution failed',
         requestId,
         stack: isDev && error instanceof Error ? error.stack : undefined,
       },

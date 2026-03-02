@@ -200,22 +200,21 @@ describe('Rate Limiting', () => {
     expect(result.retryAfter!).toBeGreaterThan(0);
   });
 
-  it('should reset after window expires', () => {
+  it('should reset after window expires', async () => {
     // Use a very short window for testing
     const result1 = checkRateLimit('short-window', 2, 100);
     expect(result1.allowed).toBe(true);
-    
+
     const result2 = checkRateLimit('short-window', 2, 100);
     expect(result2.allowed).toBe(true);
-    
+
     const result3 = checkRateLimit('short-window', 2, 100);
     expect(result3.allowed).toBe(false);
-    
+
     // Wait for window to expire
-    setTimeout(() => {
-      const result4 = checkRateLimit('short-window', 2, 100);
-      expect(result4.allowed).toBe(true);
-    }, 150);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    const result4 = checkRateLimit('short-window', 2, 100);
+    expect(result4.allowed).toBe(true);
   });
 
   it('should track remaining requests correctly', () => {

@@ -25,10 +25,29 @@ function waitForPort(host: string, port: number, timeoutMs: number): Promise<voi
 
   return new Promise((resolve, reject) => {
     const tryConnect = () => {
+      // Check if we've exceeded the overall timeout
+      if (Date.now() >= deadline) {
+        reject(new Error(`Microsandbox daemon not reachable at ${host}:${port}`))
+        return
+      }
+
       const socket = net.createConnection({ host, port })
       let settled = false
 
+      // Set a timer for each individual connect attempt
+      const attemptTimeout = setTimeout(() => {
+        if (settled) return
+        settled = true
+        cleanup()
+        if (Date.now() >= deadline) {
+          reject(new Error(`Microsandbox daemon not reachable at ${host}:${port}`))
+          return
+        }
+        setTimeout(tryConnect, 400)
+      }, Math.min(2000, deadline - Date.now()))
+
       const cleanup = () => {
+        clearTimeout(attemptTimeout)
         socket.removeAllListeners()
         socket.destroy()
       }

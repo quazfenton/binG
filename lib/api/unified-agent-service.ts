@@ -274,7 +274,7 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
   return {
     success: true,
     response: result.response,
-    steps: result.commandsExecuted?.map(cmd => ({
+    steps: (result.bashCommands || []).map(cmd => ({
       toolName: 'execute_command',
       args: { command: cmd.command },
       result: {
@@ -283,13 +283,60 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
         exitCode: cmd.exitCode,
       },
     })),
-    totalSteps: result.metadata.steps,
+    totalSteps: result.steps,
     mode: 'v2-containerized',
     metadata: {
       provider: 'opencode-engine',
       duration: Date.now() - startTime,
-      commandsExecuted: result.commandsExecuted?.length || 0,
-      filesModified: result.filesModified?.length || 0,
+      commandsExecuted: result.bashCommands?.length || 0,
+      filesModified: result.fileChanges?.length || 0,
+    },
+  };
+}
+
+/**
+ * Run V2 local mode (OpenCode CLI spawned locally) - PRIMARY ENGINE
+ */
+async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
+  const startTime = Date.now();
+  
+  // Use OpenCode Engine as primary agentic engine
+  const engineConfig: OpenCodeEngineConfig = {
+    userId: 'unified-agent',
+    sessionId: config.conversationHistory?.[0]?.content,
+    systemPrompt: config.systemPrompt,
+    model: process.env.OPENCODE_MODEL,
+    maxSteps: config.maxSteps,
+    timeout: 300000,
+    containerized: false,
+  };
+  
+  const engine = createOpenCodeEngine(engineConfig);
+  const result = await engine.execute(config.userMessage);
+  
+  if (!result.success) {
+    throw new Error(result.error || 'OpenCode engine failed');
+  }
+  
+  return {
+    success: true,
+    response: result.response,
+    steps: (result.bashCommands || []).map(cmd => ({
+      toolName: 'execute_command',
+      args: { command: cmd.command },
+      result: {
+        success: cmd.exitCode === 0,
+        output: cmd.output,
+        exitCode: cmd.exitCode,
+      },
+    })),
+    totalSteps: result.steps,
+    mode: 'v2-local',
+    metadata: {
+      provider: 'opencode-engine',
+      duration: Date.now() - startTime,
+      commandsExecuted: result.bashCommands?.length || 0,
+      filesModified: result.fileChanges?.length || 0,
     },
   };
 }

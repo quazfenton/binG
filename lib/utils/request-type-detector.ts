@@ -64,6 +64,13 @@ export function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 
     return '';
   };
 
+  // Include recent user context (last 2 messages) for better follow-up detection
+  const recentUserMessages = userMessages.slice(-2);
+  const recentContext = recentUserMessages
+    .map(m => extractText(m.content))
+    .join(' ')
+    .toLowerCase();
+
   const text = extractText(lastUserContent).trim();
   if (!text) return 'chat';
 
@@ -93,6 +100,35 @@ export function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 
   
   const looksLikeKnowledgeRequest = KNOWLEDGE_PATTERNS.some((p) => p.test(lowerText));
   const explicitlyActionable = ACTION_PATTERNS.some((p) => p.test(lowerText));
+  
+  // Check recent context for follow-up patterns that indicate tool/sandbox continuation
+  const followUpPatterns = [
+    { pattern: /\b(yes|yeah|sure|ok|okay|go ahead|please do|do it|execute|run it|go for it)\b/i, weight: 2 },
+    { pattern: /\b(make it|create it|build it|write it|send it|post it)\b/i, weight: 2 },
+    { pattern: /\b(that|this|those)\s+(one|file|code|command)/i, weight: 1 },
+  ];
+  
+  // If we have recent context and the current message looks like a follow-up, boost tool/sandbox
+  if (recentContext.length > 10) {
+    const hasRecentAction = followUpPatterns.some(({ pattern, weight }) => {
+      if (pattern.test(lowerText)) {
+        // Check if recent context has action indicators
+        const contextHasAction = /\b(run|execute|create|send|post|build|write|open|start|deploy)\b/i.test(recentContext);
+        if (contextHasAction) {
+          scores.tool += weight;
+          scores.sandbox += weight;
+        }
+        return true;
+      }
+      return false;
+    });
+    
+    // Short confirmations like "yes", "ok" with recent context strongly indicate continuation
+    if (/^\s*(yes|yeah|sure|ok|okay)\s*$/i.test(lowerText) && recentContext.length > 20) {
+      scores.tool += 3;
+      scores.sandbox += 3;
+    }
+  }
   
   // Knowledge requests without explicit action are chat
   if (looksLikeKnowledgeRequest && !explicitlyActionable) {

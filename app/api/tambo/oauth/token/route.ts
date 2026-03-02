@@ -89,11 +89,23 @@ async function exchangeForTamboToken(
   email?: string
 ): Promise<{ tamboToken: string; expiresAt: number }> {
   const { sign } = await import('jsonwebtoken');
+
+  const TAMBO_SECRET = process.env.TAMBO_API_KEY || process.env.JWT_SECRET;
   
-  const TAMBO_SECRET = process.env.TAMBO_API_KEY || process.env.JWT_SECRET || 'tambo-dev-secret';
+  // Require a configured secret in non-development environments
+  if (!TAMBO_SECRET && process.env.NODE_ENV !== 'development') {
+    throw new Error('TAMBO_API_KEY or JWT_SECRET environment variable is required');
+  }
   
+  // Use a secure default only in development
+  const secret = TAMBO_SECRET || (process.env.NODE_ENV === 'development' ? 'tambo-dev-secret' : '');
+  
+  if (!secret) {
+    throw new Error('Token signing secret is not configured');
+  }
+
   const expiresAt = Date.now() + (24 * 60 * 60 * 1000); // 24 hours
-  
+
   const tamboToken = sign(
     {
       sub: userId,
@@ -102,10 +114,10 @@ async function exchangeForTamboToken(
       iat: Math.floor(Date.now() / 1000),
       exp: Math.floor(expiresAt / 1000),
     },
-    TAMBO_SECRET,
+    secret,
     { algorithm: 'HS256' }
   );
-  
+
   return { tamboToken, expiresAt };
 }
 

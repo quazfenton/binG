@@ -130,15 +130,15 @@ export const calculateTool: TamboTool = {
   execute: async (input: Record<string, any>): Promise<ToolExecutionResult> => {
     try {
       const { expression } = input;
-      
+
       const safeEval = (expr: string): number => {
         const sanitized = expr
           .replace(/[^0-9+\-*/().\s]/g, '')
           .replace(/\s+/g, '');
-        
+
         const tokens: string[] = [];
         let current = '';
-        
+
         for (const char of sanitized) {
           if ('+-*/().'.includes(char)) {
             if (current) {
@@ -151,52 +151,50 @@ export const calculateTool: TamboTool = {
           }
         }
         if (current) tokens.push(current);
-        
+
+        // Initialize result with the first number
         let result = 0;
-        let operation: '+' | '-' | '*' | '/' | null = null;
+        let operation: '+' | '-' | '*' | '/' = '+';
         let currentNum = 0;
-        
+        let hasFirstNumber = false;
+
         for (const token of tokens) {
           if (!isNaN(Number(token))) {
             currentNum = Number(token);
-          } else if (token === '+') {
-            operation = '+';
-          } else if (token === '-') {
-            operation = '-';
-          } else if (token === '*') {
-            operation = '*';
-          } else if (token === '/') {
-            operation = '/';
-          } else if (token === '(') {
-            // Handle parentheses - simplified
-          } else if (token === ')') {
-            // Handle parentheses - simplified
-          }
-          
-          if (operation && !isNaN(Number(token))) {
-            switch (operation) {
-              case '+':
-                result += currentNum;
-                break;
-              case '-':
-                result = currentNum - result;
-                break;
-              case '*':
-                result = result * currentNum;
-                break;
-              case '/':
-                result = currentNum / result;
-                break;
+            
+            // Apply the previous operation to accumulate the result
+            if (!hasFirstNumber) {
+              // First number: just set the result
+              result = currentNum;
+              hasFirstNumber = true;
+            } else {
+              // Subsequent numbers: apply the pending operation
+              switch (operation) {
+                case '+':
+                  result += currentNum;
+                  break;
+                case '-':
+                  result -= currentNum;
+                  break;
+                case '*':
+                  result *= currentNum;
+                  break;
+                case '/':
+                  result = currentNum !== 0 ? result / currentNum : 0;
+                  break;
+              }
             }
-            operation = null;
+          } else if (token === '+' || token === '-' || token === '*' || token === '/') {
+            operation = token;
           }
+          // Parentheses are ignored in this simplified implementation
         }
-        
+
         if (tokens.length === 1) {
           return Number(tokens[0]);
         }
-        
-        return result || 0;
+
+        return hasFirstNumber ? result : 0;
       };
 
       const result = safeEval(expression);

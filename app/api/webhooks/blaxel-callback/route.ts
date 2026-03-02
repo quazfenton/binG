@@ -90,11 +90,11 @@ export async function POST(request: NextRequest) {
 
     // Process the async execution result
     await processExecutionResult({
-      execution_id: executionId,
-      sandbox_id: sandboxId,
-      status_code: statusCode,
-      response_body: responseBody,
-      response_length: responseLength,
+      execution_id: execution_id,
+      sandbox_id: sandbox_id,
+      status_code: status_code,
+      response_body: response_body,
+      response_length: response_length,
       timestamp: timestamp,
     });
 

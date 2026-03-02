@@ -312,7 +312,18 @@ export function scrollToElement(
 ): void {
   const { behavior = 'smooth', block = 'nearest', inline = 'nearest', offset = 0 } = options
 
-  element.scrollIntoView({ behavior, block, inline })
+  if (offset !== 0) {
+    // When offset is provided, use manual scroll calculation instead of scrollIntoView
+    const elementPosition = element.getBoundingClientRect().top + window.scrollY
+    const offsetPosition = elementPosition - offset
+
+    window.scrollTo({
+      top: offsetPosition,
+      behavior
+    })
+  } else {
+    element.scrollIntoView({ behavior, block, inline })
+  }
 }
 
 export function calculateDynamicWidth(

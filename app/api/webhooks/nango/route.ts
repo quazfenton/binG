@@ -130,7 +130,7 @@ async function cleanupCachedData(connectionId: string): Promise<void> {
 
 /**
  * Handle incoming Nango webhooks
- * 
+ *
  * Webhook types:
  * - auth.success: OAuth connection successful
  * - auth.failure: OAuth connection failed
@@ -140,8 +140,51 @@ async function cleanupCachedData(connectionId: string): Promise<void> {
  */
 export async function POST(request: NextRequest) {
   try {
-    const payload: NangoWebhookPayload = await request.json();
+    // Get raw body for signature verification
+    const rawBody = await request.text();
     
+    // Verify webhook signature for security
+    const signature = request.headers.get('x-nango-signature');
+    const secret = process.env.NANGO_WEBHOOK_SECRET;
+    
+    if (secret && signature) {
+      const { createHmac, timingSafeEqual } = await import('node:crypto');
+      const expected = createHmac('sha256', secret).update(rawBody).digest('hex');
+      const expectedWithPrefix = `sha256=${expected}`;
+      
+      let isValid = false;
+      try {
+        const sigBuf = Buffer.from(signature, 'utf8');
+        const expBuf = Buffer.from(expected, 'utf8');
+        const expPrefixBuf = Buffer.from(expectedWithPrefix, 'utf8');
+        
+        if (sigBuf.length === expBuf.length) {
+          isValid = timingSafeEqual(sigBuf, expBuf);
+        } else if (sigBuf.length === expPrefixBuf.length) {
+          isValid = timingSafeEqual(sigBuf, expPrefixBuf);
+        }
+      } catch {
+        isValid = false;
+      }
+      
+      if (!isValid) {
+        console.warn('[Nango Webhook] Invalid signature');
+        return NextResponse.json(
+          { error: 'Invalid webhook signature' },
+          { status: 401 }
+        );
+      }
+    } else if (secret && !signature) {
+      console.warn('[Nango Webhook] Missing signature');
+      return NextResponse.json(
+        { error: 'Webhook signature required' },
+        { status: 401 }
+      );
+    }
+    
+    // Parse the body after verification
+    const payload: NangoWebhookPayload = JSON.parse(rawBody);
+
     console.log('[Nango Webhook] Received webhook:', {
       type: payload.type,
       connectionId: payload.connection?.connectionId,
@@ -161,23 +204,23 @@ export async function POST(request: NextRequest) {
       case 'auth.success':
         await handleAuthSuccess(payload);
         break;
-      
+
       case 'auth.failure':
         await handleAuthFailure(payload);
         break;
-      
+
       case 'sync.success':
         await handleSyncSuccess(payload);
         break;
-      
+
       case 'sync.error':
         await handleSyncError(payload);
         break;
-      
+
       case 'connection.deleted':
         await handleConnectionDeleted(payload);
         break;
-      
+
       default:
         console.log('[Nango Webhook] Unknown webhook type:', payload.type);
     }
@@ -190,12 +233,12 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('[Nango Webhook] Error processing webhook:', error);
-    
+
     // Still return 200 to prevent Nango from retrying
     // We don't want to lose webhooks due to processing errors
     return NextResponse.json({
       success: false,
-      error: error.message,
+      error: 'Webhook processing failed',
       processedAt: new Date().toISOString(),
     });
   }
@@ -275,7 +318,13 @@ async function handleAuthFailure(payload: NangoWebhookPayload): Promise<void> {
 async function handleSyncSuccess(payload: NangoWebhookPayload): Promise<void> {
   const { connectionId, provider, providerConfigKey } = payload.connection;
   const { syncName, recordsUpdated } = payload.data || {};
-  
+
+  // Validate syncName before using it
+  if (!syncName) {
+    console.log('[Nango Webhook] Sync success: missing syncName, skipping cache update');
+    return;
+  }
+
   console.log('[Nango Webhook] Sync success:', {
     connectionId,
     provider,
@@ -311,7 +360,7 @@ async function handleSyncError(payload: NangoWebhookPayload): Promise<void> {
   const { connectionId, provider } = payload.connection;
   const { syncName } = payload.data || {};
   const error = payload.data?.error || 'Unknown sync error';
-  
+
   console.log('[Nango Webhook] Sync error:', {
     connectionId,
     provider,
@@ -319,12 +368,12 @@ async function handleSyncError(payload: NangoWebhookPayload): Promise<void> {
     error,
   });
 
-  await updateSyncStatus(connectionId, syncName, 'error', 0, error);
+  await updateSyncStatus(connectionId, syncName || 'unknown', 'error', 0, error);
 
   await notifyUser(connectionId, {
     type: 'sync_error',
     title: 'Sync Failed',
-    message: `Sync failed for ${syncName}: ${error}`,
+    message: `Sync failed for ${syncName || 'unknown'}: ${error}`,
     data: { connectionId, syncName, error },
   });
 
@@ -336,13 +385,19 @@ async function handleSyncError(payload: NangoWebhookPayload): Promise<void> {
     timestamp: new Date(),
   });
 
+  // Note: setTimeout doesn't work reliably in serverless environments.
+  // For retry functionality, use one of these approaches:
+  // 1. Configure Nango's built-in retry mechanism
+  // 2. Use a background job queue (e.g., Bull, Redis Queue)
+  // 3. Use a scheduled webhook scheduling service
+  // 4. Implement a dedicated retry endpoint that Nango can call
   if (payload.data?.retryEnabled) {
-    setTimeout(async () => {
-      await triggerWorkflow('retry_sync', {
-        connectionId,
-        syncName,
-      });
-    }, 60000);
+    console.log('[Nango Webhook] Retry requested but setTimeout is not reliable in serverless. Use a background job queue instead.');
+    // Trigger retry immediately (alternative: use a proper job queue)
+    await triggerWorkflow('retry_sync', {
+      connectionId,
+      syncName,
+    }).catch(err => console.error('[Nango Webhook] Retry failed:', err));
   }
 }
 

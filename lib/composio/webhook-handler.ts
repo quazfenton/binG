@@ -122,36 +122,8 @@ export async function handleComposioWebhook(request: NextRequest): Promise<NextR
     // Parse payload
     const payload = parseWebhookPayload(body);
 
-    // Log event (sanitized)
-    console.log('[ComposioWebhook] Received event:', {
-      type: payload.event_type,
-      triggerSlug: payload.metadata.trigger_slug,
-      appName: payload.metadata.app_name,
-    });
-
-    // Route event based on type
-    switch (payload.event_type) {
-      case WebhookEventType.TRIGGER_MESSAGE:
-        await handleTriggerMessage(payload);
-        break;
-
-      case WebhookEventType.TRIGGER_STATE:
-        await handleTriggerState(payload);
-        break;
-
-      case WebhookEventType.ACCOUNT_CONNECTED:
-        await handleAccountConnected(payload);
-        break;
-
-      case WebhookEventType.ACCOUNT_DISCONNECTED:
-        await handleAccountDisconnected(payload);
-        break;
-
-      default:
-        console.warn('[ComposioWebhook] Unknown event type:', payload.event_type);
-    }
-
-    return NextResponse.json({ success: true });
+    // Process the parsed payload
+    return processWebhookPayload(payload);
   } catch (error: any) {
     console.error('[ComposioWebhook] Error:', error.message);
     return NextResponse.json(
@@ -159,6 +131,49 @@ export async function handleComposioWebhook(request: NextRequest): Promise<NextR
       { status: 400 }
     );
   }
+}
+
+/**
+ * Process webhook with pre-parsed payload (avoids re-reading request body)
+ */
+export async function handleComposioWebhookWithPayload(payload: WebhookPayload): Promise<NextResponse> {
+  return processWebhookPayload(payload);
+}
+
+/**
+ * Internal function to process parsed webhook payload
+ */
+async function processWebhookPayload(payload: WebhookPayload): Promise<NextResponse> {
+  // Log event (sanitized)
+  console.log('[ComposioWebhook] Received event:', {
+    type: payload.event_type,
+    triggerSlug: payload.metadata.trigger_slug,
+    appName: payload.metadata.app_name,
+  });
+
+  // Route event based on type
+  switch (payload.event_type) {
+    case WebhookEventType.TRIGGER_MESSAGE:
+      await handleTriggerMessage(payload);
+      break;
+
+    case WebhookEventType.TRIGGER_STATE:
+      await handleTriggerState(payload);
+      break;
+
+    case WebhookEventType.ACCOUNT_CONNECTED:
+      await handleAccountConnected(payload);
+      break;
+
+    case WebhookEventType.ACCOUNT_DISCONNECTED:
+      await handleAccountDisconnected(payload);
+      break;
+
+    default:
+      console.warn('[ComposioWebhook] Unknown event type:', payload.event_type);
+  }
+
+  return NextResponse.json({ success: true });
 }
 
 /**

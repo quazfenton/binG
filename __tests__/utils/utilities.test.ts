@@ -250,7 +250,7 @@ describe('Utility Functions', () => {
 
     it('should format number with commas', () => {
       const formatNumber = (num: number) => {
-        return num.toLocaleString();
+        return num.toLocaleString('en-US');
       };
 
       expect(formatNumber(1000)).toBe('1,000');

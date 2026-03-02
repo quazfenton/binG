@@ -242,14 +242,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       }
 
       const error = err instanceof Error ? err : new Error('Unknown error');
-      
+
       // Process error through error handler
       const streamingError = streamingErrorHandler.processError(error);
-      
+
       // Check if we have accumulated any content before showing error
-      const currentMessage = messages.find(msg => msg.id === assistantMessage.id);
+      // Use messagesRef.current to avoid stale closure bug
+      const currentMessage = messagesRef.current.find(msg => msg.id === assistantMessage.id);
       const hasContent = currentMessage && currentMessage.content && currentMessage.content.trim().length > 0;
-      
+
       // Only show error to user if it should be shown and we don't have content
       if (streamingErrorHandler.shouldShowToUser(streamingError) && !hasContent) {
         const userMessage = streamingErrorHandler.getUserMessage(streamingError);
@@ -260,12 +261,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       } else {
         // Log error for debugging but don't show to user
         console.warn('Chat error (handled silently):', error);
-        
+
         // If we have content, consider the request successful
         if (hasContent && options.onFinish && currentMessageRef.current) {
           options.onFinish({
             ...currentMessageRef.current,
-            content: currentMessage.content
+            content: currentMessage?.content || ''
           });
         }
       }

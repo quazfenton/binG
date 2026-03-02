@@ -938,10 +938,6 @@ body {
     .flex-wrap {
         flex-wrap: wrap;
     }
-
-    .min-h-60px-print {
-        min-height: 50px;
-    }
 }
 
 /* Enhanced streaming animations */

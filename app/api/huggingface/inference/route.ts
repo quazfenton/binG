@@ -62,9 +62,13 @@ export async function POST(req: NextRequest) {
       const payload = await response.json();
       return NextResponse.json(payload);
     } else {
-      // Return binary data as-is with correct content type
-      const blob = await response.blob();
-      return new NextResponse(blob, {
+      // Stream binary data directly instead of buffering with blob()
+      // This reduces memory usage and latency for large outputs
+      const stream = response.body;
+      if (!stream) {
+        throw new Error('Response body is null');
+      }
+      return new NextResponse(stream, {
         headers: {
           'Content-Type': contentType || 'application/octet-stream',
         },

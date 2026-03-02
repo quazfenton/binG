@@ -77,7 +77,11 @@ class HumanInTheLoopManager {
 
     const timeoutPromise = new Promise<InterruptResponse>((resolve) => {
       setTimeout(() => {
-        resolve({ approved: false, feedback: 'Approval request timed out' });
+        // Clean up pending interrupt to prevent memory leak
+        if (this.pendingInterrupts.has(interruptId)) {
+          this.pendingInterrupts.delete(interruptId);
+          resolve({ approved: false, feedback: 'Approval request timed out' });
+        }
       }, timeout);
     });
 

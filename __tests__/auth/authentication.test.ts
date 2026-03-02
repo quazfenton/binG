@@ -475,7 +475,7 @@ describe('Authentication System', () => {
       const generateTOTPSecret = () => {
         const bytes = new Uint8Array(20);
         crypto.getRandomValues(bytes);
-        return btoa(String.fromCharCode(...bytes));
+        return Buffer.from(bytes).toString('base64');
       };
 
       const secret = generateTOTPSecret();

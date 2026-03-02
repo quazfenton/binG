@@ -85,6 +85,8 @@ export function AgentTerminal({
   useEffect(() => {
     if (!terminalRef.current || !connected) return
 
+    let disposed = false
+
     const initTerminal = async () => {
       const { Terminal } = await import('@xterm/xterm')
       const { FitAddon } = await import('@xterm/addon-fit')
@@ -114,7 +116,7 @@ export function AgentTerminal({
       xtermRef.current = { terminal, fitAddon }
 
       // Handle input
-      terminal.onData((data: string) => {
+      const disposeDataListener = terminal.onData((data: string) => {
         if (data === '\r') {
           // Enter - send command
           const command = terminal.buffer.active.getLine(terminal.buffer.active.cursorY)?.translateToString().trim() || ''
@@ -131,12 +133,20 @@ export function AgentTerminal({
       resizeObserver.observe(terminalRef.current)
 
       return () => {
+        if (disposed) return
+        disposed = true
         resizeObserver.disconnect()
+        disposeDataListener.dispose()
         terminal.dispose()
+        xtermRef.current = null
       }
     }
 
-    initTerminal()
+    const cleanupPromise = initTerminal()
+    
+    return () => {
+      cleanupPromise.then(cleanup => cleanup?.())
+    }
   }, [connected, theme, send])
 
   // Update terminal with output
@@ -358,22 +368,38 @@ export function AgentDesktop({
     })
   }, [connected, currentResolution, desktopClick])
 
-  // Auto-capture screenshots
+  // Auto-capture screenshots with overlap prevention
   useEffect(() => {
     if (!connected) return
 
+    let isCapturing = false
+    let cancelled = false
+
     const captureInterval = setInterval(async () => {
+      // Prevent overlapping captures
+      if (isCapturing) return
+      
+      isCapturing = true
       setIsCapturing(true)
+      
       try {
-        await captureScreenshot()
+        if (!cancelled) {
+          await captureScreenshot()
+        }
       } catch {
         // Screenshot not available
       } finally {
-        setIsCapturing(false)
+        if (!cancelled) {
+          isCapturing = false
+          setIsCapturing(false)
+        }
       }
     }, 1000)
 
-    return () => clearInterval(captureInterval)
+    return () => {
+      cancelled = true
+      clearInterval(captureInterval)
+    }
   }, [connected, captureScreenshot])
 
   return (

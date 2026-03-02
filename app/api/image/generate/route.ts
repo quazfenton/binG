@@ -70,15 +70,16 @@ export async function POST(req: NextRequest) {
     // Get the registry with all providers
     const registry = getDefaultRegistry()
 
-    // Initialize providers with environment variables
-    registry.initializeAll({
+    // Initialize providers with environment variables (create local instance, don't mutate global)
+    // Note: Don't set defaultModel in replicate config - it's shared state that leaks between requests
+    const initializedRegistry = registry.initializeAll({
       mistral: {
         apiKey: process.env.MISTRAL_API_KEY,
         baseURL: process.env.MISTRAL_BASE_URL,
       },
       replicate: {
         apiKey: process.env.REPLICATE_API_TOKEN,
-        defaultModel: model,
+        // model is passed per-request via params.extra to avoid leaking between concurrent requests
       },
     })
 
@@ -105,10 +106,10 @@ export async function POST(req: NextRequest) {
 
     if (preferredProvider) {
       // Use specific provider
-      result = await registry.generateWithProvider(preferredProvider, params, controller.signal)
+      result = await initializedRegistry.generateWithProvider(preferredProvider, params, controller.signal)
     } else {
       // Use fallback chain
-      result = await registry.generateWithFallback(params, undefined, controller.signal)
+      result = await initializedRegistry.generateWithFallback(params, undefined, controller.signal)
     }
 
     clearTimeout(timeoutId)

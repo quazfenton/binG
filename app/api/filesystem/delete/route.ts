@@ -26,13 +26,13 @@ const deleteRequestSchema = z.object({
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    
+
     // Validate request body
     const validation = deleteRequestSchema.safeParse(body);
     if (!validation.success) {
       return NextResponse.json(
-        { 
-          success: false, 
+        {
+          success: false,
           error: 'Invalid request',
           details: validation.error.errors.map(e => ({
             field: e.path.join('.'),
@@ -43,10 +43,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { path: targetPath, ownerId: ownerIdFromBody } = validation.data;
+    const { path: targetPath } = validation.data;
 
-    // Use ownerId from body if provided, otherwise resolve from auth
-    const ownerId = ownerIdFromBody || (await resolveFilesystemOwner(req)).ownerId;
+    // SECURITY: Always derive ownerId from authenticated request context
+    // Never trust user-supplied ownerId for delete operations
+    const authResolution = await resolveFilesystemOwner(req);
+    const ownerId = authResolution.ownerId;
 
     const result = await virtualFilesystem.deletePath(ownerId, targetPath);
     return NextResponse.json({

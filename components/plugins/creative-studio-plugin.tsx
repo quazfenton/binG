@@ -34,29 +34,14 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
   const fetchFileRef = useRef<((input: File | Blob) => Promise<Uint8Array>) | null>(null);
 
   useEffect(() => {
-    let mounted = true;
-    const loadFfmpeg = async () => {
-      try {
-        // Dynamic import avoids hard compile dependency until package is installed.
-        const ffmpegMod = await import('@ffmpeg/ffmpeg');
-        const utilMod = await import('@ffmpeg/util');
-        const instance = new ffmpegMod.FFmpeg();
-        await instance.load({
-          coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js',
-          wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm',
-        });
-        if (!mounted) return;
-        ffmpegRef.current = instance;
-        fetchFileRef.current = utilMod.fetchFile;
-        setFfmpegReady(true);
-      } catch (error) {
-        console.warn('FFmpeg load failed:', error);
-      }
-    };
-
-    loadFfmpeg();
+    // FFmpeg is now lazy-loaded when trim is actually used
+    // This avoids unnecessary startup latency
     return () => {
-      mounted = false;
+      // Cleanup on unmount
+      if (ffmpegRef.current) {
+        ffmpegRef.current = null;
+      }
+      fetchFileRef.current = null;
     };
   }, []);
 
@@ -123,19 +108,45 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
       toast.error('Upload a video first');
       return;
     }
-    if (!ffmpegRef.current || !fetchFileRef.current) {
-      toast.error('FFmpeg not ready. Install @ffmpeg/ffmpeg and @ffmpeg/util.');
+    
+    // Validate trim times - reject non-finite numeric inputs
+    if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) {
+      toast.error('Invalid time values');
       return;
     }
+    
     if (endTime <= startTime) {
       toast.error('End time must be greater than start time');
       return;
+    }
+    
+    // Lazy load FFmpeg only when trim is actually used
+    if (!ffmpegRef.current || !fetchFileRef.current) {
+      try {
+        setProcessing(true);
+        // Dynamic import avoids hard compile dependency until package is installed.
+        const ffmpegMod = await import('@ffmpeg/ffmpeg');
+        const utilMod = await import('@ffmpeg/util');
+        const instance = new ffmpegMod.FFmpeg();
+        await instance.load({
+          coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js',
+          wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm',
+        });
+        ffmpegRef.current = instance;
+        fetchFileRef.current = utilMod.fetchFile;
+        setFfmpegReady(true);
+      } catch (error) {
+        console.error('FFmpeg load failed:', error);
+        setProcessing(false);
+        toast.error('Failed to load FFmpeg. Install @ffmpeg/ffmpeg and @ffmpeg/util.');
+        return;
+      }
     }
 
     setProcessing(true);
     const inputName = `input-${Date.now()}.mp4`;
     const outputName = `output-${Date.now()}.mp4`;
-    
+
     try {
       const ffmpeg = ffmpegRef.current;
       const fetchFile = fetchFileRef.current;

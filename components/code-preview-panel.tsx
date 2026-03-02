@@ -1686,6 +1686,40 @@ export default app;`,
                         <div className="h-full flex items-center justify-center text-sm text-gray-400">
                           Loading file...
                         </div>
+                      ) : selectedFileIndex !== null && codeBlocks[selectedFileIndex] ? (
+                        // Render code block from Generated Snippets
+                        <div className="h-full flex flex-col">
+                          <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="border border-gray-500 text-gray-300 rounded px-2 py-0.5 text-xs">
+                                {codeBlocks[selectedFileIndex].language}
+                              </span>
+                              <span className="text-sm font-mono text-gray-300 truncate">
+                                {codeBlocks[selectedFileIndex].filename || `Snippet ${selectedFileIndex + 1}`}
+                              </span>
+                            </div>
+                            <button
+                              className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
+                              onClick={() => {
+                                navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code);
+                              }}
+                            >
+                              <CodeIcon className="w-4 h-4 mr-1" />
+                              Copy
+                            </button>
+                          </div>
+                          <div className="flex-1 overflow-y-auto bg-black/30">
+                            <SyntaxHighlighter
+                              style={oneDark as any}
+                              language={codeBlocks[selectedFileIndex].language}
+                              PreTag="div"
+                              className="!m-0 !bg-gray-900 h-full text-sm"
+                              showLineNumbers
+                            >
+                              {codeBlocks[selectedFileIndex].code}
+                            </SyntaxHighlighter>
+                          </div>
+                        </div>
                       ) : selectedFilesystemPath ? (
                         <div className="h-full flex flex-col">
                           <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
@@ -1721,7 +1755,7 @@ export default app;`,
                         </div>
                       ) : (
                         <div className="h-full flex items-center justify-center text-sm text-gray-500">
-                          Select a filesystem file from this chat scope.
+                          Select a file or code snippet to preview.
                         </div>
                       )}
                     </div>

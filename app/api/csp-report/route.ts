@@ -57,6 +57,18 @@ function isValidCSPReport(body: any): body is CSPReport {
 }
 
 /**
+ * Extract host from URI
+ */
+function getHost(uri: string): string | null {
+  try {
+    const url = new URL(uri);
+    return url.host;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Analyze CSP violation for security issues
  */
 function analyzeViolation(report: CSPReport['csp-report']): {
@@ -66,6 +78,10 @@ function analyzeViolation(report: CSPReport['csp-report']): {
 } {
   const blockedUri = report['blocked-uri'];
   const directive = report['effective-directive'];
+  
+  // Get hosts for comparison
+  const blockedHost = getHost(blockedUri);
+  const documentHost = getHost(report['document-uri']);
 
   // Critical: Attempted loading from malicious sources
   if (
@@ -119,15 +135,17 @@ function analyzeViolation(report: CSPReport['csp-report']): {
   }
 
   // Low: Third-party resource blocking
+  // Compare blocked URI host to document URI host to determine if it's third-party
   if (
     blockedUri.startsWith('https://') &&
-    !blockedUri.includes('localhost') &&
-    !blockedUri.includes('example.com')
+    blockedHost &&
+    documentHost &&
+    blockedHost !== documentHost
   ) {
     return {
       severity: 'low',
       category: 'third-party',
-      recommendation: 'Consider adding domain to CSP if legitimate',
+      recommendation: `Consider adding ${blockedHost} to CSP if legitimate`,
     };
   }
 

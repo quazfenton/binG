@@ -290,9 +290,11 @@ export default function TerminalPanel({
     editorSessionRef.current[id] = null;
 
     // Load persisted command history
+    // Match by terminal name (stable) instead of id (randomly generated)
     try {
       const savedSessions = getTerminalSessions();
-      const savedSession = savedSessions.find(s => s.id === id);
+      const terminalName = name || `Terminal ${terminalsRef.current.length + 1}`;
+      const savedSession = savedSessions.find(s => s.name === terminalName);
       if (savedSession?.commandHistory) {
         commandHistoryRef.current[id] = savedSession.commandHistory;
         historyIndexRef.current[id] = savedSession.commandHistory.length;

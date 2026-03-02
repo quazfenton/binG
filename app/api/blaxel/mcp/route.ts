@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { getBlaxelMcpService, type BlaxelDeploymentConfig } from '@/lib/mcp/blaxel-mcp-service';
 
 // GET /api/blaxel/mcp - List all MCP servers
 export async function GET(request: NextRequest) {
+  // SECURITY: Require authentication to prevent unauthorized access to MCP server list
+  const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+  if (!authResult.success || !authResult.userId) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
+
   const searchParams = request.nextUrl.searchParams;
   const action = searchParams.get('action');
   const serverId = searchParams.get('serverId');
@@ -45,6 +55,15 @@ export async function GET(request: NextRequest) {
 
 // POST /api/blaxel/mcp - Create or deploy MCP server
 export async function POST(request: NextRequest) {
+  // SECURITY: Require authentication to prevent unauthorized MCP server deployment
+  const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+  if (!authResult.success || !authResult.userId) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
+
   const service = getBlaxelMcpService();
   
   if (!service.isConfigured()) {
@@ -122,6 +141,15 @@ export async function POST(request: NextRequest) {
 
 // PATCH /api/blaxel/mcp - Update server configuration
 export async function PATCH(request: NextRequest) {
+  // SECURITY: Require authentication to prevent unauthorized MCP server modification
+  const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+  if (!authResult.success || !authResult.userId) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
+
   const searchParams = request.nextUrl.searchParams;
   const serverId = searchParams.get('serverId');
 
@@ -164,6 +192,15 @@ export async function PATCH(request: NextRequest) {
 
 // DELETE /api/blaxel/mcp - Delete MCP server
 export async function DELETE(request: NextRequest) {
+  // SECURITY: Require authentication to prevent unauthorized MCP server deletion
+  const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+  if (!authResult.success || !authResult.userId) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
+
   const searchParams = request.nextUrl.searchParams;
   const serverId = searchParams.get('serverId');
 

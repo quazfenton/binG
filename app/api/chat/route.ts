@@ -1086,198 +1086,215 @@ async function applyFilesystemEditsFromResponse(input: {
     write_diffs?: Array<{ path: string; diff: string }>;
   };
 }): Promise<FilesystemEditResult> {
-  const transaction = filesystemEditSessionService.createTransaction({
-    ownerId: input.ownerId,
-    conversationId: input.conversationId,
-    requestId: input.requestId,
-  });
-
-  const result: FilesystemEditResult = {
-    transactionId: transaction.id,
-    status: 'auto_applied',
-    applied: [],
-    errors: [],
-    requestedFiles: [],
-  };
-
+  // Extract all operations first to check if there's anything to do
   const combinedWriteEdits = [
     ...extractTaggedFileEdits(input.responseContent || ''),
     ...extractFsActionWrites(input.responseContent || ''),
     ...extractBashHereDocWrites(input.responseContent || ''),
     ...extractFilenameHintCodeBlocks(input.responseContent || ''),
   ];
-  const seenWriteEdits = new Set<string>();
-
-  for (const edit of combinedWriteEdits) {
-    const targetPath = resolveScopedPath({
-      requestedPath: edit.path,
-      scopePath: input.scopePath,
-      attachedPaths: input.attachedPaths,
-      lastUserMessage: input.lastUserMessage,
-    });
-    const writeKey = `${targetPath}::${edit.content}`;
-    if (seenWriteEdits.has(writeKey)) continue;
-    seenWriteEdits.add(writeKey);
-
-    try {
-      let previousVersion: number | null = null;
-      let previousContent: string | null = null;
-      let existedBefore = false;
-      try {
-        const previousFile = await virtualFilesystem.readFile(input.ownerId, targetPath);
-        previousVersion = previousFile.version;
-        previousContent = previousFile.content;
-        existedBefore = true;
-      } catch {
-        existedBefore = false;
-      }
-
-      const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, edit.content);
-      result.applied.push({
-        path: file.path,
-        operation: 'write',
-        version: file.version,
-        previousVersion,
-        existedBefore,
-      });
-      filesystemEditSessionService.recordOperation(transaction.id, {
-        path: file.path,
-        operation: 'write',
-        newVersion: file.version,
-        previousVersion,
-        previousContent,
-        existedBefore,
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'unknown error';
-      const err = `Failed to write ${targetPath}: ${message}`;
-      result.errors.push(err);
-      filesystemEditSessionService.addError(transaction.id, err);
-    }
-  }
-
   const combinedDiffOperations = [
     ...extractFencedDiffEdits(input.responseContent || ''),
     ...extractFsActionPatches(input.responseContent || ''),
     ...(input.commands?.write_diffs || []),
   ];
-
-  const seenDiffKey = new Set<string>();
-  for (const diffOperation of combinedDiffOperations) {
-    const targetPath = resolveScopedPath({
-      requestedPath: diffOperation.path,
-      scopePath: input.scopePath,
-      attachedPaths: input.attachedPaths,
-      lastUserMessage: input.lastUserMessage,
-    });
-    const diffKey = `${targetPath}::${diffOperation.diff}`;
-    if (seenDiffKey.has(diffKey)) {
-      continue;
-    }
-    seenDiffKey.add(diffKey);
-
-    try {
-      let currentContent = '';
-      let previousVersion: number | null = null;
-      let previousContent: string | null = null;
-      let existedBefore = false;
-      try {
-        const existingFile = await virtualFilesystem.readFile(input.ownerId, targetPath);
-        currentContent = existingFile.content;
-        previousVersion = existingFile.version;
-        previousContent = existingFile.content;
-        existedBefore = true;
-      } catch {
-        currentContent = '';
-        existedBefore = false;
-      }
-
-      const patchedContent = applyUnifiedDiff(currentContent, targetPath, diffOperation.diff);
-      const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, patchedContent);
-
-      result.applied.push({
-        path: file.path,
-        operation: 'patch',
-        version: file.version,
-        previousVersion,
-        existedBefore,
-      });
-      filesystemEditSessionService.recordOperation(transaction.id, {
-        path: file.path,
-        operation: 'patch',
-        newVersion: file.version,
-        previousVersion,
-        previousContent,
-        existedBefore,
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'unknown error';
-      const err = `Failed to apply diff for ${targetPath}: ${message}`;
-      result.errors.push(err);
-      filesystemEditSessionService.addError(transaction.id, err);
-    }
-  }
-
   const deleteTargets = extractFsActionDeletes(input.responseContent || '');
-  const seenDeleteTargets = new Set<string>();
-  for (const deletePath of deleteTargets) {
-    const normalizedPath = resolveScopedPath({
-      requestedPath: deletePath.trim(),
-      scopePath: input.scopePath,
-      attachedPaths: input.attachedPaths,
-      lastUserMessage: input.lastUserMessage,
-    });
-    if (!normalizedPath || seenDeleteTargets.has(normalizedPath)) {
-      continue;
-    }
-    seenDeleteTargets.add(normalizedPath);
+  const requestFiles = input.commands?.request_files || [];
 
-    try {
-      let existingVersion: number | null = null;
-      let existingContent: string | null = null;
-      let existedBefore = false;
+  // Only create transaction if there are mutating operations (write/patch/delete)
+  // This prevents memory leaks from accumulating no-op transactions
+  const hasMutatingOperations =
+    combinedWriteEdits.length > 0 ||
+    combinedDiffOperations.length > 0 ||
+    deleteTargets.length > 0;
+
+  const transaction = hasMutatingOperations
+    ? filesystemEditSessionService.createTransaction({
+        ownerId: input.ownerId,
+        conversationId: input.conversationId,
+        requestId: input.requestId,
+      })
+    : null;
+
+  const result: FilesystemEditResult = {
+    transactionId: transaction ? transaction.id : null,
+    status: hasMutatingOperations ? 'auto_applied' : 'none',
+    applied: [],
+    errors: [],
+    requestedFiles: [],
+  };
+
+  // Process write operations only if we have a transaction
+  if (transaction) {
+    const seenWriteEdits = new Set<string>();
+
+    for (const edit of combinedWriteEdits) {
+      const targetPath = resolveScopedPath({
+        requestedPath: edit.path,
+        scopePath: input.scopePath,
+        attachedPaths: input.attachedPaths,
+        lastUserMessage: input.lastUserMessage,
+      });
+      const writeKey = `${targetPath}::${edit.content}`;
+      if (seenWriteEdits.has(writeKey)) continue;
+      seenWriteEdits.add(writeKey);
+
       try {
-        const existingFile = await virtualFilesystem.readFile(input.ownerId, normalizedPath);
-        existingVersion = existingFile.version;
-        existingContent = existingFile.content;
-        existedBefore = true;
-      } catch {
-        existedBefore = false;
-      }
+        let previousVersion: number | null = null;
+        let previousContent: string | null = null;
+        let existedBefore = false;
+        try {
+          const previousFile = await virtualFilesystem.readFile(input.ownerId, targetPath);
+          previousVersion = previousFile.version;
+          previousContent = previousFile.content;
+          existedBefore = true;
+        } catch {
+          existedBefore = false;
+        }
 
-      if (!existedBefore) {
+        const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, edit.content);
+        result.applied.push({
+          path: file.path,
+          operation: 'write',
+          version: file.version,
+          previousVersion,
+          existedBefore,
+        });
+        filesystemEditSessionService.recordOperation(transaction.id, {
+          path: file.path,
+          operation: 'write',
+          newVersion: file.version,
+          previousVersion,
+          previousContent,
+          existedBefore,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        const err = `Failed to write ${targetPath}: ${message}`;
+        result.errors.push(err);
+        filesystemEditSessionService.addError(transaction.id, err);
+      }
+    }
+
+    // Process diff/patch operations
+    const seenDiffKey = new Set<string>();
+    for (const diffOperation of combinedDiffOperations) {
+      const targetPath = resolveScopedPath({
+        requestedPath: diffOperation.path,
+        scopePath: input.scopePath,
+        attachedPaths: input.attachedPaths,
+        lastUserMessage: input.lastUserMessage,
+      });
+      const diffKey = `${targetPath}::${diffOperation.diff}`;
+      if (seenDiffKey.has(diffKey)) {
         continue;
       }
+      seenDiffKey.add(diffKey);
 
-      await virtualFilesystem.deletePath(input.ownerId, normalizedPath);
-      result.applied.push({
-        path: normalizedPath,
-        operation: 'delete',
-        version: -1,
-        previousVersion: existingVersion,
-        existedBefore: true,
+      try {
+        let currentContent = '';
+        let previousVersion: number | null = null;
+        let previousContent: string | null = null;
+        let existedBefore = false;
+        try {
+          const existingFile = await virtualFilesystem.readFile(input.ownerId, targetPath);
+          currentContent = existingFile.content;
+          previousVersion = existingFile.version;
+          previousContent = existingFile.content;
+          existedBefore = true;
+        } catch {
+          currentContent = '';
+          existedBefore = false;
+        }
+
+        const patchedContent = applyUnifiedDiff(currentContent, targetPath, diffOperation.diff);
+        const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, patchedContent);
+
+        result.applied.push({
+          path: file.path,
+          operation: 'patch',
+          version: file.version,
+          previousVersion,
+          existedBefore,
+        });
+        filesystemEditSessionService.recordOperation(transaction.id, {
+          path: file.path,
+          operation: 'patch',
+          newVersion: file.version,
+          previousVersion,
+          previousContent,
+          existedBefore,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        const err = `Failed to apply diff for ${targetPath}: ${message}`;
+        result.errors.push(err);
+        filesystemEditSessionService.addError(transaction.id, err);
+      }
+    }
+
+    // Process delete operations
+    const seenDeleteTargets = new Set<string>();
+    for (const deletePath of deleteTargets) {
+      const normalizedPath = resolveScopedPath({
+        requestedPath: deletePath.trim(),
+        scopePath: input.scopePath,
+        attachedPaths: input.attachedPaths,
+        lastUserMessage: input.lastUserMessage,
       });
-      filesystemEditSessionService.recordOperation(transaction.id, {
-        path: normalizedPath,
-        operation: 'delete',
-        newVersion: -1,
-        previousVersion: existingVersion,
-        previousContent: existingContent,
-        existedBefore: true,
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : 'unknown error';
-      const err = `Failed to delete ${normalizedPath}: ${message}`;
-      result.errors.push(err);
-      filesystemEditSessionService.addError(transaction.id, err);
+      if (!normalizedPath || seenDeleteTargets.has(normalizedPath)) {
+        continue;
+      }
+      seenDeleteTargets.add(normalizedPath);
+
+      try {
+        let existingVersion: number | null = null;
+        let existingContent: string | null = null;
+        let existedBefore = false;
+        try {
+          const existingFile = await virtualFilesystem.readFile(input.ownerId, normalizedPath);
+          existingVersion = existingFile.version;
+          existingContent = existingFile.content;
+          existedBefore = true;
+        } catch {
+          existedBefore = false;
+        }
+
+        if (!existedBefore) {
+          continue;
+        }
+
+        await virtualFilesystem.deletePath(input.ownerId, normalizedPath);
+        result.applied.push({
+          path: normalizedPath,
+          operation: 'delete',
+          version: -1,
+          previousVersion: existingVersion,
+          existedBefore: true,
+        });
+        filesystemEditSessionService.recordOperation(transaction.id, {
+          path: normalizedPath,
+          operation: 'delete',
+          newVersion: -1,
+          previousVersion: existingVersion,
+          previousContent: existingContent,
+          existedBefore: true,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        const err = `Failed to delete ${normalizedPath}: ${message}`;
+        result.errors.push(err);
+        filesystemEditSessionService.addError(transaction.id, err);
+      }
+    }
+
+    // Update status if no operations succeeded
+    if (result.applied.length === 0 && result.errors.length === 0) {
+      result.status = 'none';
     }
   }
 
-  if (result.applied.length === 0 && result.errors.length === 0) {
-    result.status = 'none';
-  }
-
-  const requestFiles = input.commands?.request_files || [];
+  // Process file read requests (always allowed, even without mutating operations)
   const seenRequested = new Set<string>();
   for (const requestedFile of requestFiles) {
     const requestedPath = resolveScopedPath({

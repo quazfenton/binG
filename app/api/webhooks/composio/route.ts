@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     if (secret) {
       if (!signature) {
         console.warn(`[ComposioWebhook] Missing signature (${requestId})`);
-        const response = NextResponse.json({ 
+        const response = NextResponse.json({
           success: false,
           error: {
             type: 'missing_signature',
@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
       const isValid = verifyWebhookSignature(body, signature, secret);
       if (!isValid) {
         console.error(`[ComposioWebhook] Invalid signature (${requestId})`);
-        const response = NextResponse.json({ 
+        const response = NextResponse.json({
           success: false,
           error: {
             type: 'invalid_signature',
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
       payload = JSON.parse(body);
     } catch (error: any) {
       console.error(`[ComposioWebhook] Invalid JSON (${requestId}):`, error);
-      const response = NextResponse.json({ 
+      const response = NextResponse.json({
         success: false,
         error: {
           type: 'invalid_json',
@@ -80,8 +80,8 @@ export async function POST(request: NextRequest) {
       return addCORSHeaders(response);
     }
 
-    // Process webhook
-    const result = await handleComposioWebhook(request);
+    // Process webhook - pass the already-parsed payload to avoid re-reading body
+    const result = await handleComposioWebhookWithPayload(payload);
 
     // Log webhook processing
     console.log(`[ComposioWebhook] Processed (${requestId}):`, {
@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
     return addCORSHeaders(result);
   } catch (error: any) {
     console.error(`[ComposioWebhook] Error (${requestId}):`, error);
-    const response = NextResponse.json({ 
+    const response = NextResponse.json({
       success: false,
       error: {
         type: 'internal_error',

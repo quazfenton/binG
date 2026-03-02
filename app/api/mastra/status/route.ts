@@ -9,6 +9,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { mastra } from '@/lib/mastra/mastra-instance';
 
+// Valid workflow types - allowlist for security
+const VALID_WORKFLOWS = ['code-agent', 'hitl-code-review'];
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const runId = searchParams.get('runId');
@@ -19,6 +22,14 @@ export async function GET(request: NextRequest) {
   if (!runId) {
     return NextResponse.json(
       { error: 'runId is required' },
+      { status: 400 }
+    );
+  }
+
+  // SECURITY: Validate workflowType against allowlist before querying
+  if (!VALID_WORKFLOWS.includes(workflowType)) {
+    return NextResponse.json(
+      { error: `Invalid workflowType. Must be one of: ${VALID_WORKFLOWS.join(', ')}` },
       { status: 400 }
     );
   }

@@ -34,10 +34,10 @@ export async function generateMetadata({ params }: EmbedPageProps): Promise<Meta
 
 /**
  * Dynamic embed page handler
- * 
+ *
  * This config-driven system allows creating new embed types
  * by simply adding to embed-config.ts without creating new files.
- * 
+ *
  * Usage: /embed/[type]
  * Examples:
  * - /embed/api-pro
@@ -57,13 +57,15 @@ export default async function EmbedPage({ params }: EmbedPageProps) {
   // Dynamically import the component
   const Component = await loadComponent(config.component);
 
+  // Note: onClose is handled by the client component itself
+  // Functions cannot be passed from server to client components
   return (
-    <div 
+    <div
       className="w-screen h-screen"
       data-theme={config.theme}
       data-embed-type={type}
     >
-      <Component onClose={() => history.back()} />
+      <Component />
     </div>
   );
 }

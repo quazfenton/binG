@@ -1,15 +1,11 @@
-export default function GlobalError({
-  error,
-  reset,
-}: {
-  error: Error & { digest?: string };
-  reset: () => void;
-}) {
+'use client';
+
+export default function NotFound() {
   return (
     <html lang="en">
       <body style={{ margin: 0, padding: 0, background: '#0a0a0a', color: '#fff' }}>
-        <div style={{ 
-          padding: '40px', 
+        <div style={{
+          padding: '40px',
           textAlign: 'center',
           minHeight: '100vh',
           display: 'flex',
@@ -17,10 +13,10 @@ export default function GlobalError({
           alignItems: 'center',
           justifyContent: 'center'
         }}>
-          <h1 style={{ fontSize: '24px', marginBottom: '16px' }}>Something went wrong</h1>
-          <p style={{ marginBottom: '24px', color: '#888' }}>{error.message || 'An unexpected error occurred'}</p>
-          <button 
-            onClick={() => reset()}
+          <h1 style={{ fontSize: '24px', marginBottom: '16px' }}>Page Not Found</h1>
+          <p style={{ marginBottom: '24px', color: '#888' }}>The page you're looking for doesn't exist.</p>
+          <a
+            href="/"
             style={{
               padding: '12px 24px',
               background: '#3B82F6',
@@ -28,11 +24,12 @@ export default function GlobalError({
               border: 'none',
               borderRadius: '8px',
               cursor: 'pointer',
-              fontSize: '14px'
+              fontSize: '14px',
+              textDecoration: 'none'
             }}
           >
-            Try again
-          </button>
+            Go back home
+          </a>
         </div>
       </body>
     </html>

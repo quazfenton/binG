@@ -20,7 +20,13 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const model = String(formData.get('model') || '');
     const text = String(formData.get('text') || '');
-    const audio = formData.get('audio') as File | null;
+    const audio = formData.get('audio');
+    
+    // Validate that audio is actually a File
+    if (audio && !(audio instanceof File)) {
+      return NextResponse.json({ error: 'audio must be a valid file' }, { status: 400 });
+    }
+    
     if (!model) {
       return NextResponse.json({ error: 'model is required' }, { status: 400 });
     }
@@ -72,8 +78,15 @@ export async function POST(req: NextRequest) {
     }
 
     const contentType = upstream.headers.get('content-type') || 'audio/mpeg';
-    const blob = await upstream.blob();
-    return new NextResponse(blob, {
+    
+    // Stream the response body directly instead of buffering with blob()
+    // This reduces memory usage for large audio files
+    const stream = upstream.body;
+    if (!stream) {
+      throw new Error('Response body is null');
+    }
+    
+    return new NextResponse(stream, {
       headers: {
         'Content-Type': contentType,
       },

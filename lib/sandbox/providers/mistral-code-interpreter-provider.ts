@@ -186,7 +186,13 @@ class MistralCodeInterpreterSandboxHandle implements SandboxHandle {
       const parsed = parseExecutionEnvelope(outputText)
 
       if (parsed) {
-        return parsed
+        // Validate success as boolean, default to false if invalid
+        const isValidSuccess = typeof parsed.success === 'boolean' && parsed.success === true;
+        return {
+          success: isValidSuccess,
+          output: parsed.output || outputText || '(no output)',
+          exitCode: isValidSuccess ? 0 : (parsed.exitCode ?? 1),
+        }
       }
 
       return {

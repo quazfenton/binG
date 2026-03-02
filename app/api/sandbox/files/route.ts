@@ -22,11 +22,16 @@ export async function GET(req: NextRequest) {
     const dirPath = url.searchParams.get('path') || '.';
 
     const result = await sandboxBridge.listDirectory(session.sandboxId, dirPath);
-    
-    // listDirectory returns ToolResult { output: string, error?: string }
-    // which contains the raw `ls -la` or `find` output.
-    // For a cleaner frontend, we should parse it or just return it as is
-    return NextResponse.json({ files: result });
+
+    // Check if the operation failed
+    if (!result.success) {
+      return NextResponse.json(
+        { error: result.error || 'Failed to list directory', files: [] },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ files: result.files || result });
   } catch (error: any) {
     console.error('[Sandbox Files] Error:', error);
     return NextResponse.json({ error: 'Failed to fetch files' }, { status: 500 });

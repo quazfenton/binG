@@ -9,11 +9,13 @@ interface EmailService {
 const emailService: EmailService = {
   async sendPasswordReset(email: string, resetToken: string, resetUrl: string): Promise<boolean> {
     console.log(`[Email] Sending password reset to ${email}`);
-    console.log(`[Email] Reset link: ${resetUrl}`);
-    
+    // Log only a masked token reference for security (never log the full URL or token)
+    const maskedToken = resetToken ? `${resetToken.substring(0, 8)}...` : 'N/A';
+    console.log(`[Email] Reset token: ${maskedToken}`);
+
     // In production, integrate with email provider (SendGrid, AWS SES, etc.)
     const emailProvider = process.env.EMAIL_PROVIDER;
-    
+
     if (emailProvider === 'sendgrid') {
       // await sendgrid.send({
       //   to: email,
@@ -28,7 +30,7 @@ const emailService: EmailService = {
     } else {
       console.log('[Email] No email provider configured, logging only');
     }
-    
+
     return true;
   }
 };

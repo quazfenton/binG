@@ -513,14 +513,19 @@ export class VirtualFilesystemService {
     const next = previous
       .catch(() => undefined)
       .then(async () => {
+        const tmpFilePath = `${storageFilePath}.tmp-${Date.now()}`;
         try {
           // Ensure storage directory exists
           await fs.mkdir(this.storageDir, { recursive: true });
-          
-          const tmpFilePath = `${storageFilePath}.tmp-${Date.now()}`;
+
           await fs.writeFile(tmpFilePath, JSON.stringify(serialized, null, 2), 'utf8');
           await fs.rename(tmpFilePath, storageFilePath);
         } catch (error: any) {
+          // Cleanup temp file if rename failed
+          try {
+            await fs.unlink(tmpFilePath).catch(() => { /* ignore cleanup errors */ });
+          } catch {}
+          
           console.error('[VFS] Persist failed:', {
             ownerId: normalizedOwnerId,
             storageDir: this.storageDir,

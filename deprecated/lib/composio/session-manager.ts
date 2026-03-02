@@ -647,10 +647,10 @@ class ComposioSessionManager {
     query: string,
     options?: { toolkit?: string; limit?: number }
   ): Promise<Tool[]> {
-    const session = await this.getSession(userId);
+    const userSession = await this.getSession(userId);
 
     try {
-      const tools = await session.tools();
+      const tools = await userSession.session.tools();
 
       const queryLower = query.toLowerCase();
       let results = tools.filter(tool =>

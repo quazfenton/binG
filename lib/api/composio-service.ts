@@ -597,10 +597,10 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                     dangerouslySkipVersionCheck: true,
                   });
                 } catch {
-                  // Backward-compatible payload shape fallback
+                  // Backward-compatible payload shape fallback for older SDKs expecting 'input' key
                   result = await composio.tools.execute(toolSlug, {
                     connectedAccountId: request.userId,
-                    arguments: toolArgs,
+                    input: toolArgs,
                   });
                 }
 

@@ -18,7 +18,7 @@ export interface TaskConfig {
 export function createTask(config: TaskConfig): Task {
   return new Task({
     description: config.description,
-    expectedOutput: config.expected_output,
+    expected_output: config.expected_output,
     agent: config.agent,
   });
 }
@@ -29,7 +29,7 @@ export function createTask(config: TaskConfig): Task {
 export function createResearchTask(topic: string): Task {
   return new Task({
     description: `Research the topic: ${topic}`,
-    expectedOutput: `Comprehensive research notes on ${topic}`,
+    expected_output: `Comprehensive research notes on ${topic}`,
   });
 }
 
@@ -39,7 +39,7 @@ export function createResearchTask(topic: string): Task {
 export function createWriteTask(content: string): Task {
   return new Task({
     description: `Write content about: ${content}`,
-    expectedOutput: `Well-written content about ${content}`,
+    expected_output: `Well-written content about ${content}`,
   });
 }
 
@@ -49,6 +49,6 @@ export function createWriteTask(content: string): Task {
 export function createCodeTask(code: string): Task {
   return new Task({
     description: `Write code: ${code}`,
-    expectedOutput: `Working code for: ${code}`,
+    expected_output: `Working code for: ${code}`,
   });
 }

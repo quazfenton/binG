@@ -50,11 +50,23 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Use ownerId from query if provided, otherwise resolve from auth
+    // SECURITY: Always derive ownerId from authenticated request context
+    // Reject any attempt to override ownerId via query parameter
     const authResolution = await resolveFilesystemOwner(req);
-    const ownerId = ownerIdFromQuery || authResolution.ownerId;
+    const ownerId = authResolution.ownerId;
 
-    console.log('[VFS API] Listing directory:', { path, ownerId, source: ownerIdFromQuery ? 'query' : 'auth' });
+    // If ownerId was explicitly provided in query, verify it matches authenticated user
+    if (ownerIdFromQuery && ownerIdFromQuery !== ownerId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Unauthorized: cannot list filesystems for other users',
+        },
+        { status: 403 },
+      );
+    }
+
+    console.log('[VFS API] Listing directory:', { path, ownerId, source: 'auth' });
 
     const listing = await virtualFilesystem.listDirectory(ownerId, path);
 

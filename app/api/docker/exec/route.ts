@@ -9,7 +9,8 @@ const loadDocker = async () => {
 
 // Whitelist of allowed commands to prevent command injection
 // Note: Network utilities (curl, wget) are excluded to prevent data exfiltration
-const allowedCommands = ['ps', 'ls', 'df', 'top', 'free', 'uptime', 'whoami', 'pwd', 'cat', 'tail', 'head', 'grep', 'find', 'du', 'netstat', 'ss', 'ip', 'ifconfig', 'ping'];
+// SECURITY: 'find' removed from whitelist as it can bypass restrictions via -exec flag
+const allowedCommands = ['ps', 'ls', 'df', 'top', 'free', 'uptime', 'whoami', 'pwd', 'cat', 'tail', 'head', 'grep', 'du', 'netstat', 'ss', 'ip', 'ifconfig', 'ping'];
 
 /**
  * Validates container ID format.

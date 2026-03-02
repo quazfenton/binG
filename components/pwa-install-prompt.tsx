@@ -17,8 +17,19 @@ export function PWAInstallPrompt() {
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
+      
+      // Check if user dismissed recently before showing
+      const dismissed = localStorage.getItem('pwa-install-dismissed');
+      if (dismissed) {
+        const dismissedTime = parseInt(dismissed, 10);
+        const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+        if (Date.now() - dismissedTime < thirtyDays) {
+          return; // Don't show if dismissed within 30 days
+        }
+      }
+      
       setDeferredPrompt(e);
-      // Show install prompt after 3 seconds on first visit
+      // Show install prompt after 3 seconds
       setTimeout(() => setShowPrompt(true), 3000);
     };
 
@@ -64,7 +75,8 @@ export function PWAInstallPrompt() {
     }
   }, []);
 
-  if (!showPrompt && !updateAvailable) return null;
+  // Only show component if showPrompt is true (respects dismiss for both install and update)
+  if (!showPrompt) return null;
 
   return (
     <div className="fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 z-50">

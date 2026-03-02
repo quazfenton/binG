@@ -605,7 +605,11 @@ export default function MessageBubble({
                 variant="outline"
                 className="h-7 px-2 text-[11px]"
                 onClick={handleAcceptEdits}
-                disabled={isApplyingEditAction || fileEditDecision === "accepted"}
+                disabled={
+                  isApplyingEditAction ||
+                  fileEditDecision === "accepted" ||
+                  fileEditDecision === "auto_applied"
+                }
               >
                 Accept
               </Button>
@@ -614,7 +618,11 @@ export default function MessageBubble({
                 variant="destructive"
                 className="h-7 px-2 text-[11px]"
                 onClick={handleDenyEdits}
-                disabled={isApplyingEditAction || fileEditDecision === "denied"}
+                disabled={
+                  isApplyingEditAction ||
+                  fileEditDecision === "denied" ||
+                  fileEditDecision === "reverted_with_conflicts"
+                }
               >
                 Deny + Revert
               </Button>

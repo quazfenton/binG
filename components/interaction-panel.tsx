@@ -384,7 +384,7 @@ export default function InteractionPanel({
     [virtualFilesystem.attachedFiles],
   );
   const virtualFileNodes = useMemo(
-    () => virtualFilesystem.nodes.filter((node) => node.type === 'file'),
+    () => virtualFilesystem.nodes.filter((node) => node.type === 'file' || node.type === 'directory'),
     [virtualFilesystem.nodes],
   );
 
@@ -1463,7 +1463,16 @@ export default function InteractionPanel({
                 </div>
 
                 {/* Input Form - Always visible at bottom */}
-                <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1 min-h-0 overflow-visible">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const trimmed = input.trim();
+                    if (!trimmed) return;
+                    onSubmit(trimmed);
+                    setInput("");
+                  }}
+                  className="flex flex-col gap-2 flex-1 min-h-0 overflow-visible"
+                >
                   <div className="relative flex-1 min-h-[60px] overflow-visible">
                     <Textarea
                       ref={textareaRef}
@@ -1475,8 +1484,10 @@ export default function InteractionPanel({
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
-                          onSubmit(input);
-                          setInput('');
+                          const trimmed = input.trim();
+                          if (!trimmed) return;
+                          onSubmit(trimmed);
+                          setInput("");
                         }
                       }}
                       onFocus={() => {
