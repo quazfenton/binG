@@ -330,10 +330,9 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
           })}\n\n`;
           events.splice(Math.max(0, events.length - 1), 0, filesystemEvent);
         }
-        
+
         const encoder = new TextEncoder();
-        let encoderRef = encoder;  // Reference for cleanup
-        
+        const encoderRef = encoder;  // Reference for cleanup (no null assignment)
         const readableStream = new ReadableStream({
           async start(controller) {
             // Cleanup function for resource management
