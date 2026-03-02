@@ -46,6 +46,8 @@ export async function GET(req: NextRequest) {
   const wsHost = process.env.WEBSOCKET_HOST || 'localhost:3001';
 
   // Build WebSocket URL with properly encoded parameters
+  // Note: Token in URL is a security concern - consider using cookies for authentication
+  // when possible, as URL parameters can be logged in server/access logs
   const wsParams = new URLSearchParams();
   if (token) {
     wsParams.set('token', token);

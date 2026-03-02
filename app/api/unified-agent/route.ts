@@ -88,21 +88,33 @@ export async function POST(req: NextRequest) {
 
 /**
  * GET /api/unified-agent
- * 
+ *
  * Returns provider health status and available modes.
+ * 
+ * Security: Requires authentication to prevent leaking infrastructure configuration.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Authenticate request (same as POST handler)
+  const authResult = await resolveRequestAuth(req, {
+    allowAnonymous: true,
+    anonymousSessionId: req.headers.get('x-anonymous-session-id'),
+  });
+
+  if (!authResult.success || !authResult.userId) {
+    return NextResponse.json(
+      { error: 'Unauthorized: valid authentication required' },
+      { status: 401 }
+    );
+  }
+
   const health = checkProviderHealth();
   const modes = getAvailableModes();
-  
+
+  // Return only health and modes - DO NOT expose environment variables
+  // to avoid leaking infrastructure configuration
   return NextResponse.json({
     health,
     modes,
-    environment: {
-      LLM_PROVIDER: process.env.LLM_PROVIDER || 'not set',
-      OPENCODE_CONTAINERIZED: process.env.OPENCODE_CONTAINERIZED || 'false',
-      SANDBOX_PROVIDER: process.env.SANDBOX_PROVIDER || 'not set',
-    },
   });
 }
 

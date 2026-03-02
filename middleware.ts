@@ -91,10 +91,15 @@ export function middleware(request: NextRequest) {
     'max-age=31536000; includeSubDomains; preload'
   );
 
-  // Cross-Origin policies
-  response.headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
-  response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
-  response.headers.set('Cross-Origin-Resource-Policy', 'same-origin');
+  // NOTE: Cross-Origin isolation headers (COEP/COOP/CORP) are NOT set globally
+  // because they would break third-party resources used by plugins:
+  // - HuggingFace Spaces iframes (hf.space doesn't send CORP headers)
+  // - unpkg.com FFmpeg WASM resources
+  // - qrserver.com QR code images
+  // These headers should only be set on specific routes that explicitly need
+  // cross-origin isolation (e.g., SharedArrayBuffer for threading).
+  // If you need cross-origin isolation for a specific feature, set headers
+  // in that route handler instead of here.
 
   return response;
 }

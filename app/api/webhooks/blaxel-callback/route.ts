@@ -55,10 +55,13 @@ async function processExecutionResult(data: {
 
 export async function POST(request: NextRequest) {
   try {
-    // Verify callback signature for security
+    // SECURITY: Require webhook authentication in production
+    // In development, allow unauthenticated requests for testing
+    const isDevelopment = process.env.NODE_ENV === 'development';
+    
     if (CALLBACK_SECRET) {
       const isValid = await verifyCallbackSignature(request, CALLBACK_SECRET);
-      
+
       if (!isValid) {
         console.warn('[BlaxelCallback] Invalid signature detected');
         return NextResponse.json(
@@ -66,8 +69,16 @@ export async function POST(request: NextRequest) {
           { status: 401 }
         );
       }
+    } else if (!isDevelopment) {
+      // In production, require the secret to be configured
+      console.error('[BlaxelCallback] BLAXEL_CALLBACK_SECRET not configured - rejecting request');
+      return NextResponse.json(
+        { error: 'Webhook authentication not configured. Set BLAXEL_CALLBACK_SECRET environment variable.' },
+        { status: 500 }
+      );
     } else {
-      console.warn('[BlaxelCallback] BLAXEL_CALLBACK_SECRET not configured, skipping verification');
+      // Development mode - log warning but allow request
+      console.warn('[BlaxelCallback] Development mode: BLAXEL_CALLBACK_SECRET not configured, skipping verification');
     }
 
     // Parse callback payload
@@ -85,7 +96,7 @@ export async function POST(request: NextRequest) {
       execution_id,
       sandbox_id,
       status_code,
-      timestamp: new Date(timestamp).toISOString(),
+      timestamp: timestamp ? new Date(timestamp).toISOString() : 'unknown',
     });
 
     // Process the async execution result
@@ -95,7 +106,7 @@ export async function POST(request: NextRequest) {
       status_code: status_code,
       response_body: response_body,
       response_length: response_length,
-      timestamp: timestamp,
+      timestamp: timestamp || new Date().toISOString(),
     });
 
     return NextResponse.json({

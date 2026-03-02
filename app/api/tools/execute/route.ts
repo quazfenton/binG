@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getToolManager } from '@/lib/tools';
 import { toolAuthManager } from '@/lib/services/tool-authorization-manager';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { checkRateLimit } from '@/lib/middleware/rate-limit';
+import { checkRateLimitMiddleware } from '@/lib/middleware/rate-limit';
 import { cors, addCORSHeaders } from '@/lib/middleware/cors';
 import { validateToolExecutionRequest } from '@/lib/middleware/validation';
 
@@ -15,10 +15,10 @@ export async function POST(req: NextRequest) {
     const authResult = await resolveRequestAuth(req, {
       allowAnonymous: false,
     });
-    
+
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
-        { 
+        {
           success: false,
           error: {
             type: 'authentication_required',
@@ -31,9 +31,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Check rate limit
-    const rateLimitResponse = await checkRateLimit(req, '/api/tools/execute');
+    const rateLimitResponse = checkRateLimitMiddleware(req, '/api/tools/execute', 100, 60000);
     if (rateLimitResponse) {
-      return addCORSHeaders(rateLimitResponse);
+      return addCORSHeaders(rateLimitResponse, undefined, req);
     }
 
     // Use authenticated userId from token, ignore body userId

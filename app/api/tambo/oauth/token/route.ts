@@ -131,6 +131,13 @@ export async function POST(request: NextRequest) {
     const body: TokenExchangeRequest = await request.json();
     
     // Validate request
+    if (!body.grant_type || body.grant_type !== 'urn:ietf:params:oauth:grant-type:token-exchange') {
+      return NextResponse.json(
+        { error: 'grant_type is required and must be urn:ietf:params:oauth:grant-type:token-exchange' },
+        { status: 400 }
+      );
+    }
+    
     if (!body.subject_token) {
       return NextResponse.json(
         { error: 'subject_token is required' },

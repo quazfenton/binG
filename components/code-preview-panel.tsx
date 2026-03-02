@@ -41,9 +41,18 @@ import {
 } from "../lib/code-parser";
 
 // Lazy load Sandpack to avoid SSR issues
-const Sandpack = lazy(() => import('@codesandbox/sandpack-react').catch(() => ({
-  Sandpack: () => <div className="p-4 text-center text-yellow-600">Sandpack preview unavailable</div>
-})));
+// React.lazy requires default export, so we remap the named export
+const Sandpack = lazy(() =>
+  import('@codesandbox/sandpack-react')
+    .then(mod => ({ default: mod.Sandpack }))
+    .catch(() => ({
+      default: () => (
+        <div className="p-4 text-center text-yellow-600">
+          Sandpack preview unavailable
+        </div>
+      ),
+    }))
+);
 
 interface CodePreviewPanelProps {
   messages: Message[];

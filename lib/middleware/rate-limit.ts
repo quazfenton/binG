@@ -283,6 +283,53 @@ export function checkRateLimit(
 }
 
 /**
+ * Rate limit middleware for API routes
+ * Returns NextResponse if rate limited, null if OK
+ * 
+ * @param request - The incoming request
+ * @param identifier - Rate limit identifier (e.g., route path or user ID)
+ * @param maxRequests - Maximum requests allowed in the window
+ * @param windowMs - Time window in milliseconds
+ * @returns NextResponse if rate limited, null otherwise
+ */
+export function checkRateLimitMiddleware(
+  request: NextRequest,
+  identifier: string,
+  maxRequests: number = 100,
+  windowMs: number = 60000
+): NextResponse | null {
+  // Get client identifier (IP address or user ID from request)
+  const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0] ||
+                   request.headers.get('x-real-ip') ||
+                   'unknown';
+  
+  const fullIdentifier = `${identifier}:${clientIp}`;
+  
+  const result = checkRateLimit(fullIdentifier, maxRequests, windowMs);
+  
+  if (!result.allowed) {
+    return NextResponse.json(
+      {
+        error: 'Too many requests',
+        message: 'Rate limit exceeded. Please try again later.',
+        retryAfter: result.retryAfter,
+      },
+      {
+        status: 429,
+        headers: {
+          'X-RateLimit-Limit': String(maxRequests),
+          'X-RateLimit-Remaining': '0',
+          'X-RateLimit-Reset': String(result.resetAt),
+          'Retry-After': String(result.retryAfter),
+        },
+      }
+    );
+  }
+  
+  return null;
+}
+
+/**
  * Reset rate limit for an identifier (for admin use)
  */
 export function resetRateLimit(identifier: string): void {

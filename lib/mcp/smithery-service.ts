@@ -127,7 +127,7 @@ export class SmitheryService {
     
     if (options?.limit) params.set('limit', String(options.limit));
     if (options?.offset) params.set('offset', String(options.offset));
-    if (options?.verified) params.set('verified', 'true');
+    if (options?.verified !== undefined) params.set('verified', String(options.verified));
     if (options?.deploymentStatus) params.set('deploymentStatus', options.deploymentStatus);
     if (options?.namespace) params.set('namespace', options.namespace);
     if (options?.ownerId) params.set('ownerId', options.ownerId);

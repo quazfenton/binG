@@ -8,11 +8,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { 
-  handleComposioWebhook, 
+import {
+  handleComposioWebhookWithPayload,
   verifyWebhookSignature,
 } from '@/lib/composio/webhook-handler';
-import { checkRateLimit } from '@/lib/middleware/rate-limit';
+import { checkRateLimitMiddleware } from '@/lib/middleware/rate-limit';
 import { addCORSHeaders } from '@/lib/middleware/cors';
 
 export async function POST(request: NextRequest) {
@@ -20,9 +20,9 @@ export async function POST(request: NextRequest) {
 
   try {
     // Check rate limit
-    const rateLimitResponse = await checkRateLimit(request, '/api/webhooks/composio');
+    const rateLimitResponse = checkRateLimitMiddleware(request, '/api/webhooks/composio', 100, 60000);
     if (rateLimitResponse) {
-      return addCORSHeaders(rateLimitResponse);
+      return addCORSHeaders(rateLimitResponse, undefined, request);
     }
 
     // Get webhook signature from headers

@@ -191,11 +191,33 @@ export function AgentTerminal({
 
   // Copy output
   const handleCopy = useCallback(() => {
-    if (xtermRef.current?.terminal) {
-      const content = xtermRef.current.terminal.buffer.active.getLine(0)?.translateToString() || ''
-      navigator.clipboard.writeText(content)
+    if (!xtermRef.current?.terminal) return;
+
+    const terminal = xtermRef.current.terminal;
+
+    // First try to copy selected text if there's a selection
+    const selection = terminal.getSelection();
+    if (selection && selection.trim()) {
+      navigator.clipboard.writeText(selection);
+      return;
     }
-  }, [])
+
+    // Otherwise copy all visible content from the buffer
+    const buf = terminal.buffer.active;
+    const lines: string[] = [];
+    const viewportEnd = buf.viewportY + terminal.rows;
+
+    // Copy all lines in the buffer (or just visible portion if preferred)
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line) {
+        // translateToString(true) includes trailing whitespace
+        lines.push(line.translateToString(true));
+      }
+    }
+
+    navigator.clipboard.writeText(lines.join('\n'));
+  }, []);
 
   return (
     <div className={`border rounded-lg overflow-hidden ${theme === 'dark' ? 'bg-black border-gray-800' : 'bg-white border-gray-200'}`}>

@@ -1326,7 +1326,7 @@ export default function InteractionPanel({
                 }
 
                 setPrevTab(activeTab || null);
-                onActiveTabChange?.(value as "chat" | "extras" | "integrations" | "shell");
+                onActiveTabChange?.(value as "chat" | "images" | "extras" | "integrations" | "shell");
               }}
               className={`flex-1 flex flex-col min-h-0 transition-all duration-300 ease-out`}
             >

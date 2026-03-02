@@ -16,8 +16,9 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { createComputerUseAgent, getComputerUseSystemPrompt, computerUseTools } from '@/lib/sandbox/providers/computer-use-tools-enhanced'
+import { createComputerUseAgent, getComputerUseSystemPrompt, computerUseTools, toolCallToAction } from '@/lib/sandbox/providers/computer-use-tools-enhanced'
 import type { DesktopSandboxHandle, DesktopAction, AgentLoopResult, DesktopStats } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
+import { openai } from '@ai-sdk/openai'
 
 // ==================== Types ====================
 
@@ -160,40 +161,60 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     try {
       const { e2bDesktopProvider } = await import('@/lib/sandbox/providers/e2b-desktop-provider-enhanced')
 
-      // Get action from LLM (placeholder - integrate with your LLM provider)
+      // Get action from LLM using OpenAI
       const getActionFromLLM = async (screenshotBase64: string, iteration: number): Promise<DesktopAction | null> => {
         setCurrentIteration(iteration + 1)
 
-        // TODO: Integrate with your LLM provider (OpenAI, Anthropic, etc.)
-        // Example with OpenAI:
-        /*
-        const response = await openai.chat.completions.create({
-          model: 'gpt-4o',
-          messages: [
-            {
-              role: 'system',
-              content: getComputerUseSystemPrompt(),
-            },
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: agentTask },
-                { type: 'image_url', image_url: `data:image/png;base64,${screenshotBase64}` },
-              ],
-            },
-          ],
-          tools: Object.values(computerUseTools),
-          tool_choice: 'auto',
-        })
+        try {
+          const apiKey = process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY;
+          if (!apiKey) {
+            appendTerminalOutput('Error: No LLM API key configured (OPENAI_API_KEY or OPENROUTER_API_KEY)');
+            return null;
+          }
 
-        const toolCall = response.choices[0].message.tool_calls?.[0]
-        if (!toolCall) return null
+          // Configure OpenAI with the API key
+          const openaiConfigured = openai as any;
+          if (openaiConfigured.defaultApiKey) {
+            openaiConfigured.defaultApiKey = apiKey;
+          }
+          
+          const model = process.env.COMPUTE_USE_MODEL || 'gpt-4o';
 
-        return toolCallToAction(toolCall.function.name, JSON.parse(toolCall.function.arguments))
-        */
+          const response = await openai.chat.completions.create({
+            model,
+            messages: [
+              {
+                role: 'system',
+                content: getComputerUseSystemPrompt(),
+              },
+              {
+                role: 'user',
+                content: [
+                  { type: 'text', text: agentTask },
+                  { type: 'image_url', image_url: { url: `data:image/png;base64,${screenshotBase64}` } },
+                ],
+              },
+            ],
+            tools: Object.values(computerUseTools),
+            tool_choice: 'auto',
+            max_tokens: 4096,
+          });
 
-        // Placeholder: Return null to stop agent
-        return null
+          const toolCall = response.choices[0]?.message?.tool_calls?.[0];
+          if (!toolCall) {
+            const content = response.choices[0]?.message?.content;
+            if (content) {
+              appendTerminalOutput(`Agent: ${content}`);
+            }
+            return null;
+          }
+
+          return toolCallToAction(toolCall.function.name, JSON.parse(toolCall.function.arguments));
+        } catch (error: any) {
+          appendTerminalOutput(`LLM Error: ${error.message}`);
+          console.error('[DesktopPlugin] LLM error:', error);
+          return null;
+        }
       }
 
       const result = await desktop.runAgentLoop(getActionFromLLM, {

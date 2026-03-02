@@ -31,11 +31,11 @@ function scryptSync(password: string, salt: Buffer, keylen: number): Buffer {
 
 /**
  * Encrypt sensitive data using AES-256-GCM
- * 
+ *
  * @param plaintext - The data to encrypt
  * @param key - Encryption key (will be derived from string if provided as string)
- * @returns Encrypted data in format: iv:authTag:encryptedData (hex encoded)
- * 
+ * @returns Encrypted data in format: salt:iv:authTag:encryptedData (hex encoded)
+ *
  * @example
  * ```typescript
  * const encrypted = encryptSecret('my-secret', process.env.ENCRYPTION_KEY);
@@ -45,34 +45,36 @@ export function encryptSecret(
   plaintext: string,
   key: string | Buffer
 ): string {
-  const encryptionKey = typeof key === 'string' ? deriveKey(key, randomBytes(16)) : key;
-  
+  // Generate random salt for key derivation (16 bytes)
+  const salt = randomBytes(16);
+  const encryptionKey = typeof key === 'string' ? deriveKey(key, salt) : key;
+
   // Generate random IV (16 bytes for AES)
   const iv = randomBytes(16);
-  
+
   // Create cipher
   const cipher = createCipheriv('aes-256-gcm', encryptionKey, iv);
-  
+
   // Encrypt the plaintext
   let encrypted = cipher.update(plaintext, 'utf8', 'hex');
   encrypted += cipher.final('hex');
-  
+
   // Get authentication tag (16 bytes for GCM)
   const authTag = cipher.getAuthTag().toString('hex');
-  
-  // Return format: iv:authTag:encryptedData
-  return `${iv.toString('hex')}:${authTag}:${encrypted}`;
+
+  // Return format: salt:iv:authTag:encryptedData
+  return `${salt.toString('hex')}:${iv.toString('hex')}:${authTag}:${encrypted}`;
 }
 
 /**
  * Decrypt sensitive data using AES-256-GCM
- * 
- * @param encrypted - Encrypted data in format: iv:authTag:encryptedData
+ *
+ * @param encrypted - Encrypted data in format: salt:iv:authTag:encryptedData
  * @param key - Decryption key (must match encryption key)
  * @returns Decrypted plaintext
- * 
+ *
  * @throws Error if decryption fails (wrong key, tampered data, etc.)
- * 
+ *
  * @example
  * ```typescript
  * const decrypted = decryptSecret(encryptedData, process.env.ENCRYPTION_KEY);
@@ -82,47 +84,52 @@ export function decryptSecret(
   encrypted: string,
   key: string | Buffer
 ): string {
-  const encryptionKey = typeof key === 'string' ? deriveKey(key, randomBytes(16)) : key;
-  
-  // Parse encrypted format: iv:authTag:encryptedData
+  // Parse encrypted format: salt:iv:authTag:encryptedData
   const parts = encrypted.split(':');
-  if (parts.length !== 3) {
-    throw new Error('Invalid encrypted format. Expected: iv:authTag:encryptedData');
+  if (parts.length !== 4) {
+    throw new Error('Invalid encrypted format. Expected: salt:iv:authTag:encryptedData');
   }
-  
-  const [ivHex, authTagHex, encryptedHex] = parts;
+
+  const [saltHex, ivHex, authTagHex, encryptedHex] = parts;
+  const salt = Buffer.from(saltHex, 'hex');
   const iv = Buffer.from(ivHex, 'hex');
   const authTag = Buffer.from(authTagHex, 'hex');
-  
+
+  // Derive key using the SAME salt that was used for encryption
+  const encryptionKey = typeof key === 'string' ? deriveKey(key, salt) : key;
+
   // Create decipher
   const decipher = createDecipheriv('aes-256-gcm', encryptionKey, iv);
   decipher.setAuthTag(authTag);
-  
+
   // Decrypt the data
   let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
-  
+
   return decrypted;
 }
 
 /**
  * Check if a string appears to be encrypted data
- * Format: iv:authTag:encryptedData (all hex encoded)
+ * Format: salt:iv:authTag:encryptedData (all hex encoded)
  */
 export function isEncryptedFormat(value: string): boolean {
   const parts = value.split(':');
-  if (parts.length !== 3) return false;
-  
-  // Check IV length (16 bytes = 32 hex chars)
+  if (parts.length !== 4) return false;
+
+  // Check salt length (16 bytes = 32 hex chars)
   if (parts[0].length !== 32) return false;
-  
-  // Check auth tag length (16 bytes = 32 hex chars)
+
+  // Check IV length (16 bytes = 32 hex chars)
   if (parts[1].length !== 32) return false;
-  
+
+  // Check auth tag length (16 bytes = 32 hex chars)
+  if (parts[2].length !== 32) return false;
+
   // Check encrypted data is non-empty hex
-  if (parts[2].length === 0) return false;
-  if (!/^[0-9a-fA-F]+$/.test(parts[2])) return false;
-  
+  if (parts[3].length === 0) return false;
+  if (!/^[0-9a-fA-F]+$/.test(parts[3])) return false;
+
   return true;
 }
 

@@ -146,38 +146,49 @@ export async function POST(request: NextRequest) {
     // Verify webhook signature for security
     const signature = request.headers.get('x-nango-signature');
     const secret = process.env.NANGO_WEBHOOK_SECRET;
-    
-    if (secret && signature) {
-      const { createHmac, timingSafeEqual } = await import('node:crypto');
-      const expected = createHmac('sha256', secret).update(rawBody).digest('hex');
-      const expectedWithPrefix = `sha256=${expected}`;
-      
-      let isValid = false;
-      try {
-        const sigBuf = Buffer.from(signature, 'utf8');
-        const expBuf = Buffer.from(expected, 'utf8');
-        const expPrefixBuf = Buffer.from(expectedWithPrefix, 'utf8');
-        
-        if (sigBuf.length === expBuf.length) {
-          isValid = timingSafeEqual(sigBuf, expBuf);
-        } else if (sigBuf.length === expPrefixBuf.length) {
-          isValid = timingSafeEqual(sigBuf, expPrefixBuf);
-        }
-      } catch {
-        isValid = false;
-      }
-      
-      if (!isValid) {
-        console.warn('[Nango Webhook] Invalid signature');
-        return NextResponse.json(
-          { error: 'Invalid webhook signature' },
-          { status: 401 }
-        );
-      }
-    } else if (secret && !signature) {
+
+    // SECURITY: Require webhook signature verification in production
+    // Never accept webhooks without verification
+    if (!secret) {
+      console.error('[Nango Webhook] SECURITY: NANGO_WEBHOOK_SECRET not configured. Webhooks rejected.');
+      return NextResponse.json(
+        { error: 'Webhook verification not configured. Set NANGO_WEBHOOK_SECRET environment variable.' },
+        { status: 503 }
+      );
+    }
+
+    if (!signature) {
       console.warn('[Nango Webhook] Missing signature');
       return NextResponse.json(
         { error: 'Webhook signature required' },
+        { status: 401 }
+      );
+    }
+
+    // Verify signature
+    const { createHmac, timingSafeEqual } = await import('node:crypto');
+    const expected = createHmac('sha256', secret).update(rawBody).digest('hex');
+    const expectedWithPrefix = `sha256=${expected}`;
+
+    let isValid = false;
+    try {
+      const sigBuf = Buffer.from(signature, 'utf8');
+      const expBuf = Buffer.from(expected, 'utf8');
+      const expPrefixBuf = Buffer.from(expectedWithPrefix, 'utf8');
+
+      if (sigBuf.length === expBuf.length) {
+        isValid = timingSafeEqual(sigBuf, expBuf);
+      } else if (sigBuf.length === expPrefixBuf.length) {
+        isValid = timingSafeEqual(sigBuf, expPrefixBuf);
+      }
+    } catch {
+      isValid = false;
+    }
+
+    if (!isValid) {
+      console.warn('[Nango Webhook] Invalid signature');
+      return NextResponse.json(
+        { error: 'Invalid webhook signature' },
         { status: 401 }
       );
     }

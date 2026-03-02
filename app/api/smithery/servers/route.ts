@@ -15,12 +15,11 @@ export async function GET(request: NextRequest) {
   // Preserve explicit verified=false instead of converting to undefined
   const verified = verifiedParam === 'true' ? true : (verifiedParam === 'false' ? false : undefined);
   
-  const deploymentStatus = searchParams.get('deploymentStatus') as
-    | 'hosted'
-    | 'external'
-    | 'stdio'
-    | 'repo'
-    | null;
+  const validDeploymentStatuses = ['hosted', 'external', 'stdio', 'repo'];
+  const deploymentStatusParam = searchParams.get('deploymentStatus');
+  const deploymentStatus = deploymentStatusParam && validDeploymentStatuses.includes(deploymentStatusParam)
+    ? deploymentStatusParam as 'hosted' | 'external' | 'stdio' | 'repo'
+    : null;
 
   const service = getSmitheryService();
 

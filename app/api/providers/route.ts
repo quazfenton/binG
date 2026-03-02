@@ -36,7 +36,8 @@ export async function GET() {
       data: {
         providers: sortedProviders,
         defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "openrouter",
-        defaultModel: process.env.DEFAULT_MODEL || "openrouter/free",
+        // Use a valid default model that works with OpenRouter
+        defaultModel: process.env.DEFAULT_MODEL || "google/gemma-3-1b-it:free",
       },
     });
   } catch (error) {

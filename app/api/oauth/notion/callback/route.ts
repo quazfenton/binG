@@ -70,7 +70,14 @@ export async function GET(req: NextRequest) {
     });
 
     // Clear the state cookie after successful validation
-    response.cookies.delete('notion_oauth_state');
+    // Must use same path as when the cookie was set (in start route)
+    response.cookies.set('notion_oauth_state', '', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/api/oauth/notion/callback',
+      maxAge: 0, // Expire immediately
+    });
     return response;
   } catch (err) {
     console.error('Notion callback error:', err);

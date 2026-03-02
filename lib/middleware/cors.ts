@@ -38,13 +38,20 @@ export interface CORSConfig {
 
 /**
  * Default CORS configuration
+ * 
+ * SECURITY: When credentials are enabled, we cannot use wildcard origin.
+ * Browsers reject responses with both Access-Control-Allow-Origin: * 
+ * and Access-Control-Allow-Credentials: true.
+ * 
+ * For production, set ALLOWED_ORIGINS to specific domains.
+ * For development, localhost is allowed by default.
  */
 const DEFAULT_CORS_CONFIG: CORSConfig = {
-  origins: process.env.ALLOWED_ORIGINS?.split(',') || ['*'],
+  origins: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Request-ID'],
   exposedHeaders: ['X-Request-ID', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
-  credentials: true,
+  credentials: false, // Disabled by default - enable only when needed with specific origins
   maxAge: 86400, // 24 hours
   dynamicOrigin: true,
 };
@@ -111,20 +118,25 @@ export function createCORS(config: CORSConfig = DEFAULT_CORS_CONFIG) {
       );
     }
 
+    // SECURITY: Cannot use wildcard origin with credentials
+    const hasWildcardOrigin = config.origins.includes('*');
+    const shouldUseCredentials = config.credentials && !hasWildcardOrigin;
+
     // Create response headers
     const headers: Record<string, string> = {};
 
     // Set origin header
-    if (origin && config.origins.includes('*')) {
-      headers['Access-Control-Allow-Origin'] = '*';
+    if (origin && hasWildcardOrigin) {
+      // When wildcard, echo back the request origin (but don't allow credentials)
+      headers['Access-Control-Allow-Origin'] = origin;
     } else if (origin && validateOrigin(origin, config)) {
       headers['Access-Control-Allow-Origin'] = origin;
-    } else if (config.origins.length === 1) {
+    } else if (config.origins.length === 1 && !hasWildcardOrigin) {
       headers['Access-Control-Allow-Origin'] = config.origins[0];
     }
 
     // Set Vary header for caching
-    if (config.dynamicOrigin) {
+    if (config.dynamicOrigin || hasWildcardOrigin) {
       headers['Vary'] = 'Origin';
     }
 
@@ -139,8 +151,9 @@ export function createCORS(config: CORSConfig = DEFAULT_CORS_CONFIG) {
       headers['Access-Control-Expose-Headers'] = config.exposedHeaders.join(', ');
     }
 
-    // Set credentials
-    if (config.credentials) {
+    // SECURITY: Only set credentials if not using wildcard origin
+    // Browsers reject responses with both wildcard origin and credentials
+    if (shouldUseCredentials) {
       headers['Access-Control-Allow-Credentials'] = 'true';
     }
 
@@ -170,6 +183,9 @@ export function createCORS(config: CORSConfig = DEFAULT_CORS_CONFIG) {
  * @param config - CORS configuration
  * @param request - Original request
  * @returns Response with CORS headers
+ * 
+ * SECURITY: When credentials are enabled, we cannot use wildcard origin.
+ * This function automatically disables credentials if wildcard origin is detected.
  */
 export function addCORSHeaders(
   response: NextResponse,
@@ -178,17 +194,23 @@ export function addCORSHeaders(
 ): NextResponse {
   const origin = request?.headers.get('origin');
 
+  // SECURITY: Cannot use wildcard origin with credentials
+  // If credentials are enabled but origin is wildcard, we must be explicit
+  const hasWildcardOrigin = config.origins.includes('*');
+  const shouldUseCredentials = config.credentials && !hasWildcardOrigin;
+
   // Set origin header
-  if (origin && config.origins.includes('*')) {
-    response.headers.set('Access-Control-Allow-Origin', '*');
+  if (origin && hasWildcardOrigin) {
+    // When wildcard, echo back the request origin (but don't allow credentials)
+    response.headers.set('Access-Control-Allow-Origin', origin);
   } else if (origin && validateOrigin(origin, config)) {
     response.headers.set('Access-Control-Allow-Origin', origin);
-  } else if (config.origins.length === 1) {
+  } else if (config.origins.length === 1 && !hasWildcardOrigin) {
     response.headers.set('Access-Control-Allow-Origin', config.origins[0]);
   }
 
   // Set Vary header
-  if (config.dynamicOrigin) {
+  if (config.dynamicOrigin || hasWildcardOrigin) {
     response.headers.set('Vary', 'Origin');
   }
 
@@ -203,8 +225,9 @@ export function addCORSHeaders(
     response.headers.set('Access-Control-Expose-Headers', config.exposedHeaders.join(', '));
   }
 
-  // Set credentials
-  if (config.credentials) {
+  // SECURITY: Only set credentials if not using wildcard origin
+  // Browsers reject responses with both wildcard origin and credentials
+  if (shouldUseCredentials) {
     response.headers.set('Access-Control-Allow-Credentials', 'true');
   }
 

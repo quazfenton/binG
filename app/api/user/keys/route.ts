@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { initializeDatabase } from '@/lib/database/db';
 import jwt from 'jsonwebtoken';
-import { encryptSecret, decryptSecret } from '@/lib/utils/crypto';
+import { encryptSecret, decryptSecret, isEncryptedFormat } from '@/lib/utils/crypto';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
@@ -78,12 +78,12 @@ export async function GET(req: Request) {
     for (const row of keys) {
       // SECURITY: Decrypt API key on retrieval
       let decryptedKey: string;
-      if (ENCRYPTION_KEY && row.api_key.includes(':')) {
+      if (ENCRYPTION_KEY && isEncryptedFormat(row.api_key)) {
         try {
           decryptedKey = decryptSecret(row.api_key, ENCRYPTION_KEY);
         } catch (decryptError) {
           console.error('Failed to decrypt API key:', decryptError);
-          decryptedKey = '***ENCRYPTION_ERROR***';
+          decryptedKey = '***DECRYPTION_ERROR***';
         }
       } else {
         decryptedKey = row.api_key;

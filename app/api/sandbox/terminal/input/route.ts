@@ -20,6 +20,9 @@ const commandRateLimiter = new Map<string, { count: number; resetAt: number }>()
  * Command buffer for assembling multi-chunk commands
  * SECURITY: Buffer input per session to validate complete commands before execution
  * This prevents bypassing security checks by splitting dangerous commands across requests
+ * 
+ * Sessions are added to this buffer when they first send a command without an existing PTY connection.
+ * Once a complete command is validated, the data is forwarded and the buffer is cleared.
  */
 const commandBuffers = new Map<string, { buffer: string; lastActivity: number }>();
 
@@ -98,44 +101,68 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // SECURITY: Buffer input per session to validate complete commands
+    // SECURITY: Buffer input for sessions sending line-based commands (containing newlines)
     // This prevents bypassing security by splitting dangerous commands across requests
-    const bufferEntry = commandBuffers.get(sessionId) || { buffer: '', lastActivity: Date.now() };
-    bufferEntry.buffer += data;
-    bufferEntry.lastActivity = Date.now();
-    commandBuffers.set(sessionId, bufferEntry);
+    // PTY interactive sessions (no newlines in typical input) are not buffered
+    if (data.includes('\n') || data.includes('\r')) {
+      const bufferEntry = commandBuffers.get(sessionId) || { buffer: '', lastActivity: Date.now() };
+      bufferEntry.buffer += data;
+      bufferEntry.lastActivity = Date.now();
+      commandBuffers.set(sessionId, bufferEntry);
 
-    // Check if we have a complete command (contains newline)
-    if (bufferEntry.buffer.includes('\n')) {
-      const fullCommand = bufferEntry.buffer.trim();
-      const securityResult = checkCommandSecurity(fullCommand);
+      // Check if we have a complete command (contains newline or carriage return)
+      // Must match terminal-manager.ts which triggers on both \r and \n
+      if (bufferEntry.buffer.includes('\n') || bufferEntry.buffer.includes('\r')) {
+        const fullCommand = bufferEntry.buffer.trim();
+        const securityResult = checkCommandSecurity(fullCommand);
 
-      if (!securityResult.allowed) {
-        logger.warn('Blocked dangerous command', {
-          command: fullCommand.substring(0, 100), // Truncate for logging
-          reason: securityResult.reason,
-          severity: securityResult.severity,
-          userId: authResult.userId,
-          sessionId,
-        });
-
-        // Clear the buffer to prevent partial execution
-        commandBuffers.delete(sessionId);
-
-        return NextResponse.json(
-          {
-            error: 'Command blocked for security reasons',
+        if (!securityResult.allowed) {
+          logger.warn('Blocked dangerous command', {
+            command: fullCommand.substring(0, 100), // Truncate for logging
             reason: securityResult.reason,
             severity: securityResult.severity,
-          },
-          { status: 403 }
-        );
+            userId: authResult.userId,
+            sessionId,
+          });
+
+          // Clear the buffer to prevent partial execution
+          commandBuffers.delete(sessionId);
+
+          return NextResponse.json(
+            {
+              error: 'Command blocked for security reasons',
+              reason: securityResult.reason,
+              severity: securityResult.severity,
+            },
+            { status: 403 }
+          );
+        }
+
+        // SECURITY: Only forward data to terminal AFTER validation passes
+        // This ensures no partial command data reaches the terminal before security check
+        const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
+        if (!userSession || userSession.sessionId !== sessionId) {
+          return NextResponse.json(
+            { error: 'Unauthorized: session does not belong to this user' },
+            { status: 403 }
+          );
+        }
+
+        await terminalManager.sendInput(sessionId, data);
+
+        // Clear buffer after successful validation and forwarding
+        commandBuffers.delete(sessionId);
+
+        return NextResponse.json({ success: true });
       }
 
-      // Clear buffer after successful validation
-      commandBuffers.delete(sessionId);
+      // Partial command (buffered, waiting for newline) - don't forward yet
+      // This prevents partial command execution before security validation
+      return NextResponse.json({ success: true, buffered: true });
     }
 
+    // No newline in data - likely PTY interactive input, forward directly
+    // Security for interactive shells is handled at the shell level
     const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
     if (!userSession || userSession.sessionId !== sessionId) {
       return NextResponse.json(

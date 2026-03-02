@@ -622,7 +622,6 @@ See [Test Coverage Report](tests/COMPREHENSIVE_TEST_REPORT.md) for details.
 - **[API Endpoints](docs/API_ENDPOINTS_COMPLETE.md)** - Complete API reference (100+ endpoints)
 - **[New API Features](docs/API_NEW_FEATURES.md)** - Latest API additions from this session
 - **[E2E Testing Guide](tests/e2e/README.md)** - Playwright test setup and usage
-- **[Test Coverage Report](tests/COMPREHENSIVE_TEST_REPORT.md)** - 349+ tests across 10 categories
 - **[Implementation Plans](docs/sdk/IMPLEMENTATION_PLANS_INDEX.md)** - Technical implementation details
 - **[Mistral Agent Guide](docs/sdk/MISTRAL_AGENT_SANDBOX_IMPLEMENTATION_PLAN.md)** - Mistral integration
 - **[Sprites Enhancement](docs/sdk/SPRITES_ENHANCEMENT_PLAN.md)** - Sprites provider features
