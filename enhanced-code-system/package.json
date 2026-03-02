@@ -1,0 +1,154 @@
+{
+  "name": "@enhanced-code/system",
+  "version": "1.0.0",
+  "description": "Enhanced Technical Code Response System with advanced prompting, agentic framework integration, and sophisticated file handling",
+  "main": "dist/enhanced-code-orchestrator.js",
+  "types": "dist/enhanced-code-orchestrator.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "dev": "ts-node examples/complete-example.ts",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "format": "prettier --write src/**/*.ts",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run clean && npm run build",
+    "example:basic": "ts-node examples/basic-usage.ts",
+    "example:streaming": "ts-node examples/streaming-demo.ts",
+    "example:agentic": "ts-node examples/agentic-demo.ts",
+    "example:complete": "ts-node examples/complete-example.ts"
+  },
+  "keywords": [
+    "code-generation",
+    "ai-assisted-development",
+    "streaming",
+    "agentic-frameworks",
+    "file-management",
+    "diff-handling",
+    "typescript",
+    "prompting",
+    "crewai",
+    "praisonai",
+    "ag2"
+  ],
+  "author": "Enhanced Code System Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/enhanced-code/system.git"
+  },
+  "bugs": {
+    "url": "https://github.com/enhanced-code/system/issues"
+  },
+  "homepage": "https://github.com/enhanced-code/system#readme",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "dependencies": {
+    "zod": "^3.22.4",
+    "diff-match-patch": "^1.0.5",
+    "eventemitter3": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/jest": "^29.5.8",
+    "@types/diff-match-patch": "^1.0.36",
+    "typescript": "^5.3.2",
+    "ts-node": "^10.9.1",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "@typescript-eslint/eslint-plugin": "^6.12.0",
+    "@typescript-eslint/parser": "^6.12.0",
+    "eslint": "^8.54.0",
+    "prettier": "^3.1.0",
+    "rimraf": "^5.0.5",
+    "nodemon": "^3.0.1"
+  },
+  "optionalDependencies": {
+    "crewai-js": "^0.1.0",
+    "praisonai-sdk": "^0.1.0",
+    "ag2-client": "^0.1.0",
+    "openai": "^4.20.1",
+    "anthropic": "^0.9.1"
+  },
+  "peerDependencies": {
+    "react": ">=16.8.0",
+    "react-dom": ">=16.8.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "roots": [
+      "<rootDir>/src",
+      "<rootDir>/tests"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.ts",
+      "**/?(*.)+(spec|test).ts"
+    ],
+    "collectCoverageFrom": [
+      "src/**/*.ts",
+      "!src/**/*.d.ts",
+      "!src/examples/**",
+      "!**/node_modules/**"
+    ],
+    "coverageDirectory": "coverage",
+    "coverageReporters": [
+      "text",
+      "lcov",
+      "html"
+    ],
+    "moduleNameMapping": {
+      "^@/(.*)$": "<rootDir>/src/$1"
+    }
+  },
+  "eslintConfig": {
+    "parser": "@typescript-eslint/parser",
+    "extends": [
+      "eslint:recommended",
+      "@typescript-eslint/recommended"
+    ],
+    "plugins": [
+      "@typescript-eslint"
+    ],
+    "parserOptions": {
+      "ecmaVersion": 2022,
+      "sourceType": "module"
+    },
+    "rules": {
+      "@typescript-eslint/no-unused-vars": "error",
+      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/explicit-function-return-type": "off",
+      "@typescript-eslint/explicit-module-boundary-types": "off"
+    }
+  },
+  "prettier": {
+    "semi": true,
+    "trailingComma": "es5",
+    "singleQuote": true,
+    "printWidth": 80,
+    "tabWidth": 2,
+    "useTabs": false
+  }
+}

@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  # ===========================================
+  # Microsandbox Daemon (Self-hosted Sandbox)
+  # ===========================================
+  # Provides isolated shell terminal environments
+  # Docs: https://microsandbox.run
+  microsandbox:
+    image: ghcr.io/valtown/microsandbox:latest
+    ports:
+      - "5555:5555"  # Microsandbox API port
+    environment:
+      - PORT=5555
+      - NODE_ENV=production
+      # Security settings
+      - MSB_MAX_CONCURRENT_SANDBOXES=50
+      - MSB_SANDBOX_TIMEOUT_MS=7200000  # 2 hours
+      - MSB_WORKSPACE_DIR=/workspace
+    volumes:
+      # Persist sandbox workspaces
+      - microsandbox-workspaces:/workspace
+      # Optional: Mount custom base image
+      # - ./custom-base:/base-image
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5555/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - bing-network
+    # Resource limits (adjust based on your server)
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+
+  # ===========================================
+  # binG Frontend
+  # ===========================================
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      # Connect to microsandbox daemon
+      - MICROSANDBOX_SERVER_URL=http://microsandbox:5555
+      - SANDBOX_PROVIDER=microsandbox
+      # Auto-start microsandbox (disabled when using docker service)
+      - MICROSANDBOX_AUTO_START=false
+    volumes:
+      - ./data:/app/data  # Persist database data
+    restart: unless-stopped
+    depends_on:
+      microsandbox:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bing-network
+
+# ===========================================
+# Networks
+# ===========================================
+networks:
+  bing-network:
+    driver: bridge
+
+# ===========================================
+# Volumes
+# ===========================================
+volumes:
+  microsandbox-workspaces:
+    driver: local
+  # Database volume (if using external DB)
+  # postgres-data:
+  #   driver: local

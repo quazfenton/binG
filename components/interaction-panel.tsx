@@ -1,0 +1,1840 @@
+"use client";
+//fix
+import type React from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+
+// Tabs that need taller height when opened
+const TALL_TABS = ['images', 'extras', 'shell'];
+const DEFAULT_TAB_HEIGHT = 'min-h-[200px]';
+const TALL_TAB_HEIGHT = 'min-h-[400px]';
+const EXPAND_TRANSITION = 'transition-all duration-300 ease-out';
+import { Button } from "../components/ui/button";
+import { Textarea } from "../components/ui/textarea";
+import { Switch } from "../components/ui/switch";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "../components/ui/tabs";
+import { Card, CardContent } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { toast } from "sonner";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
+import Send from "lucide-react/dist/esm/icons/send";
+import Plus from "lucide-react/dist/esm/icons/plus";
+import Sparkles from "lucide-react/dist/esm/icons/sparkles";
+import Settings from "lucide-react/dist/esm/icons/settings";
+import HelpCircle from "lucide-react/dist/esm/icons/help-circle";
+import History from "lucide-react/dist/esm/icons/history";
+import Loader2 from "lucide-react/dist/esm/icons/loader-2";
+import ImageIcon from "lucide-react/dist/esm/icons/image";
+import Square from "lucide-react/dist/esm/icons/square";
+import MessageSquare from "lucide-react/dist/esm/icons/message-square";
+import AlertCircle from "lucide-react/dist/esm/icons/alert-circle";
+import Code from "lucide-react/dist/esm/icons/code";
+import GripHorizontal from "lucide-react/dist/esm/icons/grip-horizontal";
+import Maximize2 from "lucide-react/dist/esm/icons/maximize-2";
+import Minimize2 from "lucide-react/dist/esm/icons/minimize-2";
+import ArrowDownToLine from "lucide-react/dist/esm/icons/arrow-down-to-line";
+import Brain from "lucide-react/dist/esm/icons/brain";
+import FileText from "lucide-react/dist/esm/icons/file-text";
+import Calculator from "lucide-react/dist/esm/icons/calculator";
+import Globe from "lucide-react/dist/esm/icons/globe";
+import Palette from "lucide-react/dist/esm/icons/palette";
+import Music from "lucide-react/dist/esm/icons/music";
+import Zap from "lucide-react/dist/esm/icons/zap";
+import Film from "lucide-react/dist/esm/icons/film";
+import Camera from "lucide-react/dist/esm/icons/camera";
+import MapIcon from "lucide-react/dist/esm/icons/map";
+import Gamepad2 from "lucide-react/dist/esm/icons/gamepad-2";
+import Shield from "lucide-react/dist/esm/icons/shield";
+import Database from "lucide-react/dist/esm/icons/database";
+import CheckCircle from "lucide-react/dist/esm/icons/check-circle";
+import FileCode from "lucide-react/dist/esm/icons/file-code";
+import Search from "lucide-react/dist/esm/icons/search";
+import FolderPlus from "lucide-react/dist/esm/icons/folder-plus";
+import Hash from "lucide-react/dist/esm/icons/hash";
+import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw";
+import Package from "lucide-react/dist/esm/icons/package";
+import GitBranch from "lucide-react/dist/esm/icons/git-branch";
+import Key from "lucide-react/dist/esm/icons/key";
+import Cloud from "lucide-react/dist/esm/icons/cloud";
+import Server from "lucide-react/dist/esm/icons/server";
+import Scale from "lucide-react/dist/esm/icons/scale";
+import Terminal from "lucide-react/dist/esm/icons/terminal";
+import Link from "lucide-react/dist/esm/icons/link";
+import X from "lucide-react/dist/esm/icons/x";
+import ArrowUp from "lucide-react/dist/esm/icons/arrow-up";
+import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
+import type { LLMProvider } from "../lib/api/llm-providers";
+import MultiModelComparison from "./multi-model-comparison";
+import PluginManager, { type Plugin } from "./plugins/plugin-manager";
+import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";
+import CodeFormatterPlugin from "./plugins/code-formatter-plugin";
+import CalculatorPlugin from "./plugins/calculator-plugin";
+import NoteTakerPlugin from "./plugins/note-taker-plugin";
+import InteractiveDiagrammingPlugin from "./plugins/interactive-diagramming-plugin";
+import DataVisualizationBuilderPlugin from "./plugins/data-visualization-builder-plugin";
+import NetworkRequestBuilderPlugin from "./plugins/network-request-builder-plugin";
+import LegalDocumentPlugin from "./plugins/legal-document-plugin";
+import GitHubExplorerPlugin from "./plugins/github-explorer-plugin";
+import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
+import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
+import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
+import IntegrationPanel from "./integrations/IntegrationPanel";
+import { useVirtualFilesystem, type AttachedVirtualFile } from "../hooks/use-virtual-filesystem";
+import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
+import { secureRandom } from "../lib/utils";
+import DevOpsCommandCenterPlugin from "./plugins/devops-command-center-plugin";
+import AIPromptLibraryPlugin from "./plugins/ai-prompt-library-plugin";
+import APIPlaygroundProPlugin from "./plugins/api-playground-pro-plugin";
+import CloudStorageProPlugin from "./plugins/cloud-storage-pro-plugin";
+import CodeSandboxPlugin from "./plugins/code-sandbox-plugin";
+import CreativeStudioPlugin from "./plugins/creative-studio-plugin";
+import DataScienceWorkbenchPlugin from "./plugins/data-science-workbench-plugin";
+import GitHubExplorerAdvancedPlugin from "./plugins/github-explorer-advanced-plugin";
+import HuggingFaceSpacesProPlugin from "./plugins/huggingface-spaces-pro-plugin";
+import JsonValidatorPlugin from "./plugins/json-validator-plugin";
+import UrlUtilitiesPlugin from "./plugins/url-utilities-plugin";
+import WikiKnowledgeBasePlugin from "./plugins/wiki-knowledge-base-plugin";
+import ImageGenerationTab from "./image-generation-tab";
+
+// Pop-out plugin windows for Plugins tab
+const popOutPlugins: Plugin[] = [
+  {
+    id: "huggingface-spaces",
+    name: "Hugging Face Spaces",
+    description: "Generate images using Hugging Face Spaces models",
+    icon: ImageIcon,
+    component: HuggingFaceSpacesPlugin,
+    category: "ai",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "interactive-storyboard",
+    name: "Storyboard Creator",
+    description: "Create visual storyboards for films and animations",
+    icon: Film,
+    component: InteractiveStoryboardPlugin,
+    category: "media",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "cloud-storage",
+    name: "Cloud Storage 5GB",
+    description: "Access encrypted files from cloud providers",
+    icon: Cloud,
+    component: CloudStoragePlugin,
+    category: "utility",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "github-explorer",
+    name: "GitHub Explorer",
+    description: "Browse trending repositories and analyze code",
+    icon: GitBranch,
+    component: GitHubExplorerPlugin,
+    category: "code",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "legal-document",
+    name: "Legal Document Generator",
+    description: "Generate legal documents and analyze existing ones",
+    icon: Scale,
+    component: LegalDocumentPlugin,
+    category: "utility",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "data-visualization",
+    name: "Data Visualization Builder",
+    description: "Create interactive charts and graphs",
+    icon: Database,
+    component: DataVisualizationBuilderPlugin,
+    category: "data",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "network-request-builder",
+    name: "Network Request Builder",
+    description: "Build and test API requests",
+    icon: Globe,
+    component: NetworkRequestBuilderPlugin,
+    category: "developer",
+    defaultSize: { width: 800, height: 600 },
+    minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "note-taker",
+    name: "Note Taker",
+    description: "Take and organize notes during conversations",
+    icon: FileText,
+    component: NoteTakerPlugin,
+    category: "productivity",
+    defaultSize: { width: 600, height: 500 },
+    minSize: { width: 400, height: 300 },
+  },
+  {
+    id: "interactive-diagramming",
+    name: "Interactive Diagramming",
+    description: "Create diagrams and flowcharts",
+    icon: CheckCircle,
+    component: InteractiveDiagrammingPlugin,
+    category: "productivity",
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "devops-command-center",
+    name: "DevOps Command Center",
+    description: "Manage deployments and infrastructure",
+    icon: Server,
+    component: DevOpsCommandCenterPlugin,
+    category: "developer",
+    defaultSize: { width: 1000, height: 800 },
+    minSize: { width: 800, height: 600 },
+  },
+];
+
+interface InteractionPanelProps {
+  onSubmit: (content: string) => void;
+  onNewChat: () => void;
+  isProcessing: boolean;
+  toggleAccessibility: () => void;
+  toggleHistory: () => void;
+  toggleCodePreview: () => void;
+  onStopGeneration?: () => void;
+  onRetry?: () => void;
+  currentProvider?: string;
+  currentModel?: string;
+  error?: string | null;
+  input: string;
+  setInput: (value: string) => void;
+  availableProviders: LLMProvider[];
+  onProviderChange: (provider: string, model: string) => void;
+  hasCodeBlocks?: boolean;
+  activeTab?: "chat" | "extras" | "integrations" | "shell" | "images";
+  onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell" | "images") => void;
+  userId?: string;
+  onAttachedFilesChange?: (files: Record<string, AttachedVirtualFile>) => void;
+}
+
+export default function InteractionPanel({
+  onSubmit,
+  onNewChat,
+  isProcessing,
+  toggleAccessibility,
+  toggleHistory,
+  toggleCodePreview,
+  onStopGeneration,
+  onRetry: _onRetry,
+  currentProvider = "openrouter",
+  currentModel = "nvidia/nemotron-3-nano-30b-a3b:free",
+  error: _error,
+  input,
+  setInput,
+  availableProviders,
+  onProviderChange,
+  hasCodeBlocks = false,
+  activeTab = "chat",
+  onActiveTabChange,
+  onAttachedFilesChange,
+}: InteractionPanelProps) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dragHandleRef = useRef<HTMLDivElement>(null);
+
+  // Plugin state
+  const [pluginToOpen, setPluginToOpen] = useState<string | null>(null);
+
+  // Panel state
+  const [panelHeight, setPanelHeight] = useState(() => {
+    if (typeof window !== "undefined" && window.innerWidth <= 768) {
+      return Math.min(420, window.innerHeight * 0.58);
+    }
+    return 320; // Increased from 280 to ensure input is always visible
+  });
+  const [isDragging, setIsDragging] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  
+  // Track tall tab transitions for smooth animation
+  const [prevTab, setPrevTab] = useState<string | null>(null);
+  const [isExpanding, setIsExpanding] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const prevPanelHeightRef = useRef<number | null>(null);
+  const getPanelMaxHeight = useCallback(() => {
+    if (typeof window === "undefined") {
+      return 600;
+    }
+    return Math.max(240, window.innerHeight - 60);
+  }, []);
+
+  const getPanelMinHeight = useCallback(() => {
+    if (typeof window === "undefined") return 240;
+    return window.innerWidth <= 768 ? 320 : 240;
+  }, []);
+
+  const toggleMinimized = useCallback(() => {
+    setIsMinimized((prev) => !prev);
+  }, []);
+
+  // Handle plugin result
+  const handlePluginResult = (pluginId: string, result: any) => {
+    console.log(`Plugin ${pluginId} result:`, result);
+    if (typeof result === "string") {
+      setInput(result);
+    } else if (result?.content) {
+      setInput(result.content);
+    }
+  };
+
+  // Adjust panel height on window/viewport resize (mobile orientation + keyboard)
+  useEffect(() => {
+    let t: number | undefined;
+
+    const adjustForViewport = () => {
+      // Debounce rapid resize events
+      window.clearTimeout(t);
+      t = window.setTimeout(() => {
+        const vw = window.visualViewport;
+        const viewportH = vw?.height ?? window.innerHeight;
+
+        if (window.innerWidth <= 768) {
+          const maxMobileHeight = Math.max(240, viewportH - 60);
+          setPanelHeight((prev) =>
+            prev > maxMobileHeight ? maxMobileHeight : prev,
+          );
+
+          // Keep textarea in view when keyboard opens
+          if (document.activeElement === textareaRef.current) {
+            textareaRef.current?.scrollIntoView({
+              behavior: "smooth",
+              block: "nearest",
+            });
+          }
+        }
+      }, 100);
+    };
+
+    window.addEventListener("resize", adjustForViewport);
+    // Listen to visualViewport if available (iOS/Android keyboards)
+    if (typeof window !== "undefined" && (window as any).visualViewport) {
+      const vv = (window as any).visualViewport as VisualViewport;
+      vv.addEventListener("resize", adjustForViewport);
+      vv.addEventListener("scroll", adjustForViewport);
+      return () => {
+        window.removeEventListener("resize", adjustForViewport);
+        vv.removeEventListener("resize", adjustForViewport);
+        vv.removeEventListener("scroll", adjustForViewport);
+        if (t) window.clearTimeout(t);
+      };
+    }
+
+    return () => {
+      window.removeEventListener("resize", adjustForViewport);
+      if (t) window.clearTimeout(t);
+    };
+  }, [panelHeight]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Ctrl+K to focus input
+      if (event.ctrlKey && event.key === "k") {
+        event.preventDefault();
+        onActiveTabChange?.("chat"); // Switch to chat tab
+        setTimeout(() => {
+          textareaRef.current?.focus();
+        }, 100);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Mobile: Focus input on mount and when tapping the panel background
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.innerWidth <= 768) {
+      setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 400);
+    }
+  }, []);
+  // Virtual filesystem integration
+  const virtualFilesystem = useVirtualFilesystem("project");
+  const selectedFilePaths = useMemo(
+    () => Object.keys(virtualFilesystem.attachedFiles),
+    [virtualFilesystem.attachedFiles],
+  );
+  const virtualFileNodes = useMemo(
+    () => virtualFilesystem.nodes.filter((node) => node.type === 'file' || node.type === 'directory'),
+    [virtualFilesystem.nodes],
+  );
+
+  useEffect(() => {
+    onAttachedFilesChange?.(virtualFilesystem.attachedFiles);
+  }, [onAttachedFilesChange, virtualFilesystem.attachedFiles]);
+
+  // Initialize plugin migration service
+  useEffect(() => {
+    // Perform the migration: move Advanced AI Plugins to Extra tab
+    const advancedAIPluginIds = ['advanced-ai-plugins'];
+    const modularToolsIds = ['modular-tools'];
+    
+    // Update tab configurations
+    pluginMigrationService.movePluginsToTab(advancedAIPluginIds, 'extra');
+    pluginMigrationService.movePluginsToTab(modularToolsIds, 'plugins');
+    
+    // Validate the structure
+    const isValid = pluginMigrationService.validateTabStructure();
+    if (!isValid) {
+      console.warn('Plugin tab structure validation failed');
+    }
+  }, []);
+
+  // Plugin System
+  const availablePlugins: Plugin[] = [
+    {
+      id: "ai-enhancer",
+      name: "Prompt Enhancer",
+      description: "Enhance and improve text with AI",
+      icon: Sparkles,
+      component: AIEnhancerPlugin,
+      category: "ai",
+      defaultSize: { width: 500, height: 600 },
+      minSize: { width: 400, height: 400 },
+    },
+    {
+      id: "code-formatter",
+      name: "Code Formatter",
+      description: "Format and beautify code",
+      icon: Code,
+      component: CodeFormatterPlugin,
+      category: "code",
+      defaultSize: { width: 600, height: 700 },
+      minSize: { width: 500, height: 500 },
+    },
+    {
+      id: "calculator",
+      name: "Calculator",
+      description: "Perform calculations",
+      icon: Calculator,
+      component: CalculatorPlugin,
+      category: "utility",
+      defaultSize: { width: 350, height: 500 },
+      minSize: { width: 300, height: 400 },
+    },
+    {
+      id: "note-taker",
+      name: "Notes",
+      description: "Take and manage notes",
+      icon: FileText,
+      component: NoteTakerPlugin,
+      category: "utility",
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 400 },
+    },
+    {
+      id: "interactive-diagramming",
+      name: "Diagramming Tool",
+      description: "Create and edit diagrams like flowcharts and architecture.",
+      icon: GitBranch,
+      component: InteractiveDiagrammingPlugin,
+      category: "design",
+      defaultSize: { width: 800, height: 700 },
+      minSize: { width: 600, height: 500 },
+    },
+    {
+      id: "data-visualization-builder",
+      name: "Data Visualizer",
+      description: "Interactively build charts and graphs from data.",
+      icon: Database,
+      component: DataVisualizationBuilderPlugin,
+      category: "data",
+      defaultSize: { width: 850, height: 650 },
+      minSize: { width: 650, height: 450 },
+    },
+    {
+      id: "network-request-builder",
+      name: "API Tester",
+      description: "Construct and send HTTP requests.",
+      icon: Globe,
+      component: NetworkRequestBuilderPlugin,
+      category: "utility",
+      defaultSize: { width: 700, height: 600 },
+      minSize: { width: 500, height: 400 },
+    },
+    {
+      id: "legal-document",
+      name: "Legal Document Generator",
+      description: "Generate legal documents and analyze existing ones",
+      icon: Scale,
+      component: LegalDocumentPlugin,
+      category: "utility",
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 400 },
+    },
+    {
+      id: "interactive-storyboard",
+      name: "Storyboard Creator",
+      description: "Create visual storyboards for films and animations",
+      icon: Film,
+      component: InteractiveStoryboardPlugin,
+      category: "media",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "huggingface-spaces",
+      name: "HF Image Generator",
+      description: "Generate images using Hugging Face Spaces models",
+      icon: ImageIcon,
+      component: HuggingFaceSpacesPlugin,
+      category: "ai",
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 400 },
+    },
+    {
+      id: "github-explorer",
+      name: "GitHub Explorer",
+      description: "Browse trending repositories and analyze code",
+      icon: GitBranch,
+      component: GitHubExplorerPlugin,
+      category: "code",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "cloud-storage",
+      name: "Cloud Storage 5GB",
+      description: "Access encrypted files from cloud providers",
+      icon: Cloud,
+      component: CloudStoragePlugin,
+      category: "utility",
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 400 },
+    },
+    {
+      id: "devops-command-center",
+      name: "DevOps Command Center",
+      description: "Manage deployments and infrastructure",
+      icon: Server,
+      component: DevOpsCommandCenterPlugin,
+      category: "developer",
+      defaultSize: { width: 1000, height: 800 },
+      minSize: { width: 800, height: 600 },
+    },
+    // Pro versions with advanced features
+    {
+      id: "cloud-storage-pro",
+      name: "Cloud Storage Pro",
+      description: "Advanced cloud storage with 10GB and multi-provider sync",
+      icon: Cloud,
+      component: CloudStorageProPlugin,
+      category: "utility",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "huggingface-spaces-pro",
+      name: "HF Image Generator Pro",
+      description: "Advanced image generation with multiple models and upscaling",
+      icon: ImageIcon,
+      component: HuggingFaceSpacesProPlugin,
+      category: "ai",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "api-playground-pro",
+      name: "API Tester Pro",
+      description: "Advanced API testing with collections and automation",
+      icon: Globe,
+      component: APIPlaygroundProPlugin,
+      category: "developer",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "github-explorer-advanced",
+      name: "GitHub Explorer Pro",
+      description: "Advanced GitHub analytics and code search",
+      icon: GitBranch,
+      component: GitHubExplorerAdvancedPlugin,
+      category: "code",
+      defaultSize: { width: 1000, height: 800 },
+      minSize: { width: 800, height: 600 },
+    },
+    // Utility plugins
+    {
+      id: "code-sandbox",
+      name: "Code Sandbox",
+      description: "Live code execution and testing environment",
+      icon: Code,
+      component: CodeSandboxPlugin,
+      category: "code",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "creative-studio",
+      name: "Creative Studio",
+      description: "All-in-one creative tools for design and content",
+      icon: Palette,
+      component: CreativeStudioPlugin,
+      category: "design",
+      defaultSize: { width: 1000, height: 800 },
+      minSize: { width: 800, height: 600 },
+    },
+    {
+      id: "data-science-workbench",
+      name: "Data Science Workbench",
+      description: "Advanced data analysis and ML model building",
+      icon: Database,
+      component: DataScienceWorkbenchPlugin,
+      category: "data",
+      defaultSize: { width: 1100, height: 800 },
+      minSize: { width: 900, height: 600 },
+    },
+    {
+      id: "json-validator",
+      name: "JSON Validator",
+      description: "Validate and format JSON data",
+      icon: CheckCircle,
+      component: JsonValidatorPlugin,
+      category: "utility",
+      defaultSize: { width: 700, height: 600 },
+      minSize: { width: 500, height: 400 },
+    },
+    {
+      id: "url-utilities",
+      name: "URL Utilities",
+      description: "URL shortening, parsing, and validation tools",
+      icon: Link,
+      component: UrlUtilitiesPlugin,
+      category: "utility",
+      defaultSize: { width: 600, height: 500 },
+      minSize: { width: 400, height: 350 },
+    },
+    {
+      id: "wiki-knowledge-base",
+      name: "Wiki Knowledge Base",
+      description: "Search and browse Wikipedia knowledge",
+      icon: FileText,
+      component: WikiKnowledgeBasePlugin,
+      category: "utility",
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 450 },
+    },
+    {
+      id: "ai-prompt-library",
+      name: "AI Prompt Library",
+      description: "Browse and use pre-made AI prompts",
+      icon: Brain,
+      component: AIPromptLibraryPlugin,
+      category: "ai",
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 450 },
+    },
+  ];
+
+  const [showFileSelector, setShowFileSelector] = useState(false);
+  const fileSelectorRef = useRef<HTMLDivElement>(null);
+
+  // Close file selector when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        showFileSelector &&
+        fileSelectorRef.current &&
+        !fileSelectorRef.current.contains(event.target as Node)
+      ) {
+        setShowFileSelector(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showFileSelector]);
+
+  useEffect(() => {
+    if (showFileSelector) {
+      void virtualFilesystem.listDirectory(virtualFilesystem.currentPath);
+    }
+  }, [showFileSelector, virtualFilesystem.currentPath, virtualFilesystem.listDirectory]);
+
+  const handleToggleFileAttachment = useCallback(async (filePath: string, checked: boolean) => {
+    try {
+      if (checked) {
+        await virtualFilesystem.attachFile(filePath);
+      } else {
+        virtualFilesystem.detachFile(filePath);
+      }
+    } catch (attachError) {
+      const message = attachError instanceof Error ? attachError.message : 'Failed to attach file';
+      toast.error(message);
+    }
+  }, [virtualFilesystem]);
+
+  const handleUploadFilesToVirtualFilesystem = useCallback(async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) {
+      return;
+    }
+
+    try {
+      for (const file of files) {
+        const uploadedPath = await virtualFilesystem.uploadBrowserFile(file, {
+          targetDirectory: virtualFilesystem.currentPath,
+        });
+        await virtualFilesystem.attachFile(uploadedPath);
+      }
+      toast.success(`Attached ${files.length} file${files.length === 1 ? '' : 's'} from local device`);
+    } catch (uploadError) {
+      const message = uploadError instanceof Error ? uploadError.message : 'Failed to upload files';
+      toast.error(message);
+    } finally {
+      event.target.value = '';
+    }
+  }, [virtualFilesystem]);
+
+  const [showMultiModelComparison, setShowMultiModelComparison] =
+    useState(false);
+
+  // Simple chat suggestions (randomized on mount)
+  const chatSuggestions = useMemo(() => {
+    const suggestions = [
+      "unique app ideas",
+      "code a basic web app",
+      "make an addicting web game",
+      "show me something interesting",
+      "explain quantum computing simply",
+      "create a business plan",
+      "write a short story",
+      "design a logo concept",
+      "plan a workout routine",
+      "suggest healthy recipes",
+      "debug this error",
+      "optimize my workflow",
+    ];
+    return [...suggestions].sort(() => 0.5 - secureRandom()).slice(0, 4);
+  }, []);
+
+  // Extra modules for Extras tab (prompt templates, not full plugins)
+  const extraModules = useMemo(() => {
+    const modules = [
+      {
+        id: "ai-tutor",
+        name: "AI Tutor",
+        description:
+          "Interactive learning assistant with step-by-step explanations",
+        icon: Brain,
+        color: "text-purple-400",
+        action: () =>
+          setInput(
+            "Act as an expert tutor. Break down complex topics into digestible steps with examples and practice questions. Topic: ",
+          ),
+      },
+      {
+        id: "code-reviewer",
+        name: "Code Reviewer",
+        description:
+          "Professional code review with best practices and optimizations",
+        icon: Code,
+        color: "text-blue-400",
+        action: () =>
+          setInput(
+            "Review this code for best practices, performance, security, and maintainability. Provide specific suggestions:\n\n```\n// Paste your code here\n```",
+          ),
+      },
+      {
+        id: "multi-model-compare",
+        name: "Multi-Model Compare",
+        description: "Compare responses from multiple AI models simultaneously",
+        icon: Zap,
+        color: "text-yellow-400",
+        action: () => setShowMultiModelComparison(true),
+      },
+      {
+        id: "document-analyzer",
+        name: "Document Analyzer",
+        description: "Analyze and summarize documents, extract key insights",
+        icon: FileText,
+        color: "text-green-400",
+        action: () =>
+          setInput(
+            "Analyze this document and provide: 1) Executive summary 2) Key findings 3) Different perspectives 4) Recent developments 5) Reliable sources. Topic: ",
+          ),
+      },
+      {
+        id: "math-solver",
+        name: "Math Solver",
+        description:
+          "Step-by-step mathematical problem solving with visualizations",
+        icon: Calculator,
+        color: "text-orange-400",
+        action: () =>
+          setInput(
+            "Solve this mathematical problem step-by-step with clear explanations and visual representations where helpful:\n\n",
+          ),
+      },
+      {
+        id: "research-assistant",
+        name: "Research Assistant",
+        description:
+          "Comprehensive research with sources, analysis, and citations",
+        icon: Globe,
+        color: "text-cyan-400",
+        action: () =>
+          setInput(
+            "Research this topic comprehensively. Provide: 1) Overview 2) Key findings 3) Different perspectives 4) Recent developments 5) Reliable sources. Topic: ",
+          ),
+      },
+      {
+        id: "data-analyst",
+        name: "Data Analyst",
+        description:
+          "Analyze datasets, create visualizations, and extract insights",
+        icon: Database,
+        color: "text-indigo-400",
+        action: () =>
+          setInput(
+            "Analyze this data and provide insights, trends, and visualizations. Include statistical analysis and actionable recommendations:\n\n",
+          ),
+      },
+      {
+        id: "creative-writer",
+        name: "Creative Writer",
+        description: "Generate creative content, stories, and marketing copy",
+        icon: Palette,
+        color: "text-pink-400",
+        action: () =>
+          setInput(
+            "Create engaging creative content. Specify the type (story, blog post, marketing copy, etc.) and key requirements:\n\nContent type: \nTone: \nAudience: \nKey points: ",
+          ),
+      },
+      {
+        id: "music-composer",
+        name: "Music Composer",
+        description:
+          "Generate musical compositions, lyrics, and audio concepts",
+        icon: Music,
+        color: "text-yellow-400",
+        action: () =>
+          setInput(
+            "Help me create music. Provide chord progressions, melody ideas, lyrics, or composition structure for:\n\nGenre: \nMood: \nInstruments: \nTheme: ",
+          ),
+      },
+      {
+        id: "image-prompter",
+        name: "Image Prompter",
+        description: "Generate detailed prompts for AI image generation",
+        icon: Camera,
+        color: "text-red-400",
+        action: () =>
+          setInput(
+            "Create a detailed image generation prompt for: \n\nSubject: \nStyle: \nLighting: \nComposition: \nMood: ",
+          ),
+      },
+      {
+        id: "travel-planner",
+        name: "Travel Planner",
+        description:
+          "Plan trips with itineraries, recommendations, and logistics",
+        icon: MapIcon,
+        color: "text-emerald-400",
+        action: () =>
+          setInput(
+            "Plan a detailed travel itinerary including: 1) Daily schedule 2) Accommodations 3) Transportation 4) Activities 5) Budget estimates 6) Local tips\n\nDestination: \nDuration: \nBudget: \nInterests: ",
+          ),
+      },
+      {
+        id: "game-designer",
+        name: "Game Designer",
+        description:
+          "Design games, mechanics, narratives, and interactive experiences",
+        icon: Gamepad2,
+        color: "text-violet-400",
+        action: () =>
+          setInput(
+            "Design a game concept including: 1) Core mechanics 2) Player objectives 3) Progression system 4) Art style 5) Target audience\n\nGame type: \nPlatform: \nTheme: ",
+          ),
+      },
+      {
+        id: "business-strategist",
+        name: "Business Strategist",
+        description:
+          "Business analysis, strategy development, and market insights",
+        icon: Sparkles,
+        color: "text-amber-400",
+        action: () =>
+          setInput(
+            "Provide strategic business analysis including: 1) Market analysis 2) Competitive landscape 3) SWOT analysis 4) Growth opportunities 5) Action plan\n\nBusiness/Industry: ",
+          ),
+      },
+      {
+        id: "api-designer",
+        name: "API Designer",
+        description:
+          "Design RESTful APIs, GraphQL schemas, and API documentation",
+        icon: Globe,
+        color: "text-teal-400",
+        action: () =>
+          setInput(
+            "Design a comprehensive API including: 1) Endpoint structure 2) Request/response schemas 3) Authentication methods 4) Error handling 5) Rate limiting 6) Documentation\n\nAPI Purpose: \nData Models: \nAuthentication Type: ",
+          ),
+      },
+      {
+        id: "security-auditor",
+        name: "Security Auditor",
+        description:
+          "Security analysis, vulnerability assessment, and best practices",
+        icon: Settings,
+        color: "text-red-500",
+        action: () =>
+          setInput(
+            "Perform security analysis including: 1) Vulnerability assessment 2) Security best practices 3) Compliance requirements 4) Risk mitigation strategies 5) Security implementation guide\n\nSystem/Application: \nSecurity Level Required: \nCompliance Standards: ",
+          ),
+      },
+      {
+        id: "performance-optimizer",
+        name: "Performance Optimizer",
+        description:
+          "Code optimization, performance analysis, and bottleneck identification",
+        icon: Zap,
+        color: "text-yellow-500",
+        action: () =>
+          setInput(
+            "Analyze and optimize performance including: 1) Code profiling 2) Bottleneck identification 3) Optimization strategies 4) Caching solutions 5) Monitoring recommendations\n\nCode/System: \nPerformance Goals: \nCurrent Issues: ",
+          ),
+      },
+      {
+        id: "devops-engineer",
+        name: "DevOps Engineer",
+        description:
+          "CI/CD pipelines, infrastructure as code, and deployment strategies",
+        icon: Settings,
+        color: "text-blue-500",
+        action: () =>
+          setInput(
+            "Design DevOps solution including: 1) CI/CD pipeline 2) Infrastructure as Code 3) Deployment strategies 4) Monitoring & logging 5) Scaling solutions\n\nTech Stack: \nCloud Provider: \nDeployment Requirements: ",
+          ),
+      },
+      {
+        id: "ux-designer",
+        name: "UX Designer",
+        description:
+          "User experience design, wireframes, and usability analysis",
+        icon: Palette,
+        color: "text-purple-500",
+        action: () =>
+          setInput(
+            "Create UX design including: 1) User journey mapping 2) Wireframes & mockups 3) Usability principles 4) Accessibility guidelines 5) Design system recommendations\n\nTarget Users: \nPlatform: \nKey Features: ",
+          ),
+      },
+      {
+        id: "database-architect",
+        name: "Database Architect",
+        description:
+          "Design database schemas, optimize queries, and data modeling",
+        icon: Database,
+        color: "text-green-500",
+        action: () =>
+          setInput(
+            "Design database architecture including: 1) Entity relationship diagram 2) Table schemas with constraints 3) Indexing strategy 4) Query optimization 5) Migration scripts\n\nData Requirements: \nExpected Scale: \nDatabase Type: ",
+          ),
+      },
+      {
+        id: "test-engineer",
+        name: "Test Engineer",
+        description:
+          "Create comprehensive test suites, automation, and QA strategies",
+        icon: CheckCircle,
+        color: "text-emerald-500",
+        action: () =>
+          setInput(
+            "Create testing strategy including: 1) Unit test cases 2) Integration tests 3) E2E test scenarios 4) Test automation setup 5) Performance testing\n\nApplication Type: \nTesting Framework: \nCoverage Goals: ",
+          ),
+      },
+      {
+        id: "ai-trainer",
+        name: "AI/ML Engineer",
+        description:
+          "Machine learning models, data pipelines, and AI solutions",
+        icon: Brain,
+        color: "text-cyan-500",
+        action: () =>
+          setInput(
+            "Design AI/ML solution including: 1) Data preprocessing pipeline 2) Model architecture 3) Training strategy 4) Evaluation metrics 5) Deployment plan\n\nProblem Type: \nData Available: \nPerformance Requirements: ",
+          ),
+      },
+      {
+        id: "code-generator",
+        name: "Code Generator",
+        description: "Generate complete applications with multiple files",
+        icon: FileCode,
+        color: "text-blue-400",
+        action: () =>
+          setInput(
+            "Generate a complete application with the following structure:\n\n```\nProject Structure:\n- Frontend (React/Vue/Angular)\n- Backend (Node.js/Python/Go)\n- Database schema\n- API endpoints\n- Configuration files\n- Documentation\n```\n\nApplication Type: \nTech Stack: \nFeatures Required: ",
+          ),
+      },
+      {
+        id: "file-analyzer",
+        name: "File Analyzer",
+        description: "Analyze and optimize existing code files",
+        icon: Search,
+        color: "text-orange-500",
+        action: () =>
+          setInput(
+            "Analyze the provided code and generate:\n\n1. **Code Quality Report**\n   - Performance bottlenecks\n   - Security vulnerabilities\n   - Best practice violations\n\n2. **Optimization Suggestions**\n   - Refactoring opportunities\n   - Performance improvements\n   - Memory optimization\n\n3. **Enhanced Version**\n   - Optimized code with comments\n   - Unit tests\n   - Documentation\n\nPaste your code below:\n```\n\n```",
+          ),
+      },
+      {
+        id: "project-scaffolder",
+        name: "Project Scaffolder",
+        description: "Create complete project templates with best practices",
+        icon: FolderPlus,
+        color: "text-green-400",
+        action: () =>
+          setInput(
+            "Create a complete project scaffold including:\n\n📁 **Project Structure**\n- Organized folder hierarchy\n- Configuration files\n- Environment setup\n\n🔧 **Development Tools**\n- Build scripts\n- Linting configuration\n- Testing setup\n\n📚 **Documentation**\n- README with setup instructions\n- API documentation\n- Contributing guidelines\n\nProject Type: \nFramework: \nDeployment Target: ",
+          ),
+      },
+      {
+        id: "regex-builder",
+        name: "Regex Builder",
+        description: "Build and test complex regular expressions",
+        icon: Hash,
+        color: "text-yellow-500",
+        action: () =>
+          setInput(
+            "Create a regex pattern for:\n\n**Pattern Requirements:**\n- What you want to match\n- What you want to exclude\n- Specific format requirements\n\n**Output will include:**\n- Regex pattern with explanation\n- Test cases with examples\n- Code snippets for different languages\n- Alternative approaches\n\nDescribe what you want to match: ",
+          ),
+      },
+      {
+        id: "data-transformer",
+        name: "Data Transformer",
+        description: "Convert data between formats (JSON, CSV, XML, etc.)",
+        icon: RefreshCw,
+        color: "text-purple-400",
+        action: () =>
+          setInput(
+            "Transform data between formats:\n\n**Supported Formats:**\n- JSON ↔ CSV ↔ XML ↔ YAML\n- Database schemas\n- API responses\n- Configuration files\n\n**Features:**\n- Format validation\n- Structure optimization\n- Data cleaning\n- Schema generation\n\nSource Format: \nTarget Format: \nPaste your data:\n```\n\n```",
+          ),
+      },
+      {
+        id: "docker-composer",
+        name: "Docker Composer",
+        description: "Generate Docker configurations and compose files",
+        icon: Package,
+        color: "text-blue-600",
+        action: () =>
+          setInput(
+            "Generate Docker configuration:\n\n🐳 **Docker Setup**\n- Multi-stage Dockerfile\n- Docker Compose with services\n- Environment configuration\n- Volume and network setup\n\n📦 **Services to Include**\n- Application containers\n- Database services\n- Caching layers\n- Reverse proxy\n\n🔧 **Production Ready**\n- Health checks\n- Resource limits\n- Security best practices\n- Logging configuration\n\nApplication Stack: \nServices Needed: \nEnvironment: ",
+          ),
+      },
+      {
+        id: "git-workflow",
+        name: "Git Workflow",
+        description: "Generate Git hooks, workflows, and automation scripts",
+        icon: GitBranch,
+        color: "text-orange-600",
+        action: () =>
+          setInput(
+            "Create Git workflow automation:\n\n🌿 **Branch Strategy**\n- Branching model (GitFlow/GitHub Flow)\n- Branch protection rules\n- Merge strategies\n\n🔄 **CI/CD Pipeline**\n- GitHub Actions / GitLab CI\n- Automated testing\n- Deployment workflows\n\n🪝 **Git Hooks**\n- Pre-commit hooks\n- Commit message validation\n- Code quality checks\n\n📋 **Templates**\n- PR/MR templates\n- Issue templates\n- Contributing guidelines\n\nRepository Type: \nCI/CD Platform: \nTeam Size: ",
+          ),
+      },
+      {
+        id: "env-manager",
+        name: "Environment Manager",
+        description:
+          "Generate environment configurations and secrets management",
+        icon: Key,
+        color: "text-indigo-500",
+        action: () =>
+          setInput(
+            "Setup environment management:\n\n🔐 **Environment Variables**\n- Development, staging, production configs\n- Secret management strategy\n- Environment validation\n\n🛡️ **Security**\n- API key rotation\n- Encrypted secrets\n- Access control\n\n📁 **Configuration Files**\n- .env templates\n- Docker environment files\n- Kubernetes secrets\n- Cloud provider configs\n\n🔄 **Deployment**\n- Environment promotion\n- Configuration drift detection\n- Rollback strategies\n\nDeployment Platform: \nSecrets to Manage: \nEnvironments Needed: ",
+          ),
+      },
+      {
+        id: "huggingface-spaces",
+        name: "HF Spaces ImageGen",
+        description: "Embed Hugging Face Spaces image generation models",
+        icon: ImageIcon,
+        color: "text-yellow-400",
+        action: () =>
+          setInput(
+            "Generate images using Hugging Face Spaces:\n\n🎨 **Available Models:**\n- DALL-E Mini/Mega\n- Stable Diffusion variants\n- Midjourney-style models\n- Artistic style transfer\n- Face generation models\n\n⚡ **Zero GPU Hosting:**\n- Free GPU access\n- Instant model loading\n- No setup required\n- Community models\n\n🖼️ **Image Generation:**\n- Text-to-image\n- Image-to-image\n- Style transfer\n- Upscaling\n- Inpainting\n\n**Prompt:** Describe the image you want to generate\n**Style:** (realistic, artistic, cartoon, etc.)\n**Dimensions:** (512x512, 1024x1024, etc.)\n\nDescribe your image: ",
+          ),
+      },
+      {
+        id: "github-explorer",
+        name: "GitHub Explorer",
+        description: "Browse trending repos with retro game-like interface",
+        icon: GitBranch,
+        color: "text-green-400",
+        action: () =>
+          setInput(
+            "🕹️ **GITHUB ARCADE** 🕹️\n\n```\n┌─────────────────────────────────────┐\n│  🎮 SELECT TRENDING REPOSITORY 🎮   │\n├─────────────────────────────────────┤\n│ [A] 🔥 React 19 - Latest Features  │\n│ [B] ⚡ Vite 5.0 - Lightning Fast   │\n│ [C] 🤖 LangChain - AI Chains       │\n│ [D] 🎨 Tailwind CSS - Utility CSS  │\n│ [E] 📦 Next.js 14 - Full Stack     │\n│ [F] 🔧 TypeScript - Type Safety    │\n│ [G] 🚀 Astro - Static Site Gen     │\n│ [H] 💾 Prisma - Database ORM       │\n└─────────────────────────────────────┘\n```\n\n🎯 **MISSION:** Select a repository to:\n- 📋 Auto-fetch README.md\n- 📦 Parse package.json\n- 🔍 Extract main scripts\n- 📝 Generate project analysis\n- 🛠️ Suggest improvements\n\n**Enter your choice (A-H) or specify a custom repo:**\nRepository: ",
+          ),
+      },
+      {
+        id: "cloud-storage",
+        name: "Cloud Storage 5GB",
+        description: "Setup cloud storage with 5GB free tier",
+        icon: Cloud,
+        color: "text-blue-400",
+        action: () =>
+          setInput(
+            "☁️ **CLOUD STORAGE SETUP** (5GB Free)\n\n🗄️ **Storage Providers:**\n- Google Cloud Storage\n- AWS S3\n- Azure Blob Storage\n- DigitalOcean Spaces\n- Cloudflare R2\n\n📦 **Implementation Features:**\n- File upload/download API\n- Automatic backup system\n- CDN integration\n- Image optimization\n- Version control\n- Access permissions\n\n🔧 **Self-Hosting Option:**\n- MinIO server setup\n- Docker containerization\n- SSL/TLS encryption\n- Backup strategies\n\n**ENABLE_CLOUD_STORAGE = true** (set to false to disable)\n\nPreferred Provider: \nUse Case: \nSecurity Requirements: ",
+          ),
+      },
+      {
+        id: "vps-deployment",
+        name: "VPS Deployment",
+        description: "Deploy applications to VPS with automated setup",
+        icon: Server,
+        color: "text-purple-400",
+        action: () =>
+          setInput(
+            "🖥️ **VPS DEPLOYMENT SYSTEM**\n\n🚀 **VPS Providers:**\n- DigitalOcean Droplets\n- Linode\n- Vultr\n- Hetzner Cloud\n- Google Compute Engine\n\n⚙️ **Automated Setup:**\n- Server provisioning\n- Docker installation\n- Nginx reverse proxy\n- SSL certificate (Let's Encrypt)\n- Firewall configuration\n- Monitoring setup\n\n🔄 **CI/CD Pipeline:**\n- GitHub Actions integration\n- Automated deployments\n- Health checks\n- Rollback capabilities\n- Log aggregation\n\n**ENABLE_VPS_DEPLOYMENT = true** (set to false to disable)\n\nApplication Type: \nTraffic Expected: \nBudget Range: ",
+          ),
+      },
+    ];
+
+    // Randomize order using the same approach as template suggestions
+    return [...modules].sort(() => secureRandom() - 0.5);
+  }, [setInput]);
+
+  // Sample images for the images tab
+  const sampleImages = [
+    {
+      id: 1,
+      url: "/placeholder.svg?height=200&width=300",
+      title: "Neural Network Latent Visualization",
+    },
+    {
+      id: 2,
+      url: "/placeholder.svg?height=200&width=300",
+      title: "Data Flow Diagram",
+    },
+    {
+      id: 3,
+      url: "/placeholder.svg?height=200&width=300",
+      title: "AI Agent Architecture",
+    },
+    {
+      id: 4,
+      url: "/placeholder.svg?height=200&width=300",
+      title: "Interface Concept",
+    },
+  ];
+
+  // Calculate bottom position based on panel state
+  const bottomPosition = "env(safe-area-inset-bottom, 0px)";
+
+  return (
+    <>
+      <div
+        className={`fixed bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 border-t`}
+        style={{
+          bottom: bottomPosition,
+          height: isMinimized
+            ? "56px"
+            : isExpanded
+              ? "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)"
+              : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
+          maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)",
+        }}
+        onClick={(e) => {
+          if (
+            window.innerWidth <= 768 &&
+            textareaRef.current &&
+            e.target instanceof HTMLElement &&
+            !["TEXTAREA", "INPUT", "BUTTON", "SELECT"].includes(e.target.tagName)
+          ) {
+            textareaRef.current.focus();
+          }
+        }}
+      >
+        {/* Drag Handle - Full width resize bar */}
+        <div
+          ref={dragHandleRef}
+          className={`w-full absolute top-0 left-0 right-0 h-[4px] transition-all duration-200 ${
+            isDragging ? 'bg-white/40 cursor-ns-resize' : 'bg-transparent cursor-default'
+          }`}
+          style={{ zIndex: 50 }}
+          onDoubleClick={toggleMinimized}
+          onMouseDown={(e) => {
+            setIsExpanded(false);
+            setIsDragging(true);
+            const startY = e.clientY;
+            const startHeight = panelHeight;
+
+            const handleMouseMove = (e: MouseEvent) => {
+              const delta = startY - e.clientY;
+              setPanelHeight(
+                Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), startHeight + delta)),
+              );
+            };
+
+            const handleMouseUp = () => {
+              setIsDragging(false);
+              document.removeEventListener("mousemove", handleMouseMove);
+              document.removeEventListener("mouseup", handleMouseUp);
+            };
+
+            document.addEventListener("mousemove", handleMouseMove);
+            document.addEventListener("mouseup", handleMouseUp);
+          }}
+          onMouseEnter={(e) => {
+            if (!isDragging) {
+              e.currentTarget.classList.add('bg-white/20');
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!isDragging) {
+              e.currentTarget.classList.remove('bg-white/20');
+            }
+          }}
+        />
+
+        <div className="p-2 sm:p-3 h-full flex flex-col relative" style={{ cursor: 'default' }}>
+          {/* Minimize Button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleMinimized}
+            className="absolute top-1 right-8 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
+            title={isMinimized ? "Reopen panel" : "Hide panel"}
+          >
+            {isMinimized ? (
+              <ArrowDownToLine className="w-3 h-3 rotate-180" />
+            ) : (
+              <ArrowDownToLine className="w-3 h-3" />
+            )}
+          </Button>
+
+          {/* Expand/Minimize Button - Far Top Right Corner */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="absolute top-1 right-1 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
+            title={isExpanded ? "Collapse height" : "Expand height"}
+            disabled={isMinimized}
+          >
+            {isExpanded ? (
+              <Minimize2 className="w-3 h-3" />
+            ) : (
+              <Maximize2 className="w-3 h-3" />
+            )}
+          </Button>
+
+          {/* Header - Compact layout */}
+          <div className="flex justify-between items-center mb-1 mt-3 sm:mt-5 px-1" onDoubleClick={toggleMinimized}>
+            <div className="flex items-center gap-2">
+              <div className="">
+                <Sparkles className="h-3 w-3 text-white" />
+              </div>
+              <span className="text-sm font-medium text-white/80">
+                compute
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <GripHorizontal className="w-4 h-4 text-gray-500" />
+            </div>
+          </div>
+
+          {isMinimized && (
+            <div className="mt-1 flex items-center justify-between px-1">
+              <span className="text-xs text-white/70">Panel hidden</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={toggleMinimized}
+                className="h-7 px-2 text-xs bg-black/40 border-white/20 hover:bg-white/10"
+                title="Reopen interaction panel"
+              >
+                Reopen
+              </Button>
+            </div>
+          )}
+
+          {!isMinimized && (
+            <Tabs
+              value={activeTab}
+              onValueChange={(value) => {
+                // Handle height transition for tall tabs
+                const newTab = value as string;
+                const isNewTabTall = TALL_TABS.includes(newTab);
+                const isCurrentTabTall = activeTab ? TALL_TABS.includes(activeTab) : false;
+
+                // Auto-expand panel when switching to tall tabs (smooth animation)
+                if (isNewTabTall && !isExpanded && !isCurrentTabTall) {
+                  // Calculate target height for tall tabs (slightly higher than default)
+                  const targetHeight = window.innerWidth <= 768 
+                    ? Math.min(520, window.innerHeight * 0.65)  // Mobile: 65% of viewport
+                    : 520;  // Desktop: fixed 520px (higher than default 320px)
+                  
+                  // Animate height change
+                  const startHeight = panelHeight;
+                  const startTime = performance.now();
+                  const duration = 300; // 300ms smooth animation
+                  
+                  const animateHeight = (currentTime: number) => {
+                    const elapsed = currentTime - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    
+                    // Ease-out cubic bezier for smooth deceleration
+                    const easeOut = 1 - Math.pow(1 - progress, 3);
+                    
+                    const currentHeight = startHeight + (targetHeight - startHeight) * easeOut;
+                    setPanelHeight(currentHeight);
+                    
+                    if (progress < 1) {
+                      requestAnimationFrame(animateHeight);
+                    } else {
+                      setIsExpanding(false);
+                    }
+                  };
+                  
+                  setIsExpanding(true);
+                  requestAnimationFrame(animateHeight);
+                }
+
+                setPrevTab(activeTab || null);
+                onActiveTabChange?.(value as "chat" | "images" | "extras" | "integrations" | "shell");
+              }}
+              className={`flex-1 flex flex-col min-h-0 transition-all duration-300 ease-out`}
+            >
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2 sticky top-0 z-20 bg-black/70 backdrop-blur-sm py-1">
+                <div className="w-full sm:w-auto overflow-x-auto no-scrollbar">
+                  <TabsList className="bg-black/40 w-max min-w-full sm:min-w-0 sm:w-auto">
+                    <TabsTrigger value="chat" className="text-xs sm:text-sm">
+                      <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Chat</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="images" className="text-xs sm:text-sm">
+                      <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Images</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="extras" className="text-xs sm:text-sm">
+                      <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Extra</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="integrations" className="text-xs sm:text-sm">
+                      <Zap className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Plugins</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="shell" className="text-xs sm:text-sm">
+                      <Terminal className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Shell</span>
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
+
+                <div className="grid grid-cols-4 gap-1 w-full sm:w-auto sm:flex sm:space-x-2 flex-shrink-0">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onNewChat}
+                    title="New Chat"
+                    className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                  >
+                    <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleHistory}
+                    title="Chat History"
+                    className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                  >
+                    <History className="h-3 w-3 sm:h-4 sm:w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleAccessibility}
+                    title="Accessibility Options"
+                    className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                  >
+                    <Settings className="h-3 w-3 sm:h-4 sm:w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleCodePreview}
+                    title="Code Preview"
+                    className={`h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
+                      hasCodeBlocks
+                        ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse"
+                        : ""
+                    }`}
+                  >
+                    <Code
+                      className={`h-3 w-3 sm:h-4 sm:w-4 ${
+                        hasCodeBlocks ? "text-white" : ""
+                      }`}
+                    />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Provider/Model Selection - Restored */}
+              <div className="flex items-center gap-2 mb-2 text-xs text-white/60">
+                <Select
+                  value={`${currentProvider}:${currentModel}`}
+                  onValueChange={(value) => {
+                    const [provider, ...modelParts] = value.split(":");
+                    const model = modelParts.join(":");
+                    onProviderChange(provider, model);
+                  }}
+                >
+                  <SelectTrigger className="w-full sm:w-[280px] bg-black/40 border-white/20">
+                    <SelectValue placeholder="Select a model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {/* Only show available providers (with API keys configured) */}
+                    {availableProviders
+                      .filter(p => p.isAvailable !== false)
+                      .map((provider) => (
+                        <SelectGroup key={provider.id}>
+                          <SelectLabel>{provider.name}</SelectLabel>
+                          {provider.models.map((model) => (
+                            <SelectItem key={model} value={`${provider.id}:${model}`}>
+                              {model}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ))}
+                    {/* Show message if no providers configured */}
+                    {availableProviders.filter(p => p.isAvailable !== false).length === 0 && (
+                      <SelectItem value="none" disabled>
+                        No providers configured - add API keys to .env
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Tab Content Sections */}
+              <TabsContent value="chat" className={`m-0 flex-1 flex flex-col min-h-0 overflow-visible ${activeTab === 'chat' ? DEFAULT_TAB_HEIGHT : ''} ${activeTab && activeTab !== 'chat' && TALL_TABS.includes(activeTab) ? 'min-h-[200px]' : ''} ${EXPAND_TRANSITION}`}>
+                {/* Suggestions - Compact row */}
+                <div className="flex flex-wrap gap-2 mb-2 shrink-0">
+                  {chatSuggestions.map((suggestion, index) => (
+                    <Button
+                      key={index}
+                      variant="secondary"
+                      size="sm"
+                      className="text-xs bg-black/20 hover:bg-black/40 transition-all duration-200 shrink-0"
+                      onClick={() => {
+                        setInput(suggestion);
+                        textareaRef.current?.focus();
+                      }}
+                      disabled={isProcessing}
+                    >
+                      {suggestion}
+                    </Button>
+                  ))}
+                </div>
+
+                {/* Input Form - Always visible at bottom */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const trimmed = input.trim();
+                    if (!trimmed) return;
+                    onSubmit(trimmed);
+                    setInput("");
+                  }}
+                  className="flex flex-col gap-2 flex-1 min-h-0 overflow-visible"
+                >
+                  <div className="relative flex-1 min-h-[60px] overflow-visible">
+                    <Textarea
+                      ref={textareaRef}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      placeholder="Type your message..."
+                      className="min-h-[60px] max-h-[120px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20 rounded-2xl"
+                      rows={2}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          const trimmed = input.trim();
+                          if (!trimmed) return;
+                          onSubmit(trimmed);
+                          setInput("");
+                        }
+                      }}
+                      onFocus={() => {
+                        // Scroll to input on mobile when focused
+                        if (window.innerWidth <= 768 && textareaRef.current) {
+                          setTimeout(() => {
+                            textareaRef.current?.scrollIntoView({
+                              behavior: "smooth",
+                              block: "center",
+                            });
+                          }, 300);
+                        }
+                      }}
+                      disabled={isProcessing}
+                    />
+                    <div className="absolute right-3 top-3 flex gap-1" style={{ zIndex: 10 }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowFileSelector(!showFileSelector);
+                        }}
+                        className={`p-1.5 rounded-md border transition-colors relative ${
+                          selectedFilePaths.length > 0
+                            ? "bg-blue-500/20 border-blue-400/50 hover:bg-blue-500/30"
+                            : "bg-white/5 border-white/10 hover:bg-white/15"
+                        }`}
+                        title="Attach Files"
+                        disabled={isProcessing}
+                        style={{ zIndex: 11 }}
+                      >
+                        <FolderPlus className="w-4 h-4 text-blue-400" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onActiveTabChange?.("chat");
+                          setPluginToOpen("cloud-storage");
+                        }}
+                        className="p-1.5 rounded-md bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
+                        title="Open Cloud Storage Plugin"
+                        disabled={isProcessing}
+                      >
+                        <Cloud className="w-4 h-4 text-blue-400" />
+                      </button>
+                    </div>
+
+                    {showFileSelector && (
+                      <div
+                        ref={fileSelectorRef}
+                        className="absolute right-0 bottom-full mb-2 w-80 bg-black/98 border border-white/20 rounded-lg shadow-2xl z-50 p-3"
+                        style={{ zIndex: 100000 }}
+                      >
+                        <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/10">
+                          <h4 className="text-sm font-medium text-white/80">
+                            Attach Files ({selectedFilePaths.length})
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={() => setShowFileSelector(false)}
+                            className="text-white/50 hover:text-white/80"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        {/* Quick Upload Section */}
+                        <div className="mb-3 pb-3 border-b border-white/10">
+                          <button
+                            type="button"
+                            className="w-full px-3 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-400/30 rounded text-xs text-blue-300 flex items-center justify-center gap-2 transition-colors"
+                            onClick={() => fileInputRef.current?.click()}
+                          >
+                            <Plus className="w-3 h-3" />
+                            Upload from Computer
+                          </button>
+                        </div>
+
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          multiple
+                          className="hidden"
+                          onChange={handleUploadFilesToVirtualFilesystem}
+                        />
+
+                        {/* Filesystem Navigation */}
+                        <div className="mb-2 p-2 rounded bg-black/40 border border-white/10">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-[10px] text-white/60 truncate flex-1">
+                              {virtualFilesystem.currentPath}
+                            </span>
+                            <div className="flex gap-1 ml-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const current = virtualFilesystem.currentPath.replace(/\/+$/, "");
+                                  const parts = current.split("/").filter(Boolean);
+                                  if (parts.length > 1) {
+                                    const parentPath = parts.slice(0, -1).join("/");
+                                    void virtualFilesystem.listDirectory(parentPath || "project");
+                                  }
+                                }}
+                                className="p-1 hover:bg-white/10 rounded"
+                                title="Parent Directory"
+                              >
+                                <ArrowUp className="w-3 h-3 text-white/70" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void virtualFilesystem.listDirectory(virtualFilesystem.currentPath)}
+                                className="p-1 hover:bg-white/10 rounded"
+                                title="Refresh"
+                              >
+                                <RefreshCw className="w-3 h-3 text-white/70" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* File List */}
+                        <div className="max-h-48 overflow-y-auto pr-1 space-y-1">
+                          {virtualFilesystem.isLoading && (
+                            <div className="text-xs text-white/60 py-4 text-center">
+                              <Loader2 className="w-4 h-4 mx-auto mb-1 animate-spin" />
+                              Loading files...
+                            </div>
+                          )}
+                          {!virtualFilesystem.isLoading && virtualFileNodes.length === 0 && (
+                            <div className="text-xs text-white/50 py-4 text-center">
+                              No files yet. Upload one or create files through chat.
+                            </div>
+                          )}
+                          {virtualFileNodes.map((fileNode) => (
+                            <div
+                              key={fileNode.path}
+                              className={`flex items-center gap-2 text-xs p-2 rounded cursor-pointer transition-colors ${
+                                selectedFilePaths.includes(fileNode.path)
+                                  ? "bg-blue-600/20 border border-blue-400/30"
+                                  : "hover:bg-white/10 border border-transparent"
+                              }`}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (fileNode.type === "directory") {
+                                  void virtualFilesystem.listDirectory(fileNode.path);
+                                }
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={fileNode.type === "file" && selectedFilePaths.includes(fileNode.path)}
+                                onChange={(event) => {
+                                  event.stopPropagation();
+                                  if (fileNode.type === "file") {
+                                    void handleToggleFileAttachment(fileNode.path, event.target.checked);
+                                  }
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                }}
+                                className="w-3 h-3"
+                                disabled={fileNode.type === "directory"}
+                              />
+                              <FileText className="w-3 h-3 text-white/50 flex-shrink-0" />
+                              <span className="truncate flex-1 text-white/80">{fileNode.name}</span>
+                              {fileNode.type === "directory" && (
+                                <ChevronRight className="w-3 h-3 text-white/30" />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Cloud Storage Section */}
+                        <div className="mt-3 pt-3 border-t border-white/10">
+                          <h5 className="text-[10px] font-medium mb-2 text-white/50 uppercase tracking-wider">
+                            External Storage
+                          </h5>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onActiveTabChange?.("chat");
+                              setPluginToOpen("cloud-storage");
+                            }}
+                            className="w-full text-xs p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded flex items-center gap-2 transition-colors"
+                          >
+                            <Cloud className="w-3 h-3 text-blue-400" />
+                            <span className="text-white/70">Browse Cloud Storage</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {isProcessing && onStopGeneration ? (
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      className="self-end min-w-[80px] bg-red-600/80 hover:bg-red-600 border border-red-500/50 rounded-2xl z-20"
+                      onClick={onStopGeneration}
+                    >
+                      <Square className="h-4 w-4 mr-2" />
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button
+                      type="submit"
+                      className="self-end min-w-[80px] bg-white/10 hover:bg-white/20 border border-white/20 rounded-2xl z-20"
+                      disabled={isProcessing || !input.trim()}
+                    >
+                      {isProcessing ? (
+                        <Loader2 className="h-4 w-4 thinking-spinner" />
+                      ) : (
+                        <>
+                          <Send className="h-4 w-4 mr-2" />
+                          Send
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </form>
+              </TabsContent>
+
+              {/* Images Tab Content - Taller height for image generation */}
+              <TabsContent 
+                value="images" 
+                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'images' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
+                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                  <CardContent className="pt-0 h-full flex flex-col min-h-0 overflow-hidden">
+                    <ImageGenerationTab 
+                      onImageGenerated={(imageUrl) => {
+                        toast.success("Image generated successfully!");
+                      }}
+                    />
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* Extras Tab Content - Taller height for prompt templates */}
+              <TabsContent 
+                value="extras" 
+                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'extras' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
+                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                  <CardContent className="pt-6 h-full flex flex-col min-h-0">
+                    <div className="space-y-4 flex-1 min-h-0 flex flex-col">
+                      {/* Extras - Quick Prompt Templates */}
+                      <div className="text-center mb-4">
+                        <h3 className="font-medium text-white mb-2">
+                          Extras
+                        </h3>
+                        <p className="text-xs text-white/60">
+                          Click to insert a specialized prompt into the chat
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3 overflow-y-auto flex-1 min-h-0 content-start">
+                        {extraModules.map((extra) => {
+                          const IconComponent = extra.icon;
+                          return (
+                            <button
+                              key={extra.id}
+                              onClick={() => {
+                                extra.action(setInput, onActiveTabChange, setPluginToOpen);
+                                toast.success(
+                                  `${extra.name} prompt loaded! Check the chat input.`,
+                                );
+                              }}
+                              className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
+                            >
+                              <div className="flex items-center gap-2 w-full">
+                                <IconComponent
+                                  className={`h-4 w-4 ${extra.color} group-hover:scale-110 transition-transform`}
+                                />
+                                <span className="font-medium text-sm text-white truncate">
+                                  {extra.name}
+                                </span>
+                              </div>
+                              <p className="text-xs text-white/60 line-clamp-2 w-full">
+                                {extra.description}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* Integrations Tab Content */}
+              <TabsContent 
+                value="integrations" 
+                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'integrations' ? 'min-h-[350px]' : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
+                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                  <CardContent className="pt-6 h-full flex flex-col min-h-0">
+                    <div className="space-y-3 flex-1 min-h-0 overflow-y-auto">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Zap className="h-4 w-4 text-yellow-400" />
+                        <span className="text-sm font-medium">
+                          Modular Tools
+                        </span>
+                      </div>
+                      <div className="mb-3">
+                        <p className="text-xs text-white/60 mb-2">
+                          Pop-out plugin windows for advanced functionality:
+                        </p>
+                        {/* PluginManager for pop-out windows */}
+                        <PluginManager
+                          availablePlugins={availablePlugins}
+                          onPluginResult={handlePluginResult}
+                          openPluginId={pluginToOpen}
+                          onOpenComplete={() => setPluginToOpen(null)}
+                        />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* Shell Tab Content - Taller height for terminal */}
+              <TabsContent 
+                value="shell" 
+                className={`m-0 flex-1 overflow-auto ${activeTab === 'shell' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
+                <Card className="bg-white/5 border-white/10 h-full">
+                  <CardContent className="pt-4 h-full flex flex-col">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        <Terminal className="h-4 w-4 text-green-400" />
+                        <span className="text-sm font-medium">Sandbox Terminal</span>
+                      </div>
+                    </div>
+                    <div className="flex-1 flex items-center justify-center bg-black/40 rounded-lg p-8 font-mono text-sm text-white/60">
+                      <div className="text-center">
+                        <Terminal className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                        <p>Terminal is open below</p>
+                        <p className="text-white/40 text-xs mt-2">Type commands to execute in an isolated environment</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}

@@ -1,0 +1,564 @@
+"use client";
+
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { streamingErrorHandler } from '@/lib/streaming/streaming-error-handler';
+import type { Message } from '@/types';
+
+export interface UseChatOptions {
+  api: string;
+  body?: Record<string, any> | (() => Record<string, any>);
+  onResponse?: (response: Response) => void | Promise<void>;
+  onError?: (error: Error) => void;
+  onFinish?: (message: Message) => void;
+}
+
+export interface UseChatReturn {
+  messages: Message[];
+  input: string;
+  handleInputChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
+  handleSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
+  isLoading: boolean;
+  error: Error | undefined;
+  setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
+  stop: () => void;
+  setInput: (input: string) => void;
+}
+
+/**
+ * Enhanced useChat hook that properly handles our Server-Sent Events format
+ */
+export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | undefined>();
+  
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const currentMessageRef = useRef<Message | null>(null);
+  const messagesRef = useRef<Message[]>([]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+  }, []);
+
+  const stop = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsLoading(false);
+    }
+  }, []);
+
+  const buildRequestHeaders = useCallback((): HeadersInit => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('token');
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      let anonymousSessionId = localStorage.getItem('anonymous_session_id');
+      if (!anonymousSessionId) {
+        anonymousSessionId = `anon_${Date.now()}`;
+        localStorage.setItem('anonymous_session_id', anonymousSessionId);
+      }
+      headers['x-anonymous-session-id'] = anonymousSessionId;
+    }
+
+    return headers;
+  }, []);
+
+  const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    
+    console.log('[DEBUG] useEnhancedChat: handleSubmit called', { api: options.api, hasBody: !!options.body });
+    
+    if (!input.trim() || isLoading) {
+      console.log('[DEBUG] useEnhancedChat: Skipping - empty input or already loading');
+      return;
+    }
+
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: input.trim(),
+    };
+
+    const assistantMessage: Message = {
+      id: `assistant-${Date.now()}`,
+      role: 'assistant',
+      content: '',
+    };
+
+    // Add user message and prepare assistant message
+    setMessages(prev => [...prev, userMessage, assistantMessage]);
+    setInput('');
+    setIsLoading(true);
+    setError(undefined);
+
+    // Store reference to current assistant message
+    currentMessageRef.current = assistantMessage;
+
+    // Create abort controller for this request
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    try {
+      const resolvedBody = typeof options.body === 'function'
+        ? options.body()
+        : (options.body || {});
+      const requestBody = {
+        messages: [...messagesRef.current, userMessage],
+        ...resolvedBody,
+      };
+      
+      console.log('[DEBUG] useEnhancedChat: Sending request to', options.api, {
+        messageCount: requestBody.messages.length,
+        provider: resolvedBody.provider,
+        model: resolvedBody.model,
+        stream: resolvedBody.stream
+      });
+
+      const response = await fetch(options.api, {
+        method: 'POST',
+        headers: buildRequestHeaders(),
+        body: JSON.stringify(requestBody),
+        signal: abortController.signal,
+      });
+
+      // Call onResponse callback
+      if (options.onResponse) {
+        await options.onResponse(response);
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unable to read error');
+        let payload: any = null;
+        try {
+          payload = JSON.parse(errorText);
+        } catch {
+          payload = null;
+        }
+
+        const authRequired =
+          response.status === 401 &&
+          (payload?.status === 'auth_required' ||
+            payload?.error?.type === 'auth_required' ||
+            payload?.data?.requiresAuth === true);
+
+        if (authRequired) {
+          const content =
+            payload?.error?.message ||
+            payload?.message ||
+            `Authentication is required to continue.`;
+          const messageMetadata = {
+            requiresAuth: true,
+            authUrl: payload?.authUrl || payload?.data?.authUrl,
+            toolName: payload?.toolName || payload?.data?.toolName,
+            provider: payload?.provider || payload?.data?.provider
+          };
+
+          setMessages(prev => prev.map(msg =>
+            msg.id === assistantMessage.id
+              ? { ...msg, content, metadata: { ...(msg.metadata || {}), ...messageMetadata } }
+              : msg
+          ));
+          setIsLoading(false);
+          if (options.onFinish && currentMessageRef.current) {
+            options.onFinish({
+              ...currentMessageRef.current,
+              content,
+              metadata: messageMetadata
+            });
+          }
+          return;
+        }
+
+        console.error('[DEBUG] useEnhancedChat: HTTP error', response.status, errorText);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}${payload?.error?.message ? ` - ${payload.error.message}` : ''}`);
+      }
+
+      // Some auth-required responses are returned as JSON, not SSE.
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const payload = await response.json().catch(() => ({} as any));
+        const authRequired =
+          payload?.status === 'auth_required' ||
+          payload?.data?.requiresAuth === true ||
+          payload?.metadata?.messageMetadata?.requiresAuth === true;
+
+        if (authRequired) {
+          const content =
+            payload?.message ||
+            payload?.data?.content ||
+            `I need authorization to use ${payload?.toolName || payload?.data?.toolName || 'this tool'}. Please connect your account to proceed.`;
+
+          const messageMetadata = payload?.metadata?.messageMetadata || {
+            requiresAuth: true,
+            authUrl: payload?.authUrl || payload?.data?.authUrl,
+            toolName: payload?.toolName || payload?.data?.toolName,
+            provider: payload?.provider || payload?.data?.provider
+          };
+
+          setMessages(prev => prev.map(msg =>
+            msg.id === assistantMessage.id
+              ? { ...msg, content, metadata: { ...(msg.metadata || {}), ...messageMetadata } }
+              : msg
+          ));
+          setIsLoading(false);
+          if (options.onFinish && currentMessageRef.current) {
+            options.onFinish({
+              ...currentMessageRef.current,
+              content,
+              metadata: messageMetadata
+            });
+          }
+          return;
+        }
+      }
+
+      console.log('[DEBUG] useEnhancedChat: Response received, status:', response.status);
+
+      if (!response.body) {
+        console.error('[DEBUG] useEnhancedChat: No response body');
+        throw new Error('No response body for streaming');
+      }
+
+      // Handle streaming response
+      console.log('[DEBUG] useEnhancedChat: Starting to handle streaming response');
+      await handleStreamingResponse(response.body, assistantMessage, abortController);
+
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        // Request was cancelled
+        return;
+      }
+
+      const error = err instanceof Error ? err : new Error('Unknown error');
+
+      // Process error through error handler
+      const streamingError = streamingErrorHandler.processError(error);
+
+      // Check if we have accumulated any content before showing error
+      // Use messagesRef.current to avoid stale closure bug
+      const currentMessage = messagesRef.current.find(msg => msg.id === assistantMessage.id);
+      const hasContent = currentMessage && currentMessage.content && currentMessage.content.trim().length > 0;
+
+      // Only show error to user if it should be shown and we don't have content
+      if (streamingErrorHandler.shouldShowToUser(streamingError) && !hasContent) {
+        const userMessage = streamingErrorHandler.getUserMessage(streamingError);
+        setError(new Error(userMessage));
+        if (options.onError) {
+          options.onError(new Error(userMessage));
+        }
+      } else {
+        // Log error for debugging but don't show to user
+        console.warn('Chat error (handled silently):', error);
+
+        // If we have content, consider the request successful
+        if (hasContent && options.onFinish && currentMessageRef.current) {
+          options.onFinish({
+            ...currentMessageRef.current,
+            content: currentMessage?.content || ''
+          });
+        }
+      }
+
+      setIsLoading(false);
+    }
+  }, [buildRequestHeaders, input, isLoading, options]);
+
+  const handleStreamingResponse = async (
+    body: ReadableStream<Uint8Array>,
+    assistantMessage: Message,
+    abortController: AbortController
+  ) => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let accumulatedContent = '';
+    let currentEventType = '';
+
+    // Set up a timeout to ensure we don't get stuck
+    const timeoutId = setTimeout(() => {
+      if (accumulatedContent.trim()) {
+        // If we have some content, finalize it
+        setMessages(prev => prev.map(msg => 
+          msg.id === assistantMessage.id 
+            ? { ...msg, content: accumulatedContent }
+            : msg
+        ));
+        setIsLoading(false);
+        if (options.onFinish && currentMessageRef.current) {
+          options.onFinish({
+            ...currentMessageRef.current,
+            content: accumulatedContent
+          });
+        }
+      }
+    }, 30000); // 30 second timeout
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        if (abortController.signal.aborted) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.trim() === '') {
+            // Empty line indicates end of event
+            currentEventType = '';
+            continue;
+          }
+
+          try {
+            // Handle event type declarations
+            if (line.startsWith('event: ')) {
+              currentEventType = line.slice(7).trim();
+              console.log('[DEBUG] useEnhancedChat: Event type:', currentEventType);
+              continue;
+            }
+
+            // Handle data lines
+            if (line.startsWith('data: ')) {
+              const dataString = line.slice(6).trim();
+              if (!dataString) continue;
+              
+              console.log('[DEBUG] useEnhancedChat: Data line received, length:', dataString.length, 'preview:', dataString.substring(0, 100));
+
+              let eventData;
+              try {
+                eventData = JSON.parse(dataString);
+                console.log('[DEBUG] useEnhancedChat: Parsed event data:', { type: eventData.type, hasContent: !!eventData.content });
+              } catch (jsonError) {
+                console.warn('[DEBUG] useEnhancedChat: JSON parse failed, trying fallback:', jsonError);
+                // If JSON parsing fails, check if it's a simple text response
+                if (dataString && typeof dataString === 'string' && dataString.trim()) {
+                  // Handle different possible formats
+                  if (dataString.startsWith('{') && dataString.endsWith('}')) {
+                    // Looks like malformed JSON, try to extract content
+                    const contentMatch = dataString.match(/"content":\s*"([^"]*)"/) || 
+                                       dataString.match(/'content':\s*'([^']*)'/) ||
+                                       dataString.match(/content:\s*"([^"]*)"/) ||
+                                       dataString.match(/content:\s*'([^']*)'/) ||
+                                       dataString.match(/"([^"]+)"/);
+                    
+                    if (contentMatch && contentMatch[1]) {
+                      accumulatedContent += contentMatch[1];
+                      setMessages(prev => prev.map(msg => 
+                        msg.id === assistantMessage.id 
+                          ? { ...msg, content: accumulatedContent }
+                          : msg
+                      ));
+                    }
+                  } else {
+                    // Treat as plain text content for backward compatibility
+                    accumulatedContent += dataString;
+                    setMessages(prev => prev.map(msg => 
+                      msg.id === assistantMessage.id 
+                        ? { ...msg, content: accumulatedContent }
+                        : msg
+                    ));
+                  }
+                }
+                continue;
+              }
+
+              // Determine event type from current context or data
+              const eventType = currentEventType || eventData.type || 'token';
+              console.log('[DEBUG] useEnhancedChat: Processing event type:', eventType);
+
+              switch (eventType) {
+                case 'init':
+                  // Initialization event - just log for debugging
+                  console.log('Chat stream initialized:', eventData);
+                  break;
+
+                case 'token':
+                case 'data':
+                  if (eventData.content) {
+                    accumulatedContent += eventData.content;
+                    
+                    // Update the assistant message in real-time
+                    setMessages(prev => prev.map(msg => 
+                      msg.id === assistantMessage.id 
+                        ? { ...msg, content: accumulatedContent }
+                        : msg
+                    ));
+                  }
+                  break;
+
+                case 'done':
+                  if (eventData.messageMetadata) {
+                    const metadata = eventData.messageMetadata;
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
+                        ? { ...msg, metadata: { ...(msg.metadata || {}), ...metadata } }
+                        : msg
+                    ));
+                  }
+                  // Streaming complete
+                  clearTimeout(timeoutId);
+                  setIsLoading(false);
+                  if (options.onFinish && currentMessageRef.current) {
+                    options.onFinish({
+                      ...currentMessageRef.current,
+                      content: accumulatedContent,
+                      metadata: eventData.messageMetadata
+                    });
+                  }
+                  return;
+
+                case 'error':
+                  throw new Error(eventData.message || 'Streaming error');
+
+                case 'filesystem':
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === assistantMessage.id
+                      ? {
+                          ...msg,
+                          metadata: {
+                            ...(msg.metadata || {}),
+                            filesystem: eventData,
+                          },
+                        }
+                      : msg
+                  ));
+                  break;
+
+                case 'reasoning':
+                  if (eventData.reasoning) {
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
+                        ? {
+                            ...msg,
+                            metadata: {
+                              ...(msg.metadata || {}),
+                              reasoning: eventData.reasoning,
+                            },
+                          }
+                        : msg
+                    ));
+                  }
+                  break;
+
+                case 'tool_invocation':
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id !== assistantMessage.id) return msg;
+                    const existing = Array.isArray((msg.metadata as any)?.toolInvocations)
+                      ? ([...(msg.metadata as any).toolInvocations] as any[])
+                      : [];
+                    const idx = existing.findIndex((inv) => inv.toolCallId === eventData.toolCallId && inv.state === eventData.state);
+                    if (idx === -1) {
+                      existing.push({
+                        toolCallId: eventData.toolCallId,
+                        toolName: eventData.toolName,
+                        state: eventData.state,
+                        args: eventData.args || {},
+                        result: eventData.result,
+                      });
+                    }
+                    return {
+                      ...msg,
+                      metadata: {
+                        ...(msg.metadata || {}),
+                        toolInvocations: existing,
+                      },
+                    };
+                  }));
+                  break;
+
+                // Non-content events - just log for debugging in development
+                case 'heartbeat':
+                case 'metrics':
+                case 'commands':
+                case 'softTimeout':
+                  if (process.env.NODE_ENV === 'development') {
+                    console.log(`Chat stream event (${eventType}):`, eventData);
+                  }
+                  break;
+
+                default:
+                  // Handle unknown event types gracefully
+                  if (process.env.NODE_ENV === 'development') {
+                    console.warn('Unknown event type:', eventType, eventData);
+                  }
+                  break;
+              }
+            }
+
+            // Handle other SSE fields (id, retry) - ignore them
+            if (line.startsWith('id: ') || line.startsWith('retry: ')) {
+              continue;
+            }
+
+          } catch (parseError) {
+            // Handle parsing errors gracefully - use streaming error handler
+            const streamingError = streamingErrorHandler.processError(
+              parseError instanceof Error ? parseError : new Error(String(parseError))
+            );
+            
+            // Only show error to user if it should be shown
+            if (streamingErrorHandler.shouldShowToUser(streamingError)) {
+              console.error('SSE parsing error:', parseError);
+            } else {
+              console.warn('SSE parsing error (handled silently):', parseError);
+            }
+            
+            // Continue processing other lines even if one fails
+            continue;
+          }
+        }
+      }
+
+      // If we reach here without a 'done' event, consider it complete
+      clearTimeout(timeoutId);
+      setIsLoading(false);
+      
+      if (options.onFinish && currentMessageRef.current) {
+        options.onFinish({
+          ...currentMessageRef.current,
+          content: accumulatedContent
+        });
+      }
+
+    } catch (streamError) {
+      clearTimeout(timeoutId);
+      if (streamError instanceof Error && streamError.name !== 'AbortError') {
+        throw streamError;
+      }
+    } finally {
+      reader.releaseLock();
+      abortControllerRef.current = null;
+    }
+  };
+
+  return {
+    messages,
+    input,
+    handleInputChange,
+    handleSubmit,
+    isLoading,
+    error,
+    setMessages,
+    stop,
+    setInput,
+  };
+}

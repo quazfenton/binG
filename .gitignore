@@ -1,0 +1,69 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+data/virtual-filesystem/*
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env*
+fastagent.secrets.yaml
+venv/
+.venv/
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# local sandbox workspace (development fallback)
+/local-workspace
+.aider*
+
+node_modules*
+
+.amazonq/
+.vscode/
+.kiro/
+
+# ===========================================
+# DATABASE & BACKUPS
+# ===========================================
+
+# SQLite database files (NEVER commit these!)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+/data/*.db
+/data/*.db-*
+
+# Backup files
+*.backup
+*.bak
+*.dump
+*.sql.gz
+/backups/
+/backup/
+/data/backups/
+
+# Database journals
+*.journal
+
+# Temporary database files
+*.tmp
+*.temp
