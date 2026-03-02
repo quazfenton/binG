@@ -3,7 +3,10 @@ import { initializeDatabase } from '@/lib/database/db';
 import jwt from 'jsonwebtoken';
 import { encryptSecret, decryptSecret, isEncryptedFormat } from '@/lib/utils/crypto';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET is required');
+}
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 
 // Helper to verify JWT token
