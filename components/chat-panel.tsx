@@ -65,6 +65,8 @@ export function ChatPanel({
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const [streamingStates, setStreamingStates] = useState<Map<string, any>>(new Map());
   const [hasUserInteracted, setHasUserInteracted] = useState(false);
+  const [showWelcomeMessage, setShowWelcomeMessage] = useState(true);
+  const [isFading, setIsFading] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -75,6 +77,24 @@ export function ChatPanel({
       setHasUserInteracted(true);
     }
   }, [input]);
+
+  // Fade out welcome message after 7 seconds (4s animation)
+  useEffect(() => {
+    // Start fade after 7 seconds
+    const fadeTimer = setTimeout(() => {
+      setIsFading(true);
+    }, 7000);
+    
+    // Remove from DOM after fade completes (7s + 4s = 11s)
+    const removeTimer = setTimeout(() => {
+      setShowWelcomeMessage(false);
+    }, 11000);
+    
+    return () => {
+      clearTimeout(fadeTimer);
+      clearTimeout(removeTimer);
+    };
+  }, []);
 
   // Handle scroll position tracking
   const handleScroll = useCallback(() => {
@@ -168,9 +188,15 @@ export function ChatPanel({
         }}
         onScroll={handleScroll}
       >
-        {messages.length === 0 && !hasUserInteracted && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground opacity-40 hover:opacity-60 transition-opacity duration-300 pointer-events-none">
-            <p className="text-lg">Start a conversation</p>
+        {messages.length === 0 && !hasUserInteracted && showWelcomeMessage && (
+          <div 
+            className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground pointer-events-none transition-opacity ease-in-out"
+            style={{ 
+              opacity: isFading ? 0 : 0.25,
+              transitionDuration: '4000ms'
+            }}
+          >
+            <p className="text-lg">Let's talk !</p>
             <p className="text-sm">Type a message or use voice input</p>
           </div>
         )}

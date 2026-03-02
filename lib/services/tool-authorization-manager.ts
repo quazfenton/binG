@@ -47,12 +47,24 @@ const TOOL_PROVIDER_MAP: Record<string, string> = {
   'railway.deploy': 'railway',
   // Google News
   'googlenews.search': 'google',
+  // Composio generic/meta tools
+  'composio.search_tools': 'composio',
+  'composio.execute_tool': 'composio',
+  // Tambo local tools
+  'tambo.format_code': 'tambo',
+  'tambo.validate_input': 'tambo',
+  'tambo.calculate': 'tambo',
+  // MCP gateway tool
+  'mcp.call_tool': 'mcp',
 };
 
 // Tools that don't require user OAuth (use app-level API keys)
 const NO_AUTH_TOOLS = new Set([
   'googlemaps.search', 'googlemaps.directions', 'googlemaps.geocode',
   'googlenews.search',
+  'composio.search_tools',
+  'tambo.format_code', 'tambo.validate_input', 'tambo.calculate',
+  'mcp.call_tool',
 ]);
 
 export class ToolAuthorizationManager {
@@ -95,7 +107,11 @@ export class ToolAuthorizationManager {
     // Check if this provider uses Nango
     else if (nangoProviders.includes(provider)) {
       return `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/nango/authorize?provider=${provider}&redirect=1`;
-    } 
+    }
+    // Composio generally manages toolkit-level auth flow internally via connect links
+    else if (provider === 'composio') {
+      return `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/oauth/initiate?provider=composio`;
+    }
     // Default to standard OAuth flow
     else {
       return `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/oauth/initiate?provider=${provider}`;

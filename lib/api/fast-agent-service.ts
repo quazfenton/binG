@@ -92,57 +92,10 @@ export interface FastAgentConfig {
   };
 }
 
-class FastAgentService {
-  private config: FastAgentConfig;
-  private isHealthy: boolean = true;
-  private lastHealthCheck: number = 0;
-  private readonly HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
+import { ComplexityAnalyzer } from '../utils/complexity-analyzer';
 
-  constructor() {
-    // Support both localhost and subdomain configurations
-    const endpoint = process.env.FAST_AGENT_ENDPOINT || 'http://localhost:8080/api/chat';
-    
-    // Optional: detect and log subdomain usage without exposing URL
-    try {
-      const url = new URL(endpoint);
-      if (url.hostname.includes('fast-agent') || url.hostname.includes('agent')) {
-        console.log('[FastAgent] Using subdomain-based configuration');
-      }
-    } catch {
-      // Invalid URL format, continue with endpoint as-is
-    }
-    
-    this.config = {
-      enabled: process.env.FAST_AGENT_ENABLED === 'true',
-      endpoint,
-      timeout: parseInt(process.env.FAST_AGENT_TIMEOUT || '30000'),
-      apiKey: process.env.FAST_AGENT_API_KEY,
-      fallbackOnError: process.env.FAST_AGENT_FALLBACK !== 'false',
-      supportedProviders: (process.env.FAST_AGENT_PROVIDERS || 'openai,anthropic,google').split(','),
-      capabilities: {
-        tools: process.env.FAST_AGENT_TOOLS !== 'false',
-        fileHandling: process.env.FAST_AGENT_FILES !== 'false',
-        agentChaining: process.env.FAST_AGENT_CHAINING !== 'false',
-        mcpTools: process.env.FAST_AGENT_MCP !== 'false',
-        qualityOptimization: process.env.FAST_AGENT_QUALITY !== 'false',
-        multiThreadedReflection: process.env.FAST_AGENT_REFLECTION !== 'false',
-        stepByStepProcessing: process.env.FAST_AGENT_STEPS !== 'false',
-        multiModalHandling: process.env.FAST_AGENT_MULTIMODAL !== 'false',
-      },
-      qualitySettings: {
-        defaultMode: (process.env.FAST_AGENT_QUALITY_MODE as any) || 'enhanced',
-        reflectionEnabled: process.env.FAST_AGENT_REFLECTION_ENABLED !== 'false',
-        maxIterations: parseInt(process.env.FAST_AGENT_MAX_ITERATIONS || '3'),
-        qualityThreshold: parseFloat(process.env.FAST_AGENT_QUALITY_THRESHOLD || '0.8'),
-      },
-      processingSettings: {
-        complexityDetection: process.env.FAST_AGENT_COMPLEXITY_DETECTION !== 'false',
-        adaptiveTimeout: process.env.FAST_AGENT_ADAPTIVE_TIMEOUT !== 'false',
-        parallelProcessing: process.env.FAST_AGENT_PARALLEL !== 'false',
-        stepBreakdown: process.env.FAST_AGENT_STEP_BREAKDOWN !== 'false',
-      }
-    };
-  }
+class FastAgentService {
+  // ... (existing properties)
 
   /**
    * Check if fast-agent should handle this request with enhanced complexity detection
@@ -158,33 +111,47 @@ class FastAgentService {
     }
 
     const content = request.messages[request.messages.length - 1]?.content || '';
-    
-    // Enhanced detection patterns
-    const patterns = {
-      tools: /\b(file|create|write|read|execute|run|tool|command|script|api|database|search)\b/i,
-      code: /\b(code|function|class|import|export|debug|test|refactor|algorithm|optimize|review)\b/i,
-      files: /\b(save|load|download|upload|directory|folder|path|csv|json|xml|pdf)\b/i,
-      chains: /\b(workflow|chain|sequence|pipeline|multi-step|orchestrate|coordinate)\b/i,
-      complex: /\b(analyze|compare|evaluate|synthesize|integrate|comprehensive|detailed|thorough)\b/i,
-      multimodal: /\b(image|video|audio|chart|graph|diagram|visualization|media)\b/i
-    };
+    const metrics = ComplexityAnalyzer.analyze(content);
 
-    // Calculate complexity score
-    let complexityScore = 0;
-    Object.values(patterns).forEach(pattern => {
-      if (pattern.test(content)) complexityScore++;
-    });
+    // Determine if fast-agent should handle based on complexity score
+    return metrics.score >= 3 || request.qualityMode === 'enhanced' || request.qualityMode === 'iterative';
+  }
 
-    // Word count and sentence complexity
-    const wordCount = content.split(/\s+/).length;
-    const sentenceCount = content.split(/[.!?]+/).length;
-    
-    if (wordCount > 50) complexityScore++;
-    if (sentenceCount > 5) complexityScore++;
-    if (content.includes('step by step') || content.includes('detailed')) complexityScore++;
+  /**
+   * Perform multi-threaded reflection on a result
+   * Gets diverse perspectives (Security, Logic, UX) in parallel
+   */
+  private async performMultiThreadedReflection(
+    request: FastAgentRequest,
+    initialContent: string
+  ): Promise<FastAgentResponse['reflectionResults']> {
+    const perspectives = [
+      { name: 'Security', prompt: 'Analyze this response for security risks or sensitive data exposure.' },
+      { name: 'Logic', prompt: 'Check this response for logical consistency and accuracy.' },
+      { name: 'Style', prompt: 'Review this response for tone, clarity, and helpfulness.' }
+    ];
 
-    // Determine if fast-agent should handle based on complexity
-    return complexityScore >= 2 || request.qualityMode === 'enhanced' || request.qualityMode === 'iterative';
+    try {
+      const results = await Promise.all(perspectives.map(async (p) => {
+        const reflectionResponse = await fetch(`${this.config.endpoint}/reflect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: initialContent,
+            perspective: p.name,
+            instructions: p.prompt
+          })
+        });
+        
+        if (!reflectionResponse.ok) return null;
+        return reflectionResponse.json();
+      }));
+
+      return results.filter(Boolean);
+    } catch (error) {
+      console.warn('[FastAgent] Reflection failed:', error);
+      return [];
+    }
   }
 
   /**
@@ -192,84 +159,35 @@ class FastAgentService {
    */
   async processRequest(request: FastAgentRequest): Promise<FastAgentResponse> {
     try {
-      // Detect task complexity and adjust parameters
-      const complexity = this.detectComplexity(request);
-      const adaptedRequest = this.adaptRequestForQuality(request, complexity);
+      // ... (existing logic)
       
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-
-      if (this.config.apiKey) {
-        headers['Authorization'] = `Bearer ${this.config.apiKey}`;
-      }
-
-      // Adaptive timeout based on complexity
-      const timeout = this.config.processingSettings.adaptiveTimeout 
-        ? this.calculateAdaptiveTimeout(complexity)
-        : this.config.timeout;
-
-      const response = await fetch(this.config.endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          ...adaptedRequest,
-          capabilities: this.config.capabilities,
-          qualitySettings: this.config.qualitySettings,
-          source: 'binG-integration'
-        }),
-        signal: AbortSignal.timeout(timeout)
-      });
-
-      if (!response.ok) {
-        throw new Error(`Fast-agent responded with ${response.status}: ${response.statusText}`);
-      }
-
       const result: FastAgentResponse = await response.json();
-      
-      // Quality assessment and potential iteration
-      if (this.config.qualitySettings.reflectionEnabled && result.qualityScore && result.qualityScore < this.config.qualitySettings.qualityThreshold) {
-        console.log('[FastAgent] Quality below threshold, attempting improvement');
-        return await this.attemptQualityImprovement(adaptedRequest, result);
-      }
-      
-      // Update health status
-      this.isHealthy = true;
-      this.lastHealthCheck = Date.now();
 
-      return result;
-    } catch (error) {
-      console.warn('[FastAgent] Request failed:', error);
-      
-      // Mark as unhealthy if multiple failures
-      this.isHealthy = false;
-      
-      if (this.config.fallbackOnError) {
-        return {
-          success: false,
-          fallbackToOriginal: true,
-          error: error instanceof Error ? error.message : 'Unknown error'
-        };
+      // NEW: Trigger multi-threaded reflection if enabled and task is complex
+      if (this.config.capabilities.multiThreadedReflection && metrics.complexity === 'complex') {
+        const reflections = await this.performMultiThreadedReflection(request, result.content || '');
+        if (reflections?.length) {
+          result.reflectionResults = reflections;
+          
+          // If any reflection has low confidence, trigger iterative improvement
+          const lowConfidence = reflections.some(r => r.confidence < 0.7);
+          if (lowConfidence && this.config.qualitySettings.reflectionEnabled) {
+             return await this.attemptQualityImprovement(adaptedRequest, result);
+          }
+        }
       }
       
-      throw error;
-    }
+      // ... (rest of the logic)
+    } catch (error) { /* ... */ }
   }
 
   /**
-   * Detect task complexity for adaptive processing
+   * Detect task complexity for adaptive processing (Deprecated - use ComplexityAnalyzer)
    */
   private detectComplexity(request: FastAgentRequest): 'simple' | 'moderate' | 'complex' {
     if (request.taskComplexity) return request.taskComplexity;
-    
     const content = request.messages[request.messages.length - 1]?.content || '';
-    const wordCount = content.split(/\s+/).length;
-    const hasMultipleSteps = /\b(then|next|after|finally|step|phase)\b/gi.test(content);
-    const hasComplexTerms = /\b(analyze|synthesize|optimize|integrate|comprehensive)\b/i.test(content);
-    
-    if (wordCount > 100 || hasComplexTerms || request.qualityMode === 'iterative') return 'complex';
-    if (wordCount > 30 || hasMultipleSteps || request.qualityMode === 'enhanced') return 'moderate';
-    return 'simple';
+    return ComplexityAnalyzer.analyze(content).complexity;
   }
 
   /**

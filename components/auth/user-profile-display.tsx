@@ -4,12 +4,12 @@ import { useAuth } from '@/contexts/auth-context';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { 
-  User, 
-  Mail, 
-  Calendar, 
-  Crown, 
-  Shield, 
+import {
+  User,
+  Mail,
+  Calendar,
+  Trophy,
+  Shield,
   LogOut,
   Settings as SettingsIcon,
   CheckCircle
@@ -50,7 +50,7 @@ export function UserProfileDisplay({ showActions = true, compact = false }: User
             <div className="w-2 h-2 bg-green-400 rounded-full"></div>
             <span className="text-xs text-green-400">Online</span>
             <Badge variant="secondary" className="text-xs">
-              <Crown className="h-3 w-3 mr-1" />
+              <Trophy className="h-3 w-3 mr-1" />
               Premium
             </Badge>
           </div>
@@ -93,7 +93,7 @@ export function UserProfileDisplay({ showActions = true, compact = false }: User
           </div>
           <div className="flex flex-col gap-2">
             <Badge className="bg-gradient-to-r from-yellow-500 to-orange-500">
-              <Crown className="h-3 w-3 mr-1" />
+              <Trophy className="h-3 w-3 mr-1" />
               Premium
             </Badge>
             <Badge variant="outline" className="text-green-400 border-green-400">

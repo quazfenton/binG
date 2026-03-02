@@ -165,7 +165,7 @@ export default function MultiModelComparison({
       case 'pending':
         return <Clock className="h-4 w-4 text-gray-400" />;
       case 'streaming':
-        return <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />;
+        return <Loader2 className="h-4 w-4 text-blue-400 thinking-spinner" />;
       case 'complete':
         return <CheckCircle className="h-4 w-4 text-green-400" />;
       case 'error':
@@ -222,7 +222,7 @@ export default function MultiModelComparison({
                 className="self-end"
               >
                 {isComparing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 thinking-spinner" />
                 ) : (
                   <Send className="h-4 w-4" />
                 )}

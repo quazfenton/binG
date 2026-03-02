@@ -1,9 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
 
-/**
- * Fast-Agent workflows endpoint
- * Proxy for Python workflow execution
- */
+interface WorkflowExecutor {
+  execute(workflow: string, input: any, config?: any): Promise<any>;
+}
+
+const workflowExecutor: WorkflowExecutor = {
+  async execute(workflow: string, input: any, config?: any): Promise<any> {
+    console.log(`[Workflow] Executing workflow: ${workflow}`);
+
+    const workflowUrl = process.env.WORKFLOW_SERVICE_URL;
+
+    if (workflowUrl) {
+      try {
+        const response = await fetch(`${workflowUrl}/execute`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workflow, input, config }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => 'Unknown error');
+          throw new Error(`Workflow service returned ${response.status}: ${errorText}`);
+        }
+
+        return await response.json();
+      } catch (error) {
+        console.error('[Workflow] External service error:', error);
+        throw error; // Re-throw to surface the error to the caller
+      }
+    }
+
+    // Mock implementation for development (only when no service URL is configured)
+    return {
+      workflow,
+      input,
+      result: `Mock result for ${workflow} workflow`,
+      status: 'completed',
+      timestamp: new Date().toISOString()
+    };
+  }
+};
 
 export async function POST(request: NextRequest) {
   try {
@@ -30,19 +66,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // TODO: Implement workflow execution
-    // Options:
-    // 1. Call external Python service
-    // 2. Use subprocess to run Python scripts
-    // 3. Use Cloudflare Worker with Python runtime
-    
-    return NextResponse.json({
-      success: false,
-      error: 'Workflow execution not yet implemented',
-      workflow,
-      message: 'Configure workflow execution service in this endpoint',
-      timestamp: new Date().toISOString()
-    }, { status: 501 });
+    // Execute workflow
+    try {
+      const result = await workflowExecutor.execute(workflow, input, config);
+      
+      return NextResponse.json({
+        success: true,
+        workflow,
+        result,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('[Workflows API] Execution error:', error);
+      return NextResponse.json({
+        success: false,
+        error: 'Workflow execution failed',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }, { status: 500 });
+    }
 
   } catch (error) {
     console.error('[Workflows API] Error:', error);

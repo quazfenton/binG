@@ -161,7 +161,7 @@ class CustomFallbackService {
     
     // Code-related request
     if (/\b(code|function|class|programming|debug)\b/i.test(content)) {
-      return "I apologize, but I'm experiencing technical difficulties with my code processing capabilities at the moment. Please try again in a few moments, or rephrase your question. If this persists, you can try a simpler code-related query.";
+      return "I apologize, but I'm experiencing difficulties with my code processing at the moment. Try again in a few moments, or rephrase your question. If this persists, you can try a simpler code-related query.";
     }
     
     // File-related request
@@ -180,7 +180,7 @@ class CustomFallbackService {
     }
     
     // General/Unknown request
-    return "I apologize, but I'm experiencing technical difficulties processing your request at the moment. This is a temporary issue. Please try again in a few moments, or try rephrasing your question in a different way.";
+    return "I apologize, but I'm having difficulties processing your request at the moment. This is a temporary issue. Please try again in a few moments, or try rephrasing your question in a different way.";
   }
 
   /**

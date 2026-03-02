@@ -23,7 +23,10 @@ export async function POST(req: NextRequest) {
     const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
     if (!userSession) {
       // Create a new sandbox session (use getOrCreateSession to avoid races)
-      const session = await sandboxBridge.getOrCreateSession(authResult.userId);
+      // Pass explicit config so terminal bootstrap bypasses warm-pool preprovisioning path.
+      const session = await sandboxBridge.getOrCreateSession(authResult.userId, {
+        language: 'typescript',
+      });
       return NextResponse.json({
         sessionId: session.sessionId,
         sandboxId: session.sandboxId,

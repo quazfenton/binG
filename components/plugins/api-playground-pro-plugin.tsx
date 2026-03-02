@@ -235,7 +235,7 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
                 onKeyDown={(e) => e.key === 'Enter' && sendRequest()}
               />
               <Button onClick={() => sendRequest()} disabled={loading || !url}>
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                {loading ? <Loader2 className="w-4 h-4 thinking-spinner" /> : <Send className="w-4 h-4" />}
               </Button>
             </div>
 

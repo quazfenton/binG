@@ -31,7 +31,7 @@ export {
   createStdioTransport,
   createSSETransport,
   createWebSocketTransport,
-  MCPServerPresets,
+  MCSPerverPresets,
   callMCPTool,
   getMCPTools,
   getMCPServerStatuses,
@@ -41,3 +41,20 @@ export {
 
 // Environment Loader
 export { loadMCPEnv } from './load-env'
+
+// Smithery Integration
+export { 
+  SmitheryRegistry, 
+  SmitheryClient,
+  smitheryRegistry,
+  createSmitheryRegistry,
+  createSmitheryClient,
+} from './smithery-registry'
+
+// Smithery Service (separate from registry)
+export { 
+  SmitheryService,
+  SmitheryServer as SmitheryServerInfo,
+  SmitheryConnection as SmitheryConnectionInfo,
+  SmitheryToken,
+} from './smithery-service'

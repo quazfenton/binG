@@ -112,44 +112,56 @@ export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData
 
   for (const message of messages) {
     if (message.role !== 'assistant') continue
-    
+
     const content = typeof message.content === 'string' ? message.content : ''
-    
-    // Extract code blocks using regex
-    const codeBlockRegex = /```(\w+)?\s*(?:\/\/\s*(.+?))?\n([\s\S]*?)```/g
+
+    // Enhanced regex to capture filenames from multiple formats:
+    // ```javascript:src/App.js
+    // ```javascript src/App.js
+    // ```javascript filename="src/App.js"
+    // ```javascript // src/App.js
+    const codeBlockRegex = /```(\w+)?(?:\s*[:\s]\s*(?:filename\s*=\s*)?["']?([^"'\s\n]+)["']?)?\s*(?:\/\/\s*(.+?))?\n([\s\S]*?)```/g
     let match
-    
+
     while ((match = codeBlockRegex.exec(content)) !== null) {
-      const [, language = 'text', filenameComment, code] = match
+      const [, language, filenameFromColon, filenameFromComment, code] = match
+
+      // Priority for filename: colon format > comment format > generate default
+      let filename = ''
       
-      // Clean filename from comment or infer from language
-      let filename = filenameComment?.trim() || ''
-      if (!filename) {
+      if (filenameFromColon && filenameFromColon.trim()) {
+        // From ```javascript:src/App.js or ```javascript src/App.js
+        filename = filenameFromColon.trim()
+      } else if (filenameFromComment && filenameFromComment.trim()) {
+        // From ```javascript // src/App.js
+        filename = filenameFromComment.trim()
+      } else {
+        // Generate default filename
         const ext = getExtensionForLanguage(language)
         filename = `file-${blockIndex}.${ext}`
       }
-      
+
       codeBlocks.push({
-        language: language.toLowerCase(),
+        language: language?.toLowerCase() || 'text',
         code: code.trim(),
         filename: cleanFilename(filename),
         index: blockIndex++,
         isError: false
       })
-      
+
       // Collect shell commands
-      if (language.toLowerCase() === 'bash' || language.toLowerCase() === 'sh' || language.toLowerCase() === 'shell') {
+      if (language?.toLowerCase() === 'bash' || language?.toLowerCase() === 'sh' || language?.toLowerCase() === 'shell') {
         shellCommands += code.trim() + '\n\n'
       }
     }
-    
+
     // Extract non-code text
     const textWithoutCode = content.replace(/```[\s\S]*?```/g, '').trim()
     if (textWithoutCode) {
       nonCodeText += textWithoutCode + '\n\n'
     }
   }
-  
+
   return {
     codeBlocks,
     nonCodeText: nonCodeText.trim(),
@@ -160,7 +172,9 @@ export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData
 /**
  * Get file extension for a language
  */
-function getExtensionForLanguage(language: string): string {
+function getExtensionForLanguage(language: string | undefined): string {
+  if (!language) return 'txt';
+  
   const extensions: Record<string, string> = {
     javascript: 'js',
     typescript: 'ts',

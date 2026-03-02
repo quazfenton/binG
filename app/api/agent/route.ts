@@ -2,15 +2,30 @@ import { NextRequest, NextResponse } from "next/server";
 import { fastAgentService } from "@/lib/api/fast-agent-service";
 import type { LLMMessage } from "@/lib/api/llm-providers";
 import { generateSecureId } from '@/lib/utils';
+import { resolveRequestAuth } from "@/lib/auth/request-auth";
 
 /**
  * Dedicated Fast-Agent endpoint
  * Separate from main chat for direct Fast-Agent access
+ * 
+ * SECURITY FIX: Added authentication requirement
  */
 
 export async function POST(request: NextRequest) {
   try {
     console.log('[Agent API] Fast-Agent direct endpoint called');
+
+    // CRITICAL FIX: Add authentication requirement
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      console.warn('[Agent API] Unauthorized access attempt');
+      return NextResponse.json(
+        { error: 'Authentication required. Please log in to use Fast-Agent.' },
+        { status: 401 }
+      );
+    }
+
+    const authenticatedUserId = authResult.userId;
 
     const body = await request.json();
     const {
@@ -49,7 +64,8 @@ export async function POST(request: NextRequest) {
       maxTokens,
       stream,
       apiKeys,
-      requestId
+      requestId,
+      userId: authenticatedUserId, // Include authenticated userId
     };
 
     console.log('[Agent API] Sending request to Fast-Agent');
@@ -94,6 +110,7 @@ export async function POST(request: NextRequest) {
       success: true,
       data: formattedResponse,
       source: 'fast-agent',
+      userId: authenticatedUserId, // Include userId in response for auditing
       timestamp: new Date().toISOString()
     });
 
