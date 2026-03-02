@@ -193,22 +193,24 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: imageParams.prompt,
-          negative_prompt: imageParams.negativePrompt,
+          negativePrompt: imageParams.negativePrompt,
           model: imageParams.model,
           width: imageParams.width,
           height: imageParams.height,
-          num_inference_steps: imageParams.steps,
-          guidance_scale: imageParams.guidance,
+          steps: imageParams.steps,
+          guidance: imageParams.guidance,
           seed: imageParams.seed === '' ? -1 : Number.parseInt(imageParams.seed as string),
           sampler: imageParams.sampler,
-          num_images: imageParams.numImages
+          numImages: imageParams.numImages,
         })
       });
 
       if (!res.ok) throw new Error('Generation failed');
-      
+
       const data = await res.json();
-      setGeneratedImages(prev => [...prev, ...data.images]);
+      const images = Array.isArray(data?.data?.images) ? data.data.images : [];
+      if (images.length === 0) throw new Error('No images generated');
+      setGeneratedImages(prev => [...prev, ...images]);
       toast.success('Images generated successfully');
     } catch (err: any) {
       toast.error(err.message);
@@ -401,7 +403,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
               </div>
 
               <Button onClick={generateImage} disabled={!imageParams.prompt || generating} className="w-full">
-                {generating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />}
+                {generating ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Wand2 className="w-4 h-4 mr-2" />}
                 Generate Images
               </Button>
             </div>
@@ -473,7 +475,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
             </div>
 
             <Button onClick={generateLLM} disabled={!llmParams.prompt || llmGenerating} className="w-full">
-              {llmGenerating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Brain className="w-4 h-4 mr-2" />}
+              {llmGenerating ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Brain className="w-4 h-4 mr-2" />}
               Generate Response
             </Button>
 
@@ -536,7 +538,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
             </div>
 
             <Button onClick={generateAudio} disabled={!audioParams.text || audioGenerating} className="w-full">
-              {audioGenerating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Music className="w-4 h-4 mr-2" />}
+              {audioGenerating ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Music className="w-4 h-4 mr-2" />}
               Generate Audio
             </Button>
 
@@ -569,7 +571,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                 </SelectContent>
               </Select>
               <Button onClick={searchModels} disabled={loadingModels}>
-                {loadingModels ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                {loadingModels ? <Loader2 className="w-4 h-4 thinking-spinner" /> : <Search className="w-4 h-4" />}
               </Button>
             </div>
 
@@ -615,7 +617,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                 className="flex-1"
               />
               <Button onClick={searchSpaces} disabled={loadingModels}>
-                {loadingModels ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                {loadingModels ? <Loader2 className="w-4 h-4 thinking-spinner" /> : <Search className="w-4 h-4" />}
               </Button>
             </div>
 
@@ -700,7 +702,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                     toast.success('Workflow completed');
                   }}
                 >
-                  {workflowRunning ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Play className="w-4 h-4 mr-1" />}
+                  {workflowRunning ? <Loader2 className="w-4 h-4 mr-1 thinking-spinner" /> : <Play className="w-4 h-4 mr-1" />}
                   Run
                 </Button>
               </div>

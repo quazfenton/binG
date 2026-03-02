@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useCallback } from 'react';
+import { toast } from 'sonner';
 import { secureRandomString } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -128,18 +129,59 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
         return;
       }
 
-      const shortened: ShortenedUrl = {
-        original: input,
-        shortened: `https://short.ly/${secureRandomString(8).toLowerCase()}`,
-        clicks: 0,
-        created: new Date().toISOString(),
-        reachable: null
-      };
+      let shortened: ShortenedUrl | null = null;
+      let useLocalFallback = false;
+      
+      try {
+        const res = await fetch('/api/url/shorten', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: input }),
+        });
+        if (!res.ok) {
+          // HTTP error (4xx/5xx) - show actual error, don't fall back
+          const errorData = await res.json().catch(() => ({}));
+          toast.error(errorData.error || 'Failed to shorten URL');
+          setIsProcessing(false);
+          return;
+        }
+        const body = await res.json();
+        if (!body.shortened) {
+          toast.error('Invalid response from server');
+          setIsProcessing(false);
+          return;
+        }
+        shortened = {
+          original: body.original,
+          shortened: body.shortened,
+          clicks: body.clicks || 0,
+          created: body.created || new Date().toISOString(),
+          reachable: null,
+        };
+      } catch (err: any) {
+        // Network error (offline, CORS, server down) - fall back to local shortening
+        useLocalFallback = true;
+      }
+
+      // Fallback to local short-link generation when backend is unreachable
+      if (useLocalFallback) {
+        const shortId = secureRandomString(8).toLowerCase();
+        const baseUrl = window.location.origin;
+        shortened = {
+          original: input,
+          shortened: `${baseUrl}/local/${shortId}`,
+          clicks: 0,
+          created: new Date().toISOString(),
+          reachable: null,
+        };
+        toast.info('Backend unreachable. Created local short-link (not persisted to server).');
+      }
 
       const newUrls = [shortened, ...shortenedUrls.slice(0, 9)];
       persistShortenedUrls(newUrls);
       setAnalysis({ valid: true, url: validation.url });
       onResult?.(shortened);
+      setIsProcessing(false);
 
       // Non-blocking reachability check via HEAD request
       fetch(input, { method: 'HEAD', mode: 'no-cors' })
@@ -264,7 +306,7 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
                   className={mode === 'validate' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-green-600 hover:bg-green-700'}
                 >
                   {isProcessing ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <Loader2 className="w-4 h-4 thinking-spinner" />
                   ) : mode === 'validate' ? (
                     <>
                       <CheckCircle className="w-4 h-4 mr-2" />
@@ -468,7 +510,7 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
               >
                 {isProcessing ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 mr-2 thinking-spinner" />
                     Validating...
                   </>
                 ) : (

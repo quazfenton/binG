@@ -304,7 +304,7 @@ export default function GitHubExplorerAdvancedPlugin({ onClose }: PluginProps) {
             className="w-48"
           />
           <Button onClick={loadRepository} disabled={loading || !repoUrl}>
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            {loading ? <Loader2 className="w-4 h-4 thinking-spinner" /> : <Search className="w-4 h-4" />}
           </Button>
         </div>
 

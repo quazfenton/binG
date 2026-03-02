@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
@@ -54,6 +54,7 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<CloudFile | null>(null);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
+  const [backendMode, setBackendMode] = useState(false);
 
   const persistFiles = useCallback((newFiles: CloudFile[]) => {
     setFiles(newFiles);
@@ -72,15 +73,76 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
   };
 
+  const providerPrefix = activeProvider.toLowerCase().replace(/\s+/g, '-');
+
+  const getToken = (): string | null => {
+    return localStorage.getItem('token');
+  };
+
   const refreshFiles = async () => {
     setLoading(true);
     try {
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      toast.success('Files refreshed');
+      const token = getToken();
+      if (!token) {
+        setBackendMode(false);
+        // Load local files when not signed in
+        const localFiles = loadFilesFromStorage().filter(f => 
+          f.provider === activeProvider
+        );
+        setFiles(localFiles);
+        toast.info('Using local mode (not signed in for backend storage)');
+        return;
+      }
+      const headers: HeadersInit = { Authorization: `Bearer ${token}` };
+      const res = await fetch(`/api/storage/list?prefix=${encodeURIComponent(providerPrefix + '/')}`, { headers });
+      if (!res.ok) {
+        setBackendMode(false);
+        // Load local files when backend is unavailable
+        const localFiles = loadFilesFromStorage().filter(f => 
+          f.provider === activeProvider
+        );
+        setFiles(localFiles);
+        toast.info('Using local mode (backend unavailable or unauthorized)');
+        return;
+      }
+      const body = await res.json();
+      const listed: string[] = body?.data?.files || [];
+      // Storage service returns paths relative to prefix; reconstruct full path for backend operations
+      const fullPrefix = providerPrefix + '/';
+      const mapped: CloudFile[] = listed.map((relativePath) => {
+        const fullPath = fullPrefix + relativePath;
+        const name = relativePath.split('/').pop() || relativePath;
+        return {
+          id: fullPath,
+          name,
+          type: 'file',
+          size: 0,
+          modified: 'Synced',
+          provider: activeProvider,
+          shared: false,
+        };
+      });
+      setFiles(mapped);
+      setBackendMode(true);
+      toast.success('Files refreshed from backend');
+    } catch (err) {
+      // Network error or JSON parse error
+      setBackendMode(false);
+      // Load local files on error
+      const localFiles = loadFilesFromStorage().filter(f => 
+        f.provider === activeProvider
+      );
+      setFiles(localFiles);
+      toast.info('Using local mode (backend unavailable or unauthorized)');
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    refreshFiles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProvider]);
 
   const uploadFile = () => {
     const input = document.createElement('input');
@@ -88,27 +150,11 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
     input.onchange = (e: any) => {
       const file = e.target.files[0];
       if (!file) return;
-      
-      const reader = new FileReader();
-      reader.onload = () => {
-        const content = file.size <= MAX_STORED_FILE_SIZE ? (reader.result as string) : undefined;
-        const newFile: CloudFile = {
-          id: Date.now().toString(),
-          name: file.name,
-          type: 'file',
-          size: file.size,
-          modified: 'Just now',
-          provider: activeProvider,
-          shared: false,
-          content
-        };
-        persistFiles([...files, newFile]);
-        toast.success(content ? 'File uploaded and stored locally' : 'File metadata saved (too large to store content)');
-      };
-      if (file.size <= MAX_STORED_FILE_SIZE) {
-        reader.readAsDataURL(file);
-      } else {
+
+      const fallbackLocalUpload = () => {
+        const reader = new FileReader();
         reader.onload = () => {
+          const content = file.size <= MAX_STORED_FILE_SIZE ? (reader.result as string) : undefined;
           const newFile: CloudFile = {
             id: Date.now().toString(),
             name: file.name,
@@ -116,29 +162,131 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
             size: file.size,
             modified: 'Just now',
             provider: activeProvider,
-            shared: false
+            shared: false,
+            content
           };
           persistFiles([...files, newFile]);
-          toast.success('File metadata saved (too large to store content)');
+          setBackendMode(false);
+          toast.success(content ? 'File uploaded in local mode' : 'File metadata saved in local mode');
         };
-        reader.readAsArrayBuffer(file.slice(0, 0)); // trigger onload without reading full file
-      }
+        if (file.size <= MAX_STORED_FILE_SIZE) {
+          reader.readAsDataURL(file);
+        } else {
+          reader.readAsArrayBuffer(file.slice(0, 0));
+        }
+      };
+
+      (async () => {
+        const token = getToken();
+        if (!token) {
+          fallbackLocalUpload();
+          return;
+        }
+        try {
+          const formData = new FormData();
+          const path = `${providerPrefix}/${file.name}`;
+          formData.append('file', file);
+          formData.append('path', path);
+          const headers: HeadersInit = { Authorization: `Bearer ${token}` };
+          const res = await fetch('/api/storage/upload', { method: 'POST', body: formData, headers });
+          if (!res.ok) {
+            fallbackLocalUpload();
+            return;
+          }
+          setBackendMode(true);
+          await refreshFiles();
+          toast.success('File uploaded to backend storage');
+        } catch {
+          fallbackLocalUpload();
+        }
+      })();
     };
     input.click();
   };
 
-  const deleteFile = (id: string) => {
+  const deleteFile = async (id: string) => {
+    if (backendMode) {
+      try {
+        const token = getToken();
+        if (!token) {
+          throw new Error('No authentication token');
+        }
+        const res = await fetch(`/api/storage/delete?path=${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          await refreshFiles();
+          toast.success('File deleted');
+          return;
+        }
+        // Backend delete failed - don't fall through to local deletion
+        toast.error('Failed to delete file from backend storage');
+        return;
+      } catch (err) {
+        // Network error or other exception
+        toast.error('Failed to delete file (connection error)');
+        return;
+      }
+    }
+    // Local mode deletion
     persistFiles(files.filter(f => f.id !== id));
-    toast.success('File deleted');
+    toast.success('File deleted (local mode)');
   };
 
-  const shareFile = (file: CloudFile) => {
+  const shareFile = async (file: CloudFile) => {
+    try {
+      if (backendMode) {
+        const token = getToken();
+        if (!token) {
+          throw new Error('No authentication token');
+        }
+        const res = await fetch(`/api/storage/signed-url?path=${encodeURIComponent(file.id)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const body = await res.json();
+          const link = body?.data?.signedUrl;
+          if (link) {
+            await navigator.clipboard.writeText(link);
+            toast.success('Signed share link copied');
+            return;
+          }
+        }
+      }
+    } catch {}
+
     const link = `https://${file.provider.toLowerCase().replace(' ', '')}.com/share/${file.id}`;
     navigator.clipboard.writeText(link);
-    toast.success('Share link copied');
+    toast.success('Share link copied (local mode)');
   };
 
-  const downloadFile = (file: CloudFile) => {
+  const downloadFile = async (file: CloudFile) => {
+    if (backendMode) {
+      try {
+        const token = getToken();
+        if (!token) {
+          throw new Error('No authentication token');
+        }
+        const res = await fetch(`/api/storage/download?path=${encodeURIComponent(file.id)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = file.name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          toast.success(`Downloaded ${file.name}`);
+          return;
+        }
+      } catch {}
+    }
+
     if (file.content) {
       const a = document.createElement('a');
       a.href = file.content;
@@ -148,7 +296,7 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
       document.body.removeChild(a);
       toast.success(`Downloaded ${file.name}`);
     } else {
-      toast.info(`No stored content for ${file.name} — file metadata only`);
+      toast.info(`No stored content for ${file.name} (metadata only in local mode)`);
     }
   };
 
@@ -203,9 +351,13 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
           </div>
 
           <div className="col-span-3 space-y-3">
-            <div className="flex items-center gap-2 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs text-blue-300">
+            <div className={`flex items-center gap-2 rounded-md px-3 py-2 text-xs ${backendMode ? 'border border-green-500/30 bg-green-500/10 text-green-300' : 'border border-blue-500/30 bg-blue-500/10 text-blue-300'}`}>
               <Info className="w-4 h-4 flex-shrink-0" />
-              <span>Local storage mode — files stored in browser. Real cloud providers require configuration.</span>
+              <span>
+                {backendMode
+                  ? 'Backend storage connected via /api/storage endpoints.'
+                  : 'Local fallback mode — files stored in browser. Sign in/configure storage for backend mode.'}
+              </span>
             </div>
             <div className="flex gap-2">
               <Input
