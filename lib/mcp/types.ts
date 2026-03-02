@@ -1,6 +1,6 @@
 /**
  * MCP (Model Context Protocol) Types and Interfaces
- * 
+ *
  * Based on the official MCP specification:
  * @see https://modelcontextprotocol.io/specification
  */
@@ -10,9 +10,92 @@
  */
 export const MCP_PROTOCOL_VERSION = '2024-11-05'
 
+// ==================== Error Types ====================
+
 /**
- * MCP Role types
+ * Base MCP error class
  */
+export class MCPError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly details?: any
+  ) {
+    super(message);
+    this.name = 'MCPError';
+  }
+}
+
+/**
+ * Connection error - failed to connect to MCP server
+ */
+export class MCPConnectionError extends MCPError {
+  constructor(message: string, details?: any) {
+    super(message, 'CONNECTION_FAILED', details);
+    this.name = 'MCPConnectionError';
+  }
+}
+
+/**
+ * Timeout error - request timed out
+ */
+export class MCPTimeoutError extends MCPError {
+  constructor(
+    message: string,
+    public readonly requestId?: string | number
+  ) {
+    super(message, 'TIMEOUT');
+    this.name = 'MCPTimeoutError';
+  }
+}
+
+/**
+ * Protocol error - invalid MCP protocol message
+ */
+export class MCPProtocolError extends MCPError {
+  constructor(message: string, details?: any) {
+    super(message, 'PROTOCOL_ERROR', details);
+    this.name = 'MCPProtocolError';
+  }
+}
+
+/**
+ * Server error - error returned from MCP server
+ */
+export class MCPServerError extends MCPError {
+  constructor(
+    message: string,
+    public readonly statusCode?: number
+  ) {
+    super(message, 'SERVER_ERROR');
+    this.name = 'MCPServerError';
+  }
+}
+
+/**
+ * Resource error - error related to resource operations
+ */
+export class MCPResourceError extends MCPError {
+  constructor(message: string, public readonly uri?: string) {
+    super(message, 'RESOURCE_ERROR');
+    this.name = 'MCPResourceError';
+  }
+}
+
+/**
+ * Tool error - error related to tool operations
+ */
+export class MCPToolError extends MCPError {
+  constructor(
+    message: string,
+    public readonly toolName?: string
+  ) {
+    super(message, 'TOOL_ERROR');
+    this.name = 'MCPToolError';
+  }
+}
+
+// ==================== MCP Role types ====================
 export type MCPRole = 'user' | 'assistant' | 'tool'
 
 /**

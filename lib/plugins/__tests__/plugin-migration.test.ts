@@ -37,7 +37,7 @@ describe('PluginMigrationService', () => {
 
   describe('renameTab', () => {
     it('should rename tab successfully', () => {
-      const result = migrationService.renameTab('Images', 'Extra');
+      const result = migrationService.renameTab('Plugins', 'Extra');
       expect(result).toBe(true);
     });
 

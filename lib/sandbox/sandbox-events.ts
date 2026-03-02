@@ -1,37 +1,48 @@
+/**
+ * Sandbox Event System
+ * 
+ * Provides event emission and subscription for sandbox events
+ * 
+ * @deprecated Use enhancedSandboxEvents from sandbox-events-enhanced.ts instead
+ * This module is kept for backward compatibility
+ * 
+ * @see lib/sandbox/sandbox-events-enhanced.ts - Enhanced event system with persistence
+ */
+
 import { EventEmitter } from 'events'
 
-export type SandboxEventType = 'agent:tool_start' | 'agent:tool_result' | 'agent:stream' | 'agent:complete' | 'agent:error'
+// Re-export enhanced events for backward compatibility
+export {
+  enhancedSandboxEvents as sandboxEvents,
+  EnhancedSandboxEventEmitter,
+  emitEvent,
+  subscribeToEvents,
+  getEventHistory,
+  type EnhancedSandboxEvent,
+  type EnhancedSandboxEventType,
+} from './sandbox-events-enhanced'
 
-export interface SandboxEvent {
-  type: SandboxEventType
-  sandboxId: string
-  timestamp: number
-  data: any
-}
+// Legacy types for backward compatibility
+export type SandboxEventType = EnhancedSandboxEventType
+export type SandboxEvent = EnhancedSandboxEvent
 
-class SandboxEventEmitter {
+// Legacy event emitter (kept for backward compatibility)
+class LegacySandboxEventEmitter {
   private emitter = new EventEmitter()
 
   emit(sandboxId: string, type: SandboxEventType, data: any): void {
-    const event: SandboxEvent = {
-      type,
-      sandboxId,
-      timestamp: Date.now(),
-      data,
-    }
-    this.emitter.emit(sandboxId, event)
+    // Delegate to enhanced events
+    emitEvent(sandboxId, type, data)
   }
 
   subscribe(sandboxId: string, callback: (event: SandboxEvent) => void): () => void {
-    this.emitter.on(sandboxId, callback)
-    return () => {
-      this.emitter.off(sandboxId, callback)
-    }
+    return subscribeToEvents(sandboxId, callback, { replay: false })
   }
 
   getSubscriberCount(sandboxId: string): number {
-    return this.emitter.listenerCount(sandboxId)
+    return enhancedSandboxEvents.getSubscriberCount(sandboxId)
   }
 }
 
-export const sandboxEvents = new SandboxEventEmitter()
+// Export legacy instance for backward compatibility
+export const legacySandboxEvents = new LegacySandboxEventEmitter()

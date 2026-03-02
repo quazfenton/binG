@@ -1,7 +1,7 @@
 "use client";
 
 import { useTamboContext } from '@/contexts/tambo-context';
-import { MessageBubble } from '@/components/message-bubble';
+import MessageBubble from '@/components/message-bubble';
 import type { Message } from '@/types';
 
 interface TamboMessageRendererProps {

@@ -1,14 +1,16 @@
 /**
  * Rate Limiter Middleware
- * 
+ *
  * Provides rate limiting for API endpoints to prevent abuse and brute-force attacks.
  * Uses an in-memory Map for storage (suitable for serverless/edge deployments).
- * 
+ *
  * Features:
  * - IP-based rate limiting
  * - Email-based rate limiting (for auth endpoints)
+ * - User-based rate limiting (for authenticated users)
  * - Configurable limits via environment variables
  * - Sliding window algorithm
+ * - Tiered rate limits (free/premium/enterprise)
  */
 
 interface RateLimitEntry {
@@ -20,6 +22,45 @@ interface RateLimitConfig {
   windowMs: number;      // Time window in milliseconds
   maxRequests: number;   // Maximum requests allowed in window
   message: string;       // Error message when limit exceeded
+}
+
+// Rate limit tiers for different user levels
+export interface RateLimitTier {
+  name: string;
+  multiplier: number;
+  description: string;
+}
+
+export const RATE_LIMIT_TIERS: Record<string, RateLimitTier> = {
+  free: {
+    name: 'free',
+    multiplier: 1,
+    description: 'Free tier - standard limits'
+  },
+  premium: {
+    name: 'premium',
+    multiplier: 10,
+    description: 'Premium tier - 10x limits'
+  },
+  enterprise: {
+    name: 'enterprise',
+    multiplier: 100,
+    description: 'Enterprise tier - 100x limits'
+  },
+};
+
+// Get tier from user context or default to free
+export function getRateLimitTier(userId?: string, apiKey?: string): RateLimitTier {
+  // Check for enterprise API key pattern
+  if (apiKey?.startsWith('sk-ent-')) {
+    return RATE_LIMIT_TIERS.enterprise;
+  }
+  // Check for premium API key pattern
+  if (apiKey?.startsWith('sk-pro-')) {
+    return RATE_LIMIT_TIERS.premium;
+  }
+  // Default to free tier
+  return RATE_LIMIT_TIERS.free;
 }
 
 // In-memory storage for rate limit tracking
@@ -129,93 +170,105 @@ setInterval(cleanupExpiredEntries, 5 * 60 * 1000);
 
 /**
  * Check rate limit for a given identifier and configuration
- * 
+ *
  * @param identifier - Unique identifier (IP or email)
  * @param config - Rate limit configuration
+ * @param tier - Rate limit tier (default: free)
  * @returns Object with allowed status and retry information
  */
 export function checkRateLimit(
   identifier: string,
-  config: RateLimitConfig
-): { allowed: boolean; remaining: number; resetAfter: number; retryAfter?: number } {
+  config: RateLimitConfig,
+  tier: RateLimitTier = RATE_LIMIT_TIERS.free
+): { allowed: boolean; remaining: number; resetAfter: number; retryAfter?: number; tier: string } {
   const now = Date.now();
-  const key = `${identifier}:${config.windowMs}`;
-  
+  const key = `${identifier}:${config.windowMs}:${tier.name}`;
+
+  // Apply tier multiplier to max requests
+  const adjustedMaxRequests = config.maxRequests * tier.multiplier;
+
   const entry = rateLimitStore.get(key);
-  
+
   if (!entry) {
     // First request in this window
     rateLimitStore.set(key, {
       count: 1,
       firstRequestTime: now,
     });
-    
+
     return {
       allowed: true,
-      remaining: config.maxRequests - 1,
+      remaining: adjustedMaxRequests - 1,
       resetAfter: config.windowMs,
+      tier: tier.name,
     };
   }
-  
+
   // Check if window has expired
   const windowEnd = entry.firstRequestTime + config.windowMs;
-  
+
   if (now > windowEnd) {
     // Window expired, reset counter
     rateLimitStore.set(key, {
       count: 1,
       firstRequestTime: now,
     });
-    
+
     return {
       allowed: true,
-      remaining: config.maxRequests - 1,
+      remaining: adjustedMaxRequests - 1,
       resetAfter: config.windowMs,
+      tier: tier.name,
     };
   }
-  
+
   // Window still active
   const resetAfter = windowEnd - now;
 
-  if (entry.count >= config.maxRequests) {
+  if (entry.count >= adjustedMaxRequests) {
     // Rate limit exceeded
     return {
       allowed: false,
       remaining: 0,
       resetAfter,
       retryAfter: Math.ceil(resetAfter / 1000), // Convert to seconds
+      tier: tier.name,
     };
   }
 
   // Increment counter first, then compute remaining
   entry.count++;
   rateLimitStore.set(key, entry);
-  const remaining = Math.max(0, config.maxRequests - entry.count);
+  const remaining = Math.max(0, adjustedMaxRequests - entry.count);
 
   return {
     allowed: true,
     remaining,
     resetAfter,
+    tier: tier.name,
   };
 }
 
 /**
  * Rate limiting middleware for Next.js API routes
- * 
+ *
  * @param request - The incoming request
  * @param configKey - Key for the rate limit configuration to use
  * @param email - Optional email for email-based rate limiting
+ * @param tier - Optional rate limit tier (default: free)
  * @returns Response object if rate limited, null + headers if allowed
  */
 export function rateLimitMiddleware(
   request: Request,
   configKey: keyof typeof RATE_LIMIT_CONFIGS = 'generic',
-  email?: string
+  email?: string,
+  tier?: RateLimitTier
 ): { success: false; response: Response } | { success: true; response: null; headers: Record<string, string> } {
   const config = RATE_LIMIT_CONFIGS[configKey];
   const identifier = getClientIdentifier(request, email);
-  const result = checkRateLimit(identifier, config);
-  
+  const selectedTier = tier || RATE_LIMIT_TIERS.free;
+  const result = checkRateLimit(identifier, config, selectedTier);
+
   if (!result.allowed) {
     return {
       success: false,
@@ -225,25 +278,28 @@ export function rateLimitMiddleware(
           error: config.message,
           retryAfter: result.retryAfter,
           remaining: result.remaining,
+          tier: result.tier,
         },
         {
           status: 429,
           headers: {
             'Retry-After': result.retryAfter?.toString() || '60',
-            'X-RateLimit-Limit': config.maxRequests.toString(),
+            'X-RateLimit-Limit': (config.maxRequests * selectedTier.multiplier).toString(),
             'X-RateLimit-Remaining': result.remaining.toString(),
             'X-RateLimit-Reset': Math.ceil(Date.now() / 1000 + result.resetAfter / 1000).toString(),
+            'X-RateLimit-Tier': result.tier,
           },
         }
       ),
     };
   }
-  
+
   // Build rate limit headers for successful response so callers can attach them
   const headers = {
-    'X-RateLimit-Limit': config.maxRequests.toString(),
+    'X-RateLimit-Limit': (config.maxRequests * selectedTier.multiplier).toString(),
     'X-RateLimit-Remaining': result.remaining.toString(),
     'X-RateLimit-Reset': Math.ceil(Date.now() / 1000 + result.resetAfter / 1000).toString(),
+    'X-RateLimit-Tier': result.tier,
   };
   
   return {
@@ -287,19 +343,84 @@ export function getRateLimitStatus(
   const config = RATE_LIMIT_CONFIGS[configKey];
   const key = `${identifier}:${config.windowMs}`;
   const entry = rateLimitStore.get(key);
-  
+
   if (!entry) {
     return null;
   }
-  
+
   const now = Date.now();
   const windowEnd = entry.firstRequestTime + config.windowMs;
   const resetAfter = Math.max(0, windowEnd - now);
-  
+
   return {
     count: entry.count,
     windowMs: config.windowMs,
     maxRequests: config.maxRequests,
     resetAfter,
   };
+}
+
+/**
+ * Per-user rate limiting helper
+ * 
+ * ADDED: Easy-to-use function for per-user rate limiting in API routes
+ * 
+ * @param userId - Authenticated user ID
+ * @param configKey - Rate limit configuration key
+ * @param apiKey - Optional API key for tier detection
+ * @returns Rate limit check result with headers
+ * 
+ * @example
+ * ```typescript
+ * // In API route
+ * const userId = authResult.userId;
+ * const rateLimitResult = checkUserRateLimit(userId, 'generic', apiKey);
+ * 
+ * if (!rateLimitResult.allowed) {
+ *   return NextResponse.json({ error: 'Rate limited' }, { 
+ *     status: 429,
+ *     headers: rateLimitResult.headers 
+ *   });
+ * }
+ * ```
+ */
+export function checkUserRateLimit(
+  userId: string,
+  configKey: keyof typeof RATE_LIMIT_CONFIGS = 'generic',
+  apiKey?: string
+): {
+  allowed: boolean;
+  remaining: number;
+  resetAfter: number;
+  retryAfter?: number;
+  tier: string;
+  headers: Record<string, string>;
+} {
+  const config = RATE_LIMIT_CONFIGS[configKey];
+  const tier = getRateLimitTier(userId, apiKey);
+  const identifier = `user:${userId}`; // Per-user identifier
+  const result = checkRateLimit(identifier, config, tier);
+
+  return {
+    allowed: result.allowed,
+    remaining: result.remaining,
+    resetAfter: result.resetAfter,
+    retryAfter: result.retryAfter,
+    tier: result.tier,
+    headers: {
+      'X-RateLimit-Limit': (config.maxRequests * tier.multiplier).toString(),
+      'X-RateLimit-Remaining': result.remaining.toString(),
+      'X-RateLimit-Reset': Math.ceil(Date.now() / 1000 + result.resetAfter / 1000).toString(),
+      'X-RateLimit-Tier': result.tier,
+    },
+  };
+}
+
+/**
+ * Get user's rate limit tier based on API key or user ID
+ * 
+ * ADDED: Helper for determining user's rate limit tier
+ */
+export function getUserRateLimitTier(userId?: string, apiKey?: string): RateLimitTier {
+  return getRateLimitTier(userId, apiKey);
 }

@@ -1,0 +1,143 @@
+/**
+ * Composio Client - Updated for Session-Based Architecture
+ * 
+ * This file now wraps the session manager for backward compatibility.
+ * New code should use composioSessionManager directly.
+ * 
+ * @deprecated Use lib/composio/session-manager.ts instead
+ */
+
+import { composioSessionManager } from './session-manager';
+
+/**
+ * @deprecated Use composioSessionManager.getSession() instead
+ */
+export async function initComposio(opts: { apiKey?: string; userId?: string } = {}) {
+  if (!opts.userId) {
+    throw new Error('userId is required for session-based Composio access');
+  }
+  
+  if (opts.apiKey && opts.apiKey !== process.env.COMPOSIO_API_KEY) {
+    process.env.COMPOSIO_API_KEY = opts.apiKey;
+  }
+  
+  return composioSessionManager.getSession(opts.userId);
+}
+
+/**
+ * @deprecated Use composioSessionManager.getUserTools() instead
+ */
+export async function registerComposioTool(
+  name: string,
+  descriptor: any,
+  handler: (...args: any[]) => Promise<any>
+) {
+  console.warn(
+    '[Composio] registerComposioTool is deprecated. ' +
+    'Use composioSessionManager.executeTool() with proper session isolation.'
+  );
+  
+  // Fallback registry for backward compatibility
+  (global as any).__COMPOSIO_TOOL_REG__ = (global as any).__COMPOSIO_TOOL_REG__ || {};
+  (global as any).__COMPOSIO_TOOL_REG__[name] = handler;
+}
+
+/**
+ * @deprecated Use composioSessionManager.searchTools() instead
+ */
+export async function parseToolsFromPrompt(prompt: string) {
+  console.warn(
+    '[Composio] parseToolsFromPrompt is deprecated. ' +
+    'Use composioSessionManager.searchTools() for tool discovery.'
+  );
+  return null;
+}
+
+/**
+ * Execute tool with user session
+ * 
+ * @param userId - User identifier (REQUIRED for security)
+ * @param toolName - Tool to execute
+ * @param args - Tool arguments
+ * @returns Tool execution result
+ */
+export async function executeToolCall(
+  userId: string,
+  toolName: string,
+  args: Record<string, any>
+) {
+  if (!userId) {
+    throw new Error('userId is required for tool execution (security requirement)');
+  }
+  
+  return composioSessionManager.executeTool(userId, toolName, args);
+}
+
+/**
+ * Get user's available tools
+ * 
+ * @param userId - User identifier
+ * @param options - Optional filters
+ * @returns Array of available tools
+ */
+export async function getUserTools(
+  userId: string,
+  options?: { toolkit?: string; limit?: number }
+) {
+  return composioSessionManager.getUserTools(userId, options);
+}
+
+/**
+ * Search for tools
+ * 
+ * @param userId - User identifier
+ * @param query - Search query
+ * @param options - Search options
+ * @returns Matching tools
+ */
+export async function searchTools(
+  userId: string,
+  query: string,
+  options?: { toolkit?: string; limit?: number }
+) {
+  return composioSessionManager.searchTools(userId, query, options);
+}
+
+/**
+ * Connect account for user
+ * 
+ * @param userId - User identifier
+ * @param toolkit - Toolkit name (e.g., 'github', 'slack')
+ * @param authMode - Authentication mode
+ * @returns Connected account
+ */
+export async function connectAccount(
+  userId: string,
+  toolkit: string,
+  authMode: 'OAUTH2' | 'API_KEY' | 'BASIC' = 'OAUTH2'
+) {
+  return composioSessionManager.connectAccount(userId, toolkit, authMode);
+}
+
+/**
+ * Get user's connected accounts
+ * 
+ * @param userId - User identifier
+ * @returns Array of connected accounts
+ */
+export async function getConnectedAccounts(userId: string) {
+  return composioSessionManager.getConnectedAccounts(userId);
+}
+
+/**
+ * Disconnect account
+ * 
+ * @param userId - User identifier
+ * @param accountId - Account ID to disconnect
+ */
+export async function disconnectAccount(userId: string, accountId: string) {
+  return composioSessionManager.disconnectAccount(userId, accountId);
+}
+
+// Re-export session manager for new code
+export { composioSessionManager } from './session-manager';

@@ -30,6 +30,13 @@ interface Statistics {
   count: number;
 }
 
+interface TrainingResult {
+  algorithm: string;
+  summary?: string;
+  metrics?: Record<string, number | string>;
+  raw?: unknown;
+}
+
 export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
   const [data, setData] = useState<DataRow[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
@@ -37,6 +44,8 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
   const [selectedColumn, setSelectedColumn] = useState<string>('');
   const [statistics, setStatistics] = useState<Record<string, Statistics>>({});
   const [loading, setLoading] = useState(false);
+  const [selectedAlgorithm, setSelectedAlgorithm] = useState<'linear' | 'kmeans' | 'logistic' | 'rf'>('linear');
+  const [trainingResult, setTrainingResult] = useState<TrainingResult | null>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -102,11 +111,153 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
   const trainModel = async () => {
     setLoading(true);
     try {
-      // Simulate model training
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      toast.info('Model training simulation complete. Connect TensorFlow.js for real ML training.');
+      // Detect numeric columns with tolerance for missing/non-numeric values
+      const numericColumns = columns.filter(col => {
+        const values = data.map(row => row[col]);
+        const totalCount = values.length;
+        if (totalCount === 0) return false;
+
+        let numericCount = 0;
+        for (const value of values) {
+          // Treat missing/empty as tolerable but not numeric
+          if (value === null || value === undefined || value === '') {
+            continue;
+          }
+          const num = typeof value === 'number' ? value : Number(value);
+          if (!Number.isNaN(num) && Number.isFinite(num)) {
+            numericCount += 1;
+          }
+        }
+
+        // Allow up to 10% non-numeric/missing values in an otherwise numeric column
+        const numericRatio = numericCount / totalCount;
+        const MIN_NUMERIC_RATIO = 0.9;
+        return numericRatio >= MIN_NUMERIC_RATIO;
+      });
+
+      // K-Means is unsupervised clustering - doesn't need target/labels
+      if (selectedAlgorithm === 'kmeans') {
+        if (numericColumns.length < 2) {
+          throw new Error('Need at least 2 numeric columns for K-Means clustering');
+        }
+
+        const featureColumns = numericColumns;
+        
+        // Build features, filtering out rows with missing/invalid values
+        const features: number[][] = [];
+
+        for (const row of data) {
+          const featureValues = featureColumns.map(col => {
+            const value = row[col];
+            const num = typeof value === 'number' ? value : Number(value);
+            return Number.isFinite(num) ? num : null;
+          });
+
+          // Skip rows with any invalid values
+          if (featureValues.some(v => v === null)) {
+            continue;
+          }
+
+          features.push(featureValues as number[]);
+        }
+
+        if (features.length === 0) {
+          throw new Error('No complete rows found after filtering invalid values');
+        }
+
+        const res = await fetch('/api/modal/train', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            algorithm: selectedAlgorithm,
+            features,
+            featureColumns
+          })
+        });
+
+        const body = await res.json();
+        if (!res.ok) {
+          throw new Error(body?.error || 'Clustering failed');
+        }
+
+        const result: TrainingResult = {
+          algorithm: selectedAlgorithm,
+          summary: body?.data?.summary,
+          metrics: body?.data?.metrics,
+          raw: body?.data?.raw
+        };
+        setTrainingResult(result);
+        toast.success(body?.data?.summary || 'K-Means clustering complete');
+        setLoading(false);
+        return;
+      }
+
+      // Supervised algorithms (linear regression, logistic regression, random forest)
+      if (numericColumns.length < 2) {
+        throw new Error('Need at least 2 numeric columns for training');
+      }
+
+      const featureColumns = numericColumns.slice(0, -1);
+      const targetColumn = numericColumns[numericColumns.length - 1];
+      
+      // Build features and labels, filtering out rows with missing/invalid values
+      const features: number[][] = [];
+      const labels: number[] = [];
+      
+      for (const row of data) {
+        // Extract feature values for this row
+        const featureValues = featureColumns.map(col => {
+          const value = row[col];
+          const num = typeof value === 'number' ? value : Number(value);
+          return Number.isFinite(num) ? num : null;
+        });
+        
+        // Extract target value
+        const targetValue = row[targetColumn];
+        const targetNum = typeof targetValue === 'number' ? targetValue : Number(targetValue);
+        const target = Number.isFinite(targetNum) ? targetNum : null;
+        
+        // Skip rows with any invalid values (complete-case analysis)
+        if (featureValues.some(v => v === null) || target === null) {
+          continue;
+        }
+        
+        features.push(featureValues as number[]);
+        labels.push(target);
+      }
+      
+      if (features.length === 0) {
+        throw new Error('No complete rows found after filtering invalid values');
+      }
+
+      const res = await fetch('/api/modal/train', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          algorithm: selectedAlgorithm,
+          features,
+          labels,
+          featureColumns,
+          targetColumn
+        })
+      });
+
+      const body = await res.json();
+      if (!res.ok) {
+        throw new Error(body?.error || 'Training failed');
+      }
+
+      const result: TrainingResult = {
+        algorithm: selectedAlgorithm,
+        summary: body?.data?.summary,
+        metrics: body?.data?.metrics,
+        raw: body?.data?.raw
+      };
+      setTrainingResult(result);
+      toast.success(body?.data?.summary || 'Model training complete');
+      setLoading(false);
     } catch (err) {
-      toast.error('Training failed');
+      toast.error(err instanceof Error ? err.message : 'Training failed');
     } finally {
       setLoading(false);
     }
@@ -317,7 +468,7 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
                 <CardTitle className="text-sm">Train Model</CardTitle>
               </CardHeader>
               <CardContent className="p-3 space-y-3">
-                <Select>
+                <Select value={selectedAlgorithm} onValueChange={(v: 'linear' | 'kmeans' | 'logistic' | 'rf') => setSelectedAlgorithm(v)}>
                   <SelectTrigger><SelectValue placeholder="Select algorithm" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="linear">Linear Regression</SelectItem>
@@ -328,9 +479,31 @@ export default function DataScienceWorkbenchPlugin({ onClose }: PluginProps) {
                 </Select>
 
                 <Button onClick={trainModel} disabled={loading || data.length === 0} className="w-full">
-                  {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
+                  {loading ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Play className="w-4 h-4 mr-2" />}
                   Train Model
                 </Button>
+
+                {trainingResult && (
+                  <Card className="bg-black/20 border border-white/10">
+                    <CardHeader className="p-3">
+                      <CardTitle className="text-sm">Training Result</CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-3 text-xs space-y-2">
+                      <div><span className="text-gray-400">Algorithm:</span> {trainingResult.algorithm}</div>
+                      {trainingResult.summary && <div><span className="text-gray-400">Summary:</span> {trainingResult.summary}</div>}
+                      {trainingResult.metrics && (
+                        <div className="space-y-1">
+                          {Object.entries(trainingResult.metrics).map(([k, v]) => (
+                            <div key={k} className="flex justify-between">
+                              <span className="text-gray-400">{k}</span>
+                              <span>{String(v)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

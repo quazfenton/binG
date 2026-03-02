@@ -131,9 +131,9 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'openrouter',
     name: 'OpenRouter',
     models: [
-      'openai/gpt-oss-120b:free',
       'deepseek/deepseek-r1-0528:free',
       'qwen/qwen3-coder:free',
+      'openai/gpt-oss-120b:free',
       'z-ai/glm-4.5-air:free',
       'nvidia/nemotron-3-nano-30b-a3b:free',
       'nvidia/nemotron-nano-12b-v2-vl:free',
@@ -262,6 +262,22 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: true,
     maxTokens: 128000,
     description: 'Mistral AI models including Mistral Large, Small, and Codestral'
+  },
+  azure: {
+    id: 'azure',
+    name: 'Azure OpenAI',
+    models: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Enterprise OpenAI models on Azure'
+  },
+  vertex: {
+    id: 'vertex',
+    name: 'Google Vertex AI',
+    models: ['gemini-1.5-pro', 'gemini-1.5-flash'],
+    supportsStreaming: true,
+    maxTokens: 2000000,
+    description: 'Enterprise Google Gemini models on Vertex AI'
   },
   github: {
     id: 'github',

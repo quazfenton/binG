@@ -128,7 +128,7 @@ export default function ModalLoginForm({ onSwitchMode, onSuccess, onError }: Mod
         
         <Button 
           type="submit" 
-          className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600" 
+          className="w-full bg-gradient-to-r from-gray-900 to-gray-700 hover:from-black hover:to-gray-800" 
           disabled={isLoading}
         >
           {isLoading ? 'Signing in...' : 'Sign In'}

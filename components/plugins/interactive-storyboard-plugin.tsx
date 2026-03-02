@@ -98,8 +98,9 @@ const storyboardReducer = (state: StoryboardState, action: Action): StoryboardSt
         })),
       };
     case 'ADD_CANVAS_OBJECT': {
+      // Use crypto.randomUUID() for unique IDs instead of timestamp
       const newObject: CanvasObject = {
-        id: `obj-${Date.now()}`,
+        id: `obj-${crypto.randomUUID().split('-')[0]}`,
         type: action.payload.type,
         x: 50,
         y: 50,
@@ -462,10 +463,25 @@ function loadStoryboardFromStorage(): StoryboardState {
     if (stored) {
       const parsed = JSON.parse(stored);
       if (parsed.scenes && Array.isArray(parsed.scenes)) {
+        // Deduplicate canvas objects by ID and fix any duplicates
+        const scenes = parsed.scenes.map((s: any) => {
+          const seenIds = new Set<string>();
+          const canvasObjects = (s.canvasObjects || []).map((obj: any) => {
+            // If duplicate ID found, generate new unique ID
+            if (seenIds.has(obj.id)) {
+              const newId = `obj-${crypto.randomUUID().split('-')[0]}`;
+              console.warn(`Fixed duplicate object ID: ${obj.id} -> ${newId}`);
+              return { ...obj, id: newId };
+            }
+            seenIds.add(obj.id);
+            return obj;
+          });
+          return { ...s, canvasObjects };
+        });
         return {
           ...initialState,
           ...parsed,
-          scenes: parsed.scenes.map((s: any) => ({ ...s, canvasObjects: s.canvasObjects || [] })),
+          scenes,
         };
       }
     }

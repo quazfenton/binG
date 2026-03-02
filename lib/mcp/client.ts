@@ -7,6 +7,18 @@
 
 import { spawn, ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import * as MCPTypes from './types'
+
+const {
+  MCP_PROTOCOL_VERSION,
+  MCPConnectionError,
+  MCPTimeoutError,
+  MCPProtocolError,
+  MCPResourceError,
+  MCPServerError,
+  MCPToolError,
+} = MCPTypes
+
 import type {
   MCPTransportConfig,
   MCPConnectionState,
@@ -28,8 +40,8 @@ import type {
   MCPEventListener,
   MCPProgress,
   MCPLogMessage,
+  MCPEventType,
 } from './types'
-import { MCP_PROTOCOL_VERSION } from './types'
 
 interface MCPRequest {
   jsonrpc: '2.0'
@@ -67,16 +79,19 @@ export class MCPClient extends EventEmitter {
     reject: (error: Error) => void
     timeout?: NodeJS.Timeout
   }> = new Map()
-  
+
   private process?: ChildProcess
   private messageBuffer: string = ''
   private eventListeners: Map<string, Set<MCPEventListener>> = new Map()
-  
+
   // Cached server data
   private serverInfo: MCPServerInfo | null = null
   private cachedTools: MCPTool[] = []
   private cachedResources: MCPResource[] = []
   private cachedPrompts: MCPPrompt[] = []
+
+  // Resource subscription tracking
+  private subscribedResources: Set<string> = new Set()
 
   constructor(config: MCPTransportConfig) {
     super()
@@ -85,6 +100,20 @@ export class MCPClient extends EventEmitter {
       state: 'disconnected',
       server: null,
     }
+  }
+
+  /**
+   * Get currently subscribed resources
+   */
+  getSubscribedResources(): string[] {
+    return Array.from(this.subscribedResources);
+  }
+
+  /**
+   * Check if subscribed to a resource
+   */
+  isSubscribedToResource(uri: string): boolean {
+    return this.subscribedResources.has(uri);
   }
 
   /**
@@ -246,36 +275,53 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * Subscribe to resource updates
+   * Subscribe to a resource URI for updates
    */
   async subscribeResource(uri: string): Promise<void> {
     await this.ensureConnected()
-    await this.notify('resources/subscribe', { uri })
+    await this.request('resources/subscribe', { uri });
+    this.subscribedResources.add(uri);
   }
 
   /**
-   * Unsubscribe from resource updates
+   * Unsubscribe from a resource URI
    */
   async unsubscribeResource(uri: string): Promise<void> {
     await this.ensureConnected()
-    await this.notify('resources/unsubscribe', { uri })
+    await this.request('resources/unsubscribe', { uri });
+    this.subscribedResources.delete(uri);
   }
 
   /**
-   * Send progress notification
+   * Send progress notification for long-running operations
    */
-  async sendProgress(progressToken: string | number, progress: MCPProgress): Promise<void> {
+  async sendProgress(token: string, progress: number, total: number = 100): Promise<void> {
+    if (progress < 0 || progress > total) {
+      throw new MCPProtocolError(`Progress must be between 0 and ${total}, got ${progress}`);
+    }
+
     await this.notify('notifications/progress', {
-      progressToken,
-      ...progress,
+      progressToken: token,
+      progress,
+      total,
     })
   }
 
   /**
-   * Send log message
+   * Set logging level for server
    */
-  async sendLog(message: MCPLogMessage): Promise<void> {
-    await this.notify('notifications/message', message)
+  async setLogLevel(level: 'debug' | 'info' | 'warn' | 'error'): Promise<void> {
+    await this.notify('logging/setLevel', { level })
+  }
+
+  /**
+   * Cancel a pending request
+   */
+  async cancelRequest(requestId: string): Promise<void> {
+    await this.notify('notifications/cancelled', {
+      requestId,
+      reason: 'User cancelled',
+    })
   }
 
   /**
@@ -313,13 +359,63 @@ export class MCPClient extends EventEmitter {
   }
 
   /**
-   * Get cached prompts
+   * Connect to MCP server with OAuth support
    */
-  getCachedPrompts(): MCPPrompt[] {
-    return [...this.cachedPrompts]
-  }
+  async connectWithOAuth(options: {
+    callbackUrl: string;
+    clientMetadata?: any;
+    onRedirect: (url: string) => void;
+  }): Promise<void> {
+    if (this.isConnected()) return;
 
-  // ==================== Private Methods ====================
+    this.updateState('connecting');
+
+    try {
+      const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+      const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+      const { UnauthorizedError } = await import('@modelcontextprotocol/sdk/client/auth.js');
+
+      const clientMetadata = options.clientMetadata || {
+        client_name: 'binG MCP Client',
+        redirect_uris: [options.callbackUrl],
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        scope: 'mcp:tools mcp:resources',
+      };
+
+      const oauthProvider: any = {
+        redirectUrl: options.callbackUrl,
+        clientMetadata,
+        redirectToAuthorization: (url: URL) => options.onRedirect(url.toString()),
+        saveCodeVerifier: (v: string) => { (this as any)._codeVerifier = v; },
+        codeVerifier: () => (this as any)._codeVerifier,
+      };
+
+      const transport = new StreamableHTTPClientTransport(new URL(this.config.url!), {
+        authProvider: oauthProvider,
+      });
+
+      const client = new Client(
+        { name: 'bing-client', version: '1.0.0' },
+        { capabilities: { tools: {}, resources: {}, prompts: {} } }
+      );
+
+      try {
+        await client.connect(transport);
+        this.updateState('connected');
+      } catch (error) {
+        if (error instanceof UnauthorizedError) {
+          console.log('[MCPClient] OAuth redirection initiated');
+        } else {
+          throw error;
+        }
+      }
+
+    } catch (error: any) {
+      this.updateState('error', error.message);
+      throw error;
+    }
+  }
 
   private async connectStdio(): Promise<void> {
     if (!this.config.command) {
@@ -342,7 +438,7 @@ export class MCPClient extends EventEmitter {
       })
 
       this.process.on('error', (error) => {
-        reject(new Error(`Failed to start process: ${error.message}`))
+        reject(new MCPConnectionError(`Failed to start process: ${error.message}`))
       })
 
       this.process.on('close', (code) => {
@@ -356,7 +452,6 @@ export class MCPClient extends EventEmitter {
         }
       })
 
-      // Resolve on 'spawn' event (process successfully started) or fall back to timeout
       const spawnTimeout = setTimeout(() => {
         this.process?.removeAllListeners('spawn')
         resolve()
@@ -374,9 +469,35 @@ export class MCPClient extends EventEmitter {
       throw new Error('SSE transport requires url')
     }
 
-    // SSE connection would be implemented here
-    // This is a placeholder for the full implementation
-    throw new Error('SSE transport not yet fully implemented')
+    return new Promise((resolve, reject) => {
+      try {
+        const url = new URL(this.config.url!);
+        const eventSource = new EventSource(url.toString());
+
+        eventSource.onopen = () => {
+          console.log(`[MCPClient] SSE connection opened to ${url}`);
+          resolve();
+        };
+
+        eventSource.onerror = (error) => {
+          console.error('[MCPClient] SSE connection error:', error);
+          reject(new Error(`SSE connection failed: ${JSON.stringify(error)}`));
+        };
+
+        eventSource.addEventListener('message', (event) => {
+          if (event.data) {
+            this.handleMessage(event.data);
+          }
+        });
+
+        this.on('disconnected', () => {
+          eventSource.close();
+        });
+
+      } catch (error: any) {
+        reject(new Error(`Failed to initialize SSE: ${error.message}`));
+      }
+    });
   }
 
   private async connectWebSocket(timeout: number): Promise<void> {
@@ -384,9 +505,53 @@ export class MCPClient extends EventEmitter {
       throw new Error('WebSocket transport requires wsUrl')
     }
 
-    // WebSocket connection would be implemented here
-    // This is a placeholder for the full implementation
-    throw new Error('WebSocket transport not yet fully implemented')
+    return new Promise((resolve, reject) => {
+      try {
+        const ws = new WebSocket(this.config.wsUrl!);
+
+        ws.onopen = () => {
+          console.log(`[MCPClient] WebSocket connection opened to ${this.config.wsUrl}`);
+          resolve();
+        };
+
+        ws.onerror = (error) => {
+          console.error('[MCPClient] WebSocket error:', error);
+          reject(new Error(`WebSocket connection failed`));
+        };
+
+        ws.onmessage = (event) => {
+          if (typeof event.data === 'string') {
+            this.handleMessage(event.data);
+          } else if (event.data instanceof Buffer) {
+            this.handleMessage(event.data.toString());
+          }
+        };
+
+        ws.onclose = (event) => {
+          this.updateState('disconnected');
+          this.emitEvent({
+            type: 'disconnected',
+            data: { code: event.code, reason: event.reason },
+            timestamp: new Date()
+          });
+        };
+
+        this.on('disconnected', () => {
+          ws.close();
+        });
+
+        this.sendRequest = (request: MCPRequest) => {
+          ws.send(JSON.stringify(request));
+        };
+
+        this.sendNotification = (notification: MCPNotification) => {
+          ws.send(JSON.stringify(notification));
+        };
+
+      } catch (error: any) {
+        reject(new Error(`Failed to initialize WebSocket: ${error.message}`));
+      }
+    });
   }
 
   private async initialize(timeout: number): Promise<void> {
@@ -406,7 +571,6 @@ export class MCPClient extends EventEmitter {
       capabilities: response.capabilities || {},
     }
 
-    // Send initialized notification
     await this.notify('notifications/initialized', {})
   }
 
@@ -416,7 +580,7 @@ export class MCPClient extends EventEmitter {
     timeout: number = 30000
   ): Promise<any> {
     const id = ++this.requestId
-    
+
     const request: MCPRequest = {
       jsonrpc: '2.0',
       id,
@@ -427,7 +591,7 @@ export class MCPClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         this.pendingRequests.delete(id)
-        reject(new Error(`Request timeout: ${method}`))
+        reject(new MCPTimeoutError(`Request timeout: ${method}`, id))
       }, timeout)
 
       this.pendingRequests.set(id, {
@@ -480,10 +644,8 @@ export class MCPClient extends EventEmitter {
         const message: MCPResponse | MCPNotification = JSON.parse(line)
         
         if ('id' in message) {
-          // Response
           this.handleResponse(message as MCPResponse)
         } else if ('method' in message) {
-          // Notification
           this.handleNotification(message as MCPNotification)
         }
       } catch (error) {
@@ -492,12 +654,19 @@ export class MCPClient extends EventEmitter {
     }
   }
 
+  private handleLogMessage(params: any): void {
+    const { level, logger, data } = params
+    const timestamp = new Date().toISOString()
+    this.emitEvent({
+      type: 'log',
+      data: { level, logger, data, timestamp },
+      timestamp: new Date()
+    })
+  }
+
   private handleResponse(response: MCPResponse): void {
     const pending = this.pendingRequests.get(response.id)
-    if (!pending) {
-      console.warn('[MCPClient] Received response for unknown request:', response.id)
-      return
-    }
+    if (!pending) return
 
     if (pending.timeout) {
       clearTimeout(pending.timeout)
@@ -505,38 +674,26 @@ export class MCPClient extends EventEmitter {
     this.pendingRequests.delete(response.id)
 
     if (response.error) {
-      pending.reject(new Error(response.error.message))
+      switch (response.error.code) {
+        case -32000: pending.reject(new MCPServerError(response.error.message, response.error.code)); break
+        case -32001: pending.reject(new MCPResourceError(response.error.message)); break
+        case -32002: pending.reject(new MCPToolError(response.error.message)); break
+        case -32600: pending.reject(new MCPProtocolError(response.error.message)); break
+        case -32601: pending.reject(new MCPProtocolError(`Method not found: ${response.error.message}`)); break
+        default: pending.reject(new Error(response.error.message))
+      }
     } else {
       pending.resolve(response.result)
     }
   }
 
   private handleNotification(notification: MCPNotification): void {
-    // Handle server-initiated notifications
     switch (notification.method) {
-      case 'notifications/resources/list_changed':
-        this.emitEvent({ type: 'resource_registered', timestamp: new Date() })
-        break
-      case 'notifications/tools/list_changed':
-        this.emitEvent({ type: 'tool_registered', timestamp: new Date() })
-        break
-      case 'notifications/prompts/list_changed':
-        this.emitEvent({ type: 'prompt_registered', timestamp: new Date() })
-        break
-      case 'notifications/progress':
-        this.emitEvent({ 
-          type: 'progress', 
-          data: notification.params,
-          timestamp: new Date()
-        })
-        break
-      case 'notifications/message':
-        this.emitEvent({ 
-          type: 'log', 
-          data: notification.params,
-          timestamp: new Date()
-        })
-        break
+      case 'notifications/resources/list_changed': this.emitEvent({ type: 'resource_registered', timestamp: new Date() }); break
+      case 'notifications/tools/list_changed': this.emitEvent({ type: 'tool_registered', timestamp: new Date() }); break
+      case 'notifications/prompts/list_changed': this.emitEvent({ type: 'prompt_registered', timestamp: new Date() }); break
+      case 'notifications/progress': this.emitEvent({ type: 'progress', data: notification.params, timestamp: new Date() }); break
+      case 'notifications/message': this.handleLogMessage(notification.params); break
     }
   }
 
@@ -567,8 +724,6 @@ export class MCPClient extends EventEmitter {
         }
       }
     }
-    
-    // Also emit via EventEmitter
     this.emit('event', event)
   }
 }

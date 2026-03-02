@@ -1,9 +1,42 @@
-import { randomUUID, createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { randomUUID, createCipheriv, createDecipheriv, randomBytes, createHash } from 'crypto';
 import { getDatabase } from '../database/connection';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // 96-bit IV per NIST SP 800-38D (standard for GCM)
 const AUTH_TAG_LENGTH = 16;
+
+/**
+ * PKCE (Proof Key for Code Exchange) Implementation
+ * Prevents authorization code interception attacks
+ * @see https://datatracker.ietf.org/doc/html/rfc7636
+ */
+
+/**
+ * Generate PKCE code verifier (43-128 characters)
+ * Uses cryptographically secure random bytes
+ */
+export function generateCodeVerifier(): string {
+  // Generate 32 bytes (256 bits) of random data
+  const verifier = randomBytes(32).toString('base64url');
+  // Ensure it's between 43-128 characters (RFC 7636 requirement)
+  return verifier.slice(0, 128);
+}
+
+/**
+ * Generate PKCE code challenge from verifier
+ * Uses SHA-256 hash (S256 method - recommended)
+ */
+export function generateCodeChallenge(verifier: string): string {
+  return createHash('sha256').update(verifier).digest('base64url');
+}
+
+/**
+ * Verify PKCE code challenge matches verifier
+ */
+export function verifyCodeChallenge(verifier: string, challenge: string): boolean {
+  const computedChallenge = generateCodeChallenge(verifier);
+  return computedChallenge === challenge;
+}
 
 function getEncryptionKey(): Buffer {
   const key = process.env.TOKEN_ENCRYPTION_KEY;
@@ -61,6 +94,10 @@ export interface OAuthSession {
   redirectUri: string | null;
   expiresAt: Date;
   isCompleted: boolean;
+  // PKCE parameters
+  codeVerifier?: string;
+  codeChallenge?: string;
+  codeChallengeMethod?: 'S256' | 'plain';
 }
 
 export class OAuthService {
@@ -107,7 +144,11 @@ export class OAuthService {
           is_completed BOOLEAN DEFAULT FALSE,
           completed_at DATETIME,
           ip_address TEXT,
-          user_agent TEXT
+          user_agent TEXT,
+          -- PKCE parameters (RFC 7636)
+          code_verifier TEXT,
+          code_challenge TEXT,
+          code_challenge_method TEXT
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_sessions_state ON oauth_sessions(state);
@@ -121,35 +162,114 @@ export class OAuthService {
     }
   }
 
+  /**
+   * Get authorization URL with PKCE support
+   * Use this to generate the OAuth authorization URL
+   */
+  getAuthorizationUrl(params: {
+    provider: string;
+    providerAuthUrl: string;
+    clientId: string;
+    redirectUri: string;
+    scopes: string[];
+    codeChallenge?: string;
+    codeChallengeMethod?: string;
+    state: string;
+    nonce?: string;
+  }): string {
+    const url = new URL(params.providerAuthUrl);
+    url.searchParams.set('client_id', params.clientId);
+    url.searchParams.set('redirect_uri', params.redirectUri);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('scope', params.scopes.join(' '));
+    url.searchParams.set('state', params.state);
+    
+    // Add PKCE parameters if available
+    if (params.codeChallenge) {
+      url.searchParams.set('code_challenge', params.codeChallenge);
+      if (params.codeChallengeMethod) {
+        url.searchParams.set('code_challenge_method', params.codeChallengeMethod);
+      }
+    }
+    
+    // Add nonce for OIDC
+    if (params.nonce) {
+      url.searchParams.set('nonce', params.nonce);
+    }
+    
+    return url.toString();
+  }
+
   async createOAuthSession(params: {
     userId: number;
     provider: string;
     redirectUri?: string;
+    usePkce?: boolean; // Enable PKCE by default for public clients
   }): Promise<OAuthSession> {
     const id = randomUUID();
     const state = randomUUID();
     const nonce = randomUUID();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+    
+    // Generate PKCE parameters if enabled
+    const usePkce = params.usePkce ?? true;
+    const codeVerifier = usePkce ? generateCodeVerifier() : undefined;
+    const codeChallenge = usePkce && codeVerifier ? generateCodeChallenge(codeVerifier) : undefined;
 
     const stmt = this.db.prepare(`
-      INSERT INTO oauth_sessions (id, user_id, provider, state, nonce, redirect_uri, expires_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO oauth_sessions (
+        id, user_id, provider, state, nonce, redirect_uri, expires_at,
+        code_verifier, code_challenge, code_challenge_method
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    stmt.run(id, params.userId, params.provider, state, nonce, params.redirectUri ?? null, expiresAt.toISOString());
+    stmt.run(
+      id, 
+      params.userId, 
+      params.provider, 
+      state, 
+      nonce, 
+      params.redirectUri ?? null, 
+      expiresAt.toISOString(),
+      codeVerifier ?? null,
+      codeChallenge ?? null,
+      usePkce ? 'S256' : null
+    );
 
-    return { id, userId: params.userId, provider: params.provider, state, nonce, redirectUri: params.redirectUri ?? null, expiresAt, isCompleted: false };
+    return { 
+      id, 
+      userId: params.userId, 
+      provider: params.provider, 
+      state, 
+      nonce, 
+      redirectUri: params.redirectUri ?? null, 
+      expiresAt, 
+      isCompleted: false,
+      codeVerifier,
+      codeChallenge,
+      codeChallengeMethod: usePkce ? 'S256' : undefined,
+    };
   }
 
   async getOAuthSessionByState(state: string): Promise<OAuthSession | null> {
     const stmt = this.db.prepare(`
-      SELECT * FROM oauth_sessions WHERE state = ? AND is_completed = FALSE AND datetime(expires_at) > datetime('now')
+      SELECT * FROM oauth_sessions 
+      WHERE state = ? AND is_completed = FALSE AND datetime(expires_at) > datetime('now')
     `);
     const row = stmt.get(state) as any;
     if (!row) return null;
     return {
-      id: row.id, userId: row.user_id, provider: row.provider,
-      state: row.state, nonce: row.nonce, redirectUri: row.redirect_uri,
-      expiresAt: new Date(row.expires_at), isCompleted: !!row.is_completed,
+      id: row.id, 
+      userId: row.user_id, 
+      provider: row.provider,
+      state: row.state, 
+      nonce: row.nonce, 
+      redirectUri: row.redirect_uri,
+      expiresAt: new Date(row.expires_at), 
+      isCompleted: !!row.is_completed,
+      codeVerifier: row.code_verifier,
+      codeChallenge: row.code_challenge,
+      codeChallengeMethod: row.code_challenge_method as 'S256' | 'plain' | undefined,
     };
   }
 
@@ -158,6 +278,80 @@ export class OAuthService {
       UPDATE oauth_sessions SET is_completed = TRUE, completed_at = datetime('now') WHERE state = ?
     `);
     stmt.run(state);
+  }
+
+  /**
+   * Exchange authorization code for tokens with PKCE verification
+   * 
+   * @param state - OAuth state parameter
+   * @param code - Authorization code from provider
+   * @param tokenEndpoint - Provider's token endpoint URL
+   * @param clientId - OAuth client ID
+   * @param redirectUri - Redirect URI used in authorization request
+   * @returns Object with access_token and optionally refresh_token
+   */
+  async exchangeCodeForToken(params: {
+    state: string;
+    code: string;
+    tokenEndpoint: string;
+    clientId: string;
+    redirectUri: string;
+  }): Promise<{ accessToken: string; refreshToken?: string; expiresIn?: number }> {
+    // Get the OAuth session
+    const session = await this.getOAuthSessionByState(params.state);
+    if (!session) {
+      throw new Error('Invalid or expired OAuth session');
+    }
+
+    // Verify PKCE code challenge if PKCE was used
+    if (session.codeChallenge) {
+      if (!session.codeVerifier) {
+        throw new Error('Code verifier missing for PKCE session');
+      }
+      
+      // Verify the code challenge matches
+      const isValid = verifyCodeChallenge(session.codeVerifier, session.codeChallenge);
+      if (!isValid) {
+        throw new Error('PKCE code verification failed');
+      }
+    }
+
+    // Exchange code for tokens
+    const tokenParams = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: params.code,
+      redirect_uri: params.redirectUri,
+      client_id: params.clientId,
+    });
+
+    // Add code_verifier if PKCE was used
+    if (session.codeVerifier) {
+      tokenParams.set('code_verifier', session.codeVerifier);
+    }
+
+    const response = await fetch(params.tokenEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: tokenParams.toString(),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`Token exchange failed: ${errorData.error_description || response.statusText}`);
+    }
+
+    const tokenData = await response.json();
+
+    // Mark session as completed
+    await this.completeOAuthSession(params.state);
+
+    return {
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      expiresIn: tokenData.expires_in,
+    };
   }
 
   async saveConnection(params: {
