@@ -362,15 +362,15 @@ class AdvancedToolRouterImpl implements AdvancedToolRouter {
 
     switch (effectiveGoal) {
       case 'cost':
-        // Find cheapest provider with acceptable success rate
+        // Find cheapest provider with acceptable success rate (percentage)
         return allMetrics
-          .filter(m => m.successRate >= 0.9)
+          .filter(m => m.successRate >= 90)
           .sort((a, b) => a.averageCostPerRequest - b.averageCostPerRequest)[0]?.name || 'openai'
 
       case 'speed':
-        // Find fastest provider
+        // Find fastest provider with acceptable success rate (percentage)
         return allMetrics
-          .filter(m => m.successRate >= 0.9)
+          .filter(m => m.successRate >= 90)
           .sort((a, b) => a.averageLatencyMs - b.averageLatencyMs)[0]?.name || 'openai'
 
       case 'quality':

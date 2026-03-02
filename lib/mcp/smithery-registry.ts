@@ -14,11 +14,14 @@
  * @see https://smithery.ai/docs/api-reference
  */
 
-import { SmitheryClient, SmitherySearchOptions, SmitherySearchResults, SmitheryServer, SmitheryRelease, SmitheryConnection, SmitheryConfig } from './smithery-registry';
+// SmitheryClient and related types/interfaces are defined within this file,
+// so a self-import is not necessary and causes conflicts.
+// Other modules importing from './smithery-registry' will get these exports.
 
 export interface SmitheryServer {
   qualifiedName: string;
   namespace: string;
+  name: string;
   name: string;
   description: string;
   version?: string;

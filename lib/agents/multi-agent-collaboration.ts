@@ -221,9 +221,11 @@ export class MultiAgentCollaboration extends EventEmitter {
     context?: any
   ): Promise<CollaborationResult> {
     const startTime = Date.now();
-    
+    const results: Record<string, any> = {};
+    const taskStatus: Record<string, Task> = {};
+  
     // 1. Propose tasks
-    const proposalIds = agentRoles.map(role => {
+    const proposalIds = agentRoles.map((role) => {
       return simulatedOrchestrator.proposeTask({
         proposerId: `agent_${role}`,
         framework: 'unified',
@@ -236,6 +238,75 @@ export class MultiAgentCollaboration extends EventEmitter {
 
     // 2. Orchestrate reviews (mock review for MVP)
     for (const id of proposalIds) {
+      simulatedOrchestrator.reviewTask(
+        id,
+        'system_orchestrator',
+        'approve',
+        'Plan looks solid.',
+      );
+    }
+
+    // 3. Execute approved tasks
+    const readyTasks = simulatedOrchestrator
+      .getReadyTasks()
+      .filter((t) => proposalIds.includes(t.id));
+  
+    for (const task of readyTasks) {
+      simulatedOrchestrator.startExecution(task.id);
+    
+      // Real execution logic (simplified)
+      try {
+        const { createAgent } = await import('@/lib/agent/unified-agent');
+        const agent = await createAgent({
+          provider: context?.provider || 'e2b',
+          capabilities: ['terminal'],
+        });
+      
+        const output = await agent.terminalSend(task.description);
+        simulatedOrchestrator.completeTask(task.id, output);
+        await agent.cleanup();
+
+        results[task.id] = output;
+        taskStatus[task.id] = {
+          id: task.id,
+          description: task.description,
+          assignedTo: undefined,
+          status: 'completed',
+          result: output,
+          error: undefined,
+          dependencies: task.dependencies,
+          priority: 5,
+        };
+      } catch (err) {
+        console.error(`Orchestrated execution failed for ${task.id}:`, err);
+        const message = (err as Error)?.message ?? String(err);
+
+        results[task.id] = undefined;
+        taskStatus[task.id] = {
+          id: task.id,
+          description: task.description,
+          assignedTo: undefined,
+          status: 'failed',
+          result: undefined,
+          error: message,
+          dependencies: task.dependencies,
+          priority: 5,
+        };
+      }
+    }
+
+    const success =
+      readyTasks.length > 0 &&
+      Object.values(taskStatus).every((task) => task.status === 'completed');
+
+    return {
+      success,
+      results,
+      taskStatus,
+      duration: Date.now() - startTime,
+      error: success ? undefined : 'One or more orchestrated tasks failed.',
+    };
+  }
       simulatedOrchestrator.reviewTask(id, 'system_orchestrator', 'approve', 'Plan looks solid.');
     }
 
@@ -540,6 +611,11 @@ export class MultiAgentCollaboration extends EventEmitter {
       return false;
     }
 
+    // Ensure the task is actually assigned to the from-agent before handing off
+    if (task.assignedTo && task.assignedTo !== fromAgentId) {
+      return false;
+    }
+
     // Send handoff message
     this.sendMessage(fromAgentId, toAgentId, 'handoff', {
       taskId,
@@ -547,6 +623,20 @@ export class MultiAgentCollaboration extends EventEmitter {
       context,
     });
 
+    // Reassign task
+    task.assignedTo = toAgentId;
+  
+    // Update agent statuses
+    fromAgent.status = 'idle';
+    fromAgent.currentTask = undefined;
+  
+    toAgent.status = 'working';
+    toAgent.currentTask = task.description;
+
+    this.emit('task-handoff', { from: fromAgent, to: toAgent, task });
+
+    return true;
+  }
     // Reassign task
     task.assignedTo = toAgentId;
     

@@ -163,11 +163,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
       // Import generateText from ai SDK for LLM calls
       const { generateText } = await import('ai')
 
-      const apiKey = process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY
-      if (!apiKey) {
-        appendTerminalOutput('Error: No LLM API key configured (OPENAI_API_KEY or OPENROUTER_API_KEY)')
-        setIsAgentRunning(false)
-        return
+      // LLM API keys must be configured on the server; client code does not access them directly here.
       }
 
       // Create OpenAI model instance
@@ -278,12 +274,25 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
           return await desktop.middleClick(action.x, action.y)
         case 'drag':
           return await desktop.drag(action.startX, action.startY, action.endX, action.endY)
-        case 'scroll':
-          return await desktop.scroll(action.direction, action.ticks)
+        case 'scroll': {
+          const ticks = Math.abs(action.scrollY) || 1
+          const direction = action.scrollY >= 0 ? 'down' : 'up'
+          return await desktop.scroll(direction, ticks)
+        }
         case 'type':
           return await desktop.type(action.text)
-        case 'press':
+        case 'keypress':
           return await desktop.press(action.keys)
+        case 'screenshot':
+          const base64 = await desktop.screenshotBase64()
+          return { success: true, output: `Screenshot taken (${base64.length} bytes)` }
+        default:
+          return { success: false, output: `Unknown action type: ${(action as any).type}` }
+      }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
         case 'screenshot':
           const base64 = await desktop.screenshotBase64()
           return { success: true, output: `Screenshot taken (${base64.length} bytes)` }
@@ -312,7 +321,8 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     if (!desktop) return
 
     try {
-      const dataUrl = await desktop.screenshotDataUrl()
+      const base64 = await desktop.screenshotBase64()
+      const dataUrl = `data:image/png;base64,${base64}`
       setCurrentScreenshot(dataUrl)
 
       // Draw to canvas
@@ -333,6 +343,10 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
       appendTerminalOutput(`Screenshot error: ${err.message}`)
     }
   }, [desktop])
+    } catch (err: any) {
+      appendTerminalOutput(`Screenshot error: ${err.message}`)
+    }
+  }, [desktop])
 
   /**
    * Run terminal command
@@ -342,7 +356,15 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
 
     try {
       appendTerminalOutput(`$ ${terminalCommand}`)
-      const result = await desktop.runCommand(terminalCommand)
+
+      const anyDesktop = desktop as any
+      if (typeof anyDesktop.runCommand !== 'function') {
+        appendTerminalOutput('Command execution is not supported by this desktop provider.')
+        setTerminalCommand('')
+        return
+      }
+
+      const result = await anyDesktop.runCommand(terminalCommand)
 
       if (result.output) {
         appendTerminalOutput(result.output)
@@ -371,7 +393,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     if (!desktop) return
 
     try {
-      const result = await desktop.executeAction(action)
+      const result = await executeDesktopAction(action)
       setActionHistory(prev => [
         ...prev,
         {
@@ -385,7 +407,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     } catch (err: any) {
       appendTerminalOutput(`Action error: ${err.message}`)
     }
-  }, [desktop])
+  }, [desktop, executeDesktopAction])
 
   // ==================== Render ====================
 

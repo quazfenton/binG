@@ -540,14 +540,12 @@ export class Crew {
     inputs: Record<string, string | number | boolean> | undefined,
     outputs: TaskOutput[],
   ): Promise<void> {
-    await Promise.all(
-      this.tasks.map(async (task) => {
-        const startedAt = Date.now();
-        const output = await task.execute({ inputs });
-        outputs.push(output);
-        await this.afterTask(task, output, startedAt);
-      })
-    );
+    for (const task of this.tasks) {
+      const startedAt = Date.now();
+      const output = await task.execute({ inputs });
+      outputs.push(output);
+      await this.afterTask(task, output, startedAt);
+    }
   }
 
   private async executeHierarchicalAsync(
@@ -560,14 +558,12 @@ export class Crew {
     );
     this.log(`Manager plan: ${plan.raw}`);
 
-    await Promise.all(
-      this.tasks.map(async (task) => {
-        const startedAt = Date.now();
-        const output = await task.execute({ inputs });
-        outputs.push(output);
-        await this.afterTask(task, output, startedAt);
-      })
-    );
+    for (const task of this.tasks) {
+      const startedAt = Date.now();
+      const output = await task.execute({ inputs });
+      outputs.push(output);
+      await this.afterTask(task, output, startedAt);
+    }
   }
 
   private async executeConsensualAsync(

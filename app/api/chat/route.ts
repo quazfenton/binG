@@ -1366,25 +1366,29 @@ export async function GET() {
  * Error handler with logging
  */
 async function handleError(error: any, requestId: string, provider: string, model: string, userId: string) {
-  const latencyMs = Date.now() - requestStartTime;
-  
-  // Log error
+  // We don't have direct access to the original request start time here,
+  // so we log completion without latency to avoid referencing undefined state.
   await chatRequestLogger.logRequestComplete(
     requestId,
     false,
     undefined,
     undefined,
-    latencyMs,
-    error.message
+    undefined,
+    error instanceof Error ? error.message : String(error)
   );
   
-  // Return error response
-  return errorHandler.handleError(error, {
-    context: 'chat_api',
-    provider,
-    model,
-    userId,
-  });
+  // Use the existing errorHandler.processError API instead of a non-existent handleError method.
+  return errorHandler.processError(
+    error instanceof Error ? error : new Error(String(error)),
+    {
+      component: 'chat_api',
+      provider,
+      model,
+      userId,
+      requestId,
+      timestamp: Date.now(),
+    }
+  );
 }
 
 // Handle preflight requests for CORS

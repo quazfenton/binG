@@ -288,7 +288,7 @@ class ComposioSessionManager {
     }
 
     try {
-      const tools = await session.tools();
+      const tools = await session.session.tools();
 
       // Filter if toolkit specified
       let filteredTools = tools;
@@ -371,7 +371,7 @@ class ComposioSessionManager {
     const session = await this.getSession(userId);
 
     try {
-      const tools = await session.tools();
+      const tools = await session.session.tools();
       const tool = tools.find(t => t.slug === toolName || t.name === toolName);
 
       if (!tool) {
@@ -439,7 +439,7 @@ class ComposioSessionManager {
     error?: string;
   }> {
     const session = await this.getSession(userId, { provider: options.provider });
-    const tools = await session.tools();
+    const tools = await session.session.tools();
     
     // Use provided LLM or default to OpenAI
     let llm = options.llm;

@@ -194,6 +194,7 @@ export default function TerminalPanel({
     if (!isOpen && terminals.length > 0) {
       terminals.forEach(t => {
         t.eventSource?.close();
+        t.websocket?.close();
         t.terminal?.dispose();
       });
 
@@ -2234,15 +2235,19 @@ export default function TerminalPanel({
 
               setTimeout(() => {
                 // Reconnect with same parameters
-                const tokenParam = connectionToken
-                  ? `?token=${encodeURIComponent(connectionToken)}`
-                  : '';
                 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const newWsUrl = `${wsProtocol}//${window.location.host}/api/sandbox/terminal/ws${tokenParam}&sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}`;
-                
+                const params = new URLSearchParams({
+                  sessionId,
+                  sandboxId,
+                });
+                if (connectionToken) {
+                  params.set('token', connectionToken);
+                }
+                const newWsUrl = `${wsProtocol}//${window.location.host}/api/sandbox/terminal/ws?${params.toString()}`;
+  
                 const newWs = new WebSocket(newWsUrl);
                 currentTerm.websocket = newWs;
-                
+  
                 // Re-attach handlers (simplified - would need to extract handler logic)
                 newWs.onopen = () => {
                   reconnectAttempts = 0;
@@ -2252,6 +2257,7 @@ export default function TerminalPanel({
                 newWs.onmessage = ws.onmessage;
                 newWs.onerror = ws.onerror;
                 newWs.onclose = ws.onclose;
+              }, delay);
               }, delay);
             } else {
               // Max reconnection attempts reached, fall back to command-mode

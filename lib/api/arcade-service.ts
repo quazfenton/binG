@@ -361,6 +361,8 @@ export class ArcadeService {
     }
 
     // Execute tool
+    return this.executeTool(toolName, input, userId);
+  }
     return this.executeTool(userId, toolName, input);
   }
 
