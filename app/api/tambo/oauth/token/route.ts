@@ -29,6 +29,9 @@ export interface TokenExchangeResponse {
 
 /**
  * Verify JWT from OAuth provider
+ * 
+ * SECURITY: Never skip JWT verification in production.
+ * Development mode requires explicit UNSAFE_SKIP_JWT_VERIFY=true flag.
  */
 async function verifyUserJWT(token: string): Promise<{
   valid: boolean;
@@ -38,16 +41,20 @@ async function verifyUserJWT(token: string): Promise<{
 }> {
   try {
     const JWT_SECRET = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
-    
+    const SKIP_JWT_VERIFY = process.env.UNSAFE_SKIP_JWT_VERIFY === 'true';
+
     if (!JWT_SECRET) {
-      // In development, accept any valid JWT structure
-      if (process.env.NODE_ENV === 'development') {
-        // Decode without verification for dev
+      // SECURITY: Never silently accept unverified JWTs based on NODE_ENV alone
+      // Require explicit opt-in for development testing
+      if (SKIP_JWT_VERIFY && process.env.NODE_ENV === 'development') {
+        console.warn('[Tambo OAuth] ⚠️ SECURITY WARNING: JWT verification disabled. Only use in local development!');
+        
+        // Decode without verification for dev (explicit opt-in required)
         const base64Url = token.split('.')[1];
         const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
         const jsonPayload = decodeURIComponent(
           Buffer.from(base64, 'base64').toString('utf-8')
-            .split('').map(char => 
+            .split('').map(char =>
               '%' + ('00' + char.charCodeAt(0).toString(16)).slice(-2)
             ).join('')
         );
@@ -58,11 +65,17 @@ async function verifyUserJWT(token: string): Promise<{
           email: decoded.email || decoded.preferred_username,
         };
       }
-      return { valid: false, error: 'JWT_SECRET not configured' };
+      return { 
+        valid: false, 
+        error: 'JWT_SECRET not configured. Set JWT_SECRET or NEXTAUTH_SECRET environment variable.' 
+      };
     }
 
     const decoded = verify(token, JWT_SECRET, {
-      algorithms: ['HS256', 'RS256'],
+      // SECURITY: Only accept HS256 (symmetric) algorithm
+      // RS256 removed to prevent algorithm confusion attacks
+      // See: https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/
+      algorithms: ['HS256'],
     }) as any;
 
     return {

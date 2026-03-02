@@ -2,18 +2,29 @@
  * Mastra HITL Resume API
  *
  * Resumes suspended workflows with human approval data.
- * 
- * FIXED: Added comprehensive validation, run status checking, and audit trail
+ *
+ * SECURITY: Requires JWT authentication. Approver identity is verified server-side
+ * using the authenticated user's identity, not client-supplied fields.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { mastra } from '@/lib/mastra/mastra-instance';
 import { getApprovalStep } from '@/lib/mastra/workflows/hitl-workflow';
+import { verifyAuth } from '@/lib/auth/jwt';
 
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
 
   try {
+    // SECURITY: Authenticate the caller using JWT
+    const authResult = await verifyAuth(request);
+    if (!authResult.success) {
+      return NextResponse.json(
+        { error: 'Authentication required', requestId },
+        { status: 401 }
+      );
+    }
+
     // Parse and validate request body
     let body;
     try {
@@ -25,13 +36,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { 
-      runId, 
-      approved, 
-      feedback, 
+    const {
+      runId,
+      approved,
+      feedback,
       modifications,
-      approverId,
-      approverEmail,
+      // SECURITY: approverId and approverEmail are now ignored from client input
+      // They are derived from the authenticated user instead
     } = body;
 
     // Validate required fields
@@ -49,20 +60,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate approver info for audit trail
-    if (!approverId || typeof approverId !== 'string') {
-      return NextResponse.json(
-        { error: 'approverId is required for audit trail', requestId },
-        { status: 400 }
-      );
-    }
-
-    if (!approverEmail || typeof approverEmail !== 'string') {
-      return NextResponse.json(
-        { error: 'approverEmail is required for audit trail', requestId },
-        { status: 400 }
-      );
-    }
+    // SECURITY: Use authenticated user's identity for audit trail
+    // This prevents forgery of approver identity
+    const approverId = authResult.userId!;
+    const approverEmail = authResult.email!;
 
     // Get workflow
     const workflow = mastra.getWorkflow('hitl-code-review');

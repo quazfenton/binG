@@ -83,7 +83,7 @@ export class VirtualFilesystemService {
     return file;
   }
 
-  async writeFile(ownerId: string, filePath: string, content: string): Promise<VirtualFile> {
+  async writeFile(ownerId: string, filePath: string, content: string, language?: string): Promise<VirtualFile> {
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
     const previous = workspace.files.get(normalizedPath);
@@ -102,7 +102,7 @@ export class VirtualFilesystemService {
     const currentTotalSize = Array.from(workspace.files.values())
       .reduce((sum, file) => sum + file.size, 0);
     const newTotalSize = currentTotalSize - (previous?.size || 0) + fileSize;
-    
+
     if (newTotalSize > MAX_TOTAL_WORKSPACE_SIZE) {
       throw new Error(
         `Workspace quota exceeded: ${this.formatFileSize(newTotalSize)} > ${this.formatFileSize(MAX_TOTAL_WORKSPACE_SIZE)}. ` +
@@ -120,7 +120,7 @@ export class VirtualFilesystemService {
     const file: VirtualFile = {
       path: normalizedPath,
       content: normalizedContent,
-      language: this.getLanguageFromPath(normalizedPath),
+      language: language ?? this.getLanguageFromPath(normalizedPath),
       lastModified: now,
       version: (previous?.version || 0) + 1,
       size: fileSize,

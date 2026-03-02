@@ -17,7 +17,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { createComputerUseAgent, getComputerUseSystemPrompt, computerUseTools, toolCallToAction } from '@/lib/sandbox/providers/computer-use-tools-enhanced'
-import type { DesktopSandboxHandle, DesktopAction, AgentLoopResult, DesktopStats } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
+import type { DesktopSandboxHandle, DesktopAction, DesktopStats } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
 import { openai } from '@ai-sdk/openai'
 
 // ==================== Types ====================
@@ -81,7 +81,8 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
         dpi: 96,
         timeoutMs: 300000,
         startStreaming: true,
-        autoCleanup: true,
+        // Note: autoCleanup is not a valid option for createDesktop
+        // Use desktopSessionManager.createSession if you need autoCleanup
       })
 
       setDesktop(desktopHandle)
@@ -159,95 +160,140 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     setActionHistory([])
 
     try {
-      const { e2bDesktopProvider } = await import('@/lib/sandbox/providers/e2b-desktop-provider-enhanced')
+      // Import generateText from ai SDK for LLM calls
+      const { generateText } = await import('ai')
 
-      // Get action from LLM using OpenAI
-      const getActionFromLLM = async (screenshotBase64: string, iteration: number): Promise<DesktopAction | null> => {
-        setCurrentIteration(iteration + 1)
+      const apiKey = process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY
+      if (!apiKey) {
+        appendTerminalOutput('Error: No LLM API key configured (OPENAI_API_KEY or OPENROUTER_API_KEY)')
+        setIsAgentRunning(false)
+        return
+      }
+
+      // Create OpenAI model instance
+      const model = process.env.COMPUTER_USE_MODEL || 'gpt-4o'
+      const openaiModel = openai(model)
+
+      // Manual agent loop implementation
+      let iteration = 0
+      let shouldContinue = true
+
+      while (shouldContinue && iteration < maxIterations && desktop.isAlive()) {
+        iteration++
+        setCurrentIteration(iteration)
 
         try {
-          const apiKey = process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY;
-          if (!apiKey) {
-            appendTerminalOutput('Error: No LLM API key configured (OPENAI_API_KEY or OPENROUTER_API_KEY)');
-            return null;
-          }
+          // Take screenshot for vision input
+          const screenshotBase64 = await desktop.screenshotBase64()
 
-          // Configure OpenAI with the API key
-          const openaiConfigured = openai as any;
-          if (openaiConfigured.defaultApiKey) {
-            openaiConfigured.defaultApiKey = apiKey;
-          }
-          
-          const model = process.env.COMPUTE_USE_MODEL || 'gpt-4o';
+          appendTerminalOutput(`\n--- Iteration ${iteration} ---`)
 
-          const response = await openai.chat.completions.create({
-            model,
+          // Call LLM with computer use tools
+          const result = await generateText({
+            model: openaiModel,
+            system: getComputerUseSystemPrompt(),
             messages: [
-              {
-                role: 'system',
-                content: getComputerUseSystemPrompt(),
-              },
               {
                 role: 'user',
                 content: [
                   { type: 'text', text: agentTask },
-                  { type: 'image_url', image_url: { url: `data:image/png;base64,${screenshotBase64}` } },
+                  { type: 'image', image: screenshotBase64 },
                 ],
               },
             ],
-            tools: Object.values(computerUseTools),
-            tool_choice: 'auto',
-            max_tokens: 4096,
-          });
+            tools: computerUseTools,
+            maxSteps: 1,
+          })
 
-          const toolCall = response.choices[0]?.message?.tool_calls?.[0];
-          if (!toolCall) {
-            const content = response.choices[0]?.message?.content;
-            if (content) {
-              appendTerminalOutput(`Agent: ${content}`);
+          // Get the tool call from the result
+          const toolCall = result.toolCalls?.[0]
+
+          if (toolCall) {
+            appendTerminalOutput(`Agent calling: ${toolCall.toolName}`)
+
+            // Convert tool call to desktop action
+            const action = toolCallToAction(toolCall.toolName, toolCall.args as any)
+
+            if (action) {
+              // Execute the action on the desktop
+              const actionResult = await executeDesktopAction(action)
+
+              // Record in history
+              setActionHistory(prev => [
+                ...prev,
+                {
+                  id: `${iteration}-${Date.now()}`,
+                  action,
+                  result: { success: actionResult.success, output: actionResult.output || '' },
+                  timestamp: Date.now(),
+                },
+              ])
+
+              appendTerminalOutput(`Action result: ${actionResult.success ? 'Success' : 'Failed'} - ${actionResult.output?.substring(0, 100)}`)
             }
-            return null;
+          } else if (result.text) {
+            appendTerminalOutput(`Agent: ${result.text}`)
+            // If no tool call and we have text, agent might be done
+            if (result.text.toLowerCase().includes('complete') || result.text.toLowerCase().includes('done')) {
+              shouldContinue = false
+            }
+          } else {
+            appendTerminalOutput('Agent returned no action or text, stopping...')
+            shouldContinue = false
           }
 
-          return toolCallToAction(toolCall.function.name, JSON.parse(toolCall.function.arguments));
-        } catch (error: any) {
-          appendTerminalOutput(`LLM Error: ${error.message}`);
-          console.error('[DesktopPlugin] LLM error:', error);
-          return null;
+          // Small delay between iterations
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        } catch (llmError: any) {
+          appendTerminalOutput(`LLM Error: ${llmError.message}`)
+          console.error('[DesktopPlugin] LLM error:', llmError)
+          shouldContinue = false
         }
       }
 
-      const result = await desktop.runAgentLoop(getActionFromLLM, {
-        maxIterations,
-        onIteration: (iteration, action, actionResult) => {
-          if (action) {
-            setActionHistory(prev => [
-              ...prev,
-              {
-                id: `${iteration}-${Date.now()}`,
-                action,
-                result: { success: actionResult.success, output: actionResult.output || '' },
-                timestamp: Date.now(),
-              },
-            ])
-          }
-        },
-        onError: (error, iteration) => {
-          console.error(`[DesktopPlugin] Agent error at iteration ${iteration}:`, error)
-          appendTerminalOutput(`Error: ${error.message}`)
-        },
-        onComplete: (result: AgentLoopResult) => {
-          console.log('[DesktopPlugin] Agent completed:', result)
-          appendTerminalOutput(`Agent completed: ${result.completed ? 'Success' : 'Failed'} after ${result.iterations} iterations`)
-          setIsAgentRunning(false)
-        },
-      })
+      appendTerminalOutput(`\nAgent finished after ${iteration} iterations`)
+      setIsAgentRunning(false)
     } catch (err: any) {
       console.error('[DesktopPlugin] Agent error:', err)
       appendTerminalOutput(`Agent error: ${err.message}`)
       setIsAgentRunning(false)
     }
   }, [desktop, agentTask, maxIterations])
+
+  /**
+   * Execute a desktop action and return the result
+   */
+  const executeDesktopAction = async (action: DesktopAction): Promise<{ success: boolean; output: string }> => {
+    try {
+      switch (action.type) {
+        case 'mouse_move':
+          return await desktop.moveMouse(action.x, action.y)
+        case 'left_click':
+          return await desktop.leftClick(action.x, action.y)
+        case 'right_click':
+          return await desktop.rightClick(action.x, action.y)
+        case 'double_click':
+          return await desktop.doubleClick(action.x, action.y)
+        case 'middle_click':
+          return await desktop.middleClick(action.x, action.y)
+        case 'drag':
+          return await desktop.drag(action.startX, action.startY, action.endX, action.endY)
+        case 'scroll':
+          return await desktop.scroll(action.direction, action.ticks)
+        case 'type':
+          return await desktop.type(action.text)
+        case 'press':
+          return await desktop.press(action.keys)
+        case 'screenshot':
+          const base64 = await desktop.screenshotBase64()
+          return { success: true, output: `Screenshot taken (${base64.length} bytes)` }
+        default:
+          return { success: false, output: `Unknown action type: ${(action as any).type}` }
+      }
+    } catch (error: any) {
+      return { success: false, output: error.message }
+    }
+  }
 
   /**
    * Stop agent loop

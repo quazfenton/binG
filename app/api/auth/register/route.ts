@@ -80,11 +80,11 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
     logger.info('Registration successful', { email, userId: result.user?.id });
 
     // Set session cookie
+    // SECURITY: Do NOT expose sessionId in response body - it's available via httpOnly cookie
     const response = NextResponse.json({
       success: true,
       user: result.user,
       token: result.token,
-      sessionId: result.sessionId,
     });
 
     if (result.sessionId) {

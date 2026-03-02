@@ -91,6 +91,11 @@ export function AgentTerminal({
       const { Terminal } = await import('@xterm/xterm')
       const { FitAddon } = await import('@xterm/addon-fit')
 
+      // Guard: Check if component is still mounted after async imports
+      if (!terminalRef.current) {
+        return () => {} // Return noop cleanup
+      }
+
       const terminal = new Terminal({
         cursorBlink: true,
         fontSize: 13,
@@ -198,7 +203,7 @@ export function AgentTerminal({
     // First try to copy selected text if there's a selection
     const selection = terminal.getSelection();
     if (selection && selection.trim()) {
-      navigator.clipboard.writeText(selection);
+      navigator.clipboard.writeText(selection).catch(() => {});
       return;
     }
 
@@ -216,7 +221,7 @@ export function AgentTerminal({
       }
     }
 
-    navigator.clipboard.writeText(lines.join('\n'));
+    navigator.clipboard.writeText(lines.join('\n')).catch(() => {});
   }, []);
 
   return (

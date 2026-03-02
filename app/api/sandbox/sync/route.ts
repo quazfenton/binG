@@ -29,6 +29,40 @@ import type { SandboxProviderType } from '@/lib/sandbox/providers';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 
+/**
+ * Supported sandbox providers for VFS sync
+ * Single source of truth - used consistently across validation and documentation
+ */
+const SUPPORTED_PROVIDERS = [
+  'sprites',
+  'blaxel',
+  'daytona',
+  'e2b',
+  'microsandbox',
+  'codesandbox',
+  'runloop',
+] as const;
+
+/**
+ * Default workspace directories for each provider
+ */
+const PROVIDER_WORKSPACE_DIRS: Record<string, string> = {
+  sprites: '/home/sprite/workspace',
+  blaxel: '/workspace',
+  daytona: '/workspace',
+  e2b: '/home/user',
+  microsandbox: '/workspace',
+  codesandbox: '/workspace',
+  runloop: '/workspace',
+};
+
+/**
+ * Get default workspace directory for provider
+ */
+function getDefaultWorkspaceDir(provider: string): string {
+  return PROVIDER_WORKSPACE_DIRS[provider] || '/workspace';
+}
+
 export interface SyncRequest {
   sandboxId: string;
   provider: string;
@@ -242,12 +276,11 @@ export async function POST(req: NextRequest): Promise<NextResponse<SyncResponse>
     }
 
     // Validate provider is known
-    const validProviders = ['sprites', 'blaxel', 'daytona', 'e2b', 'microsandbox', 'codesandbox', 'runloop'];
-    if (!validProviders.includes(provider.toLowerCase())) {
+    if (!SUPPORTED_PROVIDERS.includes(provider.toLowerCase() as any)) {
       return NextResponse.json(
         {
           success: false,
-          error: `Unknown provider: ${provider}. Valid providers: ${validProviders.join(', ')}`,
+          error: `Unknown provider: ${provider}. Valid providers: ${SUPPORTED_PROVIDERS.join(', ')}`,
         },
         { status: 400 }
       );
@@ -334,7 +367,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<SyncResponse>
       return NextResponse.json(
         {
           success: false,
-          error: 'timeout must be between 1000 and 300000 milliseconds (1-5 minutes)',
+          error: 'timeout must be between 1000 and 300000 milliseconds (1 second to 5 minutes)',
         },
         { status: 400 }
       );
@@ -484,7 +517,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<any>> {
           GET: 'Get sync status (requires auth + sandboxId + provider)',
         },
         modes: ['full', 'incremental', 'bootstrap'],
-        supportedProviders: ['sprites', 'blaxel', 'daytona', 'e2b', 'microsandbox'],
+        supportedProviders: Array.from(SUPPORTED_PROVIDERS),
         authRequired: true,
       });
     }
@@ -536,19 +569,4 @@ export async function GET(req: NextRequest): Promise<NextResponse<any>> {
       { status: 500 }
     );
   }
-}
-
-/**
- * Get default workspace directory for provider
- */
-function getDefaultWorkspaceDir(provider: string): string {
-  const workspaceDirs: Record<string, string> = {
-    sprites: '/home/sprite/workspace',
-    blaxel: '/workspace',
-    daytona: '/workspace',
-    e2b: '/home/user',
-    microsandbox: '/workspace',
-  };
-
-  return workspaceDirs[provider] || '/workspace';
 }

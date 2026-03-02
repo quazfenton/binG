@@ -92,28 +92,52 @@ export async function POST(request: NextRequest) {
 
     // Invoke tool on existing server
     if (invoke && body.serverId) {
+      if (!toolName) {
+        return NextResponse.json(
+          { error: 'toolName is required when invoking a tool' },
+          { status: 400 }
+        );
+      }
       const result = await service.invokeTool(body.serverId, toolName, args);
       return NextResponse.json({ result });
     }
 
     // Deploy from Hub
     if (source === 'hub' && hubServerId) {
+      if (!name || typeof name !== 'string' || name.trim().length === 0) {
+        return NextResponse.json(
+          { error: 'name is required for deploying from Hub' },
+          { status: 400 }
+        );
+      }
       const server = await service.deployFromHub(hubServerId, name);
       return NextResponse.json({ server, action: 'deployed' });
     }
 
     // Deploy from OpenAPI spec
     if (source === 'openapi' && openApiSpec) {
-      const server = await service.createFromOpenApi(name, openApiSpec, { 
-        runtime, 
-        env, 
-        secrets 
+      if (!name || typeof name !== 'string' || name.trim().length === 0) {
+        return NextResponse.json(
+          { error: 'name is required for deploying from OpenAPI spec' },
+          { status: 400 }
+        );
+      }
+      const server = await service.createFromOpenApi(name, openApiSpec, {
+        runtime,
+        env,
+        secrets
       });
       return NextResponse.json({ server, action: 'deployed' });
     }
 
     // Deploy custom code
     if (code) {
+      if (!name || typeof name !== 'string' || name.trim().length === 0) {
+        return NextResponse.json(
+          { error: 'name is required for deploying custom code' },
+          { status: 400 }
+        );
+      }
       const config: BlaxelDeploymentConfig = {
         name,
         code,

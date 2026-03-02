@@ -145,19 +145,30 @@ export function createRateLimiter(config: RateLimitConfig) {
 /**
  * Get client identifier for rate limiting
  * Uses IP address, with fallback to anonymous session ID
+ *
+ * SECURITY: Only trust x-forwarded-for/x-real-ip when behind a trusted proxy
+ * Set TRUST_PROXY=true in environment when running behind a load balancer/reverse proxy
  */
 function getClientIdentifier(req: NextRequest): string {
-  // Try to get IP from headers (works behind proxy/load balancer)
-  const forwardedFor = req.headers.get('x-forwarded-for');
-  if (forwardedFor) {
-    // Take the first IP (client IP, not proxy IPs)
-    const ip = forwardedFor.split(',')[0].trim();
-    return `ip:${ip}`;
+  const trustProxy = process.env.TRUST_PROXY === 'true';
+
+  // If TRUST_PROXY is enabled, use x-forwarded-for (first IP is the client)
+  if (trustProxy) {
+    const forwardedFor = req.headers.get('x-forwarded-for');
+    if (forwardedFor) {
+      // Take the first IP (client IP, not proxy IPs)
+      const ip = forwardedFor.split(',')[0].trim();
+      // Validate IP format to prevent injection
+      if (isValidIp(ip)) {
+        return `ip:${ip}`;
+      }
+    }
   }
 
-  // Try to get real IP (works in some environments)
+  // Try to get real IP from Next.js request (works in some environments)
+  // This is safer as it's populated by the framework, not headers
   const ip = req.ip;
-  if (ip) {
+  if (ip && isValidIp(ip)) {
     return `ip:${ip}`;
   }
 
@@ -168,9 +179,39 @@ function getClientIdentifier(req: NextRequest): string {
   }
 
   // Last resort: use user agent + host as identifier
+  // Note: This is less effective for rate limiting but prevents complete bypass
   const userAgent = req.headers.get('user-agent') || 'unknown';
   const host = req.headers.get('host') || 'unknown';
   return `ua:${userAgent}:${host}`;
+}
+
+/**
+ * Validate IP address format (IPv4 or IPv6)
+ */
+function isValidIp(ip: string): boolean {
+  if (!ip || typeof ip !== 'string') return false;
+
+  // IPv4 pattern
+  const ipv4Pattern = /^(?:\d{1,3}\.){3}\d{1,3}$/;
+  if (ipv4Pattern.test(ip)) {
+    // Additional check: each octet should be 0-255
+    const octets = ip.split('.').map(Number);
+    return octets.every(octet => octet >= 0 && octet <= 255);
+  }
+
+  // IPv6 pattern (simplified - covers most common cases)
+  const ipv6Pattern = /^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$/;
+  if (ipv6Pattern.test(ip)) {
+    return true;
+  }
+
+  // IPv6 with :: shorthand
+  const ipv6ShortPattern = /^::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}$|^[0-9a-fA-F]{1,4}::(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}$/;
+  if (ipv6ShortPattern.test(ip)) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -298,11 +339,28 @@ export function checkRateLimitMiddleware(
   maxRequests: number = 100,
   windowMs: number = 60000
 ): NextResponse | null {
-  // Get client identifier (IP address or user ID from request)
-  const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0] ||
-                   request.headers.get('x-real-ip') ||
-                   'unknown';
-  
+  // Get client IP address
+  // SECURITY: Only trust proxy headers when TRUST_PROXY is enabled
+  const trustProxy = process.env.TRUST_PROXY === 'true';
+  let clientIp: string;
+
+  if (trustProxy) {
+    const forwardedFor = request.headers.get('x-forwarded-for');
+    if (forwardedFor) {
+      clientIp = forwardedFor.split(',')[0].trim();
+    } else {
+      clientIp = request.ip || 'unknown';
+    }
+  } else {
+    // Don't trust headers - use Next.js request.ip if available
+    clientIp = request.ip || 'unknown';
+  }
+
+  // Validate IP format
+  if (!isValidIp(clientIp)) {
+    clientIp = 'unknown';
+  }
+
   const fullIdentifier = `${identifier}:${clientIp}`;
   
   const result = checkRateLimit(fullIdentifier, maxRequests, windowMs);

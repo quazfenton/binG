@@ -2,25 +2,37 @@ import { NextRequest } from 'next/server';
 import { verifyAuth } from './jwt';
 import { authService } from './auth-service';
 
+// Enhanced cache entry with validation metadata
+interface CachedAuthResult {
+  result: ResolvedRequestAuth;
+  expires: number;
+  // For session auth: store session expiration time
+  sessionExpiresAt?: number;
+  // For JWT auth: store JTI for blacklist checking (but we don't cache JWT success anymore)
+  jti?: string;
+  jwtExpiresAt?: number;
+}
+
 // Simple LRU cache for auth results
 class AuthCache {
-  private cache = new Map<string, { result: ResolvedRequestAuth; expires: number }>();
+  private cache = new Map<string, CachedAuthResult>();
   private readonly ttl = 5 * 60 * 1000; // 5 minutes
 
-  get(key: string): ResolvedRequestAuth | null {
+  get(key: string): CachedAuthResult | null {
     const entry = this.cache.get(key);
     if (!entry) return null;
     if (Date.now() > entry.expires) {
       this.cache.delete(key);
       return null;
     }
-    return entry.result;
+    return entry;
   }
 
-  set(key: string, result: ResolvedRequestAuth): void {
+  set(key: string, result: ResolvedRequestAuth, metadata?: { sessionExpiresAt?: number; jti?: string; jwtExpiresAt?: number }): void {
     this.cache.set(key, {
       result,
       expires: Date.now() + this.ttl,
+      ...metadata,
     });
 
     // Cleanup if cache gets too large
@@ -90,7 +102,7 @@ class AuthCache {
    */
   static sanitizeError(error: any): string {
     const message = error?.message || String(error)
-    
+
     // Remove potential secrets from error messages
     const sanitized = message
       // API keys (various formats)
@@ -99,7 +111,7 @@ class AuthCache {
       // Bearer tokens
       .replace(/Bearer\s+[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+/g, 'Bearer [REDACTED_TOKEN]')
       // JWT tokens
-      .replace(/eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+/g, '[REDACTED_JWT]')
+      .replace(/eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+/gi, '[REDACTED_JWT]')
       // Passwords in various formats
       .replace(/password[=:]\s*[^\s,;]+/gi, 'password=[REDACTED]')
       .replace(/pwd[=:]\s*[^\s,;]+/gi, 'pwd=[REDACTED]')
@@ -111,7 +123,7 @@ class AuthCache {
       .replace(/access[_-]?token[=:]\s*[^\s,;]+/gi, 'access_token=[REDACTED]')
       // Private keys
       .replace(/-----BEGIN\s+\w+\s+PRIVATE\s+KEY-----[\s\S]+?-----END\s+\w+\s+PRIVATE\s+KEY-----/g, '[REDACTED_PRIVATE_KEY]')
-    
+
     return sanitized
   }
 }
@@ -162,14 +174,54 @@ export async function resolveRequestAuth(
   const authHeader = req.headers.get('authorization') || ''
   const sessionId = req.cookies.get('session_id')?.value || ''
   const anonId = options.anonymousSessionId || req.headers.get(anonymousHeaderName) || ''
-  
+
   // Create unique cache key from all auth factors
   const cacheKey = `auth:${authHeader}:${sessionId}:${anonId}`;
 
-  // Check cache first
+  // Check cache first - but ALWAYS re-validate for security
   const cached = authCache.get(cacheKey);
   if (cached) {
-    return cached;
+    // SECURITY: Re-validate cached results to prevent bypassing expiration checks
+    
+    // For JWT auth, NEVER cache success - always re-verify to check blacklist
+    if (cached.result.source === 'jwt' && cached.result.userId) {
+      // Remove from cache - JWT must always be re-verified
+      authCache.delete(cacheKey);
+    }
+    
+    // For session auth, re-check expiration using stored metadata
+    if (cached.result.source === 'session' && cached.result.userId) {
+      if (cached.sessionExpiresAt) {
+        // Check if session has expired since caching
+        if (Date.now() >= cached.sessionExpiresAt) {
+          // Session expired, remove from cache and re-validate
+          authCache.delete(cacheKey);
+        } else {
+          // Session still valid, return cached result
+          return cached.result;
+        }
+      } else if (sessionId) {
+        // No expiration metadata, re-validate session
+        const sessionAuth = await authService.validateSession(sessionId);
+        if (!sessionAuth.success) {
+          authCache.delete(cacheKey);
+        } else {
+          return cached.result;
+        }
+      } else {
+        authCache.delete(cacheKey);
+      }
+    }
+    
+    // For anonymous auth, just return (no expiration to check)
+    if (cached.result.source === 'anonymous') {
+      return cached.result;
+    }
+    
+    // For failed auth, return cached failure (short TTL prevents issues)
+    if (!cached.result.success) {
+      return cached.result;
+    }
   }
 
   // 1) Try JWT auth from explicit bearer token or existing Authorization header.
@@ -177,7 +229,8 @@ export async function resolveRequestAuth(
   const jwtAuth = await verifyAuth(requestForJwt);
   if (jwtAuth.success && jwtAuth.userId) {
     const result: ResolvedRequestAuth = { success: true, userId: jwtAuth.userId, source: 'jwt' };
-    authCache.set(cacheKey, result);
+    // SECURITY: Don't cache JWT success - always re-verify to check blacklist
+    // authCache.set(cacheKey, result); // REMOVED for security
     return result;
   }
 
@@ -190,7 +243,12 @@ export async function resolveRequestAuth(
         userId: String(sessionAuth.user.id),
         source: 'session'
       };
-      authCache.set(cacheKey, result);
+      // Get session expiration for cache re-validation
+      const session = (sessionAuth as any).session;
+      const sessionExpiresAt = session?.expires_at ? new Date(session.expires_at).getTime() : undefined;
+      
+      // Cache session success with expiration metadata
+      authCache.set(cacheKey, result, { sessionExpiresAt });
       return result;
     }
   }

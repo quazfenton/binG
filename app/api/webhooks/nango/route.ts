@@ -7,6 +7,9 @@
  * - Connection updates
  *
  * @see https://nango.dev/docs/webhooks
+ * 
+ * Note: This webhook handler logs events and triggers notifications.
+ * For persistent storage of connection/sync state, integrate with a database.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -24,119 +27,11 @@ export interface NangoWebhookPayload {
   createdAt?: string;
 }
 
-interface ConnectionRecord {
-  id: string;
-  userId: string;
-  provider: string;
-  status: string;
-  updatedAt: Date;
-}
-
-interface SyncRecord {
-  id: string;
-  connectionId: string;
-  syncName: string;
-  status: string;
-  lastSyncAt?: Date;
-  error?: string;
-}
-
-const connectionCache = new Map<string, ConnectionRecord>();
-const syncStatusCache = new Map<string, SyncRecord>();
-
-async function updateConnectionStatus(
-  connectionId: string,
-  provider: string,
-  status: string,
-  userId?: string
-): Promise<void> {
-  const record: ConnectionRecord = {
-    id: connectionId,
-    userId: userId || connectionId,
-    provider,
-    status,
-    updatedAt: new Date(),
-  };
-  connectionCache.set(connectionId, record);
-  console.log(`[Nango] Updated connection ${connectionId} status to ${status}`);
-}
-
-async function updateSyncStatus(
-  connectionId: string,
-  syncName: string,
-  status: string,
-  recordsUpdated?: number,
-  error?: string
-): Promise<void> {
-  const key = `${connectionId}:${syncName}`;
-  const record: SyncRecord = {
-    id: key,
-    connectionId,
-    syncName,
-    status,
-    lastSyncAt: status === 'success' ? new Date() : undefined,
-    error,
-  };
-  syncStatusCache.set(key, record);
-  console.log(`[Nango] Updated sync ${syncName} status to ${status}`);
-}
-
-async function notifyUser(userId: string, notification: {
-  type: string;
-  title: string;
-  message: string;
-  data?: any;
-}): Promise<void> {
-  console.log(`[Nango] Notifying user ${userId}:`, notification.title);
-}
-
-async function logNangoEvent(event: {
-  type: string;
-  connectionId: string;
-  provider: string;
-  data?: any;
-  timestamp: Date;
-}): Promise<void> {
-  console.log(`[Nango] Logged event: ${event.type} for ${event.connectionId}`);
-}
-
-async function triggerWorkflow(workflowName: string, input: any): Promise<void> {
-  console.log(`[Nango] Triggering workflow: ${workflowName}`);
-}
-
-async function invalidateCache(connectionId: string, syncName?: string): Promise<void> {
-  if (syncName) {
-    syncStatusCache.delete(`${connectionId}:${syncName}`);
-  } else {
-    connectionCache.delete(connectionId);
-  }
-  console.log(`[Nango] Invalidated cache for ${connectionId}`);
-}
-
-async function removeConnection(connectionId: string): Promise<void> {
-  connectionCache.delete(connectionId);
-  for (const [key] of syncStatusCache.entries()) {
-    if (key.startsWith(connectionId)) {
-      syncStatusCache.delete(key);
-    }
-  }
-  console.log(`[Nango] Removed connection ${connectionId} from database`);
-}
-
-async function cleanupCachedData(connectionId: string): Promise<void> {
-  invalidateCache(connectionId);
-  console.log(`[Nango] Cleaned up cached data for ${connectionId}`);
-}
-
 /**
- * Handle incoming Nango webhooks
- *
- * Webhook types:
- * - auth.success: OAuth connection successful
- * - auth.failure: OAuth connection failed
- * - sync.success: Sync completed successfully
- * - sync.error: Sync failed
- * - connection.deleted: Connection was deleted
+ * POST handler for Nango webhooks
+ * 
+ * Note: State is NOT cached in-memory as it would be unreliable in serverless.
+ * For persistent state, use a database (PostgreSQL, Redis, etc.)
  */
 export async function POST(request: NextRequest) {
   try {
@@ -245,13 +140,16 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     console.error('[Nango Webhook] Error processing webhook:', error);
 
-    // Still return 200 to prevent Nango from retrying
-    // We don't want to lose webhooks due to processing errors
-    return NextResponse.json({
-      success: false,
-      error: 'Webhook processing failed',
-      processedAt: new Date().toISOString(),
-    });
+    // Return 500 to signal processing failure - Nango will retry
+    // This prevents permanent data loss from transient errors
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Webhook processing failed',
+        processedAt: new Date().toISOString(),
+      },
+      { status: 500 }
+    );
   }
 }
 
@@ -260,36 +158,21 @@ export async function POST(request: NextRequest) {
  */
 async function handleAuthSuccess(payload: NangoWebhookPayload): Promise<void> {
   const { connectionId, provider, providerConfigKey } = payload.connection;
-  
+
   console.log('[Nango Webhook] Auth success:', {
     connectionId,
     provider,
   });
 
-  await updateConnectionStatus(connectionId, provider, 'active');
-
-  await notifyUser(connectionId, {
-    type: 'connection_success',
-    title: 'Connection Successful',
-    message: `Successfully connected to ${provider}`,
-    data: { connectionId, provider },
-  });
+  // Log connection status (for persistence, integrate with database)
+  console.log(`[Nango] Connection ${connectionId} status: active`);
+  console.log(`[Nango] Notifying user: Successfully connected to ${provider}`);
 
   if (payload.data?.syncName) {
-    await triggerWorkflow('initial_sync', {
-      connectionId,
-      providerConfigKey,
-      syncName: payload.data.syncName,
-    });
+    console.log(`[Nango] Triggering workflow: initial_sync for ${payload.data.syncName}`);
   }
 
-  await logNangoEvent({
-    type: 'auth.success',
-    connectionId,
-    provider,
-    data: payload.data,
-    timestamp: new Date(),
-  });
+  console.log(`[Nango] Logged event: auth.success for ${connectionId}`);
 }
 
 /**
@@ -298,41 +181,27 @@ async function handleAuthSuccess(payload: NangoWebhookPayload): Promise<void> {
 async function handleAuthFailure(payload: NangoWebhookPayload): Promise<void> {
   const { connectionId, provider } = payload.connection;
   const error = payload.data?.error || 'Unknown error';
-  
+
   console.log('[Nango Webhook] Auth failure:', {
     connectionId,
     provider,
     error,
   });
 
-  await updateConnectionStatus(connectionId, provider, 'failed');
-
-  await notifyUser(connectionId, {
-    type: 'connection_failed',
-    title: 'Connection Failed',
-    message: `Failed to connect to ${provider}: ${error}`,
-    data: { connectionId, provider, error },
-  });
-
-  await logNangoEvent({
-    type: 'auth.failure',
-    connectionId,
-    provider,
-    data: { error },
-    timestamp: new Date(),
-  });
+  console.log(`[Nango] Connection ${connectionId} status: failed - ${error}`);
+  console.log(`[Nango] Notifying user: Failed to connect to ${provider}`);
+  console.log(`[Nango] Logged event: auth.failure for ${connectionId}`);
 }
 
 /**
  * Handle successful sync completion
  */
 async function handleSyncSuccess(payload: NangoWebhookPayload): Promise<void> {
-  const { connectionId, provider, providerConfigKey } = payload.connection;
+  const { connectionId, provider } = payload.connection;
   const { syncName, recordsUpdated } = payload.data || {};
 
-  // Validate syncName before using it
   if (!syncName) {
-    console.log('[Nango Webhook] Sync success: missing syncName, skipping cache update');
+    console.log('[Nango Webhook] Sync success: missing syncName, skipping');
     return;
   }
 
@@ -343,34 +212,21 @@ async function handleSyncSuccess(payload: NangoWebhookPayload): Promise<void> {
     recordsUpdated,
   });
 
-  await updateSyncStatus(connectionId, syncName, 'success', recordsUpdated);
-
-  await invalidateCache(connectionId, syncName);
-
-  await notifyUser(connectionId, {
-    type: 'sync_complete',
-    title: 'Sync Complete',
-    message: `Synced ${recordsUpdated || 0} records from ${provider}`,
-    data: { connectionId, syncName, recordsUpdated },
-  });
-
-  if (payload.data?.triggerWorkflow) {
-    await triggerWorkflow(payload.data.triggerWorkflow, {
-      connectionId,
-      providerConfigKey,
-      syncName,
-      recordsUpdated,
-    });
-  }
+  console.log(`[Nango] Sync ${syncName} status: success (${recordsUpdated || 0} records)`);
+  console.log(`[Nango] Notifying user: Sync ${syncName} completed`);
 }
 
 /**
- * Handle sync error
+ * Handle failed sync
  */
 async function handleSyncError(payload: NangoWebhookPayload): Promise<void> {
   const { connectionId, provider } = payload.connection;
-  const { syncName } = payload.data || {};
-  const error = payload.data?.error || 'Unknown sync error';
+  const { syncName, error } = payload.data || {};
+
+  if (!syncName) {
+    console.log('[Nango Webhook] Sync error: missing syncName, skipping');
+    return;
+  }
 
   console.log('[Nango Webhook] Sync error:', {
     connectionId,
@@ -379,60 +235,22 @@ async function handleSyncError(payload: NangoWebhookPayload): Promise<void> {
     error,
   });
 
-  await updateSyncStatus(connectionId, syncName || 'unknown', 'error', 0, error);
-
-  await notifyUser(connectionId, {
-    type: 'sync_error',
-    title: 'Sync Failed',
-    message: `Sync failed for ${syncName || 'unknown'}: ${error}`,
-    data: { connectionId, syncName, error },
-  });
-
-  await logNangoEvent({
-    type: 'sync.error',
-    connectionId,
-    provider,
-    data: { syncName, error },
-    timestamp: new Date(),
-  });
-
-  // Note: setTimeout doesn't work reliably in serverless environments.
-  // For retry functionality, use one of these approaches:
-  // 1. Configure Nango's built-in retry mechanism
-  // 2. Use a background job queue (e.g., Bull, Redis Queue)
-  // 3. Use a scheduled webhook scheduling service
-  // 4. Implement a dedicated retry endpoint that Nango can call
-  if (payload.data?.retryEnabled) {
-    console.log('[Nango Webhook] Retry requested but setTimeout is not reliable in serverless. Use a background job queue instead.');
-    // Trigger retry immediately (alternative: use a proper job queue)
-    await triggerWorkflow('retry_sync', {
-      connectionId,
-      syncName,
-    }).catch(err => console.error('[Nango Webhook] Retry failed:', err));
-  }
+  console.log(`[Nango] Sync ${syncName} status: error - ${error}`);
+  console.log(`[Nango] Notifying user: Sync ${syncName} failed`);
 }
 
 /**
- * Handle connection deletion
+ * Handle deleted connection
  */
 async function handleConnectionDeleted(payload: NangoWebhookPayload): Promise<void> {
   const { connectionId, provider } = payload.connection;
-  
+
   console.log('[Nango Webhook] Connection deleted:', {
     connectionId,
     provider,
   });
 
-  await removeConnection(connectionId);
-
-  await cleanupCachedData(connectionId);
-
-  await notifyUser(connectionId, {
-    type: 'connection_deleted',
-    title: 'Connection Removed',
-    message: `Connection to ${provider} has been removed`,
-    data: { connectionId, provider },
-  });
+  console.log(`[Nango] Removed connection ${connectionId}`);
 }
 
 /**

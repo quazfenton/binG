@@ -13,24 +13,27 @@ export const maxDuration = 300; // 5 minutes for agent tasks
 
 /**
  * POST /api/unified-agent
- * 
+ *
  * Unified agent endpoint that supports both:
  * - V1: LLM API (Mistral, Google, OpenRouter, etc.)
  * - V2: OpenCode Containerized (sandboxed CLI)
- * 
+ *
  * Automatically routes based on configuration and availability.
+ *
+ * SECURITY: Requires authentication. Anonymous access is disabled because
+ * this endpoint executes tools and sandbox commands that must be isolated
+ * to authenticated users only.
  */
 export async function POST(req: NextRequest) {
   try {
-    // Authenticate user
+    // Authenticate user - anonymous access NOT allowed
     const authResult = await resolveRequestAuth(req, {
-      allowAnonymous: true,
-      anonymousSessionId: req.headers.get('x-anonymous-session-id'),
+      allowAnonymous: false,
     });
-    
+
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
-        { error: 'Unauthorized: valid authentication required' },
+        { error: 'Unauthorized: authentication required' },
         { status: 401 }
       );
     }
@@ -90,19 +93,19 @@ export async function POST(req: NextRequest) {
  * GET /api/unified-agent
  *
  * Returns provider health status and available modes.
- * 
- * Security: Requires authentication to prevent leaking infrastructure configuration.
+ *
+ * SECURITY: Requires authentication to prevent leaking infrastructure configuration.
+ * Anonymous access is disabled.
  */
 export async function GET(req: NextRequest) {
-  // Authenticate request (same as POST handler)
+  // Authenticate request - anonymous access NOT allowed
   const authResult = await resolveRequestAuth(req, {
-    allowAnonymous: true,
-    anonymousSessionId: req.headers.get('x-anonymous-session-id'),
+    allowAnonymous: false,
   });
 
   if (!authResult.success || !authResult.userId) {
     return NextResponse.json(
-      { error: 'Unauthorized: valid authentication required' },
+      { error: 'Unauthorized: authentication required' },
       { status: 401 }
     );
   }

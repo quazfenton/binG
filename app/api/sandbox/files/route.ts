@@ -19,7 +19,38 @@ export async function GET(req: NextRequest) {
 
     // Get dir path from query param, default to '.'
     const url = new URL(req.url);
-    const dirPath = url.searchParams.get('path') || '.';
+    let dirPath = url.searchParams.get('path') || '.';
+
+    // SECURITY: Validate path to prevent directory traversal attacks
+    // Reject paths containing '..' which could escape the workspace
+    if (dirPath.includes('..')) {
+      return NextResponse.json(
+        { error: 'Invalid path: directory traversal not allowed' },
+        { status: 400 }
+      );
+    }
+
+    // Reject null bytes which could be used for path injection
+    if (dirPath.includes('\0')) {
+      return NextResponse.json(
+        { error: 'Invalid path: contains null bytes' },
+        { status: 400 }
+      );
+    }
+
+    // Normalize path separators and ensure it's not absolute
+    dirPath = dirPath.replace(/\\/g, '/');
+    if (dirPath.startsWith('/')) {
+      return NextResponse.json(
+        { error: 'Invalid path: absolute paths not allowed' },
+        { status: 400 }
+      );
+    }
+
+    // Empty or whitespace-only path after trimming
+    if (!dirPath.trim()) {
+      dirPath = '.';
+    }
 
     const result = await sandboxBridge.listDirectory(session.sandboxId, dirPath);
 

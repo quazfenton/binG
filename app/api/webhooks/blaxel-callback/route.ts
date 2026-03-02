@@ -1,66 +1,46 @@
 /**
  * Blaxel Async Execution Callback Webhook
- * 
+ *
  * Receives callbacks from Blaxel when async executions complete.
  * Verifies callback signatures for security.
- * 
+ *
  * @see https://docs.blaxel.ai/Agents/Asynchronous-triggers#verify-a-callback-using-its-signature
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyCallbackSignature, verifyCallbackMiddleware } from '@/lib/sandbox/providers';
+import { verifyCallbackSignature } from '@/lib/sandbox/providers';
 
 const CALLBACK_SECRET = process.env.BLAXEL_CALLBACK_SECRET;
 
 /**
  * POST handler for Blaxel webhook callbacks
+ *
+ * Verifies the callback signature and logs the async execution result.
  * 
- * Verifies the callback signature and processes the async execution result.
+ * Note: Results are logged for monitoring. For persistent storage or real-time
+ * notifications, integrate with a database or event queue (e.g., Redis, SQS).
  */
-const executionResults = new Map<string, {
-  executionId: string;
-  statusCode: number;
-  responseBody?: string;
-  responseLength?: number;
-  timestamp: string;
-  sandboxId?: string;
-  processedAt: Date;
-}>();
-
-/**
- * Process the async execution result
- */
-async function processExecutionResult(data: {
-  execution_id: string;
-  sandbox_id?: string;
-  status_code: number;
-  response_body?: string;
-  response_length?: number;
-  timestamp: string;
-}): Promise<void> {
-  const result = {
-    executionId: data.execution_id,
-    statusCode: data.status_code,
-    responseBody: data.response_body,
-    responseLength: data.response_length,
-    timestamp: data.timestamp,
-    sandboxId: data.sandbox_id,
-    processedAt: new Date(),
-  };
-  
-  executionResults.set(data.execution_id, result);
-  
-  console.log(`[BlaxelCallback] Processed execution ${data.execution_id} with status ${data.status_code}`);
-}
-
 export async function POST(request: NextRequest) {
   try {
     // SECURITY: Require webhook authentication in production
     // In development, allow unauthenticated requests for testing
     const isDevelopment = process.env.NODE_ENV === 'development';
-    
+
+    // SECURITY FIX: Read body as text FIRST to avoid double-consumption
+    // The body stream can only be read once, and verifyCallbackSignature
+    // needs to read it for HMAC verification. We read it once, then parse.
+    const rawBody = await request.text();
+
     if (CALLBACK_SECRET) {
-      const isValid = await verifyCallbackSignature(request, CALLBACK_SECRET);
+      // Create a new Request with the raw body for signature verification
+      // This allows verifyCallbackSignature to read the body without consuming the original
+      const verificationRequest = new NextRequest(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: rawBody,
+      });
+
+      const isValid = await verifyCallbackSignature(verificationRequest, CALLBACK_SECRET);
 
       if (!isValid) {
         console.warn('[BlaxelCallback] Invalid signature detected');
@@ -81,8 +61,17 @@ export async function POST(request: NextRequest) {
       console.warn('[BlaxelCallback] Development mode: BLAXEL_CALLBACK_SECRET not configured, skipping verification');
     }
 
-    // Parse callback payload
-    const body = await request.json();
+    // Parse callback payload from the raw body text we already read
+    let body: any;
+    try {
+      body = JSON.parse(rawBody);
+    } catch (parseError) {
+      return NextResponse.json(
+        { error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
+
     const {
       status_code,
       response_body,
@@ -99,15 +88,9 @@ export async function POST(request: NextRequest) {
       timestamp: timestamp ? new Date(timestamp).toISOString() : 'unknown',
     });
 
-    // Process the async execution result
-    await processExecutionResult({
-      execution_id: execution_id,
-      sandbox_id: sandbox_id,
-      status_code: status_code,
-      response_body: response_body,
-      response_length: response_length,
-      timestamp: timestamp || new Date().toISOString(),
-    });
+    // Log execution result for monitoring
+    // For persistent storage, integrate with database or event queue
+    console.log(`[BlaxelCallback] Execution ${execution_id} completed with status ${status_code}`);
 
     return NextResponse.json({
       success: true,

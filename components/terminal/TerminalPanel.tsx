@@ -347,9 +347,15 @@ export default function TerminalPanel({
     
     // Save command history before cleanup
     const history = commandHistoryRef.current[terminalId];
-    if (history && history.length > 0) {
+    if (history && history.length > 0 && terminal) {
       try {
-        addCommandToHistory(terminalId, history);
+        saveTerminalSession({
+          id: terminal.id,
+          name: terminal.name,
+          commandHistory: history,
+          sandboxInfo: terminal.sandboxInfo,
+          lastUsed: Date.now(),
+        });
       } catch (err) {
         logger.warn('Failed to save command history', err);
       }

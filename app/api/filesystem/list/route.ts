@@ -50,13 +50,16 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    // Use validated output from zod - ensures any transforms/coercions are applied
+    const { path: validatedPath, ownerId: validatedOwnerId } = validation.data;
+
     // SECURITY: Always derive ownerId from authenticated request context
     // Reject any attempt to override ownerId via query parameter
     const authResolution = await resolveFilesystemOwner(req);
-    const ownerId = authResolution.ownerId;
+    const authenticatedOwnerId = authResolution.ownerId;
 
     // If ownerId was explicitly provided in query, verify it matches authenticated user
-    if (ownerIdFromQuery && ownerIdFromQuery !== ownerId) {
+    if (validatedOwnerId && validatedOwnerId !== authenticatedOwnerId) {
       return NextResponse.json(
         {
           success: false,
@@ -66,9 +69,9 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    console.log('[VFS API] Listing directory:', { path, ownerId, source: 'auth' });
+    console.log('[VFS API] Listing directory:', { path: validatedPath, ownerId: authenticatedOwnerId, source: 'auth' });
 
-    const listing = await virtualFilesystem.listDirectory(ownerId, path);
+    const listing = await virtualFilesystem.listDirectory(authenticatedOwnerId, validatedPath);
 
     return NextResponse.json({
       success: true,

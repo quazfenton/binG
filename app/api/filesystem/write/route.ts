@@ -53,13 +53,8 @@ export async function POST(req: NextRequest) {
     const authResolution = await resolveFilesystemOwner(req);
     const ownerId = authResolution.ownerId;
 
-    const file = await virtualFilesystem.writeFile(ownerId, filePath, content);
-    
-    // Optionally set language if provided
-    if (language) {
-      file.language = language;
-    }
-    
+    const file = await virtualFilesystem.writeFile(ownerId, filePath, content, language);
+
     return NextResponse.json({
       success: true,
       data: {

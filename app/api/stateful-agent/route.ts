@@ -29,8 +29,18 @@ export async function POST(request: NextRequest) {
     }`,
   );
 
+  let effectiveUseCrewAI = USE_CREWAI;
+  let effectiveUseStateful = USE_STATEFUL_AGENT;
+
   try {
     const body = await request.json();
+    
+    // Parse and validate maxSteps with upper bound to prevent excessive API calls
+    // Default from env, clamped to reasonable maximum (50 steps)
+    const envMaxSteps = parseInt(process.env.AI_SDK_MAX_STEPS || '10', 10);
+    const userMaxSteps = typeof body.maxSteps === 'number' ? body.maxSteps : envMaxSteps;
+    const maxSteps = Math.max(1, Math.min(userMaxSteps, 50)); // Clamp between 1 and 50
+    
     const {
       messages,
       sessionId,
@@ -43,8 +53,10 @@ export async function POST(request: NextRequest) {
       useStateful = USE_STATEFUL_AGENT,
       useCrewAI = USE_CREWAI,
       enforcePlanActVerify = true,
-      maxSteps = parseInt(process.env.AI_SDK_MAX_STEPS || '10'),
     } = body;
+
+    effectiveUseCrewAI = useCrewAI;
+    effectiveUseStateful = useStateful;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json(
@@ -198,7 +210,7 @@ export async function POST(request: NextRequest) {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
       metadata: {
-        agentType: USE_CREWAI ? 'crewai' : USE_STATEFUL_AGENT ? 'stateful' : 'legacy',
+        agentType: effectiveUseCrewAI ? 'crewai' : effectiveUseStateful ? 'stateful' : 'legacy',
       },
     }, { status: 500 });
   }

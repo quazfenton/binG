@@ -54,21 +54,21 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const status = quotaManager.getAllStatus();
-    
+    const quotasData = quotaManager.getAllQuotas();
+
     // Build response
-    const quotas = Object.entries(status).map(([provider, s]) => {
-      const percentageUsed = (s.currentUsage / s.monthlyLimit) * 100;
-      
+    const quotas = quotasData.map((s) => {
+      const percentageUsed = s.monthlyLimit > 0 ? (s.currentUsage / s.monthlyLimit) * 100 : 0;
+
       return {
-        provider,
+        provider: s.provider,
         used: s.currentUsage,
         limit: s.monthlyLimit,
         remaining: Math.max(0, s.monthlyLimit - s.currentUsage),
         percentageUsed: Math.round(percentageUsed * 100) / 100,
         resetDate: s.resetDate,
         isDisabled: s.isDisabled,
-        type: getProviderType(provider),
+        type: getProviderType(s.provider),
       };
     });
 

@@ -81,6 +81,7 @@ export async function POST(request: NextRequest) {
 
     // Convert to SSE stream
     const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
     const readableStream = new ReadableStream({
       async start(controller) {
         const timeout = setTimeout(() => {
@@ -93,7 +94,7 @@ export async function POST(request: NextRequest) {
             if (abortController.signal.aborted) {
               break;
             }
-            const data = encoder.decode(chunk);
+            const data = decoder.decode(chunk);
             controller.enqueue(encoder.encode(`data: ${data}\n\n`));
           }
           clearTimeout(timeout);

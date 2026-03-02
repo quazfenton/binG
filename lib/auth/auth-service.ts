@@ -309,10 +309,9 @@ export class AuthService {
       if (!passwordValid) {
         // Record failed login attempt
         recordFailedLogin(credentials.email, sessionInfo?.ipAddress || 'unknown', sessionInfo?.userAgent);
-        return { 
-          success: false, 
-          error: `Invalid email or password. ${lockout.remainingAttempts! - 1} attempts remaining before lockout.`
-        };
+        // SECURITY: Return generic error to prevent email enumeration
+        // Lockout status should be communicated via separate flow (e.g., email notification)
+        return { success: false, error: 'Invalid email or password' };
       }
 
       // SUCCESS: Clear failed login attempts on successful login

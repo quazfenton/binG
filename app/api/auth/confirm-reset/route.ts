@@ -91,9 +91,11 @@ export async function POST(req: NextRequest) {
 
     const db = getDatabase();
 
-    // Verify user exists and is active
+    // SECURITY: Verify user exists, is active, AND has a valid reset token
+    // This prevents token replay attacks where a captured token could be reused
     const user = db.prepare(`
-      SELECT id, email, is_active FROM users WHERE id = ?
+      SELECT id, email, is_active, reset_token, reset_token_expires 
+      FROM users WHERE id = ?
     `).get(userId) as any;
 
     if (!user) {
@@ -110,6 +112,33 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // SECURITY: Check if reset token has already been used or doesn't exist
+    // A consumed token will have reset_token set to NULL
+    if (!user.reset_token) {
+      console.warn(`[Security] Password reset token replay attempt for user ${user.email} (ID: ${userId})`);
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: 'This password reset link has already been used. Please request a new one.' 
+        },
+        { status: 400 }
+      );
+    }
+
+    // SECURITY: Verify reset token hasn't expired
+    if (user.reset_token_expires) {
+      const expiresAt = new Date(user.reset_token_expires);
+      if (Date.now() > expiresAt.getTime()) {
+        return NextResponse.json(
+          { 
+            success: false, 
+            error: 'This password reset link has expired. Please request a new one.' 
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     // Hash new password
     const bcrypt = await import('bcryptjs');
     const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -117,9 +146,10 @@ export async function POST(req: NextRequest) {
     // Update password and invalidate all sessions
     db.prepare(`
       UPDATE users
-      SET password = ?,
+      SET password_hash = ?,
           reset_token = NULL,
-          reset_token_expires = NULL
+          reset_token_expires = NULL,
+          updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(passwordHash, userId);
 

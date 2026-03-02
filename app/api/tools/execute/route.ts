@@ -121,17 +121,17 @@ export async function POST(req: NextRequest) {
       }, { status: 500 });
     }
 
-    const response = NextResponse.json({ 
-      success: true, 
+    const response = NextResponse.json({
+      success: true,
       output: result.output,
       requestId,
     });
-    
-    return addCORSHeaders(response);
+
+    return addCORSHeaders(response, undefined, req);
   } catch (error: any) {
     console.error(`[Tools] Execution error (${requestId}):`, error);
     // Don't expose internal error details to clients
-    return NextResponse.json({ 
+    return NextResponse.json({
       success: false,
       error: {
         type: 'internal_error',
@@ -150,10 +150,10 @@ export async function GET(req: NextRequest) {
     const authResult = await resolveRequestAuth(req, {
       allowAnonymous: false,
     });
-    
+
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
-        { 
+        {
           success: false,
           error: {
             type: 'authentication_required',
@@ -172,26 +172,26 @@ export async function GET(req: NextRequest) {
 
     if (category) {
       const tools = toolManager.getToolsByCategory(category);
-      const response = NextResponse.json({ 
+      const response = NextResponse.json({
         success: true,
         tools,
         requestId,
       });
-      return addCORSHeaders(response);
+      return addCORSHeaders(response, undefined, req);
     }
 
     // Get available tools and connected providers for the authenticated user
     const available = await toolAuthManager.getAvailableTools(authenticatedUserId);
     const providers = await toolAuthManager.getConnectedProviders(authenticatedUserId);
-    
-    const response = NextResponse.json({ 
+
+    const response = NextResponse.json({
       success: true,
-      availableTools: available, 
+      availableTools: available,
       connectedProviders: providers,
       requestId,
     });
-    
-    return addCORSHeaders(response);
+
+    return addCORSHeaders(response, undefined, req);
   } catch (error: any) {
     console.error(`[Tools] Error fetching tools (${requestId}):`, error);
     // Don't expose internal error details to clients
@@ -207,13 +207,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function OPTIONS(request: NextRequest) {
-  return new NextResponse(null, {
-    status: 200,
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Max-Age': '86400',
-    },
-  });
+  // Use proper CORS middleware for preflight requests
+  const response = new NextResponse(null, { status: 200 });
+  return addCORSHeaders(response, undefined, request);
 }
