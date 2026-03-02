@@ -126,7 +126,7 @@ export async function POST(req: NextRequest) {
       output: result.output,
       requestId,
     });
-
+    
     return addCORSHeaders(response, undefined, req);
   } catch (error: any) {
     console.error(`[Tools] Execution error (${requestId}):`, error);

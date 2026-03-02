@@ -2038,11 +2038,13 @@ export default function TerminalPanel({
       if (wsSupported) {
         try {
           // Build WebSocket URL with connection token for authentication
-          const tokenParam = connectionToken
-            ? `?token=${encodeURIComponent(connectionToken)}`
-            : '';
           const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-          const wsUrl = `${wsProtocol}//${window.location.host}/api/sandbox/terminal/ws${tokenParam}&sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}`;
+          let wsUrl = `${wsProtocol}//${window.location.host}/api/sandbox/terminal/ws`;
+          if (connectionToken) {
+            wsUrl += `?token=${encodeURIComponent(connectionToken)}&sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}`;
+          } else {
+            wsUrl += `?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}`;
+          }
 
           const ws = new WebSocket(wsUrl);
           term.websocket = ws;
