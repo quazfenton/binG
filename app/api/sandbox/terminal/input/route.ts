@@ -147,11 +147,10 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      await terminalManager.sendInput(sessionId, data);
+      await terminalManager.sendInput(sessionId, fullCommand);
 
       // Clear buffer after successful validation and forwarding
       commandBuffers.delete(sessionId);
-
       return NextResponse.json({ success: true });
     }
 
