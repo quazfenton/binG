@@ -1,7 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSmitheryService, type SmitheryServer } from '@/lib/mcp/smithery-service';
 
+import { NextRequest, NextResponse } from 'next/server';
+import { getSmitheryService, type SmitheryServer } from '@/lib/mcp/smithery-service';
+import { verifyAuth } from '@/lib/auth/verify-auth';
+
 export async function GET(request: NextRequest) {
+  const authResult = await verifyAuth(request);
+  if (!authResult.valid) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
+
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get('q') || '';
   
@@ -22,6 +34,31 @@ export async function GET(request: NextRequest) {
     : null;
 
   const service = getSmitheryService();
+
+  if (!service.isConfigured()) {
+    return NextResponse.json(
+      { error: 'Smithery API not configured. Set SMITHERY_API_KEY in environment.' },
+      { status: 503 }
+    );
+  }
+
+  try {
+    const servers = await service.searchServers(query, {
+      limit,
+      offset,
+      verified,
+      deploymentStatus: deploymentStatus || undefined,
+    });
+
+    return NextResponse.json({ servers });
+  } catch (error) {
+    console.error('[Smithery] Search error:', error);
+    return NextResponse.json(
+      { error: 'Failed to search servers' },
+      { status: 500 }
+    );
+  }
+}
 
   if (!service.isConfigured()) {
     return NextResponse.json(
