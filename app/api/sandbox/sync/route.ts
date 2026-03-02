@@ -557,9 +557,25 @@ export async function GET(req: NextRequest): Promise<NextResponse<any>> {
     }
 
     if (session.userId !== authResult.userId) {
-      // Log unauthorized access attempt for GET endpoint, similar to POST handler
       console.warn(
         `[VFS Sync GET] Unauthorized access attempt: user ${authResult.userId} tried to get status for sandbox ${sandboxId} owned by ${session.userId}`
+      );
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized: you do not have access to this sandbox' },
+        { status: 403 }
+      );
+    }
+
+    return NextResponse.json({
+      sandboxId,
+      provider,
+      status: 'active',
+      capabilities: {
+        batch: true,
+        incremental: true,
+        tarPipe: provider === 'sprites',
+      },
+    });
       );
       return NextResponse.json(
         { success: false, error: 'Unauthorized: you do not have access to this sandbox' },
