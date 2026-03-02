@@ -10,11 +10,7 @@ export {
   quickCollaborativeExecute,
 } from './multi-agent-collaboration';
 
-export {
-  AgentMemoryManager,
-  createAgentMemoryManager,
-  quickAddMemory,
-} from './agent-memory';
+// agent-memory moved to deprecated/lib/agents/ on 2026-03-01
 
 export type {
   AgentRole,
@@ -23,9 +19,3 @@ export type {
   AgentMessage,
   CollaborationResult,
 } from './multi-agent-collaboration';
-
-export type {
-  MemoryItem,
-  ContextConfig,
-  MemoryRetrievalResult,
-} from './agent-memory';

@@ -40,7 +40,6 @@ export default defineConfig({
       '__tests__/arcade/contextual-auth.test.ts',
       '__tests__/blaxel/enhanced-features.test.ts',
       '__tests__/blaxel/volume-templates.test.ts',
-      '__tests__/blaxel-provider-enhanced.test.ts', // Requires @blaxel/core setup
       '__tests__/composio/enhanced-features.test.ts',
       '__tests__/composio/triggers-webhooks.test.ts',
       '__tests__/crewai/full-integration.test.ts',

@@ -508,3 +508,47 @@ export async function quickCanaryDeploy(
     manager.destroy();
   }
 }
+
+/**
+ * Scaling presets for auto-scaling configuration
+ */
+export const ScalingPresets = {
+  /**
+   * Conservative scaling - slower response to load changes
+   */
+  conservative: (name: string) => ({
+    name,
+    minReplicas: 1,
+    maxReplicas: 5,
+    scaleUpThreshold: 70,
+    scaleDownThreshold: 30,
+    cooldownSeconds: 600,
+    stabilizationWindowSeconds: 300,
+  }),
+
+  /**
+   * Aggressive scaling - faster response to load changes
+   */
+  aggressive: (name: string) => ({
+    name,
+    minReplicas: 1,
+    maxReplicas: 20,
+    scaleUpThreshold: 50,
+    scaleDownThreshold: 20,
+    cooldownSeconds: 180,
+    stabilizationWindowSeconds: 60,
+  }),
+
+  /**
+   * Balanced scaling - moderate response to load changes
+   */
+  balanced: (name: string) => ({
+    name,
+    minReplicas: 2,
+    maxReplicas: 10,
+    scaleUpThreshold: 85,
+    scaleDownThreshold: 15,
+    cooldownSeconds: 300,
+    stabilizationWindowSeconds: 120,
+  }),
+};

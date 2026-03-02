@@ -55,6 +55,158 @@ export interface MCPConfig {
   }
 }
 
+// ==================== Desktop Action Types ====================
+// Used for computer use agent interactions
+
+/**
+ * Mouse move action
+ */
+export interface MouseMoveAction {
+  type: 'mouse_move'
+  x: number
+  y: number
+}
+
+/**
+ * Left click action
+ */
+export interface LeftClickAction {
+  type: 'left_click'
+  x?: number
+  y?: number
+}
+
+/**
+ * Right click action
+ */
+export interface RightClickAction {
+  type: 'right_click'
+  x?: number
+  y?: number
+}
+
+/**
+ * Double click action
+ */
+export interface DoubleClickAction {
+  type: 'double_click'
+  x?: number
+  y?: number
+}
+
+/**
+ * Middle click action
+ */
+export interface MiddleClickAction {
+  type: 'middle_click'
+  x?: number
+  y?: number
+}
+
+/**
+ * Mouse drag action
+ */
+export interface DragAction {
+  type: 'drag'
+  startX: number
+  startY: number
+  endX: number
+  endY: number
+}
+
+/**
+ * Type text action
+ */
+export interface TypeAction {
+  type: 'type'
+  text: string
+}
+
+/**
+ * Key press action
+ */
+export interface KeypressAction {
+  type: 'keypress'
+  keys: string[]
+}
+
+/**
+ * Scroll action
+ */
+export interface ScrollAction {
+  type: 'scroll'
+  scrollY: number
+}
+
+/**
+ * Screenshot action
+ */
+export interface ScreenshotAction {
+  type: 'screenshot'
+}
+
+/**
+ * Wait action
+ */
+export interface WaitAction {
+  type: 'wait'
+  duration: number
+}
+
+/**
+ * Terminal command action
+ */
+export interface TerminalCommandAction {
+  type: 'terminal_command'
+  command: string
+  cwd?: string
+  timeout?: number
+}
+
+/**
+ * Desktop action union type
+ * All possible actions for computer use agents
+ */
+export type DesktopAction =
+  | MouseMoveAction
+  | LeftClickAction
+  | RightClickAction
+  | DoubleClickAction
+  | MiddleClickAction
+  | DragAction
+  | TypeAction
+  | KeypressAction
+  | ScrollAction
+  | ScreenshotAction
+  | WaitAction
+  | TerminalCommandAction
+
+/**
+ * Agent loop result for tracking desktop agent execution
+ */
+export interface AgentLoopResult {
+  success: boolean
+  action?: DesktopAction
+  output?: string
+  error?: string
+  iteration: number
+  screenshotBase64?: string
+}
+
+/**
+ * Desktop statistics for monitoring
+ */
+export interface DesktopStats {
+  id: string
+  uptime: number
+  actionCount: number
+  lastActionAt?: number
+  resolution: [number, number]
+  streamUrl?: string
+  mcpConfigured: boolean
+  activeSessions: number
+}
+
 /**
  * Desktop sandbox handle with enhanced computer use capabilities
  */
@@ -432,7 +584,31 @@ export class DesktopSandboxHandle {
     return this.mcpConfigured
   }
 
-  // ==================== Lifecycle ====================
+  // ==================== Stats & Lifecycle ====================
+
+  /**
+   * Check if desktop sandbox is still alive
+   */
+  isAlive(): boolean {
+    // Sandbox is considered alive if it has an id and hasn't been killed
+    return !!this.id && !!this.sandbox
+  }
+
+  /**
+   * Get desktop statistics for monitoring
+   */
+  getStats(): DesktopStats {
+    return {
+      id: this.id,
+      uptime: Date.now() - (this.sandbox?.createdAt || Date.now()),
+      actionCount: 0, // Could be tracked internally if needed
+      lastActionAt: undefined,
+      resolution: DESKTOP_DEFAULT_RESOLUTION,
+      streamUrl: this.streamUrl,
+      mcpConfigured: this.mcpConfigured,
+      activeSessions: this.ampSessions.size,
+    }
+  }
 
   /**
    * Kill the desktop sandbox
@@ -488,9 +664,18 @@ export class E2BDesktopProvider {
 
   /**
    * Create a new desktop sandbox with VNC streaming
+   *
+   * @param config - Configuration options
+   * @param config.template - Desktop template ID (default: 'desktop')
+   * @param config.resolution - Screen resolution [width, height] (default: [1920, 1080])
+   * @param config.dpi - Screen DPI (default: 96)
+   * @param config.timeoutMs - Session timeout in milliseconds (default: 300000)
+   * @param config.startStreaming - Start VNC streaming (default: true)
    */
   async createDesktop(config: {
     template?: string
+    resolution?: [number, number]
+    dpi?: number
     timeoutMs?: number
     startStreaming?: boolean
   } = {}): Promise<DesktopSandboxHandle> {
@@ -505,6 +690,8 @@ export class E2BDesktopProvider {
       const sandbox = await Desktop.create({
         template: config.template || 'desktop',
         timeoutMs: config.timeoutMs || DESKTOP_DEFAULT_TIMEOUT,
+        resolution: config.resolution || DESKTOP_DEFAULT_RESOLUTION,
+        dpi: config.dpi || 96,
       })
 
       let streamUrl: string | undefined
@@ -537,7 +724,17 @@ export const e2bDesktopProvider = new E2BDesktopProvider()
 export const desktopSessionManager = {
   sessions: new Map<string, DesktopSandboxHandle>(),
 
-  async createSession(sessionId: string, config?: { template?: string }): Promise<DesktopSandboxHandle> {
+  async createSession(
+    sessionId: string,
+    config?: {
+      template?: string
+      resolution?: [number, number]
+      dpi?: number
+      timeoutMs?: number
+      startStreaming?: boolean
+      autoCleanup?: boolean
+    }
+  ): Promise<DesktopSandboxHandle> {
     const desktop = await e2bDesktopProvider.createDesktop(config)
     this.sessions.set(sessionId, desktop)
     return desktop

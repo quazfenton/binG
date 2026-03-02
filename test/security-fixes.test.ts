@@ -348,25 +348,25 @@ describe('Virtual Filesystem Quota Enforcement', () => {
 
 describe('E2B Desktop Provider Cleanup', () => {
   it('should have kill method in DesktopHandle', async () => {
-    const { E2BDesktopProvider } = await import('@/lib/sandbox/providers/e2b-desktop-provider')
-    
+    const { E2BDesktopProvider } = await import('@/lib/sandbox/providers/e2b-desktop-provider-enhanced')
+
     const provider = new E2BDesktopProvider()
-    
+
     // Without API key, createDesktop will return null, but we can check the interface
     const desktop = await provider.createDesktop()
-    
+
     if (desktop) {
       expect(desktop.kill).toBeDefined()
       expect(typeof desktop.kill).toBe('function')
-      
+
       // Cleanup
       await desktop.kill()
     }
   })
 
   it('should cleanup all sessions on destroyAllSessions', async () => {
-    const { desktopSessionManager } = await import('@/lib/sandbox/providers/e2b-desktop-provider')
-    
+    const { desktopSessionManager } = await import('@/lib/sandbox/providers/e2b-desktop-provider-enhanced')
+
     // Mock sessions
     const mockDesktop = {
       kill: vi.fn().mockResolvedValue(undefined),
@@ -374,28 +374,28 @@ describe('E2B Desktop Provider Cleanup', () => {
       leftClick: vi.fn(),
       // ... other required methods
     }
-    
+
     desktopSessionManager.sessions.set('session-1', mockDesktop as any)
     desktopSessionManager.sessions.set('session-2', mockDesktop as any)
-    
+
     await desktopSessionManager.destroyAllSessions()
-    
+
     expect(mockDesktop.kill).toHaveBeenCalledTimes(2)
     expect(desktopSessionManager.sessions.size).toBe(0)
   })
 
   it('should handle kill errors gracefully', async () => {
-    const { desktopSessionManager } = await import('@/lib/sandbox/providers/e2b-desktop-provider')
-    
+    const { desktopSessionManager } = await import('@/lib/sandbox/providers/e2b-desktop-provider-enhanced')
+
     const mockDesktop = {
       kill: vi.fn().mockRejectedValue(new Error('Kill failed')),
     }
-    
+
     desktopSessionManager.sessions.set('error-session', mockDesktop as any)
-    
+
     // Should not throw
     await expect(desktopSessionManager.destroySession('error-session')).resolves.not.toThrow()
-    
+
     // Session should still be removed
     expect(desktopSessionManager.sessions.has('error-session')).toBe(false)
   })

@@ -194,8 +194,8 @@ describe('Blaxel Provider Enhanced E2E', () => {
   })
 
   it('should create Blaxel sandbox', async () => {
-    const { blaxelProvider } = await import('@/lib/sandbox/providers/blaxel-provider-enhanced')
-    
+    const { blaxelProvider } = await import('@/lib/sandbox/providers/blaxel-provider')
+
     if (!process.env.BLAXEL_API_KEY) {
       return // Skip if no API key
     }
@@ -207,8 +207,8 @@ describe('Blaxel Provider Enhanced E2E', () => {
   })
 
   it('should call agent (multi-agent workflow)', async () => {
-    const { blaxelProvider } = await import('@/lib/sandbox/providers/blaxel-provider-enhanced')
-    
+    const { blaxelProvider } = await import('@/lib/sandbox/providers/blaxel-provider')
+
     if (!process.env.BLAXEL_API_KEY) {
       return // Skip if no API key
     }
@@ -219,26 +219,22 @@ describe('Blaxel Provider Enhanced E2E', () => {
   })
 
   it('should schedule job', async () => {
-    const { blaxelProvider } = await import('@/lib/sandbox/providers/blaxel-provider-enhanced')
-    
+    const { blaxelProvider } = await import('@/lib/sandbox/providers/blaxel-provider')
+
     if (!process.env.BLAXEL_API_KEY) {
       return // Skip if no API key
     }
 
-    // Test scheduling with cron expression
-    const result = await blaxelProvider.scheduleJob('0 9 * * *', [
+    // Note: scheduleJob throws as cron scheduling requires blaxel.toml
+    // Testing that it throws the correct error
+    await expect(blaxelProvider.scheduleJob('0 9 * * *', [
       { id: 'test-task', data: { type: 'test' } },
-    ])
-
-    expect(result.scheduleId).toBeDefined()
-
-    // Cleanup
-    await blaxelProvider.cancelSchedule(result.scheduleId)
+    ])).rejects.toThrow('Cron scheduling is not supported via SDK')
   })
 
   it('should stream logs', async () => {
-    const { blaxelProvider } = await import('@/lib/sandbox/providers/blaxel-provider-enhanced')
-    
+    const { blaxelProvider } = await import('@/lib/sandbox/providers/blaxel-provider')
+
     if (!process.env.BLAXEL_API_KEY) {
       return // Skip if no API key
     }
@@ -253,8 +249,8 @@ describe('Blaxel Provider Enhanced E2E', () => {
   })
 
   it('should run batch job', async () => {
-    const { blaxelProvider } = await import('@/lib/sandbox/providers/blaxel-provider-enhanced')
-    
+    const { blaxelProvider } = await import('@/lib/sandbox/providers/blaxel-provider')
+
     if (!process.env.BLAXEL_API_KEY) {
       return // Skip if no API key
     }

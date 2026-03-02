@@ -5,7 +5,7 @@
  */
 
 export { blaxelAsyncManager, BlaxelAsyncManager, verifyWebhookFromRequest } from './blaxel-async';
-export { BlaxelTrafficManager, createTrafficManager, quickCanaryDeploy } from './traffic-manager';
+export { BlaxelTrafficManager, createTrafficManager, quickCanaryDeploy, ScalingPresets } from './traffic-manager';
 export { blaxelAgentHandoff, BlaxelAgentHandoffManager, createAgentHandoffManager } from './agent-handoff';
 export { blaxelBatchJobs, BlaxelBatchJobsManager, createBatchJobsManager, quickBatchExecute } from './batch-jobs';
 

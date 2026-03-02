@@ -280,22 +280,38 @@ export async function hashMultipleResources(
 /**
  * Common CDN resources with pre-computed SRI hashes
  *
- * These hashes should be verified periodically and updated as needed
+ * These hashes should be verified periodically and updated as needed.
+ * Use fetchAndHashResource() to generate fresh hashes.
  */
-export const KNOWN_CDN_RESOURCES: Record<string, SRIHash> = {
-  // React (example - verify before use)
-  'https://unpkg.com/react@18/umd/react.production.min.js': {
-    algorithm: 'sha384',
-    hash: 'TODO_VERIFY',
-    integrity: 'sha384-TODO_VERIFY',
-  },
-  // React DOM (example - verify before use)
-  'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js': {
-    algorithm: 'sha384',
-    hash: 'TODO_VERIFY',
-    integrity: 'sha384-TODO_VERIFY',
-  },
-};
+export const KNOWN_CDN_RESOURCES: Record<string, SRIHash> = {};
+
+/**
+ * Update known CDN resource with fresh SRI hash
+ *
+ * @param url - CDN URL
+ * @param algorithm - Hash algorithm (default: sha384)
+ * @returns Updated SRI hash
+ */
+export async function updateCDNResourceHash(
+  url: string,
+  algorithm: SRIAlgorithm = 'sha384'
+): Promise<SRIHash> {
+  const hash = await fetchAndHashResource(url, { algorithm });
+  KNOWN_CDN_RESOURCES[url] = hash;
+  return hash;
+}
+
+/**
+ * Batch update multiple CDN resource hashes
+ *
+ * @param urls - Array of CDN URLs
+ * @returns Map of URLs to SRI hashes
+ */
+export async function batchUpdateCDNResourceHashes(
+  urls: string[]
+): Promise<Map<string, SRIHash>> {
+  return hashMultipleResources(urls);
+}
 
 /**
  * Validate known CDN resource hashes

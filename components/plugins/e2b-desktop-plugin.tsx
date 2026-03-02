@@ -16,7 +16,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { createComputerUseAgent, getComputerUseSystemPrompt, type computerUseTools } from '@/lib/sandbox/providers/computer-use-tools-enhanced'
+import { createComputerUseAgent, getComputerUseSystemPrompt, computerUseTools } from '@/lib/sandbox/providers/computer-use-tools-enhanced'
 import type { DesktopSandboxHandle, DesktopAction, AgentLoopResult, DesktopStats } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
 
 // ==================== Types ====================

@@ -33,6 +33,7 @@ export interface SandboxHandle {
   restoreCheckpoint?(checkpointId: string): Promise<void>
   listCheckpoints?(): Promise<CheckpointInfo[]>
   createService?(config: ServiceConfig): Promise<ServiceInfo>
+  configureService?(config: ServiceConfig & { autoStop?: 'suspend' | 'stop' }): Promise<ServiceInfo>
   listServices?(): Promise<ServiceInfo[]>
   listSessions?(): Promise<SessionInfo[]>
   attachSession?(sessionId: string, options: PtyConnectOptions): Promise<PtyHandle>

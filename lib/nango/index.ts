@@ -11,28 +11,5 @@ export { nangoTools, nangoGitHubTools, nangoSlackTools, nangoNotionTools } from 
 export { nangoConnectionManager } from '../stateful-agent/tools/nango-connection';
 export { nangoRateLimiter } from '../stateful-agent/tools/nango-rate-limit';
 
-// NEW: Sync Manager
-export {
-  triggerSync,
-  getSyncStatus,
-  getSyncRecords,
-  listSyncs,
-  startContinuousSync,
-  getSyncHistory,
-  handleSyncRequest,
-  type SyncConfig,
-  type SyncStatus,
-} from './nango-sync-manager';
-
-// NEW: Webhook Manager
-export {
-  subscribeToWebhooks,
-  unsubscribeFromWebhooks,
-  verifyWebhookSignature,
-  processWebhook,
-  listWebhookSubscriptions,
-  createWebhookHandler,
-  handleWebhookRequest,
-  type WebhookSubscription,
-  type WebhookEvent,
-} from './nango-webhook-manager';
+// Sync Manager and Webhook Manager moved to deprecated/lib/nango/ on 2026-03-01
+// Active Nango integration uses lib/api/nango-service.ts

@@ -677,9 +677,11 @@ export class SpritesSandboxHandle implements SandboxHandle {
 
   /**
    * Create a service with auto-start on wake
-   * 
+   *
    * Services automatically restart when Sprite wakes from hibernation.
    * This is the RECOMMENDED way to run persistent services (web servers, etc.)
+   *
+   * @deprecated Use configureService() instead which uses execFile directly
    */
   async createService(config: ServiceConfig): Promise<ServiceInfo> {
     if (!this.enableAutoServices) {
@@ -693,7 +695,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
 
       // Build command with options
       let cmd = `sprite-env services create ${config.name} -s ${this.id} --cmd "${config.command}"`
-      
+
       if (config.args && config.args.length > 0) {
         cmd += ` --args "${config.args.join(' ')}"`
       }
@@ -725,6 +727,66 @@ export class SpritesSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       console.error('[Sprites] Service creation failed:', error.message)
       throw new Error(`Failed to create service: ${error.message}`)
+    }
+  }
+
+  /**
+   * Configure service with auto-suspend support (preferred method)
+   *
+   * Uses execFile directly instead of shell exec for better security.
+   * Supports auto-suspend to preserve memory state.
+   *
+   * @see https://docs.sprites.dev/working-with-sprites#auto-suspend
+   */
+  async configureService(config: {
+    name: string
+    command: string
+    args?: string[]
+    port?: number
+    autoStart?: boolean
+    autoStop?: 'suspend' | 'stop'
+  }): Promise<ServiceInfo> {
+    try {
+      const args = [
+        'sprite-env',
+        'services',
+        'create',
+        config.name,
+        '--cmd',
+        config.command,
+      ]
+
+      if (config.args && config.args.length > 0) {
+        args.push('--args', ...config.args)
+      }
+
+      if (config.port) {
+        args.push('--port', config.port.toString())
+      }
+
+      if (config.autoStart) {
+        args.push('--auto-start')
+      }
+
+      if (config.autoStop === 'suspend') {
+        args.push('--auto-suspend') // Preserves memory state
+      } else if (config.autoStop === 'stop') {
+        args.push('--auto-stop') // Only saves disk
+      }
+
+      const result = await this.sprite.execFile('sprite', args)
+      const service = JSON.parse(result.stdout)
+
+      return {
+        id: service.id || config.name,
+        name: config.name,
+        status: service.status || 'running',
+        port: config.port,
+        url: service.url,
+      }
+    } catch (error: any) {
+      console.error('[Sprites] Failed to configure service:', error)
+      throw error
     }
   }
 
@@ -783,7 +845,23 @@ export class SpritesSandboxHandle implements SandboxHandle {
     }
   }
 
-  // Note: restartService removed - use sprites-provider-enhanced.ts version instead
+  /**
+   * Restart service
+   * 
+   * @see https://docs.sprites.dev/working-with-sprites#services
+   */
+  async restartService(serviceName: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      await this.sprite.execFile('sprite-env', [
+        'services',
+        'restart',
+        serviceName,
+      ])
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  }
 
   /**
    * Configure HTTP service for auto-suspend/resume

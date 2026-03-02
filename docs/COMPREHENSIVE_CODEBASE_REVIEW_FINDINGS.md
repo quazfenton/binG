@@ -824,7 +824,7 @@ async removeProxy(proxyId: string): Promise<void>
 **Current Implementation**:
 ```typescript
 // lib/sandbox/providers/e2b-provider.ts (line 23)
-import { e2bDesktopProvider, type DesktopHandle, type E2BDesktopConfig } from './e2b-desktop-provider'
+import { e2bDesktopProvider, type DesktopSandboxHandle as DesktopHandle } from './e2b-desktop-provider-enhanced'
 ```
 
 **Assessment**: ⚠️ **PARTIAL** - Desktop provider imported but not integrated into main provider.
@@ -2075,16 +2075,16 @@ export class ComposioAuthManager {
 ### Files Reviewed
 | File | Lines | Status |
 |------|-------|--------|
-| `lib/stateful-agent/human-in-the-loop.ts` | ~120 | ✅ Good |
+| `lib/stateful-agent/human-in-the-loop.ts` | ~745 | ✅ Enhanced |
 | `lib/stateful-agent/commit/shadow-commit.ts` | 359 | ✅ Good |
 | `lib/stateful-agent/agents/self-healing.ts` | Not yet reviewed | 🔄 Pending |
 | `lib/stateful-agent/agents/provider-fallback.ts` | Not yet reviewed | 🔄 Pending |
 
 ### Critical Findings
 
-#### 15.1 Human-in-the-Loop Manager (✅ GOOD)
+#### 15.1 Human-in-the-Loop Manager (✅ ENHANCED)
 
-**Current Implementation**:
+**Current Implementation** (Base):
 ```typescript
 // lib/stateful-agent/human-in-the-loop.ts
 class HumanInTheLoopManager {
@@ -2096,7 +2096,7 @@ class HumanInTheLoopManager {
 
   async requestInterrupt(request: InterruptRequest): Promise<InterruptResponse> {
     const interruptId = crypto.randomUUID();
-    
+
     const promise = new Promise<InterruptResponse>((resolve) => {
       this.pendingInterrupts.set(interruptId, { request, resolve, createdAt: new Date() });
     });
@@ -2109,7 +2109,7 @@ class HumanInTheLoopManager {
       ? 300000
       : Math.max(10000, Math.min(1800000, configuredTimeout));
 
-    const timeoutPromise = new Promise<InterruptResponse>((_, reject) => {
+    const timeoutPromise = new Promise<InterruptResponse>((resolve) => {
       setTimeout(() => {
         resolve({ approved: false, feedback: 'Approval request timed out' });
       }, timeout);
@@ -2120,17 +2120,67 @@ class HumanInTheLoopManager {
 }
 ```
 
-**Assessment**: ✅ **GOOD** - HITL manager solid with:
+**Assessment**: ✅ **ENHANCED** - HITL manager now includes:
+
+**Base Features** (Original):
 - ✅ Proper interrupt queue management
 - ✅ Configurable timeout with validation (10s-30min range)
 - ✅ Timeout auto-deny
 - ✅ Session cancellation support
 - ✅ Pending interrupts listing
+- ✅ Audit logging integration
 
-**Minor Improvements**:
-1. **Persistence** - Interrupts lost on restart (in-memory Map)
+**Enhanced Features** (New):
+- ✅ `ApprovalWorkflow` and `ApprovalRule` interfaces for configurable workflows
+- ✅ Pre-built condition matchers: `toolNameMatcher`, `filePathMatcher`, `riskLevelMatcher`
+- ✅ Pre-built rules: shell commands, sensitive files, read-only ops, high-risk files
+- ✅ Three pre-configured workflows: `defaultWorkflow`, `strictWorkflow`, `permissiveWorkflow`
+- ✅ `evaluateWorkflow()` and `evaluateActiveWorkflow()` functions
+- ✅ `requireApprovalWithWorkflow()` for workflow-based approvals
+- ✅ `HITLWorkflowManager` class for stateful execution with history tracking
+- ✅ Workflow registry with custom workflow support (`getWorkflow`, `registerWorkflow`)
+- ✅ `ApprovalContext` for rich evaluation context (filePath, riskLevel, userId, sessionId)
+
+**Usage Example**:
+```typescript
+import {
+  requireApprovalWithWorkflow,
+  createHITLWorkflowManager,
+  defaultWorkflow,
+  type ApprovalContext
+} from '@/lib/stateful-agent';
+
+// Simple workflow-based approval
+const result = await requireApprovalWithWorkflow(
+  'execShell',
+  { command: 'rm -rf /tmp/*' },
+  { filePath: '/tmp/cache', riskLevel: 'high' } as ApprovalContext,
+  userId
+);
+
+// Advanced: Use workflow manager
+const manager = createHITLWorkflowManager(defaultWorkflow);
+const evalResult = manager.evaluate('writeFile', { path: '.env' }, {
+  filePath: '.env',
+  riskLevel: 'high'
+});
+
+if (evalResult.requiresApproval) {
+  console.log('Matched rule:', evalResult.matchedRule?.name);
+  console.log('Timeout:', evalResult.timeout);
+}
+```
+
+**Environment Variables**:
+- `ENABLE_HITL=true` - Enable HITL enforcement
+- `HITL_WORKFLOW_ID=default` - Select workflow (default, strict, permissive)
+- `HITL_TIMEOUT=300000` - Approval timeout in ms (default: 5 min)
+- `HITL_APPROVAL_REQUIRED_ACTIONS=execShell,writeFile,deleteFile` - Legacy action list
+
+**Remaining Improvements**:
+1. **Persistence** - Interrupts still in-memory (could use Redis/DB)
 2. **Webhook notifications** - No notification when approval needed
-3. **Audit logging** - No approval history tracking
+3. **Multi-approvers** - Support for multiple approvers per rule
 
 ---
 

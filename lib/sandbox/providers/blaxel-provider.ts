@@ -432,7 +432,7 @@ export class BlaxelProvider implements SandboxProvider {
 
 import { SandboxSecurityManager } from '../security-manager'
 
-class BlaxelSandboxHandle implements SandboxHandle {
+export class BlaxelSandboxHandle implements SandboxHandle {
   readonly id: string
   readonly workspaceDir = WORKSPACE_DIR
   private sandbox: any
@@ -923,12 +923,20 @@ class BlaxelSandboxHandle implements SandboxHandle {
 
   /**
    * Schedule recurring job (cron)
-   * Note: Cron scheduling is configured via blaxel.toml, not runtime SDK.
-   * This method is a placeholder for future SDK support.
+   * 
+   * DEPRECATED: Cron scheduling is configured via blaxel.toml, not runtime SDK.
+   * Use the Blaxel CLI or Console to configure scheduled jobs.
+   * 
+   * @see https://docs.blaxel.ai/Jobs/Overview
+   * @see https://docs.blaxel.ai/Jobs/Deploy-a-job
+   * 
+   * @deprecated Use blaxel.toml configuration or Blaxel Console instead
    */
-  async scheduleJob(schedule: string, tasks?: BatchTask[]): Promise<{ scheduleId: string }> {
-    console.warn('[Blaxel] Cron scheduling via SDK is not yet supported. Configure via blaxel.toml instead.')
-    throw new Error('Cron scheduling must be configured via blaxel.toml. See docs for details.')
+  async scheduleJob(_schedule: string, _tasks?: BatchTask[]): Promise<{ scheduleId: string }> {
+    throw new Error(
+      'Cron scheduling is not supported via SDK. Configure scheduled jobs via blaxel.toml or the Blaxel Console. ' +
+      'See: https://docs.blaxel.ai/Jobs/Overview'
+    )
   }
 
   /**

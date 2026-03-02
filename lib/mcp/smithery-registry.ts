@@ -14,6 +14,8 @@
  * @see https://smithery.ai/docs/api-reference
  */
 
+import { SmitheryClient, SmitherySearchOptions, SmitherySearchResults, SmitheryServer, SmitheryRelease, SmitheryConnection, SmitheryConfig } from './smithery-registry';
+
 export interface SmitheryServer {
   qualifiedName: string;
   namespace: string;
@@ -30,6 +32,106 @@ export interface SmitheryServer {
   mcpUrl?: string;
   iconUrl?: string;
 }
+
+export interface SmitheryRelease {
+  id: string;
+  version: string;
+  status: 'success' | 'failed' | 'building';
+  deploymentType: 'stdio' | 'http' | 'container';
+  createdAt: string;
+  logs?: string;
+  mcpEndpointUrl?: string;
+}
+
+export interface SmitheryConnection {
+  id: string;
+  namespace: string;
+  serverQualifiedName: string;
+  mcpUrl: string;
+  status: 'active' | 'inactive' | 'error';
+  metadata?: Record<string, any>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SmitherySearchOptions {
+  q?: string;
+  deploymentStatus?: 'stdio' | 'http' | 'container';
+  verified?: boolean;
+  ownerId?: string;
+  hasTools?: boolean;
+  hasSkills?: boolean;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface SmitherySearchResults {
+  servers: SmitheryServer[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+export interface SmitheryConfig {
+  apiKey?: string;
+  baseUrl?: string;
+}
+
+/**
+ * Smithery Registry - Wrapper class with additional registry features
+ */
+export class SmitheryRegistry {
+  private client: SmitheryClient;
+  private installedServers: Map<string, SmitheryServer> = new Map();
+  
+  constructor(config?: SmitheryConfig) {
+    this.client = new SmitheryClient(config);
+  }
+  
+  /**
+   * Search for servers in the registry
+   */
+  async searchServers(query: string): Promise<SmitheryServer[]> {
+    const results = await this.client.searchServers({ q: query });
+    return results.servers;
+  }
+  
+  /**
+   * Get server details
+   */
+  async getServerDetails(qualifiedName: string): Promise<{
+    name: string;
+    config: { command: string; args: string[] };
+  }> {
+    const server = await this.client.getServer(qualifiedName);
+    return {
+      name: server.name,
+      config: {
+        command: 'npx',
+        args: ['-y', `@smithery/${qualifiedName}`],
+      },
+    };
+  }
+  
+  /**
+   * Install a server
+   */
+  async installServer(qualifiedName: string): Promise<{ success: boolean; serverId: string }> {
+    const server = await this.client.getServer(qualifiedName);
+    this.installedServers.set(qualifiedName, server);
+    return { success: true, serverId: qualifiedName };
+  }
+  
+  /**
+   * Get installed servers
+   */
+  getInstalledServers(): SmitheryServer[] {
+    return Array.from(this.installedServers.values());
+  }
+}
+
+export { SmitheryClient };
 
 export interface SmitheryRelease {
   id: string;
@@ -514,3 +616,15 @@ export class SmitheryClient {
 export function createSmitheryClient(config?: SmitheryConfig): SmitheryClient {
   return new SmitheryClient(config);
 }
+
+/**
+ * Create Smithery registry instance
+ */
+export function createSmitheryRegistry(config?: SmitheryConfig): SmitheryRegistry {
+  return new SmitheryRegistry(config);
+}
+
+/**
+ * Default Smithery registry instance
+ */
+export const smitheryRegistry = new SmitheryRegistry();

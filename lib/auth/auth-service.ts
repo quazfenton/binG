@@ -658,55 +658,6 @@ export class AuthService {
       return { success: false, error: 'Token refresh failed' };
     }
   }
-
-  /**
-   * Check if token needs refresh and refresh automatically
-   * 
-   * @param token - Current JWT token
-   * @param sessionInfo - Optional session info for refresh
-   * @returns Object with token status and new token if refreshed
-   */
-  async checkAndRefreshToken(token: string, sessionInfo?: Partial<SessionInfo>): Promise<{
-    needsRefresh: boolean;
-    token?: string;
-    sessionId?: string;
-    error?: string;
-  }> {
-    try {
-      // Decode token to check expiration
-      const jwt = require('jsonwebtoken');
-      const decoded = jwt.decode(token) as { exp?: number } | null;
-
-      if (!decoded?.exp) {
-        return { needsRefresh: false };
-      }
-
-      // Check if token is expiring soon (within 5 minutes)
-      if (isTokenExpiringSoon(decoded.exp)) {
-        // Try to refresh using the token as session ID
-        // In production, you'd want a separate refresh token store
-        const refreshResult = await this.refreshToken(token, sessionInfo);
-        
-        if (refreshResult.success) {
-          return {
-            needsRefresh: true,
-            token: refreshResult.token,
-            sessionId: refreshResult.sessionId,
-          };
-        } else {
-          return {
-            needsRefresh: true,
-            error: refreshResult.error,
-          };
-        }
-      }
-
-      return { needsRefresh: false };
-    } catch (error) {
-      logger.error('Token check error', error as Error);
-      return { needsRefresh: false };
-    }
-  }
 }
 
 // Export singleton instance

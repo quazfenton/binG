@@ -1477,42 +1477,58 @@ export function getToolsForPhase(phase: string): Record<string, CoreTool> {
 }
 ```
 
-### 4. **Human-in-the-Loop Enhancement**
+### 4. **Human-in-the-Loop Enhancement** ✅ **IMPLEMENTED**
+
+The enhanced HITL features have been appended to `lib/stateful-agent/human-in-the-loop.ts`:
+
 ```typescript
-// lib/stateful-agent/human-in-the-loop-enhanced.ts
+// lib/stateful-agent/human-in-the-loop.ts
+
+// Workflow and Rule interfaces
 export interface ApprovalWorkflow {
   id: string;
+  name?: string;
   type: 'auto' | 'manual' | 'hybrid';
   rules: ApprovalRule[];
+  defaultAction?: 'require_approval' | 'auto_approve';
 }
 
 export interface ApprovalRule {
-  condition: (toolName: string, params: any) => boolean;
+  id?: string;
+  name?: string;
+  condition: ApprovalCondition;
   action: 'require_approval' | 'notify_only' | 'auto_approve';
   approvers?: string[];
   timeout?: number;
+  description?: string;
 }
 
-export const defaultWorkflow: ApprovalWorkflow = {
-  id: 'default',
-  type: 'hybrid',
-  rules: [
-    {
-      condition: (toolName) => ['execShell'].includes(toolName),
-      action: 'require_approval',
-      timeout: 300000, // 5 minutes
-    },
-    {
-      condition: (toolName, params) => 
-        toolName === 'applyDiff' && params.path?.includes('.env'),
-      action: 'require_approval',
-    },
-    {
-      condition: (toolName) => ['readFile', 'listFiles'].includes(toolName),
-      action: 'auto_approve',
-    },
-  ],
-};
+// Pre-built condition matchers
+export function toolNameMatcher(names: string[]): ApprovalCondition;
+export function filePathMatcher(patterns: string[]): ApprovalCondition;
+export function riskLevelMatcher(levels: ('low' | 'medium' | 'high')[]): ApprovalCondition;
+
+// Pre-built rules
+export function createShellCommandRule(): ApprovalRule;
+export function createSensitiveFilesRule(): ApprovalRule;
+export function createReadOnlyRule(): ApprovalRule;
+export function createHighRiskFileRule(): ApprovalRule;
+
+// Pre-built workflows
+export const defaultWorkflow: ApprovalWorkflow;    // Balanced hybrid approach
+export const strictWorkflow: ApprovalWorkflow;     // Require approval for most
+export const permissiveWorkflow: ApprovalWorkflow; // Only approve high-risk
+
+// Workflow evaluation
+export function evaluateWorkflow(workflow, toolName, params, context?): WorkflowEvaluation;
+export function evaluateActiveWorkflow(toolName, params, context?): WorkflowEvaluation;
+
+// Enhanced approval with workflow
+export async function requireApprovalWithWorkflow(toolName, params, context?, userId?): Promise<...>;
+
+// Workflow manager
+export class HITLWorkflowManager { ... }
+export function createHITLWorkflowManager(workflow?): HITLWorkflowManager;
 ```
 
 ---

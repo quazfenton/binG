@@ -233,7 +233,7 @@ const sandbox = await Sandbox.create()
 
 ```typescript
 // New code - desktop with VNC and AMP
-import { e2bDesktopProvider } from '@/lib/sandbox/providers/e2b-desktop-provider'
+import { e2bDesktopProvider } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
 
 const desktop = await e2bDesktopProvider.createDesktop({
   startStreaming: true,
@@ -261,9 +261,9 @@ await desktop.type('Hello')
    ```typescript
    // Old
    import { Sandbox } from 'e2b'
-   
+
    // New
-   import { e2bDesktopProvider } from '@/lib/sandbox/providers/e2b-desktop-provider'
+   import { e2bDesktopProvider } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
    ```
 
 4. **Update creation**:

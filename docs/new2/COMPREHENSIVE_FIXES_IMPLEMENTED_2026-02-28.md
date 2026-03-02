@@ -449,6 +449,41 @@ TERMINAL_RATE_LIMIT_WINDOW_MS=1000
 5. Run full test suite to verify no regressions
 6. Deploy to staging for integration testing
 
+## AST Aware Diff Implementation Future Enhancements (Optional)
+
+1. **TypeScript Type Preservation**
+   - Automatically infer and preserve types during edits
+   - Type-safe refactoring
+
+2. **Cross-File References**
+   - Track references across multiple files
+   - Update imports when renaming exports
+
+3. **Code Formatting Integration**
+   - Auto-format after AST edits
+   - Prettier integration
+
+4. **Semantic Diff Visualization**
+   - Show AST-level changes in UI
+   - Visual diff of node structure
+
+5. **Refactoring Recipes**
+   - Pre-built refactoring patterns
+   - One-click common refactorings
+
+More:
+- [ ] Implement 2FA (TOTP/WebAuthn)
+- [ ] Add password history
+- [ ] Implement device fingerprinting
+- [ ] Add suspicious activity detection
+
+### Long-term (Optional)
+- [ ] Redis-backed rate limiting (for distributed systems)
+- [ ] Advanced fraud detection
+- [ ] Behavioral analysis
+- [ ] Machine learning anomaly detection
+---
+
 ---
 
 **Review Completed:** February 28, 2026  

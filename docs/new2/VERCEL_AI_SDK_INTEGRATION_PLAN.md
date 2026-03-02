@@ -333,8 +333,23 @@ Store conversation history for context-aware responses and pattern learning.
 #### 3. Progressive Tool Disclosure
 Only expose relevant tools for each phase (discovery, planning, editing, verifying) to reduce token usage and improve focus.
 
-#### 4. Enhanced Human-in-the-Loop
+#### 4. Enhanced Human-in-the-Loop ✅ **COMPLETED**
 Configurable approval workflows with rules based on tool type, file paths, and risk levels.
+
+**Features Added:**
+- `ApprovalWorkflow` and `ApprovalRule` interfaces
+- Pre-built condition matchers (tool name, file path, risk level)
+- Pre-built rules for common scenarios (shell commands, sensitive files, read-only ops)
+- Three pre-configured workflows (default, strict, permissive)
+- `evaluateWorkflow()` and `evaluateActiveWorkflow()` functions
+- `requireApprovalWithWorkflow()` for workflow-based approvals
+- `HITLWorkflowManager` class for stateful execution with history tracking
+- Workflow registry with custom workflow support
+
+**Environment Variables:**
+- `ENABLE_HITL=true` - Enable HITL enforcement
+- `HITL_WORKFLOW_ID=default` - Select workflow (default, strict, permissive)
+- `HITL_TIMEOUT=300000` - Approval timeout in ms
 
 ### Files Created vs. Planned
 

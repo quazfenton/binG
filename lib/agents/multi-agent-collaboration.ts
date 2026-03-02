@@ -685,3 +685,30 @@ export class MultiAgentCollaboration extends EventEmitter {
 export function createMultiAgentCollaboration(): MultiAgentCollaboration {
   return new MultiAgentCollaboration();
 }
+
+/**
+ * Quick collaborative execution helper
+ * 
+ * Creates a temporary collaboration instance and executes tasks
+ * across multiple agents in parallel.
+ * 
+ * @param roles - Agent roles to create
+ * @param taskDescription - Task description
+ * @param context - Optional execution context
+ * @returns Collaboration result
+ */
+export async function quickCollaborativeExecute(
+  roles: AgentRole[],
+  taskDescription: string,
+  context?: any
+): Promise<CollaborationResult> {
+  const collaboration = new MultiAgentCollaboration();
+  
+  // Register agents for each role
+  for (let i = 0; i < roles.length; i++) {
+    collaboration.registerAgent(`quick_agent_${i}`, roles[i]);
+  }
+  
+  // Execute collaboratively
+  return collaboration.executeCollaborative(taskDescription, roles, context);
+}

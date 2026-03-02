@@ -23,7 +23,7 @@ import {
   deleteTerminalSession,
   type TerminalSessionState,
 } from './terminal-session-store'
-import { emitEvent } from './sandbox-events-enhanced'
+import { emitEvent } from './sandbox-events'
 
 interface PtyConnection {
   ptyHandle: ProviderPtyHandle

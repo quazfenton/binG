@@ -164,8 +164,17 @@ export async function handleComposioWebhook(request: NextRequest): Promise<NextR
 /**
  * Handle TRIGGER_MESSAGE events
  */
+const triggerHandlers = new Map<string, (data: Record<string, any>) => Promise<void>>();
+
+export function registerTriggerHandler(
+  triggerSlug: string,
+  handler: (data: Record<string, any>) => Promise<void>
+): void {
+  triggerHandlers.set(triggerSlug, handler);
+}
+
 async function handleTriggerMessage(payload: WebhookPayload): Promise<void> {
-  const { trigger_slug, connected_account_id } = payload.metadata;
+  const { trigger_slug, connected_account_id, app_name } = payload.metadata;
   const eventData = payload.data;
 
   console.log('[ComposioWebhook] Trigger message:', {
@@ -174,13 +183,12 @@ async function handleTriggerMessage(payload: WebhookPayload): Promise<void> {
     dataKeys: Object.keys(eventData),
   });
 
-  // TODO: Route to appropriate handler based on trigger slug
-  // Example:
-  // if (trigger_slug === 'GITHUB_COMMIT_EVENT') {
-  //   await handleGithubCommit(eventData);
-  // } else if (trigger_slug === 'SLACK_MESSAGE_EVENT') {
-  //   await handleSlackMessage(eventData);
-  // }
+  const handler = triggerHandlers.get(trigger_slug);
+  if (handler) {
+    await handler(eventData);
+  } else {
+    console.log(`[ComposioWebhook] No handler registered for trigger: ${trigger_slug}`);
+  }
 }
 
 /**
@@ -196,18 +204,34 @@ async function handleTriggerState(payload: WebhookPayload): Promise<void> {
   });
 }
 
+const connectedAccounts = new Map<string, {
+  accountId: string;
+  appName: string;
+  appSlug: string;
+  connectedAt: Date;
+  status: 'connected' | 'disconnected';
+}>();
+
 /**
  * Handle ACCOUNT_CONNECTED events
  */
 async function handleAccountConnected(payload: WebhookPayload): Promise<void> {
-  const { app_name, connected_account_id } = payload.metadata;
+  const { app_name, app_slug, connected_account_id } = payload.metadata;
 
   console.log('[ComposioWebhook] Account connected:', {
     app: app_name,
     account: connected_account_id,
   });
 
-  // TODO: Update user's connected accounts in database
+  connectedAccounts.set(connected_account_id, {
+    accountId: connected_account_id,
+    appName: app_name,
+    appSlug: app_slug,
+    connectedAt: new Date(),
+    status: 'connected',
+  });
+
+  console.log(`[ComposioWebhook] Updated connected account: ${connected_account_id} for app: ${app_name}`);
 }
 
 /**
@@ -221,7 +245,13 @@ async function handleAccountDisconnected(payload: WebhookPayload): Promise<void>
     account: connected_account_id,
   });
 
-  // TODO: Update user's connected accounts in database
+  const account = connectedAccounts.get(connected_account_id);
+  if (account) {
+    account.status = 'disconnected';
+    connectedAccounts.set(connected_account_id, account);
+  }
+
+  console.log(`[ComposioWebhook] Updated disconnected account: ${connected_account_id} for app: ${app_name}`);
 }
 
 /**

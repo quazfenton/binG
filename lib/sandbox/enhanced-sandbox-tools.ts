@@ -94,6 +94,31 @@ export const ENHANCED_SANDBOX_TOOLS = [
       return { valid: true };
     },
   },
+  {
+    name: 'list_dir',
+    description: 'List files and directories at the given path in the sandbox workspace.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description: 'Directory path relative to the sandbox workspace root. Defaults to workspace root.',
+        },
+      },
+      required: [],
+    },
+    validate: (args: { path?: string }, workspaceDir: string) => {
+      const path = args.path || '.';
+      const validation = validateFilePath(path, workspaceDir);
+      if (!validation.valid) {
+        return {
+          valid: false,
+          reason: validation.reason,
+        };
+      }
+      return { valid: true };
+    },
+  },
 
   // Enhanced: Computer Use Tools
   {
@@ -513,7 +538,7 @@ export const ENHANCED_SANDBOX_TOOLS = [
 
 // Tool categories for organization
 export const TOOL_CATEGORIES = {
-  base: ['exec_shell', 'write_file', 'read_file'],
+  base: ['exec_shell', 'write_file', 'read_file', 'list_dir'],
   computerUse: ['computer_use_click', 'computer_use_type', 'computer_use_screenshot', 'computer_use_scroll'],
   git: ['git_clone', 'git_status', 'git_commit', 'git_push'],
   codeExecution: ['run_code'],
@@ -522,6 +547,8 @@ export const TOOL_CATEGORIES = {
   process: ['start_process', 'stop_process', 'list_processes'],
   preview: ['get_previews', 'forward_port'],
 }
+
+export type ToolName = typeof ENHANCED_SANDBOX_TOOLS[number]['name']
 
 // Helper to get tools by category
 export function getToolsByCategory(category: keyof typeof TOOL_CATEGORIES) {

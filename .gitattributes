@@ -1,0 +1,8 @@
+# Ignore Markdown files in the entire repository
+*.md linguist-documentation=true
+docs/** linguist-documentation=true
+
+# Ignore everything inside the test/ folder for diffs and analysis
+test/** linguist-generated=true
+tests-results/** linguist-generated=true
+deprecated/** linguist-documentation=true

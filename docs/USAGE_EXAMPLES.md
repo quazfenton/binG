@@ -274,7 +274,7 @@ if (auth.success) {
 ### Create Desktop with VNC
 
 ```typescript
-import { e2bDesktopProvider } from '@/lib/sandbox/providers/e2b-desktop-provider'
+import { e2bDesktopProvider } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
 
 // Create desktop sandbox
 const desktop = await e2bDesktopProvider.createDesktop({

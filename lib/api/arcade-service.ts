@@ -125,13 +125,24 @@ export class ArcadeService {
 
   /**
    * Get available tools for a toolkit
+   * 
+   * @param filters - Optional filters (toolkit, tags, limit)
    */
-  async getTools(toolkit?: string): Promise<ArcadeTool[]> {
+  async getTools(filters?: {
+    toolkit?: string;
+    tags?: string[];
+    limit?: number;
+  }): Promise<ArcadeTool[]> {
     await this.initialize();
 
     try {
       if (this.client?.tools) {
-        const tools = await this.client.tools.list(toolkit ? { toolkit } : {});
+        const options = {
+          toolkit: filters?.toolkit,
+          tags: filters?.tags,
+          limit: filters?.limit,
+        };
+        const tools = await this.client.tools.list(options);
         return tools.map((t: any) => ({
           name: t.name,
           description: t.description,
@@ -140,6 +151,87 @@ export class ArcadeService {
           requiresAuth: t.requires_auth || false,
         }));
       }
+
+      // HTTP fallback
+      const url = new URL(`${this.config.baseUrl || 'https://api.arcade.dev'}/v1/tools`);
+      if (filters?.toolkit) {
+        url.searchParams.set('toolkit', filters.toolkit);
+      }
+      if (filters?.tags?.length) {
+        url.searchParams.set('tags', filters.tags.join(','));
+      }
+      if (filters?.limit) {
+        url.searchParams.set('limit', String(filters.limit));
+      }
+
+      const response = await fetch(url.toString(), {
+        headers: {
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to get tools: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      return data.tools?.map((t: any) => ({
+        name: t.name,
+        description: t.description,
+        toolkit: t.toolkit,
+        inputSchema: t.input_schema || {},
+        requiresAuth: t.requires_auth || false,
+      })) || [];
+    } catch (error: any) {
+      console.error('[ArcadeService] getTools failed:', error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Search for tools
+   */
+  async searchTools(
+    query: string, 
+    options?: { limit?: number }
+  ): Promise<ArcadeTool[]> {
+    await this.initialize();
+
+    try {
+      if (this.client?.tools?.search) {
+        const tools = await this.client.tools.search({
+          query,
+          limit: options?.limit,
+        });
+        return tools.map((t: any) => ({
+          name: t.name,
+          description: t.description,
+          toolkit: t.toolkit,
+          inputSchema: t.input_schema || {},
+          requiresAuth: t.requires_auth || false,
+        }));
+      }
+
+      // Fallback to local search
+      const allTools = await this.getTools();
+      const queryLower = query.toLowerCase();
+
+      let results = allTools.filter(tool =>
+        tool.name.toLowerCase().includes(queryLower) ||
+        tool.description.toLowerCase().includes(queryLower) ||
+        tool.toolkit.toLowerCase().includes(queryLower)
+      );
+
+      if (options?.limit) {
+        results = results.slice(0, options.limit);
+      }
+
+      return results;
+    } catch (error: any) {
+      console.error('[ArcadeService] searchTools failed:', error.message);
+      return [];
+    }
+  }
 
       // HTTP fallback
       const url = new URL(`${this.config.baseUrl || 'https://api.arcade.dev'}/v1/tools`);

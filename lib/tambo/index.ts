@@ -6,6 +6,17 @@
  * @see https://tambo.ai/docs
  */
 
+// Local tools
+export {
+  formatCodeTool,
+  validateInputTool,
+  calculateTool,
+  allTamboTools,
+  getToolByName,
+  registerTool,
+  type TamboTool,
+} from './tambo-tools';
+
 // Unified registries (single source of truth)
 export {
   tamboToolRegistry,

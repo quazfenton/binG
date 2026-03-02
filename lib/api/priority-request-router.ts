@@ -15,15 +15,11 @@ import { customFallbackService, type CustomFallbackRequest, type CustomFallbackR
 import { enhancedLLMService, type EnhancedLLMRequest } from './enhanced-llm-service';
 import { getToolManager, getUnifiedToolRegistry, getToolDiscoveryService, getToolErrorHandler } from '../tools';
 import { toolAuthManager } from '../services/tool-authorization-manager';
-import { toolContextManager } from '../services/tool-context-manager';
 import { sandboxBridge } from '../sandbox';
 import type { LLMMessage } from './llm-providers';
 import { detectRequestType } from '../utils/request-type-detector';
 import { initializeComposioService, getComposioService, type ComposioToolRequest } from './composio-service';
 import { quotaManager } from '../services/quota-manager';
-import { getArcadeService } from './arcade-service';
-import { getNangoService } from './nango-service';
-import { getTamboService } from '../tambo/tambo-service';
 
 // ===========================================
 // Circuit Breaker Pattern Implementation

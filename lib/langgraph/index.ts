@@ -19,8 +19,8 @@ export {
   selfHealingRouter,
 } from './nodes';
 
-// Graph compilation and execution
-export { createAgentGraph, runLangGraphAgent } from './graph';
+// graph.ts moved to deprecated/lib/langgraph/ on 2026-03-01
+// Agent graph orchestration uses lib/mastra/ and lib/stateful-agent/ instead
 
 // Re-export for convenience
 export { createCheckpointer } from '@/lib/stateful-agent/checkpointer';

@@ -13,7 +13,7 @@ import { CodeSandboxProvider } from './codesandbox-provider'
 import { E2BProvider } from './e2b-provider'
 import { DaytonaProvider } from './daytona-provider'
 import { RunloopProvider } from './runloop-provider'
-import { E2BDesktopProvider, desktopSessionManager, type DesktopHandle, type E2BDesktopConfig } from './e2b-desktop-provider'
+import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from './e2b-desktop-provider-enhanced'
 
 // Provider registry
 const providerRegistry = new Map<SandboxProviderType, {
@@ -234,7 +234,8 @@ export function getProviderPriority(type: SandboxProviderType): number {
 
 // Re-export provider implementations for direct import
 export { MicrosandboxProvider } from './microsandbox-provider'
-export { BlaxelProvider } from './blaxel-provider'
+export { BlaxelProvider, verifyCallbackSignature, verifyCallbackMiddleware } from './blaxel-provider'
+export type { BlaxelSandboxHandle } from './blaxel-provider'
 export { SpritesProvider } from './sprites-provider'
 export { CodeSandboxProvider } from './codesandbox-provider'
 export { E2BProvider, E2BGitIntegration, createE2BGitIntegration } from './e2b-provider'
@@ -391,11 +392,13 @@ export {
   E2BDesktopProvider,
   desktopSessionManager,
   executeDesktopCommand,
-  getDesktopSessionInfo,
-  listDesktopSessions,
-  type DesktopHandle,
-  type E2BDesktopConfig,
-} from './e2b-desktop-provider';
+  type DesktopSandboxHandle as DesktopHandle,
+  type DesktopAction,
+  type AgentLoopResult,
+  type DesktopStats,
+  type AmpSession,
+  type MCPConfig,
+} from './e2b-desktop-provider-enhanced';
 
 // ===========================================
 // E2B MCP Gateway Exports

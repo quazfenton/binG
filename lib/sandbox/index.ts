@@ -10,6 +10,15 @@ export { provisionBaseImage, warmPool, WarmPool } from './base-image';
 export type { BasePackageSet, ProvisionResult } from './base-image';
 export { sandboxFilesystemSync } from './sandbox-filesystem-sync';
 
+// Enhanced terminal manager with desktop/MCP support
+export { EnhancedTerminalManager } from './enhanced-terminal-manager';
+
+// Enhanced sandbox tools with computer use, MCP, desktop operations
+export { ENHANCED_SANDBOX_TOOLS, TOOL_CATEGORIES, getToolsByCategory, isToolAvailable, getToolByName } from './enhanced-sandbox-tools';
+
+// Enhanced port detection
+export { enhancedPortDetector, detectPorts, getDetectedPorts, clearDetectedPorts, type PortDetectionResult } from './enhanced-port-detector';
+
 // Resource monitoring
 export {
   SandboxResourceMonitor,

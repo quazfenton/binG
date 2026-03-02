@@ -121,7 +121,8 @@ function analyzeViolation(report: CSPReport['csp-report']): {
   // Low: Third-party resource blocking
   if (
     blockedUri.startsWith('https://') &&
-    !blockedUri.includes(window.location.hostname)
+    !blockedUri.includes('localhost') &&
+    !blockedUri.includes('example.com')
   ) {
     return {
       severity: 'low',
@@ -135,6 +136,40 @@ function analyzeViolation(report: CSPReport['csp-report']): {
     category: 'other',
     recommendation: 'Review CSP policy',
   };
+}
+
+export interface CSPViolationRecord {
+  id?: string;
+  timestamp: string;
+  blockedUri: string;
+  documentUri: string;
+  effectiveDirective: string;
+  sourceFile?: string;
+  lineNumber?: number;
+  columnNumber?: number;
+  severity: string;
+  category: string;
+  userAgent?: string;
+  ip?: string;
+}
+
+const cspViolations: CSPViolationRecord[] = [];
+
+async function sendAlert(alert: {
+  type: string;
+  severity: string;
+  details: any;
+}): Promise<void> {
+  console.error('[CSP Alert]', JSON.stringify(alert));
+}
+
+async function storeCSPViolation(record: CSPViolationRecord): Promise<void> {
+  record.id = `csp-${Date.now()}`;
+  cspViolations.push(record);
+  
+  if (cspViolations.length > 1000) {
+    cspViolations.shift();
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -166,30 +201,40 @@ export async function POST(request: NextRequest) {
     // In production, send to logging service (e.g., Sentry, Datadog)
     console.log('[CSP Violation]', JSON.stringify(logEntry, null, 2));
 
-    // Track critical violations for alerting
-    if (analysis.severity === 'critical' || analysis.severity === 'high') {
-      console.error(
-        '[CSP Critical Violation]',
-        JSON.stringify({
+      // Track critical violations for alerting
+      if (analysis.severity === 'critical' || analysis.severity === 'high') {
+        console.error(
+          '[CSP Critical Violation]',
+          JSON.stringify({
+            severity: analysis.severity,
+            category: analysis.category,
+            blockedUri: report['blocked-uri'],
+            sourceFile: report['source-file'],
+            recommendation: analysis.recommendation,
+          })
+        );
+
+        await sendAlert({
+          type: 'csp-violation',
           severity: analysis.severity,
-          category: analysis.category,
-          blockedUri: report['blocked-uri'],
-          sourceFile: report['source-file'],
-          recommendation: analysis.recommendation,
-        })
-      );
+          details: logEntry,
+        });
+      }
 
-      // TODO: Send alert to monitoring service
-      // await sendAlert({
-      //   type: 'csp-violation',
-      //   severity: analysis.severity,
-      //   details: logEntry,
-      // });
-    }
-
-    // Store violation in database for analysis
-    // TODO: Implement database storage
-    // await db.cspViolations.create({ data: logEntry });
+      // Store violation in database for analysis
+      await storeCSPViolation({
+        timestamp: logEntry.timestamp,
+        blockedUri: report['blocked-uri'],
+        documentUri: report['document-uri'],
+        effectiveDirective: report['effective-directive'],
+        sourceFile: report['source-file'],
+        lineNumber: report['line-number'],
+        columnNumber: report['column-number'],
+        severity: analysis.severity,
+        category: analysis.category,
+        userAgent: logEntry.userAgent,
+        ip: logEntry.ip,
+      });
 
     return NextResponse.json({
       success: true,

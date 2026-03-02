@@ -113,13 +113,13 @@ describe('E2E Enhanced Features', () => {
 
   describe('Desktop Session Lifecycle', () => {
     it('should manage desktop session lifecycle', async () => {
-      const { desktopSessionManager, E2BDesktopProvider } = await import('@/lib/sandbox/providers/e2b-desktop-provider')
-      
+      const { desktopSessionManager, E2BDesktopProvider } = await import('@/lib/sandbox/providers/e2b-desktop-provider-enhanced')
+
       const sessionId = `desktop-${randomUUID()}`
-      
+
       // Without API key, session will be null, but we test the flow
       const provider = new E2BDesktopProvider()
-      
+
       // Test session management methods exist
       expect(desktopSessionManager.createSession).toBeDefined()
       expect(desktopSessionManager.getSession).toBeDefined()
