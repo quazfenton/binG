@@ -76,7 +76,14 @@ async function verifyUserJWT(token: string): Promise<{
       // RS256 removed to prevent algorithm confusion attacks
       // See: https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/
       algorithms: ['HS256'],
+      issuer: process.env.JWT_ISSUER,
+      audience: process.env.JWT_AUDIENCE || 'user-access',
     }) as any;
+
+    // Enforce token purpose/type to avoid token confusion
+    if (decoded.token_use !== 'access') {
+      return { valid: false, error: 'Invalid token type' };
+    }
 
     return {
       valid: true,

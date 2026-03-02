@@ -36,8 +36,18 @@ export async function GET() {
       data: {
         providers: sortedProviders,
         defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "openrouter",
-        // Use a valid default model that works with OpenRouter
-        defaultModel: process.env.DEFAULT_MODEL || "google/gemma-3-1b-it:free",
+        const defaultProvider = process.env.DEFAULT_LLM_PROVIDER || "openrouter";
+        const selectedProvider = Object.values(PROVIDERS).find(p => p.id === defaultProvider);
+        const providerDefaultModel = process.env.DEFAULT_MODEL || selectedProvider?.models?.[0];
+
+        return NextResponse.json({
+          success: true,
+          data: {
+            providers: sortedProviders,
+            defaultProvider,
+            defaultModel: providerDefaultModel,
+          },
+        });
       },
     });
   } catch (error) {

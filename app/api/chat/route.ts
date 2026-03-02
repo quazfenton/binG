@@ -174,16 +174,22 @@ export async function POST(request: NextRequest) {
       m => m === model || m.startsWith(model + ':') || m.endsWith(':' + model.split(':')[0])
     ) || model;
     const attachedFilesystemFiles = normalizeFilesystemContext(filesystemContext?.attachedFiles);
+    const anonymousSessionSeed =
+      request.headers.get('x-anonymous-session-id')?.trim() || requestId;
+    const actorId =
+      authResult.success && authResult.userId
+        ? authResult.userId
+        : `anon:${sanitizePathSegment(anonymousSessionSeed)}`;
     const resolvedConversationId =
       typeof conversationId === 'string' && conversationId.trim()
         ? conversationId.trim()
-        : `session_${authResult.userId || 'anon'}_${new Date().toISOString().slice(0, 10)}`;
+        : `session_${sanitizePathSegment(actorId)}_${requestId}`;
     const defaultScopePath = `project/sessions/${sanitizePathSegment(resolvedConversationId)}`;
     const requestedScopePath =
       typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
         ? filesystemContext.scopePath.trim()
         : defaultScopePath;
-    const filesystemOwnerId = authResult.success && authResult.userId ? authResult.userId : 'anon:public';
+    const filesystemOwnerId = actorId;
     const denialContext = filesystemEditSessionService.getRecentDenials(
       `${filesystemOwnerId}:${resolvedConversationId}`,
       4,
