@@ -90,6 +90,13 @@ async function verifyUserJWT(token: string): Promise<{
       userId: decoded.sub || decoded.userId || decoded.id,
       email: decoded.email || decoded.preferred_username,
     };
+    }
+
+    return {
+      valid: true,
+      userId: decoded.sub || decoded.userId || decoded.id,
+      email: decoded.email || decoded.preferred_username,
+    };
   } catch (error: any) {
     return {
       valid: false,
