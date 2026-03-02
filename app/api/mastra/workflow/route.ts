@@ -29,19 +29,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { task, ownerId, workflowType = 'code-agent' } = body;
+    const authResult = await verifyAuth(request);
+    if (!authResult.success) {
+      return NextResponse.json(
+        { error: 'Authentication required', requestId },
+        { status: 401 }
+      );
+    }
+
+    const { task, workflowType = 'code-agent' } = body;
+    const ownerId = authResult.userId;
+    if (!ownerId) {
+      return NextResponse.json(
+        { error: 'Authenticated user is missing userId', requestId },
+        { status: 401 }
+      );
+    }
 
     // Validate required fields
     if (!task || typeof task !== 'string') {
       return NextResponse.json(
         { error: 'task is required and must be a string', requestId },
-        { status: 400 }
-      );
-    }
-
-    if (!ownerId || typeof ownerId !== 'string') {
-      return NextResponse.json(
-        { error: 'ownerId is required and must be a string', requestId },
         { status: 400 }
       );
     }
