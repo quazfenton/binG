@@ -218,24 +218,27 @@ class ComposioSessionManager {
     toolkits?: string[] 
   }): Promise<UserSession> {
     const existing = this.sessions.get(userId);
-    if (existing) {
+
+    // If we already have an in-memory session with a live Composio instance,
+    // just bump lastActive and reuse it.
+    if (existing && existing.session) {
       existing.lastActive = Date.now();
       await this.persistSession(existing);
       return existing;
     }
 
-    // Create new session
+    // Create a new underlying Composio session (for new users or after restart)
     const composio = await this.initComposio(options?.provider);
-    
+  
     // Create session with configuration based on provider and options
     const sessionConfig: any = {
       userId,
     };
-    
+  
     if (options?.toolkits || this.defaultConfig.defaultToolkits) {
       sessionConfig.toolkits = options?.toolkits || this.defaultConfig.defaultToolkits;
     }
-    
+  
     if (this.defaultConfig.manageConnections) {
       sessionConfig.manageConnections = true;
     }
@@ -248,11 +251,12 @@ class ComposioSessionManager {
       headers: session.mcp.headers || {},
     } : undefined;
 
+    const now = Date.now();
     const userSession: UserSession = {
       userId,
       session,
-      createdAt: Date.now(),
-      lastActive: Date.now(),
+      createdAt: existing?.createdAt ?? now,
+      lastActive: now,
       mcpConfig,
     };
 
@@ -260,6 +264,7 @@ class ComposioSessionManager {
     await this.persistSession(userSession);
 
     return userSession;
+  }
   }
 
   /**
