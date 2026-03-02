@@ -17,6 +17,7 @@ import { toolContextManager } from '../services/tool-context-manager';
 import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
 import { getProviderForTask, getModelForTask } from '../config/task-providers';
+import { advancedToolCallDispatcher } from '../tool-integration/parsers/dispatcher';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -264,14 +265,15 @@ export class EnhancedLLMService {
 
   async *generateStreamingResponse(request: EnhancedLLMRequest): AsyncGenerator<StreamingResponse> {
     const { provider, fallbackProviders, ...llmRequest } = request;
+    const primaryProvider = provider || getProviderForTask('chat');
 
     try {
-      const fullRequest = { ...llmRequest, provider };
+      const fullRequest = { ...llmRequest, provider: primaryProvider };
       yield* llmService.generateStreamingResponse(fullRequest);
     } catch (error) {
-      console.warn(`Streaming failed for ${provider}:`, error);
+      console.warn(`Streaming failed for ${primaryProvider}:`, error);
       
-      const fallbacks = fallbackProviders || this.fallbackChains.get(provider) || [];
+      const fallbacks = fallbackProviders || this.fallbackChains.get(primaryProvider) || [];
       const availableFallbacks = fallbacks.filter(fallbackProvider => 
         this.endpointConfigs.has(fallbackProvider) && 
         this.isProviderHealthy(fallbackProvider) &&
@@ -280,7 +282,7 @@ export class EnhancedLLMService {
 
       if (availableFallbacks.length === 0) {
         throw this.createEnhancedError(
-          `No streaming fallback providers available for ${provider}`,
+          `No streaming fallback providers available for ${primaryProvider}`,
           'NO_STREAMING_FALLBACKS',
           error as Error
         );
@@ -343,9 +345,9 @@ export class EnhancedLLMService {
    * - Google: Maps 'tool' to 'user' which is incorrect
    */
   private filterMessagesForProvider(
-    messages: Array<{ role: string; content: string }>,
+    messages: LLMMessage[],
     provider: string
-  ): Array<{ role: string; content: string }> {
+  ): LLMMessage[] {
     // OpenAI-compatible providers can handle tool messages
     const openAICompatible = ['openrouter', 'chutes', 'portkey'];
     if (openAICompatible.includes(provider)) {
@@ -358,7 +360,7 @@ export class EnhancedLLMService {
       if (msg.role === 'tool') return false;
 
       // Remove assistant messages that are just JSON-stringified tool calls
-      if (msg.role === 'assistant' && msg.content) {
+      if (msg.role === 'assistant' && typeof msg.content === 'string' && msg.content) {
         try {
           const parsed = JSON.parse(msg.content);
           if (Array.isArray(parsed) && parsed.every(item => item.id && item.type && item.function)) {
@@ -513,6 +515,14 @@ export class EnhancedLLMService {
     const toolManager = getToolManager();
     const executedCalls: Array<{ name: string; arguments: Record<string, any> }> = [];
     const toolResults: Array<{ name: string; success: boolean; output?: any; error?: string; authUrl?: string }> = [];
+    const toolInvocations: Array<{
+      toolCallId: string;
+      toolName: string;
+      state: 'partial-call' | 'call' | 'result';
+      args: Record<string, any>;
+      result?: any;
+    }> = [];
+    const reasoningTrace: string[] = [];
 
     for (const call of toolCalls) {
       const resolvedTool = this.resolveToolKey(call.name);
@@ -526,6 +536,21 @@ export class EnhancedLLMService {
       }
 
       executedCalls.push({ name: resolvedTool, arguments: call.arguments });
+      const toolCallId = `tool-${resolvedTool}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      toolInvocations.push({
+        toolCallId,
+        toolName: resolvedTool,
+        state: 'partial-call',
+        args: call.arguments,
+      });
+      toolInvocations.push({
+        toolCallId,
+        toolName: resolvedTool,
+        state: 'call',
+        args: call.arguments,
+      });
+      reasoningTrace.push(`Selected tool '${resolvedTool}' with parsed arguments.`);
+
       const result = await toolManager.executeTool(
         resolvedTool,
         call.arguments,
@@ -543,6 +568,20 @@ export class EnhancedLLMService {
         error: result.error,
         authUrl: result.authUrl
       });
+      toolInvocations.push({
+        toolCallId,
+        toolName: resolvedTool,
+        state: 'result',
+        args: call.arguments,
+        result: result.success
+          ? { output: result.output }
+          : { error: result.error || 'Tool execution failed' },
+      });
+      reasoningTrace.push(
+        result.success
+          ? `Tool '${resolvedTool}' completed successfully.`
+          : `Tool '${resolvedTool}' failed: ${result.error || 'unknown error'}.`,
+      );
     }
 
     const authRequired = toolResults.find(r => !r.success && !!r.authUrl);
@@ -557,7 +596,9 @@ export class EnhancedLLMService {
           authUrl: authRequired.authUrl,
           toolName: authRequired.name,
           toolCalls: executedCalls,
-          toolResults
+          toolResults,
+          toolInvocations,
+          reasoningTrace,
         }
       } as LLMResponse;
     }
@@ -578,6 +619,8 @@ export class EnhancedLLMService {
         ...(response as any).metadata,
         toolCalls: executedCalls,
         toolResults,
+        toolInvocations,
+        reasoningTrace,
       }
     } as LLMResponse;
   }
@@ -596,46 +639,35 @@ export class EnhancedLLMService {
   }
 
   private extractToolCallsFromLLMResponse(response: LLMResponse): Array<{ name: string; arguments: Record<string, any> }> {
-    const calls: Array<{ name: string; arguments: Record<string, any> }> = [];
+    const tools = Object.entries(TOOL_REGISTRY).map(([name, cfg]) => ({
+      name,
+      inputSchema: cfg.inputSchema as any,
+    }));
+    const dispatch = advancedToolCallDispatcher.dispatch(
+      {
+        provider: (response as any)?.provider,
+        model: (response as any)?.model,
+        content: response.content,
+        metadata: (response as any)?.metadata || {},
+      },
+      tools,
+    );
+
     const seen = new Set<string>();
-
-    const addCall = (name?: string, args?: any) => {
-      if (!name) return;
-      const call = {
-        name: String(name),
-        arguments: (args && typeof args === 'object') ? args : {}
-      };
+    const calls: Array<{ name: string; arguments: Record<string, any> }> = [];
+    for (const call of dispatch.calls) {
       const key = `${call.name}:${JSON.stringify(call.arguments)}`;
-      if (seen.has(key)) return;
+      if (seen.has(key)) continue;
       seen.add(key);
-      calls.push(call);
-    };
-
-    // 1) Native metadata path
-    const metaCalls = (response as any)?.metadata?.toolCalls;
-    if (Array.isArray(metaCalls)) {
-      for (const call of metaCalls) {
-        if (!call) continue;
-        if (call.function?.name) {
-          let args = call.function.arguments;
-          if (typeof args === 'string') {
-            try { args = JSON.parse(args); } catch { args = {}; }
-          }
-          addCall(call.function.name, args);
-          continue;
-        }
-        if (call.name && call.input) {
-          addCall(call.name, call.input);
-          continue;
-        }
-        addCall(call.name, call.arguments);
-      }
+      calls.push({
+        name: call.name,
+        arguments: call.arguments,
+      });
     }
 
-    // NOTE: Tool calls are ONLY accepted from structured metadata, never from free-text content.
-    // Parsing JSON from LLM response content would allow prompt injection attacks where an
-    // adversarial prompt or compromised model could embed malicious tool_calls in text content,
-    // causing unintended tool execution without user confirmation.
+    if (dispatch.rejected.length > 0) {
+      console.warn('[EnhancedLLMService] Rejected tool calls during parser validation:', dispatch.rejected);
+    }
 
     return calls;
   }

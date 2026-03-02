@@ -74,8 +74,8 @@ export class LLMIntegration {
 
   constructor(config?: LLMConfig) {
     this.config = {
-      defaultProvider: 'openrouter',
-      defaultModel: 'deepseek/deepseek-r1-0528:free',
+      defaultProvider: 'mistral',
+      defaultModel: 'mistral-large-latest',
       defaultTemperature: 0.7,
       defaultMaxTokens: 80000,
       timeoutMs: 120000, // 2 minutes

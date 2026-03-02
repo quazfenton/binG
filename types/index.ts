@@ -11,6 +11,14 @@ export interface Message {
     authUrl?: string;
     toolName?: string;
     provider?: string;
+    reasoning?: string;
+    toolInvocations?: Array<{
+      toolCallId: string;
+      toolName: string;
+      state: 'partial-call' | 'call' | 'result';
+      args?: Record<string, any>;
+      result?: any;
+    }>;
     [key: string]: any;
   };
 }

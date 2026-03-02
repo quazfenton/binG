@@ -309,7 +309,7 @@ export default function AIPromptLibraryPlugin({ onClose }: PluginProps) {
                       </SelectContent>
                     </Select>
                     <Button onClick={executePrompt} disabled={generating} className="flex-1">
-                      {generating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
+                      {generating ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Play className="w-4 h-4 mr-2" />}
                       Execute
                     </Button>
                   </div>

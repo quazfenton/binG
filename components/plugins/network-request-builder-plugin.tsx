@@ -178,7 +178,7 @@ export const NetworkRequestBuilderPlugin: React.FC<PluginProps> = ({ onClose, on
           title="Request timeout in ms"
         />
         <Button onClick={handleSendRequest} disabled={isLoading} className="bg-cyan-600 hover:bg-cyan-700">
-          {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          {isLoading ? <Loader2 className="w-4 h-4 thinking-spinner" /> : <Send className="w-4 h-4" />}
         </Button>
       </div>
 
@@ -235,7 +235,7 @@ export const NetworkRequestBuilderPlugin: React.FC<PluginProps> = ({ onClose, on
         </TabsContent>
 
         <TabsContent value="response" className="flex-1 min-h-0 bg-black/20 rounded-b-md">
-          {isLoading && <div className="flex items-center justify-center h-full text-white/50"><Loader2 className="w-8 h-8 animate-spin" /></div>}
+          {isLoading && <div className="flex items-center justify-center h-full text-white/50"><Loader2 className="w-8 h-8 thinking-spinner" /></div>}
           {error && <div className="p-4 text-red-400 bg-red-900/50 h-full"><pre>{error}</pre></div>}
           {response && (
             <div className="h-full flex flex-col">

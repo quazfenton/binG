@@ -52,6 +52,7 @@ export interface PluginSandbox {
 }
 
 export class PluginIsolationManager {
+  private static idCounter = 0;
   private sandboxes = new Map<string, PluginSandbox>();
   private resourceMonitors = new Map<string, NodeJS.Timeout>();
   private errorHandlers = new Map<string, (error: PluginError) => void>();
@@ -70,7 +71,7 @@ export class PluginIsolationManager {
     pluginId: string, 
     config: Partial<PluginIsolationConfig> = {}
   ): string {
-    const sandboxId = `sandbox_${pluginId}_${Date.now()}`;
+    const sandboxId = `sandbox_${pluginId}_${Date.now()}_${PluginIsolationManager.idCounter++}`;
     const fullConfig: PluginIsolationConfig = {
       sandboxed: true,
       resourceLimits: { ...this.defaultLimits, ...config.resourceLimits },

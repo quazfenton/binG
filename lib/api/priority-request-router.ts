@@ -1,20 +1,227 @@
 /**
  * Priority Request Router - Routes requests through priority-based endpoint chain
  * Ensures requests are handled by the most capable available service with automatic fallback
+ * 
+ * Features:
+ * - Circuit breaker pattern for fault tolerance
+ * - Failure rate tracking with automatic recovery
+ * - Health check integration
+ * - Quota management
  */
 
 import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from './fast-agent-service';
 import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from './n8n-agent-service';
 import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from './custom-fallback-service';
 import { enhancedLLMService, type EnhancedLLMRequest } from './enhanced-llm-service';
-import { getToolManager } from '../tools';
+import { getToolManager, getUnifiedToolRegistry, getToolDiscoveryService, getToolErrorHandler } from '../tools';
 import { toolAuthManager } from '../services/tool-authorization-manager';
-import { toolContextManager } from '../services/tool-context-manager';
 import { sandboxBridge } from '../sandbox';
 import type { LLMMessage } from './llm-providers';
 import { detectRequestType } from '../utils/request-type-detector';
 import { initializeComposioService, getComposioService, type ComposioToolRequest } from './composio-service';
 import { quotaManager } from '../services/quota-manager';
+
+// ===========================================
+// Circuit Breaker Pattern Implementation
+// ===========================================
+
+/**
+ * Circuit breaker states
+ */
+type CircuitState = 'closed' | 'open' | 'half-open';
+
+/**
+ * Circuit breaker configuration
+ */
+interface CircuitBreakerConfig {
+  /** Number of failures before opening circuit */
+  failureThreshold: number;
+  /** Time in ms before attempting recovery */
+  recoveryTimeoutMs: number;
+  /** Time window for counting failures */
+  failureWindowMs: number;
+}
+
+/**
+ * Circuit breaker state for an endpoint
+ */
+interface CircuitBreakerState {
+  state: CircuitState;
+  failures: number;
+  successes: number;
+  lastFailureTime: number;
+  lastSuccessTime: number;
+  failureTimestamps: number[];
+}
+
+/**
+ * Default circuit breaker configuration
+ * 
+ * Tuned for production:
+ * - Opens after 5 failures within 1 minute
+ * - Attempts recovery after 30 seconds
+ * - Half-open allows 1 test request
+ */
+const DEFAULT_CIRCUIT_BREAKER_CONFIG: CircuitBreakerConfig = {
+  failureThreshold: 5,
+  recoveryTimeoutMs: 30000,  // 30 seconds
+  failureWindowMs: 60000,    // 1 minute
+};
+
+/**
+ * Circuit breaker class for endpoint fault tolerance
+ */
+class CircuitBreaker {
+  private states = new Map<string, CircuitBreakerState>();
+  private readonly config: CircuitBreakerConfig;
+
+  constructor(config?: Partial<CircuitBreakerConfig>) {
+    this.config = { ...DEFAULT_CIRCUIT_BREAKER_CONFIG, ...config };
+  }
+
+  /**
+   * Get or create circuit breaker state for endpoint
+   */
+  private getState(endpoint: string): CircuitBreakerState {
+    if (!this.states.has(endpoint)) {
+      this.states.set(endpoint, {
+        state: 'closed',
+        failures: 0,
+        successes: 0,
+        lastFailureTime: 0,
+        lastSuccessTime: 0,
+        failureTimestamps: [],
+      });
+    }
+    return this.states.get(endpoint)!;
+  }
+
+  /**
+   * Check if endpoint should be skipped (circuit open)
+   */
+  shouldSkip(endpoint: string): boolean {
+    const state = this.getState(endpoint);
+    const now = Date.now();
+
+    if (state.state === 'closed') {
+      return false;  // Circuit closed, allow requests
+    }
+
+    if (state.state === 'open') {
+      // Check if recovery timeout has elapsed
+      if (now - state.lastFailureTime >= this.config.recoveryTimeoutMs) {
+        console.log(`[CircuitBreaker] ${endpoint}: Opening half-open circuit for test request`);
+        state.state = 'half-open';  // Allow one test request
+        return false;
+      }
+      console.log(`[CircuitBreaker] ${endpoint}: Circuit OPEN - skipping (retry in ${Math.round((this.config.recoveryTimeoutMs - (now - state.lastFailureTime)) / 1000)}s)`);
+      return true;  // Skip this endpoint
+    }
+
+    if (state.state === 'half-open') {
+      // Allow the test request but monitor closely
+      return false;
+    }
+
+    return false;
+  }
+
+  /**
+   * Record successful request
+   */
+  recordSuccess(endpoint: string): void {
+    const state = this.getState(endpoint);
+    const now = Date.now();
+
+    state.successes++;
+    state.lastSuccessTime = now;
+    state.failures = 0;  // Reset failures on success
+    state.failureTimestamps = [];  // Clear failure history
+
+    if (state.state === 'half-open') {
+      console.log(`[CircuitBreaker] ${endpoint}: Test request succeeded - closing circuit`);
+      state.state = 'closed';  // Recovery successful
+    }
+
+    this.logState(endpoint);
+  }
+
+  /**
+   * Record failed request
+   */
+  recordFailure(endpoint: string): void {
+    const state = this.getState(endpoint);
+    const now = Date.now();
+
+    state.failures++;
+    state.lastFailureTime = now;
+    state.failureTimestamps.push(now);
+
+    // Remove old failures outside the window
+    const windowStart = now - this.config.failureWindowMs;
+    state.failureTimestamps = state.failureTimestamps.filter(t => t > windowStart);
+
+    // Check if we should open the circuit
+    if (state.failureTimestamps.length >= this.config.failureThreshold) {
+      if (state.state !== 'open') {
+        console.warn(`[CircuitBreaker] ${endpoint}: Circuit OPENED after ${state.failures} failures in ${this.config.failureWindowMs / 1000}s`);
+        state.state = 'open';
+      }
+    }
+
+    this.logState(endpoint);
+  }
+
+  /**
+   * Get circuit breaker statistics
+   */
+  getStats(endpoint: string): {
+    state: CircuitState;
+    failures: number;
+    successes: number;
+    failureRate: number;
+  } {
+    const state = this.getState(endpoint);
+    const total = state.failures + state.successes;
+    
+    return {
+      state: state.state,
+      failures: state.failures,
+      successes: state.successes,
+      failureRate: total > 0 ? state.failures / total : 0,
+    };
+  }
+
+  /**
+   * Log current state (for debugging)
+   */
+  private logState(endpoint: string): void {
+    const state = this.getState(endpoint);
+    console.debug(`[CircuitBreaker] ${endpoint}: state=${state.state}, failures=${state.failures}, successes=${state.successes}`);
+  }
+
+  /**
+   * Reset circuit breaker for endpoint (manual override)
+   */
+  reset(endpoint: string): void {
+    this.states.set(endpoint, {
+      state: 'closed',
+      failures: 0,
+      successes: 0,
+      lastFailureTime: 0,
+      lastSuccessTime: 0,
+      failureTimestamps: [],
+    });
+    console.log(`[CircuitBreaker] ${endpoint}: Circuit manually reset`);
+  }
+
+  /**
+   * Get all circuit breaker states (for monitoring)
+   */
+  getAllStates(): Map<string, CircuitBreakerState> {
+    return new Map(this.states);
+  }
+}
 
 export interface RouterRequest {
   messages: LLMMessage[];
@@ -55,12 +262,32 @@ class PriorityRequestRouter {
   private endpoints: EndpointConfig[];
   private routingStats: Map<string, { success: number; failures: number }>;
   private readonly composioService: ReturnType<typeof initializeComposioService>;
+  private readonly circuitBreaker: CircuitBreaker;
 
   constructor() {
     this.routingStats = new Map();
+    this.circuitBreaker = new CircuitBreaker();
     // Initialize Composio service if available
     this.composioService = initializeComposioService();
     this.endpoints = this.initializeEndpoints();
+  }
+
+  /**
+   * Get circuit breaker statistics for monitoring
+   */
+  getCircuitBreakerStats(): Map<string, any> {
+    const stats = new Map<string, any>();
+    for (const [endpoint, state] of this.circuitBreaker.getAllStates()) {
+      stats.set(endpoint, this.circuitBreaker.getStats(endpoint));
+    }
+    return stats;
+  }
+
+  /**
+   * Manually reset circuit breaker for endpoint (for debugging/operations)
+   */
+  resetCircuitBreaker(endpoint: string): void {
+    this.circuitBreaker.reset(endpoint);
   }
 
   private getToolServicePreference(): 'composio-tools' | 'tool-execution' | 'auto' {
@@ -240,7 +467,7 @@ class PriorityRequestRouter {
   }
 
   /**
-   * Route request through priority chain
+   * Route request through priority chain with circuit breaker protection
    */
   async route(request: RouterRequest): Promise<RouterResponse> {
     const errors: Array<{ endpoint: string; error: Error }> = [];
@@ -278,26 +505,48 @@ class PriorityRequestRouter {
     for (const endpoint of orderedEndpoints) {
       try {
         console.log(`[Router] Trying endpoint: ${endpoint.name} (priority ${endpoint.priority})`);
-        
+
+        // ===========================================
+        // CIRCUIT BREAKER CHECK
+        // Skip endpoint if circuit is OPEN
+        // ===========================================
+        if (this.circuitBreaker.shouldSkip(endpoint.name)) {
+          const stats = this.circuitBreaker.getStats(endpoint.name);
+          console.warn(
+            `[Router] ${endpoint.name}: SKIPPED (circuit breaker OPEN - ` +
+            `${stats.failures} failures, retry in ~30s)`
+          );
+          fallbackChain.push(`${endpoint.name} (circuit breaker open)`);
+          continue;
+        }
+
         // Check if endpoint can handle this request
         if (!endpoint.canHandle(request)) {
           console.log(`[Router] ${endpoint.name} cannot handle this request type, skipping`);
           continue;
         }
 
-        // Perform health check
-        const isHealthy = await endpoint.healthCheck();
-        if (!isHealthy) {
-          console.warn(`[Router] ${endpoint.name} health check failed, trying next`);
-          fallbackChain.push(`${endpoint.name} (unhealthy)`);
-          continue;
+        // Skip health check for original-system (regular chat) to avoid latency
+        // Health checks are still performed for tool/sandbox endpoints
+        if (endpoint.name !== 'original-system') {
+          const isHealthy = await endpoint.healthCheck();
+          if (!isHealthy) {
+            console.warn(`[Router] ${endpoint.name} health check failed, trying next`);
+            fallbackChain.push(`${endpoint.name} (unhealthy)`);
+            continue;
+          }
         }
 
         // Process request
         console.log(`[Router] Routing to ${endpoint.name}`);
         const response = await endpoint.processRequest(request);
 
-        // Track success
+        // ===========================================
+        // CIRCUIT BREAKER: Record SUCCESS
+        // ===========================================
+        this.circuitBreaker.recordSuccess(endpoint.name);
+        
+        // Track success in stats
         this.updateStats(endpoint.name, true);
 
         // Map endpoint name to quota provider key
@@ -329,12 +578,13 @@ class PriorityRequestRouter {
             actualProvider,
             actualModel,
             quotaRemaining: quotaProvider ? quotaManager.getRemainingCalls(quotaProvider) : Infinity,
+            circuitBreakerState: this.circuitBreaker.getStats(endpoint.name),
           }
         };
 
       } catch (error) {
         const err = error as Error;
-        
+
         // Skip verbose logging for expected "not configured" errors
         const isNotConfiguredError = err.message.includes('not configured');
         if (!isNotConfiguredError) {
@@ -343,7 +593,12 @@ class PriorityRequestRouter {
           console.log(`[Router] ${endpoint.name} skipped: ${err.message}`);
         }
 
-        // Track failure
+        // ===========================================
+        // CIRCUIT BREAKER: Record FAILURE
+        // ===========================================
+        this.circuitBreaker.recordFailure(endpoint.name);
+        
+        // Track failure in stats
         this.updateStats(endpoint.name, false);
 
         errors.push({ endpoint: endpoint.name, error: err });
@@ -367,7 +622,7 @@ class PriorityRequestRouter {
     // Return a final emergency response
     return {
       success: false,
-      content: "I apologize, but I'm currently unable to process your request due to technical difficulties. Please try again in a moment.",
+      content: "Sorry, but I can't process your request due to technical difficulties. Please try again in a moment.",
       source: 'emergency-fallback',
       priority: 999,
       fallbackChain,
@@ -437,7 +692,8 @@ class PriorityRequestRouter {
             provider: inferredProvider,
             toolName: toolkitName,
             type: 'auth_required',
-            composioSessionId: result.metadata?.sessionId
+            composioSessionId: result.metadata?.sessionId,
+            composioMcp: result.metadata?.mcp,
           }
         };
       }
@@ -466,6 +722,7 @@ class PriorityRequestRouter {
           toolCalls: result.toolCalls,
           connectedAccounts: result.connectedAccounts,
           composioSessionId: result.metadata?.sessionId,
+          composioMcp: result.metadata?.mcp,
           toolsUsed: result.metadata?.toolsUsed,
           executionTime: result.metadata?.executionTime
         }
@@ -677,7 +934,7 @@ class PriorityRequestRouter {
   }
 
   /**
-   * Process tool request with authorization
+   * Process tool request with unified registry
    */
   private async processToolRequest(request: RouterRequest): Promise<any> {
     return this.processToolRequestInternal(request, true);
@@ -696,54 +953,122 @@ class PriorityRequestRouter {
     }
 
     try {
-      const result = await toolContextManager.processToolRequest(
-        request.messages,
-        request.userId,
-        request.requestId || `conv_${Date.now()}`
-      );
+      // Try unified registry first
+      const unifiedRegistry = getUnifiedToolRegistry();
+      const toolDiscovery = getToolDiscoveryService();
+      const errorHandler = getToolErrorHandler();
 
-      if (result.requiresAuth && result.authUrl) {
+      // Detect tool intent from messages
+      const detectionResult = this.detectToolIntent(request.messages);
+      
+      if (!detectionResult.detectedTool) {
+        // No tool detected, fall through to composio
+        if (allowFallbackToComposio) {
+          return await this.processComposioRequestInternal(request, false);
+        }
         return {
-          content: `I need authorization to use ${result.toolName}. Please connect your account to proceed.`,
-          data: {
-            source: 'tool-execution',
-            requiresAuth: true,
-            authUrl: result.authUrl,
-            toolName: result.toolName,
-            type: 'auth_required'
-          }
+          content: 'No tool intent detected',
+          data: { source: 'tool-execution', type: 'no_intent' }
         };
       }
 
-      if (result.toolCalls && result.toolCalls.length > 0) {
+      // Check authorization
+      const isAuthorized = await toolAuthManager.isAuthorized(request.userId, detectionResult.detectedTool);
+      if (!isAuthorized) {
+        const provider = toolAuthManager.getRequiredProvider(detectionResult.detectedTool);
+        if (provider) {
+          const authUrl = toolAuthManager.getAuthorizationUrl(provider);
+          return {
+            content: `I need authorization to use ${detectionResult.detectedTool}. Please connect your account to proceed.`,
+            data: {
+              source: 'tool-execution',
+              requiresAuth: true,
+              authUrl,
+              toolName: detectionResult.detectedTool,
+              type: 'auth_required'
+            }
+          };
+        }
+      }
+
+      // Execute via unified registry
+      const result = await unifiedRegistry.executeTool(
+        detectionResult.detectedTool,
+        detectionResult.toolInput,
+        {
+          userId: request.userId,
+          conversationId: request.requestId || `conv_${Date.now()}`,
+          metadata: { sessionId: `session_${request.requestId}` }
+        }
+      );
+
+      if (result.success) {
+        // Record usage for statistics
+        toolDiscovery.recordUsage(detectionResult.detectedTool, true, 0);
+        
         return {
-          content: result.content,
+          content: result.output ? JSON.stringify(result.output) : `Tool ${detectionResult.detectedTool} executed successfully`,
           data: {
             source: 'tool-execution',
-            toolCalls: result.toolCalls,
-            toolResults: result.toolResults,
+            toolCalls: [{ name: detectionResult.detectedTool, arguments: detectionResult.toolInput }],
+            toolResults: [{ name: detectionResult.detectedTool, result: result.output }],
             type: 'tool_execution'
           }
         };
       }
 
-      const noToolResult = {
-        content: result.content,
-        data: {
-          source: 'tool-execution',
-          type: 'no_tools_detected'
-        }
-      };
+      // Handle errors with unified error handler
+      const toolError = errorHandler.handleError(
+        new Error(result.error || 'Tool execution failed'),
+        detectionResult.detectedTool,
+        detectionResult.toolInput
+      );
+
+      // Record failed usage
+      toolDiscovery.recordUsage(detectionResult.detectedTool, false, 0);
+
+      // If auth required, return auth URL
+      if (toolError.category === 'authentication' || result.authRequired) {
+        const provider = toolAuthManager.getRequiredProvider(detectionResult.detectedTool);
+        const authUrl = provider ? toolAuthManager.getAuthorizationUrl(provider) : result.authUrl;
+        return {
+          content: `Authorization required for ${detectionResult.detectedTool}. Please connect your account.`,
+          data: {
+            source: 'tool-execution',
+            requiresAuth: true,
+            authUrl,
+            toolName: detectionResult.detectedTool,
+            type: 'auth_required'
+          }
+        };
+      }
+
+      // Fallback to Composio if unified registry failed
       if (allowFallbackToComposio) {
-        console.log('[Router] tool-execution no_tools_detected -> fallback composio-tools');
+        console.log('[Router] unified registry failed, falling back to Composio');
         const fallback = await this.processComposioRequestInternal(request, false);
         if (fallback?.data?.type === 'auth_required' || fallback?.data?.type === 'composio_execution') {
           return fallback;
         }
       }
-      return noToolResult;
+
+      // Return error with hints
+      return {
+        content: `Tool execution failed: ${toolError.message}\n\nHints:\n${toolError.hints?.join('\n') || 'Please try again'}`,
+        data: {
+          source: 'tool-execution',
+          error: toolError.message,
+          category: toolError.category,
+          retryable: toolError.retryable,
+          hints: toolError.hints,
+          type: 'error'
+        }
+      };
     } catch (error) {
       console.error('[Router] Tool processing error:', error);
+      const errorHandler = getToolErrorHandler();
+      const toolError = errorHandler.handleError(error, 'unknown');
+      
       if (allowFallbackToComposio) {
         console.log('[Router] tool-execution error -> fallback composio-tools');
         const fallback = await this.processComposioRequestInternal(request, false);
@@ -751,15 +1076,55 @@ class PriorityRequestRouter {
           return fallback;
         }
       }
+      
       return {
-        content: 'Tool execution is currently unavailable. Please try again later.',
+        content: `Tool execution failed: ${toolError.message}`,
         data: {
           source: 'tool-execution',
-          error: error instanceof Error ? error.message : 'Unknown error',
+          error: toolError.message,
+          category: toolError.category,
+          hints: toolError.hints,
           type: 'error'
         }
       };
     }
+  }
+
+  /**
+   * Detect tool intent from messages (helper)
+   */
+  private detectToolIntent(messages: LLMMessage[]): { detectedTool: string | null; toolInput: any; error?: string } {
+    // Simple extraction - in production use proper LLM-based tool extraction
+    const lastMessage = messages[messages.length - 1];
+    const content = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+    
+    // Look for tool call patterns
+    const toolCallMatch = content.match(/<tool\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/tool>/);
+    if (toolCallMatch) {
+      try {
+        return {
+          detectedTool: toolCallMatch[1],
+          toolInput: JSON.parse(toolCallMatch[2] || '{}'),
+        };
+      } catch {
+        return {
+          detectedTool: toolCallMatch[1],
+          toolInput: {},
+          error: 'Invalid tool arguments JSON',
+        };
+      }
+    }
+    
+    // Check for function call patterns
+    if (lastMessage?.tool_calls?.length > 0) {
+      const toolCall = lastMessage.tool_calls[0];
+      return {
+        detectedTool: toolCall.function?.name || null,
+        toolInput: toolCall.function?.arguments ? JSON.parse(toolCall.function.arguments) : {},
+      };
+    }
+
+    return { detectedTool: null, toolInput: {} };
   }
 
   /**

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
@@ -23,10 +23,27 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreview, setVideoPreview] = useState<string>('');
   const [processing, setProcessing] = useState(false);
+  const [ffmpegReady, setFfmpegReady] = useState(false);
+  const [startTime, setStartTime] = useState(0);
+  const [endTime, setEndTime] = useState(10);
   const [memeTopText, setMemeTopText] = useState('');
   const [memeBottomText, setMemeBottomText] = useState('');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const memeCanvasRef = useRef<HTMLCanvasElement>(null);
+  const ffmpegRef = useRef<any>(null);
+  const fetchFileRef = useRef<((input: File | Blob) => Promise<Uint8Array>) | null>(null);
+
+  useEffect(() => {
+    // FFmpeg is now lazy-loaded when trim is actually used
+    // This avoids unnecessary startup latency
+    return () => {
+      // Cleanup on unmount
+      if (ffmpegRef.current) {
+        ffmpegRef.current = null;
+      }
+      fetchFileRef.current = null;
+    };
+  }, []);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -87,14 +104,84 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
   };
 
   const trimVideo = async () => {
+    if (!videoFile) {
+      toast.error('Upload a video first');
+      return;
+    }
+    
+    // Validate trim times - reject non-finite numeric inputs
+    if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) {
+      toast.error('Invalid time values');
+      return;
+    }
+    
+    if (endTime <= startTime) {
+      toast.error('End time must be greater than start time');
+      return;
+    }
+    
+    // Lazy load FFmpeg only when trim is actually used
+    if (!ffmpegRef.current || !fetchFileRef.current) {
+      try {
+        setProcessing(true);
+        // Dynamic import avoids hard compile dependency until package is installed.
+        const ffmpegMod = await import('@ffmpeg/ffmpeg');
+        const utilMod = await import('@ffmpeg/util');
+        const instance = new ffmpegMod.FFmpeg();
+        await instance.load({
+          coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js',
+          wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm',
+        });
+        ffmpegRef.current = instance;
+        fetchFileRef.current = utilMod.fetchFile;
+        setFfmpegReady(true);
+      } catch (error) {
+        console.error('FFmpeg load failed:', error);
+        setProcessing(false);
+        toast.error('Failed to load FFmpeg. Install @ffmpeg/ffmpeg and @ffmpeg/util.');
+        return;
+      }
+    }
+
     setProcessing(true);
+    const inputName = `input-${Date.now()}.mp4`;
+    const outputName = `output-${Date.now()}.mp4`;
+
     try {
-      // Simulated trim — actual video processing happens client-side
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      toast.success('Video trimmed (simulated — client-side processing)');
+      const ffmpeg = ffmpegRef.current;
+      const fetchFile = fetchFileRef.current;
+
+      await ffmpeg.writeFile(inputName, await fetchFile(videoFile));
+      await ffmpeg.exec([
+        '-i', inputName,
+        '-ss', String(startTime),
+        '-to', String(endTime),
+        '-c', 'copy',
+        outputName,
+      ]);
+
+      const outputData = await ffmpeg.readFile(outputName);
+      const outputBlob = new Blob([outputData], { type: 'video/mp4' });
+      const outputUrl = URL.createObjectURL(outputBlob);
+      setVideoPreview(prev => {
+        if (prev) URL.revokeObjectURL(prev);
+        return outputUrl;
+      });
+      toast.success('Video trimmed successfully');
     } catch (err) {
+      console.error('Video trim error:', err);
       toast.error('Processing failed');
     } finally {
+      // Always cleanup WASM file handles to prevent memory leaks
+      try {
+        const ffmpeg = ffmpegRef.current;
+        if (ffmpeg) {
+          await ffmpeg.deleteFile(inputName).catch(() => {});
+          await ffmpeg.deleteFile(outputName).catch(() => {});
+        }
+      } catch (cleanupErr) {
+        console.error('Cleanup error:', cleanupErr);
+      }
       setProcessing(false);
     }
   };
@@ -270,18 +357,23 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-sm mb-2 block">Start Time (s)</label>
-                    <Input type="number" defaultValue={0} min={0} />
+                    <Input type="number" value={startTime} min={0} onChange={(e) => setStartTime(Number(e.target.value || 0))} />
                   </div>
                   <div>
                     <label className="text-sm mb-2 block">End Time (s)</label>
-                    <Input type="number" defaultValue={10} min={0} />
+                    <Input type="number" value={endTime} min={0} onChange={(e) => setEndTime(Number(e.target.value || 0))} />
                   </div>
                 </div>
 
                 <Button onClick={trimVideo} disabled={processing} className="w-full">
-                  {processing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Scissors className="w-4 h-4 mr-2" />}
+                  {processing ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Scissors className="w-4 h-4 mr-2" />}
                   Trim Video
                 </Button>
+                {!ffmpegReady && (
+                  <p className="text-xs text-yellow-300">
+                    Loading FFmpeg engine. If this stays unavailable, install `@ffmpeg/ffmpeg` and `@ffmpeg/util`.
+                  </p>
+                )}
               </>
             )}
           </TabsContent>

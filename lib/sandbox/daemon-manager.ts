@@ -18,8 +18,12 @@ export class DaemonManager {
    * Sanitize command to prevent shell injection attacks
    */
   private sanitizeCommand(command: string): string {
-    // Reject commands with shell metacharacters that could enable injection
-    const dangerousChars = /[;&|`$(){}[\]<>!#~\\]/;
+    // Block ALL shell metacharacters including pipes and redirects
+    // This prevents command injection via: echo "hi" | bash, ls > file, cat < file, etc.
+    // Blocked: ; (command separator), ` (command substitution), $ (variable expansion),
+    //          () (subshell), {} (brace expansion), [] (glob/range), ! (history),
+    //          # (comment injection), ~ (home dir), \ (escape), | (pipe), > (redirect), < (redirect), & (background)
+    const dangerousChars = /[;`$(){}[\]!#~\\|>&]/;
     if (dangerousChars.test(command)) {
       throw new Error('Command contains disallowed characters for security');
     }

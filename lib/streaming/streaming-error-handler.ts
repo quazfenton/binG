@@ -33,6 +33,10 @@ export interface ErrorRecoveryOptions {
 export class StreamingErrorHandler {
   private errorCounts: Map<string, number> = new Map();
   private recoveryOptions: ErrorRecoveryOptions;
+  
+  // Recovery tracking
+  private recoveryAttempts: number = 0;
+  private successfulRecoveries: number = 0;
 
   constructor(options: Partial<ErrorRecoveryOptions> = {}) {
     this.recoveryOptions = {
@@ -114,6 +118,9 @@ export class StreamingErrorHandler {
     }
 
     try {
+      // Track recovery attempt
+      this.recoveryAttempts++;
+
       // Calculate delay with optional exponential backoff
       let delay = this.recoveryOptions.retryDelay;
       if (this.recoveryOptions.exponentialBackoff) {
@@ -131,6 +138,9 @@ export class StreamingErrorHandler {
         await recoveryFn();
       }
 
+      // Track successful recovery
+      this.successfulRecoveries++;
+      
       // Reset error count on successful recovery
       this.errorCounts.delete(errorKey);
       return true;
@@ -185,16 +195,115 @@ export class StreamingErrorHandler {
 
   /**
    * Get error statistics
+   * 
+   * ENHANCED: Now with detailed analytics
    */
-  getErrorStats(): { [errorType: string]: number } {
-    const stats: { [errorType: string]: number } = {};
+  getErrorStats(): { 
+    byType: { [errorType: string]: number };
+    byRequest: { [requestId: string]: number };
+    totalErrors: number;
+    recoveryAttempts: number;
+    successfulRecoveries: number;
+  } {
+    const byType: { [errorType: string]: number } = {};
+    const byRequest: { [requestId: string]: number } = {};
+    let totalErrors = 0;
     
     for (const [key, count] of this.errorCounts.entries()) {
-      const errorType = key.split('-')[0];
-      stats[errorType] = (stats[errorType] || 0) + count;
+      const parts = key.split('-');
+      const errorType = parts[0];
+      const requestId = parts[1] || 'unknown';
+      
+      byType[errorType] = (byType[errorType] || 0) + count;
+      byRequest[requestId] = (byRequest[requestId] || 0) + count;
+      totalErrors += count;
+    }
+
+    return {
+      byType,
+      byRequest,
+      totalErrors,
+      recoveryAttempts: this.recoveryAttempts,
+      successfulRecoveries: this.successfulRecoveries,
+    };
+  }
+
+  /**
+   * Get error analytics dashboard data
+   * 
+   * ADDED: Comprehensive error analytics for monitoring
+   */
+  getErrorAnalytics(): {
+    summary: {
+      totalErrors: number;
+      recoveryRate: number;
+      mostCommonError: string;
+      averageErrorsPerRequest: number;
+    };
+    byType: Array<{ type: string; count: number; percentage: number }>;
+    recentErrors: Array<{ type: string; requestId?: string; count: number }>;
+  } {
+    const stats = this.getErrorStats();
+    const totalErrors = stats.totalErrors;
+    
+    // Calculate recovery rate
+    const recoveryRate = totalErrors > 0 
+      ? Math.round((this.successfulRecoveries / Math.max(this.recoveryAttempts, 1)) * 100)
+      : 100;
+    
+    // Find most common error
+    let mostCommonError = 'none';
+    let maxCount = 0;
+    for (const [type, count] of Object.entries(stats.byType)) {
+      if (count > maxCount) {
+        maxCount = count;
+        mostCommonError = type;
+      }
     }
     
-    return stats;
+    // Calculate average errors per request
+    const uniqueRequests = Object.keys(stats.byRequest).length;
+    const averageErrorsPerRequest = uniqueRequests > 0
+      ? Math.round((totalErrors / uniqueRequests) * 10) / 10
+      : 0;
+    
+    // Build byType array with percentages
+    const byType = Object.entries(stats.byType)
+      .map(([type, count]) => ({
+        type,
+        count,
+        percentage: totalErrors > 0 ? Math.round((count / totalErrors) * 100) : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+    
+    // Get recent errors (top 5)
+    const recentErrors = Object.entries(stats.byRequest)
+      .map(([requestId, count]) => {
+        const type = requestId.split('-')[0] || 'unknown';
+        return { type, requestId, count };
+      })
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+    
+    return {
+      summary: {
+        totalErrors,
+        recoveryRate,
+        mostCommonError,
+        averageErrorsPerRequest,
+      },
+      byType,
+      recentErrors,
+    };
+  }
+
+  /**
+   * Reset error statistics
+   */
+  resetStats(): void {
+    this.errorCounts.clear();
+    this.recoveryAttempts = 0;
+    this.successfulRecoveries = 0;
   }
 
   // Private helper methods for error categorization
