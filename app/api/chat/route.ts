@@ -189,6 +189,10 @@ export async function POST(request: NextRequest) {
       typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
         ? filesystemContext.scopePath.trim()
         : defaultScopePath;
+    const filesystemOwnerId = authResult.success && authResult.userId ? authResult.userId : actorId;
+      typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
+        ? filesystemContext.scopePath.trim()
+        : defaultScopePath;
     const filesystemOwnerId = actorId;
     const denialContext = filesystemEditSessionService.getRecentDenials(
       `${filesystemOwnerId}:${resolvedConversationId}`,
