@@ -1,53 +1,91 @@
-# Base image - Using debian instead of alpine for better compatibility with native modules
-FROM node:20-bullseye AS base
-WORKDIR /app
-RUN corepack enable
-ENV NEXT_TELEMETRY_DISABLED=1
+# Production Dockerfile for binG Backend
+# Multi-stage build for optimal image size
 
-# Builder stage
-FROM base AS builder
-# Install build dependencies for native modules
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ build-essential \
-  && rm -rf /var/lib/apt/lists/*
-COPY . .
+# ===========================================
+# Stage 1: Dependencies
+# ===========================================
+FROM node:20-alpine AS deps
+
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
 
 # Install dependencies
-RUN pnpm install --frozen-lockfile
+RUN npm ci --only=production && npm cache clean --force
 
-# Rebuild native modules for the Linux environment
-RUN pnpm rebuild better-sqlite3
+# ===========================================
+# Stage 2: Builder
+# ===========================================
+FROM node:20-alpine AS builder
 
-# Build the application
-RUN SKIP_DB_INIT=1 pnpm run build
+RUN apk add --no-cache libc6-compat
 
-# Prune devDependencies for production
-RUN pnpm prune --prod
+WORKDIR /app
 
-# Production runner stage
-FROM base AS runner
+# Copy dependencies from deps stage
+COPY --from=deps /app/node_modules ./node_modules
+
+# Copy source files
+COPY . .
+
+# Build Next.js application
+RUN npm run build
+
+# ===========================================
+# Stage 3: Runner
+# ===========================================
+FROM node:20-alpine AS runner
+
+RUN apk add --no-cache \
+    libc6-compat \
+    libstdc++ \
+    curl \
+    firecracker \
+    jq
+
+WORKDIR /app
+
+# Create non-root user for security
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
+
+# Set production environment
 ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
 
-# Copy only runtime essentials - Next.js standalone mode bundles everything needed
-COPY --from=builder --chown=root:root /app/node_modules ./node_modules
-COPY --from=builder --chown=root:root /app/package.json ./package.json
-COPY --from=builder --chown=root:root /app/pnpm-lock.yaml ./pnpm-lock.yaml
-COPY --from=builder --chown=root:root /app/.next ./.next
-COPY --from=builder --chown=root:root /app/public ./public
-COPY --from=builder --chown=root:root /app/next.config.mjs ./next.config.mjs
+# Create necessary directories
+RUN mkdir -p /tmp/workspaces /tmp/snapshots /tmp/firecracker
+RUN chown -R nextjs:nodejs /tmp/workspaces /tmp/snapshots /tmp/firecracker
 
-# Set restrictive permissions on application files (read-only for non-root users)
-RUN chmod -R 755 /app/node_modules /app/public \
-    && chmod 644 /app/package.json /app/pnpm-lock.yaml /app/next.config.mjs \
-    && chmod -R 755 /app/.next
+# Copy built application
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Create writable directories for runtime data
-RUN mkdir -p /app/data /app/.next/cache \
-    && chown -R node:node /app/data /app/.next/cache \
-    && chmod -R 755 /app/data /app/.next/cache
+# Copy backend initialization script
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/init-backend.js ./scripts/
 
-# Switch to non-root user for security
-USER node
+# Switch to non-root user
+USER nextjs
 
-EXPOSE 3000
-CMD ["pnpm", "start"]
+# Expose ports
+EXPOSE 3000 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:3000/api/backend/health || exit 1
+
+# Set environment variables
+ENV PORT=3000
+ENV WEBSOCKET_PORT=8080
+ENV STORAGE_TYPE=local
+ENV LOCAL_SNAPSHOT_DIR=/tmp/snapshots
+ENV WORKSPACE_DIR=/tmp/workspaces
+ENV RUNTIME_TYPE=process
+
+# Start application
+CMD ["sh", "-c", "node scripts/init-backend.js & node server.js"]

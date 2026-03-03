@@ -1,0 +1,46 @@
+# Grafana Provisioning Configuration
+# Automatically configures data sources and dashboards
+
+# ===========================================
+# Data Sources
+# ===========================================
+apiVersion: 1
+
+datasources:
+  # Prometheus Data Source
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"
+      queryTimeout: "60s"
+      httpMethod: "POST"
+
+  # MinIO Data Source (optional)
+  # - name: MinIO
+  #   type: prometheus
+  #   access: proxy
+  #   url: http://minio:9000/minio/v2/metrics/cluster
+  #   editable: true
+  #   basicAuth: true
+  #   basicAuthUser: minioadmin
+  #   secureJsonData:
+  #     basicAuthPassword: minioadmin
+
+# ===========================================
+# Dashboard Provisioning
+# ===========================================
+providers:
+  - name: 'Default'
+    orgId: 1
+    folder: ''
+    folderUid: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
