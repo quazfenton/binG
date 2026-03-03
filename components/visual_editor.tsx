@@ -1,821 +1,1893 @@
 "use client";
 
-import * as React from "react";
-import {
+/**
+ * components/visual_editor.tsx
+ *
+ * Full Craft.js visual editor with:
+ * - Real Craft.js canvas (drag/drop, resize, select, undo/redo built-in)
+ * - 15+ editable craft components (Container, Text, Button, Image, Input, Card, Badge, Divider, Icon, Hero, NavBar, Grid, Form, Video, Code)
+ * - Live CSS inspector panel (all box-model, typography, background, border, effects)
+ * - Component template library sourced from community patterns
+ * - Craft.js nodes → JSX string export (writes back to project files)
+ * - Split mode: visual canvas + live code editor side by side
+ * - Layers panel (Craft.js built-in Tree)
+ * - Viewport switcher (desktop / tablet / mobile)
+ * - Full keyboard shortcuts
+ * - VFS handoff on save
+ */
+
+import React, {
   useState,
   useEffect,
   useRef,
   useCallback,
-  useReducer,
   useMemo,
 } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Button } from "./ui/button";
-import { Badge } from "./ui/badge";
-import { Input } from "./ui/input";
-import { Label } from "./ui/label";
+
+// ─── Craft.js ────────────────────────────────────────────────────────────────
+import { Editor, Frame, Element, useEditor, useNode } from "@craftjs/core";
+import { Layers } from "@craftjs/layers";
+
+// ─── Icons ───────────────────────────────────────────────────────────────────
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select";
-import { Slider } from "./ui/slider";
-import { Switch } from "./ui/switch";
-import { Textarea } from "./ui/textarea";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
-import {
-  Eye,
-  Code,
-  Layers,
-  Package,
-  Settings,
-  Save,
-  Undo,
-  Redo,
   MousePointer,
   Move,
-  Square,
   Type,
-  Image,
-  Palette,
-  Download,
-  Upload,
-  Play,
-  RefreshCw,
-  AlertCircle,
-  Info,
-  X,
-  Grid,
-  Zap,
-  Smartphone,
-  Monitor,
-  Tablet,
-  Paintbrush,
+  Square,
+  Image as ImageIcon,
   Layout,
-  Component,
-  Database,
-  FileCode,
-  Globe,
-  Plus,
-  Search,
+  Code,
+  Eye,
+  EyeOff,
+  Save,
+  Undo2,
+  Redo2,
+  X,
   ChevronDown,
   ChevronRight,
-  FileText,
-  Lock,
-  Unlock,
+  Plus,
   Trash2,
-  MoreHorizontal,
+  Copy,
+  Layers as LayersIcon,
+  Settings,
+  Palette,
+  Zap,
+  Search,
+  Monitor,
+  Tablet,
+  Smartphone,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  AlignJustify,
+  Bold,
+  Italic,
+  Underline,
   Link,
-  ArrowRight,
+  Grid,
+  Package,
+  FileCode,
+  Play,
+  RefreshCw,
+  Download,
+  Upload,
+  Maximize2,
+  ArrowLeft,
+  CheckCircle,
+  AlertCircle,
+  Info,
+  Grip,
+  PanelLeft,
+  PanelRight,
 } from "lucide-react";
 
-// ─────────────────────────────────────────────────────────────
-// TYPES
-// ─────────────────────────────────────────────────────────────
+import type { VFSProject } from "../app/visual-editor/page";
 
-export interface ProjectStructure {
-  files: { [key: string]: string };
-  framework:
-    | "react"
-    | "vue"
-    | "angular"
-    | "svelte"
-    | "solid"
-    | "vanilla"
-    | "next"
-    | "nuxt"
-    | "gatsby"
-    | "vite"
-    | "astro"
-    | "remix";
-  name?: string;
-  dependencies?: string[];
-  devDependencies?: string[];
-  scripts?: { [key: string]: string };
-  bundler?: "webpack" | "vite" | "parcel" | "rollup" | "esbuild";
-  packageManager?: "npm" | "yarn" | "pnpm" | "bun";
+// ─────────────────────────────────────────────────────────────────────────────
+// CRAFT COMPONENT PROPS & TYPES
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface CraftStyleProps {
+  // Layout
+  display?: string;
+  flexDirection?: string;
+  flexWrap?: string;
+  alignItems?: string;
+  justifyContent?: string;
+  gap?: string;
+  gridTemplateColumns?: string;
+  // Spacing
+  margin?: string;
+  marginTop?: string;
+  marginRight?: string;
+  marginBottom?: string;
+  marginLeft?: string;
+  padding?: string;
+  paddingTop?: string;
+  paddingRight?: string;
+  paddingBottom?: string;
+  paddingLeft?: string;
+  // Size
+  width?: string;
+  height?: string;
+  minWidth?: string;
+  minHeight?: string;
+  maxWidth?: string;
+  maxHeight?: string;
+  // Typography
+  fontFamily?: string;
+  fontSize?: string;
+  fontWeight?: string;
+  fontStyle?: string;
+  textDecoration?: string;
+  textAlign?: string;
+  lineHeight?: string;
+  letterSpacing?: string;
+  color?: string;
+  // Background
+  background?: string;
+  backgroundColor?: string;
+  backgroundImage?: string;
+  backgroundSize?: string;
+  backgroundPosition?: string;
+  // Border
+  border?: string;
+  borderTop?: string;
+  borderRight?: string;
+  borderBottom?: string;
+  borderLeft?: string;
+  borderColor?: string;
+  borderWidth?: string;
+  borderStyle?: string;
+  borderRadius?: string;
+  // Effects
+  boxShadow?: string;
+  opacity?: string;
+  overflow?: string;
+  cursor?: string;
+  transition?: string;
+  transform?: string;
+  filter?: string;
+  backdropFilter?: string;
+  // Position
+  position?: string;
+  top?: string;
+  right?: string;
+  bottom?: string;
+  left?: string;
+  zIndex?: string;
 }
 
-interface ComponentBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+// ─────────────────────────────────────────────────────────────────────────────
+// UTILITY: generate inline style object from CraftStyleProps
+// ─────────────────────────────────────────────────────────────────────────────
+
+function toStyle(s: CraftStyleProps): React.CSSProperties {
+  return s as React.CSSProperties;
 }
 
-interface AnimationConfig {
-  id: string;
-  type: "fade" | "slide" | "scale" | "rotate" | "bounce" | "custom";
-  trigger: "hover" | "click" | "scroll" | "load" | "focus";
-  duration: number;
-  delay?: number;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// CRAFT SELECTION WRAPPER — adds blue ring + drag handle when selected
+// ─────────────────────────────────────────────────────────────────────────────
 
-interface ComponentMetadata {
-  id: string;
-  type: string;
-  filePath: string;
-  bounds: ComponentBounds;
-  props: Record<string, unknown>;
-  styles: Record<string, string>;
-  children: string[];
-  parent?: string;
-  sourceLocation: { line: number; column: number; file: string };
-  locked?: boolean;
-  hidden?: boolean;
-  animations?: AnimationConfig[];
-}
-
-interface AssetReference {
-  id: string;
-  filename: string;
-  url: string;
-  type: "image" | "video" | "audio" | "font" | "document";
-  size: number;
-  metadata: Record<string, unknown>;
-}
-
-interface LayoutNode {
-  id: string;
-  component: ComponentMetadata;
-  children: LayoutNode[];
-  parent: LayoutNode | null;
-}
-
-interface EditorState {
-  selectedTool: "select" | "move" | "resize" | "text" | "image" | "shape";
-  zoom: number;
-  panOffset: { x: number; y: number };
-  snapToGrid: boolean;
-  showGuidelines: boolean;
-  viewport: "desktop" | "tablet" | "mobile";
-  gridSize: number;
-  showBounds: boolean;
-  livePreview: boolean;
-  autoSave: boolean;
-}
-
-interface VisualEditorProject extends ProjectStructure {
-  visualConfig?: {
-    componentMap: Map<string, ComponentMetadata>;
-    styleSheets: string[];
-    assets: Map<string, AssetReference>;
-    layoutTree: LayoutNode[];
-    lastSyncTimestamp: number;
-  };
-}
-
-interface CodeBlockError {
-  id: string;
-  type: "parse" | "runtime" | "sync";
-  message: string;
-  file?: string;
-  line?: number;
-}
-
-interface VisualEditorProps {
-  initialProject: ProjectStructure;
-  onSaveToOriginal?: (updatedProject: ProjectStructure) => void;
-  onClose?: () => void;
-}
-
-// ─────────────────────────────────────────────────────────────
-// UNDO/REDO REDUCER
-// ─────────────────────────────────────────────────────────────
-
-interface HistoryState {
-  past: VisualEditorProject[];
-  present: VisualEditorProject;
-  future: VisualEditorProject[];
-}
-
-type HistoryAction =
-  | { type: "SET"; payload: VisualEditorProject }
-  | { type: "UNDO" }
-  | { type: "REDO" };
-
-function historyReducer(state: HistoryState, action: HistoryAction): HistoryState {
-  switch (action.type) {
-    case "SET":
-      return {
-        past: [...state.past.slice(-19), state.present],
-        present: action.payload,
-        future: [],
-      };
-    case "UNDO":
-      if (state.past.length === 0) return state;
-      return {
-        past: state.past.slice(0, -1),
-        present: state.past[state.past.length - 1],
-        future: [state.present, ...state.future.slice(0, 19)],
-      };
-    case "REDO":
-      if (state.future.length === 0) return state;
-      return {
-        past: [...state.past, state.present],
-        present: state.future[0],
-        future: state.future.slice(1),
-      };
-    default:
-      return state;
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────────────────────
-
-function extractStyleSheets(files: { [key: string]: string }): string[] {
-  return Object.entries(files)
-    .filter(([filename]) => filename.endsWith(".css"))
-    .map(([, content]) => content);
-}
-
-function buildLayoutTree(components: ComponentMetadata[]): LayoutNode[] {
-  const roots: LayoutNode[] = [];
-  const nodeMap = new Map<string, LayoutNode>();
-  components.forEach((comp) => {
-    nodeMap.set(comp.id, { id: comp.id, component: comp, children: [], parent: null });
-  });
-  nodeMap.forEach((node) => {
-    if (node.component.parent) {
-      const parent = nodeMap.get(node.component.parent);
-      if (parent) {
-        node.parent = parent;
-        parent.children.push(node);
-        return;
-      }
-    }
-    roots.push(node);
-  });
-  return roots;
-}
-
-function getMainFile(framework: string): string {
-  switch (framework) {
-    case "react":
-    case "vite":
-      return "src/App.jsx";
-    case "next":
-      return "pages/index.tsx";
-    case "vue":
-    case "nuxt":
-      return "src/App.vue";
-    case "angular":
-      return "src/app/app.component.ts";
-    case "svelte":
-      return "src/App.svelte";
-    default:
-      return "index.html";
-  }
-}
-
-function getDefaultStyles(): Record<string, string> {
-  return { position: "absolute", width: "120px", height: "48px" };
-}
-
-function getDefaultProps(_type: string, _framework: string): Record<string, unknown> {
-  return {};
-}
-
-function findComponentAtPoint(
-  x: number,
-  y: number,
-  componentMap: Map<string, ComponentMetadata> | undefined
-): string | undefined {
-  if (!componentMap) return undefined;
-  let topmost: string | undefined;
-  let topmostZ = -Infinity;
-  componentMap.forEach((comp, id) => {
-    if (
-      x >= comp.bounds.x &&
-      x <= comp.bounds.x + comp.bounds.width &&
-      y >= comp.bounds.y &&
-      y <= comp.bounds.y + comp.bounds.height
-    ) {
-      const z = Number(comp.styles.zIndex ?? 0);
-      if (z >= topmostZ) {
-        topmostZ = z;
-        topmost = id;
-      }
-    }
-  });
-  return topmost;
-}
-
-/** Naive code patcher: injects/updates inline style on a JSX element */
-function syncVisualChangesToCode(
-  project: VisualEditorProject,
-  componentId: string,
-  updates: Partial<ComponentMetadata>
-): VisualEditorProject {
-  if (!updates.styles && !updates.props) return project;
-  // For now we mark the file as dirty — real AST patching is a Phase 2 task
-  return {
-    ...project,
-    visualConfig: project.visualConfig
-      ? {
-          ...project.visualConfig,
-          lastSyncTimestamp: Date.now(),
-        }
-      : undefined,
-  };
-}
-
-// ─────────────────────────────────────────────────────────────
-// COMPONENT DETECTOR
-// ─────────────────────────────────────────────────────────────
-
-class ComponentDetector {
-  constructor(private framework: string) {}
-
-  async detectComponents(files: {
-    [key: string]: string;
-  }): Promise<ComponentMetadata[]> {
-    const components: ComponentMetadata[] = [];
-    for (const [filePath, content] of Object.entries(files)) {
-      try {
-        switch (this.framework) {
-          case "react":
-          case "next":
-          case "gatsby":
-          case "remix":
-            components.push(...this.parseReactComponents(content, filePath));
-            break;
-          case "vue":
-          case "nuxt":
-            components.push(...this.parseVueComponents(content, filePath));
-            break;
-          case "angular":
-            components.push(...this.parseAngularComponents(content, filePath));
-            break;
-          case "svelte":
-            components.push(...this.parseSvelteComponents(content, filePath));
-            break;
-          default:
-            components.push(...this.parseVanillaComponents(content, filePath));
-        }
-      } catch (err) {
-        console.warn(`Failed to parse ${filePath}:`, err);
-      }
-    }
-    return components;
-  }
-
-  private parseReactComponents(code: string, filePath: string): ComponentMetadata[] {
-    const fnMatches = [...(code.matchAll(/function\s+([A-Z][a-zA-Z0-9]*)/g))];
-    const arrowMatches = [...(code.matchAll(/const\s+([A-Z][a-zA-Z0-9]*)\s*=/g))];
-    return [...fnMatches, ...arrowMatches].slice(0, 12).map((m, i) => ({
-      id: `comp_${m[1] ?? `Component${i}`}_${Date.now()}_${i}`,
-      type: "react-component",
-      filePath,
-      bounds: { x: 40 + i * 24, y: 40 + i * 24, width: 200, height: 80 },
-      props: {},
-      styles: {},
-      children: [],
-      sourceLocation: { line: 1, column: 1, file: filePath },
-    }));
-  }
-
-  private parseVueComponents(code: string, filePath: string): ComponentMetadata[] {
-    return [
-      {
-        id: `comp_vue_${Date.now()}`,
-        type: "vue-component",
-        filePath,
-        bounds: { x: 50, y: 50, width: 220, height: 100 },
-        props: {},
-        styles: {},
-        children: [],
-        sourceLocation: { line: 1, column: 1, file: filePath },
-      },
-    ];
-  }
-
-  private parseAngularComponents(
-    code: string,
-    filePath: string
-  ): ComponentMetadata[] {
-    return [...(code.matchAll(/@Component[\s\S]*?export\s+class\s+(\w+)/g))].map(
-      (m, i) => ({
-        id: `comp_${m[1]}_${Date.now()}_${i}`,
-        type: "angular-component",
-        filePath,
-        bounds: { x: 50 + i * 20, y: 50 + i * 20, width: 200, height: 80 },
-        props: {},
-        styles: {},
-        children: [],
-        sourceLocation: { line: 1, column: 1, file: filePath },
-      })
-    );
-  }
-
-  private parseSvelteComponents(
-    _code: string,
-    filePath: string
-  ): ComponentMetadata[] {
-    if (!filePath.endsWith(".svelte")) return [];
-    const name =
-      filePath.split("/").pop()?.replace(".svelte", "") ?? "SvelteComp";
-    return [
-      {
-        id: `comp_${name}_${Date.now()}`,
-        type: "svelte-component",
-        filePath,
-        bounds: { x: 50, y: 50, width: 200, height: 80 },
-        props: {},
-        styles: {},
-        children: [],
-        sourceLocation: { line: 1, column: 1, file: filePath },
-      },
-    ];
-  }
-
-  private parseVanillaComponents(
-    code: string,
-    filePath: string
-  ): ComponentMetadata[] {
-    if (!filePath.endsWith(".html")) return [];
-    return [...(code.matchAll(/<([a-z][a-z0-9-]*)[^>]*>/g))]
-      .filter(
-        (m) =>
-          !["html", "head", "body", "meta", "title", "script", "style", "link"].includes(
-            m[1]
-          )
-      )
-      .slice(0, 12)
-      .map((m, i) => ({
-        id: `comp_${m[1]}_${Date.now()}_${i}`,
-        type: m[1],
-        filePath,
-        bounds: { x: 40 + i * 10, y: 40 + i * 10, width: 140, height: 48 },
-        props: {},
-        styles: {},
-        children: [],
-        sourceLocation: { line: 1, column: 1, file: filePath },
-      }));
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// TOOL BUTTON
-// ─────────────────────────────────────────────────────────────
-
-function ToolButton({
-  icon: Icon,
-  tooltip,
-  active,
-  onClick,
+function SelectionWrapper({
+  children,
+  label,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
-  tooltip: string;
-  active: boolean;
-  onClick: () => void;
+  children: React.ReactNode;
+  label: string;
 }) {
+  const {
+    connectors: { connect, drag },
+    selected,
+    hovered,
+  } = useNode((node) => ({
+    selected: node.events.selected,
+    hovered: node.events.hovered,
+  }));
+
   return (
-    <button
-      onClick={onClick}
-      title={tooltip}
-      className={`w-8 h-8 flex items-center justify-center rounded transition-all ${
-        active
-          ? "bg-[#3b82f6] text-white shadow-lg shadow-blue-500/30"
-          : "text-[#8b949e] hover:text-white hover:bg-[#30363d]"
-      }`}
+    <div
+      ref={(ref) => {
+        if (ref) connect(drag(ref));
+      }}
+      className={[
+        "relative craft-node",
+        selected ? "ring-2 ring-[#3b82f6] ring-offset-1 ring-offset-transparent" : "",
+        hovered && !selected ? "ring-1 ring-[#3b82f6]/50" : "",
+      ].join(" ")}
+      style={{ minHeight: 2, cursor: "default" }}
     >
-      <Icon className="w-4 h-4" />
-    </button>
+      {(selected || hovered) && (
+        <div className="absolute -top-5 left-0 z-50 bg-[#3b82f6] text-white text-[9px] font-mono px-1.5 py-0.5 rounded-sm pointer-events-none whitespace-nowrap">
+          {label}
+        </div>
+      )}
+      {children}
+    </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// TOOLBAR
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// ── CRAFT COMPONENTS ─────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 
-function VisualEditorToolbar({
-  project,
-  editorMode,
-  editorState,
-  onModeChange,
-  onToolChange,
-  onSave,
-  onUndo,
-  onRedo,
-  onClose,
-  canUndo,
-  canRedo,
-  errors,
-}: {
-  project: VisualEditorProject;
-  editorMode: "design" | "code" | "split";
-  editorState: EditorState;
-  onModeChange: (m: "design" | "code" | "split") => void;
-  onToolChange: (t: EditorState["selectedTool"]) => void;
-  onSave: () => void;
-  onUndo: () => void;
-  onRedo: () => void;
-  onClose?: () => void;
-  canUndo: boolean;
-  canRedo: boolean;
-  errors: CodeBlockError[];
-}) {
-  const runtimeErrors = errors.filter((e) => e.type === "runtime").length;
-  const parseWarnings = errors.filter((e) => e.type === "parse").length;
+// ── ContainerCraft ────────────────────────────────────────────────────────────
+
+interface ContainerProps {
+  styles?: CraftStyleProps;
+  children?: React.ReactNode;
+  className?: string;
+}
+
+export function ContainerCraft({ styles = {}, children, className = "" }: ContainerProps) {
+  return (
+    <SelectionWrapper label="Container">
+      <div
+        className={className}
+        style={{
+          minHeight: 48,
+          ...toStyle(styles),
+        }}
+      >
+        {children}
+      </div>
+    </SelectionWrapper>
+  );
+}
+ContainerCraft.craft = {
+  displayName: "Container",
+  props: {
+    styles: {
+      display: "flex",
+      flexDirection: "column",
+      padding: "16px",
+      gap: "8px",
+    },
+  },
+  rules: { canDrop: () => true },
+};
+
+// ── TextCraft ─────────────────────────────────────────────────────────────────
+
+interface TextProps {
+  text?: string;
+  tag?: "h1" | "h2" | "h3" | "h4" | "p" | "span" | "label" | "code" | "blockquote";
+  styles?: CraftStyleProps;
+}
+
+export function TextCraft({ text = "Edit this text", tag = "p", styles = {} }: TextProps) {
+  const Tag = tag;
+  return (
+    <SelectionWrapper label={`Text / ${tag}`}>
+      <Tag style={toStyle(styles)} suppressContentEditableWarning>
+        {text}
+      </Tag>
+    </SelectionWrapper>
+  );
+}
+TextCraft.craft = {
+  displayName: "Text",
+  props: { text: "Edit this text", tag: "p", styles: { color: "#e6edf3", fontSize: "16px" } },
+};
+
+// ── ButtonCraft ───────────────────────────────────────────────────────────────
+
+interface ButtonProps {
+  label?: string;
+  variant?: "primary" | "secondary" | "outline" | "ghost" | "destructive" | "gradient";
+  size?: "xs" | "sm" | "md" | "lg" | "xl";
+  styles?: CraftStyleProps;
+  href?: string;
+  disabled?: boolean;
+  fullWidth?: boolean;
+}
+
+const BTN_VARIANTS: Record<string, React.CSSProperties> = {
+  primary: { background: "#3b82f6", color: "#fff", border: "none" },
+  secondary: { background: "#21262d", color: "#e6edf3", border: "1px solid #30363d" },
+  outline: { background: "transparent", color: "#3b82f6", border: "2px solid #3b82f6" },
+  ghost: { background: "transparent", color: "#8b949e", border: "none" },
+  destructive: { background: "#ef4444", color: "#fff", border: "none" },
+  gradient: {
+    background: "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+    color: "#fff",
+    border: "none",
+  },
+};
+
+const BTN_SIZES: Record<string, React.CSSProperties> = {
+  xs: { padding: "2px 8px", fontSize: "11px", borderRadius: "4px" },
+  sm: { padding: "4px 12px", fontSize: "13px", borderRadius: "6px" },
+  md: { padding: "8px 18px", fontSize: "14px", borderRadius: "8px" },
+  lg: { padding: "12px 24px", fontSize: "16px", borderRadius: "10px" },
+  xl: { padding: "16px 32px", fontSize: "18px", borderRadius: "12px" },
+};
+
+export function ButtonCraft({
+  label = "Button",
+  variant = "primary",
+  size = "md",
+  styles = {},
+  href,
+  disabled = false,
+  fullWidth = false,
+}: ButtonProps) {
+  const base: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontWeight: 500,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.5 : 1,
+    width: fullWidth ? "100%" : "auto",
+    transition: "all 0.15s",
+    ...BTN_VARIANTS[variant],
+    ...BTN_SIZES[size],
+    ...toStyle(styles),
+  };
 
   return (
-    <div className="h-14 bg-[#161b22] border-b border-[#30363d] flex items-center justify-between px-4 flex-shrink-0">
-      {/* Left */}
-      <div className="flex items-center gap-3">
-        {/* Mode switcher */}
-        <div className="flex bg-[#21262d] rounded-lg border border-[#30363d] overflow-hidden">
-          {(["design", "split", "code"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => onModeChange(m)}
-              className={`px-3 h-8 text-xs font-medium flex items-center gap-1.5 transition-colors ${
-                editorMode === m
-                  ? "bg-[#3b82f6] text-white"
-                  : "text-[#8b949e] hover:text-white hover:bg-[#30363d]"
-              }`}
-            >
-              {m === "design" && <Eye className="w-3 h-3" />}
-              {m === "code" && <Code className="w-3 h-3" />}
-              {m === "split" && <Layout className="w-3 h-3" />}
-              {m.charAt(0).toUpperCase() + m.slice(1)}
-            </button>
+    <SelectionWrapper label={`Button / ${variant}`}>
+      <button style={base} disabled={disabled}>
+        {label}
+      </button>
+    </SelectionWrapper>
+  );
+}
+ButtonCraft.craft = {
+  displayName: "Button",
+  props: { label: "Click me", variant: "primary", size: "md", styles: {} },
+};
+
+// ── ImageCraft ────────────────────────────────────────────────────────────────
+
+interface ImageCraftProps {
+  src?: string;
+  alt?: string;
+  objectFit?: "cover" | "contain" | "fill" | "none" | "scale-down";
+  styles?: CraftStyleProps;
+}
+
+export function ImageCraft({
+  src = "https://picsum.photos/seed/craft/400/300",
+  alt = "Image",
+  objectFit = "cover",
+  styles = {},
+}: ImageCraftProps) {
+  return (
+    <SelectionWrapper label="Image">
+      <img
+        src={src}
+        alt={alt}
+        style={{
+          display: "block",
+          maxWidth: "100%",
+          objectFit,
+          ...toStyle(styles),
+        }}
+        draggable={false}
+      />
+    </SelectionWrapper>
+  );
+}
+ImageCraft.craft = {
+  displayName: "Image",
+  props: {
+    src: "https://picsum.photos/seed/craft/400/300",
+    alt: "Image",
+    objectFit: "cover",
+    styles: { width: "100%", height: "200px", borderRadius: "8px" },
+  },
+};
+
+// ── CardCraft ─────────────────────────────────────────────────────────────────
+
+interface CardCraftProps {
+  title?: string;
+  subtitle?: string;
+  variant?: "default" | "bordered" | "elevated" | "glass" | "gradient";
+  styles?: CraftStyleProps;
+  children?: React.ReactNode;
+}
+
+const CARD_VARIANTS: Record<string, React.CSSProperties> = {
+  default: { background: "#161b22", border: "1px solid #30363d" },
+  bordered: { background: "transparent", border: "2px solid #3b82f6" },
+  elevated: {
+    background: "#161b22",
+    border: "1px solid #30363d",
+    boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+  },
+  glass: {
+    background: "rgba(255,255,255,0.05)",
+    backdropFilter: "blur(12px)",
+    border: "1px solid rgba(255,255,255,0.1)",
+  },
+  gradient: {
+    background: "linear-gradient(135deg, #1e3a5f 0%, #1a1f2e 100%)",
+    border: "1px solid #3b82f6/30",
+  },
+};
+
+export function CardCraft({
+  title = "Card Title",
+  subtitle = "Card description goes here",
+  variant = "default",
+  styles = {},
+  children,
+}: CardCraftProps) {
+  return (
+    <SelectionWrapper label={`Card / ${variant}`}>
+      <div
+        style={{
+          borderRadius: "12px",
+          padding: "20px",
+          overflow: "hidden",
+          ...CARD_VARIANTS[variant],
+          ...toStyle(styles),
+        }}
+      >
+        {title && (
+          <h3 style={{ margin: "0 0 6px", color: "#e6edf3", fontSize: "16px", fontWeight: 600 }}>
+            {title}
+          </h3>
+        )}
+        {subtitle && (
+          <p style={{ margin: "0 0 12px", color: "#8b949e", fontSize: "13px" }}>{subtitle}</p>
+        )}
+        {children}
+      </div>
+    </SelectionWrapper>
+  );
+}
+CardCraft.craft = {
+  displayName: "Card",
+  props: { title: "Card Title", subtitle: "Card description", variant: "default", styles: {} },
+  rules: { canDrop: () => true },
+};
+
+// ── BadgeCraft ────────────────────────────────────────────────────────────────
+
+interface BadgeCraftProps {
+  label?: string;
+  color?: "blue" | "green" | "red" | "yellow" | "purple" | "gray";
+  styles?: CraftStyleProps;
+}
+
+const BADGE_COLORS: Record<string, React.CSSProperties> = {
+  blue: { background: "#1d3a6b", color: "#60a5fa", border: "1px solid #3b82f6/40" },
+  green: { background: "#14532d", color: "#4ade80", border: "1px solid #22c55e/40" },
+  red: { background: "#7f1d1d", color: "#f87171", border: "1px solid #ef4444/40" },
+  yellow: { background: "#713f12", color: "#facc15", border: "1px solid #eab308/40" },
+  purple: { background: "#3b0764", color: "#c084fc", border: "1px solid #a855f7/40" },
+  gray: { background: "#1f2937", color: "#9ca3af", border: "1px solid #374151" },
+};
+
+export function BadgeCraft({ label = "Badge", color = "blue", styles = {} }: BadgeCraftProps) {
+  return (
+    <SelectionWrapper label="Badge">
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          padding: "2px 8px",
+          borderRadius: "999px",
+          fontSize: "11px",
+          fontWeight: 600,
+          ...BADGE_COLORS[color],
+          ...toStyle(styles),
+        }}
+      >
+        {label}
+      </span>
+    </SelectionWrapper>
+  );
+}
+BadgeCraft.craft = {
+  displayName: "Badge",
+  props: { label: "New", color: "blue", styles: {} },
+};
+
+// ── DividerCraft ──────────────────────────────────────────────────────────────
+
+interface DividerCraftProps {
+  orientation?: "horizontal" | "vertical";
+  label?: string;
+  color?: string;
+  styles?: CraftStyleProps;
+}
+
+export function DividerCraft({
+  orientation = "horizontal",
+  label,
+  color = "#30363d",
+  styles = {},
+}: DividerCraftProps) {
+  if (orientation === "vertical") {
+    return (
+      <SelectionWrapper label="Divider / vertical">
+        <div
+          style={{
+            width: "1px",
+            height: "100%",
+            minHeight: "24px",
+            background: color,
+            ...toStyle(styles),
+          }}
+        />
+      </SelectionWrapper>
+    );
+  }
+
+  if (label) {
+    return (
+      <SelectionWrapper label="Divider / labeled">
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "12px",
+            ...toStyle(styles),
+          }}
+        >
+          <div style={{ flex: 1, height: "1px", background: color }} />
+          <span style={{ color: "#8b949e", fontSize: "12px", whiteSpace: "nowrap" }}>{label}</span>
+          <div style={{ flex: 1, height: "1px", background: color }} />
+        </div>
+      </SelectionWrapper>
+    );
+  }
+
+  return (
+    <SelectionWrapper label="Divider">
+      <hr style={{ border: "none", borderTop: `1px solid ${color}`, margin: "8px 0", ...toStyle(styles) }} />
+    </SelectionWrapper>
+  );
+}
+DividerCraft.craft = {
+  displayName: "Divider",
+  props: { orientation: "horizontal", color: "#30363d", styles: {} },
+};
+
+// ── InputCraft ────────────────────────────────────────────────────────────────
+
+interface InputCraftProps {
+  placeholder?: string;
+  inputType?: "text" | "email" | "password" | "number" | "search" | "url" | "tel";
+  label?: string;
+  hint?: string;
+  variant?: "default" | "filled" | "outlined";
+  styles?: CraftStyleProps;
+}
+
+export function InputCraft({
+  placeholder = "Enter text…",
+  inputType = "text",
+  label,
+  hint,
+  variant = "default",
+  styles = {},
+}: InputCraftProps) {
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "8px 12px",
+    borderRadius: "8px",
+    fontSize: "14px",
+    color: "#e6edf3",
+    outline: "none",
+    ...( variant === "filled"
+      ? { background: "#21262d", border: "1px solid transparent" }
+      : variant === "outlined"
+      ? { background: "transparent", border: "2px solid #3b82f6" }
+      : { background: "#0d1117", border: "1px solid #30363d" }),
+    ...toStyle(styles),
+  };
+
+  return (
+    <SelectionWrapper label={`Input / ${inputType}`}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+        {label && (
+          <label style={{ color: "#8b949e", fontSize: "13px", fontWeight: 500 }}>{label}</label>
+        )}
+        <input type={inputType} placeholder={placeholder} style={inputStyle} readOnly />
+        {hint && <p style={{ color: "#6e7681", fontSize: "12px" }}>{hint}</p>}
+      </div>
+    </SelectionWrapper>
+  );
+}
+InputCraft.craft = {
+  displayName: "Input",
+  props: { placeholder: "Enter text…", inputType: "text", variant: "default", styles: {} },
+};
+
+// ── HeroCraft ─────────────────────────────────────────────────────────────────
+
+interface HeroCraftProps {
+  headline?: string;
+  subheadline?: string;
+  ctaLabel?: string;
+  variant?: "centered" | "split" | "minimal";
+  backgroundGradient?: string;
+  styles?: CraftStyleProps;
+  children?: React.ReactNode;
+}
+
+export function HeroCraft({
+  headline = "Build Something Amazing",
+  subheadline = "A powerful platform to bring your ideas to life.",
+  ctaLabel = "Get Started",
+  variant = "centered",
+  backgroundGradient = "linear-gradient(135deg, #0d1117 0%, #1a1f35 100%)",
+  styles = {},
+  children,
+}: HeroCraftProps) {
+  return (
+    <SelectionWrapper label={`Hero / ${variant}`}>
+      <section
+        style={{
+          background: backgroundGradient,
+          padding: "80px 24px",
+          textAlign: variant === "centered" ? "center" : "left",
+          ...toStyle(styles),
+        }}
+      >
+        <h1
+          style={{
+            fontSize: "clamp(2rem, 5vw, 4rem)",
+            fontWeight: 800,
+            color: "#e6edf3",
+            margin: "0 0 16px",
+            lineHeight: 1.15,
+          }}
+        >
+          {headline}
+        </h1>
+        <p
+          style={{
+            fontSize: "1.125rem",
+            color: "#8b949e",
+            margin: "0 0 32px",
+            maxWidth: "560px",
+            ...(variant === "centered" ? { marginLeft: "auto", marginRight: "auto" } : {}),
+          }}
+        >
+          {subheadline}
+        </p>
+        <button
+          style={{
+            background: "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+            color: "#fff",
+            padding: "14px 32px",
+            borderRadius: "10px",
+            fontSize: "16px",
+            fontWeight: 600,
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
+          {ctaLabel}
+        </button>
+        {children}
+      </section>
+    </SelectionWrapper>
+  );
+}
+HeroCraft.craft = {
+  displayName: "Hero Section",
+  props: {
+    headline: "Build Something Amazing",
+    subheadline: "A powerful platform to bring your ideas to life.",
+    ctaLabel: "Get Started",
+    variant: "centered",
+    backgroundGradient: "linear-gradient(135deg, #0d1117 0%, #1a1f35 100%)",
+    styles: {},
+  },
+  rules: { canDrop: () => true },
+};
+
+// ── NavBarCraft ───────────────────────────────────────────────────────────────
+
+interface NavBarCraftProps {
+  brand?: string;
+  links?: string[];
+  variant?: "transparent" | "solid" | "blurred";
+  styles?: CraftStyleProps;
+}
+
+export function NavBarCraft({
+  brand = "MyApp",
+  links = ["Home", "Features", "Pricing", "Docs"],
+  variant = "solid",
+  styles = {},
+}: NavBarCraftProps) {
+  return (
+    <SelectionWrapper label={`NavBar / ${variant}`}>
+      <nav
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "12px 24px",
+          ...( variant === "solid"
+            ? { background: "#161b22", borderBottom: "1px solid #30363d" }
+            : variant === "blurred"
+            ? {
+                background: "rgba(22,27,34,0.7)",
+                backdropFilter: "blur(12px)",
+                borderBottom: "1px solid rgba(255,255,255,0.08)",
+              }
+            : { background: "transparent" }),
+          ...toStyle(styles),
+        }}
+      >
+        <span style={{ color: "#e6edf3", fontWeight: 700, fontSize: "18px" }}>{brand}</span>
+        <div style={{ display: "flex", gap: "24px" }}>
+          {links.map((l) => (
+            <a key={l} href="#" style={{ color: "#8b949e", fontSize: "14px", textDecoration: "none" }}>
+              {l}
+            </a>
           ))}
         </div>
-
-        {/* Tool palette */}
-        {editorMode !== "code" && (
-          <div className="flex items-center gap-0.5 bg-[#21262d] rounded-lg border border-[#30363d] p-1">
-            <ToolButton icon={MousePointer} tooltip="Select (V)" active={editorState.selectedTool === "select"} onClick={() => onToolChange("select")} />
-            <ToolButton icon={Move} tooltip="Move (M)" active={editorState.selectedTool === "move"} onClick={() => onToolChange("move")} />
-            <ToolButton icon={Square} tooltip="Shape (R)" active={editorState.selectedTool === "shape"} onClick={() => onToolChange("shape")} />
-            <ToolButton icon={Type} tooltip="Text (T)" active={editorState.selectedTool === "text"} onClick={() => onToolChange("text")} />
-            <ToolButton icon={Image} tooltip="Image (I)" active={editorState.selectedTool === "image"} onClick={() => onToolChange("image")} />
-          </div>
-        )}
-
-        {/* Undo/Redo */}
-        <div className="flex items-center gap-0.5">
-          <button
-            onClick={onUndo}
-            disabled={!canUndo}
-            title="Undo (⌘Z)"
-            className="w-8 h-8 flex items-center justify-center rounded text-[#8b949e] hover:text-white hover:bg-[#30363d] disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-          >
-            <Undo className="w-4 h-4" />
-          </button>
-          <button
-            onClick={onRedo}
-            disabled={!canRedo}
-            title="Redo (⌘⇧Z)"
-            className="w-8 h-8 flex items-center justify-center rounded text-[#8b949e] hover:text-white hover:bg-[#30363d] disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-          >
-            <Redo className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* Center */}
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-medium text-white">
-          {project.name ?? "Untitled Project"}
-        </span>
-        <span className="text-[#3b82f6] text-xs bg-[#3b82f6]/10 px-2 py-0.5 rounded-full border border-[#3b82f6]/20">
-          {project.framework}
-        </span>
-        <span className="text-xs text-[#8b949e]">
-          {project.visualConfig?.componentMap.size ?? 0} components
-        </span>
-        {runtimeErrors > 0 && (
-          <span className="flex items-center gap-1 text-xs text-red-400 bg-red-400/10 px-2 py-0.5 rounded-full">
-            <AlertCircle className="w-3 h-3" />
-            {runtimeErrors}
-          </span>
-        )}
-        {parseWarnings > 0 && (
-          <span className="flex items-center gap-1 text-xs text-yellow-400 bg-yellow-400/10 px-2 py-0.5 rounded-full">
-            <Info className="w-3 h-3" />
-            {parseWarnings}
-          </span>
-        )}
-      </div>
-
-      {/* Right */}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={onSave}
-          className="flex items-center gap-1.5 px-3 h-8 bg-[#3b82f6] hover:bg-[#2563eb] text-white text-xs font-medium rounded-lg transition-colors"
-        >
-          <Save className="w-3.5 h-3.5" />
-          Save
-        </button>
-        {onClose && (
-          <button
-            onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded text-[#8b949e] hover:text-white hover:bg-[#30363d] transition-all"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        )}
-      </div>
-    </div>
+      </nav>
+    </SelectionWrapper>
   );
 }
-
-// ─────────────────────────────────────────────────────────────
-// COMPONENT LIBRARY PANEL
-// ─────────────────────────────────────────────────────────────
-
-const COMPONENT_CATEGORIES = {
-  basic: {
-    name: "Elements",
-    icon: Square,
-    items: [
-      { type: "div", name: "Container", icon: Square },
-      { type: "button", name: "Button", icon: MousePointer },
-      { type: "input", name: "Input", icon: Type },
-      { type: "textarea", name: "Textarea", icon: FileText },
-      { type: "img", name: "Image", icon: Image },
-      { type: "text", name: "Text", icon: Type },
-      { type: "link", name: "Link", icon: Link },
-    ],
+NavBarCraft.craft = {
+  displayName: "NavBar",
+  props: {
+    brand: "MyApp",
+    links: ["Home", "Features", "Pricing", "Docs"],
+    variant: "solid",
+    styles: {},
   },
-  layout: {
-    name: "Layout",
-    icon: Layout,
-    items: [
-      { type: "header", name: "Header", icon: Layout },
-      { type: "nav", name: "Nav", icon: Layout },
-      { type: "main", name: "Main", icon: Layout },
-      { type: "aside", name: "Sidebar", icon: Layout },
-      { type: "footer", name: "Footer", icon: Layout },
-      { type: "section", name: "Section", icon: Layout },
-    ],
-  },
-  forms: {
-    name: "Forms",
-    icon: FileText,
-    items: [
-      { type: "form", name: "Form", icon: FileText },
-      { type: "select", name: "Select", icon: ChevronDown },
-      { type: "checkbox", name: "Checkbox", icon: Square },
-      { type: "radio", name: "Radio", icon: Square },
-      { type: "range", name: "Slider", icon: ArrowRight },
-      { type: "file", name: "File Upload", icon: Upload },
-    ],
-  },
-  media: {
-    name: "Media",
-    icon: Image,
-    items: [
-      { type: "video", name: "Video", icon: Play },
-      { type: "canvas", name: "Canvas", icon: Paintbrush },
-      { type: "svg", name: "SVG", icon: Paintbrush },
-      { type: "iframe", name: "Iframe", icon: Globe },
-    ],
-  },
-} as const;
+};
 
-function ComponentLibraryPanel({
-  framework,
-  onComponentDrop,
-}: {
-  framework: string;
-  onComponentDrop: (type: string, pos: { x: number; y: number }) => void;
-}) {
-  const [search, setSearch] = useState("");
-  const [expanded, setExpanded] = useState<Set<string>>(new Set(["basic"]));
+// ── GridCraft ─────────────────────────────────────────────────────────────────
 
-  const toggle = (k: string) =>
-    setExpanded((prev) => {
-      const n = new Set(prev);
-      n.has(k) ? n.delete(k) : n.add(k);
-      return n;
-    });
+interface GridCraftProps {
+  columns?: number;
+  gap?: string;
+  styles?: CraftStyleProps;
+  children?: React.ReactNode;
+}
 
-  const handleDragStart = (e: React.DragEvent, type: string) => {
-    e.dataTransfer.setData("component-type", type);
-    e.dataTransfer.effectAllowed = "copy";
-  };
-
+export function GridCraft({ columns = 3, gap = "16px", styles = {}, children }: GridCraftProps) {
   return (
-    <div className="flex flex-col border-b border-[#30363d]" style={{ height: "55%" }}>
-      {/* Header */}
-      <div className="px-4 pt-4 pb-3 border-b border-[#30363d]">
-        <div className="flex items-center justify-between mb-3">
-          <span className="text-xs font-semibold text-[#8b949e] uppercase tracking-wider">
-            Components
-          </span>
-          <span className="text-[10px] text-[#3b82f6] bg-[#3b82f6]/10 px-1.5 py-0.5 rounded">
-            {framework}
-          </span>
-        </div>
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#484f58]" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search…"
-            className="w-full pl-8 pr-3 h-7 bg-[#0d1117] border border-[#30363d] rounded text-xs text-white placeholder-[#484f58] focus:outline-none focus:border-[#3b82f6]"
-          />
-        </div>
+    <SelectionWrapper label={`Grid / ${columns}col`}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${columns}, 1fr)`,
+          gap,
+          ...toStyle(styles),
+        }}
+      >
+        {children}
       </div>
-
-      <div className="flex-1 overflow-y-auto py-2 px-2">
-        {Object.entries(COMPONENT_CATEGORIES).map(([key, cat]) => {
-          const filtered = cat.items.filter((i) =>
-            i.name.toLowerCase().includes(search.toLowerCase())
-          );
-          if (filtered.length === 0) return null;
-          const CatIcon = cat.icon;
-          return (
-            <div key={key} className="mb-1">
-              <button
-                onClick={() => toggle(key)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 text-left text-[#8b949e] hover:text-white hover:bg-[#21262d] rounded text-xs transition-colors"
-              >
-                <CatIcon className="w-3 h-3" />
-                <span className="flex-1 font-medium">{cat.name}</span>
-                {expanded.has(key) ? (
-                  <ChevronDown className="w-3 h-3" />
-                ) : (
-                  <ChevronRight className="w-3 h-3" />
-                )}
-              </button>
-
-              {expanded.has(key) && (
-                <div className="ml-2 mt-0.5 space-y-0.5">
-                  {filtered.map((item) => {
-                    const ItemIcon = item.icon;
-                    return (
-                      <div
-                        key={item.type}
-                        draggable
-                        onDragStart={(e) => handleDragStart(e, item.type)}
-                        className="flex items-center gap-2 px-2 py-1.5 rounded cursor-grab text-[#8b949e] hover:text-white hover:bg-[#21262d] group transition-colors"
-                      >
-                        <ItemIcon className="w-3.5 h-3.5 flex-shrink-0" />
-                        <span className="text-xs">{item.name}</span>
-                        <Plus className="w-3 h-3 ml-auto opacity-0 group-hover:opacity-60 transition-opacity" />
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    </SelectionWrapper>
   );
 }
+GridCraft.craft = {
+  displayName: "Grid",
+  props: { columns: 3, gap: "16px", styles: {} },
+  rules: { canDrop: () => true },
+};
 
-// ─────────────────────────────────────────────────────────────
-// PROPERTY INSPECTOR
-// ─────────────────────────────────────────────────────────────
+// ── FormCraft ─────────────────────────────────────────────────────────────────
 
-function PropertyInspectorPanel({
-  selectedComponents,
-  project,
-  onPropertyChange,
-}: {
-  selectedComponents: Set<string>;
-  project: VisualEditorProject;
-  onPropertyChange: (id: string, prop: string, val: unknown) => void;
-}) {
-  const [activeTab, setActiveTab] = useState<"props" | "styles" | "animate">("props");
+interface FormCraftProps {
+  title?: string;
+  submitLabel?: string;
+  variant?: "card" | "minimal" | "inline";
+  styles?: CraftStyleProps;
+  children?: React.ReactNode;
+}
 
-  const comp =
-    selectedComponents.size === 1
-      ? project.visualConfig?.componentMap.get(
-          Array.from(selectedComponents)[0]
-        )
-      : null;
+export function FormCraft({
+  title = "Contact Form",
+  submitLabel = "Submit",
+  variant = "card",
+  styles = {},
+  children,
+}: FormCraftProps) {
+  return (
+    <SelectionWrapper label="Form">
+      <form
+        onSubmit={(e) => e.preventDefault()}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "16px",
+          ...(variant === "card"
+            ? {
+                background: "#161b22",
+                border: "1px solid #30363d",
+                borderRadius: "12px",
+                padding: "24px",
+              }
+            : {}),
+          ...toStyle(styles),
+        }}
+      >
+        {title && (
+          <h3 style={{ margin: 0, color: "#e6edf3", fontSize: "18px", fontWeight: 600 }}>
+            {title}
+          </h3>
+        )}
+        {children}
+        <button
+          type="submit"
+          style={{
+            background: "#3b82f6",
+            color: "#fff",
+            padding: "10px 20px",
+            borderRadius: "8px",
+            border: "none",
+            cursor: "pointer",
+            fontWeight: 600,
+            fontSize: "14px",
+          }}
+        >
+          {submitLabel}
+        </button>
+      </form>
+    </SelectionWrapper>
+  );
+}
+FormCraft.craft = {
+  displayName: "Form",
+  props: { title: "Contact Form", submitLabel: "Submit", variant: "card", styles: {} },
+  rules: { canDrop: () => true },
+};
 
-  if (!comp) {
+// ── CodeBlockCraft ────────────────────────────────────────────────────────────
+
+interface CodeBlockCraftProps {
+  code?: string;
+  language?: string;
+  showLineNumbers?: boolean;
+  styles?: CraftStyleProps;
+}
+
+export function CodeBlockCraft({
+  code = `// Hello World\nconsole.log("Hello, World!");`,
+  language = "javascript",
+  showLineNumbers = true,
+  styles = {},
+}: CodeBlockCraftProps) {
+  const lines = code.split("\n");
+  return (
+    <SelectionWrapper label={`Code / ${language}`}>
+      <pre
+        style={{
+          background: "#0d1117",
+          border: "1px solid #30363d",
+          borderRadius: "8px",
+          padding: "16px",
+          overflow: "auto",
+          fontFamily: "'DM Mono', monospace",
+          fontSize: "13px",
+          lineHeight: 1.6,
+          margin: 0,
+          ...toStyle(styles),
+        }}
+      >
+        {lines.map((line, i) => (
+          <div key={i} style={{ display: "flex" }}>
+            {showLineNumbers && (
+              <span
+                style={{
+                  width: "2rem",
+                  color: "#484f58",
+                  userSelect: "none",
+                  flexShrink: 0,
+                }}
+              >
+                {i + 1}
+              </span>
+            )}
+            <span style={{ color: "#e6edf3" }}>{line || " "}</span>
+          </div>
+        ))}
+      </pre>
+    </SelectionWrapper>
+  );
+}
+CodeBlockCraft.craft = {
+  displayName: "Code Block",
+  props: {
+    code: `// Hello World\nconsole.log("Hello, World!");`,
+    language: "javascript",
+    showLineNumbers: true,
+    styles: {},
+  },
+};
+
+// ── AlertCraft ────────────────────────────────────────────────────────────────
+
+interface AlertCraftProps {
+  message?: string;
+  type?: "info" | "success" | "warning" | "error";
+  title?: string;
+  dismissible?: boolean;
+  styles?: CraftStyleProps;
+}
+
+const ALERT_STYLES: Record<string, React.CSSProperties> = {
+  info: { background: "#0c1f3e", border: "1px solid #1d4ed8", color: "#93c5fd" },
+  success: { background: "#052e16", border: "1px solid #15803d", color: "#86efac" },
+  warning: { background: "#2d1b00", border: "1px solid #b45309", color: "#fcd34d" },
+  error: { background: "#2d0a0a", border: "1px solid #b91c1c", color: "#fca5a5" },
+};
+
+export function AlertCraft({
+  message = "This is an alert message.",
+  type = "info",
+  title,
+  styles = {},
+}: AlertCraftProps) {
+  return (
+    <SelectionWrapper label={`Alert / ${type}`}>
+      <div
+        style={{
+          display: "flex",
+          gap: "12px",
+          alignItems: "flex-start",
+          padding: "12px 16px",
+          borderRadius: "8px",
+          ...ALERT_STYLES[type],
+          ...toStyle(styles),
+        }}
+      >
+        <div style={{ marginTop: 2 }}>
+          {type === "success" ? (
+            <CheckCircle size={16} />
+          ) : type === "error" ? (
+            <AlertCircle size={16} />
+          ) : (
+            <Info size={16} />
+          )}
+        </div>
+        <div>
+          {title && <p style={{ margin: "0 0 2px", fontWeight: 600, fontSize: "14px" }}>{title}</p>}
+          <p style={{ margin: 0, fontSize: "13px" }}>{message}</p>
+        </div>
+      </div>
+    </SelectionWrapper>
+  );
+}
+AlertCraft.craft = {
+  displayName: "Alert",
+  props: { message: "This is an alert message.", type: "info", styles: {} },
+};
+
+// ── StatCardCraft ─────────────────────────────────────────────────────────────
+
+interface StatCardCraftProps {
+  label?: string;
+  value?: string;
+  trend?: string;
+  trendUp?: boolean;
+  icon?: string;
+  styles?: CraftStyleProps;
+}
+
+export function StatCardCraft({
+  label = "Total Revenue",
+  value = "$48,295",
+  trend = "+12.5%",
+  trendUp = true,
+  styles = {},
+}: StatCardCraftProps) {
+  return (
+    <SelectionWrapper label="Stat Card">
+      <div
+        style={{
+          background: "#161b22",
+          border: "1px solid #30363d",
+          borderRadius: "12px",
+          padding: "20px",
+          ...toStyle(styles),
+        }}
+      >
+        <p style={{ margin: "0 0 8px", color: "#8b949e", fontSize: "13px" }}>{label}</p>
+        <p style={{ margin: "0 0 8px", color: "#e6edf3", fontSize: "28px", fontWeight: 700 }}>
+          {value}
+        </p>
+        <span
+          style={{
+            fontSize: "12px",
+            fontWeight: 600,
+            color: trendUp ? "#4ade80" : "#f87171",
+          }}
+        >
+          {trend} vs last period
+        </span>
+      </div>
+    </SelectionWrapper>
+  );
+}
+StatCardCraft.craft = {
+  displayName: "Stat Card",
+  props: { label: "Total Revenue", value: "$48,295", trend: "+12.5%", trendUp: true, styles: {} },
+};
+
+// ── AvatarCraft ───────────────────────────────────────────────────────────────
+
+interface AvatarCraftProps {
+  src?: string;
+  name?: string;
+  size?: "sm" | "md" | "lg" | "xl";
+  showName?: boolean;
+  showBadge?: boolean;
+  styles?: CraftStyleProps;
+}
+
+const AVATAR_SIZES = { sm: 32, md: 40, lg: 56, xl: 80 };
+
+export function AvatarCraft({
+  src = "https://i.pravatar.cc/80",
+  name = "Jane Doe",
+  size = "md",
+  showName = true,
+  styles = {},
+}: AvatarCraftProps) {
+  const px = AVATAR_SIZES[size];
+  return (
+    <SelectionWrapper label="Avatar">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          ...toStyle(styles),
+        }}
+      >
+        <img
+          src={src}
+          alt={name}
+          width={px}
+          height={px}
+          style={{
+            borderRadius: "50%",
+            border: "2px solid #30363d",
+            objectFit: "cover",
+            flexShrink: 0,
+          }}
+        />
+        {showName && (
+          <span style={{ color: "#e6edf3", fontSize: "14px", fontWeight: 500 }}>{name}</span>
+        )}
+      </div>
+    </SelectionWrapper>
+  );
+}
+AvatarCraft.craft = {
+  displayName: "Avatar",
+  props: {
+    src: "https://i.pravatar.cc/80",
+    name: "Jane Doe",
+    size: "md",
+    showName: true,
+    styles: {},
+  },
+};
+
+// ── TableCraft ────────────────────────────────────────────────────────────────
+
+interface TableCraftProps {
+  headers?: string[];
+  rows?: string[][];
+  striped?: boolean;
+  styles?: CraftStyleProps;
+}
+
+export function TableCraft({
+  headers = ["Name", "Status", "Value"],
+  rows = [
+    ["Alpha Corp", "Active", "$12,400"],
+    ["Beta Inc", "Pending", "$8,100"],
+    ["Gamma LLC", "Inactive", "$3,500"],
+  ],
+  striped = true,
+  styles = {},
+}: TableCraftProps) {
+  return (
+    <SelectionWrapper label="Table">
+      <div
+        style={{
+          overflowX: "auto",
+          borderRadius: "8px",
+          border: "1px solid #30363d",
+          ...toStyle(styles),
+        }}
+      >
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            fontSize: "14px",
+            color: "#e6edf3",
+          }}
+        >
+          <thead>
+            <tr style={{ background: "#21262d" }}>
+              {headers.map((h) => (
+                <th
+                  key={h}
+                  style={{
+                    padding: "10px 14px",
+                    textAlign: "left",
+                    color: "#8b949e",
+                    fontWeight: 600,
+                    fontSize: "12px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                    borderBottom: "1px solid #30363d",
+                  }}
+                >
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, ri) => (
+              <tr
+                key={ri}
+                style={{
+                  background: striped && ri % 2 === 1 ? "#0d1117" : "transparent",
+                  borderBottom: "1px solid #21262d",
+                }}
+              >
+                {row.map((cell, ci) => (
+                  <td key={ci} style={{ padding: "10px 14px" }}>
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </SelectionWrapper>
+  );
+}
+TableCraft.craft = {
+  displayName: "Table",
+  props: {
+    headers: ["Name", "Status", "Value"],
+    rows: [
+      ["Alpha Corp", "Active", "$12,400"],
+      ["Beta Inc", "Pending", "$8,100"],
+    ],
+    striped: true,
+    styles: {},
+  },
+};
+
+// ── BentoGridCraft ─────────────────────────────────────────────────────────────
+
+interface BentoGridCraftProps {
+  columns?: number;
+  items?: { title: string; description: string; icon: string }[];
+  styles?: CraftStyleProps;
+  children?: React.ReactNode;
+}
+
+export function BentoGridCraft({ columns = 3, items = [], styles = {}, children }: BentoGridCraftProps) {
+  const defaultItems = items.length > 0 ? items : [
+    { title: "Analytics", description: "Real-time insights", icon: "📊" },
+    { title: "Automation", description: "Save time", icon: "⚡" },
+    { title: "Security", description: "Enterprise-grade", icon: "🔒" },
+    { title: "Integration", description: "Connect anything", icon: "🔗" },
+  ];
+  
+  return (
+    <SelectionWrapper label="Bento Grid">
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${columns}, 1fr)`,
+          gap: "16px",
+          padding: "24px",
+          background: "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)",
+          borderRadius: "16px",
+          ...toStyle(styles),
+        }}
+      >
+        {defaultItems.map((item, i) => (
+          <div
+            key={i}
+            style={{
+              background: "rgba(255,255,255,0.05)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: "12px",
+              padding: "20px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+            }}
+          >
+            <span style={{ fontSize: "24px" }}>{item.icon}</span>
+            <span style={{ color: "#f8fafc", fontWeight: 600, fontSize: "14px" }}>{item.title}</span>
+            <span style={{ color: "#94a3b8", fontSize: "12px" }}>{item.description}</span>
+          </div>
+        ))}
+        {children}
+      </div>
+    </SelectionWrapper>
+  );
+}
+BentoGridCraft.craft = {
+  displayName: "Bento Grid",
+  props: { columns: 3, items: [], styles: {} },
+  rules: { canDrop: () => true },
+};
+
+// ── SpotlightCardCraft ─────────────────────────────────────────────────────────
+
+interface SpotlightCardCraftProps {
+  title?: string;
+  description?: string;
+  styles?: CraftStyleProps;
+  children?: React.ReactNode;
+}
+
+export function SpotlightCardCraft({ title = "Spotlight Feature", description = "Highlight your key feature with this spotlight card.", styles = {}, children }: SpotlightCardCraftProps) {
+  return (
+    <SelectionWrapper label="Spotlight Card">
+      <div
+        style={{
+          position: "relative",
+          padding: "32px",
+          borderRadius: "16px",
+          background: "#0f172a",
+          overflow: "hidden",
+          ...toStyle(styles),
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            top: "-50%",
+            left: "-50%",
+            width: "200%",
+            height: "200%",
+            background: "radial-gradient(circle, rgba(59,130,246,0.15) 0%, transparent 50%)",
+            animation: "pulse 4s ease-in-out infinite",
+          }}
+        />
+        <div style={{ position: "relative", zIndex: 1 }}>
+          <h3 style={{ margin: "0 0 8px", color: "#f8fafc", fontSize: "20px", fontWeight: 700 }}>{title}</h3>
+          <p style={{ margin: 0, color: "#94a3b8", fontSize: "14px" }}>{description}</p>
+        </div>
+        {children}
+      </div>
+    </SelectionWrapper>
+  );
+}
+SpotlightCardCraft.craft = {
+  displayName: "Spotlight Card",
+  props: { title: "Spotlight Feature", description: "Highlight your key feature", styles: {} },
+};
+
+// ── ShinyButtonCraft ───────────────────────────────────────────────────────────
+
+interface ShinyButtonCraftProps {
+  label?: string;
+  styles?: CraftStyleProps;
+}
+
+export function ShinyButtonCraft({ label = "Shiny Button", styles = {} }: ShinyButtonCraftProps) {
+  return (
+    <SelectionWrapper label="Shiny Button">
+      <button
+        style={{
+          position: "relative",
+          padding: "12px 24px",
+          background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+          color: "#fff",
+          border: "none",
+          borderRadius: "8px",
+          fontSize: "14px",
+          fontWeight: 600,
+          cursor: "pointer",
+          overflow: "hidden",
+          ...toStyle(styles),
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            top: 0,
+            left: "-100%",
+            width: "100%",
+            height: "100%",
+            background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)",
+            animation: "shiny 3s infinite",
+          }}
+        />
+        {label}
+      </button>
+    </SelectionWrapper>
+  );
+}
+ShinyButtonCraft.craft = {
+  displayName: "Shiny Button",
+  props: { label: "Shiny Button", styles: {} },
+};
+
+// ── GradientTextCraft ────────────────────────────────────────────────────────
+
+interface GradientTextCraftProps {
+  text?: string;
+  styles?: CraftStyleProps;
+}
+
+export function GradientTextCraft({ text = "Gradient Text", styles = {} }: GradientTextCraftProps) {
+  return (
+    <SelectionWrapper label="Gradient Text">
+      <span
+        style={{
+          background: "linear-gradient(135deg, #f472b6 0%, #a855f7 50%, #3b82f6 100%)",
+          WebkitBackgroundClip: "text",
+          WebkitTextFillColor: "transparent",
+          backgroundClip: "text",
+          fontSize: "32px",
+          fontWeight: 800,
+          ...toStyle(styles),
+        }}
+      >
+        {text}
+      </span>
+    </SelectionWrapper>
+  );
+}
+GradientTextCraft.craft = {
+  displayName: "Gradient Text",
+  props: { text: "Gradient Text", styles: {} },
+};
+
+// ── BackgroundBeamsCraft ────────────────────────────────────────────────────
+
+interface BackgroundBeamsCraftProps {
+  styles?: CraftStyleProps;
+  children?: React.ReactNode;
+}
+
+export function BackgroundBeamsCraft({ styles = {}, children }: BackgroundBeamsCraftProps) {
+  return (
+    <SelectionWrapper label="Background Beams">
+      <div
+        style={{
+          position: "relative",
+          minHeight: "300px",
+          background: "#000",
+          overflow: "hidden",
+          borderRadius: "12px",
+          ...toStyle(styles),
+        }}
+      >
+        <div style={{ position: "absolute", inset: 0, background: "radial-gradient(circle at 50% 0%, rgba(59,130,246,0.3), transparent 60%)" }} />
+        <div style={{ position: "relative", zIndex: 1, padding: "40px" }}>
+          {children || <h2 style={{ color: "#fff", margin: 0 }}>Hero Section with Beams</h2>}
+        </div>
+      </div>
+    </SelectionWrapper>
+  );
+}
+BackgroundBeamsCraft.craft = {
+  displayName: "Background Beams",
+  props: { styles: {} },
+  rules: { canDrop: () => true },
+};
+
+// ── PricingCardCraft ─────────────────────────────────────────────────────────
+
+interface PricingCardCraftProps {
+  title?: string;
+  price?: string;
+  period?: string;
+  features?: string[];
+  highlighted?: boolean;
+  styles?: CraftStyleProps;
+}
+
+export function PricingCardCraft({
+  title = "Pro",
+  price = "$29",
+  period = "/month",
+  features = ["All features", "Priority support", "Unlimited projects"],
+  highlighted = false,
+  styles = {},
+}: PricingCardCraftProps) {
+  return (
+    <SelectionWrapper label="Pricing Card">
+      <div
+        style={{
+          padding: "32px",
+          borderRadius: "16px",
+          background: highlighted ? "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)" : "#1e293b",
+          border: highlighted ? "2px solid #8b5cf6" : "1px solid #334155",
+          textAlign: "center",
+          ...toStyle(styles),
+        }}
+      >
+        <h3 style={{ margin: "0 0 16px", color: "#f8fafc", fontSize: "18px", fontWeight: 600 }}>{title}</h3>
+        <div style={{ marginBottom: "24px" }}>
+          <span style={{ color: "#f8fafc", fontSize: "48px", fontWeight: 800 }}>{price}</span>
+          <span style={{ color: "#94a3b8", fontSize: "14px" }}>{period}</span>
+        </div>
+        <ul style={{ listStyle: "none", padding: 0, margin: "0 0 24px", textAlign: "left" }}>
+          {features.map((f, i) => (
+            <li key={i} style={{ color: "#cbd5e1", fontSize: "14px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ color: "#4ade80" }}>✓</span> {f}
+            </li>
+          ))}
+        </ul>
+        <button
+          style={{
+            width: "100%",
+            padding: "12px",
+            background: highlighted ? "linear-gradient(135deg, #8b5cf6, #6366f1)" : "#334155",
+            color: "#fff",
+            border: "none",
+            borderRadius: "8px",
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          Get Started
+        </button>
+      </div>
+    </SelectionWrapper>
+  );
+}
+PricingCardCraft.craft = {
+  displayName: "Pricing Card",
+  props: { title: "Pro", price: "$29", period: "/month", features: [], highlighted: false, styles: {} },
+};
+
+// ── TestimonialCardCraft ─────────────────────────────────────────────────────
+
+interface TestimonialCardCraftProps {
+  quote?: string;
+  author?: string;
+  role?: string;
+  avatar?: string;
+  styles?: CraftStyleProps;
+}
+
+export function TestimonialCardCraft({
+  quote = "This product changed how I work. Absolutely amazing!",
+  author = "Jane Smith",
+  role = "CEO, TechCorp",
+  avatar = "https://i.pravatar.cc/80?img=1",
+  styles = {},
+}: TestimonialCardCraftProps) {
+  return (
+    <SelectionWrapper label="Testimonial">
+      <div
+        style={{
+          padding: "24px",
+          background: "#1e293b",
+          borderRadius: "12px",
+          border: "1px solid #334155",
+          ...toStyle(styles),
+        }}
+      >
+        <p style={{ margin: "0 0 16px", color: "#cbd5e1", fontSize: "14px", fontStyle: "italic" }}>"{quote}"</p>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <img src={avatar} alt={author} style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
+          <div>
+            <p style={{ margin: 0, color: "#f8fafc", fontSize: "14px", fontWeight: 600 }}>{author}</p>
+            <p style={{ margin: 0, color: "#94a3b8", fontSize: "12px" }}>{role}</p>
+          </div>
+        </div>
+      </div>
+    </SelectionWrapper>
+  );
+}
+TestimonialCardCraft.craft = {
+  displayName: "Testimonial",
+  props: { quote: "Amazing product!", author: "Jane Smith", role: "CEO", avatar: "", styles: {} },
+};
+
+// ── FeatureListCraft ─────────────────────────────────────────────────────────
+
+interface FeatureListCraftProps {
+  features?: { title: string; description: string; icon: string }[];
+  styles?: CraftStyleProps;
+  children?: React.ReactNode;
+}
+
+export function FeatureListCraft({
+  features = [],
+  styles = {},
+  children,
+}: FeatureListCraftProps) {
+  const defaultFeatures = features.length > 0 ? features : [
+    { title: "Fast Performance", description: "Lightning fast load times", icon: "⚡" },
+    { title: "Secure by Default", description: "Enterprise-grade security", icon: "🔒" },
+    { title: "Easy Integration", description: "Connect with your stack", icon: "🔗" },
+  ];
+  
+  return (
+    <SelectionWrapper label="Feature List">
+      <div style={{ padding: "24px", ...toStyle(styles) }}>
+        {defaultFeatures.map((feature, i) => (
+          <div key={i} style={{ display: "flex", gap: "16px", marginBottom: "20px" }}>
+            <span style={{ fontSize: "24px" }}>{feature.icon}</span>
+            <div>
+              <h4 style={{ margin: "0 0 4px", color: "#f8fafc", fontSize: "16px", fontWeight: 600 }}>{feature.title}</h4>
+              <p style={{ margin: 0, color: "#94a3b8", fontSize: "14px" }}>{feature.description}</p>
+            </div>
+          </div>
+        ))}
+        {children}
+      </div>
+    </SelectionWrapper>
+  );
+}
+FeatureListCraft.craft = {
+  displayName: "Feature List",
+  props: { features: [], styles: {} },
+  rules: { canDrop: () => true },
+};
+
+// ── MobileNavCraft ──────────────────────────────────────────────────────────
+
+interface MobileNavCraftProps {
+  title?: string;
+  styles?: CraftStyleProps;
+}
+
+export function MobileNavCraft({ title = "App Title", styles = {} }: MobileNavCraftProps) {
+  return (
+    <SelectionWrapper label="Mobile Nav">
+      <nav
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "12px 16px",
+          background: "#000",
+          borderBottom: "1px solid #333",
+          ...toStyle(styles),
+        }}
+      >
+        <span style={{ color: "#fff", fontWeight: 600 }}>{title}</span>
+        <div style={{ display: "flex", gap: "16px" }}>
+          <span style={{ color: "#666", fontSize: "20px" }}>🔍</span>
+          <span style={{ color: "#666", fontSize: "20px" }}>⚙️</span>
+        </div>
+      </nav>
+    </SelectionWrapper>
+  );
+}
+MobileNavCraft.craft = {
+  displayName: "Mobile Nav",
+  props: { title: "App Title", styles: {} },
+};
+
+// ── BottomTabBarCraft ───────────────────────────────────────────────────────
+
+interface BottomTabBarCraftProps {
+  tabs?: string[];
+  activeTab?: number;
+  styles?: CraftStyleProps;
+}
+
+export function BottomTabBarCraft({ tabs = ["🏠", "🔍", "➕", "💬", "👤"], activeTab = 0, styles = {} }: BottomTabBarCraftProps) {
+  return (
+    <SelectionWrapper label="Bottom Tab Bar">
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-around",
+          padding: "12px 16px",
+          background: "#000",
+          borderTop: "1px solid #333",
+          ...toStyle(styles),
+        }}
+      >
+        {tabs.map((tab, i) => (
+          <span
+            key={i}
+            style={{
+              fontSize: "20px",
+              opacity: activeTab === i ? 1 : 0.5,
+              cursor: "pointer",
+            }}
+          >
+            {tab}
+          </span>
+        ))}
+      </div>
+    </SelectionWrapper>
+  );
+}
+BottomTabBarCraft.craft = {
+  displayName: "Bottom Tab Bar",
+  props: { tabs: [], activeTab: 0, styles: {} },
+};
+
+// ── StatusBarCraft ───────────────────────────────────────────────────────────
+
+interface StatusBarCraftProps {
+  time?: string;
+  battery?: number;
+  styles?: CraftStyleProps;
+}
+
+export function StatusBarCraft({ time = "9:41", battery = 80, styles = {} }: StatusBarCraftProps) {
+  return (
+    <SelectionWrapper label="Status Bar">
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "8px 16px",
+          background: "#000",
+          ...toStyle(styles),
+        }}
+      >
+        <span style={{ color: "#fff", fontSize: "12px" }}>{time}</span>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <span style={{ color: "#fff", fontSize: "12px" }}>📶</span>
+          <span style={{ color: "#fff", fontSize: "12px" }}>🔋 {battery}%</span>
+        </div>
+      </div>
+    </SelectionWrapper>
+  );
+}
+StatusBarCraft.craft = {
+  displayName: "Status Bar",
+  props: { time: "9:41", battery: 80, styles: {} },
+};
+
+// ── AppHeaderCraft ───────────────────────────────────────────────────────────
+
+interface AppHeaderCraftProps {
+  title?: string;
+  avatar?: string;
+  styles?: CraftStyleProps;
+}
+
+export function AppHeaderCraft({ title = "Profile", avatar = "https://i.pravatar.cc/40", styles = {} }: AppHeaderCraftProps) {
+  return (
+    <SelectionWrapper label="App Header">
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "12px",
+          padding: "16px",
+          background: "#fff",
+          borderBottom: "1px solid #eee",
+          ...toStyle(styles),
+        }}
+      >
+        <img src={avatar} alt="avatar" style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
+        <h2 style={{ margin: 0, color: "#000", fontSize: "18px", fontWeight: 600 }}>{title}</h2>
+      </div>
+    </SelectionWrapper>
+  );
+}
+AppHeaderCraft.craft = {
+  displayName: "App Header",
+  props: { title: "Profile", avatar: "", styles: {} },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESOLVER MAP
+// ─────────────────────────────────────────────────────────────────────────────
+
+const RESOLVER = {
+  ContainerCraft,
+  TextCraft,
+  ButtonCraft,
+  ImageCraft,
+  CardCraft,
+  BadgeCraft,
+  DividerCraft,
+  InputCraft,
+  HeroCraft,
+  NavBarCraft,
+  GridCraft,
+  FormCraft,
+  CodeBlockCraft,
+  AlertCraft,
+  StatCardCraft,
+  AvatarCraft,
+  TableCraft,
+  BentoGridCraft,
+  SpotlightCardCraft,
+  ShinyButtonCraft,
+  GradientTextCraft,
+  BackgroundBeamsCraft,
+  PricingCardCraft,
+  TestimonialCardCraft,
+  FeatureListCraft,
+  MobileNavCraft,
+  BottomTabBarCraft,
+  StatusBarCraft,
+  AppHeaderCraft,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CRAFT → JSX STRING SERIALISER
+// ─────────────────────────────────────────────────────────────────────────────
+
+function craftNodesToJSX(nodes: Record<string, any>): string {
+  function renderNode(nodeId: string, depth = 1): string {
+    const node = nodes[nodeId];
+    if (!node) return "";
+    const indent = "  ".repeat(depth);
+    const { type, props, nodes: childIds = [], linkedNodes } = node;
+
+    const name = typeof type === "string" ? type : type?.resolvedName ?? "div";
+
+    const propsStr = Object.entries(props ?? {})
+      .filter(([k]) => k !== "children")
+      .map(([k, v]) => {
+        if (typeof v === "string") return `${k}="${v}"`;
+        if (typeof v === "boolean") return v ? k : `${k}={false}`;
+        if (typeof v === "object") return `${k}={${JSON.stringify(v)}}`;
+        if (typeof v === "number") return `${k}={${v}}`;
+        return "";
+      })
+      .filter(Boolean)
+      .join(" ");
+
+    const allChildIds = [
+      ...(childIds ?? []),
+      ...Object.values(linkedNodes ?? {}).map(String),
+    ];
+
+    if (allChildIds.length === 0) {
+      return `${indent}<${name}${propsStr ? " " + propsStr : ""} />`;
+    }
+
+    const children = allChildIds.map((cid) => renderNode(String(cid), depth + 1)).join("\n");
+    return `${indent}<${name}${propsStr ? " " + propsStr : ""}>\n${children}\n${indent}</${name}>`;
+  }
+
+  const root = nodes["ROOT"];
+  if (!root) return "";
+  const rootChildren = (root.nodes ?? []).map((id: string) => renderNode(id)).join("\n");
+
+  return `import React from "react";\n\nexport default function Page() {\n  return (\n    <div>\n${rootChildren}\n    </div>\n  );\n}\n`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS PANEL — per-node property editor driven by Craft's useEditor
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SettingsPanel() {
+  const { selected, actions } = useEditor((state) => {
+    const [id] = state.events.selected;
+    if (!id) return { selected: null };
+    const node = state.nodes[id];
+    return {
+      selected: {
+        id,
+        name: node?.data?.type?.resolvedName ?? node?.data?.displayName ?? "Unknown",
+        props: node?.data?.props ?? {},
+      },
+    };
+  });
+
+  const [activeTab, setActiveTab] = useState<"content" | "style" | "layout">("content");
+  const [customCSS, setCustomCSS] = useState("");
+
+  useEffect(() => {
+    if (selected) {
+      const s = selected.props?.styles ?? {};
+      setCustomCSS(
+        Object.entries(s)
+          .map(([k, v]) => `${k.replace(/([A-Z])/g, "-$1").toLowerCase()}: ${v};`)
+          .join("\n")
+      );
+    }
+  }, [selected?.id]);
+
+  if (!selected) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-[#484f58] gap-3 px-4">
-        <Settings className="w-8 h-8 opacity-30" />
-        <p className="text-xs text-center">Select a component to inspect its properties</p>
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 text-[#484f58] p-6">
+        <Settings className="w-10 h-10 opacity-20" />
+        <p className="text-xs text-center leading-relaxed">
+          Click any element on the canvas to edit its properties here
+        </p>
       </div>
     );
   }
 
-  const set = (prop: string, val: unknown) => onPropertyChange(comp.id, prop, val);
+  const setProp = (propKey: string, value: unknown) => {
+    actions.setProp(selected.id, (props: Record<string, unknown>) => {
+      props[propKey] = value;
+    });
+  };
+
+  const setStyle = (cssKey: string, value: string) => {
+    actions.setProp(selected.id, (props: Record<string, unknown>) => {
+      const styles = (props.styles as Record<string, string>) ?? {};
+      props.styles = { ...styles, [cssKey]: value };
+    });
+  };
+
+  const applyCustomCSS = (raw: string) => {
+    const parsed: Record<string, string> = {};
+    raw.split(/[;\n]/).forEach((line) => {
+      const idx = line.indexOf(":");
+      if (idx < 0) return;
+      const key = line
+        .slice(0, idx)
+        .trim()
+        .replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      const val = line.slice(idx + 1).trim();
+      if (key && val) parsed[key] = val;
+    });
+    actions.setProp(selected.id, (props: Record<string, unknown>) => {
+      props.styles = parsed;
+    });
+  };
+
+  const s: Record<string, string> = (selected.props?.styles as Record<string, string>) ?? {};
+  const p = selected.props ?? {};
+
+  const FONT_FAMILIES = [
+    "inherit",
+    "sans-serif",
+    "serif",
+    "monospace",
+    "DM Mono, monospace",
+    "Syne, sans-serif",
+    "Georgia, serif",
+    "system-ui",
+  ];
+  const FONT_WEIGHTS = ["100", "200", "300", "400", "500", "600", "700", "800", "900"];
+  const DISPLAYS = ["block", "flex", "grid", "inline", "inline-flex", "inline-block", "none"];
+  const POSITIONS = ["static", "relative", "absolute", "fixed", "sticky"];
+  const FLEX_DIRS = ["row", "column", "row-reverse", "column-reverse"];
+  const ALIGN_ITEMS_OPTS = ["flex-start", "center", "flex-end", "stretch", "baseline"];
+  const JUSTIFY_CONTENT_OPTS = [
+    "flex-start",
+    "center",
+    "flex-end",
+    "space-between",
+    "space-around",
+    "space-evenly",
+  ];
+  const OVERFLOW_OPTS = ["visible", "hidden", "scroll", "auto"];
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Tab bar */}
-      <div className="flex border-b border-[#30363d] px-2 pt-2 gap-1">
-        {(["props", "styles", "animate"] as const).map((t) => (
+      {/* Header */}
+      <div className="px-4 py-3 border-b border-[#30363d] flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-[#3b82f6]" />
+          <span className="text-xs font-semibold text-white">{selected.name}</span>
+        </div>
+        <button
+          onClick={() => actions.delete(selected.id)}
+          className="w-6 h-6 flex items-center justify-center rounded text-[#484f58] hover:text-red-400 hover:bg-red-400/10 transition-colors"
+          title="Delete"
+        >
+          <Trash2 className="w-3 h-3" />
+        </button>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-[#30363d]">
+        {(["content", "style", "layout"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setActiveTab(t)}
-            className={`px-3 py-1.5 text-xs rounded-t transition-colors capitalize ${
+            className={`flex-1 py-2 text-xs capitalize transition-colors ${
               activeTab === t
                 ? "text-white border-b-2 border-[#3b82f6]"
                 : "text-[#8b949e] hover:text-white"
@@ -826,148 +1898,290 @@ function PropertyInspectorPanel({
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-4">
-        {activeTab === "props" && (
+      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {activeTab === "content" && (
           <>
-            <PropRow label="ID">
-              <code className="text-[10px] text-[#3b82f6] bg-[#0d1117] px-1.5 py-0.5 rounded">
-                {comp.id}
-              </code>
-            </PropRow>
-            <PropRow label="Type">
-              <span className="text-xs text-white">{comp.type}</span>
-            </PropRow>
-            <PropRow label="File">
-              <span className="text-[10px] text-[#8b949e] truncate">{comp.filePath}</span>
-            </PropRow>
-
-            <Divider label="Position & Size" />
-
-            <div className="grid grid-cols-2 gap-2">
-              {(["x", "y", "width", "height"] as const).map((k) => (
-                <PropRow key={k} label={k.toUpperCase()}>
-                  <InlineNumberInput
-                    value={comp.bounds[k]}
-                    onChange={(v) => {
-                      const newBounds = { ...comp.bounds, [k]: v };
-                      onPropertyChange(comp.id, "bounds", newBounds);
-                    }}
-                    suffix="px"
+            {/* Text content */}
+            {"text" in p && (
+              <PropGroup label="Text">
+                <textarea
+                  value={p.text as string}
+                  onChange={(e) => setProp("text", e.target.value)}
+                  rows={3}
+                  className="w-full bg-[#0d1117] border border-[#30363d] rounded text-xs text-white p-2 resize-none focus:outline-none focus:border-[#3b82f6]"
+                />
+              </PropGroup>
+            )}
+            {"label" in p && (
+              <PropGroup label="Label">
+                <StringInput value={p.label as string} onChange={(v) => setProp("label", v)} />
+              </PropGroup>
+            )}
+            {"src" in p && (
+              <PropGroup label="Image URL">
+                <StringInput value={p.src as string} onChange={(v) => setProp("src", v)} />
+              </PropGroup>
+            )}
+            {"alt" in p && (
+              <PropGroup label="Alt Text">
+                <StringInput value={p.alt as string} onChange={(v) => setProp("alt", v)} />
+              </PropGroup>
+            )}
+            {"headline" in p && (
+              <>
+                <PropGroup label="Headline">
+                  <StringInput value={p.headline as string} onChange={(v) => setProp("headline", v)} />
+                </PropGroup>
+                <PropGroup label="Subheadline">
+                  <StringInput
+                    value={p.subheadline as string}
+                    onChange={(v) => setProp("subheadline", v)}
                   />
-                </PropRow>
-              ))}
-            </div>
-
-            <Divider label="Visibility" />
-
-            <PropRow label="Hidden">
-              <Switch
-                checked={comp.hidden ?? false}
-                onCheckedChange={(v) => set("hidden", v)}
-                className="data-[state=checked]:bg-[#3b82f6]"
-              />
-            </PropRow>
-            <PropRow label="Locked">
-              <Switch
-                checked={comp.locked ?? false}
-                onCheckedChange={(v) => set("locked", v)}
-                className="data-[state=checked]:bg-[#3b82f6]"
-              />
-            </PropRow>
+                </PropGroup>
+                <PropGroup label="CTA Label">
+                  <StringInput value={p.ctaLabel as string} onChange={(v) => setProp("ctaLabel", v)} />
+                </PropGroup>
+              </>
+            )}
+            {"title" in p && !("headline" in p) && (
+              <PropGroup label="Title">
+                <StringInput value={p.title as string} onChange={(v) => setProp("title", v)} />
+              </PropGroup>
+            )}
+            {"brand" in p && (
+              <PropGroup label="Brand">
+                <StringInput value={p.brand as string} onChange={(v) => setProp("brand", v)} />
+              </PropGroup>
+            )}
+            {"value" in p && "label" in p && (
+              <PropGroup label="Value">
+                <StringInput value={p.value as string} onChange={(v) => setProp("value", v)} />
+              </PropGroup>
+            )}
+            {"code" in p && (
+              <PropGroup label="Code">
+                <textarea
+                  value={p.code as string}
+                  onChange={(e) => setProp("code", e.target.value)}
+                  rows={5}
+                  className="w-full bg-[#0d1117] border border-[#30363d] rounded text-[11px] font-mono text-white p-2 resize-none focus:outline-none focus:border-[#3b82f6]"
+                />
+              </PropGroup>
+            )}
+            {"variant" in p && (
+              <PropGroup label="Variant">
+                <SelectInput
+                  value={p.variant as string}
+                  options={["primary","secondary","outline","ghost","destructive","gradient","default","bordered","elevated","glass","centered","split","minimal","solid","blurred","transparent","card","filled","outlined","info","success","warning","error"].filter(
+                    (o, i, a) => a.indexOf(o) === i
+                  )}
+                  onChange={(v) => setProp("variant", v)}
+                />
+              </PropGroup>
+            )}
+            {"tag" in p && (
+              <PropGroup label="HTML Tag">
+                <SelectInput
+                  value={p.tag as string}
+                  options={["h1", "h2", "h3", "h4", "p", "span", "label", "code", "blockquote"]}
+                  onChange={(v) => setProp("tag", v)}
+                />
+              </PropGroup>
+            )}
+            {"columns" in p && (
+              <PropGroup label="Columns">
+                <NumberInput value={p.columns as number} onChange={(v) => setProp("columns", v)} min={1} max={12} />
+              </PropGroup>
+            )}
           </>
         )}
 
-        {activeTab === "styles" && (
+        {activeTab === "style" && (
           <>
-            <Divider label="Typography" />
-            <PropRow label="Color">
-              <ColorInput
-                value={comp.styles.color ?? "#ffffff"}
-                onChange={(v) => set("styles.color", v)}
+            <SectionTitle>Typography</SectionTitle>
+            <PropGroup label="Font Size">
+              <StringInput value={s.fontSize ?? ""} onChange={(v) => setStyle("fontSize", v)} placeholder="16px" />
+            </PropGroup>
+            <PropGroup label="Font Family">
+              <SelectInput
+                value={s.fontFamily ?? "inherit"}
+                options={FONT_FAMILIES}
+                onChange={(v) => setStyle("fontFamily", v)}
               />
-            </PropRow>
-            <PropRow label="Font Size">
-              <InlineTextInput
-                value={comp.styles.fontSize ?? ""}
-                onChange={(v) => set("styles.fontSize", v)}
-                placeholder="16px"
+            </PropGroup>
+            <PropGroup label="Font Weight">
+              <SelectInput
+                value={s.fontWeight ?? "400"}
+                options={FONT_WEIGHTS}
+                onChange={(v) => setStyle("fontWeight", v)}
               />
-            </PropRow>
-            <PropRow label="Font Weight">
-              <select
-                value={comp.styles.fontWeight ?? "400"}
-                onChange={(e) => set("styles.fontWeight", e.target.value)}
-                className="w-full h-6 bg-[#0d1117] border border-[#30363d] rounded text-xs text-white px-1 focus:outline-none focus:border-[#3b82f6]"
-              >
-                {["100","200","300","400","500","600","700","800","900","bold"].map((w) => (
-                  <option key={w} value={w}>{w}</option>
-                ))}
-              </select>
-            </PropRow>
+            </PropGroup>
+            <PropGroup label="Text Color">
+              <ColorInput value={s.color ?? "#e6edf3"} onChange={(v) => setStyle("color", v)} />
+            </PropGroup>
+            <PropGroup label="Text Align">
+              <div className="flex gap-1">
+                {(["left", "center", "right", "justify"] as const).map((a) => {
+                  const Icon = a === "left" ? AlignLeft : a === "center" ? AlignCenter : a === "right" ? AlignRight : AlignJustify;
+                  return (
+                    <button
+                      key={a}
+                      onClick={() => setStyle("textAlign", a)}
+                      className={`flex-1 py-1 flex items-center justify-center rounded border ${
+                        s.textAlign === a
+                          ? "border-[#3b82f6] bg-[#1d3a6b] text-[#3b82f6]"
+                          : "border-[#30363d] text-[#8b949e] hover:text-white"
+                      }`}
+                    >
+                      <Icon className="w-3 h-3" />
+                    </button>
+                  );
+                })}
+              </div>
+            </PropGroup>
+            <PropGroup label="Line Height">
+              <StringInput value={s.lineHeight ?? ""} onChange={(v) => setStyle("lineHeight", v)} placeholder="1.5" />
+            </PropGroup>
+            <PropGroup label="Letter Spacing">
+              <StringInput value={s.letterSpacing ?? ""} onChange={(v) => setStyle("letterSpacing", v)} placeholder="0.04em" />
+            </PropGroup>
 
-            <Divider label="Background" />
-            <PropRow label="Background">
-              <ColorInput
-                value={comp.styles.backgroundColor ?? "transparent"}
-                onChange={(v) => set("styles.backgroundColor", v)}
-              />
-            </PropRow>
+            <SectionTitle>Background</SectionTitle>
+            <PropGroup label="Background">
+              <StringInput value={s.background ?? s.backgroundColor ?? ""} onChange={(v) => setStyle("background", v)} placeholder="#161b22 or linear-gradient(…)" />
+            </PropGroup>
+            <PropGroup label="Bg Color">
+              <ColorInput value={s.backgroundColor ?? "#161b22"} onChange={(v) => setStyle("backgroundColor", v)} />
+            </PropGroup>
 
-            <Divider label="Border" />
-            <PropRow label="Radius">
-              <InlineTextInput
-                value={comp.styles.borderRadius ?? ""}
-                onChange={(v) => set("styles.borderRadius", v)}
-                placeholder="4px"
-              />
-            </PropRow>
-            <PropRow label="Border">
-              <InlineTextInput
-                value={comp.styles.border ?? ""}
-                onChange={(v) => set("styles.border", v)}
-                placeholder="1px solid #ccc"
-              />
-            </PropRow>
+            <SectionTitle>Border</SectionTitle>
+            <PropGroup label="Border">
+              <StringInput value={s.border ?? ""} onChange={(v) => setStyle("border", v)} placeholder="1px solid #30363d" />
+            </PropGroup>
+            <PropGroup label="Border Radius">
+              <StringInput value={s.borderRadius ?? ""} onChange={(v) => setStyle("borderRadius", v)} placeholder="8px" />
+            </PropGroup>
+            <PropGroup label="Border Color">
+              <ColorInput value={s.borderColor ?? "#30363d"} onChange={(v) => setStyle("borderColor", v)} />
+            </PropGroup>
 
-            <Divider label="Raw CSS" />
+            <SectionTitle>Effects</SectionTitle>
+            <PropGroup label="Box Shadow">
+              <StringInput value={s.boxShadow ?? ""} onChange={(v) => setStyle("boxShadow", v)} placeholder="0 4px 24px rgba(0,0,0,.4)" />
+            </PropGroup>
+            <PropGroup label="Opacity">
+              <StringInput value={s.opacity ?? ""} onChange={(v) => setStyle("opacity", v)} placeholder="1" />
+            </PropGroup>
+            <PropGroup label="Transition">
+              <StringInput value={s.transition ?? ""} onChange={(v) => setStyle("transition", v)} placeholder="all 0.2s" />
+            </PropGroup>
+            <PropGroup label="Transform">
+              <StringInput value={s.transform ?? ""} onChange={(v) => setStyle("transform", v)} placeholder="rotate(5deg)" />
+            </PropGroup>
+            <PropGroup label="Filter">
+              <StringInput value={s.filter ?? ""} onChange={(v) => setStyle("filter", v)} placeholder="blur(4px)" />
+            </PropGroup>
+            <PropGroup label="Backdrop Filter">
+              <StringInput value={s.backdropFilter ?? ""} onChange={(v) => setStyle("backdropFilter", v)} placeholder="blur(12px)" />
+            </PropGroup>
+
+            <SectionTitle>Raw CSS</SectionTitle>
             <textarea
-              defaultValue={Object.entries(comp.styles)
-                .map(([k, v]) => `${k}: ${v};`)
-                .join("\n")}
-              onBlur={(e) => {
-                const parsed: Record<string, string> = {};
-                e.target.value.split("\n").forEach((line) => {
-                  const idx = line.indexOf(":");
-                  if (idx > 0) {
-                    const k = line.slice(0, idx).trim();
-                    const v = line.slice(idx + 1).trim().replace(/;$/, "");
-                    if (k && v) parsed[k] = v;
-                  }
-                });
-                onPropertyChange(comp.id, "styles", parsed);
-              }}
-              rows={6}
-              className="w-full bg-[#0d1117] border border-[#30363d] rounded text-[11px] font-mono text-white p-2 focus:outline-none focus:border-[#3b82f6] resize-none"
-              placeholder="color: red;&#10;margin: 8px;"
+              value={customCSS}
+              onChange={(e) => setCustomCSS(e.target.value)}
+              onBlur={() => applyCustomCSS(customCSS)}
+              rows={8}
+              placeholder={"font-size: 16px;\ncolor: red;\npadding: 8px 16px;"}
+              className="w-full bg-[#0d1117] border border-[#30363d] rounded text-[11px] font-mono text-white p-2 resize-none focus:outline-none focus:border-[#3b82f6]"
             />
           </>
         )}
 
-        {activeTab === "animate" && (
-          <div className="flex flex-col items-center justify-center gap-3 py-8 text-[#484f58]">
-            <Zap className="w-8 h-8 opacity-30" />
-            <p className="text-xs text-center">Animation editor coming in Phase 2</p>
-            <button className="text-xs text-[#3b82f6] hover:underline" disabled>
-              + Add Animation
-            </button>
-          </div>
+        {activeTab === "layout" && (
+          <>
+            <SectionTitle>Size</SectionTitle>
+            <PropGroup label="Width">
+              <StringInput value={s.width ?? ""} onChange={(v) => setStyle("width", v)} placeholder="100%" />
+            </PropGroup>
+            <PropGroup label="Height">
+              <StringInput value={s.height ?? ""} onChange={(v) => setStyle("height", v)} placeholder="auto" />
+            </PropGroup>
+            <PropGroup label="Min W">
+              <StringInput value={s.minWidth ?? ""} onChange={(v) => setStyle("minWidth", v)} placeholder="0" />
+            </PropGroup>
+            <PropGroup label="Max W">
+              <StringInput value={s.maxWidth ?? ""} onChange={(v) => setStyle("maxWidth", v)} placeholder="100%" />
+            </PropGroup>
+
+            <SectionTitle>Spacing</SectionTitle>
+            <PropGroup label="Padding">
+              <StringInput value={s.padding ?? ""} onChange={(v) => setStyle("padding", v)} placeholder="16px" />
+            </PropGroup>
+            <PropGroup label="Margin">
+              <StringInput value={s.margin ?? ""} onChange={(v) => setStyle("margin", v)} placeholder="0" />
+            </PropGroup>
+            <PropGroup label="Gap">
+              <StringInput value={s.gap ?? ""} onChange={(v) => setStyle("gap", v)} placeholder="8px" />
+            </PropGroup>
+
+            <SectionTitle>Flexbox / Grid</SectionTitle>
+            <PropGroup label="Display">
+              <SelectInput value={s.display ?? "block"} options={DISPLAYS} onChange={(v) => setStyle("display", v)} />
+            </PropGroup>
+            <PropGroup label="Direction">
+              <SelectInput value={s.flexDirection ?? "row"} options={FLEX_DIRS} onChange={(v) => setStyle("flexDirection", v)} />
+            </PropGroup>
+            <PropGroup label="Align">
+              <SelectInput value={s.alignItems ?? "stretch"} options={ALIGN_ITEMS_OPTS} onChange={(v) => setStyle("alignItems", v)} />
+            </PropGroup>
+            <PropGroup label="Justify">
+              <SelectInput value={s.justifyContent ?? "flex-start"} options={JUSTIFY_CONTENT_OPTS} onChange={(v) => setStyle("justifyContent", v)} />
+            </PropGroup>
+            <PropGroup label="Grid Cols">
+              <StringInput value={s.gridTemplateColumns ?? ""} onChange={(v) => setStyle("gridTemplateColumns", v)} placeholder="repeat(3,1fr)" />
+            </PropGroup>
+
+            <SectionTitle>Position</SectionTitle>
+            <PropGroup label="Position">
+              <SelectInput value={s.position ?? "static"} options={POSITIONS} onChange={(v) => setStyle("position", v)} />
+            </PropGroup>
+            <div className="grid grid-cols-2 gap-1.5">
+              {(["top", "right", "bottom", "left"] as const).map((d) => (
+                <PropGroup key={d} label={d.charAt(0).toUpperCase() + d.slice(1)}>
+                  <StringInput value={(s as any)[d] ?? ""} onChange={(v) => setStyle(d, v)} placeholder="auto" />
+                </PropGroup>
+              ))}
+            </div>
+            <PropGroup label="Z-Index">
+              <StringInput value={s.zIndex ?? ""} onChange={(v) => setStyle("zIndex", v)} placeholder="0" />
+            </PropGroup>
+            <PropGroup label="Overflow">
+              <SelectInput value={s.overflow ?? "visible"} options={OVERFLOW_OPTS} onChange={(v) => setStyle("overflow", v)} />
+            </PropGroup>
+            <PropGroup label="Cursor">
+              <StringInput value={s.cursor ?? ""} onChange={(v) => setStyle("cursor", v)} placeholder="pointer" />
+            </PropGroup>
+          </>
         )}
       </div>
     </div>
   );
 }
 
-function PropRow({
+// ─────────────────────────────────────────────────────────────────────────────
+// SMALL FORM HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 pt-1 pb-0.5">
+      <span className="text-[9px] uppercase tracking-widest text-[#484f58]">{children}</span>
+      <div className="flex-1 h-px bg-[#21262d]" />
+    </div>
+  );
+}
+
+function PropGroup({
   label,
   children,
 }: {
@@ -975,49 +2189,14 @@ function PropRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-2 min-h-[24px]">
-      <span className="text-[10px] text-[#484f58] w-16 flex-shrink-0">{label}</span>
+    <div className="flex items-center gap-2 min-h-[22px]">
+      <span className="text-[10px] text-[#484f58] w-14 flex-shrink-0 leading-none">{label}</span>
       <div className="flex-1 min-w-0">{children}</div>
     </div>
   );
 }
 
-function Divider({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-2 pt-1">
-      <span className="text-[10px] text-[#484f58] uppercase tracking-wider whitespace-nowrap">
-        {label}
-      </span>
-      <div className="flex-1 h-px bg-[#21262d]" />
-    </div>
-  );
-}
-
-function ColorInput({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <input
-        type="color"
-        value={value.startsWith("#") ? value : "#000000"}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent"
-      />
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="flex-1 h-6 bg-[#0d1117] border border-[#30363d] rounded text-[11px] text-white px-1.5 focus:outline-none focus:border-[#3b82f6]"
-      />
-    </div>
-  );
-}
-
-function InlineTextInput({
+function StringInput({
   value,
   onChange,
   placeholder,
@@ -1028,7 +2207,7 @@ function InlineTextInput({
 }) {
   return (
     <input
-      value={value}
+      value={value ?? ""}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
       className="w-full h-6 bg-[#0d1117] border border-[#30363d] rounded text-[11px] text-white px-1.5 focus:outline-none focus:border-[#3b82f6] placeholder-[#484f58]"
@@ -1036,647 +2215,427 @@ function InlineTextInput({
   );
 }
 
-function InlineNumberInput({
+function NumberInput({
   value,
   onChange,
-  suffix,
+  min,
+  max,
 }: {
   value: number;
   onChange: (v: number) => void;
-  suffix?: string;
+  min?: number;
+  max?: number;
 }) {
   return (
-    <div className="relative">
-      <input
-        type="number"
-        value={Math.round(value)}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full h-6 bg-[#0d1117] border border-[#30363d] rounded text-[11px] text-white px-1.5 focus:outline-none focus:border-[#3b82f6] pr-6"
-      />
-      {suffix && (
-        <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-[#484f58] pointer-events-none">
-          {suffix}
-        </span>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// LAYERS PANEL
-// ─────────────────────────────────────────────────────────────
-
-function LayersPanel({
-  project,
-  selectedComponents,
-  onSelectionChange,
-  onComponentUpdate,
-}: {
-  project: VisualEditorProject;
-  selectedComponents: Set<string>;
-  onSelectionChange: (s: Set<string>) => void;
-  onComponentUpdate: (id: string, updates: Partial<ComponentMetadata>) => void;
-}) {
-  const [search, setSearch] = useState("");
-
-  const components = useMemo(
-    () => Array.from(project.visualConfig?.componentMap.values() ?? []),
-    [project.visualConfig?.componentMap]
-  );
-
-  const filtered = useMemo(
-    () =>
-      components.filter(
-        (c) =>
-          c.type.toLowerCase().includes(search.toLowerCase()) ||
-          c.id.toLowerCase().includes(search.toLowerCase())
-      ),
-    [components, search]
-  );
-
-  const handleClick = (id: string, e: React.MouseEvent) => {
-    if (e.ctrlKey || e.metaKey) {
-      const next = new Set(selectedComponents);
-      next.has(id) ? next.delete(id) : next.add(id);
-      onSelectionChange(next);
-    } else {
-      onSelectionChange(new Set([id]));
-    }
-  };
-
-  return (
-    <div className="flex flex-col border-b border-[#30363d]" style={{ height: "50%" }}>
-      <div className="px-4 py-3 border-b border-[#30363d]">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-semibold text-[#8b949e] uppercase tracking-wider">
-            Layers
-          </span>
-          <span className="text-[10px] text-[#8b949e] bg-[#21262d] px-1.5 py-0.5 rounded">
-            {filtered.length}
-          </span>
-        </div>
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#484f58]" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search layers…"
-            className="w-full pl-8 pr-3 h-7 bg-[#0d1117] border border-[#30363d] rounded text-xs text-white placeholder-[#484f58] focus:outline-none focus:border-[#3b82f6]"
-          />
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto py-1 px-1">
-        {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-2 text-[#484f58]">
-            <Layers className="w-6 h-6 opacity-30" />
-            <p className="text-xs">No layers yet</p>
-          </div>
-        ) : (
-          filtered.map((comp) => {
-            const isSelected = selectedComponents.has(comp.id);
-            return (
-              <div
-                key={comp.id}
-                onClick={(e) => handleClick(comp.id, e)}
-                className={`group flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors ${
-                  isSelected
-                    ? "bg-[#1f3249] border border-[#3b82f6]/40"
-                    : "hover:bg-[#21262d]"
-                }`}
-              >
-                <Component
-                  className={`w-3.5 h-3.5 flex-shrink-0 ${
-                    isSelected ? "text-[#3b82f6]" : "text-[#484f58]"
-                  }`}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs text-white truncate">{comp.type}</div>
-                  <div className="text-[10px] text-[#484f58] truncate">{comp.id.slice(0, 20)}…</div>
-                </div>
-                <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onComponentUpdate(comp.id, { hidden: !comp.hidden });
-                    }}
-                    className="w-5 h-5 flex items-center justify-center rounded hover:bg-[#30363d] transition-colors"
-                    title={comp.hidden ? "Show" : "Hide"}
-                  >
-                    <Eye className={`w-3 h-3 ${comp.hidden ? "text-[#484f58]" : "text-[#8b949e]"}`} />
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onComponentUpdate(comp.id, { locked: !comp.locked });
-                    }}
-                    className="w-5 h-5 flex items-center justify-center rounded hover:bg-[#30363d] transition-colors"
-                    title={comp.locked ? "Unlock" : "Lock"}
-                  >
-                    {comp.locked ? (
-                      <Lock className="w-3 h-3 text-yellow-400" />
-                    ) : (
-                      <Unlock className="w-3 h-3 text-[#8b949e]" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// ASSETS PANEL
-// ─────────────────────────────────────────────────────────────
-
-function AssetsPanel({
-  project,
-  onAssetUpload,
-  onAssetInsert,
-}: {
-  project: VisualEditorProject;
-  onAssetUpload: (files: FileList) => void;
-  onAssetInsert: (asset: AssetReference) => void;
-}) {
-  const fileRef = useRef<HTMLInputElement>(null);
-  const assets = Array.from(project.visualConfig?.assets.values() ?? []);
-
-  const fmt = (b: number) => {
-    if (b === 0) return "0 B";
-    const units = ["B", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(b) / Math.log(1024));
-    return `${(b / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
-  };
-
-  return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="px-4 py-3 border-b border-[#30363d] flex items-center justify-between">
-        <span className="text-xs font-semibold text-[#8b949e] uppercase tracking-wider">
-          Assets
-        </span>
-        <button
-          onClick={() => fileRef.current?.click()}
-          className="flex items-center gap-1 text-xs text-[#3b82f6] hover:text-blue-300 transition-colors"
-        >
-          <Upload className="w-3 h-3" />
-          Upload
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept="image/*,audio/*,video/*"
-          className="hidden"
-          onChange={(e) => e.target.files && onAssetUpload(e.target.files)}
-        />
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-2">
-        {assets.length === 0 ? (
-          <div
-            onClick={() => fileRef.current?.click()}
-            className="m-2 border border-dashed border-[#30363d] rounded-lg flex flex-col items-center justify-center py-8 gap-2 text-[#484f58] cursor-pointer hover:border-[#3b82f6] hover:text-[#3b82f6] transition-colors"
-          >
-            <Upload className="w-6 h-6 opacity-50" />
-            <span className="text-xs">Drop assets here</span>
-          </div>
-        ) : (
-          <div className="space-y-1">
-            {assets.map((asset) => (
-              <div
-                key={asset.id}
-                className="group flex items-center gap-2 p-2 rounded bg-[#21262d] hover:bg-[#30363d] transition-colors"
-              >
-                <div className="w-8 h-8 bg-[#0d1117] rounded flex items-center justify-center flex-shrink-0">
-                  {asset.type === "image" ? (
-                    <img src={asset.url} alt={asset.filename} className="w-full h-full object-cover rounded" />
-                  ) : (
-                    <FileText className="w-4 h-4 text-[#484f58]" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs text-white truncate">{asset.filename}</div>
-                  <div className="text-[10px] text-[#484f58]">{fmt(asset.size)}</div>
-                </div>
-                <button
-                  onClick={() => onAssetInsert(asset)}
-                  className="opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded hover:bg-[#30363d] transition-all"
-                  title="Insert"
-                >
-                  <Plus className="w-3 h-3 text-[#3b82f6]" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// COMPONENT RENDERER (on canvas)
-// ─────────────────────────────────────────────────────────────
-
-function ComponentRenderer({
-  component,
-  isSelected,
-  onUpdate,
-  onDrag,
-  zoom,
-}: {
-  component: ComponentMetadata;
-  isSelected: boolean;
-  onUpdate: (u: Partial<ComponentMetadata>) => void;
-  onDrag: (dx: number, dy: number) => void;
-  zoom: number;
-}) {
-  const isDragging = useRef(false);
-  const dragStart = useRef({ x: 0, y: 0 });
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (component.locked) return;
-    e.stopPropagation();
-    isDragging.current = true;
-    dragStart.current = { x: e.clientX, y: e.clientY };
-
-    const onMove = (ev: MouseEvent) => {
-      if (!isDragging.current) return;
-      onDrag(
-        (ev.clientX - dragStart.current.x) / zoom,
-        (ev.clientY - dragStart.current.y) / zoom
-      );
-      dragStart.current = { x: ev.clientX, y: ev.clientY };
-    };
-    const onUp = () => {
-      isDragging.current = false;
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  };
-
-  if (component.hidden) return null;
-
-  const typeColors: Record<string, string> = {
-    "react-component": "bg-[#1f3249] border-[#3b82f6]/40 text-[#3b82f6]",
-    "vue-component": "bg-[#1a2e1a] border-[#22c55e]/40 text-[#22c55e]",
-    button: "bg-[#2a1f1f] border-[#ef4444]/40 text-[#ef4444]",
-    img: "bg-[#2a1a2e] border-[#a855f7]/40 text-[#a855f7]",
-  };
-  const colorClass =
-    typeColors[component.type] ??
-    "bg-[#21262d] border-[#30363d] text-[#8b949e]";
-
-  return (
-    <div
-      onMouseDown={handleMouseDown}
-      className={`absolute border rounded transition-shadow select-none ${colorClass} ${
-        isSelected
-          ? "ring-2 ring-[#3b82f6] ring-offset-1 ring-offset-[#0d1117] shadow-lg shadow-[#3b82f6]/20"
-          : "hover:ring-1 hover:ring-[#3b82f6]/40"
-      } ${component.locked ? "cursor-not-allowed opacity-60" : "cursor-move"}`}
-      style={{
-        left: component.bounds.x,
-        top: component.bounds.y,
-        width: component.bounds.width,
-        height: component.bounds.height,
-        ...component.styles,
-      }}
-    >
-      <div className="w-full h-full flex items-center justify-center p-1 overflow-hidden">
-        <span className="text-[10px] font-medium opacity-70 truncate">
-          {component.type}
-        </span>
-      </div>
-      {/* Resize handle */}
-      {isSelected && !component.locked && (
-        <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-[#3b82f6] rounded-sm cursor-se-resize border border-[#0d1117]" />
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// SELECTION OVERLAY
-// ─────────────────────────────────────────────────────────────
-
-function SelectionOverlay({
-  selectedComponents,
-  componentMap,
-  zoom,
-  panOffset,
-}: {
-  selectedComponents: string[];
-  componentMap: Map<string, ComponentMetadata> | undefined;
-  zoom: number;
-  panOffset: { x: number; y: number };
-}) {
-  if (!componentMap) return null;
-  const selected = selectedComponents
-    .map((id) => componentMap.get(id))
-    .filter(Boolean) as ComponentMetadata[];
-  if (selected.length === 0) return null;
-
-  const minX = Math.min(...selected.map((c) => c.bounds.x));
-  const minY = Math.min(...selected.map((c) => c.bounds.y));
-  const maxX = Math.max(...selected.map((c) => c.bounds.x + c.bounds.width));
-  const maxY = Math.max(...selected.map((c) => c.bounds.y + c.bounds.height));
-
-  const left = minX * zoom + panOffset.x;
-  const top = minY * zoom + panOffset.y;
-  const width = (maxX - minX) * zoom;
-  const height = (maxY - minY) * zoom;
-
-  return (
-    <div
-      className="absolute pointer-events-none border-2 border-[#3b82f6] border-dashed"
-      style={{ left, top, width, height }}
+    <input
+      type="number"
+      value={value ?? 0}
+      min={min}
+      max={max}
+      onChange={(e) => onChange(Number(e.target.value))}
+      className="w-full h-6 bg-[#0d1117] border border-[#30363d] rounded text-[11px] text-white px-1.5 focus:outline-none focus:border-[#3b82f6]"
     />
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// VISUAL CANVAS
-// ─────────────────────────────────────────────────────────────
-
-function VisualCanvas({
-  project,
-  selectedComponents,
-  editorState,
-  onSelectionChange,
-  onComponentUpdate,
-  onStateChange,
-  onComponentDrop,
-  isLoading,
+function SelectInput({
+  value,
+  options,
+  onChange,
 }: {
-  project: VisualEditorProject;
-  selectedComponents: Set<string>;
-  editorState: EditorState;
-  onSelectionChange: (s: Set<string>) => void;
-  onComponentUpdate: (id: string, u: Partial<ComponentMetadata>) => void;
-  onStateChange: React.Dispatch<React.SetStateAction<EditorState>>;
-  onComponentDrop?: (type: string, pos: { x: number; y: number }) => void;
-  isLoading: boolean;
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
 }) {
-  const canvasRef = useRef<HTMLDivElement>(null);
+  return (
+    <select
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full h-6 bg-[#0d1117] border border-[#30363d] rounded text-[11px] text-white px-1 focus:outline-none focus:border-[#3b82f6]"
+    >
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+    </select>
+  );
+}
 
-  const handleCanvasClick = (e: React.MouseEvent) => {
-    if (e.target !== canvasRef.current) return;
-    onSelectionChange(new Set());
-  };
+function ColorInput({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const safeHex = /^#[0-9a-fA-F]{3,8}$/.test(value) ? value : "#000000";
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        type="color"
+        value={safeHex}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-5 h-5 rounded cursor-pointer border-0 p-0 bg-transparent"
+      />
+      <input
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex-1 h-6 bg-[#0d1117] border border-[#30363d] rounded text-[11px] text-white px-1.5 focus:outline-none focus:border-[#3b82f6]"
+      />
+    </div>
+  );
+}
 
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.08 : 0.08;
-    onStateChange((prev) => ({
-      ...prev,
-      zoom: Math.max(0.1, Math.min(4, prev.zoom + delta)),
-    }));
-  };
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPONENT LIBRARY (drag palette)
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    const type = e.dataTransfer.getData("component-type");
-    if (!type || !canvasRef.current) return;
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = (e.clientX - rect.left - editorState.panOffset.x) / editorState.zoom;
-    const y = (e.clientY - rect.top - editorState.panOffset.y) / editorState.zoom;
-    onComponentDrop?.(type, { x, y });
-  };
+interface LibItem {
+  name: string;
+  component: React.ElementType;
+  defaultProps: Record<string, unknown>;
+  preview?: React.ReactNode;
+}
 
-  const handleComponentDrag = (id: string, dx: number, dy: number) => {
-    const comp = project.visualConfig?.componentMap.get(id);
-    if (!comp) return;
-    onComponentUpdate(id, {
-      bounds: {
-        ...comp.bounds,
-        x: comp.bounds.x + dx,
-        y: comp.bounds.y + dy,
-      },
+const LIBRARY_CATEGORIES: { label: string; icon: React.ElementType; items: LibItem[] }[] = [
+  {
+    label: "Layout",
+    icon: Layout,
+    items: [
+      { name: "Container", component: ContainerCraft, defaultProps: ContainerCraft.craft.props },
+      { name: "Grid", component: GridCraft, defaultProps: GridCraft.craft.props },
+      { name: "Hero Section", component: HeroCraft, defaultProps: HeroCraft.craft.props },
+      { name: "NavBar", component: NavBarCraft, defaultProps: NavBarCraft.craft.props },
+    ],
+  },
+  {
+    label: "Typography",
+    icon: Type,
+    items: [
+      { name: "Text / Heading", component: TextCraft, defaultProps: { ...TextCraft.craft.props, tag: "h2", text: "Heading", styles: { fontSize: "24px", fontWeight: "700", color: "#e6edf3" } } },
+      { name: "Text / Paragraph", component: TextCraft, defaultProps: TextCraft.craft.props },
+      { name: "Code Block", component: CodeBlockCraft, defaultProps: CodeBlockCraft.craft.props },
+    ],
+  },
+  {
+    label: "Interactive",
+    icon: Zap,
+    items: [
+      { name: "Button / Primary", component: ButtonCraft, defaultProps: ButtonCraft.craft.props },
+      { name: "Button / Outline", component: ButtonCraft, defaultProps: { ...ButtonCraft.craft.props, variant: "outline" } },
+      { name: "Button / Gradient", component: ButtonCraft, defaultProps: { ...ButtonCraft.craft.props, variant: "gradient" } },
+      { name: "Input", component: InputCraft, defaultProps: InputCraft.craft.props },
+      { name: "Form", component: FormCraft, defaultProps: FormCraft.craft.props },
+    ],
+  },
+  {
+    label: "Data Display",
+    icon: Grid,
+    items: [
+      { name: "Card / Default", component: CardCraft, defaultProps: CardCraft.craft.props },
+      { name: "Card / Glass", component: CardCraft, defaultProps: { ...CardCraft.craft.props, variant: "glass" } },
+      { name: "Card / Elevated", component: CardCraft, defaultProps: { ...CardCraft.craft.props, variant: "elevated" } },
+      { name: "Badge", component: BadgeCraft, defaultProps: BadgeCraft.craft.props },
+      { name: "Alert", component: AlertCraft, defaultProps: AlertCraft.craft.props },
+      { name: "Stat Card", component: StatCardCraft, defaultProps: StatCardCraft.craft.props },
+      { name: "Table", component: TableCraft, defaultProps: TableCraft.craft.props },
+      { name: "Avatar", component: AvatarCraft, defaultProps: AvatarCraft.craft.props },
+    ],
+  },
+  {
+    label: "Media",
+    icon: ImageIcon,
+    items: [
+      { name: "Image", component: ImageCraft, defaultProps: ImageCraft.craft.props },
+      { name: "Divider", component: DividerCraft, defaultProps: DividerCraft.craft.props },
+      { name: "Divider / Label", component: DividerCraft, defaultProps: { ...DividerCraft.craft.props, label: "OR" } },
+    ],
+  },
+  {
+    label: "✨ Advanced UI",
+    icon: Zap,
+    items: [
+      { name: "Bento Grid", component: BentoGridCraft, defaultProps: BentoGridCraft.craft.props },
+      { name: "Spotlight Card", component: SpotlightCardCraft, defaultProps: SpotlightCardCraft.craft.props },
+      { name: "Shiny Button", component: ShinyButtonCraft, defaultProps: ShinyButtonCraft.craft.props },
+      { name: "Gradient Text", component: GradientTextCraft, defaultProps: GradientTextCraft.craft.props },
+      { name: "Background Beams", component: BackgroundBeamsCraft, defaultProps: BackgroundBeamsCraft.craft.props },
+      { name: "Pricing Card", component: PricingCardCraft, defaultProps: PricingCardCraft.craft.props },
+      { name: "Testimonial", component: TestimonialCardCraft, defaultProps: TestimonialCardCraft.craft.props },
+      { name: "Feature List", component: FeatureListCraft, defaultProps: FeatureListCraft.craft.props },
+    ],
+  },
+  {
+    label: "📱 Mobile UI",
+    icon: Smartphone,
+    items: [
+      { name: "Mobile Nav", component: MobileNavCraft, defaultProps: MobileNavCraft.craft.props },
+      { name: "Bottom Tab Bar", component: BottomTabBarCraft, defaultProps: BottomTabBarCraft.craft.props },
+      { name: "Status Bar", component: StatusBarCraft, defaultProps: StatusBarCraft.craft.props },
+      { name: "App Header", component: AppHeaderCraft, defaultProps: AppHeaderCraft.craft.props },
+    ],
+  },
+];
+
+function ComponentLibrary() {
+  const { connectors } = useEditor();
+  const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set(["Layout", "Interactive"]));
+
+  const toggle = (label: string) =>
+    setExpanded((prev) => {
+      const n = new Set(prev);
+      n.has(label) ? n.delete(label) : n.add(label);
+      return n;
     });
-  };
 
-  const gridSize = editorState.gridSize * editorState.zoom;
-
-  if (isLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-[#0d1117]">
-        <div className="text-center">
-          <RefreshCw className="w-8 h-8 animate-spin mx-auto mb-3 text-[#3b82f6]" />
-          <p className="text-sm text-[#8b949e]">Parsing components…</p>
-        </div>
-      </div>
-    );
-  }
+  const filtered = useMemo(() => {
+    if (!search) return LIBRARY_CATEGORIES;
+    const q = search.toLowerCase();
+    return LIBRARY_CATEGORIES.map((cat) => ({
+      ...cat,
+      items: cat.items.filter((i) => i.name.toLowerCase().includes(q)),
+    })).filter((cat) => cat.items.length > 0);
+  }, [search]);
 
   return (
-    <div className="flex-1 flex flex-col bg-[#0d1117] overflow-hidden">
-      {/* Canvas toolbar */}
-      <div className="h-10 bg-[#161b22] border-b border-[#30363d] flex items-center justify-between px-4 flex-shrink-0">
-        <div className="flex items-center gap-3">
-          {/* Viewport */}
-          <div className="flex items-center gap-0.5 bg-[#21262d] rounded border border-[#30363d] p-0.5">
-            {(["desktop", "tablet", "mobile"] as const).map((v) => {
-              const VIcon = v === "desktop" ? Monitor : v === "tablet" ? Tablet : Smartphone;
-              return (
-                <button
-                  key={v}
-                  onClick={() => onStateChange((p) => ({ ...p, viewport: v }))}
-                  title={v}
-                  className={`w-7 h-6 flex items-center justify-center rounded transition-colors ${
-                    editorState.viewport === v
-                      ? "bg-[#3b82f6] text-white"
-                      : "text-[#8b949e] hover:text-white"
-                  }`}
-                >
-                  <VIcon className="w-3.5 h-3.5" />
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Zoom */}
-          <div className="flex items-center gap-1.5 text-xs text-[#8b949e]">
-            <button
-              onClick={() => onStateChange((p) => ({ ...p, zoom: Math.max(0.1, p.zoom - 0.1) }))}
-              className="w-5 h-5 flex items-center justify-center rounded hover:bg-[#21262d] hover:text-white transition-colors"
-            >−</button>
-            <span className="w-12 text-center tabular-nums">
-              {Math.round(editorState.zoom * 100)}%
-            </span>
-            <button
-              onClick={() => onStateChange((p) => ({ ...p, zoom: Math.min(4, p.zoom + 0.1) }))}
-              className="w-5 h-5 flex items-center justify-center rounded hover:bg-[#21262d] hover:text-white transition-colors"
-            >+</button>
-            <button
-              onClick={() => onStateChange((p) => ({ ...p, zoom: 1, panOffset: { x: 0, y: 0 } }))}
-              className="text-[10px] px-1.5 hover:text-white transition-colors"
-            >
-              Fit
-            </button>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-1.5 text-xs text-[#8b949e] cursor-pointer select-none">
-            <Switch
-              checked={editorState.snapToGrid}
-              onCheckedChange={(v) => onStateChange((p) => ({ ...p, snapToGrid: v }))}
-              className="data-[state=checked]:bg-[#3b82f6] scale-75"
-            />
-            <Grid className="w-3 h-3" />
-            Grid
-          </label>
-          <label className="flex items-center gap-1.5 text-xs text-[#8b949e] cursor-pointer select-none">
-            <Switch
-              checked={editorState.showBounds}
-              onCheckedChange={(v) => onStateChange((p) => ({ ...p, showBounds: v }))}
-              className="data-[state=checked]:bg-[#3b82f6] scale-75"
-            />
-            Bounds
-          </label>
-          <label className="flex items-center gap-1.5 text-xs text-[#8b949e] cursor-pointer select-none">
-            <Switch
-              checked={editorState.livePreview}
-              onCheckedChange={(v) => onStateChange((p) => ({ ...p, livePreview: v }))}
-              className="data-[state=checked]:bg-[#3b82f6] scale-75"
-            />
-            <Eye className="w-3 h-3" />
-            Live
-          </label>
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="px-3 py-3 border-b border-[#30363d]">
+        <p className="text-[10px] uppercase tracking-widest text-[#484f58] mb-2">Components</p>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[#484f58]" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search…"
+            className="w-full pl-7 pr-2 h-7 bg-[#0d1117] border border-[#30363d] rounded text-xs text-white placeholder-[#484f58] focus:outline-none focus:border-[#3b82f6]"
+          />
         </div>
       </div>
 
-      {/* Canvas area */}
-      <div
-        ref={canvasRef}
-        className={`flex-1 relative overflow-hidden ${
-          editorState.selectedTool === "text" ? "cursor-text" :
-          editorState.selectedTool === "move" ? "cursor-grab" :
-          editorState.selectedTool === "shape" ? "cursor-crosshair" :
-          "cursor-default"
-        }`}
-        onClick={handleCanvasClick}
-        onWheel={handleWheel}
-        onDrop={handleDrop}
-        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; }}
-        style={{
-          backgroundImage: editorState.snapToGrid
-            ? `radial-gradient(circle, #30363d 1px, transparent 1px)`
-            : undefined,
-          backgroundSize: editorState.snapToGrid
-            ? `${gridSize}px ${gridSize}px`
-            : undefined,
-          backgroundPosition: `${editorState.panOffset.x % gridSize}px ${editorState.panOffset.y % gridSize}px`,
-        }}
-      >
-        {/* Transform wrapper */}
-        <div
-          style={{
-            transform: `translate(${editorState.panOffset.x}px, ${editorState.panOffset.y}px) scale(${editorState.zoom})`,
-            transformOrigin: "0 0",
-            position: "absolute",
-            top: 0,
-            left: 0,
-          }}
-        >
-          {project.visualConfig?.componentMap &&
-            Array.from(project.visualConfig.componentMap.entries()).map(([id, comp]) => (
-              <ComponentRenderer
-                key={id}
-                component={comp}
-                isSelected={selectedComponents.has(id)}
-                onUpdate={(u) => onComponentUpdate(id, u)}
-                onDrag={(dx, dy) => handleComponentDrag(id, dx, dy)}
-                zoom={editorState.zoom}
-              />
-            ))}
-        </div>
+      <div className="flex-1 overflow-y-auto py-1">
+        {filtered.map((cat) => {
+          const CatIcon = cat.icon;
+          const isOpen = expanded.has(cat.label);
+          return (
+            <div key={cat.label}>
+              <button
+                onClick={() => toggle(cat.label)}
+                className="w-full flex items-center gap-2 px-3 py-2 text-[#8b949e] hover:text-white hover:bg-[#21262d] text-xs transition-colors"
+              >
+                <CatIcon className="w-3.5 h-3.5" />
+                <span className="flex-1 text-left font-medium">{cat.label}</span>
+                {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              </button>
 
-        {/* Selection overlay */}
-        {selectedComponents.size > 1 && (
-          <SelectionOverlay
-            selectedComponents={Array.from(selectedComponents)}
-            componentMap={project.visualConfig?.componentMap}
-            zoom={editorState.zoom}
-            panOffset={editorState.panOffset}
-          />
-        )}
-
-        {/* Empty state */}
-        {(!project.visualConfig?.componentMap ||
-          project.visualConfig.componentMap.size === 0) && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="text-center">
-              <Layout className="w-12 h-12 mx-auto mb-3 text-[#30363d]" />
-              <p className="text-sm text-[#484f58]">Drag components here</p>
-              <p className="text-xs text-[#30363d] mt-1">
-                or drop from the library on the left
-              </p>
+              {isOpen && (
+                <div className="pb-1">
+                  {cat.items.map((item) => (
+                    <div
+                      key={item.name}
+                      ref={(ref) => {
+                        if (ref) {
+                          connectors.create(
+                            ref,
+                            React.createElement(item.component as any, item.defaultProps)
+                          );
+                        }
+                      }}
+                      className="flex items-center gap-2 mx-2 px-2 py-2 rounded text-xs text-[#8b949e] hover:text-white hover:bg-[#21262d] cursor-grab active:cursor-grabbing transition-colors group"
+                    >
+                      <Grip className="w-3 h-3 text-[#30363d] group-hover:text-[#484f58]" />
+                      <span>{item.name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })}
       </div>
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// CODE EDITOR
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// TOOLBAR  (inside the Editor context)
+// ─────────────────────────────────────────────────────────────────────────────
 
-function CodeEditor({
-  project,
-  onCodeChange,
+function EditorToolbar({
+  editorMode,
+  onModeChange,
+  viewport,
+  onViewportChange,
+  onSave,
+  onReturn,
+  isSaving,
+  saveStatus,
+  projectName,
 }: {
-  project: VisualEditorProject;
-  onCodeChange: (path: string, code: string) => void;
+  editorMode: "design" | "code" | "split";
+  onModeChange: (m: "design" | "code" | "split") => void;
+  viewport: "desktop" | "tablet" | "mobile";
+  onViewportChange: (v: "desktop" | "tablet" | "mobile") => void;
+  onSave: () => void;
+  onReturn: () => void;
+  isSaving: boolean;
+  saveStatus: "idle" | "saved" | "error";
+  projectName: string;
 }) {
-  const fileNames = Object.keys(project.files);
-  const [selectedFile, setSelectedFile] = useState(fileNames[0] ?? null);
-  const [content, setContent] = useState(
-    selectedFile ? (project.files[selectedFile] ?? "") : ""
-  );
-
-  useEffect(() => {
-    if (selectedFile && project.files[selectedFile] !== undefined) {
-      setContent(project.files[selectedFile]);
-    }
-  }, [project.files, selectedFile]);
-
-  const handleChange = (val: string) => {
-    setContent(val);
-    if (selectedFile) onCodeChange(selectedFile, val);
-  };
+  const { actions, canUndo, canRedo } = useEditor((state, query) => ({
+    canUndo: query.history.canUndo(),
+    canRedo: query.history.canRedo(),
+  }));
 
   return (
-    <div className="flex-1 flex bg-[#0d1117] overflow-hidden">
-      {/* File tree */}
-      <div className="w-48 border-r border-[#30363d] flex flex-col flex-shrink-0">
-        <div className="px-3 py-2.5 border-b border-[#30363d]">
-          <span className="text-[10px] font-semibold text-[#8b949e] uppercase tracking-wider">
-            Files
+    <div
+      className="h-12 flex items-center justify-between px-4 border-b border-[#30363d] bg-[#0d1117] flex-shrink-0"
+      style={{ fontFamily: "Syne, sans-serif" }}
+    >
+      {/* Left */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onReturn}
+          className="flex items-center gap-1.5 text-xs text-[#8b949e] hover:text-white transition-colors"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          Back
+        </button>
+
+        <div className="w-px h-4 bg-[#30363d]" />
+
+        {/* Mode */}
+        <div className="flex bg-[#161b22] rounded-lg border border-[#30363d] overflow-hidden">
+          {(["design", "split", "code"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => onModeChange(m)}
+              className={`px-3 h-7 text-[11px] font-medium flex items-center gap-1.5 transition-colors capitalize ${
+                editorMode === m
+                  ? "bg-[#3b82f6] text-white"
+                  : "text-[#8b949e] hover:text-white"
+              }`}
+            >
+              {m === "design" ? <Eye className="w-3 h-3" /> : m === "code" ? <Code className="w-3 h-3" /> : <Layout className="w-3 h-3" />}
+              {m}
+            </button>
+          ))}
+        </div>
+
+        {/* Viewport */}
+        <div className="flex items-center gap-0.5 bg-[#161b22] rounded border border-[#30363d] p-0.5">
+          {(["desktop", "tablet", "mobile"] as const).map((v) => {
+            const Icon = v === "desktop" ? Monitor : v === "tablet" ? Tablet : Smartphone;
+            return (
+              <button
+                key={v}
+                onClick={() => onViewportChange(v)}
+                title={v}
+                className={`w-6 h-6 flex items-center justify-center rounded transition-colors ${
+                  viewport === v
+                    ? "bg-[#3b82f6] text-white"
+                    : "text-[#8b949e] hover:text-white"
+                }`}
+              >
+                <Icon className="w-3 h-3" />
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Center */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-semibold text-white truncate max-w-[200px]">
+          {projectName}
+        </span>
+        <button
+          onClick={() => actions.history.undo()}
+          disabled={!canUndo}
+          title="Undo ⌘Z"
+          className="w-7 h-7 flex items-center justify-center rounded text-[#8b949e] hover:text-white hover:bg-[#21262d] disabled:opacity-30 transition-all"
+        >
+          <Undo2 className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={() => actions.history.redo()}
+          disabled={!canRedo}
+          title="Redo ⌘⇧Z"
+          className="w-7 h-7 flex items-center justify-center rounded text-[#8b949e] hover:text-white hover:bg-[#21262d] disabled:opacity-30 transition-all"
+        >
+          <Redo2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* Right */}
+      <div className="flex items-center gap-2">
+        {saveStatus === "saved" && (
+          <span className="flex items-center gap-1 text-[11px] text-green-400">
+            <CheckCircle className="w-3 h-3" /> Saved
           </span>
+        )}
+        {saveStatus === "error" && (
+          <span className="flex items-center gap-1 text-[11px] text-red-400">
+            <AlertCircle className="w-3 h-3" /> Error
+          </span>
+        )}
+        <button
+          onClick={onSave}
+          disabled={isSaving}
+          className="flex items-center gap-1.5 px-3 h-7 bg-[#3b82f6] hover:bg-[#2563eb] disabled:opacity-60 text-white text-[11px] font-semibold rounded-lg transition-colors"
+        >
+          {isSaving ? (
+            <RefreshCw className="w-3 h-3 animate-spin" />
+          ) : (
+            <Save className="w-3 h-3" />
+          )}
+          Save & Sync
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CODE EDITOR (file tree + textarea, standalone — not inside craft context)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CodeEditorPane({
+  files,
+  onFileChange,
+}: {
+  files: Record<string, string>;
+  onFileChange: (path: string, content: string) => void;
+}) {
+  const names = Object.keys(files);
+  const [selected, setSelected] = useState(names[0] ?? "");
+  const [content, setContent] = useState(files[names[0]] ?? "");
+
+  useEffect(() => {
+    if (selected && files[selected] !== undefined) setContent(files[selected]);
+  }, [selected, files]);
+
+  return (
+    <div className="flex h-full bg-[#0d1117] overflow-hidden">
+      {/* File tree */}
+      <div className="w-44 border-r border-[#30363d] flex flex-col flex-shrink-0">
+        <div className="px-3 py-2 border-b border-[#30363d]">
+          <span className="text-[9px] uppercase tracking-widest text-[#484f58]">Files</span>
         </div>
         <div className="flex-1 overflow-y-auto py-1">
-          {fileNames.map((f) => (
+          {names.map((n) => (
             <button
-              key={f}
-              onClick={() => setSelectedFile(f)}
-              className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center gap-2 ${
-                selectedFile === f
-                  ? "bg-[#1f3249] text-white border-l-2 border-[#3b82f6]"
+              key={n}
+              onClick={() => setSelected(n)}
+              className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-1.5 transition-colors truncate ${
+                selected === n
+                  ? "bg-[#1f3249] text-white border-l-2 border-[#3b82f6] pl-2.5"
                   : "text-[#8b949e] hover:bg-[#21262d] hover:text-white"
               }`}
             >
               <FileCode className="w-3 h-3 flex-shrink-0" />
-              <span className="truncate">{f}</span>
+              <span className="truncate">{n}</span>
             </button>
           ))}
         </div>
@@ -1684,487 +2643,572 @@ function CodeEditor({
 
       {/* Editor */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {selectedFile && (
-          <div className="px-4 py-2 border-b border-[#30363d] flex items-center gap-2">
-            <span className="text-xs text-[#8b949e]">{selectedFile}</span>
+        {selected && (
+          <div className="px-4 py-1.5 border-b border-[#30363d] flex items-center gap-2">
+            <span className="text-[11px] text-[#8b949e]">{selected}</span>
           </div>
         )}
-        {selectedFile ? (
-          <textarea
-            value={content}
-            onChange={(e) => handleChange(e.target.value)}
-            className="flex-1 bg-[#0d1117] text-[#e6edf3] font-mono text-xs p-4 resize-none focus:outline-none leading-relaxed"
-            spellCheck={false}
-          />
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-[#484f58] text-sm">
-            Select a file
-          </div>
-        )}
+        <textarea
+          value={content}
+          onChange={(e) => {
+            setContent(e.target.value);
+            onFileChange(selected, e.target.value);
+          }}
+          spellCheck={false}
+          className="flex-1 bg-[#0d1117] text-[#e6edf3] font-mono text-xs p-4 resize-none focus:outline-none leading-relaxed"
+          style={{ fontFamily: "DM Mono, monospace" }}
+        />
       </div>
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// STATUS BAR
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// VIEWPORT WIDTHS
+// ─────────────────────────────────────────────────────────────────────────────
 
-function StatusBar({
-  project,
-  editorState,
-  errors,
-}: {
-  project: VisualEditorProject;
-  editorState: EditorState;
-  errors: CodeBlockError[];
-}) {
-  const errCount = errors.filter((e) => e.type !== "parse").length;
-  const warnCount = errors.filter((e) => e.type === "parse").length;
+const VIEWPORT_WIDTHS = { desktop: "100%", tablet: "768px", mobile: "390px" };
 
-  return (
-    <div className="h-7 bg-[#161b22] border-t border-[#30363d] flex items-center justify-between px-4 flex-shrink-0">
-      <div className="flex items-center gap-4 text-[10px] text-[#484f58]">
-        <span>{project.framework}</span>
-        <span>{project.visualConfig?.componentMap.size ?? 0} components</span>
-        <span>
-          Zoom: {Math.round(editorState.zoom * 100)}%
-        </span>
-        <span>{editorState.viewport}</span>
-      </div>
-      <div className="flex items-center gap-3 text-[10px]">
-        {errCount > 0 && (
-          <span className="text-red-400 flex items-center gap-1">
-            <AlertCircle className="w-3 h-3" /> {errCount} error{errCount > 1 ? "s" : ""}
-          </span>
-        )}
-        {warnCount > 0 && (
-          <span className="text-yellow-400 flex items-center gap-1">
-            <Info className="w-3 h-3" /> {warnCount} warning{warnCount > 1 ? "s" : ""}
-          </span>
-        )}
-        {errCount === 0 && warnCount === 0 && (
-          <span className="text-[#22c55e]">Ready</span>
-        )}
-        <span className="text-[#484f58]">
-          {new Date(project.visualConfig?.lastSyncTimestamp ?? Date.now()).toLocaleTimeString()}
-        </span>
-      </div>
-    </div>
-  );
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// JSX → CRAFT.JS PARSER
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────
-// ERROR TOAST
-// ─────────────────────────────────────────────────────────────
-
-function ErrorToast({
-  errors,
-  onDismiss,
-}: {
-  errors: CodeBlockError[];
-  onDismiss: (id: string) => void;
-}) {
-  const visible = errors.slice(0, 3);
-  if (visible.length === 0) return null;
-
-  return (
-    <div className="absolute bottom-10 right-4 flex flex-col gap-2 z-50 max-w-sm">
-      <AnimatePresence>
-        {visible.map((err) => (
-          <motion.div
-            key={err.id}
-            initial={{ opacity: 0, y: 12, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8, scale: 0.96 }}
-            className={`flex items-start gap-2 p-3 rounded-lg border text-xs shadow-lg backdrop-blur-sm ${
-              err.type === "runtime"
-                ? "bg-red-950/90 border-red-800 text-red-200"
-                : err.type === "parse"
-                ? "bg-yellow-950/90 border-yellow-800 text-yellow-200"
-                : "bg-blue-950/90 border-blue-800 text-blue-200"
-            }`}
-          >
-            <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="font-medium">{err.type}</div>
-              <div className="opacity-80 text-[10px] mt-0.5">{err.message}</div>
-            </div>
-            <button
-              onClick={() => onDismiss(err.id)}
-              className="opacity-60 hover:opacity-100 transition-opacity"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </motion.div>
-        ))}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// MAIN VISUAL EDITOR
-// ─────────────────────────────────────────────────────────────
-
-export default function VisualEditor({
-  initialProject,
-  onSaveToOriginal,
-  onClose,
-}: VisualEditorProps) {
-  const [{ past, present: project, future }, dispatch] = useReducer(
-    historyReducer,
-    {
-      past: [],
-      present: initialProject as VisualEditorProject,
-      future: [],
-    }
-  );
-
-  const [selectedComponents, setSelectedComponents] = useState<Set<string>>(
-    new Set()
-  );
-  const [editorMode, setEditorMode] = useState<"design" | "code" | "split">(
-    "design"
-  );
-  const [editorState, setEditorState] = useState<EditorState>({
-    selectedTool: "select",
-    zoom: 1,
-    panOffset: { x: 40, y: 40 },
-    snapToGrid: true,
-    showGuidelines: true,
-    viewport: "desktop",
-    gridSize: 20,
-    showBounds: false,
-    livePreview: true,
-    autoSave: true,
-  });
-  const [errors, setErrors] = useState<CodeBlockError[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-
-  // Initialize — parse components from code
-  useEffect(() => {
-    let cancelled = false;
-    const init = async () => {
-      try {
-        setIsLoading(true);
-        const detector = new ComponentDetector(project.framework);
-        const detected = await detector.detectComponents(project.files);
-
-        if (cancelled) return;
-
-        const visualConfig: NonNullable<VisualEditorProject["visualConfig"]> = {
-          componentMap: new Map(detected.map((c) => [c.id, c])),
-          styleSheets: extractStyleSheets(project.files),
-          assets: new Map(),
-          layoutTree: buildLayoutTree(detected),
-          lastSyncTimestamp: Date.now(),
-        };
-
-        dispatch({
-          type: "SET",
-          payload: { ...project, visualConfig },
-        });
-      } catch (err: unknown) {
-        if (cancelled) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        setErrors((prev) => [
-          ...prev,
-          { id: `err_${Date.now()}`, type: "parse", message: msg },
-        ]);
-      } finally {
-        if (!cancelled) setIsLoading(false);
+function jsxToCraftNodes(jsxCode: string): Record<string, unknown> {
+  const nodes: Record<string, unknown> = {};
+  let nodeIdCounter = 1;
+  
+  const getNextId = () => `node-${nodeIdCounter++}`;
+  
+  function parseStyle(styleStr: string): Record<string, string> {
+    const styles: Record<string, string> = {};
+    if (!styleStr) return styles;
+    
+    styleStr.split(';').forEach(rule => {
+      const [key, ...valueParts] = rule.split(':');
+      if (key && valueParts.length > 0) {
+        const k = key.trim().replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+        const v = valueParts.join(':').trim();
+        if (k && v) styles[k] = v;
       }
-    };
-    init();
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handleComponentDrop = useCallback(
-    (componentType: string, position: { x: number; y: number }) => {
-      const newComp: ComponentMetadata = {
-        id: `comp_${componentType}_${Date.now()}`,
-        type: componentType,
-        filePath: getMainFile(project.framework),
-        bounds: {
-          x: editorState.snapToGrid
-            ? Math.round(position.x / editorState.gridSize) * editorState.gridSize
-            : position.x,
-          y: editorState.snapToGrid
-            ? Math.round(position.y / editorState.gridSize) * editorState.gridSize
-            : position.y,
-          width: 120,
-          height: 48,
-        },
-        props: getDefaultProps(componentType, project.framework),
-        styles: getDefaultStyles(),
-        children: [],
-        sourceLocation: {
-          line: 1,
-          column: 1,
-          file: getMainFile(project.framework),
-        },
-      };
-
-      dispatch({
-        type: "SET",
-        payload: {
-          ...project,
-          visualConfig: project.visualConfig
-            ? {
-                ...project.visualConfig,
-                componentMap: new Map([
-                  ...project.visualConfig.componentMap,
-                  [newComp.id, newComp],
-                ]),
-                layoutTree: buildLayoutTree([
-                  ...Array.from(project.visualConfig.componentMap.values()),
-                  newComp,
-                ]),
-                lastSyncTimestamp: Date.now(),
-              }
-            : undefined,
-        },
-      });
-
-      setSelectedComponents(new Set([newComp.id]));
-    },
-    [project, editorState.snapToGrid, editorState.gridSize]
-  );
-
-  const handleComponentUpdate = useCallback(
-    (componentId: string, updates: Partial<ComponentMetadata>) => {
-      if (!project.visualConfig) return;
-      const existing = project.visualConfig.componentMap.get(componentId);
-      if (!existing) return;
-
-      const updated = { ...existing, ...updates };
-      const newMap = new Map(project.visualConfig.componentMap);
-      newMap.set(componentId, updated);
-
-      const newProject = syncVisualChangesToCode(
-        {
-          ...project,
-          visualConfig: {
-            ...project.visualConfig,
-            componentMap: newMap,
-            lastSyncTimestamp: Date.now(),
-          },
-        },
-        componentId,
-        updates
-      );
-
-      dispatch({ type: "SET", payload: newProject });
-    },
-    [project]
-  );
-
-  const handlePropertyChange = useCallback(
-    (componentId: string, prop: string, val: unknown) => {
-      if (prop === "bounds") {
-        handleComponentUpdate(componentId, { bounds: val as ComponentBounds });
-      } else if (prop.startsWith("styles.")) {
-        const existing =
-          project.visualConfig?.componentMap.get(componentId)?.styles ?? {};
-        handleComponentUpdate(componentId, {
-          styles: { ...existing, [prop.slice(7)]: String(val) },
-        });
-      } else if (prop === "styles") {
-        handleComponentUpdate(componentId, { styles: val as Record<string, string> });
-      } else {
-        const existing =
-          project.visualConfig?.componentMap.get(componentId)?.props ?? {};
-        handleComponentUpdate(componentId, {
-          props: { ...existing, [prop]: val },
-        });
-      }
-    },
-    [handleComponentUpdate, project.visualConfig]
-  );
-
-  const handleCodeChange = useCallback(
-    (filePath: string, code: string) => {
-      dispatch({
-        type: "SET",
-        payload: {
-          ...project,
-          files: { ...project.files, [filePath]: code },
-        },
-      });
-    },
-    [project]
-  );
-
-  const handleAssetUpload = useCallback((files: FileList) => {
-    Array.from(files).forEach((file) => {
-      const url = URL.createObjectURL(file);
-      const asset: AssetReference = {
-        id: `asset_${Date.now()}_${file.name}`,
-        filename: file.name,
-        url,
-        type: file.type.startsWith("image/") ? "image" : "document",
-        size: file.size,
-        metadata: {},
-      };
-      dispatch({
-        type: "SET",
-        payload: {
-          ...project,
-          visualConfig: project.visualConfig
-            ? {
-                ...project.visualConfig,
-                assets: new Map([
-                  ...project.visualConfig.assets,
-                  [asset.id, asset],
-                ]),
-              }
-            : undefined,
-        },
-      });
     });
-  }, [project]);
-
-  const handleAssetInsert = useCallback(
-    (asset: AssetReference) => {
-      // Drop image asset at center of canvas
-      handleComponentDrop("img", {
-        x: 100 + Math.random() * 200,
-        y: 100 + Math.random() * 200,
+    return styles;
+  }
+  
+  function parseJSXElement(tagName: string, props: Record<string, unknown>, children: string[]): Record<string, unknown> {
+    const id = getNextId();
+    const node: Record<string, unknown> = {
+      type: tagName,
+      props: { ...props },
+      nodes: [],
+      linkedNodes: {},
+    };
+    
+    if (children.length > 0) {
+      const childElements: Record<string, unknown>[] = [];
+      let textContent = '';
+      
+      children.forEach(child => {
+        const trimmed = child.trim();
+        if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+          if (textContent) {
+            childElements.push({
+              type: 'text',
+              props: { text: textContent },
+              nodes: [],
+              linkedNodes: {},
+            });
+            textContent = '';
+          }
+          const parsed = parseSimpleJSX(trimmed);
+          if (parsed) childElements.push(parsed);
+        } else if (trimmed) {
+          textContent += (textContent ? ' ' : '') + trimmed;
+        }
       });
-    },
-    [handleComponentDrop]
-  );
+      
+      if (textContent) {
+        childElements.push({
+          type: 'text',
+          props: { text: textContent },
+          nodes: [],
+          linkedNodes: {},
+        });
+      }
+      
+      node.nodes = childElements.map((c: Record<string, unknown>) => {
+        const childId = c.type === 'text' ? getNextId() : (c as any).id || getNextId();
+        nodes[childId] = { ...c, id: childId };
+        return childId;
+      });
+    }
+    
+    return { id, ...node };
+  }
+  
+  function parseSimpleJSX(jsx: string): Record<string, unknown> | null {
+    const openTagMatch = jsx.match(/<(\w+)([^>]*)>/);
+    if (!openTagMatch) return null;
+    
+    const tagName = openTagMatch[1];
+    const propsStr = openTagMatch[2];
+    const props: Record<string, unknown> = {};
+    
+    const styleMatch = propsStr.match(/style\s*=\s*["']([^"']*)["']/);
+    if (styleMatch) {
+      props.styles = parseStyle(styleMatch[1]);
+    }
+    
+    const classMatch = propsStr.match(/className\s*=\s*["']([^"']*)["']/);
+    if (classMatch) {
+      props.className = classMatch[1];
+    }
+    
+    const srcMatch = propsStr.match(/src\s*=\s*["']([^"']*)["']/);
+    if (srcMatch) {
+      props.src = srcMatch[1];
+    }
+    
+    const altMatch = propsStr.match(/alt\s*=\s*["']([^"']*)["']/);
+    if (altMatch) {
+      props.alt = altMatch[1];
+    }
+    
+    const textMatch = jsx.match(/>([^<]*)<\/\w+>/);
+    if (textMatch && tagName !== 'img' && tagName !== 'input' && tagName !== 'br' && tagName !== 'hr') {
+      props.text = textMatch[1].trim();
+    }
+    
+    const componentMap: Record<string, string> = {
+      'div': 'ContainerCraft',
+      'span': 'TextCraft',
+      'p': 'TextCraft',
+      'h1': 'TextCraft',
+      'h2': 'TextCraft',
+      'h3': 'TextCraft',
+      'button': 'ButtonCraft',
+      'img': 'ImageCraft',
+      'input': 'InputCraft',
+      'section': 'ContainerCraft',
+      'nav': 'NavBarCraft',
+      'header': 'ContainerCraft',
+      'footer': 'ContainerCraft',
+      'main': 'ContainerCraft',
+      'article': 'ContainerCraft',
+      'aside': 'ContainerCraft',
+    };
+    
+    const craftType = componentMap[tagName] || 'ContainerCraft';
+    
+    return {
+      type: craftType,
+      resolvedName: craftType,
+      props,
+      nodes: [],
+      linkedNodes: {},
+    };
+  }
+  
+  function extractJSXElements(code: string): string[] {
+    const elements: string[] = [];
+    let depth = 0;
+    let currentStart = -1;
+    
+    for (let i = 0; i < code.length; i++) {
+      if (code[i] === '<' && code[i + 1] !== '/') {
+        if (depth === 0) currentStart = i;
+        depth++;
+      } else if (code[i] === '<' && code[i + 1] === '/') {
+        depth--;
+        if (depth === 0 && currentStart >= 0) {
+          let j = i;
+          while (j < code.length && code[j] !== '>') j++;
+          elements.push(code.slice(currentStart, j + 1));
+          currentStart = -1;
+        }
+      } else if (code[i] === '/' && code[i + 1] === '>') {
+        depth--;
+        if (depth === 0 && currentStart >= 0) {
+          elements.push(code.slice(currentStart, i + 2));
+          currentStart = -1;
+        }
+      }
+    }
+    
+    return elements;
+  }
+  
+  const jsxElements = extractJSXElements(jsxCode);
+  const rootChildren: string[] = [];
+  
+  jsxElements.forEach(elem => {
+    const parsed = parseSimpleJSX(elem);
+    if (parsed) {
+      const id = getNextId();
+      nodes[id] = { ...parsed, id };
+      rootChildren.push(id);
+    }
+  });
+  
+  nodes['ROOT'] = {
+    type: 'div',
+    props: {},
+    nodes: rootChildren,
+    linkedNodes: {},
+  };
+  
+  return nodes;
+}
 
-  const dismissError = useCallback((id: string) => {
-    setErrors((prev) => prev.filter((e) => e.id !== id));
+function findMainJSXFile(files: Record<string, string>): string | null {
+  const priorityFiles = [
+    'app.tsx', 'app.jsx', 'App.tsx', 'App.jsx',
+    'page.tsx', 'page.jsx', 'Page.tsx', 'Page.jsx',
+    'index.tsx', 'index.jsx', 'Index.tsx', 'Index.jsx',
+    'main.tsx', 'main.jsx', 'Main.tsx', 'Main.jsx',
+  ];
+  
+  for (const pf of priorityFiles) {
+    for (const [path] of Object.entries(files)) {
+      if (path.toLowerCase().endsWith(pf.toLowerCase())) {
+        return files[path];
+      }
+    }
+  }
+  
+  for (const [path, content] of Object.entries(files)) {
+    if (path.match(/\.(tsx|jsx)$/i) && content.includes('return') && content.includes('<')) {
+      return content;
+    }
+  }
+  
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CANVAS WRAPPER — renders Craft <Frame> centred inside the viewport chrome
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CanvasPane({ 
+  viewport,
+  initialNodes,
+}: { 
+  viewport: "desktop" | "tablet" | "mobile";
+  initialNodes?: Record<string, unknown>;
+}) {
+  const { enabled, actions } = useEditor((state) => ({ 
+    enabled: state.options.enabled,
+    actions: state.actions,
+  }));
+  const width = VIEWPORT_WIDTHS[viewport];
+  const hasInitialized = useRef(false);
+
+  useEffect(() => {
+    if (initialNodes && !hasInitialized.current && Object.keys(initialNodes).length > 1) {
+      hasInitialized.current = true;
+      try {
+        actions.deserialize(initialNodes);
+      } catch (e) {
+        console.warn("[CanvasPane] Failed to deserialize initial nodes:", e);
+      }
+    }
+  }, [initialNodes, actions]);
+
+  return (
+    <div className="flex-1 bg-[#070b0f] overflow-auto flex flex-col items-center">
+      {/* Viewport label */}
+      <div className="w-full flex items-center justify-center py-2 gap-2">
+        <span className="text-[10px] text-[#484f58]">
+          {viewport} {viewport !== "desktop" ? `· ${width}` : ""}
+        </span>
+      </div>
+
+      {/* Page canvas */}
+      <div
+        className="relative flex-1 w-full"
+        style={{
+          maxWidth: width,
+          minHeight: "100%",
+          background: "#ffffff",
+          boxShadow: "0 0 0 1px #30363d, 0 8px 32px rgba(0,0,0,0.5)",
+        }}
+      >
+        <Frame>
+          <Element
+            is={ContainerCraft}
+            canvas
+            styles={{
+              display: "flex",
+              flexDirection: "column",
+              minHeight: "100vh",
+              background: "#ffffff",
+            }}
+          />
+        </Frame>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN EXPORTED COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface VisualEditorMainProps {
+  project: VFSProject;
+  onSave: (updatedFiles: Record<string, string>) => void;
+  onReturn: () => void;
+  isSaving: boolean;
+  saveStatus: "idle" | "saved" | "error";
+}
+
+export function VisualEditorMain({
+  project,
+  onSave,
+  onReturn,
+  isSaving,
+  saveStatus,
+}: VisualEditorMainProps) {
+  const [editorMode, setEditorMode] = useState<"design" | "code" | "split">("design");
+  const [viewport, setViewport] = useState<"desktop" | "tablet" | "mobile">("desktop");
+  const [files, setFiles] = useState<Record<string, string>>(project.files);
+  const [showLayers, setShowLayers] = useState(true);
+  const [showProps, setShowProps] = useState(true);
+  const [showComponents, setShowComponents] = useState(true);
+
+  // Parse JSX files to create initial Craft.js nodes
+  const initialNodes = useMemo(() => {
+    const mainJSX = findMainJSXFile(project.files);
+    if (mainJSX) {
+      try {
+        return jsxToCraftNodes(mainJSX);
+      } catch (e) {
+        console.warn("[VisualEditorMain] Failed to parse JSX:", e);
+      }
+    }
+    return undefined;
+  }, [project.files]);
+
+  // We keep a ref to the Craft serialised JSON so the toolbar can read it on save
+  const craftJsonRef = useRef<Record<string, unknown>>({});
+
+  const handleFileChange = useCallback((path: string, content: string) => {
+    setFiles((prev) => ({ ...prev, [path]: content }));
   }, []);
 
   const handleSave = useCallback(() => {
-    onSaveToOriginal?.(project);
-  }, [project, onSaveToOriginal]);
+    // Serialize craft nodes → JSX and inject into project files
+    const craftNodes = craftJsonRef.current;
+    const jsxString = craftNodesToJSX(craftNodes as Record<string, any>);
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        dispatch({ type: "UNDO" });
-      }
-      if (
-        ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "z") ||
-        ((e.metaKey || e.ctrlKey) && e.key === "y")
-      ) {
-        e.preventDefault();
-        dispatch({ type: "REDO" });
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-        handleSave();
-      }
-      if (e.key === "Escape") setSelectedComponents(new Set());
-      if (e.key === "v" && !e.metaKey && !e.ctrlKey)
-        setEditorState((p) => ({ ...p, selectedTool: "select" }));
-      if (e.key === "m" && !e.metaKey && !e.ctrlKey)
-        setEditorState((p) => ({ ...p, selectedTool: "move" }));
-      if (e.key === "t" && !e.metaKey && !e.ctrlKey)
-        setEditorState((p) => ({ ...p, selectedTool: "text" }));
-      if (e.key === "r" && !e.metaKey && !e.ctrlKey)
-        setEditorState((p) => ({ ...p, selectedTool: "shape" }));
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [handleSave]);
+    // Find the main entry file to update
+    const mainFile =
+      Object.keys(files).find((f) =>
+        ["app.tsx", "app.jsx", "page.tsx", "index.tsx", "index.jsx", "index.html"].some((m) =>
+          f.toLowerCase().endsWith(m)
+        )
+      ) ?? Object.keys(files)[0];
+
+    const updatedFiles = { ...files };
+    if (mainFile && Object.keys(craftNodes).length > 1) {
+      // Only override if user actually placed craft nodes
+      updatedFiles[mainFile] = jsxString;
+    }
+
+    onSave(updatedFiles);
+  }, [files, onSave]);
 
   return (
-    <div className="h-screen w-screen bg-[#0d1117] flex flex-col overflow-hidden font-sans">
-      <VisualEditorToolbar
-        project={project}
-        editorMode={editorMode}
-        editorState={editorState}
-        onModeChange={setEditorMode}
-        onToolChange={(t) => setEditorState((p) => ({ ...p, selectedTool: t }))}
-        onSave={handleSave}
-        onUndo={() => dispatch({ type: "UNDO" })}
-        onRedo={() => dispatch({ type: "REDO" })}
-        onClose={onClose}
-        canUndo={past.length > 0}
-        canRedo={future.length > 0}
-        errors={errors}
-      />
+    <Editor
+      resolver={RESOLVER}
+      onRender={({ render }) => render}
+      onNodesChange={(query) => {
+        craftJsonRef.current = query.getSerializedNodes() as Record<string, unknown>;
+      }}
+    >
+      <div
+        className="h-screen w-screen flex flex-col bg-[#0d1117] overflow-hidden"
+        style={{ fontFamily: "Syne, sans-serif" }}
+      >
+        {/* ── GLOBAL STYLES ── */}
+        <style>{`
+          .craft-node { position: relative; }
+          * { box-sizing: border-box; }
+          ::-webkit-scrollbar { width: 4px; height: 4px; }
+          ::-webkit-scrollbar-track { background: #0d1117; }
+          ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+          ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+          @keyframes pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+          }
+          @keyframes shiny {
+            0% { left: -100%; }
+            100% { left: 100%; }
+          }
+        `}</style>
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left panel */}
-        <div className="w-64 flex-shrink-0 bg-[#161b22] border-r border-[#30363d] flex flex-col overflow-hidden">
-          <ComponentLibraryPanel
-            framework={project.framework}
-            onComponentDrop={handleComponentDrop}
-          />
-          <PropertyInspectorPanel
-            selectedComponents={selectedComponents}
-            project={project}
-            onPropertyChange={handlePropertyChange}
-          />
+        {/* ── TOOLBAR ── */}
+        <EditorToolbar
+          editorMode={editorMode}
+          onModeChange={setEditorMode}
+          viewport={viewport}
+          onViewportChange={setViewport}
+          onSave={handleSave}
+          onReturn={onReturn}
+          isSaving={isSaving}
+          saveStatus={saveStatus}
+          projectName={project.name ?? "Untitled"}
+        />
+
+        {/* ── BODY ── */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* ── LEFT SIDEBAR ── */}
+          <div
+            className={`flex-shrink-0 border-r border-[#30363d] bg-[#161b22] flex flex-col overflow-hidden transition-all duration-200 ${
+              showComponents ? "w-56" : "w-0 border-r-0"
+            }`}
+          >
+            {editorMode !== "code" && <ComponentLibrary />}
+          </div>
+
+          {/* ── CENTER ── */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {editorMode === "design" && <CanvasPane viewport={viewport} initialNodes={initialNodes} />}
+            {editorMode === "code" && (
+              <CodeEditorPane files={files} onFileChange={handleFileChange} />
+            )}
+            {editorMode === "split" && (
+              <div className="flex-1 flex overflow-hidden">
+                <div className="flex-1 flex flex-col overflow-hidden border-r border-[#30363d]">
+                  <CanvasPane viewport={viewport} initialNodes={initialNodes} />
+                </div>
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <CodeEditorPane files={files} onFileChange={handleFileChange} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── RIGHT SIDEBAR ── */}
+          <div
+            className={`flex-shrink-0 border-l border-[#30363d] bg-[#161b22] flex flex-col overflow-hidden transition-all duration-200 ${
+              showProps || showLayers ? "w-64" : "w-0 border-l-0"
+            }`}
+          >
+            {editorMode !== "code" && (
+              <div className="flex flex-col h-full overflow-hidden">
+                {/* Layers */}
+                {showLayers && (
+                  <div className="flex flex-col border-b border-[#30363d]" style={{ height: "38%" }}>
+                    <div className="px-3 py-2 flex items-center justify-between border-b border-[#30363d]">
+                      <div className="flex items-center gap-1.5">
+                        <LayersIcon className="w-3.5 h-3.5 text-[#8b949e]" />
+                        <span className="text-[10px] uppercase tracking-widest text-[#484f58]">
+                          Layers
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setShowLayers(false)}
+                        className="w-4 h-4 flex items-center justify-center text-[#484f58] hover:text-white"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-1">
+                      <Layers
+                        expandRootOnLoad
+                        renderLayer={({ layer, children }) => (
+                          <div
+                            style={{ paddingLeft: `${(layer.depth - 1) * 12}px` }}
+                            className={`flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer text-xs transition-colors ${
+                              layer.selected
+                                ? "bg-[#1f3249] text-white"
+                                : "text-[#8b949e] hover:bg-[#21262d] hover:text-white"
+                            }`}
+                          >
+                            <span className="truncate">
+                              {layer.data.displayName ?? layer.data.type?.resolvedName ?? "Node"}
+                            </span>
+                            {children}
+                          </div>
+                        )}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Settings / Inspector */}
+                {showProps && (
+                  <div className="flex flex-col flex-1 overflow-hidden">
+                    <div className="px-3 py-2 flex items-center justify-between border-b border-[#30363d] flex-shrink-0">
+                      <div className="flex items-center gap-1.5">
+                        <Settings className="w-3.5 h-3.5 text-[#8b949e]" />
+                        <span className="text-[10px] uppercase tracking-widest text-[#484f58]">
+                          Properties
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setShowProps(false)}
+                        className="w-4 h-4 flex items-center justify-center text-[#484f58] hover:text-white"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <SettingsPanel />
+                  </div>
+                )}
+
+                {/* Restore buttons */}
+                {(!showLayers || !showProps) && (
+                  <div className="p-2 border-t border-[#30363d] flex gap-1">
+                    {!showLayers && (
+                      <button
+                        onClick={() => setShowLayers(true)}
+                        className="flex-1 py-1 text-[10px] text-[#8b949e] hover:text-white bg-[#21262d] rounded flex items-center justify-center gap-1"
+                      >
+                        <LayersIcon className="w-3 h-3" /> Layers
+                      </button>
+                    )}
+                    {!showProps && (
+                      <button
+                        onClick={() => setShowProps(true)}
+                        className="flex-1 py-1 text-[10px] text-[#8b949e] hover:text-white bg-[#21262d] rounded flex items-center justify-center gap-1"
+                      >
+                        <Settings className="w-3 h-3" /> Props
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Center */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {editorMode === "design" && (
-            <VisualCanvas
-              project={project}
-              selectedComponents={selectedComponents}
-              editorState={editorState}
-              onSelectionChange={setSelectedComponents}
-              onComponentUpdate={handleComponentUpdate}
-              onStateChange={setEditorState}
-              onComponentDrop={handleComponentDrop}
-              isLoading={isLoading}
-            />
-          )}
-          {editorMode === "code" && (
-            <CodeEditor project={project} onCodeChange={handleCodeChange} />
-          )}
-          {editorMode === "split" && (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="flex-1 overflow-hidden" style={{ maxHeight: "50%" }}>
-                <VisualCanvas
-                  project={project}
-                  selectedComponents={selectedComponents}
-                  editorState={editorState}
-                  onSelectionChange={setSelectedComponents}
-                  onComponentUpdate={handleComponentUpdate}
-                  onStateChange={setEditorState}
-                  onComponentDrop={handleComponentDrop}
-                  isLoading={isLoading}
-                />
-              </div>
-              <div className="flex-1 border-t border-[#30363d] overflow-hidden">
-                <CodeEditor project={project} onCodeChange={handleCodeChange} />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right panel */}
-        <div className="w-56 flex-shrink-0 bg-[#161b22] border-l border-[#30363d] flex flex-col overflow-hidden">
-          <LayersPanel
-            project={project}
-            selectedComponents={selectedComponents}
-            onSelectionChange={setSelectedComponents}
-            onComponentUpdate={handleComponentUpdate}
-          />
-          <AssetsPanel
-            project={project}
-            onAssetUpload={handleAssetUpload}
-            onAssetInsert={handleAssetInsert}
-          />
+        {/* ── STATUS BAR ── */}
+        <div className="h-6 bg-[#161b22] border-t border-[#30363d] flex items-center justify-between px-4 text-[10px] text-[#484f58] flex-shrink-0">
+          <div className="flex items-center gap-4">
+            <span>{project.framework}</span>
+            <span>{project.name}</span>
+            <span>{Object.keys(files).length} files</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowComponents(!showComponents)}
+              className="flex items-center gap-1 hover:text-white transition-colors"
+            >
+              <PanelLeft className="w-3 h-3" />
+              {showComponents ? "Hide" : "Show"} library
+            </button>
+            <button
+              onClick={() => { setShowLayers(true); setShowProps(true); }}
+              className="flex items-center gap-1 hover:text-white transition-colors"
+            >
+              <PanelRight className="w-3 h-3" />
+              Show panels
+            </button>
+          </div>
         </div>
       </div>
-
-      <StatusBar project={project} editorState={editorState} errors={errors} />
-
-      <ErrorToast errors={errors} onDismiss={dismissError} />
-    </div>
+    </Editor>
   );
 }

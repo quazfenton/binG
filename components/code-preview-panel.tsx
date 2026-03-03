@@ -566,6 +566,71 @@ export default function CodePreviewPanel({
     return () => window.removeEventListener('code-preview-manual' as any, handleTerminalPreview);
   }, [handleManualPreview]);
 
+  // Listen for VFS save events from visual editor
+  useEffect(() => {
+    const VFS_SAVE_CHANNEL = "visual_editor_vfs_save";
+    
+    // BroadcastChannel listener
+    const bc = new BroadcastChannel(VFS_SAVE_CHANNEL);
+    bc.onmessage = async (event) => {
+      if (event.data?.type === "VFS_SAVE") {
+        const { filesystemScopePath: savedScopePath, files: updatedFiles } = event.data;
+        console.log("[CodePreviewPanel] Received VFS_SAVE from visual editor:", savedScopePath);
+        
+        // Write updated files back to VFS
+        for (const [filePath, content] of Object.entries(updatedFiles)) {
+          const fullPath = `${savedScopePath || 'project'}/${filePath}`;
+          try {
+            await writeFilesystemFile(fullPath, content);
+          } catch (err) {
+            console.error(`[CodePreviewPanel] Failed to write ${fullPath}:`, err);
+          }
+        }
+        
+        // Refresh the file listing
+        await listFilesystemDirectory(filesystemScopePath);
+        
+        // Update local state
+        setScopedPreviewFiles(updatedFiles);
+        
+        toast.success("Visual editor changes synced to filesystem");
+      }
+    };
+    
+    // Also listen for direct window messages (for same-window communication)
+    const handleWindowMessage = async (e: MessageEvent) => {
+      if (e.data?.type === "VFS_SAVE") {
+        const { filesystemScopePath: savedScopePath, files: updatedFiles } = e.data;
+        console.log("[CodePreviewPanel] Received VFS_SAVE via window message:", savedScopePath);
+        
+        // Write updated files back to VFS
+        for (const [filePath, content] of Object.entries(updatedFiles)) {
+          const fullPath = `${savedScopePath || 'project'}/${filePath}`;
+          try {
+            await writeFilesystemFile(fullPath, content);
+          } catch (err) {
+            console.error(`[CodePreviewPanel] Failed to write ${fullPath}:`, err);
+          }
+        }
+        
+        // Refresh the file listing
+        await listFilesystemDirectory(filesystemScopePath);
+        
+        // Update local state
+        setScopedPreviewFiles(updatedFiles);
+        
+        toast.success("Visual editor changes synced to filesystem");
+      }
+    };
+    
+    window.addEventListener("message", handleWindowMessage);
+    
+    return () => {
+      bc.close();
+      window.removeEventListener("message", handleWindowMessage);
+    };
+  }, [filesystemScopePath, writeFilesystemFile, listFilesystemDirectory]);
+
   // Extract code blocks from messages using centralized parser
   const codeBlocks = useMemo(() => {
     const parsedData = parseCodeBlocksFromMessages(messages);
