@@ -22,7 +22,11 @@ const writeRequestSchema = z.object({
     ),
   content: z.string()
     .max(10 * 1024 * 1024, 'Content too large (max 10MB)'),
-  ownerId: z.string().optional(),
+  language: z.string().optional(),
+}).strict();
+
+export async function POST(req: NextRequest) {
+  try {
   language: z.string().optional(),
 });
 
