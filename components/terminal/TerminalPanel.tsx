@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import {
   Terminal as TerminalIcon, X, Minimize2, Maximize2, Square,
   Trash2, Copy, ChevronUp, ChevronDown, GripHorizontal,
-  Cpu, MemoryStick, Plus, Split, Wifi, WifiOff
+  Cpu, MemoryStick, Plus, Split, Wifi, WifiOff, Loader2
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
@@ -145,6 +145,16 @@ export default function TerminalPanel({
   const [isSplitView, setIsSplitView] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState<number>(450); // Default height in pixels
   const [isResizing, setIsResizing] = useState(false);
+  
+  // Phase 2: Sandbox lifecycle control
+  const [sandboxStatus, setSandboxStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const [autoConnectSandbox, setAutoConnectSandbox] = useState(false); // Default: off (lazy init)
+  const [idleTimeLeft, setIdleTimeLeft] = useState<number | null>(null);
+  const [lastActivity, setLastActivity] = useState<number>(Date.now());
+  
+  // Idle timeout configuration (15 minutes default, 0 to disable)
+  const IDLE_TIMEOUT_MS = parseInt(process.env.NEXT_PUBLIC_SANDBOX_IDLE_TIMEOUT_MS || '900000', 10);
+  const IDLE_WARNING_MS = parseInt(process.env.NEXT_PUBLIC_SANDBOX_IDLE_WARNING_MS || '60000', 10);
 
   const terminalsRef = useRef<TerminalInstance[]>([]);
   terminalsRef.current = terminals;
@@ -227,6 +237,79 @@ export default function TerminalPanel({
    syncVfsToLocal();
   }, [isOpen, filesystemScopePath, getVfsSnapshot]);
 
+  // Bidirectional sync: Poll VFS for changes from code-preview-panel/editor
+  useEffect(() => {
+    if (!isOpen) return;
+    
+    const pollInterval = setInterval(async () => {
+      try {
+        const snapshot = await getVfsSnapshot();
+        const currentFiles = Object.keys(localFileSystemRef.current);
+        const vfsFiles = snapshot?.files?.map(f => f.path) || [];
+        
+        // Check if VFS has new/changed files
+        const hasChanges = vfsFiles.some(f => !currentFiles.includes(f));
+        if (hasChanges) {
+          console.log('[Terminal] VFS changed, re-syncing...');
+          // Trigger re-sync
+          const syncVfsToLocal = async () => {
+            try {
+              const snapshot = await getVfsSnapshot();
+              const files = snapshot?.files || [];
+
+              if (files.length === 0) {
+                if (Object.keys(localFileSystemRef.current).length <= 1) {
+                  localFileSystemRef.current = createInitialFileSystem();
+                }
+                return;
+              }
+
+              const fs = localFileSystemRef.current;
+
+              if (!fs['project']) {
+                fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+              }
+
+              for (const file of files) {
+                let relativePath = file.path;
+                relativePath = relativePath.replace(/^project\/sessions\/[^/]+\//, '');
+                relativePath = relativePath.replace(/^project\//, '');
+
+                const fullPath = `project/${relativePath}`;
+
+                const parts = fullPath.split('/');
+                for (let i = 1; i < parts.length; i++) {
+                  const dirPath = parts.slice(0, i).join('/');
+                  if (!fs[dirPath]) {
+                    fs[dirPath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+                  }
+                }
+
+                if (file.content !== undefined) {
+                  fs[fullPath] = {
+                    type: 'file',
+                    content: file.content,
+                    createdAt: Date.now(),
+                    modifiedAt: new Date(file.lastModified).getTime(),
+                  };
+                }
+              }
+
+              console.log('[Terminal] Re-synced VFS:', Object.keys(fs).length, 'entries');
+            } catch (error) {
+              console.error('[Terminal] Re-sync error:', error);
+            }
+          };
+          syncVfsToLocal();
+        }
+      } catch (error) {
+        console.error('[Terminal] Poll error:', error);
+      }
+    }, 2000);
+    
+    return () => clearInterval(pollInterval);
+  }, [isOpen, getVfsSnapshot]);
+
   const localFileSystemRef = useRef<LocalFileSystem>(createInitialFileSystem());
   const localShellCwdRef = useRef<Record<string, string>>({});
   const reconnectCooldownUntilRef = useRef<Record<string, number>>({});
@@ -255,6 +338,28 @@ export default function TerminalPanel({
 
   useEffect(() => {
     if (isOpen && terminals.length === 0) {
+      // Restore terminal state from localStorage
+      const savedState = localStorage.getItem('terminal-state');
+      if (savedState) {
+        try {
+          const state = JSON.parse(savedState);
+          console.log('[Terminal] Restored state from localStorage:', state);
+          
+          // Restore command history
+          if (state.commandHistory) {
+            commandHistoryRef.current = state.commandHistory;
+          }
+          
+          // Restore sandbox connection preference
+          if (state.sandboxConnected) {
+            setSandboxStatus('disconnected'); // Don't auto-reconnect, let user choose
+            toast.info('Sandbox disconnected. Click to reconnect.');
+          }
+        } catch (error) {
+          console.error('[Terminal] Failed to restore state:', error);
+        }
+      }
+      
       const savedSessions = getTerminalSessions();
       if (savedSessions.length > 0) {
         const session = savedSessions[0];
@@ -265,13 +370,69 @@ export default function TerminalPanel({
     }
   }, [isOpen]);
 
+  // Save terminal state on unmount/close
   useEffect(() => {
     return () => {
+      // Save terminal state to localStorage
+      const state = {
+        commandHistory: commandHistoryRef.current,
+        sandboxConnected: sandboxStatus === 'connected',
+        timestamp: Date.now(),
+      };
+      localStorage.setItem('terminal-state', JSON.stringify(state));
+      console.log('[Terminal] Saved state to localStorage');
+      
+      // Also save to database via saveTerminalSession
       terminalsRef.current.forEach(t => {
         t.eventSource?.close();
         t.terminal?.dispose();
+        
+        saveTerminalSession({
+          id: t.id,
+          name: t.name,
+          commandHistory: commandHistoryRef.current[t.id] || [],
+          sandboxInfo: {
+            ...t.sandboxInfo,
+            status: 'none'
+          },
+        });
       });
     };
+  }, [sandboxStatus]);
+
+  // Phase 2: Idle timeout monitoring
+  useEffect(() => {
+    // Only monitor if sandbox is connected and timeout is enabled
+    if (sandboxStatus !== 'connected' || IDLE_TIMEOUT_MS <= 0) {
+      setIdleTimeLeft(null);
+      return;
+    }
+    
+    const checkIdle = setInterval(() => {
+      const elapsed = Date.now() - lastActivity;
+      const remaining = IDLE_TIMEOUT_MS - elapsed;
+      
+      if (remaining <= 0) {
+        // Timeout reached - auto disconnect
+        console.log('[Sandbox Idle] Timeout reached, disconnecting...');
+        toast.warning('Sandbox disconnected due to inactivity');
+        toggleSandboxConnection();
+        setIdleTimeLeft(null);
+      } else if (remaining <= IDLE_WARNING_MS && remaining > 0) {
+        // Show warning in last minute
+        setIdleTimeLeft(remaining);
+      } else if (remaining > IDLE_WARNING_MS) {
+        // Still plenty of time
+        setIdleTimeLeft(null);
+      }
+    }, 10000); // Check every 10 seconds
+    
+    return () => clearInterval(checkIdle);
+  }, [sandboxStatus, lastActivity, IDLE_TIMEOUT_MS, IDLE_WARNING_MS, toggleSandboxConnection]);
+
+  // Update last activity on user input
+  const updateActivity = useCallback(() => {
+    setLastActivity(Date.now());
   }, []);
 
   useEffect(() => {
@@ -1957,6 +2118,9 @@ export default function TerminalPanel({
       }
 
       terminal.onData((data: string) => {
+        // Update idle timeout on any user input
+        updateActivity();
+        
         const term = terminalsRef.current.find(t => t.id === terminalId);
         if (!term) return;
 
@@ -2172,21 +2336,56 @@ export default function TerminalPanel({
         }
 
         if (data === '\t') {
-          // Basic tab completion
+          // Enhanced tab completion
           const lastWord = lineBuffer.split(' ').pop() || '';
           if (lastWord) {
-            const cwd = localShellCwdRef.current[terminalId] || 'project';
+            const cwd = localShellCwdRef.current[terminalId] || 'workspace';
+            
+            // Get completions from filesystem
             const completions = Object.keys(localFileSystemRef.current)
-              .filter(k => k.startsWith(resolveLocalPath(cwd, lastWord)))
+              .filter(k => {
+                const relativePath = k.replace(/^workspace\//, '');
+                return relativePath.startsWith(lastWord);
+              })
               .map(k => k.split('/').pop() || k);
+            
             if (completions.length === 1) {
+              // Single completion - auto-fill
               const completion = completions[0].slice(lastWord.length);
               lineBufferRef.current[terminalId] = lineBuffer + completion;
               term.terminal?.write(completion);
             } else if (completions.length > 1) {
+              // Multiple completions - show list
               term.terminal?.write('\r\n' + completions.join('  ') + '\r\n');
-              term.terminal?.write(getPrompt(term.mode, cwd) + lineBuffer);
+              const prompt = getPrompt(term.mode, cwd);
+              term.terminal?.write(prompt + lineBuffer);
+            } else {
+              // No completions - beep
+              term.terminal?.write('\x07');
             }
+          }
+          return;
+        }
+
+        if (data === '\x12') {  // Ctrl+R - History search
+          const history = commandHistoryRef.current[terminalId] || [];
+          const currentInput = lineBufferRef.current[terminalId] || '';
+          
+          // Find matching command from history (reverse search)
+          const match = history.reverse().find(cmd => 
+            cmd.toLowerCase().includes(currentInput.toLowerCase())
+          );
+          
+          if (match) {
+            const prompt = getPrompt(term.mode, localShellCwdRef.current[terminalId] || 'workspace');
+            // Clear line and write match
+            term.terminal?.write('\r\x1b[K' + prompt + match);
+            lineBufferRef.current[terminalId] = match;
+            cursorPosRef.current[terminalId] = match.length;
+            // Move cursor to end of line
+            term.terminal?.write(`\x1b[${prompt.length + match.length + 1}G`);
+          } else {
+            term.terminal?.write('\x07'); // Beep if no match
           }
           return;
         }
@@ -2233,11 +2432,8 @@ export default function TerminalPanel({
             return true;
           }
         }
-        
-        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-          event.preventDefault();
-          return true;
-        }
+
+        // Allow arrow keys and other special keys to pass through
         return true;
       });
 
@@ -3141,6 +3337,57 @@ export default function TerminalPanel({
     }
   }, [isSplitView, terminals.length, createTerminal, initXterm]);
 
+  // Phase 2: Toggle sandbox connection
+  const toggleSandboxConnection = useCallback(async () => {
+    if (sandboxStatus === 'connected') {
+      // Disconnect - kill sandbox session
+      const term = terminalsRef.current.find(t => t.id === activeTerminalId);
+      if (term?.sandboxInfo.sessionId) {
+        try {
+          await fetch('/api/sandbox/terminal', {
+            method: 'DELETE',
+            headers: {
+              'Content-Type': 'application/json',
+              ...getAuthHeaders(),
+            },
+            body: JSON.stringify({ sessionId: term.sandboxInfo.sessionId }),
+          });
+          setSandboxStatus('disconnected');
+          toast.success('Sandbox disconnected');
+        } catch (error) {
+          toast.error('Failed to disconnect sandbox');
+        }
+      }
+    } else if (sandboxStatus === 'disconnected') {
+      // Connect - create new sandbox session
+      setSandboxStatus('connecting');
+      try {
+        const res = await fetch('/api/sandbox/terminal', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          toast.success('Sandbox connected: ' + data.sandboxId.slice(0, 12) + '...');
+          setSandboxStatus('connected');
+          // Reconnect terminal to sandbox
+          if (activeTerminalId) {
+            connectTerminal(activeTerminalId);
+          }
+        } else {
+          toast.error('Failed to connect sandbox');
+          setSandboxStatus('disconnected');
+        }
+      } catch (error) {
+        toast.error('Failed to connect sandbox');
+        setSandboxStatus('disconnected');
+      }
+    }
+  }, [sandboxStatus, activeTerminalId, connectTerminal]);
+
   const getModeIndicator = (mode: TerminalMode, status: string) => {
     switch (mode) {
       case 'local':
@@ -3310,6 +3557,43 @@ export default function TerminalPanel({
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
+          {/* Phase 2: Sandbox connection button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleSandboxConnection}
+            className={`text-white/60 hover:text-white ${
+              sandboxStatus === 'connected' ? 'bg-green-500/20 text-green-400' :
+              sandboxStatus === 'connecting' ? 'bg-yellow-500/20 text-yellow-400' :
+              'text-red-400 hover:text-red-300'
+            }`}
+            title={
+              sandboxStatus === 'connected' ? 'Disconnect sandbox' :
+              sandboxStatus === 'connecting' ? 'Connecting...' :
+              'Connect sandbox'
+            }
+            aria-label={
+              sandboxStatus === 'connected' ? 'Disconnect sandbox' :
+              sandboxStatus === 'connecting' ? 'Connecting to sandbox' :
+              'Connect sandbox'
+            }
+          >
+            {sandboxStatus === 'connected' ? (
+              <Wifi className="w-4 h-4" />
+            ) : sandboxStatus === 'connecting' ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <WifiOff className="w-4 h-4" />
+            )}
+          </Button>
+          
+          {/* Idle timeout indicator */}
+          {idleTimeLeft !== null && IDLE_TIMEOUT_MS > 0 && (
+            <div className="text-xs text-yellow-400 px-2 py-1 bg-yellow-500/10 rounded animate-pulse">
+              ⏱️ Auto-disconnect in {Math.floor(idleTimeLeft / 60000)}:{String(Math.floor((idleTimeLeft % 60000) / 1000)).padStart(2, '0')}
+            </div>
+          )}
+          
           <Button
             variant="ghost"
             size="sm"
