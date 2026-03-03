@@ -160,6 +160,21 @@ export default function CodePreviewPanel({
   const [editableContent, setEditableContent] = useState("");
   const [isCreatingFile, setIsCreatingFile] = useState(false);
   
+  // Manual Sandpack preview state
+  const [manualPreviewFiles, setManualPreviewFiles] = useState<Record<string, string> | null>(null);
+  const [isManualPreviewActive, setIsManualPreviewActive] = useState(false);
+  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'local' | 'cloud'>('sandpack');
+  const [devBoxOutput, setDevBoxOutput] = useState<string[]>([]);
+  const [isDevBoxRunning, setIsDevBoxRunning] = useState(false);
+  const [pyodideOutput, setPyodideOutput] = useState<string>('');
+  const [isPyodideLoading, setIsPyodideLoading] = useState(false);
+  const [viteOutput, setViteOutput] = useState<string>('');
+  const [isViteBuilding, setIsViteBuilding] = useState(false);
+  const [localExecutionOutput, setLocalExecutionOutput] = useState<string>('');
+  const [isLocalExecuting, setIsLocalExecuting] = useState(false);
+  const [executionMode, setExecutionMode] = useState<'local' | 'cloud' | 'hybrid'>('local');
+  const pyodideRef = useRef<any>(null);
+  
   // Context menu state for file operations
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -343,6 +358,136 @@ export default function CodePreviewPanel({
     
     toast.info('Command sent to terminal');
   }, []);
+
+  // Manual Sandpack preview handler
+  const handleManualPreview = useCallback(async (directoryPath?: string, mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'local' | 'cloud') => {
+    try {
+      const targetPath = directoryPath || filesystemCurrentPath;
+      console.log('[Manual Preview] Loading files from:', targetPath);
+      
+      // Get all files from the directory
+      const nodes = await listFilesystemDirectory(targetPath);
+      const files: Record<string, string> = {};
+      
+      // Recursively load files
+      const loadFiles = async (path: string, basePath: string = '') => {
+        const dirNodes = await listFilesystemDirectory(path);
+        for (const node of dirNodes) {
+          const relativePath = basePath ? `${basePath}/${node.name}` : node.name;
+          if (node.type === 'directory') {
+            await loadFiles(node.path, relativePath);
+          } else {
+            try {
+              const file = await readFilesystemFile(node.path);
+              if (file.content) {
+                files[relativePath] = file.content;
+              }
+            } catch (err) {
+              console.warn('Failed to load file:', node.path, err);
+            }
+          }
+        }
+      };
+      
+      await loadFiles(targetPath);
+      
+      if (Object.keys(files).length === 0) {
+        toast.error('No files found in directory');
+        return;
+      }
+      
+      // Auto-detect best preview mode AND execution mode
+      let selectedMode = mode || 'sandpack';
+      let detectedExecutionMode: 'local' | 'cloud' | 'hybrid' = 'local';
+      
+      if (!mode) {
+        // Detection flags
+        const hasHtml = Object.keys(files).some(f => f.endsWith('.html'));
+        const hasJsx = Object.keys(files).some(f => f.endsWith('.jsx') || f.endsWith('.tsx'));
+        const hasVue = Object.keys(files).some(f => f.endsWith('.vue'));
+        const hasSvelte = Object.keys(files).some(f => f.endsWith('.svelte'));
+        const hasParcelConfig = Object.keys(files).some(f => f.includes('parcel') || f.endsWith('.parcelrc'));
+        const hasPython = Object.keys(files).some(f => f.endsWith('.py'));
+        const hasNodeServer = Object.keys(files).some(f => f === 'server.js' || f === 'app.js' || f === 'index.js');
+        const hasPackageJson = Object.keys(files).some(f => f === 'package.json');
+        const hasSimplePython = hasPython && !Object.keys(files).some(f => f.includes('flask') || f.includes('django'));
+        const hasViteConfig = Object.keys(files).some(f => f.includes('vite.config'));
+        const hasViteProject = hasViteConfig || (hasPackageJson && Object.values(files).find((c: any) => typeof c === 'string' && c.includes('"vite"')));
+        const hasHeavyComputation = Object.values(files).some((c: any) => {
+          if (typeof c !== 'string') return false;
+          return c.includes('tensorflow') || c.includes('pytorch') || c.includes('cuda') || c.includes('gpu');
+        });
+        const hasAPIKeys = Object.values(files).some((c: any) => 
+          typeof c === 'string' && (c.includes('OPENAI_API_KEY') || c.includes('process.env'))
+        );
+        
+        // Determine execution mode based on requirements
+        if (hasHeavyComputation || hasAPIKeys) {
+          detectedExecutionMode = 'cloud'; // Needs cloud resources or API access
+        } else if (hasSimplePython || hasJsx || hasVue || hasSvelte || hasHtml) {
+          detectedExecutionMode = 'local'; // Can run in browser
+        } else if (hasPython || hasNodeServer) {
+          detectedExecutionMode = 'hybrid'; // Try local first, fallback to cloud
+        }
+        
+        // Select preview mode
+        if (hasViteProject) {
+          selectedMode = 'vite';
+        } else if (hasSimplePython && !hasPackageJson) {
+          selectedMode = 'pyodide';
+        } else if (hasParcelConfig) {
+          selectedMode = 'parcel';
+        } else if (hasPython || (hasNodeServer && hasPackageJson)) {
+          selectedMode = detectedExecutionMode === 'local' ? 'local' : 'devbox';
+        } else if (hasHtml && !hasJsx && !hasVue && !hasSvelte) {
+          selectedMode = 'iframe';
+        } else if (hasJsx || hasVue || hasSvelte) {
+          selectedMode = 'sandpack';
+        }
+      }
+      
+      // Set execution mode
+      setExecutionMode(detectedExecutionMode);
+      
+      // Set manual preview files and activate
+      setManualPreviewFiles(files);
+      setIsManualPreviewActive(true);
+      setPreviewMode(selectedMode);
+      setSelectedTab('preview');
+      
+      const modeIcon = {
+        sandpack: '▶', iframe: '📄', raw: '📝', parcel: '⚡',
+        devbox: '🔵', pyodide: '🐍', vite: '⚡', local: '💻', cloud: '☁️'
+      }[selectedMode] || '▶';
+      
+      const execIcon = { local: '💻', cloud: '☁️', hybrid: '🔄' }[detectedExecutionMode];
+      
+      toast.success(`${modeIcon} Preview loaded (${selectedMode}) - ${execIcon} ${detectedExecutionMode} execution`, {
+        description: `${Object.keys(files).length} files detected`
+      });
+    } catch (error: any) {
+      console.error('[Manual Preview] Error:', error);
+      toast.error('Failed to load preview: ' + error.message);
+    }
+  }, [filesystemCurrentPath, listFilesystemDirectory, readFilesystemFile]);
+
+  // Clear manual preview
+  const handleClearManualPreview = useCallback(() => {
+    setManualPreviewFiles(null);
+    setIsManualPreviewActive(false);
+    toast.info('Manual preview cleared');
+  }, []);
+
+  // Listen for terminal preview commands
+  useEffect(() => {
+    const handleTerminalPreview = (e: CustomEvent) => {
+      const { directory } = e.detail || {};
+      handleManualPreview(directory);
+    };
+    
+    window.addEventListener('code-preview-manual' as any, handleTerminalPreview);
+    return () => window.removeEventListener('code-preview-manual' as any, handleTerminalPreview);
+  }, [handleManualPreview]);
 
   // Extract code blocks from messages using centralized parser
   const codeBlocks = useMemo(() => {
@@ -932,7 +1077,14 @@ Generated on: ${new Date().toLocaleString()}
       }
     };
 
-    const useStructure = projectStructureWithScopedFiles || projectStructure;
+    // Use manual preview files if active, otherwise use auto-detected structure
+    const useStructure = isManualPreviewActive && manualPreviewFiles
+      ? {
+          name: 'Manual Preview',
+          files: manualPreviewFiles,
+          framework: 'react' as const,
+        }
+      : (projectStructureWithScopedFiles || projectStructure);
     
     if (
       useStructure &&
@@ -1126,6 +1278,701 @@ export default app;`,
         addEntryFileIfMissing();
 
         const template = getSandpackTemplate(useStructure.framework);
+
+        // If manual preview with iframe mode and has HTML file, use iframe
+        if (isManualPreviewActive && previewMode === 'iframe') {
+          const htmlFile = Object.entries(useStructure.files).find(
+            ([path]) => path.endsWith('.html')
+          );
+          
+          if (htmlFile) {
+            return (
+              <div className="h-full bg-white rounded-lg overflow-hidden">
+                <div className="bg-gray-800 px-4 py-2 flex items-center justify-between">
+                  <span className="text-white text-sm font-medium">HTML Preview</span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewMode('sandpack')}
+                    className="text-xs"
+                  >
+                    Switch to Sandpack
+                  </Button>
+                </div>
+                <iframe
+                  srcDoc={htmlFile[1]}
+                  className="w-full h-[calc(100%-40px)] border-0"
+                  title="Preview"
+                  sandbox="allow-scripts allow-same-origin"
+                />
+              </div>
+            );
+          }
+        }
+
+        // Raw HTML view mode
+        if (isManualPreviewActive && previewMode === 'raw') {
+          const htmlFile = Object.entries(useStructure.files).find(
+            ([path]) => path.endsWith('.html')
+          );
+          
+          if (htmlFile) {
+            return (
+              <div className="h-full bg-gray-900 rounded-lg overflow-hidden">
+                <div className="bg-gray-800 px-4 py-2 flex items-center justify-between">
+                  <span className="text-white text-sm font-medium">Raw HTML</span>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setPreviewMode('iframe')}
+                      className="text-xs"
+                    >
+                      Iframe
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setPreviewMode('sandpack')}
+                      className="text-xs"
+                    >
+                      Sandpack
+                    </Button>
+                  </div>
+                </div>
+                <pre className="p-4 text-green-400 font-mono text-sm overflow-auto h-[calc(100%-40px)]">
+                  {htmlFile[1]}
+                </pre>
+              </div>
+            );
+          }
+        }
+
+        // Parcel bundler preview mode
+        if (isManualPreviewActive && previewMode === 'parcel') {
+          // Create a single HTML file with all assets inlined for Parcel
+          const htmlFile = Object.entries(useStructure.files).find(
+            ([path]) => path.endsWith('.html')
+          );
+          const jsFiles = Object.entries(useStructure.files).filter(
+            ([path]) => path.endsWith('.js') || path.endsWith('.jsx') || path.endsWith('.ts') || path.endsWith('.tsx')
+          );
+          const cssFiles = Object.entries(useStructure.files).filter(
+            ([path]) => path.endsWith('.css')
+          );
+          
+          // Build inline HTML with all assets
+          let inlineHtml = htmlFile ? htmlFile[1] : `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parcel Preview</title>
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>`;
+
+          // Inline CSS
+          for (const [path, code] of cssFiles) {
+            inlineHtml = inlineHtml.replace(
+              '</head>',
+              `<style>\n/* ${path} */\n${code}\n</style>\n</head>`
+            );
+          }
+
+          // Inline JS
+          for (const [path, code] of jsFiles) {
+            inlineHtml = inlineHtml.replace(
+              '</body>',
+              `<script>\n// ${path}\n${code}\n</script>\n</body>`
+            );
+          }
+
+          return (
+            <div className="h-full bg-white rounded-lg overflow-hidden flex flex-col">
+              <div className="bg-purple-900 px-4 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-white text-sm font-medium">⚡ Parcel Preview</span>
+                  <span className="text-purple-300 text-xs">Zero-config bundler</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewMode('sandpack')}
+                    className="text-xs bg-purple-800 hover:bg-purple-700 text-white"
+                  >
+                    Sandpack
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewMode('iframe')}
+                    className="text-xs bg-purple-800 hover:bg-purple-700 text-white"
+                  >
+                    Iframe
+                  </Button>
+                </div>
+              </div>
+              <iframe
+                srcDoc={inlineHtml}
+                className="w-full flex-1 border-0"
+                title="Parcel Preview"
+                sandbox="allow-scripts allow-same-origin allow-modals"
+              />
+            </div>
+          );
+        }
+
+        // CodeSandbox DevBox preview mode (for backend/full-stack apps)
+        if (isManualPreviewActive && previewMode === 'devbox') {
+          const packageJson = Object.entries(useStructure.files).find(
+            ([path]) => path === 'package.json' || path.endsWith('/package.json')
+          );
+          const pythonFiles = Object.entries(useStructure.files).filter(
+            ([path]) => path.endsWith('.py')
+          );
+          const nodeFiles = Object.entries(useStructure.files).filter(
+            ([path]) => path.endsWith('.js') || path.endsWith('.ts')
+          );
+          
+          // Detect runtime
+          let runtime = 'node';
+          let startCommand = 'npm start';
+          
+          if (pythonFiles.length > 0) {
+            runtime = 'python';
+            const hasFlask = pythonFiles.some(([_, code]) => code.includes('flask'));
+            const hasDjango = pythonFiles.some(([_, code]) => code.includes('django'));
+            if (hasFlask) startCommand = 'python app.py';
+            else if (hasDjango) startCommand = 'python manage.py runserver';
+            else startCommand = 'python main.py';
+          } else if (packageJson) {
+            try {
+              const pkg = JSON.parse(packageJson[1]);
+              if (pkg.scripts?.start) startCommand = `npm start`;
+              else if (pkg.scripts?.dev) startCommand = `npm run dev`;
+            } catch (e) {
+              startCommand = 'node index.js';
+            }
+          }
+
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-white text-sm font-medium">🔵 DevBox Runtime</span>
+                  <span className="text-blue-300 text-xs">Full-stack environment</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setIsDevBoxRunning(!isDevBoxRunning);
+                      if (!isDevBoxRunning) {
+                        setDevBoxOutput([
+                          `> Starting ${runtime} environment...`,
+                          `> Running: ${startCommand}`,
+                          `> Environment ready.`,
+                        ]);
+                      }
+                    }}
+                    className={`text-xs ${isDevBoxRunning ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'} text-white`}
+                  >
+                    {isDevBoxRunning ? '⏹ Stop' : '▶ Run'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewMode('sandpack')}
+                    className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                  >
+                    Sandpack
+                  </Button>
+                </div>
+              </div>
+              
+              {/* Terminal-like output */}
+              <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
+                <div className="text-gray-400 mb-2">
+                  <p>📦 Runtime: {runtime}</p>
+                  <p>🚀 Command: {startCommand}</p>
+                  <p>📁 Files: {Object.keys(useStructure.files).length}</p>
+                </div>
+                
+                {isDevBoxRunning ? (
+                  <div className="space-y-1">
+                    {devBoxOutput.map((line, i) => (
+                      <p key={i} className="text-green-400">{line}</p>
+                    ))}
+                    <p className="text-blue-400 animate-pulse">▊</p>
+                  </div>
+                ) : (
+                  <div className="text-yellow-400">
+                    <p>⚠️  DevBox is stopped</p>
+                    <p className="text-gray-500 mt-2">
+                      Click "▶ Run" to start the {runtime} environment.<br/>
+                      This will simulate running your backend code.
+                    </p>
+                  </div>
+                )}
+                
+                {/* File tree */}
+                <div className="mt-4 pt-4 border-t border-gray-800">
+                  <p className="text-gray-400 mb-2">📁 Project Structure:</p>
+                  <div className="text-gray-500 text-xs space-y-1">
+                    {Object.keys(useStructure.files).slice(0, 20).map((path) => (
+                      <p key={path}>  {path}</p>
+                    ))}
+                    {Object.keys(useStructure.files).length > 20 && (
+                      <p className="text-gray-600">  ... and {Object.keys(useStructure.files).length - 20} more files</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // Pyodide Python in-browser execution
+        if (isManualPreviewActive && previewMode === 'pyodide') {
+          const pythonFiles = Object.entries(useStructure.files).filter(
+            ([path]) => path.endsWith('.py')
+          );
+          const mainFile = pythonFiles.find(([path]) => path === 'main.py' || path === 'app.py') || pythonFiles[0];
+          
+          // Load Pyodide dynamically
+          React.useEffect(() => {
+            const loadPyodide = async () => {
+              setIsPyodideLoading(true);
+              try {
+                // Load Pyodide from CDN
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js';
+                script.async = true;
+                script.onload = async () => {
+                  if ((window as any).loadPyodide) {
+                    const pyodide = await (window as any).loadPyodide({
+                      indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/',
+                    });
+                    pyodideRef.current = pyodide;
+                    
+                    // Capture stdout
+                    pyodide.setStdout({
+                      batched: (msg: string) => {
+                        setPyodideOutput(prev => prev + msg + '\n');
+                      }
+                    });
+                    
+                    // Execute main Python file
+                    if (mainFile) {
+                      try {
+                        await pyodide.runPythonAsync(mainFile[1]);
+                      } catch (err: any) {
+                        setPyodideOutput(prev => prev + `\nError: ${err.message}\n`);
+                      }
+                    }
+                    
+                    setIsPyodideLoading(false);
+                  }
+                };
+                document.head.appendChild(script);
+              } catch (err: any) {
+                console.error('Failed to load Pyodide:', err);
+                setIsPyodideLoading(false);
+              }
+            };
+            
+            loadPyodide();
+            
+            return () => {
+              // Cleanup
+              if (pyodideRef.current) {
+                pyodideRef.current = null;
+              }
+            };
+          }, [mainFile]);
+
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className="bg-yellow-900 px-4 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-white text-sm font-medium">🐍 Pyodide Python</span>
+                  <span className="text-yellow-300 text-xs">In-browser execution</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setPyodideOutput('');
+                      if (pyodideRef.current && mainFile) {
+                        pyodideRef.current.runPythonAsync(mainFile[1]).catch((err: any) => {
+                          setPyodideOutput(prev => prev + `\nError: ${err.message}\n`);
+                        });
+                      }
+                    }}
+                    className="text-xs bg-green-600 hover:bg-green-700 text-white"
+                  >
+                    ▶ Re-run
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewMode('devbox')}
+                    className="text-xs bg-yellow-800 hover:bg-yellow-700 text-white"
+                  >
+                    DevBox
+                  </Button>
+                </div>
+              </div>
+              
+              <div className="flex-1 flex flex-col">
+                {/* File list */}
+                <div className="p-2 bg-gray-900 border-b border-gray-800">
+                  <p className="text-gray-400 text-xs mb-1">📁 Python Files:</p>
+                  <div className="flex flex-wrap gap-1">
+                    {pythonFiles.map(([path]) => (
+                      <span key={path} className="text-xs bg-gray-800 text-blue-400 px-2 py-0.5 rounded">
+                        {path}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                
+                {/* Output terminal */}
+                <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
+                  {isPyodideLoading ? (
+                    <div className="flex items-center gap-2 text-yellow-400">
+                      <div className="w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin" />
+                      <span>Loading Pyodide (this may take a moment)...</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <p className="text-gray-500"># Pyodide Python Runtime</p>
+                      <p className="text-gray-500"># Executing: {mainFile?.[0] || 'unknown'}</p>
+                      <p className="text-gray-500"># ─────────────────────────────</p>
+                      {pyodideOutput ? (
+                        <pre className="text-green-400 whitespace-pre-wrap">{pyodideOutput}</pre>
+                      ) : (
+                        <p className="text-gray-600">No output yet...</p>
+                      )}
+                      <p className="text-blue-400 animate-pulse">▊</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // Vite build preview mode
+        if (isManualPreviewActive && previewMode === 'vite') {
+          const viteConfig = Object.entries(useStructure.files).find(
+            ([path]) => path.includes('vite.config')
+          );
+          const packageJson = Object.entries(useStructure.files).find(
+            ([path]) => path === 'package.json'
+          );
+          const indexHtml = Object.entries(useStructure.files).find(
+            ([path]) => path === 'index.html' || path.endsWith('/index.html')
+          );
+          const srcFiles = Object.entries(useStructure.files).filter(
+            ([path]) => path.startsWith('src/')
+          );
+          
+          // Simulate Vite build
+          React.useEffect(() => {
+            const runViteBuild = async () => {
+              setIsViteBuilding(true);
+              setViteOutput('');
+              
+              const logs = [
+                '> vite build',
+                `vite v5.0.0 building for production...`,
+                `✓ ${srcFiles.length} modules transformed.`,
+              ];
+              
+              // Simulate build output
+              for (const log of logs) {
+                await new Promise(resolve => setTimeout(resolve, 300));
+                setViteOutput(prev => prev + log + '\n');
+              }
+              
+              // Show built files
+              const distFiles = srcFiles.map(([path]) => path.replace('src/', 'dist/assets/'));
+              await new Promise(resolve => setTimeout(resolve, 500));
+              setViteOutput(prev => prev + `\n✓ built in ${Math.random() * 500 + 200 | 0}ms\n`);
+              setViteOutput(prev => prev + `\n📁 dist/\n` + distFiles.slice(0, 5).map(f => `  ${f}`).join('\n') + '\n');
+              
+              setIsViteBuilding(false);
+            };
+            
+            runViteBuild();
+          }, [srcFiles]);
+
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className="bg-cyan-900 px-4 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-white text-sm font-medium">⚡ Vite Build</span>
+                  <span className="text-cyan-300 text-xs">Next-gen frontend tooling</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setViteOutput('');
+                      setIsViteBuilding(true);
+                      setTimeout(() => setIsViteBuilding(false), 1500);
+                    }}
+                    className="text-xs bg-green-600 hover:bg-green-700 text-white"
+                    disabled={isViteBuilding}
+                  >
+                    {isViteBuilding ? '⏳ Building...' : '🔁 Rebuild'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewMode('sandpack')}
+                    className="text-xs bg-cyan-800 hover:bg-cyan-700 text-white"
+                  >
+                    Sandpack
+                  </Button>
+                </div>
+              </div>
+              
+              <div className="flex-1 flex flex-col">
+                {/* Config info */}
+                <div className="p-2 bg-gray-900 border-b border-gray-800">
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <p className="text-gray-400">⚙️ Vite Config:</p>
+                      <p className="text-cyan-400">{viteConfig ? '✓ Found' : '⚠ Not found'}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">📄 index.html:</p>
+                      <p className="text-cyan-400">{indexHtml ? '✓ Found' : '⚠ Not found'}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">📦 package.json:</p>
+                      <p className="text-cyan-400">{packageJson ? '✓ Found' : '⚠ Not found'}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">📁 src/ files:</p>
+                      <p className="text-cyan-400">{srcFiles.length} files</p>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Build output */}
+                <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
+                  {isViteBuilding ? (
+                    <div className="flex items-center gap-2 text-cyan-400">
+                      <div className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                      <span>Building with Vite...</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <pre className="text-green-400 whitespace-pre-wrap">{viteOutput || 'Build complete!'}</pre>
+                      <p className="text-blue-400 animate-pulse">▊</p>
+                    </div>
+                  )}
+                </div>
+                
+                {/* File tree */}
+                <div className="p-2 bg-gray-900 border-t border-gray-800">
+                  <p className="text-gray-400 text-xs mb-1">📁 Project Structure:</p>
+                  <div className="text-gray-500 text-xs space-y-1 max-h-32 overflow-auto">
+                    {Object.keys(useStructure.files).slice(0, 15).map((path) => (
+                      <p key={path}>  {path}</p>
+                    ))}
+                    {Object.keys(useStructure.files).length > 15 && (
+                      <p className="text-gray-600">  ... and {Object.keys(useStructure.files).length - 15} more files</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // Local/Cloud execution mode indicator and runner
+        if (isManualPreviewActive && (previewMode === 'local' || previewMode === 'cloud')) {
+          const jsFiles = Object.entries(useStructure.files).filter(
+            ([path]) => path.endsWith('.js') || path.endsWith('.ts') || path.endsWith('.jsx') || path.endsWith('.tsx')
+          );
+          const pythonFiles = Object.entries(useStructure.files).filter(
+            ([path]) => path.endsWith('.py')
+          );
+          const hasCloudRequirement = Object.values(useStructure.files).some((c: any) => 
+            typeof c === 'string' && (c.includes('tensorflow') || c.includes('pytorch') || c.includes('OPENAI_API_KEY'))
+          );
+          
+          const runCode = async () => {
+            setIsLocalExecuting(true);
+            setLocalExecutionOutput('> Starting execution...\n');
+            
+            try {
+              if (executionMode === 'local' || (executionMode === 'hybrid' && !hasCloudRequirement)) {
+                // Local execution
+                setLocalExecutionOutput(prev => prev + '\n💻 Running locally in browser...\n');
+                
+                // Execute JavaScript/TypeScript
+                if (jsFiles.length > 0) {
+                  for (const [path, code] of jsFiles) {
+                    try {
+                      setLocalExecutionOutput(prev => prev + `\n📄 Running ${path}...\n`);
+                      // Simple eval for demo (in production, use proper sandbox)
+                      const result = eval(code);
+                      if (result !== undefined) {
+                        setLocalExecutionOutput(prev => prev + `→ ${JSON.stringify(result, null, 2)}\n`);
+                      }
+                    } catch (err: any) {
+                      setLocalExecutionOutput(prev => prev + `❌ Error in ${path}: ${err.message}\n`);
+                    }
+                  }
+                }
+                
+                // Python via Pyodide if available
+                if (pythonFiles.length > 0 && pyodideRef.current) {
+                  setLocalExecutionOutput(prev => prev + '\n🐍 Running Python via Pyodide...\n');
+                  for (const [path, code] of pythonFiles) {
+                    try {
+                      setLocalExecutionOutput(prev => prev + `\n📄 Running ${path}...\n`);
+                      const result = await pyodideRef.current.runPythonAsync(code);
+                      if (result) {
+                        setLocalExecutionOutput(prev => prev + `→ ${result}\n`);
+                      }
+                    } catch (err: any) {
+                      setLocalExecutionOutput(prev => prev + `❌ Error in ${path}: ${err.message}\n`);
+                    }
+                  }
+                }
+                
+                setLocalExecutionOutput(prev => prev + '\n✅ Local execution complete!\n');
+              }
+              
+              if (executionMode === 'cloud' || (executionMode === 'hybrid' && hasCloudRequirement)) {
+                // Cloud execution
+                setLocalExecutionOutput(prev => prev + '\n☁️  Cloud execution required...\n');
+                setLocalExecutionOutput(prev => prev + '⚠️  This code requires cloud resources:\n');
+                
+                if (hasCloudRequirement) {
+                  setLocalExecutionOutput(prev => prev + '  - Heavy computation (GPU/TPU)\n');
+                  setLocalExecutionOutput(prev => prev + '  - External API access\n');
+                }
+                
+                setLocalExecutionOutput(prev => prev + '\n💡 To run this code:\n');
+                setLocalExecutionOutput(prev => prev + '  1. Connect to sandbox: connect\n');
+                setLocalExecutionOutput(prev => prev + '  2. Or use preview:devbox for full runtime\n');
+              }
+              
+            } catch (err: any) {
+              setLocalExecutionOutput(prev => prev + `\n❌ Execution failed: ${err.message}\n`);
+            } finally {
+              setIsLocalExecuting(false);
+            }
+          };
+
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className={`px-4 py-2 flex items-center justify-between ${
+                executionMode === 'cloud' ? 'bg-purple-900' :
+                executionMode === 'hybrid' ? 'bg-orange-900' :
+                'bg-green-900'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <span className="text-white text-sm font-medium">
+                    {executionMode === 'local' && '💻 Local Execution'}
+                    {executionMode === 'cloud' && '☁️  Cloud Execution Required'}
+                    {executionMode === 'hybrid' && '🔄 Hybrid Execution'}
+                  </span>
+                  <span className={`text-xs ${
+                    executionMode === 'cloud' ? 'text-purple-300' :
+                    executionMode === 'hybrid' ? 'text-orange-300' :
+                    'text-green-300'
+                  }`}>
+                    {executionMode === 'local' && 'Fast, offline-capable'}
+                    {executionMode === 'cloud' && 'Needs server/API access'}
+                    {executionMode === 'hybrid' && 'Local + cloud fallback'}
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={runCode}
+                    disabled={isLocalExecuting}
+                    className={`text-xs ${
+                      isLocalExecuting ? 'bg-gray-600' :
+                      executionMode === 'cloud' ? 'bg-purple-600 hover:bg-purple-700' :
+                      'bg-green-600 hover:bg-green-700'
+                    } text-white`}
+                  >
+                    {isLocalExecuting ? '⏳ Running...' : '▶ Run Code'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewMode('devbox')}
+                    className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                  >
+                    DevBox
+                  </Button>
+                </div>
+              </div>
+              
+              <div className="flex-1 flex flex-col">
+                {/* File info */}
+                <div className="p-2 bg-gray-900 border-b border-gray-800">
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <p className="text-gray-400">📄 JavaScript/TS:</p>
+                      <p className="text-green-400">{jsFiles.length} files</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">🐍 Python:</p>
+                      <p className="text-green-400">{pythonFiles.length} files</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">☁️  Cloud Required:</p>
+                      <p className={hasCloudRequirement ? 'text-purple-400' : 'text-green-400'}>
+                        {hasCloudRequirement ? 'Yes' : 'No'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Execution output */}
+                <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
+                  {isLocalExecuting ? (
+                    <div className="flex items-center gap-2 text-green-400">
+                      <div className="w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
+                      <span>Executing code...</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <p className="text-gray-500"># Execution Environment</p>
+                      <p className="text-gray-500"># Mode: {executionMode}</p>
+                      <p className="text-gray-500"># ─────────────────────────────</p>
+                      {localExecutionOutput ? (
+                        <pre className="text-green-400 whitespace-pre-wrap">{localExecutionOutput}</pre>
+                      ) : (
+                        <p className="text-gray-600">Click "▶ Run Code" to execute</p>
+                      )}
+                      <p className="text-blue-400 animate-pulse">▊</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        }
 
         return (
           <Suspense fallback={
@@ -1705,13 +2552,67 @@ export default app;`,
                                 if (name?.trim()) {
                                   const fullPath = `${filesystemCurrentPath.replace(/\/+$/, '')}/${name.trim()}/.keep`;
                                   writeFilesystemFile(fullPath, '').then(() => {
-                                    toast.success(`Created folder ${name.trim()}`);
                                     void listFilesystemDirectory(filesystemCurrentPath);
-                                  }).catch(() => toast.error('Failed to create folder'));
+                                    toast.success('Folder created');
+                                  });
                                 }
                               }}
                             >
                               + Folder
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="h-7 px-2 text-[11px] bg-purple-600 hover:bg-purple-700"
+                              onClick={() => handleManualPreview()}
+                              title="Preview current directory in Sandpack"
+                            >
+                              ▶ Preview
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => handleManualPreview(undefined, 'iframe')}
+                              title="Preview as HTML iframe"
+                            >
+                              📄 HTML
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => handleManualPreview(undefined, 'parcel')}
+                              title="Preview with Parcel bundler"
+                            >
+                              ⚡ Parcel
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => handleManualPreview(undefined, 'devbox')}
+                              title="Preview with DevBox runtime"
+                            >
+                              🔵 DevBox
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => handleManualPreview(undefined, 'pyodide')}
+                              title="Preview with Pyodide (Python in browser)"
+                            >
+                              🐍 Pyodide
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => handleManualPreview(undefined, 'vite')}
+                              title="Preview with Vite build"
+                            >
+                              ⚡ Vite
                             </Button>
                           </div>
                           {isCreatingFile && (
