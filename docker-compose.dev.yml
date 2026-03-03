@@ -1,61 +1,49 @@
-# Production Docker Compose Configuration
-# Orchestrates all binG backend services
+# Development Docker Compose Configuration
+# Optimized for local development with hot-reload
 
 version: '3.8'
 
 services:
   # ===========================================
-  # Next.js Application
+  # Next.js Application (Development Mode)
   # ===========================================
   app:
     build:
       context: .
-      dockerfile: Dockerfile
-      target: runner
-    container_name: bing-app
+      dockerfile: Dockerfile.dev
+      target: development
+    container_name: bing-app-dev
     restart: unless-stopped
     ports:
       - "3000:3000"
       - "8080:8080"
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
       - PORT=3000
       - WEBSOCKET_PORT=8080
-      - STORAGE_TYPE=${STORAGE_TYPE:-local}
+      - STORAGE_TYPE=local
       - LOCAL_SNAPSHOT_DIR=/tmp/snapshots
       - WORKSPACE_DIR=/tmp/workspaces
-      - RUNTIME_TYPE=${RUNTIME_TYPE:-process}
+      - RUNTIME_TYPE=process
       
-      # Authentication
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
-      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
-      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
-      
-      # S3 Storage (optional)
-      - S3_ENDPOINT=${S3_ENDPOINT}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
-      - S3_SECRET_KEY=${S3_SECRET_KEY}
-      - S3_BUCKET=${S3_BUCKET:-ephemeral-snapshots}
-      - S3_REGION=${S3_REGION:-us-east-1}
-      
-      # Quotas
-      - MAX_EXECUTIONS_PER_HOUR=${MAX_EXECUTIONS_PER_HOUR:-1000}
-      - MAX_CONCURRENT_SANDBOXES=${MAX_CONCURRENT_SANDBOXES:-10}
-      - MAX_MEMORY_MB=${MAX_MEMORY_MB:-2048}
-      - MAX_STORAGE_MB=${MAX_STORAGE_MB:-10240}
+      # Authentication (dev keys)
+      - JWT_SECRET_KEY=dev-secret-key-change-in-production
+      - JWT_ALGORITHM=HS256
+      - JWT_EXPIRATION_HOURS=24
       
       # Logging
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LOG_LEVEL=debug
+      - LOG_FORMAT=pretty
+      
+      # Hot reload
+      - WATCHPACK_POLLING=true
     volumes:
+      - .:/app:cached
+      - /app/node_modules
+      - /app/.next
       - app-workspaces:/tmp/workspaces
       - app-snapshots:/tmp/snapshots
-      - app-firecracker:/tmp/firecracker
-    depends_on:
-      minio:
-        condition: service_healthy
-      prometheus:
-        condition: service_started
+    command: npm run dev
     networks:
       - bing-network
     healthcheck:
@@ -63,29 +51,21 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          cpus: '4'
-          memory: 4G
-        reservations:
-          cpus: '2'
-          memory: 2G
+      start_period: 60s
 
   # ===========================================
   # MinIO (S3-Compatible Storage)
   # ===========================================
   minio:
     image: minio/minio:latest
-    container_name: bing-minio
+    container_name: bing-minio-dev
     restart: unless-stopped
     ports:
       - "9000:9000"
       - "9001:9001"
     environment:
-      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
     volumes:
       - minio-data:/data
     command: server /data --console-address ":9001"
@@ -96,19 +76,13 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
 
   # ===========================================
   # Prometheus (Metrics Collection)
   # ===========================================
   prometheus:
     image: prom/prometheus:latest
-    container_name: bing-prometheus
+    container_name: bing-prometheus-dev
     restart: unless-stopped
     ports:
       - "9090:9090"
@@ -118,37 +92,26 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=15d'
       - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
     networks:
       - bing-network
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
 
   # ===========================================
   # Grafana (Metrics Visualization)
   # ===========================================
   grafana:
     image: grafana/grafana:latest
-    container_name: bing-grafana
+    container_name: bing-grafana-dev
     restart: unless-stopped
     ports:
       - "3001:3000"
     environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
@@ -156,66 +119,50 @@ services:
       - prometheus
     networks:
       - bing-network
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 512M
 
   # ===========================================
-  # Node Exporter (System Metrics)
+  # Redis (Session Cache - Optional)
   # ===========================================
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: bing-node-exporter
+  redis:
+    image: redis:7-alpine
+    container_name: bing-redis-dev
     restart: unless-stopped
     ports:
-      - "9100:9100"
+      - "6379:6379"
     volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    command:
-      - '--path.procfs=/host/proc'
-      - '--path.sysfs=/host/sys'
-      - '--path.rootfs=/rootfs'
-      - '--collector.filesystem.ignored-mount-points="^/(sys|proc|dev|host|etc)($$|/)"'
+      - redis-data:/data
+    command: redis-server --appendonly yes
     networks:
       - bing-network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 256M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   # ===========================================
   # Microsandbox (Local Sandbox Provider)
   # ===========================================
   microsandbox:
     image: node:20-alpine
-    container_name: bing-microsandbox
+    container_name: bing-microsandbox-dev
     restart: unless-stopped
     ports:
       - "5555:5555"
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
       - MSB_PORT=5555
-      - MSB_MAX_INSTANCES=100
-      - MSB_INSTANCE_TTL_HOURS=2
+      - MSB_MAX_INSTANCES=50
+      - MSB_INSTANCE_TTL_HOURS=1
       - WORKSPACE_DIR=/workspace
+      - MICROSANDBOX_ALLOW_LOCAL_FALLBACK=true
     volumes:
       - microsandbox-workspaces:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
     command: >
       sh -c "
       npm install -g microsandbox &&
-      msb server start --prod --port 5555
+      msb server start --dev --port 5555
       "
     networks:
       - bing-network
@@ -228,11 +175,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
           cpus: '1'
           memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
     depends_on:
       - app
 
@@ -242,9 +189,6 @@ services:
 networks:
   bing-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16
 
 # ===========================================
 # Volumes
@@ -254,13 +198,13 @@ volumes:
     driver: local
   app-snapshots:
     driver: local
-  app-firecracker:
-    driver: local
   minio-data:
     driver: local
   prometheus-data:
     driver: local
   grafana-data:
+    driver: local
+  redis-data:
     driver: local
   microsandbox-workspaces:
     driver: local
