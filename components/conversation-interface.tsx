@@ -121,10 +121,19 @@ export default function ConversationInterface() {
   const [filesystemSessionId, setFilesystemSessionId] = useState<string>(
     () => `draft-chat_${Date.now()}_${generateSecureId("chat")}`,
   );
+  
+  // Project name for simpler terminal paths (e.g., "webGame" instead of long session ID)
+  const [projectName, setProjectName] = useState<string>('workspace');
+  
   const filesystemScopePath = useMemo(
     () => `project/sessions/${filesystemSessionId}`,
     [filesystemSessionId],
   );
+  
+  // Expose project name setter globally for LLM/chat to update
+  useEffect(() => {
+    (window as any).__setProjectName = setProjectName;
+  }, []);
 
   const [activeTab, setActiveTab] = useState<"chat" | "extras" | "integrations" | "shell">("chat");
 
@@ -939,6 +948,7 @@ export default function ConversationInterface() {
         }}
         onMinimize={() => setTerminalMinimized(!terminalMinimized)}
         isMinimized={terminalMinimized}
+        filesystemScopePath={filesystemScopePath}
       />
     </div>
   );
