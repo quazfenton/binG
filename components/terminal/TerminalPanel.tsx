@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Terminal as TerminalIcon, X, Minimize2, Maximize2, Square,
-  Trash2, Copy, ChevronUp, ChevronDown,
+  Trash2, Copy, ChevronUp, ChevronDown, GripHorizontal,
   Cpu, MemoryStick, Plus, Split, Wifi, WifiOff
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -13,6 +13,7 @@ import { saveTerminalSession, getTerminalSessions, addCommandToHistory } from '@
 import { secureRandom, generateSecureId } from '@/lib/utils';
 import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '@/lib/terminal/terminal-security';
 import { createLogger } from '@/lib/utils/logger';
+import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
 
 const logger = createLogger('TerminalPanel');
 
@@ -82,9 +83,11 @@ function getAnonymousSessionId(): string | null {
     if (!sessionId) {
       sessionId = generateSecureId('anon');
       localStorage.setItem('anonymous_session_id', sessionId);
+      console.log('[TerminalPanel] Generated new anonymous session ID:', sessionId);
     }
     return sessionId;
-  } catch {
+  } catch (err) {
+    console.warn('[TerminalPanel] Failed to access localStorage for anonymous session:', err);
     return null;
   }
 }
@@ -99,7 +102,7 @@ function getAuthHeaders(): Record<string, string> {
   }
 
   if (anonymousSessionId) {
-    headers['X-Anonymous-Session-Id'] = anonymousSessionId;
+    headers['x-anonymous-session-id'] = anonymousSessionId;
   }
 
   return headers;
@@ -133,16 +136,97 @@ export default function TerminalPanel({
   isOpen,
   onClose,
   onMinimize,
-  isMinimized = false
-}: TerminalPanelProps) {
+  isMinimized = false,
+  filesystemScopePath,
+}: TerminalPanelProps & { filesystemScopePath?: string }) {
   const [terminals, setTerminals] = useState<TerminalInstance[]>([]);
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isSplitView, setIsSplitView] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState<number>(450); // Default height in pixels
+  const [isResizing, setIsResizing] = useState(false);
 
   const terminalsRef = useRef<TerminalInstance[]>([]);
   terminalsRef.current = terminals;
-  
+  const resizeStartY = useRef<number>(0);
+  const resizeStartHeight = useRef<number>(0);
+
+  // Store the filesystem scope path for auto-cd on connect
+  const filesystemScopePathRef = useRef<string | undefined>(filesystemScopePath);
+  filesystemScopePathRef.current = filesystemScopePath;
+
+  // Use virtual filesystem to get real files instead of mock
+  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || 'project');
+  const {
+    listDirectory: listVfsDirectory,
+    readFile: readVfsFile,
+    getSnapshot: getVfsSnapshot,
+  } = virtualFilesystem;
+
+  // Sync local filesystem with virtual filesystem on mount and when scope changes
+  useEffect(() => {
+   if (!isOpen) return;
+   
+   const syncVfsToLocal = async () => {
+     try {
+       const snapshot = await getVfsSnapshot();
+       const files = snapshot?.files || [];
+       
+       if (files.length === 0) {
+         // Keep mock filesystem when VFS is empty
+         if (Object.keys(localFileSystemRef.current).length <= 1) {
+           localFileSystemRef.current = createInitialFileSystem();
+         }
+         return;
+       }
+
+       // Merge VFS files into existing local filesystem (don't destroy local-only files)
+       const fs = localFileSystemRef.current;
+       
+       // Ensure project root exists
+       if (!fs['project']) {
+         fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+       }
+       
+       for (const file of files) {
+         // Normalize VFS path to project-relative
+         let relativePath = file.path;
+         // Strip session prefix if present
+         relativePath = relativePath.replace(/^project\/sessions\/[^/]+\//, '');
+         // Strip leading project/ to avoid duplication
+         relativePath = relativePath.replace(/^project\//, '');
+         
+         const fullPath = `project/${relativePath}`;
+         
+         // Create intermediate directories
+         const parts = fullPath.split('/');
+         for (let i = 1; i < parts.length; i++) {
+           const dirPath = parts.slice(0, i).join('/');
+           if (!fs[dirPath]) {
+             fs[dirPath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+           }
+         }
+         
+         // Add file
+         if (file.content !== undefined) {
+           fs[fullPath] = {
+             type: 'file',
+             content: file.content,
+             createdAt: Date.now(),
+             modifiedAt: new Date(file.lastModified).getTime(),
+           };
+         }
+       }
+       
+       console.log('[TerminalPanel] Merged VFS into project/:', Object.keys(fs).length, 'entries');
+     } catch (error) {
+       console.error('[TerminalPanel] Failed to sync VFS:', error);
+     }
+   };
+   
+   syncVfsToLocal();
+  }, [isOpen, filesystemScopePath, getVfsSnapshot]);
+
   const localFileSystemRef = useRef<LocalFileSystem>(createInitialFileSystem());
   const localShellCwdRef = useRef<Record<string, string>>({});
   const reconnectCooldownUntilRef = useRef<Record<string, number>>({});
@@ -254,6 +338,36 @@ export default function TerminalPanel({
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  // Resize handle for terminal panel height
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    resizeStartY.current = e.clientY;
+    resizeStartHeight.current = terminalHeight;
+  }, [terminalHeight]);
+
+  const handleResizeMove = useCallback((e: MouseEvent) => {
+    if (!isResizing) return;
+    const deltaY = resizeStartY.current - e.clientY;
+    const newHeight = Math.max(200, Math.min(800, resizeStartHeight.current + deltaY));
+    setTerminalHeight(newHeight);
+  }, [isResizing]);
+
+  const handleResizeEnd = useCallback(() => {
+    setIsResizing(false);
+  }, []);
+
+  useEffect(() => {
+    if (isResizing) {
+      document.addEventListener('mousemove', handleResizeMove);
+      document.addEventListener('mouseup', handleResizeEnd);
+      return () => {
+        document.removeEventListener('mousemove', handleResizeMove);
+        document.removeEventListener('mouseup', handleResizeEnd);
+      };
+    }
+  }, [isResizing, handleResizeMove, handleResizeEnd]);
+
   // Listen for auto-connect events from conversation interface
   useEffect(() => {
     const handleAutoConnect = () => {
@@ -265,6 +379,65 @@ export default function TerminalPanel({
     window.addEventListener('terminal-auto-connect', handleAutoConnect);
     return () => window.removeEventListener('terminal-auto-connect', handleAutoConnect);
   }, [activeTerminalId]);
+
+  // Listen for "Run in Terminal" events from chat code blocks
+  useEffect(() => {
+    const handleRunCommand = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!detail?.command || !activeTerminalId) return;
+
+      const term = terminalsRef.current.find(t => t.id === activeTerminalId);
+      if (!term?.terminal) return;
+
+      // Split multi-line commands and execute each line
+      const commands = detail.command.split('\n').filter((l: string) => {
+        const trimmed = l.trim();
+        // Skip comments and empty lines
+        return trimmed && !trimmed.startsWith('#') && !trimmed.startsWith('//');
+      });
+
+      if (commands.length === 0) return;
+
+      // If in PTY mode, send directly to sandbox
+      if (term.mode === 'pty' && term.sandboxInfo.sessionId) {
+        for (const cmd of commands) {
+          void sendInput(term.sandboxInfo.sessionId, cmd + '\n');
+        }
+        toast.success(`Sent ${commands.length} command(s) to terminal`);
+        return;
+      }
+
+      // In local mode, execute sequentially
+      const executeNext = (index: number) => {
+        if (index >= commands.length) return;
+        const cmd = commands[index].trim();
+        lineBufferRef.current[activeTerminalId!] = '';
+        cursorPosRef.current[activeTerminalId!] = 0;
+        term.terminal?.writeln(`\x1b[90m$ ${cmd}\x1b[0m`);
+
+        executeLocalShellCommand(
+          activeTerminalId!,
+          cmd,
+          (text) => term.terminal?.write(text),
+          false,
+          term.mode
+        ).then((showPrompt) => {
+          if (index === commands.length - 1 && showPrompt) {
+            const cwd = localShellCwdRef.current[activeTerminalId!] || 'project';
+            term.terminal?.write(getPrompt(term.mode, cwd));
+          }
+          // Execute next command after a small delay
+          setTimeout(() => executeNext(index + 1), 100);
+        });
+      };
+
+      executeNext(0);
+      toast.success(`Running ${commands.length} command(s) in terminal`);
+    };
+
+    window.addEventListener('terminal-run-command', handleRunCommand);
+    return () => window.removeEventListener('terminal-run-command', handleRunCommand);
+  }, [activeTerminalId, executeLocalShellCommand, sendInput]);
 
   const createTerminal = useCallback((name?: string, sandboxInfo?: any) => {
     const id = generateSecureId('terminal');
@@ -281,6 +454,7 @@ export default function TerminalPanel({
       isConnected: false,
     };
 
+    // Set default cwd to project (matches createInitialFileSystem)
     localShellCwdRef.current[id] = 'project';
     reconnectCooldownUntilRef.current[id] = 0;
     commandQueueRef.current[id] = [];
@@ -306,11 +480,6 @@ export default function TerminalPanel({
 
     setTerminals(prev => [...prev, newTerminal]);
     setActiveTerminalId(id);
-
-    // Auto-connect to sandbox after terminal is created (for better UX)
-    setTimeout(() => {
-      connectTerminal(id);
-    }, 1000);
 
     return id;
   }, []);
@@ -399,7 +568,8 @@ export default function TerminalPanel({
   const resolveLocalPath = useCallback((cwd: string, input: string): string => {
     const raw = (input || '').trim().replace(/\\/g, '/');
     if (!raw) return cwd;
-    
+
+    // Handle absolute paths
     if (raw.startsWith('/')) {
       const parts = raw.split('/').filter(Boolean);
       const stack: string[] = [];
@@ -412,9 +582,14 @@ export default function TerminalPanel({
         stack.push(part);
       }
       const result = stack.join('/');
-      return result.startsWith('project') ? result : `project/${result}`.replace(/\/+/g, '/');
+      // Default to project root if no root specified
+      if (!result.startsWith('project')) {
+        return `project/${result}`.replace(/\/+/g, '/');
+      }
+      return result;
     }
-    
+
+    // Handle relative paths
     const base = raw.startsWith('project') ? raw : `${cwd}/${raw}`.replace(/\/+/g, '/');
     const parts = base.split('/').filter(Boolean);
     const stack: string[] = [];
@@ -457,12 +632,12 @@ export default function TerminalPanel({
   const listLocalDirectory = (path: string): string[] => {
     const fs = localFileSystemRef.current;
     const entries: string[] = [];
-    const prefix = path === 'project' ? '' : path + '/';
-    
+
     for (const key of Object.keys(fs)) {
       const parent = getParentPath(key);
       if (parent === path) {
-        const name = key.replace(prefix, '');
+        // Extract just the entry name (last part of the path)
+        const name = key.split('/').pop() || key;
         entries.push(name);
       }
     }
@@ -470,7 +645,7 @@ export default function TerminalPanel({
   };
 
   const getPrompt = (mode: TerminalMode, cwd: string): string => {
-    const displayCwd = cwd.replace(/^project/, '~');
+    const displayCwd = cwd.replace(/^(project|workspace)/, '~');
     switch (mode) {
       case 'local':
         return `\x1b[34m[local]\x1b[0m \x1b[1;32m${displayCwd}$\x1b[0m `;
@@ -574,10 +749,15 @@ export default function TerminalPanel({
         writeLine('  pwd                Print working directory');
         writeLine('  cd <dir>           Change directory');
         writeLine('  cat <file>         Display file contents');
+        writeLine('  head <file>        Show first 10 lines');
+        writeLine('  tail <file>        Show last 10 lines');
+        writeLine('  grep <pat> <file>  Search file for pattern');
+        writeLine('  wc <file>          Count lines/words/chars');
+        writeLine('  tree [dir]         Show directory tree');
+        writeLine('  find [dir] [pat]   Find files');
         writeLine('  mkdir <dir>        Create directory');
         writeLine('  touch <file>       Create empty file');
-        writeLine('  rm <file>          Remove file');
-        writeLine('  rmdir <dir>        Remove directory');
+        writeLine('  rm [-rf] <path>    Remove file/directory');
         writeLine('  cp <src> <dst>     Copy file');
         writeLine('  mv <src> <dst>     Move/rename file');
         writeLine('  echo <text>        Output text');
@@ -1028,9 +1208,117 @@ export default function TerminalPanel({
         return true;
       }
 
+      case 'tree': {
+        const targetPath = resolveLocalPath(cwd, arg1 || '.');
+        const fs = localFileSystemRef.current;
+        if (!fs[targetPath] || fs[targetPath].type !== 'directory') {
+          writeError(`tree: '${arg1 || '.'}': No such directory`);
+          return true;
+        }
+        writeLine(`\x1b[34m${targetPath.split('/').pop() || targetPath}\x1b[0m`);
+        const printTree = (dirPath: string, prefix: string) => {
+          const entries = listLocalDirectory(dirPath).sort();
+          entries.forEach((entry, i) => {
+            const entryPath = `${dirPath}/${entry}`;
+            const isLast = i === entries.length - 1;
+            const connector = isLast ? '└── ' : '├── ';
+            const info = fs[entryPath];
+            if (info?.type === 'directory') {
+              writeLine(`${prefix}${connector}\x1b[34m${entry}/\x1b[0m`);
+              printTree(entryPath, prefix + (isLast ? '    ' : '│   '));
+            } else {
+              writeLine(`${prefix}${connector}${entry}`);
+            }
+          });
+        };
+        printTree(targetPath, '');
+        return true;
+      }
+
+      case 'find': {
+        const targetPath = resolveLocalPath(cwd, arg1 || '.');
+        const fs = localFileSystemRef.current;
+        const pattern = arg2 || '';
+        for (const key of Object.keys(fs).sort()) {
+          if (key.startsWith(targetPath)) {
+            const relativePath = key.replace(targetPath, '.').replace(/^\.\//, './');
+            if (!pattern || relativePath.includes(pattern)) {
+              writeLine(relativePath);
+            }
+          }
+        }
+        return true;
+      }
+
+      case 'wc': {
+        if (!arg1) { writeError('wc: missing file operand'); return true; }
+        const filePath = resolveLocalPath(cwd, arg1);
+        const fs = localFileSystemRef.current;
+        if (!fs[filePath] || fs[filePath].type !== 'file') {
+          writeError(`wc: ${arg1}: No such file`);
+          return true;
+        }
+        const content = fs[filePath].content || '';
+        const lines = content.split('\n').length;
+        const words = content.split(/\s+/).filter(Boolean).length;
+        const chars = content.length;
+        writeLine(`  ${lines}  ${words}  ${chars} ${arg1}`);
+        return true;
+      }
+
+      case 'head': {
+        if (!arg1) { writeError('head: missing file operand'); return true; }
+        const filePath = resolveLocalPath(cwd, arg1);
+        const fs = localFileSystemRef.current;
+        if (!fs[filePath] || fs[filePath].type !== 'file') {
+          writeError(`head: ${arg1}: No such file`);
+          return true;
+        }
+        const lines = (fs[filePath].content || '').split('\n').slice(0, 10);
+        lines.forEach(l => writeLine(l));
+        return true;
+      }
+
+      case 'tail': {
+        if (!arg1) { writeError('tail: missing file operand'); return true; }
+        const filePath = resolveLocalPath(cwd, arg1);
+        const fs = localFileSystemRef.current;
+        if (!fs[filePath] || fs[filePath].type !== 'file') {
+          writeError(`tail: ${arg1}: No such file`);
+          return true;
+        }
+        const lines = (fs[filePath].content || '').split('\n');
+        lines.slice(-10).forEach(l => writeLine(l));
+        return true;
+      }
+
+      case 'grep': {
+        if (!arg1 || !arg2) { writeError('grep: Usage: grep <pattern> <file>'); return true; }
+        const filePath = resolveLocalPath(cwd, arg2);
+        const fs = localFileSystemRef.current;
+        if (!fs[filePath] || fs[filePath].type !== 'file') {
+          writeError(`grep: ${arg2}: No such file`);
+          return true;
+        }
+        const lines = (fs[filePath].content || '').split('\n');
+        lines.forEach((line, i) => {
+          if (line.includes(arg1)) {
+            writeLine(`\x1b[35m${i + 1}:\x1b[0m${line.replace(new RegExp(arg1.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), `\x1b[31m${arg1}\x1b[0m`)}`);
+          }
+        });
+        return true;
+      }
+
       default: {
-        writeError(`command not found: ${cmd}`);
-        writeLine('\x1b[90mType "help" for available commands.\x1b[0m');
+        // Suggest sandbox for execution commands
+        const execCmds = ['node', 'python', 'python3', 'npm', 'npx', 'yarn', 'pnpm', 'pip', 'pip3', 'cargo', 'go', 'ruby', 'java', 'gcc', 'g++', 'make', 'docker', 'git', 'curl', 'wget'];
+        if (execCmds.includes(cmd)) {
+          writeLine(`\x1b[33m⚠ "${cmd}" requires a sandbox environment.\x1b[0m`);
+          writeLine('\x1b[90mType "connect" to connect to a sandbox with full execution.\x1b[0m');
+        } else {
+          writeError(`command not found: ${cmd}`);
+          writeLine('\x1b[90mType "help" for available commands.\x1b[0m');
+        }
         return true;
       }
     }
@@ -1046,21 +1334,159 @@ export default function TerminalPanel({
 
     const writeLine = (text: string) => write(text + '\r\n');
 
+    if ((session as any).pendingExit) {
+      const key = input.toLowerCase();
+      if (key === 'y') {
+        const fs = localFileSystemRef.current;
+        const fileContent = session.lines.join('\n');
+        fs[session.filePath] = {
+          type: 'file',
+          content: fileContent,
+          createdAt: fs[session.filePath]?.createdAt || Date.now(),
+          modifiedAt: Date.now()
+        };
+        syncFileToVFS(session.filePath, fileContent);
+        writeLine(`\x1b[32m"${session.filePath}" saved\x1b[0m`);
+        editorSessionRef.current[terminalId] = null;
+        updateTerminalState(terminalId, { mode: 'local' });
+        const cwd = localShellCwdRef.current[terminalId] || 'project';
+        write(getPrompt('local', cwd));
+      } else if (key === 'n') {
+        editorSessionRef.current[terminalId] = null;
+        updateTerminalState(terminalId, { mode: 'local' });
+        const cwd = localShellCwdRef.current[terminalId] || 'project';
+        writeLine('\x1b[90mChanges discarded.\x1b[0m');
+        write(getPrompt('local', cwd));
+      } else if (key === 'c' || input === '\x1b') {
+        delete (session as any).pendingExit;
+        const maxLines = 15;
+        const scrollOffset = Math.max(0, session.cursorLine - maxLines + 1);
+        const displayLines = session.lines.slice(scrollOffset, scrollOffset + maxLines);
+        write(`\x1b[2J\x1b[H`);
+        writeLine(`\x1b[1;32m Nano - ${session.filePath.split('/').pop()}\x1b[0m`);
+        writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+        displayLines.forEach((l, i) => {
+          const actualLine = scrollOffset + i;
+          const prefix = actualLine === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+          writeLine(`${prefix}${l || ''}`);
+        });
+        if (session.lines.length > scrollOffset + maxLines) {
+          writeLine(`\x1b[90m... ${session.lines.length - scrollOffset - maxLines} more lines ...\x1b[0m`);
+        }
+        writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+        writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+        writeLine(`\x1b[90mLine ${session.cursorLine + 1}/${session.lines.length} | Col ${session.cursorCol}\x1b[0m`);
+      }
+      return;
+    }
+
     if (input === '\x1b[A') {
-      if (session.cursorLine > 0) session.cursorLine--;
+      if (session.cursorLine > 0) {
+        session.cursorLine--;
+        const line = session.lines[session.cursorLine] || '';
+        session.cursorCol = Math.min(session.cursorCol, line.length);
+      }
+      const maxLines = 15;
+      const scrollOffset = Math.max(0, session.cursorLine - maxLines + 1);
+      const displayLines = session.lines.slice(scrollOffset, scrollOffset + maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m ${session.type === 'nano' ? 'Nano' : 'Vim'} - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const actualLine = scrollOffset + i;
+        const prefix = actualLine === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > scrollOffset + maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - scrollOffset - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      if (session.type === 'nano') {
+        writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      } else {
+        writeLine('\x1b[33mNORMAL MODE\x1b[0m');
+      }
+      writeLine(`\x1b[90mLine ${session.cursorLine + 1}/${session.lines.length} | Col ${session.cursorCol}\x1b[0m`);
       return;
     }
     if (input === '\x1b[B') {
-      if (session.cursorLine < session.lines.length - 1) session.cursorLine++;
+      if (session.cursorLine < session.lines.length - 1) {
+        session.cursorLine++;
+        const line = session.lines[session.cursorLine] || '';
+        session.cursorCol = Math.min(session.cursorCol, line.length);
+      }
+      const maxLines = 15;
+      const scrollOffset = Math.max(0, session.cursorLine - maxLines + 1);
+      const displayLines = session.lines.slice(scrollOffset, scrollOffset + maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m ${session.type === 'nano' ? 'Nano' : 'Vim'} - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const actualLine = scrollOffset + i;
+        const prefix = actualLine === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > scrollOffset + maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - scrollOffset - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      if (session.type === 'nano') {
+        writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      } else {
+        writeLine('\x1b[33mNORMAL MODE\x1b[0m');
+      }
+      writeLine(`\x1b[90mLine ${session.cursorLine + 1}/${session.lines.length} | Col ${session.cursorCol}\x1b[0m`);
       return;
     }
     if (input === '\x1b[D') {
       if (session.cursorCol > 0) session.cursorCol--;
+      const maxLines = 15;
+      const scrollOffset = Math.max(0, session.cursorLine - maxLines + 1);
+      const displayLines = session.lines.slice(scrollOffset, scrollOffset + maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m ${session.type === 'nano' ? 'Nano' : 'Vim'} - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const actualLine = scrollOffset + i;
+        const prefix = actualLine === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > scrollOffset + maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - scrollOffset - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      if (session.type === 'nano') {
+        writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      } else {
+        writeLine('\x1b[33mNORMAL MODE\x1b[0m');
+      }
+      writeLine(`\x1b[90mLine ${session.cursorLine + 1}/${session.lines.length} | Col ${session.cursorCol}\x1b[0m`);
       return;
     }
     if (input === '\x1b[C') {
       const line = session.lines[session.cursorLine] || '';
       if (session.cursorCol < line.length) session.cursorCol++;
+      const maxLines = 15;
+      const scrollOffset = Math.max(0, session.cursorLine - maxLines + 1);
+      const displayLines = session.lines.slice(scrollOffset, scrollOffset + maxLines);
+      write(`\x1b[2J\x1b[H`);
+      writeLine(`\x1b[1;32m ${session.type === 'nano' ? 'Nano' : 'Vim'} - ${session.filePath.split('/').pop()}\x1b[0m`);
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      displayLines.forEach((l, i) => {
+        const actualLine = scrollOffset + i;
+        const prefix = actualLine === session.cursorLine ? '\x1b[32m>\x1b[0m ' : '  ';
+        writeLine(`${prefix}${l || ''}`);
+      });
+      if (session.lines.length > scrollOffset + maxLines) {
+        writeLine(`\x1b[90m... ${session.lines.length - scrollOffset - maxLines} more lines ...\x1b[0m`);
+      }
+      writeLine('\x1b[90m─────────────────────────────────────\x1b[0m');
+      if (session.type === 'nano') {
+        writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m');
+      } else {
+        writeLine('\x1b[33mNORMAL MODE\x1b[0m');
+      }
+      writeLine(`\x1b[90mLine ${session.cursorLine + 1}/${session.lines.length} | Col ${session.cursorCol}\x1b[0m`);
       return;
     }
 
@@ -1232,18 +1658,21 @@ export default function TerminalPanel({
     }
 
     if (input === '\x18') {
-      editorSessionRef.current[terminalId] = null;
-      updateTerminalState(terminalId, { mode: 'local' });
-      const cwd = localShellCwdRef.current[terminalId] || 'project';
-      writeLine('');
       if (session.lines.join('\n') !== session.originalContent) {
-        writeLine('\x1b[33mSave modified buffer (ANSWERING "No" WILL DESTROY CHANGES) ? \x1b[0m');
-        writeLine('\x1b[90m Y \x1b[0m Yes');
-        writeLine('\x1b[90m N \x1b[0m No');
-        writeLine('\x1b[90m^C \x1b[0m Cancel');
+        (session as any).pendingExit = true;
+        write(`\x1b[2J\x1b[H`);
+        writeLine('\x1b[33mSave modified buffer?\x1b[0m');
+        writeLine('');
+        writeLine('  \x1b[32mY\x1b[0m  Yes - save and exit');
+        writeLine('  \x1b[31mN\x1b[0m  No - discard changes and exit');
+        writeLine('  \x1b[90mC\x1b[0m  Cancel - return to editor');
       } else {
+        editorSessionRef.current[terminalId] = null;
+        updateTerminalState(terminalId, { mode: 'local' });
+        const cwd = localShellCwdRef.current[terminalId] || 'project';
+        writeLine('');
         writeLine('\x1b[90mExit.\x1b[0m');
-        write(getPrompt('editor', cwd));
+        write(getPrompt('local', cwd));
       }
       return;
     }
@@ -1798,14 +2227,18 @@ export default function TerminalPanel({
         if (t.mode === 'pty') return true; // Let PTY handle everything
         
         // Suppress default browser behavior for Ctrl combinations in editor mode
-        if (t.mode === 'editor' || editorSessionRef.current[terminalId]) {
-          const ctrlKeys = ['g', 'o', 'x', 'k', 'u', 'r', 'y', 'c', 'j', 't'];
+        if (t.mode === 'editor' || t.mode === 'command-mode' || editorSessionRef.current[terminalId]) {
+          const ctrlKeys = ['g', 'o', 'x', 'k', 'u', 'r', 'y', 'c', 'j', 't', 's'];
           if (event.ctrlKey && ctrlKeys.includes(event.key.toLowerCase())) {
-            return false; // Let xterm handle these Ctrl shortcuts for nano
+            event.preventDefault();
+            return true;
           }
         }
         
-        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') return false; // Suppress default xterm scroll
+        if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+          event.preventDefault();
+          return true;
+        }
         return true;
       });
 
@@ -1919,8 +2352,12 @@ export default function TerminalPanel({
   // Spinner animation frames for connecting status
   const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-  // Connection timeout in milliseconds (15 seconds)
-  const CONNECTION_TIMEOUT_MS = 15000;
+  // Connection timeout in milliseconds (configurable, default 15 seconds)
+  const CONNECTION_TIMEOUT_MS = parseInt(
+    process.env.NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS || '15000',
+    10
+  ) || 15000;
+  const CONNECTION_TIMEOUT_SECONDS = Math.round(CONNECTION_TIMEOUT_MS / 1000);
 
   const connectTerminal = useCallback(async (terminalId: string) => {
     connectTerminalRef.current = connectTerminal;
@@ -1944,7 +2381,7 @@ export default function TerminalPanel({
     term.terminal?.writeln('');
     term.terminal?.writeln('\x1b[33m⟳ Connecting to sandbox...\x1b[0m');
     term.terminal?.writeln('\x1b[90mThis may take a moment on first connection.\x1b[0m');
-    term.terminal?.writeln('\x1b[90mTimeout after 15s will fall back to command-mode.\x1b[0m');
+    term.terminal?.writeln(`\x1b[90mTimeout after ${CONNECTION_TIMEOUT_SECONDS}s will fall back to command-mode.\x1b[0m`);
     term.terminal?.writeln('');
 
     // Start animated spinner during connection
@@ -1974,7 +2411,10 @@ export default function TerminalPanel({
           delete (currentTerm as any).__spinnerInterval;
         }
         // Fall back to command-mode
-        const cwd = localShellCwdRef.current[terminalId] || 'project';
+        const scopePath = filesystemScopePathRef.current;
+        const sandboxPath = scopePath ? scopePath.replace(/^project\//, '/workspace/') : '/workspace';
+        const cwd = sandboxPath;
+        localShellCwdRef.current[terminalId] = cwd;
         updateTerminalState(terminalId, {
           sandboxInfo: { status: 'active' },
           isConnected: true,
@@ -1987,7 +2427,8 @@ export default function TerminalPanel({
         currentTerm.terminal?.writeln('\x1b[33m⚠ Connection timeout. Using command-mode.\x1b[0m');
         currentTerm.terminal?.writeln('\x1b[90mCommands execute line-by-line. Type "connect" to retry PTY.\x1b[0m');
         currentTerm.terminal?.writeln('');
-        currentTerm.terminal?.write(`\x1b[1;32m${cwd.replace(/^project/, '~')}$\x1b[0m `);
+        currentTerm.terminal?.writeln(`\x1b[90m→ cd ${sandboxPath}\x1b[0m`);
+        currentTerm.terminal?.write(`\x1b[1;32m${sandboxPath.replace(/^\/workspace/, '~')}$\x1b[0m `);
       }
     }, CONNECTION_TIMEOUT_MS);
 
@@ -2005,7 +2446,36 @@ export default function TerminalPanel({
       });
 
       if (!sessionRes.ok) {
-        throw new Error('Failed to create sandbox session');
+        const errorData = await sessionRes.json().catch(() => ({}));
+        
+        // Check if this is an auth error that requires sign-in
+        if (sessionRes.status === 401 && errorData.requiresAuth) {
+          // Fall back to local shell mode for anonymous users
+          console.log('[Terminal] Sandbox requires auth, using local shell mode');
+          const cwd = localShellCwdRef.current[terminalId] || '/workspace';
+          updateTerminalState(terminalId, {
+            sandboxInfo: { status: 'active' },
+            isConnected: true,
+            mode: 'local',
+          });
+          
+          // Get current terminal reference
+          const currentTerm = terminalsRef.current.find(t => t.id === terminalId);
+          if (currentTerm) {
+            currentTerm.sandboxInfo = { status: 'active' };
+            currentTerm.isConnected = true;
+            currentTerm.mode = 'local';
+            currentTerm.terminal?.writeln('');
+            currentTerm.terminal?.writeln('\x1b[33m⚠ Sandbox requires authentication\x1b[0m');
+            currentTerm.terminal?.writeln('\x1b[90mPlease sign in to use the sandbox terminal.\x1b[0m');
+            currentTerm.terminal?.writeln('\x1b[90mUsing local shell mode in the meantime.\x1b[0m');
+            currentTerm.terminal?.writeln('');
+            currentTerm.terminal?.write(`\x1b[1;32m${cwd.replace(/^\/workspace/, '~')}$\x1b[0m `);
+          }
+          return;
+        }
+        
+        throw new Error(errorData.error || 'Failed to create sandbox session');
       }
 
       const sessionData = await sessionRes.json();
@@ -2103,6 +2573,15 @@ export default function TerminalPanel({
                   currentTerm.terminal.writeln('\x1b[1;32m✓ Sandbox connected!\x1b[0m');
                   currentTerm.terminal.writeln('\x1b[90mYou now have full terminal access.\x1b[0m');
                   currentTerm.terminal.writeln('');
+
+                  // Auto-cd to filesystem scope path if available
+                  const scopePath = filesystemScopePathRef.current;
+                  if (scopePath) {
+                    // Convert VFS path (project/sessions/...) to sandbox path (/workspace/sessions/...)
+                    const sandboxPath = scopePath.replace(/^project\//, '/workspace/');
+                    currentTerm.terminal.writeln(`\x1b[90m→ cd ${sandboxPath}\x1b[0m`);
+                    ws.send(JSON.stringify({ type: 'input', data: `cd ${sandboxPath}\n` }));
+                  }
 
                   if (currentTerm.terminal) {
                     sendResize(sessionId, currentTerm.terminal.cols, currentTerm.terminal.rows);
@@ -2776,12 +3255,23 @@ export default function TerminalPanel({
       initial={{ y: 100, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       exit={{ y: 100, opacity: 0 }}
-      className={`fixed bottom-0 left-0 right-0 z-50 bg-black/95 border-t border-white/10 backdrop-blur-sm flex flex-col ${
-        isExpanded ? 'h-[80vh]' : 'h-[55vh] sm:h-[450px]'
-      }`}
+      style={{ height: terminalHeight }}
+      className={`fixed bottom-0 left-0 right-0 z-50 bg-black/95 border-t border-white/10 backdrop-blur-sm flex flex-col`}
       role="application"
       aria-label="Terminal panel"
     >
+      {/* Resize handle */}
+      <div
+        onMouseDown={handleResizeStart}
+        className={`absolute -top-1 left-0 right-0 h-2 cursor-ns-resize z-50 ${
+          isResizing ? 'bg-blue-500/30' : 'hover:bg-white/10'
+        }`}
+        title="Drag to resize terminal"
+      >
+        <div className="flex items-center justify-center h-full">
+          <GripHorizontal className="w-4 h-4 text-white/30" />
+        </div>
+      </div>
       <div className="flex items-center justify-between px-2 sm:px-4 py-2 border-b border-white/10 bg-black/50 shrink-0 gap-2">
         <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0 overflow-hidden">
           <div className="flex items-center gap-2">
@@ -2901,13 +3391,15 @@ export default function TerminalPanel({
       </div>
 
       <div className={`flex flex-1 min-h-0 w-full ${isSplitView ? 'flex-row' : 'flex-col'}`}>
-        {terminals.map((terminal) => (
+        {terminals.map((terminal, index) => (
           <div
             key={terminal.id}
             id={`terminal-panel-${terminal.id}`}
             role="tabpanel"
             aria-labelledby={`terminal-tab-${terminal.id}`}
-            className={`flex-1 min-h-0 w-full ${
+            className={`flex-1 min-h-0 ${
+              isSplitView ? 'w-1/2' : 'w-full'
+            } ${
               !isSplitView && activeTerminalId !== terminal.id ? 'hidden' : ''
             } ${
               isSplitView && terminals.length > 1 ? 'border-r border-white/10 last:border-r-0' : ''

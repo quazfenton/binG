@@ -28,6 +28,7 @@ import {
   AlertCircle,
   Eye,
   Edit,
+  Trash2,
 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -141,6 +142,8 @@ export default function CodePreviewPanel({
     setCurrentPath: setFilesystemCurrentPath,
     listDirectory: listFilesystemDirectory,
     readFile: readFilesystemFile,
+    writeFile: writeFilesystemFile,
+    deletePath: deleteFilesystemPath,
     isLoading: isFilesystemLoading,
   } = virtualFilesystem;
   const [selectedFilesystemPath, setSelectedFilesystemPath] = useState<string>("");
@@ -148,6 +151,10 @@ export default function CodePreviewPanel({
   const [selectedFilesystemContent, setSelectedFilesystemContent] = useState<string>("");
   const [isFilesystemFileLoading, setIsFilesystemFileLoading] = useState(false);
   const [scopedPreviewFiles, setScopedPreviewFiles] = useState<Record<string, string>>({});
+  const [isEditingFile, setIsEditingFile] = useState(false);
+  const [editableContent, setEditableContent] = useState("");
+  const [isCreatingFile, setIsCreatingFile] = useState(false);
+  const [newFileName, setNewFileName] = useState("");
 
   const filesystemNodes = useMemo(() => {
     return [...filesystemRawNodes].sort((a, b) => {
@@ -177,6 +184,7 @@ export default function CodePreviewPanel({
   }, [filesystemCurrentPath, openFilesystemDirectory]);
 
   const selectFilesystemFile = useCallback(async (path: string) => {
+    setIsEditingFile(false);
     setIsFilesystemFileLoading(true);
     try {
       // Ensure path doesn't get duplicated prefix
@@ -1556,7 +1564,59 @@ export default app;`,
                             >
                               Refresh
                             </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => setIsCreatingFile(true)}
+                            >
+                              + File
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-[11px]"
+                              onClick={() => {
+                                const name = prompt('New folder name:');
+                                if (name?.trim()) {
+                                  const fullPath = `${filesystemCurrentPath.replace(/\/+$/, '')}/${name.trim()}/.keep`;
+                                  writeFilesystemFile(fullPath, '').then(() => {
+                                    toast.success(`Created folder ${name.trim()}`);
+                                    void listFilesystemDirectory(filesystemCurrentPath);
+                                  }).catch(() => toast.error('Failed to create folder'));
+                                }
+                              }}
+                            >
+                              + Folder
+                            </Button>
                           </div>
+                          {isCreatingFile && (
+                            <div className="mt-2 flex items-center gap-1">
+                              <input
+                                type="text"
+                                value={newFileName}
+                                onChange={(e) => setNewFileName(e.target.value)}
+                                placeholder="filename.ext"
+                                className="flex-1 bg-black/50 border border-white/20 rounded px-2 py-1 text-xs text-white outline-none focus:border-blue-500"
+                                autoFocus
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && newFileName.trim()) {
+                                    const fullPath = `${filesystemCurrentPath.replace(/\/+$/, '')}/${newFileName.trim()}`;
+                                    writeFilesystemFile(fullPath, '').then(() => {
+                                      setNewFileName('');
+                                      setIsCreatingFile(false);
+                                      toast.success(`Created ${newFileName.trim()}`);
+                                      void listFilesystemDirectory(filesystemCurrentPath);
+                                    }).catch(() => toast.error('Failed to create file'));
+                                  } else if (e.key === 'Escape') {
+                                    setIsCreatingFile(false);
+                                    setNewFileName('');
+                                  }
+                                }}
+                              />
+                              <Button size="sm" variant="ghost" className="h-7 px-1 text-[10px]" onClick={() => { setIsCreatingFile(false); setNewFileName(''); }}>✕</Button>
+                            </div>
+                          )}
                         </div>
                         <div className="space-y-1">
                           {isFilesystemLoading && (
@@ -1593,6 +1653,25 @@ export default app;`,
                                 )}
                                 <span className="truncate flex-1">{node.name}</span>
                               </div>
+                              <button
+                                className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-all"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const label = node.type === 'directory' ? `Delete folder "${node.name}" and all contents?` : `Delete ${node.name}?`;
+                                  if (confirm(label)) {
+                                    deleteFilesystemPath(node.path).then(() => {
+                                      toast.success(`Deleted ${node.name}`);
+                                      void listFilesystemDirectory(filesystemCurrentPath);
+                                      if (selectedFilesystemPath === node.path) {
+                                        setSelectedFilesystemPath('');
+                                        setSelectedFilesystemContent('');
+                                      }
+                                    }).catch(() => toast.error('Failed to delete'));
+                                  }
+                                }}
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
                             </div>
                           ))}
                         </div>
@@ -1740,26 +1819,76 @@ export default app;`,
                                 {selectedFilesystemPath.replace(/^project\//, '')}
                               </span>
                             </div>
-                            <button
-                              className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
-                              onClick={() => {
-                                navigator.clipboard.writeText(selectedFilesystemContent);
-                              }}
-                            >
-                              <CodeIcon className="w-4 h-4 mr-1" />
-                              Copy
-                            </button>
+                            <div className="flex items-center gap-2">
+                              {isEditingFile ? (
+                                <>
+                                  <button
+                                    className="flex items-center text-sm text-green-400 hover:bg-green-900/30 px-2 py-1 rounded"
+                                    onClick={() => {
+                                      writeFilesystemFile(selectedFilesystemPath, editableContent).then(() => {
+                                        setSelectedFilesystemContent(editableContent);
+                                        setIsEditingFile(false);
+                                        toast.success('File saved');
+                                      }).catch(() => toast.error('Failed to save'));
+                                    }}
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    className="flex items-center text-sm hover:bg-gray-700 px-2 py-1 rounded"
+                                    onClick={() => {
+                                      setIsEditingFile(false);
+                                      setEditableContent('');
+                                    }}
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
+                                    onClick={() => {
+                                      setEditableContent(selectedFilesystemContent);
+                                      setIsEditingFile(true);
+                                    }}
+                                  >
+                                    <Edit className="w-4 h-4 mr-1" />
+                                    Edit
+                                  </button>
+                                  <button
+                                    className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(selectedFilesystemContent);
+                                    }}
+                                  >
+                                    <CodeIcon className="w-4 h-4 mr-1" />
+                                    Copy
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </div>
                           <div className="flex-1 overflow-y-auto bg-black/30">
-                            <SyntaxHighlighter
-                              style={oneDark as any}
-                              language={selectedFilesystemLanguage}
-                              PreTag="div"
-                              className="!m-0 !bg-gray-900 h-full text-sm"
-                              showLineNumbers
-                            >
-                              {selectedFilesystemContent}
-                            </SyntaxHighlighter>
+                            {isEditingFile ? (
+                              <textarea
+                                value={editableContent}
+                                onChange={(e) => setEditableContent(e.target.value)}
+                                className="w-full h-full bg-gray-900 text-gray-100 font-mono text-sm p-4 resize-none outline-none border-none"
+                                spellCheck={false}
+                                autoFocus
+                              />
+                            ) : (
+                              <SyntaxHighlighter
+                                style={oneDark as any}
+                                language={selectedFilesystemLanguage}
+                                PreTag="div"
+                                className="!m-0 !bg-gray-900 h-full text-sm"
+                                showLineNumbers
+                              >
+                                {selectedFilesystemContent}
+                              </SyntaxHighlighter>
+                            )}
                           </div>
                         </div>
                       ) : (

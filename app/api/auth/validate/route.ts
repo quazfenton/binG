@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { authService } from '@/lib/auth/auth-service';
 import { verifyAuth } from '@/lib/auth/jwt';
 
+// Force Node.js runtime for jsonwebtoken compatibility
+export const runtime = 'nodejs';
+
 export async function POST(request: NextRequest) {
   try {
     // Try session-based validation first

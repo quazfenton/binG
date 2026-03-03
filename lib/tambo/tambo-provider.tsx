@@ -25,7 +25,9 @@ export interface EnhancedTamboProviderProps {
   userToken?: string;
   userId?: string;
   enabled?: boolean;
-  contextHelpers?: Record<string, ContextHelper>;
+  contextHelpers?: {
+    [key: string]: ContextHelper;
+  };
   mcpServers?: Array<{
     name: string;
     url: string;
@@ -123,14 +125,14 @@ export function EnhancedTamboProvider({
   const tools = getTamboToolRegistry().toArray();
   const components = getTamboComponentRegistry().toArray();
 
-  // Build context helpers object
-  const allContextHelpers = {
-    ...getContextHelpers(),
-    // Add default helpers if not overridden
+  // Build context helpers object with explicit keys
+  const baseHelpers = getContextHelpers();
+  const allContextHelpers: { [key: string]: ContextHelper } = {
     userTime: customContextHelpers?.userTime || (() => ({
       time: new Date().toISOString(),
       formatted: new Date().toLocaleString(),
     })),
+    ...baseHelpers,
   };
 
   // If not enabled or not client-side, render children without Tambo

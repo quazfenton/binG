@@ -83,8 +83,7 @@ export interface GenerateBody {
     // Get the registry with all providers
     const registry = getDefaultRegistry()
 
-    // Initialize providers with environment variables (create local instance, don't mutate global)
-    // Note: Don't set defaultModel in replicate config - it's shared state that leaks between requests
+    // Initialize providers with environment variables
     const initializedRegistry = registry.initializeAll({
       mistral: {
         apiKey: process.env.MISTRAL_API_KEY,
@@ -92,9 +91,16 @@ export interface GenerateBody {
       },
       replicate: {
         apiKey: process.env.REPLICATE_API_TOKEN,
-        // model is passed per-request via params.extra to avoid leaking between concurrent requests
       },
     })
+
+    if (!initializedRegistry) {
+      clearTimeout(timeoutId)
+      return NextResponse.json(
+        { error: 'Image generation service unavailable. Please try again later.' },
+        { status: 503 }
+      )
+    }
 
     // Build unified parameters
     const params: ImageGenerationParams = {

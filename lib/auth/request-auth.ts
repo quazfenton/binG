@@ -264,6 +264,7 @@ export async function resolveRequestAuth(
         return result;
       }
     }
+    // If anonymous auth fails or no ID provided, fall through to return error
   }
 
   const result: ResolvedRequestAuth = {
