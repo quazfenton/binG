@@ -21,7 +21,6 @@ const registerSchema = schemas.registration.extend({
 export const POST = validateRequest(registerSchema)(async (request, { validatedBody }) => {
   try {
     const { email, password, username } = validatedBody;
-
     // Rate limiting: 5 registrations per hour per IP
     // This prevents email bombing and spam registrations
     const rateLimitResult = await rateLimiters.registration(
@@ -42,6 +41,10 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
     const userAgent = request.headers.get('user-agent') || 'unknown';
 
     logger.info('Registration attempt', {
+      email: maskEmail(email),
+      username: username || 'not provided',
+      ip: ipAddress,
+    });
       email,
       username: username || 'not provided',
       ip: ipAddress,
