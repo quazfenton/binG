@@ -21,7 +21,11 @@ export interface TamboTool {
 const formatCodeSchema = z.object({
   code: z.string(),
   language: z.string().optional(),
-  options: z.record(z.any()).optional(),
+  options: z.object({
+    indentSize: z.number().optional(),
+    useTabs: z.boolean().optional(),
+    trailingComma: z.boolean().optional(),
+  }).optional(),
 });
 
 export const formatCodeTool: TamboTool = {
@@ -68,7 +72,11 @@ export const formatCodeTool: TamboTool = {
 
 const validateInputSchema = z.object({
   input: z.any(),
-  schema: z.record(z.any()),
+  schema: z.object({
+    type: z.string().optional(),
+    required: z.array(z.string()).optional(),
+    properties: z.record(z.any()).optional(),
+  }),
 });
 
 export const validateInputTool: TamboTool = {

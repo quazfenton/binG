@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Button } from "@/components/ui/button"
-import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play } from "lucide-react"
+import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal } from "lucide-react"
 import type { Message } from "@/types"
 import { useEnhancedStreamingDisplay } from "@/hooks/use-enhanced-streaming-display"
 import { useResponsiveLayout, calculateDynamicWidth, getOverflowStrategy } from "@/hooks/use-responsive-layout"
@@ -402,8 +402,26 @@ export default function MessageBubble({
                 code({ className, children, ...props }) {
                   const match = /language-(\w+)/.exec(className || "");
                   const isInline = Boolean((props as any).inline);
+                  const codeStr = String(children).replace(/\n$/, "");
+                  const isShellLang = match && ['bash', 'sh', 'shell', 'zsh', 'console', 'terminal'].includes(match[1]);
                   return !isInline && match ? (
-                    <div className={`${layout.isMobile ? 'text-xs' : 'text-sm'} ${contentAnalysis.hasCodeBlocks && layout.isMobile ? 'overflow-x-auto' : ''}`}>
+                    <div className={`${layout.isMobile ? 'text-xs' : 'text-sm'} ${contentAnalysis.hasCodeBlocks && layout.isMobile ? 'overflow-x-auto' : ''} relative group/code`}>
+                      {isShellLang && (
+                        <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/code:opacity-100 transition-opacity">
+                          <button
+                            className="flex items-center gap-1 bg-green-600/80 hover:bg-green-500 text-white text-[10px] px-2 py-1 rounded"
+                            title="Run in Terminal"
+                            onClick={() => {
+                              window.dispatchEvent(new CustomEvent('terminal-run-command', {
+                                detail: { command: codeStr }
+                              }));
+                            }}
+                          >
+                            <Terminal className="w-3 h-3" />
+                            Run
+                          </button>
+                        </div>
+                      )}
                       <SyntaxHighlighter
                         style={vscDarkPlus as any}
                         language={match[1]}
@@ -417,7 +435,7 @@ export default function MessageBubble({
                           overflowX: layout.isMobile ? 'auto' : 'visible'
                         }}
                       >
-                        {String(children).replace(/\n$/, "")}
+                        {codeStr}
                       </SyntaxHighlighter>
                     </div>
                   ) : (

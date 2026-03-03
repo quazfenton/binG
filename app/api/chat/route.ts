@@ -13,6 +13,9 @@ import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesyste
 import type { LLMMessage } from "@/lib/api/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 
+// Force Node.js runtime for Daytona SDK compatibility
+export const runtime = 'nodejs';
+
 // Note: Fast-Agent now has dedicated endpoint at /api/agent
 // This route uses priority router which includes Fast-Agent as Priority 1
 

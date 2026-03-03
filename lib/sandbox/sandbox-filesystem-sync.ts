@@ -12,7 +12,19 @@
 import { sandboxBridge } from './sandbox-service-bridge';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 
-const WORKSPACE_DIR = '/workspace';
+// Workspace directory varies by provider
+// This will be resolved per-sandbox based on the provider
+function getWorkspaceDirForSandbox(sandboxId: string): string {
+  // Infer provider from sandbox ID prefix
+  if (sandboxId.startsWith('mistral-')) return '/workspace';
+  if (sandboxId.startsWith('blaxel-')) return '/workspace';
+  if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return '/workspace';
+  if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return '/workspace'; // CodeSandbox
+  if (sandboxId.startsWith('e2b-')) return '/home/user';
+  
+  // Default to Daytona
+  return '/home/daytona/workspace';
+}
 
 // Global singleton to prevent HMR interval leaks
 declare global {
@@ -70,9 +82,10 @@ class SandboxFilesystemSync {
   }
 
   async syncSandboxToVFS(sandboxId: string, userId: string): Promise<void> {
+    const workspaceDir = getWorkspaceDirForSandbox(sandboxId);
     let entries: { name: string; type: string }[];
     try {
-      entries = await sandboxBridge.listDirectory(sandboxId, WORKSPACE_DIR);
+      entries = await sandboxBridge.listDirectory(sandboxId, workspaceDir);
     } catch (err) {
       console.warn(
         `[SandboxSync] Cannot list sandbox ${sandboxId} directory:`,
@@ -86,7 +99,7 @@ class SandboxFilesystemSync {
     const files = entries.filter((e) => e.type === 'file');
 
     for (const file of files) {
-      const sandboxPath = `${WORKSPACE_DIR}/${file.name}`;
+      const sandboxPath = `${workspaceDir}/${file.name}`;
       try {
         const sandboxContent = await sandboxBridge.readFile(sandboxId, sandboxPath);
         if (typeof sandboxContent !== 'string') continue;
@@ -140,7 +153,8 @@ class SandboxFilesystemSync {
     }
 
     for (const file of snapshot.files) {
-      const sandboxPath = `${WORKSPACE_DIR}/${file.path}`;
+      const workspaceDir = getWorkspaceDirForSandbox(sandboxId);
+      const sandboxPath = `${workspaceDir}/${file.path}`;
       try {
         await sandboxBridge.writeFile(sandboxId, sandboxPath, file.content);
       } catch (err) {

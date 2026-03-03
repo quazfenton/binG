@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSmitheryService, type SmitheryServer } from '@/lib/mcp/smithery-service';
-
-import { NextRequest, NextResponse } from 'next/server';
-import { getSmitheryService, type SmitheryServer } from '@/lib/mcp/smithery-service';
 import { verifyAuth } from '@/lib/auth/verify-auth';
 
 export async function GET(request: NextRequest) {

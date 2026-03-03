@@ -15,6 +15,7 @@ import {
   getSession as storeGetSession,
   getSessionByUserId as storeGetSessionByUserId,
   getAllActiveSessions,
+  deleteSession as deleteSessionFromStore,
 } from './session-store';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { sandboxFilesystemSync } from './sandbox-filesystem-sync';
@@ -139,7 +140,7 @@ export class SandboxServiceBridge {
   /**
    * Infer provider type from sandbox ID
    */
-  private inferProviderFromSandboxId(sandboxId: string): string | null {
+  inferProviderFromSandboxId(sandboxId: string): string | null {
     if (sandboxId.startsWith('blaxel-')) return 'blaxel';
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites';
     if (sandboxId.startsWith('mistral-')) return 'mistral';
@@ -151,9 +152,16 @@ export class SandboxServiceBridge {
     return null;
   }
 
-  private async getProvider(name: string | null) {
+  async getProvider(name: string | null) {
     const { getSandboxProvider } = await import('./providers');
     return getSandboxProvider((name as any) || 'e2b');
+  }
+
+  /**
+   * Delete a session from the store
+   */
+  deleteSession(sessionId: string): void {
+    deleteSessionFromStore(sessionId);
   }
 
   /**

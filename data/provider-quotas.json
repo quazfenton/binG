@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-03-02T07:26:43.758Z",
+  "updatedAt": "2026-03-03T00:48:47.838Z",
   "quotas": {
     "composio": {
       "monthlyLimit": 20000,
@@ -22,7 +22,7 @@
     },
     "daytona": {
       "monthlyLimit": 5000,
-      "currentUsage": 0,
+      "currentUsage": 5,
       "resetDate": "2026-04-01T04:00:00.000Z",
       "isDisabled": false
     },
@@ -34,7 +34,7 @@
     },
     "microsandbox": {
       "monthlyLimit": 10000,
-      "currentUsage": 54,
+      "currentUsage": 59,
       "resetDate": "2026-04-01T04:00:00.000Z",
       "isDisabled": false
     },
