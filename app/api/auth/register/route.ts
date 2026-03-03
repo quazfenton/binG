@@ -45,6 +45,9 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
       username: username || 'not provided',
       ip: ipAddress,
     });
+      username: username || 'not provided',
+      ip: ipAddress,
+    });
       email,
       username: username || 'not provided',
       ip: ipAddress,
