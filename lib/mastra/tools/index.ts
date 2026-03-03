@@ -453,6 +453,8 @@ export const allTools = {
   executeCode: executeCodeTool,
   syntaxCheck: syntaxCheckTool,
   installDeps: installDepsTool,
+  // Filesystem tools for LLM agent (from filesystem-tools.ts)
+  // These provide structured tool definitions for LLM tool calling
 };
 
 /**
@@ -476,4 +478,18 @@ export function getToolsByCategory(category: 'vfs' | 'sandbox') {
     return [writeFileTool, readFileTool, deletePathTool, listFilesTool];
   }
   return [executeCodeTool, syntaxCheckTool, installDepsTool];
+}
+
+/**
+ * Get all tools including agent filesystem tools
+ * For use with LLM tool calling
+ */
+export function getAllToolsWithAgentTools() {
+  const { getFilesystemTools } = require('../tools/filesystem-tools');
+  const agentTools = getFilesystemTools();
+  
+  return [
+    ...Object.values(allTools),
+    ...agentTools,
+  ];
 }

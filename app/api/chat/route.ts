@@ -12,9 +12,15 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import type { LLMMessage } from "@/lib/api/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
+import { getFilesystemTools, createAgentLoop } from '@/lib/mastra';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
+
+// LLM Agent Tools Configuration
+const LLM_AGENT_TOOLS_ENABLED = process.env.LLM_AGENT_TOOLS_ENABLED !== 'false';
+const LLM_AGENT_TOOLS_MAX_ITERATIONS = parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '10', 10);
+const LLM_AGENT_TOOLS_TIMEOUT_MS = parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '30000', 10);
 
 // Note: Fast-Agent now has dedicated endpoint at /api/agent
 // This route uses priority router which includes Fast-Agent as Priority 1
@@ -279,6 +285,46 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
       // Process response through unified handler
       const unifiedResponse = unifiedResponseHandler.processResponse(routerResponse, requestId);
       const rawResponseContent = unifiedResponse.content || '';
+      
+      // LLM Agent Tools: Execute filesystem tools if enabled and user is authenticated
+      let agentToolResults = null;
+      if (LLM_AGENT_TOOLS_ENABLED && authenticatedUserId && requestType === 'tool') {
+        try {
+          console.log('[LLM Agent Tools] Executing filesystem tools for user:', authenticatedUserId);
+          
+          const agentLoop = createAgentLoop(
+            authenticatedUserId,
+            requestedScopePath || 'workspace',
+            LLM_AGENT_TOOLS_MAX_ITERATIONS
+          );
+          
+          // Set timeout for agent execution
+          const agentPromise = agentLoop.executeTask(rawResponseContent);
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Agent tools timeout')), LLM_AGENT_TOOLS_TIMEOUT_MS);
+          });
+          
+          agentToolResults = await Promise.race([agentPromise, timeoutPromise]) as any;
+          
+          console.log('[LLM Agent Tools] Execution completed:', {
+            success: agentToolResults.success,
+            iterations: agentToolResults.iterations,
+            results: agentToolResults.results?.length,
+          });
+          
+          // Append agent tool results to response
+          if (agentToolResults.success && agentToolResults.results?.length > 0) {
+            const toolSummary = agentToolResults.results
+              .map((r: any) => `${r.tool}: ${JSON.stringify(r.result)}`)
+              .join('\n');
+            unifiedResponse.content = `${rawResponseContent}\n\n[Agent Tools Executed]\n${toolSummary}`;
+          }
+        } catch (error: any) {
+          console.error('[LLM Agent Tools] Execution failed:', error.message);
+          // Continue with normal response even if agent tools fail
+        }
+      }
+      
       const filesystemEdits =
         !enableFilesystemEdits
           ? null
@@ -718,6 +764,16 @@ function appendFilesystemContextMessages(
             '   >>>',
             '   DELETE <path>',
             'Prefer concrete multi-file edits when user requests full project scaffolding.',
+            '',
+            'To read a file from the workspace, use: <file_read path="..." />',
+            '',
+            'When the user asks how to run code, include shell commands in ```bash blocks.',
+            'The user has a terminal that can execute these commands.',
+            'For multi-step setups, provide all commands in a single bash block so they can be run together.',
+            'Example: ```bash',
+            'npm install',
+            'npm run dev',
+            '```',
           ].join('\n')
         : '',
       workspaceContext ? `Current workspace session context:\n${workspaceContext}` : '',
