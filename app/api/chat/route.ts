@@ -332,7 +332,7 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
         }
 
         const encoder = new TextEncoder();
-        const encoderRef = encoder;  // Reference for cleanup (no null assignment)
+        let encoderRef = encoder;  // Reference for cleanup
         const readableStream = new ReadableStream({
           async start(controller) {
             // Cleanup function for resource management
