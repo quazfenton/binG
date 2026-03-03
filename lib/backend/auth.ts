@@ -1,0 +1,241 @@
+/**
+ * Authentication Module
+ * JWT validation and user ID extraction
+ * Migrated from ephemeral/auth.py
+ */
+
+import { jwtVerify, importSPKI, JWTPayload } from 'jose';
+
+export interface AuthConfig {
+  algorithm: string;
+  expirationHours: number;
+  issuer?: string;
+  audience?: string;
+  publicKey?: string;
+  secretKey?: string;
+}
+
+const DEFAULT_AUTH_CONFIG: AuthConfig = {
+  algorithm: 'HS256',
+  expirationHours: 24,
+  issuer: process.env.IDP_ISSUER,
+  audience: process.env.IDP_AUDIENCE,
+  publicKey: process.env.AUTH_PUBLIC_KEY,
+  secretKey: process.env.JWT_SECRET_KEY,
+};
+
+/**
+ * Validate user ID to prevent path traversal and command injection
+ */
+export function validateUserId(userId: string): boolean {
+  // Allow alphanumeric characters, hyphens, underscores, and pipe (for IdP formats like auth0|...)
+  return /^[a-zA-Z0-9_\-\|]+$/.test(userId);
+}
+
+/**
+ * Get and validate user ID from JWT token
+ */
+export async function getUserId(token: string, config: AuthConfig = DEFAULT_AUTH_CONFIG): Promise<string> {
+  try {
+    let key: CryptoKey;
+
+    // Determine key type based on algorithm
+    if (config.algorithm.startsWith('RS') || config.algorithm.startsWith('ES')) {
+      // Asymmetric algorithm (RS256, ES256, etc.) - use public key
+      if (!config.publicKey) {
+        throw new Error('Public key required for asymmetric algorithm');
+      }
+      key = await importSPKI(config.publicKey, config.algorithm);
+    } else {
+      // Symmetric algorithm (HS256, HS384, HS512) - use secret key
+      if (!config.secretKey) {
+        throw new Error('Secret key required for symmetric algorithm');
+      }
+      key = new TextEncoder().encode(config.secretKey);
+    }
+
+    // Verify and decode JWT
+    const { payload } = await jwtVerify(token, key, {
+      algorithms: [config.algorithm],
+      issuer: config.issuer,
+      audience: config.audience,
+    });
+
+    // Extract user ID from 'sub' claim
+    const userId = payload.sub;
+    if (!userId) {
+      throw new Error('JWT missing "sub" claim');
+    }
+
+    // Validate user ID format
+    if (!validateUserId(userId)) {
+      throw new Error('Invalid user ID format');
+    }
+
+    return userId;
+  } catch (error: any) {
+    if (error.name === 'JWTExpired') {
+      throw new Error('JWT token has expired');
+    }
+    if (error.name === 'JOSEError') {
+      throw new Error('Invalid JWT token');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create JWT token (for testing/internal use)
+ */
+export async function createToken(
+  userId: string,
+  config: AuthConfig = DEFAULT_AUTH_CONFIG
+): Promise<string> {
+  const { SignJWT } = await import('jose');
+
+  if (!config.secretKey) {
+    throw new Error('Secret key required for token creation');
+  }
+
+  const token = await new SignJWT({})
+    .setProtectedHeader({ alg: config.algorithm })
+    .setSubject(userId)
+    .setIssuedAt()
+    .setExpirationTime(`${config.expirationHours}h`)
+    .setIssuer(config.issuer)
+    .setAudience(config.audience)
+    .sign(new TextEncoder().encode(config.secretKey));
+
+  return token;
+}
+
+/**
+ * Extract user from Authorization header
+ */
+export async function getCurrentUser(authorization: string | null): Promise<string> {
+  if (!authorization) {
+    throw new Error('Authorization header required');
+  }
+
+  if (!authorization.startsWith('Bearer ')) {
+    throw new Error('Authorization header must start with "Bearer "');
+  }
+
+  const token = authorization.substring(7); // Remove "Bearer " prefix
+  return getUserId(token);
+}
+
+/**
+ * Middleware-style auth checker for API routes
+ */
+export async function requireAuth(request: Request): Promise<string> {
+  const authHeader = request.headers.get('Authorization');
+  return getCurrentUser(authHeader);
+}
+
+/**
+ * Check if token is valid without extracting user ID
+ */
+export async function validateToken(token: string, config: AuthConfig = DEFAULT_AUTH_CONFIG): Promise<boolean> {
+  try {
+    await getUserId(token, config);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get token expiration time
+ */
+export async function getTokenExpiration(token: string): Promise<Date | null> {
+  try {
+    const { payload } = await import('jose');
+    const decoded = payload(token);
+    
+    if (decoded.exp) {
+      return new Date(decoded.exp * 1000);
+    }
+    
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Auth configuration validator
+ */
+export function validateAuthConfig(config: AuthConfig): void {
+  const errors: string[] = [];
+
+  if (!config.algorithm) {
+    errors.push('Algorithm is required');
+  }
+
+  if (config.algorithm.startsWith('RS') || config.algorithm.startsWith('ES')) {
+    if (!config.publicKey) {
+      errors.push('Public key required for asymmetric algorithm');
+    }
+  } else if (config.algorithm.startsWith('HS')) {
+    if (!config.secretKey) {
+      errors.push('Secret key required for symmetric algorithm');
+    }
+  } else {
+    errors.push(`Unsupported algorithm: ${config.algorithm}`);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Invalid auth config: ${errors.join(', ')}`);
+  }
+}
+
+// Singleton auth instance
+export class AuthManager {
+  private config: AuthConfig;
+  private static instance: AuthManager | null = null;
+
+  constructor(config: AuthConfig = DEFAULT_AUTH_CONFIG) {
+    validateAuthConfig(config);
+    this.config = config;
+  }
+
+  static getInstance(config?: AuthConfig): AuthManager {
+    if (!AuthManager.instance) {
+      AuthManager.instance = new AuthManager(config);
+    }
+    return AuthManager.instance;
+  }
+
+  async getUserId(token: string): Promise<string> {
+    return getUserId(token, this.config);
+  }
+
+  async createToken(userId: string): Promise<string> {
+    return createToken(userId, this.config);
+  }
+
+  async validateToken(token: string): Promise<boolean> {
+    return validateToken(token, this.config);
+  }
+
+  async getCurrentUser(authorization: string | null): Promise<string> {
+    if (!authorization) {
+      throw new Error('Authorization header required');
+    }
+    const token = authorization.startsWith('Bearer ') ? authorization.substring(7) : authorization;
+    return this.getUserId(token);
+  }
+
+  updateConfig(config: Partial<AuthConfig>): void {
+    this.config = { ...this.config, ...config };
+    validateAuthConfig(this.config);
+  }
+
+  getConfig(): AuthConfig {
+    return { ...this.config };
+  }
+}
+
+// Export singleton instance
+export const authManager = AuthManager.getInstance();
