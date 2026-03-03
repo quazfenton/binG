@@ -96,8 +96,8 @@ export async function POST(req: NextRequest) {
     // Extract the JWT ID (jti) from the decoded token payload.
     // This jti is expected to be stored in the database's reset_token column
     // to link the active reset token to the user and prevent replay attacks.
-    const tokenJti = decoded.jti; 
-    
+    const tokenJti = decoded.jti;
+
     // It's a critical security measure that `jti` is present in the token when issued.
     if (!tokenJti) {
       console.error(`[Security] JWT ID (jti) missing from decoded token for userId: ${userId}`);
@@ -110,8 +110,48 @@ export async function POST(req: NextRequest) {
     // SECURITY: Verify user exists, is active, AND has a valid reset token that matches the one provided.
     // This prevents token replay attacks where a captured token could be reused.
     const user = db.prepare(`
-      SELECT id, email, is_active, reset_token, reset_token_expires 
+      SELECT id, email, is_active, reset_token, reset_token_expires
       FROM users WHERE id = ?
+    `).get(userId) as any;
+
+    if (!user) {
+      // Do not reveal if user exists or not for security reasons (user enumeration).
+      // A user might have been deleted after a token was issued.
+      return NextResponse.json(
+        { success: false, error: 'Invalid reset token' },
+        { status: 400 }
+      );
+    }
+
+    if (!user.is_active) {
+      return NextResponse.json(
+        { success: false, error: 'Account is deactivated' },
+        { status: 403 }
+      );
+    }
+
+    // SECURITY: Verify the token matches the stored reset_token and hasn't expired
+    if (!user.reset_token || user.reset_token !== tokenJti) {
+      console.warn(`[Security] Password reset token mismatch or replay attempt for user ${user.email} (ID: ${userId})`);
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Invalid reset token'
+        },
+        { status: 400 }
+      );
+    }
+
+    if (user.reset_token_expires && new Date(user.reset_token_expires) < new Date()) {
+      console.warn(`[Security] Expired password reset token used for user ${user.email} (ID: ${userId})`);
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Reset token has expired. Please request a new password reset.'
+        },
+        { status: 400 }
+      );
+    }
     `).get(userId) as any;
 
     if (!user) {
