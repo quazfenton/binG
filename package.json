@@ -21,7 +21,8 @@
     "test:fast-agent": "node test-fast-agent-integration.js",
     "backup": "node scripts/backup-database.js",
     "backup:local": "BACKUP_PROVIDER=local node scripts/backup-database.js",
-    "backup:s3": "BACKUP_PROVIDER=s3 node scripts/backup-database.js"
+    "backup:s3": "BACKUP_PROVIDER=s3 node scripts/backup-database.js",
+    "backend:init": "node scripts/init-backend.js"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.48",
@@ -41,6 +42,8 @@
     "@composio/langchain": "^0.6.2",
     "@composio/openai-agents": "^0.5.5",
     "@composio/vercel": "^0.5.4",
+    "@craftjs/core": "^0.2.12",
+    "@craftjs/layers": "^0.2.7",
     "@daytonaio/sdk": "^0.143.0",
     "@e2b/code-interpreter": "^2.3.3",
     "@e2b/desktop": "^2.2.2",
@@ -123,6 +126,7 @@
     "framer-motion": "^11.18.0",
     "input-otp": "1.4.1",
     "ioredis": "^5.4.1",
+    "jose": "^6.0.10",
     "js-yaml": "^4.1.1",
     "jsonwebtoken": "^9.0.2",
     "jszip": "^3.10.1",
