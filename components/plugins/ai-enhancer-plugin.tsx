@@ -46,13 +46,21 @@ export const AIEnhancerPlugin: React.FC<PluginProps> = ({
           messages: [
             { role: 'system', content: `You are a text enhancement assistant. Rewrite the user's text in a ${mode} tone. Only output the enhanced text, nothing else.` },
             { role: 'user', content: input }
+          ],
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          stream: false
+        }),
+          messages: [
+            { role: 'system', content: `You are a text enhancement assistant. Rewrite the user's text in a ${mode} tone. Only output the enhanced text, nothing else.` },
+            { role: 'user', content: input }
           ]
         }),
       });
 
       if (!response.ok) throw new Error('Enhancement failed');
       const data = await response.json();
-      const enhancedText = data.message || data.choices?.[0]?.message?.content || data.content || '';
+      const enhancedText = data.data?.content || data.message || data.choices?.[0]?.message?.content || data.content || '';
       
       setEnhanced(enhancedText);
       onResult?.({ original: input, enhanced: enhancedText, mode });

@@ -165,7 +165,14 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
             shared: false,
             content
           };
-          persistFiles([...files, newFile]);
+          const allFiles = loadFilesFromStorage();
+          const otherProvidersFiles = allFiles.filter(f => f.provider !== activeProvider);
+          persistFiles([...otherProvidersFiles, ...files, newFile]);
+          setBackendMode(false);
+          toast.success(content ? 'File uploaded in local mode' : 'File metadata saved in local mode');
+        };
+        if (file.size <= MAX_STORED_FILE_SIZE) {
+          reader.readAsDataURL(file);
           setBackendMode(false);
           toast.success(content ? 'File uploaded in local mode' : 'File metadata saved in local mode');
         };
@@ -230,7 +237,12 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
       }
     }
     // Local mode deletion
-    persistFiles(files.filter(f => f.id !== id));
+    const allFiles = loadFilesFromStorage();
+    const remainingCurrentProvider = files.filter(f => f.id !== id);
+    persistFiles([
+      ...allFiles.filter(f => f.provider !== activeProvider),
+      ...remainingCurrentProvider
+    ]);
     toast.success('File deleted (local mode)');
   };
 

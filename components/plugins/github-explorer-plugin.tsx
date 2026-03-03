@@ -153,7 +153,7 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
           setSelectedFile({ name: (data as any).name, content });
         }
       } else {
-        const data = await ghFetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`);
+        const data = await ghFetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`);
         if (typeof data.content === 'string') {
           const content = atob(data.content);
           setSelectedFile({ name: data.name, content });

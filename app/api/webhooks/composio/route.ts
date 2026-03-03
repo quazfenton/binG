@@ -14,7 +14,6 @@ import {
 } from '@/lib/composio/webhook-handler';
 import { checkRateLimitMiddleware } from '@/lib/middleware/rate-limit';
 import { addCORSHeaders } from '@/lib/middleware/cors';
-
 export async function POST(request: NextRequest) {
   const requestId = `webhook_composio_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
@@ -34,7 +33,24 @@ export async function POST(request: NextRequest) {
 
     // Verify signature if secret is configured
     const secret = process.env.COMPOSIO_WEBHOOK_SECRET;
-    if (secret) {
+    if (!secret) {
+      console.error(`[ComposioWebhook] Webhook secret not configured (${requestId})`);
+      return addCORSHeaders(
+        NextResponse.json({
+          success: false,
+          error: {
+            code: 'WEBHOOK_SECRET_MISSING',
+            message: 'Webhook secret not configured',
+          },
+        }, { status: 403 }),
+        undefined,
+        request
+      );
+    }
+
+    if (!signature) {
+      console.warn(`[ComposioWebhook] Missing signature (${requestId})`);
+      const response = NextResponse.json({
       if (!signature) {
         console.warn(`[ComposioWebhook] Missing signature (${requestId})`);
         const response = NextResponse.json({

@@ -45,10 +45,15 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
 
       setDisplay(String(newValue));
       setPreviousValue(newValue);
-      
+
       // Add to history
       const calculation = `${currentValue} ${operation} ${inputValue} = ${newValue}`;
-      updateHistory([calculation, ...history.slice(0, 9)]); // Keep last 10
+      updateHistory(prevHistory => [calculation, ...prevHistory.slice(0, 9)]); // Keep last 10
+    }
+
+    setWaitingForOperand(true);
+    setOperation(nextOperation);
+  };
     }
 
     setWaitingForOperand(true);
@@ -155,6 +160,8 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('input, textarea, [contenteditable="true"]')) return;
       if (e.key >= '0' && e.key <= '9') {
         inputNumber(e.key);
       } else if (e.key === '+') {

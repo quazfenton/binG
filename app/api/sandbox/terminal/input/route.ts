@@ -104,6 +104,15 @@ export async function POST(req: NextRequest) {
     // SECURITY: Buffer ALL input for security validation
     // We cannot distinguish between "PTY interactive" and "line-based" input reliably
     // Attackers could bypass security by sending dangerous commands without newlines
+    // SECURITY: Verify session ownership BEFORE buffering any data
+    const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
+    if (!userSession || userSession.sessionId !== sessionId) {
+      return NextResponse.json(
+        { error: 'Unauthorized: session does not belong to this user' },
+        { status: 403 }
+      );
+    }
+
     const bufferEntry = commandBuffers.get(sessionId) || { buffer: '', lastActivity: Date.now() };
     bufferEntry.buffer += data;
     bufferEntry.lastActivity = Date.now();
@@ -147,7 +156,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      await terminalManager.sendInput(sessionId, fullCommand);
+      await terminalManager.sendInput(sessionId, bufferEntry.buffer);
 
       // Clear buffer after successful validation and forwarding
       commandBuffers.delete(sessionId);

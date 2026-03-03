@@ -129,13 +129,15 @@ export default function AIPromptLibraryPlugin({ onClose }: PluginProps) {
           messages: [
             { role: 'user', content: processedContent }
           ],
-          model: selectedModel
+          provider: 'openrouter',
+          model: selectedModel,
+          stream: false
         }),
       });
 
       if (!response.ok) throw new Error('Execution failed');
       const data = await response.json();
-      const generatedResult = data.message || data.choices?.[0]?.message?.content || data.content || '';
+      const generatedResult = data.data?.content || data.message || data.choices?.[0]?.message?.content || data.content || '';
       setResult(generatedResult);
       toast.success('Prompt executed');
     } catch (err) {

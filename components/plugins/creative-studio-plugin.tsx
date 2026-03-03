@@ -114,12 +114,12 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
       toast.error('Invalid time values');
       return;
     }
-    
+
     if (endTime <= startTime) {
       toast.error('End time must be greater than start time');
       return;
     }
-    
+
     // Lazy load FFmpeg only when trim is actually used
     if (!ffmpegRef.current || !fetchFileRef.current) {
       try {
@@ -128,8 +128,10 @@ export default function CreativeStudioPlugin({ onClose }: PluginProps) {
         const ffmpegMod = await import('@ffmpeg/ffmpeg');
         const utilMod = await import('@ffmpeg/util');
         const instance = new ffmpegMod.FFmpeg();
-        await instance.load({
-          coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js',
+        await instance.load();
+        ffmpegRef.current = instance;
+        fetchFileRef.current = utilMod.fetchFile;
+        setFfmpegReady(true);
           wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm',
         });
         ffmpegRef.current = instance;

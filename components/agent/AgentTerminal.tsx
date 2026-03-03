@@ -148,6 +148,11 @@ export function AgentTerminal({
     }
 
     const cleanupPromise = initTerminal()
+
+    return () => {
+      cleanupPromise.then(cleanup => cleanup?.()).catch(() => {})
+    }
+  }, [connected, theme, send])
     
     return () => {
       cleanupPromise.then(cleanup => cleanup?.())

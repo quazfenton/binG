@@ -104,7 +104,14 @@ export default function CodeSandboxPlugin({ onClose }: PluginProps) {
     const startTime = Date.now();
 
     try {
+      const command = getCommandForLanguage(language, code, packages);
       const res = await fetch('/api/sandbox/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          command,
+          sandboxId: 'default-sandbox'
+        }),
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

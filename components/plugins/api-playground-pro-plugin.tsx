@@ -99,11 +99,13 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
     const resolvedBody = overrides?.body ?? replaceEnvVars(body);
 
     try {
-      const requestHeaders: Record<string, string> = overrides?.headers ?? {};
-      if (!overrides?.headers) {
-        headers.filter(h => h.enabled && h.key).forEach(h => {
-          requestHeaders[h.key] = h.value;
-        });
+      const requestHeaders: Record<string, string> = {};
+      headers.filter(h => h.enabled && h.key).forEach(h => {
+        requestHeaders[h.key] = h.value;
+      });
+      if (overrides?.headers) {
+        Object.assign(requestHeaders, overrides.headers);
+      }
       }
 
       const res = await fetch(resolvedUrl, {

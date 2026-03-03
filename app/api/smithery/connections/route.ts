@@ -65,6 +65,24 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json(
+        { error: 'Invalid request body' },
+        { status: 400 }
+      );
+    }
+
+    const { mcpUrl, metadata, connectionId } = body;
+    if (!mcpUrl || typeof mcpUrl !== 'string') {
+      return NextResponse.json(
+        { error: 'mcpUrl is required and must be a string' },
+        { status: 400 }
+      );
+    }
+
+    if (connectionId) {
+      // Update existing connection
+      const connection = await service.createOrUpdateConnection(connectionId, mcpUrl);
     const { mcpUrl, metadata, connectionId } = body;
 
     if (connectionId) {

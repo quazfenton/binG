@@ -158,12 +158,15 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     setIsAgentRunning(true)
     setCurrentIteration(0)
     setActionHistory([])
-
     try {
       // Import generateText from ai SDK for LLM calls
       const { generateText } = await import('ai')
 
-      // LLM API keys must be configured on the server; client code does not access them directly here.
+      const apiKey = process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY
+      if (!apiKey) {
+        appendTerminalOutput('Error: No LLM API key configured (OPENAI_API_KEY or OPENROUTER_API_KEY)')
+        setIsAgentRunning(false)
+        return
       }
 
       // Create OpenAI model instance
@@ -173,12 +176,17 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
       // Manual agent loop implementation
       let iteration = 0
       let shouldContinue = true
+      const controller = new AbortController()
 
-      while (shouldContinue && iteration < maxIterations && desktop.isAlive()) {
+      while (shouldContinue && iteration < maxIterations && desktop.isAlive() && !controller.signal.aborted) {
         iteration++
         setCurrentIteration(iteration)
 
         try {
+          // Take screenshot for vision input
+          const screenshotBase64 = await desktop.screenshotBase64()
+
+          appendTerminalOutput(`\n--- Iteration ${iteration} ---`)
           // Take screenshot for vision input
           const screenshotBase64 = await desktop.screenshotBase64()
 
@@ -283,6 +291,11 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
           return await desktop.type(action.text)
         case 'keypress':
           return await desktop.press(action.keys)
+        case 'screenshot':
+          const base64 = await desktop.screenshotBase64()
+          return { success: true, output: `Screenshot taken (${base64.length} bytes)` }
+        default:
+          return { success: false, output: `Unknown action type: ${(action as any).type}` }
         case 'screenshot':
           const base64 = await desktop.screenshotBase64()
           return { success: true, output: `Screenshot taken (${base64.length} bytes)` }

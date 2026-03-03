@@ -344,7 +344,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   // Handle keyboard shortcuts - uses ref to avoid initialization order issues
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Ctrl+Enter or Cmd+Enter to generate from anywhere
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.repeat) {
       e.preventDefault();
       if (!isGenerating && params.prompt.trim()) {
         generateFnRef.current?.();
@@ -355,7 +355,12 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   // Handle prompt textarea keyboard events
   const handlePromptKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Enter without Shift to generate (in textarea)
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.repeat) {
+      e.preventDefault();
+      if (!isGenerating && params.prompt.trim()) {
+        generateFnRef.current?.();
+      }
+    }
       e.preventDefault();
       if (!isGenerating && params.prompt.trim()) {
         generateFnRef.current?.();
@@ -472,6 +477,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
     setSelectedImage(null);
     setImageErrors(new Set());
     localStorage.removeItem('generated-images');
+    setGenerationHistory([]);
     localStorage.removeItem('generation-history');
     toast.info("Cleared all images");
   }, []);

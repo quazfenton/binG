@@ -65,7 +65,7 @@ export async function POST(
 }
 
 /**
- * GET /api/mastra/workflows/:workflowId/run/:runId
+ * GET /api/mastra/workflows/:workflowId/runs/:runId
  *
  * Get workflow run status and result.
  *
@@ -73,10 +73,23 @@ export async function POST(
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ workflowId: string; runId: string }> }
+  { params }: { params: Promise<{ workflowId: string }> }
 ) {
   try {
-    const { workflowId, runId } = await params;
+    const { workflowId } = await params;
+    const runId = request.nextUrl.searchParams.get('runId');
+
+    if (!runId) {
+      return NextResponse.json(
+        { error: 'runId query parameter is required' },
+        { status: 400 }
+      );
+    }
+
+    // Get workflow
+    const workflow = mastra.getWorkflow(workflowId);
+
+    if (!workflow) {
 
     // Get workflow
     const workflow = mastra.getWorkflow(workflowId);

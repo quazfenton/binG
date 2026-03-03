@@ -381,8 +381,28 @@ export default function GitHubExplorerAdvancedPlugin({ onClose }: PluginProps) {
                 />
                 {renderFileTree(
                   (() => {
-                    const filtered = fileFilter
-                      ? fileTree.filter(n => n.path.toLowerCase().includes(fileFilter.toLowerCase()))
+                    const filterTree = (nodes: any[]): any[] => {
+                      return nodes.reduce((acc: any[], node) => {
+                        const matches = fileFilter
+                          ? node.path.toLowerCase().includes(fileFilter.toLowerCase())
+                          : true;
+                        if (node.children) {
+                          const filteredChildren = filterTree(node.children);
+                          if (matches || filteredChildren.length > 0) {
+                            acc.push({ ...node, children: filteredChildren });
+                          }
+                        } else if (matches) {
+                          acc.push(node);
+                        }
+                        return acc;
+                      }, []);
+                    };
+
+                    const filtered = fileFilter ? filterTree(fileTree) : fileTree;
+                    return showAllFiles ? filtered : filtered.slice(0, 50);
+                  })()
+                )}
+                {!showAllFiles && fileTree.length > 50 && (
                       : fileTree;
                     return showAllFiles ? filtered : filtered.slice(0, 50);
                   })()

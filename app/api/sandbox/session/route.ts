@@ -158,9 +158,11 @@ export async function PATCH(req: NextRequest) {
     const sandboxProvider = getSandboxProvider(
       (provider as any) ?? (process.env.SANDBOX_PROVIDER as any) ?? undefined
     );
-    const handle = await sandboxProvider.getSandbox(sandboxId);
-
-    switch (action) {
+    const resolvedProvider = (provider as any)
+      ?? (sandboxBridge.inferProviderFromSandboxId(sandboxId) as any)
+      ?? (process.env.SANDBOX_PROVIDER as any)
+      ?? undefined;
+    const sandboxProvider = getSandboxProvider(resolvedProvider);
       case 'list': {
         if (!('listServices' in handle) || typeof (handle as any).listServices !== 'function') {
           return NextResponse.json(

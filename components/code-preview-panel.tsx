@@ -191,8 +191,9 @@ export default function CodePreviewPanel({
       const cleanPath = path.replace(/^project\/project\//, 'project/');
       const file = await readFilesystemFile(cleanPath);
       setSelectedFilesystemPath(file.path);
-      setSelectedFilesystemLanguage(file.language || "text");
-      setSelectedFilesystemContent(file.content || "");
+  const selectFilesystemFile = useCallback(async (path: string) => {
+    setSelectedFileIndex(-1);
+    setIsEditingFile(false);
     } finally {
       setIsFilesystemFileLoading(false);
     }

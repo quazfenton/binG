@@ -92,6 +92,7 @@ export default function DevOpsCommandCenterPlugin({ onClose }: PluginProps) {
 
   const loadContainers = async () => {
     setLoading(true);
+    setDemoMode(false);
     try {
       const res = await fetch('/api/docker/containers');
       if (res.ok) {
@@ -101,6 +102,11 @@ export default function DevOpsCommandCenterPlugin({ onClose }: PluginProps) {
     } catch (err) {
       // Mock data for demo
       setDemoMode(true);
+      setContainers([
+        { id: '1', name: 'nginx-proxy', image: 'nginx:latest', status: 'running', state: 'Up 2 hours', ports: ['80:80', '443:443'], created: '2 hours ago' },
+        { id: '2', name: 'postgres-db', image: 'postgres:14', status: 'running', state: 'Up 1 day', ports: ['5432:5432'], created: '1 day ago' },
+        { id: '3', name: 'redis-cache', image: 'redis:alpine', status: 'running', state: 'Up 5 hours', ports: ['6379:6379'], created: '5 hours ago' },
+        { id: '4', name: 'api-server', image: 'node:18', status: 'exited', state: 'Exited (0) 10 minutes ago', ports: [], created: '3 hours ago' }
       setContainers([
         { id: '1', name: 'nginx-proxy', image: 'nginx:latest', status: 'running', state: 'Up 2 hours', ports: ['80:80', '443:443'], created: '2 hours ago' },
         { id: '2', name: 'postgres-db', image: 'postgres:14', status: 'running', state: 'Up 1 day', ports: ['5432:5432'], created: '1 day ago' },

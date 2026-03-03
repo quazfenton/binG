@@ -107,11 +107,10 @@ export const CodeFormatterPlugin: React.FC<PluginProps> = ({
           for (const raw of lines) {
             const line = raw.trim();
             if (!line) continue;
-            if (line === '}' || line.startsWith('}')) {
-              depth = Math.max(0, depth - 1);
-              result.push(indent(depth) + line);
-            } else {
-              result.push(indent(depth) + line);
+            const lineDepth = (line === '}' || line.startsWith('}'))
+              ? Math.max(0, depth - 1)
+              : depth;
+            result.push(indent(lineDepth) + line);
             }
             // Count braces to adjust depth for next line
             for (const ch of line) {

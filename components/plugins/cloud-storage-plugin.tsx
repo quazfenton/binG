@@ -31,7 +31,7 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         return;
       }
 
-      const response = await fetch('/api/storage/list?prefix=users/' + encodeURIComponent(user.email), {
+      const response = await fetch('/api/storage/list?prefix=users/' + encodeURIComponent(user.email) + '/', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -84,7 +84,7 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         return;
       }
 
-      const response = await fetch(`/api/storage/download?path=users/${encodeURIComponent(user.email)}/${file}`, {
+      const response = await fetch(`/api/storage/download?path=users/${encodeURIComponent(user.email)}/${encodeURIComponent(file)}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
