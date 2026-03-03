@@ -576,6 +576,22 @@ export async function GET(req: NextRequest): Promise<NextResponse<any>> {
         tarPipe: provider === 'sprites',
       },
     });
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized: you do not have access to this sandbox' },
+        { status: 403 }
+      );
+    }
+
+    return NextResponse.json({
+      sandboxId,
+      provider,
+      status: 'active',
+      capabilities: {
+        batch: true,
+        incremental: true,
+        tarPipe: provider === 'sprites',
+      },
+    });
       );
       return NextResponse.json(
         { success: false, error: 'Unauthorized: you do not have access to this sandbox' },
