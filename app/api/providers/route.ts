@@ -40,6 +40,7 @@ export async function GET() {
         const selectedProvider = Object.values(PROVIDERS).find(p => p.id === defaultProvider);
         const providerDefaultModel = process.env.DEFAULT_MODEL || selectedProvider?.models?.[0];
         const providerDefaultModel = process.env.DEFAULT_MODEL || selectedProvider?.models?.[0];
+        const providerDefaultModel = process.env.DEFAULT_MODEL || selectedProvider?.models?.[0];
 
         return NextResponse.json({
           success: true,
