@@ -839,27 +839,31 @@ export default function CodePreviewPanel({
             ) {
               framework = "fastapi";
             } else if (pkg.dependencies.django || pkg.dependencies["Django"]) {
-              framework = "django";
-            } else if (pkg.dependencies.react) {
-              framework = "react";
-            } else if (pkg.dependencies.vue || pkg.dependencies["@vue/core"]) {
-              framework = "vue";
-            } else if (pkg.dependencies["@angular/core"]) {
-              framework = "angular";
-            }
-          }
-
-          if (pkg.devDependencies) {
-            devDependencies.push(...Object.keys(pkg.devDependencies));
-
-            // Detect bundler from devDependencies
-            if (pkg.devDependencies.vite) {
-              bundler = "vite";
-            } else if (pkg.devDependencies.webpack) {
-              bundler = "webpack";
-            } else if (pkg.devDependencies.parcel) {
-              bundler = "parcel";
-            } else if (pkg.devDependencies.rollup) {
+  const handleRenameFile = useCallback((oldPath: string) => {
+    const oldName = oldPath.split('/').pop() || '';
+    const newName = prompt('Rename to:', oldName);
+    if (!newName || newName === oldName) return;
+  
+    const parentPath = oldPath.split('/').slice(0, -1).join('/');
+    const newPath = parentPath ? `${parentPath}/${newName}` : newName;
+  
+    // Read old file, write new file, delete old file
+    readFilesystemFile(oldPath).then((file: any) => {
+      return writeFilesystemFile(newPath, file.content).then(() => {
+        return deleteFilesystemPath(oldPath);
+      });
+    }).then(() => {
+      toast.success('Renamed to: ' + newName);
+      void listFilesystemDirectory(filesystemCurrentPath);
+      setContextMenu(null);
+      if (selectedFilesystemPath === oldPath) {
+        setSelectedFilesystemPath('');
+        setSelectedFilesystemContent('');
+      }
+    }).catch((err: any) => {
+      toast.error('Failed to rename: ' + err.message);
+    });
+  }, [filesystemCurrentPath, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, listFilesystemDirectory, selectedFilesystemPath]);
               bundler = "rollup";
             } else if (pkg.devDependencies.esbuild) {
               bundler = "esbuild";
