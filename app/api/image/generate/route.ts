@@ -6,27 +6,40 @@ import {
 } from '@/lib/image-generation'
 
 export interface GenerateBody {
-  prompt: string
-  negativePrompt?: string
-  width?: number
-  height?: number
-  steps?: number
-  guidance?: number
-  seed?: number | 'random'
-  model?: string
-  initImageUrl?: string
-  numImages?: number
-  aspectRatio?: AspectRatio
-  quality?: 'low' | 'medium' | 'high' | 'ultra'
-  style?: string
-  sampler?: string
-  provider?: string
-  imageStrength?: number
-}
+  export interface GenerateBody {
+    prompt: string
+    negativePrompt?: string
+    width?: number
+    height?: number
+    steps?: number
+    guidance?: number
+    seed?: number | 'random'
+    model?: string
+    initImageUrl?: string
+    numImages?: number
+    aspectRatio?: AspectRatio
+    quality?: 'low' | 'medium' | 'high' | 'ultra'
+    style?: string
+    sampler?: string
+    provider?: string
+    imageStrength?: number
+  }
 
-export async function POST(req: NextRequest) {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 180000) // 3 minute timeout
+  export async function POST(req: NextRequest) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 180000) // 3 minute timeout
+
+    try {
+      const body = (await req.json()) as GenerateBody
+      const {
+        prompt,
+        if (!prompt) {
+          clearTimeout(timeoutId)
+          return NextResponse.json(
+            { error: 'Prompt is required' },
+            { status: 400 }
+          )
+        }
 
   try {
     const body = (await req.json()) as GenerateBody
