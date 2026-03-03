@@ -90,6 +90,27 @@ export class VirtualFilesystemService {
     const now = new Date().toISOString();
     const normalizedContent = typeof content === 'string' ? content : String(content ?? '');
 
+    // Check for concurrent modification (conflict detection)
+    if (previous) {
+      const timeSinceLastWrite = Date.now() - new Date(previous.lastModified).getTime();
+      if (timeSinceLastWrite < 1000) {
+        // File was modified within last second - potential conflict
+        console.warn('[VFS] Potential concurrent modification:', filePath, {
+          timeSinceLastWrite,
+          previousVersion: previous.version,
+        });
+        
+        // Emit conflict event for listeners to handle
+        this.events.emit('conflict', {
+          path: filePath,
+          previousContent: previous.content,
+          newContent: normalizedContent,
+          previousVersion: previous.version,
+          timestamp: now,
+        });
+      }
+    }
+
     // Validate file size
     const fileSize = Buffer.byteLength(normalizedContent, 'utf8');
     if (fileSize > MAX_FILE_SIZE) {
