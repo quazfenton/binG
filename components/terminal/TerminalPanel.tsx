@@ -938,6 +938,16 @@ export default function TerminalPanel({
         writeLine('  connect            Connect to sandbox');
         writeLine('  disconnect         Disconnect from sandbox');
         writeLine('  status             Show sandbox status');
+        writeLine('');
+        writeLine('\x1b[33mPreview:\x1b[0m');
+        writeLine('  preview [path]     Preview directory in Sandpack');
+        writeLine('                     (opens visual app preview)');
+        writeLine('  preview:html [path] Preview as HTML iframe');
+        writeLine('  preview:raw [path]  View raw HTML source');
+        writeLine('  preview:parcel [path] Preview with Parcel bundler');
+        writeLine('  preview:devbox [path] Preview with DevBox runtime');
+        writeLine('  preview:pyodide [path] Execute Python in browser');
+        writeLine('  preview:vite [path]   Build with Vite');
         return true;
       }
 
@@ -1365,6 +1375,97 @@ export default function TerminalPanel({
             writeLine(`  Memory:    ${term.sandboxInfo.resources.memory}`);
           }
         }
+        return true;
+      }
+
+      case 'preview': {
+        // Send preview command to code-preview-panel
+        const previewPath = allArgs || cwd;
+        const event = new CustomEvent('code-preview-manual', {
+          detail: { directory: previewPath, mode: 'sandpack' }
+        });
+        window.dispatchEvent(event);
+        
+        writeLine(`\x1b[32m▶ Sending preview request for: ${previewPath}\x1b[0m`);
+        writeLine(`\x1b[90mCheck the Code Preview panel to see the result.\x1b[0m`);
+        return true;
+      }
+
+      case 'preview:html': {
+        // Send HTML iframe preview command
+        const previewPath = allArgs || cwd;
+        const event = new CustomEvent('code-preview-manual', {
+          detail: { directory: previewPath, mode: 'iframe' }
+        });
+        window.dispatchEvent(event);
+        
+        writeLine(`\x1b[32m▶ Sending HTML preview request for: ${previewPath}\x1b[0m`);
+        writeLine(`\x1b[90mOpening in iframe mode.\x1b[0m`);
+        return true;
+      }
+
+      case 'preview:raw': {
+        // Send raw HTML view command
+        const previewPath = allArgs || cwd;
+        const event = new CustomEvent('code-preview-manual', {
+          detail: { directory: previewPath, mode: 'raw' }
+        });
+        window.dispatchEvent(event);
+        
+        writeLine(`\x1b[32m▶ Sending raw HTML request for: ${previewPath}\x1b[0m`);
+        writeLine(`\x1b[90mOpening in raw source mode.\x1b[0m`);
+        return true;
+      }
+
+      case 'preview:parcel': {
+        // Send Parcel bundler preview command
+        const previewPath = allArgs || cwd;
+        const event = new CustomEvent('code-preview-manual', {
+          detail: { directory: previewPath, mode: 'parcel' }
+        });
+        window.dispatchEvent(event);
+        
+        writeLine(`\x1b[32m⚡ Sending Parcel request for: ${previewPath}\x1b[0m`);
+        writeLine(`\x1b[90mOpening with Parcel zero-config bundler.\x1b[0m`);
+        return true;
+      }
+
+      case 'preview:devbox': {
+        // Send DevBox runtime preview command
+        const previewPath = allArgs || cwd;
+        const event = new CustomEvent('code-preview-manual', {
+          detail: { directory: previewPath, mode: 'devbox' }
+        });
+        window.dispatchEvent(event);
+        
+        writeLine(`\x1b[32m🔵 Sending DevBox request for: ${previewPath}\x1b[0m`);
+        writeLine(`\x1b[90mOpening full-stack runtime environment.\x1b[0m`);
+        return true;
+      }
+
+      case 'preview:pyodide': {
+        // Send Pyodide Python preview command
+        const previewPath = allArgs || cwd;
+        const event = new CustomEvent('code-preview-manual', {
+          detail: { directory: previewPath, mode: 'pyodide' }
+        });
+        window.dispatchEvent(event);
+        
+        writeLine(`\x1b[32m🐍 Sending Pyodide request for: ${previewPath}\x1b[0m`);
+        writeLine(`\x1b[90mExecuting Python in browser via Pyodide.\x1b[0m`);
+        return true;
+      }
+
+      case 'preview:vite': {
+        // Send Vite build preview command
+        const previewPath = allArgs || cwd;
+        const event = new CustomEvent('code-preview-manual', {
+          detail: { directory: previewPath, mode: 'vite' }
+        });
+        window.dispatchEvent(event);
+        
+        writeLine(`\x1b[32m⚡ Sending Vite build request for: ${previewPath}\x1b[0m`);
+        writeLine(`\x1b[90mBuilding with Vite (next-gen frontend tooling).\x1b[0m`);
         return true;
       }
 
