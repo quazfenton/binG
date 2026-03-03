@@ -163,16 +163,25 @@ export default function CodePreviewPanel({
   // Manual Sandpack preview state
   const [manualPreviewFiles, setManualPreviewFiles] = useState<Record<string, string> | null>(null);
   const [isManualPreviewActive, setIsManualPreviewActive] = useState(false);
-  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'local' | 'cloud'>('sandpack');
+  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'node' | 'local' | 'cloud'>('sandpack');
   const [devBoxOutput, setDevBoxOutput] = useState<string[]>([]);
   const [isDevBoxRunning, setIsDevBoxRunning] = useState(false);
   const [pyodideOutput, setPyodideOutput] = useState<string>('');
   const [isPyodideLoading, setIsPyodideLoading] = useState(false);
   const [viteOutput, setViteOutput] = useState<string>('');
   const [isViteBuilding, setIsViteBuilding] = useState(false);
+  const [webpackOutput, setWebpackOutput] = useState<string>('');
+  const [isWebpackBuilding, setIsWebpackBuilding] = useState(false);
+  const [nodeOutput, setNodeOutput] = useState<string>('');
+  const [isNodeRunning, setIsNodeRunning] = useState(false);
   const [localExecutionOutput, setLocalExecutionOutput] = useState<string>('');
   const [isLocalExecuting, setIsLocalExecuting] = useState(false);
   const [executionMode, setExecutionMode] = useState<'local' | 'cloud' | 'hybrid'>('local');
+  const [executionCache, setExecutionCache] = useState<Map<string, { result: string; timestamp: number; hash: string }>>(new Map());
+  const [cacheEnabled, setCacheEnabled] = useState(true);
+  const [cacheHits, setCacheHits] = useState(0);
+  const [cacheMisses, setCacheMisses] = useState(0);
+  const [snapshots, setSnapshots] = useState<Array<{ id: string; date: string; size: string }>>([]);
   const pyodideRef = useRef<any>(null);
   
   // Context menu state for file operations
@@ -358,6 +367,74 @@ export default function CodePreviewPanel({
     window.dispatchEvent(event);
     
     toast.info('Command sent to terminal');
+  }, []);
+
+  // Simple hash function for caching
+  const hashCode = useCallback((str: string): string => {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return hash.toString(36);
+  }, []);
+
+  // Check cache for execution result
+  const getCachedResult = useCallback((code: string, filePath: string): string | null => {
+    if (!cacheEnabled) return null;
+    
+    const cacheKey = `${filePath}:${hashCode(code)}`;
+    const cached = executionCache.get(cacheKey);
+    
+    if (cached) {
+      const age = Date.now() - cached.timestamp;
+      const maxAge = 5 * 60 * 1000; // 5 minutes cache
+      
+      if (age < maxAge) {
+        setCacheHits(prev => prev + 1);
+        return cached.result;
+      } else {
+        // Cache expired
+        executionCache.delete(cacheKey);
+        setExecutionCache(new Map(executionCache));
+      }
+    }
+    
+    setCacheMisses(prev => prev + 1);
+    return null;
+  }, [cacheEnabled, executionCache, hashCode]);
+
+  // Cache execution result
+  const cacheResult = useCallback((code: string, filePath: string, result: string) => {
+    if (!cacheEnabled) return;
+    
+    const cacheKey = `${filePath}:${hashCode(code)}`;
+    const newCache = new Map(executionCache);
+    newCache.set(cacheKey, {
+      result,
+      timestamp: Date.now(),
+      hash: hashCode(code),
+    });
+    setExecutionCache(newCache);
+    
+    // Auto cleanup old entries
+    const now = Date.now();
+    const maxAge = 5 * 60 * 1000;
+    for (const [key, value] of newCache.entries()) {
+      if (now - value.timestamp > maxAge) {
+        newCache.delete(key);
+      }
+    }
+    setExecutionCache(newCache);
+  }, [cacheEnabled, executionCache, hashCode]);
+
+  // Clear execution cache
+  const clearExecutionCache = useCallback(() => {
+    setExecutionCache(new Map());
+    setCacheHits(0);
+    setCacheMisses(0);
+    toast.success('Execution cache cleared');
   }, []);
 
   // Manual Sandpack preview handler
@@ -1543,17 +1620,22 @@ export default app;`,
           );
         }
 
-        // Pyodide Python in-browser execution
+        // Pyodide Python in-browser execution (ENHANCED)
         if (isManualPreviewActive && previewMode === 'pyodide') {
           const pythonFiles = Object.entries(useStructure.files).filter(
             ([path]) => path.endsWith('.py')
           );
           const mainFile = pythonFiles.find(([path]) => path === 'main.py' || path === 'app.py') || pythonFiles[0];
+          const requirementsFile = Object.entries(useStructure.files).find(
+            ([path]) => path === 'requirements.txt'
+          );
           
-          // Load Pyodide dynamically
+          // Enhanced Pyodide with package installation
           React.useEffect(() => {
             const loadPyodide = async () => {
               setIsPyodideLoading(true);
+              setPyodideOutput('');
+              
               try {
                 // Load Pyodide from CDN
                 const script = document.createElement('script');
@@ -1566,19 +1648,46 @@ export default app;`,
                     });
                     pyodideRef.current = pyodide;
                     
-                    // Capture stdout
+                    // Enhanced stdout capture
                     pyodide.setStdout({
                       batched: (msg: string) => {
-                        setPyodideOutput(prev => prev + msg + '\n');
-                      }
+                        setPyodideOutput(prev => prev + msg);
+                      },
+                      write: (msg: string) => {
+                        setPyodideOutput(prev => prev + msg);
+                      },
+                      isatty: () => false,
                     });
+                    
+                    // Install requirements if present
+                    if (requirementsFile) {
+                      setPyodideOutput(prev => prev + '# Installing requirements...\n');
+                      try {
+                        await pyodide.runPythonAsync(`
+                          import micropip
+                          requirements = """${requirementsFile[1]}"""
+                          for pkg in requirements.strip().split('\\n'):
+                              pkg = pkg.strip()
+                              if pkg and not pkg.startswith('#'):
+                                  try:
+                                      await micropip.install(pkg)
+                                      print(f'✓ Installed {pkg}')
+                                  except Exception as e:
+                                      print(f'⚠ Could not install {pkg}: {e}')
+                        `);
+                      } catch (err: any) {
+                        setPyodideOutput(prev => prev + `⚠ Package installation warning: ${err.message}\n`);
+                      }
+                    }
                     
                     // Execute main Python file
                     if (mainFile) {
+                      setPyodideOutput(prev => prev + `\n# Running ${mainFile[0]}...\n# ─────────────────────────────\n`);
                       try {
                         await pyodide.runPythonAsync(mainFile[1]);
+                        setPyodideOutput(prev => prev + '\n✅ Execution complete!\n');
                       } catch (err: any) {
-                        setPyodideOutput(prev => prev + `\nError: ${err.message}\n`);
+                        setPyodideOutput(prev => prev + `\n❌ Error: ${err.message}\n`);
                       }
                     }
                     
@@ -1600,7 +1709,7 @@ export default app;`,
                 pyodideRef.current = null;
               }
             };
-          }, [mainFile]);
+          }, [mainFile, requirementsFile]);
 
           return (
             <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
@@ -1635,20 +1744,30 @@ export default app;`,
                   </Button>
                 </div>
               </div>
-              
+
               <div className="flex-1 flex flex-col">
                 {/* File list */}
                 <div className="p-2 bg-gray-900 border-b border-gray-800">
-                  <p className="text-gray-400 text-xs mb-1">📁 Python Files:</p>
-                  <div className="flex flex-wrap gap-1">
-                    {pythonFiles.map(([path]) => (
-                      <span key={path} className="text-xs bg-gray-800 text-blue-400 px-2 py-0.5 rounded">
-                        {path}
-                      </span>
-                    ))}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <p className="text-gray-400">📁 Python Files:</p>
+                      <p className="text-blue-400">{pythonFiles.length} files</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">📦 Requirements:</p>
+                      <p className={requirementsFile ? 'text-green-400' : 'text-gray-500'}>
+                        {requirementsFile ? '✓ Found' : 'Not found'}
+                      </p>
+                    </div>
                   </div>
+                  {requirementsFile && (
+                    <div className="mt-2 p-2 bg-black/30 rounded text-xs font-mono text-gray-400 max-h-20 overflow-auto">
+                      {requirementsFile[1].split('\n').filter(l => l.trim() && !l.startsWith('#')).slice(0, 5).join('\n')}
+                      {requirementsFile[1].split('\n').filter(l => l.trim() && !l.startsWith('#')).length > 5 && '\n...'}
+                    </div>
+                  )}
                 </div>
-                
+
                 {/* Output terminal */}
                 <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
                   {isPyodideLoading ? (
@@ -1828,32 +1947,64 @@ export default app;`,
                 // Local execution
                 setLocalExecutionOutput(prev => prev + '\n💻 Running locally in browser...\n');
                 
-                // Execute JavaScript/TypeScript
+                // Execute JavaScript/TypeScript with caching
                 if (jsFiles.length > 0) {
                   for (const [path, code] of jsFiles) {
                     try {
                       setLocalExecutionOutput(prev => prev + `\n📄 Running ${path}...\n`);
-                      // Simple eval for demo (in production, use proper sandbox)
-                      const result = eval(code);
-                      if (result !== undefined) {
-                        setLocalExecutionOutput(prev => prev + `→ ${JSON.stringify(result, null, 2)}\n`);
+                      
+                      // Check cache first
+                      const cachedResult = getCachedResult(code, path);
+                      if (cachedResult) {
+                        setLocalExecutionOutput(prev => prev + `⚡ Cache hit! (${cachedResult})\n`);
+                        continue;
                       }
+                      
+                      // Simple eval for demo (in production, use proper sandbox)
+                      const startTime = Date.now();
+                      const result = eval(code);
+                      const execTime = Date.now() - startTime;
+                      
+                      if (result !== undefined) {
+                        const resultStr = JSON.stringify(result, null, 2);
+                        setLocalExecutionOutput(prev => prev + `→ ${resultStr}\n`);
+                        // Cache the result
+                        cacheResult(code, path, resultStr);
+                      }
+                      
+                      setLocalExecutionOutput(prev => prev + `⏱️ Executed in ${execTime}ms\n`);
                     } catch (err: any) {
                       setLocalExecutionOutput(prev => prev + `❌ Error in ${path}: ${err.message}\n`);
                     }
                   }
                 }
                 
-                // Python via Pyodide if available
+                // Python via Pyodide if available with caching
                 if (pythonFiles.length > 0 && pyodideRef.current) {
                   setLocalExecutionOutput(prev => prev + '\n🐍 Running Python via Pyodide...\n');
                   for (const [path, code] of pythonFiles) {
                     try {
                       setLocalExecutionOutput(prev => prev + `\n📄 Running ${path}...\n`);
-                      const result = await pyodideRef.current.runPythonAsync(code);
-                      if (result) {
-                        setLocalExecutionOutput(prev => prev + `→ ${result}\n`);
+                      
+                      // Check cache first
+                      const cachedResult = getCachedResult(code, path);
+                      if (cachedResult) {
+                        setLocalExecutionOutput(prev => prev + `⚡ Cache hit! (${cachedResult})\n`);
+                        continue;
                       }
+                      
+                      const startTime = Date.now();
+                      const result = await pyodideRef.current.runPythonAsync(code);
+                      const execTime = Date.now() - startTime;
+                      
+                      if (result) {
+                        const resultStr = String(result);
+                        setLocalExecutionOutput(prev => prev + `→ ${resultStr}\n`);
+                        // Cache the result
+                        cacheResult(code, path, resultStr);
+                      }
+                      
+                      setLocalExecutionOutput(prev => prev + `⏱️ Executed in ${execTime}ms\n`);
                     } catch (err: any) {
                       setLocalExecutionOutput(prev => prev + `❌ Error in ${path}: ${err.message}\n`);
                     }
@@ -1861,6 +2012,7 @@ export default app;`,
                 }
                 
                 setLocalExecutionOutput(prev => prev + '\n✅ Local execution complete!\n');
+                setLocalExecutionOutput(prev => prev + `\n📊 Cache Stats: ${cacheHits} hits, ${cacheMisses} misses\n`);
               }
               
               if (executionMode === 'cloud' || (executionMode === 'hybrid' && hasCloudRequirement)) {
@@ -1912,6 +2064,24 @@ export default app;`,
                   <Button
                     size="sm"
                     variant="outline"
+                    onClick={clearExecutionCache}
+                    className="text-xs bg-gray-600 hover:bg-gray-700 text-white"
+                    title="Clear execution cache"
+                  >
+                    🗑️ Clear Cache
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setCacheEnabled(!cacheEnabled)}
+                    className={`text-xs ${cacheEnabled ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-600 hover:bg-gray-700'} text-white`}
+                    title={cacheEnabled ? 'Cache enabled' : 'Cache disabled'}
+                  >
+                    {cacheEnabled ? '💾 Cache ON' : '⚡ Cache OFF'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
                     onClick={runCode}
                     disabled={isLocalExecuting}
                     className={`text-xs ${
@@ -1936,7 +2106,7 @@ export default app;`,
               <div className="flex-1 flex flex-col">
                 {/* File info */}
                 <div className="p-2 bg-gray-900 border-b border-gray-800">
-                  <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="grid grid-cols-4 gap-2 text-xs">
                     <div>
                       <p className="text-gray-400">📄 JavaScript/TS:</p>
                       <p className="text-green-400">{jsFiles.length} files</p>
@@ -1949,6 +2119,12 @@ export default app;`,
                       <p className="text-gray-400">☁️  Cloud Required:</p>
                       <p className={hasCloudRequirement ? 'text-purple-400' : 'text-green-400'}>
                         {hasCloudRequirement ? 'Yes' : 'No'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">💾 Cache:</p>
+                      <p className="text-blue-400">
+                        {cacheEnabled ? `✓ ${cacheHits} hits / ${cacheMisses} misses` : '✗ Disabled'}
                       </p>
                     </div>
                   </div>
