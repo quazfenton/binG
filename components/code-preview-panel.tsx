@@ -566,6 +566,11 @@ export default function CodePreviewPanel({
       if (!finalFilename) {
         console.error(
           "Filename is unexpectedly null or undefined after cleaning.",
+
+      // Ensure a filename is always set, even if it's a default one.
+      if (!finalFilename) {
+        console.error(
+          "Filename is unexpectedly null or undefined after cleaning.",
         );
         continue; // Skip this block if filename is missing
       }
