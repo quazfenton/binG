@@ -3,6 +3,9 @@ import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
 import { getSandboxProvider } from '@/lib/sandbox/providers';
 
+// Force Node.js runtime for Daytona SDK compatibility
+export const runtime = 'nodejs';
+
 export async function POST(req: NextRequest) {
   try {
     // CRITICAL: Authenticate user from JWT token - do NOT trust userId from request body

@@ -205,6 +205,17 @@
     },
     "onlyBuiltDependencies": [
       "better-sqlite3"
+    ],
+    "ignoredBuiltDependencies": [
+      "@smithery/cli",
+      "bufferutil",
+      "cpu-features",
+      "es5-ext",
+      "esbuild",
+      "protobufjs",
+      "sharp",
+      "ssh2",
+      "utf-8-validate"
     ]
   },
   "resolutions": {
