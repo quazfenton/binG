@@ -29,6 +29,11 @@ import {
   Eye,
   Edit,
   Trash2,
+  Plus,
+  FolderPlus,
+  X,
+  CheckCircle,
+  Play,
 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -154,6 +159,18 @@ export default function CodePreviewPanel({
   const [isEditingFile, setIsEditingFile] = useState(false);
   const [editableContent, setEditableContent] = useState("");
   const [isCreatingFile, setIsCreatingFile] = useState(false);
+  
+  // Context menu state for file operations
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    path: string;
+    type: 'file' | 'directory';
+  } | null>(null);
+  
+  // Monaco editor state (commented out for future use)
+  // const [editingFile, setEditingFile] = useState<{ path: string; content: string } | null>(null);
+  // const [editorContent, setEditorContent] = useState('');
   const [newFileName, setNewFileName] = useState("");
 
   const filesystemNodes = useMemo(() => {
@@ -251,6 +268,82 @@ export default function CodePreviewPanel({
     return extensions[language.toLowerCase()] || "txt";
   };
 
+  // Context menu handlers for file operations
+  const handleCreateFile = useCallback((parentPath: string) => {
+    const name = prompt('New file name (e.g., index.js):');
+    if (!name) return;
+    
+    const newPath = parentPath ? `${parentPath}/${name}` : name;
+    writeFilesystemFile(newPath, '').then(() => {
+      toast.success('File created: ' + name);
+      void listFilesystemDirectory(filesystemCurrentPath);
+      setContextMenu(null);
+    }).catch((err: any) => {
+      toast.error('Failed to create file: ' + err.message);
+    });
+  }, [filesystemCurrentPath, writeFilesystemFile, listFilesystemDirectory]);
+
+  const handleCreateFolder = useCallback((parentPath: string) => {
+    const name = prompt('New folder name:');
+    if (!name) return;
+    
+    // Create a dummy file in the folder to create the directory
+    const newPath = parentPath ? `${parentPath}/${name}/.gitkeep` : `${name}/.gitkeep`;
+    writeFilesystemFile(newPath, '').then(() => {
+      toast.success('Folder created: ' + name);
+      void listFilesystemDirectory(filesystemCurrentPath);
+      setContextMenu(null);
+    }).catch((err: any) => {
+      toast.error('Failed to create folder: ' + err.message);
+    });
+  }, [filesystemCurrentPath, writeFilesystemFile, listFilesystemDirectory]);
+
+  const handleRenameFile = useCallback((oldPath: string) => {
+    const oldName = oldPath.split('/').pop() || '';
+    const newName = prompt('Rename to:', oldName);
+    if (!newName || newName === oldName) return;
+    
+    const parentPath = oldPath.split('/').slice(0, -1).join('/');
+    const newPath = parentPath ? `${parentPath}/${newName}` : newName;
+    
+    // Read old file, write new file, delete old file
+    readFilesystemFile(oldPath).then((file: any) => {
+      return writeFilefilesystemFile(newPath, file.content).then(() => {
+        return deleteFilesystemPath(oldPath);
+      });
+    }).then(() => {
+      toast.success('Renamed to: ' + newName);
+      void listFilesystemDirectory(filesystemCurrentPath);
+      setContextMenu(null);
+      if (selectedFilesystemPath === oldPath) {
+        setSelectedFilesystemPath('');
+        setSelectedFilesystemContent('');
+      }
+    }).catch((err: any) => {
+      toast.error('Failed to rename: ' + err.message);
+    });
+  }, [filesystemCurrentPath, readFilesystemFile, writeFilefilesystemFile, deleteFilesystemPath, listFilesystemDirectory, selectedFilesystemPath]);
+
+  // Helper to detect shell code blocks
+  const isShellCodeBlock = useCallback((language: string, code: string): boolean => {
+    const shellLanguages = ['bash', 'sh', 'shell', 'zsh', 'fish'];
+    return shellLanguages.includes(language) ||
+           code.trim().startsWith('npm ') || code.trim().startsWith('yarn ') ||
+           code.trim().startsWith('pnpm ') || code.trim().startsWith('pip ') ||
+           code.trim().startsWith('python ') || code.trim().startsWith('node ');
+  }, []);
+
+  // Handler to send command to terminal
+  const handleRunCommand = useCallback((code: string) => {
+    // Dispatch custom event for terminal to listen
+    const event = new CustomEvent('terminal-run-command', {
+      detail: { commands: [code.trim()] }
+    });
+    window.dispatchEvent(event);
+    
+    toast.info('Command sent to terminal');
+  }, []);
+
   // Extract code blocks from messages using centralized parser
   const codeBlocks = useMemo(() => {
     const parsedData = parseCodeBlocksFromMessages(messages);
@@ -334,6 +427,29 @@ export default function CodePreviewPanel({
     void loadScopedFiles();
     return () => { cancelled = true; };
   }, [filesystemScopePath, isOpen, virtualFilesystem.getSnapshot]);
+
+  // Bidirectional sync: Poll VFS for changes from terminal/editor
+  useEffect(() => {
+    if (!isOpen || selectedTab !== 'files') return;
+    
+    const pollInterval = setInterval(async () => {
+      try {
+        const snapshot = await virtualFilesystem.getSnapshot(filesystemScopePath);
+        const currentFileCount = filesystemNodes.length;
+        const vfsFileCount = snapshot?.files?.length || 0;
+        
+        // Refresh if file count changed
+        if (currentFileCount !== vfsFileCount) {
+          console.log('[CodePreview] VFS changed, refreshing file list...');
+          await listFilesystemDirectory(filesystemCurrentPath);
+        }
+      } catch (error) {
+        console.error('[CodePreview] Poll error:', error);
+      }
+    }, 2000);
+    
+    return () => clearInterval(pollInterval);
+  }, [isOpen, selectedTab, filesystemCurrentPath, filesystemNodes.length, listFilesystemDirectory, virtualFilesystem.getSnapshot]);
 
   // Generate project structure for complex projects
   // Also merge virtual filesystem files for live preview
@@ -612,54 +728,71 @@ export default function CodePreviewPanel({
   const downloadAsZip = async () => {
     const zip = new JSZip();
 
-    // Use merged project structure (includes virtual filesystem files)
+    // Try to get files from VFS first (most up-to-date)
+    try {
+      const snapshot = await virtualFilesystem.getSnapshot(filesystemScopePath);
+      const vfsFiles = snapshot?.files || [];
+      
+      if (vfsFiles.length > 0) {
+        // Add all VFS files to zip
+        for (const file of vfsFiles) {
+          // Get relative path from workspace
+          const relativePath = file.path.replace(/^project\//, '');
+          zip.file(relativePath, file.content || '');
+        }
+        
+        console.log('[Download] Added', vfsFiles.length, 'files from VFS');
+      }
+    } catch (err) {
+      console.warn('[Download] Failed to get VFS files, using fallback:', err);
+    }
+
+    // Fallback to project structure if VFS failed or empty
     const structureToUse = projectStructureWithScopedFiles || projectStructure;
     
-    if (structureToUse && Object.keys(structureToUse.files).length > 0) {
+    if (zip.files['README.md'] === undefined && structureToUse && Object.keys(structureToUse.files).length > 0) {
       // Add all files from project structure
       Object.entries(structureToUse.files).forEach(([filename, fileData]) => {
         const content = typeof fileData === 'string' ? fileData : (fileData.content || '');
-        zip.file(filename, content);
+        if (!zip.files[filename]) {
+          zip.file(filename, content);
+        }
       });
-    } else if (codeBlocks.length > 0) {
-      // Fallback to code blocks
+    }
+    
+    // Final fallback to code blocks
+    if (Object.keys(zip.files).length === 0 && codeBlocks.length > 0) {
       codeBlocks.forEach((block) => {
         const filename =
           block.filename ||
           `snippet-${block.index}.${getFileExtension(block.language)}`;
         zip.file(filename, block.code);
       });
-    } else {
-      // No files available
-      toast.error("No files available to download");
-      return;
     }
 
-    // Get collected data from codeBlocks
-    const nonCodeText = (codeBlocks as any).nonCodeText || "";
-    const shellCommands = (codeBlocks as any).shellCommands || "";
+    // Add README if project has files
+    if (Object.keys(zip.files).length > 0 && !zip.files['README.md']) {
+      const structureToUse = projectStructureWithScopedFiles || projectStructure;
+      const shellCommands = (codeBlocks as any).shellCommands || "";
+      const nonCodeText = (codeBlocks as any).nonCodeText || "";
+      
+      const readme = `# Code Project
 
-    // Always add README
-    const readme = `# Code Project
-
-This project contains ${structureToUse ? Object.keys(structureToUse.files).length : codeBlocks.length} files.
+This project was generated via AI chat assistant.
 
 ## Files:
-${
-  structureToUse
-    ? Object.keys(structureToUse.files)
-        .map((filename) => `- ${filename}`)
-        .join("\n")
-    : codeBlocks
-        .map((block) => `- ${block.filename} (${block.language})`)
-        .join("\n")
+${structureToUse
+  ? Object.keys(structureToUse.files)
+      .map((filename) => `- ${filename}`)
+      .join("\n")
+  : Object.keys(zip.files).filter(f => f !== 'README.md').map(f => `- ${f}`).join("\n")
 }
 
 ## Dependencies:
 ${
   structureToUse?.dependencies?.length
     ? structureToUse.dependencies.map((dep) => `- ${dep}`).join("\n")
-    : "None"
+    : "See individual files for requirements"
 }
 
 ## Usage:
@@ -669,30 +802,21 @@ ${
 \`\`\`bash
 ${shellCommands}
 \`\`\`
-
-### Instructions:
 `
-    : ""
-}Please review each file and follow the appropriate setup instructions for your programming language.
+    : "See individual files for usage instructions"
+}
 
-${
-  nonCodeText
-    ? `## Documentation:
-
-${nonCodeText}
-
-`
-    : ""
-}Programmed on: ${new Date().toLocaleString()}
+Generated on: ${new Date().toLocaleString()}
 `;
-    zip.file("README.md", readme);
+      zip.file("README.md", readme);
+    }
 
     try {
       const content = await zip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(content);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `code-${Date.now()}.zip`;
+      a.download = `project-${Date.now()}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -1644,6 +1768,16 @@ export default app;`,
                                   void selectFilesystemFile(node.path);
                                 }
                               }}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setContextMenu({
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                  path: node.path,
+                                  type: node.type,
+                                });
+                              }}
                             >
                               <div className="flex items-center flex-1 min-w-0">
                                 {node.type === "directory" ? (
@@ -1786,15 +1920,31 @@ export default app;`,
                                 {codeBlocks[selectedFileIndex].filename || `Snippet ${selectedFileIndex + 1}`}
                               </span>
                             </div>
-                            <button
-                              className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
-                              onClick={() => {
-                                navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code);
-                              }}
-                            >
-                              <CodeIcon className="w-4 h-4 mr-1" />
-                              Copy
-                            </button>
+                            <div className="flex items-center gap-2">
+                              {/* Run button for shell commands */}
+                              {isShellCodeBlock(codeBlocks[selectedFileIndex].language, codeBlocks[selectedFileIndex].code) && (
+                                <button
+                                  className="flex items-center text-sm text-green-400 hover:bg-green-900/30 px-2 py-1 rounded"
+                                  onClick={() => {
+                                    handleRunCommand(codeBlocks[selectedFileIndex].code);
+                                  }}
+                                  title="Run in terminal"
+                                >
+                                  <Play className="w-3 h-3 mr-1" />
+                                  Run
+                                </button>
+                              )}
+                              
+                              <button
+                                className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code);
+                                }}
+                              >
+                                <CodeIcon className="w-4 h-4 mr-1" />
+                                Copy
+                              </button>
+                            </div>
                           </div>
                           <div className="flex-1 overflow-y-auto bg-black/30">
                             <SyntaxHighlighter
@@ -1974,6 +2124,78 @@ export default app;`,
             </CardContent>
           </Card>
         </motion.div>
+      )}
+      
+      {/* Context Menu for File Operations */}
+      {contextMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setContextMenu(null)}
+          />
+          <div
+            className="fixed z-50 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 min-w-[180px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <button
+              className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
+              onClick={() => {
+                handleCreateFile(contextMenu.type === 'directory' ? contextMenu.path : contextMenu.path.split('/').slice(0, -1).join('/'));
+              }}
+            >
+              <Plus className="w-4 h-4" /> New File
+            </button>
+            
+            <button
+              className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
+              onClick={() => {
+                handleCreateFolder(contextMenu.type === 'directory' ? contextMenu.path : contextMenu.path.split('/').slice(0, -1).join('/'));
+              }}
+            >
+              <FolderPlus className="w-4 h-4" /> New Folder
+            </button>
+            
+            {contextMenu.type === 'file' && (
+              <>
+                <hr className="my-1 border-gray-700" />
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
+                  onClick={() => {
+                    handleRenameFile(contextMenu.path);
+                  }}
+                >
+                  <Edit className="w-4 h-4" /> Rename
+                </button>
+              </>
+            )}
+            
+            <hr className="my-1 border-gray-700" />
+            
+            <button
+              className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 flex items-center gap-2"
+              onClick={() => {
+                const label = contextMenu.type === 'directory' 
+                  ? `Delete folder "${contextMenu.path.split('/').pop()}" and all contents?` 
+                  : `Delete ${contextMenu.path.split('/').pop()}?`;
+                if (confirm(label)) {
+                  deleteFilesystemPath(contextMenu.path).then(() => {
+                    toast.success('Deleted ' + contextMenu.path.split('/').pop());
+                    void listFilesystemDirectory(filesystemCurrentPath);
+                    setContextMenu(null);
+                    if (selectedFilesystemPath === contextMenu.path) {
+                      setSelectedFilesystemPath('');
+                      setSelectedFilesystemContent('');
+                    }
+                  }).catch((err: any) => {
+                    toast.error('Failed to delete: ' + err.message);
+                  });
+                }
+              }}
+            >
+              <Trash2 className="w-4 h-4" /> Delete
+            </button>
+          </div>
+        </>
       )}
     </AnimatePresence>
   );
