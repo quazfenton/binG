@@ -7,6 +7,9 @@ const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
   throw new Error('JWT_SECRET is required');
 }
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET is required');
+}
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 
 // Helper to verify JWT token
