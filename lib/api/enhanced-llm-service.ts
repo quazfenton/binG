@@ -507,7 +507,7 @@ export class EnhancedLLMService {
     userId: string,
     conversationId: string
   ): Promise<LLMResponse> {
-    const toolCalls = this.extractToolCallsFromLLMResponse(response);
+    const toolCalls = await this.extractToolCallsFromLLMResponse(response);
     if (toolCalls.length === 0) {
       return response;
     }
@@ -638,12 +638,12 @@ export class EnhancedLLMService {
     return match || null;
   }
 
-  private extractToolCallsFromLLMResponse(response: LLMResponse): Array<{ name: string; arguments: Record<string, any> }> {
+  private async extractToolCallsFromLLMResponse(response: LLMResponse): Promise<Array<{ name: string; arguments: Record<string, any> }>> {
     const tools = Object.entries(TOOL_REGISTRY).map(([name, cfg]) => ({
       name,
       inputSchema: cfg.inputSchema as any,
     }));
-    const dispatch = advancedToolCallDispatcher.dispatch(
+    const dispatch = await advancedToolCallDispatcher.dispatch(
       {
         provider: (response as any)?.provider,
         model: (response as any)?.model,

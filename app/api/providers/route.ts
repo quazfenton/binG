@@ -1,8 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { llmService, PROVIDERS } from "@/lib/api/llm-providers";
+import { resolveRequestAuth } from "@/lib/auth/request-auth";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    // SECURITY: Require authentication to prevent enumeration of provider configuration
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     // Get providers that have API keys configured
     const availableProviders = llmService.getAvailableProviders();
     const availableProviderIds = availableProviders.map(p => p.id);

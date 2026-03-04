@@ -152,11 +152,21 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
   const [hasChanges, setHasChanges] = useState(false);
   const [importData, setImportData] = useState('');
   const [showImport, setShowImport] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Load saved API keys on mount
   useEffect(() => {
-    const saved = getUserAPIKeys();
-    setApiKeys(saved);
+    const loadKeys = async () => {
+      try {
+        const saved = await getUserAPIKeys();
+        setApiKeys(saved);
+      } catch (error) {
+        console.error('Failed to load API keys:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadKeys();
   }, []);
 
   // Handle key change
@@ -166,10 +176,10 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
   };
 
   // Save all API keys
-  const handleSave = () => {
+  const handleSave = async () => {
     try {
-      setUserAPIKeys(apiKeys);
-      toast.success('API keys saved successfully');
+      await setUserAPIKeys(apiKeys);
+      toast.success('API keys saved successfully (AES-256 encrypted)');
       setHasChanges(false);
     } catch (error) {
       toast.error('Failed to save API keys');
@@ -177,9 +187,9 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
   };
 
   // Delete specific key
-  const handleDelete = (key: keyof UserAPIKeys) => {
+  const handleDelete = async (key: keyof UserAPIKeys) => {
     try {
-      deleteUserAPIKey(key);
+      await deleteUserAPIKey(key);
       setApiKeys(prev => {
         const updated = { ...prev };
         delete updated[key];
@@ -193,7 +203,7 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
   };
 
   // Clear all keys
-  const handleClearAll = () => {
+  const handleClearAll = async () => {
     if (confirm('Are you sure you want to clear all API keys? This cannot be undone.')) {
       try {
         clearAllUserAPIKeys();
@@ -207,21 +217,21 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
   };
 
   // Export keys
-  const handleExport = () => {
+  const handleExport = async () => {
     try {
-      const exported = exportUserAPIKeys();
+      const exported = await exportUserAPIKeys();
       navigator.clipboard.writeText(exported);
-      toast.success('API keys exported to clipboard');
+      toast.success('API keys exported to clipboard (keep this secure!)');
     } catch (error) {
       toast.error('Failed to export API keys');
     }
   };
 
   // Import keys
-  const handleImport = () => {
+  const handleImport = async () => {
     try {
-      importUserAPIKeys(importData);
-      setApiKeys(getUserAPIKeys());
+      await importUserAPIKeys(importData);
+      setApiKeys(await getUserAPIKeys());
       toast.success('API keys imported successfully');
       setShowImport(false);
       setImportData('');
@@ -262,7 +272,7 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
             API Keys & Credentials
           </h2>
           <p className="text-gray-400 mt-1">
-            Manage your personal API keys for enhanced functionality
+            Manage your personal API keys for enhanced functionality (AES-256 encrypted)
           </p>
         </div>
         
@@ -271,6 +281,7 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
             variant="outline"
             size="sm"
             onClick={handleExport}
+            disabled={isLoading}
             className="border-gray-700 text-gray-300 hover:bg-gray-800"
           >
             <Download className="w-4 h-4 mr-2" />
@@ -281,6 +292,7 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
             variant="outline"
             size="sm"
             onClick={() => setShowImport(!showImport)}
+            disabled={isLoading}
             className="border-gray-700 text-gray-300 hover:bg-gray-800"
           >
             <Upload className="w-4 h-4 mr-2" />
@@ -291,6 +303,7 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
             variant="outline"
             size="sm"
             onClick={handleClearAll}
+            disabled={isLoading}
             className="border-red-900 text-red-400 hover:bg-red-950"
           >
             <Trash2 className="w-4 h-4 mr-2" />
@@ -300,7 +313,7 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={!hasChanges}
+            disabled={!hasChanges || isLoading}
             className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
           >
             <Save className="w-4 h-4 mr-2" />
@@ -308,6 +321,18 @@ export default function UserAPIKeysPanel({ userId }: UserAPIKeysPanelProps) {
           </Button>
         </div>
       </div>
+
+      {/* Loading State */}
+      {isLoading && (
+        <Card className="bg-gray-900/50 border-gray-800">
+          <CardContent className="py-8">
+            <div className="flex items-center justify-center gap-3">
+              <div className="w-6 h-6 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-gray-400">Loading API keys...</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Import Panel */}
       {showImport && (

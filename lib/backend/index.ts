@@ -41,7 +41,7 @@ export {
   sandboxManager,
   type Sandbox,
   type SandboxConfig,
-  type ExecResult,
+  type ExecResult as SandboxExecResult,
   type FileEntry,
 } from './sandbox-manager';
 
@@ -90,6 +90,10 @@ export {
   getProcessRuntime,
   type FirecrackerConfig,
   type VMInstance,
+  type RuntimeType,
+  type ResourceLimits,
+  type ContainerInfo,
+  type ExecResult as FirecrackerExecResult,
 } from './firecracker-runtime';
 
 // Metrics
@@ -134,22 +138,6 @@ export {
   type JobExecutor,
 } from './background-jobs';
 
-// Container Runtime
-export {
-  ContainerRuntime,
-  FirecrackerRuntime,
-  ProcessRuntime,
-  createRuntime,
-  getFirecrackerRuntime,
-  getProcessRuntime,
-  type RuntimeType,
-  type ResourceLimits,
-  type ContainerInfo,
-  type ExecResult,
-  type FirecrackerConfig,
-  type VMInstance,
-} from './firecracker-runtime';
-
 // Snapshot Manager
 export {
   SnapshotManager,
@@ -157,7 +145,6 @@ export {
   type RetryConfig,
   type SnapshotResult,
   type SnapshotInfo,
-  type StorageBackend,
 } from './snapshot-manager';
 
 // Agent Workspace

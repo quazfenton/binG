@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
+import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 
 export async function POST(req: NextRequest) {
   try {
@@ -15,6 +16,15 @@ export async function POST(req: NextRequest) {
 
     // Use authenticated userId from token, ignore body userId
     const authenticatedUserId = authResult.userId;
+
+    // Rate limiting: 30 executions per minute per user
+    const rateLimitResult = checkUserRateLimit(authenticatedUserId, 'generic');
+    if (!rateLimitResult.allowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Too many command executions.', retryAfter: rateLimitResult.retryAfter },
+        { status: 429, headers: rateLimitResult.headers }
+      );
+    }
 
     const body = await req.json();
     const { command, sandboxId } = body;

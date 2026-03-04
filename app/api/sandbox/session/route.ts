@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
 import { getSandboxProvider } from '@/lib/sandbox/providers';
+import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -19,6 +20,15 @@ export async function POST(req: NextRequest) {
 
     // Use authenticated userId from token, ignore body userId
     const authenticatedUserId = authResult.userId;
+
+    // Rate limiting: prevent rapid session creation
+    const rateLimitResult = checkUserRateLimit(authenticatedUserId, 'generic');
+    if (!rateLimitResult.allowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Too many session operations.', retryAfter: rateLimitResult.retryAfter },
+        { status: 429, headers: rateLimitResult.headers }
+      );
+    }
 
     const body = await req.json();
 

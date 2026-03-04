@@ -38,7 +38,10 @@ export class WebSocketTerminalServer extends EventEmitter {
     this.maxSessions = config.maxSessions || 100;
   }
 
-  async start(): Promise<void> {
+  async start(port?: number): Promise<void> {
+    if (port) {
+      this.port = port;
+    }
     return new Promise((resolve, reject) => {
       try {
         this.wss = new WebSocketServer({

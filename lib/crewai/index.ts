@@ -16,17 +16,17 @@ export { CrewMemory, createMemory, ShortTermMemory, EntityMemoryStore, Persisten
 export type { MemoryEntry, EntityMemory, MemoryConfig } from './agents/memory';
 
 // Self-healing
-export { SelfHealingExecutor, RetryBudget, CrossAgentConsensus, createSelfHealingExecutor } from './runtime/self-healing';
+export { SelfHealingExecutor, RetryBudget, CrossAgentConsensus, runCrewWithSelfHealing } from './runtime/self-healing';
 export type { RetryConfig, AgentRetryState, ConsensusVote, ConsensusResult, HealingStrategy } from './runtime/self-healing';
 
 // Context window
-export { ContextWindowManager, createContextWindowManager } from './runtime/context-window';
+export { ContextWindowManager, createContextWindow } from './runtime/context-window';
 export type { Message, ContextWindowConfig } from './runtime/context-window';
-export { createStreamingOutput } from './runtime/context-window';
 
 // Streaming
-export { CrewStreamingOutputImpl, streamToAsyncIterable } from './runtime/streaming';
+export { CrewStreamingOutputImpl, createCrewStream, runCrewWithStreaming } from './runtime/streaming';
 export type { StreamChunk, AgentStreamData, ToolStreamData, CrewStreamingOutput } from './runtime/streaming';
+
 
 // Task system
 export { Task } from './tasks/task';
@@ -54,13 +54,12 @@ export function createCrew(config: {
   process?: 'sequential' | 'hierarchical';
 }): Crew {
   return new Crew({
-    id: config.name,
-    name: config.name,
     agents: config.agents,
     tasks: config.tasks,
     process: config.process || 'sequential',
   });
 }
+
 
 /**
  * Run CrewAI workflow
@@ -130,21 +129,22 @@ export { KnowledgeSource, KnowledgeBase, createKnowledgeBase } from './knowledge
 export type { KnowledgeSourceConfig, DocumentChunk, SearchResult, EmbedderConfig } from './knowledge';
 
 // MCP Server
-export { MCPServer, createMCPServer, MCPErrorCodes } from './mcp/server';
+export { MCPServer } from './mcp/server';
 export type { MCPTool, MCPServerConfig, MCPRequest, MCPResponse, MCPEvent } from './mcp/server';
 
 // Observability
-export { ObservabilityManager, TraceRecorder, MetricsCollector, LangSmithExporter, createObservability } from './observability';
+export { TraceRecorder, MetricsCollector, LangSmithExporter, createObservability } from './observability';
 export type { TokenUsage, ExecutionMetrics, Span, Trace } from './observability';
 
 // Tools
-export { SerperDevTool, WikipediaTool, DirectorySearchTool, FileReadTool, CodeDocsSearchTool, createCrewAITools as createSearchTools, getToolByName } from './tools/crewai-tools';
-export { DockerCodeExecutor, CodeInterpreterTool, createCodeExecutor } from './tools/code-execution';
+export { SerperDevTool, WikipediaTool, DirectorySearchTool, FileReadTool, CodeDocsSearchTool, createToolRegistry } from './tools/crewai-tools';
+export { DockerCodeExecutor, createCodeExecutionTool } from './tools/code-execution';
 export type { CodeExecutionConfig, ExecutionResult } from './tools/code-execution';
 
 // Swarms
-export { MultiCrewSwarm, HierarchicalSwarm, ShardPlanner, AggregatorCrew, createSwarm } from './swarm';
+export { MultiCrewSwarm, HierarchicalSwarm, ShardPlanner, AggregatorCrew } from './swarm';
 export type { Shard, ShardResult, AggregatorResult, SwarmConfig, SwarmEvent } from './swarm';
+
 
 // Export types
 export * from './types';
@@ -169,4 +169,4 @@ export {
   createWriteTask,
   createCodeTask,
 } from './tasks';
-export type { TaskConfig } from './tasks';
+

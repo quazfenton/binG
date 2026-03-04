@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
+import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 
 export async function GET(req: NextRequest) {
   try {
@@ -9,6 +10,15 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },
         { status: 401 }
+      );
+    }
+
+    // Rate limiting: 30 file operations per minute per user
+    const rateLimitResult = checkUserRateLimit(authResult.userId, 'generic');
+    if (!rateLimitResult.allowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Too many file operations.', retryAfter: rateLimitResult.retryAfter },
+        { status: 429, headers: rateLimitResult.headers }
       );
     }
 

@@ -479,8 +479,8 @@ export class SmitheryProvider implements ToolProvider {
       let toolName = request.toolKey;
       let serverId = '';
 
-      if (toolKey.startsWith('smithery:')) {
-        const parts = toolKey.split(':');
+      if (toolName.startsWith('smithery:')) {
+        const parts = toolName.split(':');
         serverId = parts[1];
         toolName = parts.slice(2).join(':');
       } else {
@@ -492,6 +492,7 @@ export class SmitheryProvider implements ToolProvider {
           }
         }
       }
+
 
       const server = this.servers.get(serverId);
       if (!server) {

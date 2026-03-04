@@ -7,8 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-// Database import commented out until connection module is fixed
-// import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection';
 import { authManager } from '@/lib/backend/auth';
 
 /**
@@ -36,17 +35,24 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get from database (commented out until database module is fixed)
-    // const db = await getDatabase();
-    // const result = await db.get(
-    //   'SELECT encrypted_keys, updated_at FROM user_api_keys WHERE user_id = ?',
-    //   [userId]
-    // );
+    // Get from database
+    const db = getDatabase();
+    const result = db.prepare(
+      'SELECT encrypted_keys, updated_at FROM user_api_keys WHERE user_id = ?'
+    ).get(userId) as { encrypted_keys: string; updated_at: string } | undefined;
 
-    // For now, return success - actual keys are in localStorage
+    if (!result) {
+      return NextResponse.json({ 
+        hasKeys: false, 
+        message: 'No keys stored in database' 
+      });
+    }
+
+    // Return metadata only - actual decryption happens client-side
     return NextResponse.json({
-      hasKeys: false,
-      message: 'Keys stored in localStorage (database integration pending)',
+      hasKeys: true,
+      updatedAt: result.updated_at,
+      message: 'Keys retrieved from database (decryption happens client-side)',
     });
   } catch (error: any) {
     console.error('Failed to get API keys:', error);
@@ -92,17 +98,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Store in database (commented out until database module is fixed)
-    // const db = await getDatabase();
-    // await db.run(
-    //   `INSERT OR REPLACE INTO user_api_keys (user_id, encrypted_keys, updated_at)
-    //    VALUES (?, ?, datetime('now'))`,
-    //   [userId, encryptedKeys]
-    // );
+    // Store in database
+    const db = getDatabase();
+    db.prepare(`
+      INSERT OR REPLACE INTO user_api_keys (user_id, encrypted_keys, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+    `).run(userId, encryptedKeys);
 
     return NextResponse.json({
       success: true,
-      message: 'API keys saved to localStorage (database integration pending)',
+      message: 'API keys saved to database successfully',
     });
   } catch (error: any) {
     console.error('Failed to save API keys:', error);
@@ -138,13 +143,13 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    // Delete from database (commented out until database module is fixed)
-    // const db = await getDatabase();
-    // await db.run('DELETE FROM user_api_keys WHERE user_id = ?', [userId]);
+    // Delete from database
+    const db = getDatabase();
+    db.prepare('DELETE FROM user_api_keys WHERE user_id = ?').run(userId);
 
     return NextResponse.json({
       success: true,
-      message: 'API keys deleted from localStorage (database integration pending)',
+      message: 'API keys deleted from database successfully',
     });
   } catch (error: any) {
     console.error('Failed to delete API keys:', error);

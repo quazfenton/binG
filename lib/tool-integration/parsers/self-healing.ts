@@ -20,7 +20,7 @@ export class SelfHealingToolValidator {
   private readonly CACHE_MAX_SIZE = 1000;
   private readonly CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-  validate(calls: ParsedToolCall[], tools: ParserToolDefinition[]): SelfHealingToolCallResult {
+  async validate(calls: ParsedToolCall[], tools: ParserToolDefinition[]): Promise<SelfHealingToolCallResult> {
     const accepted: ParsedToolCall[] = [];
     const rejected: Array<{ call: ParsedToolCall; reason: string }> = [];
 
@@ -63,7 +63,7 @@ export class SelfHealingToolValidator {
       }
 
       // Try deep healing with LLM (slower but more powerful)
-      const deepHealedArgs = this.attemptDeepHeal(call, tool, parsed.error);
+      const deepHealedArgs = await this.attemptDeepHeal(call, tool, parsed.error);
       if (deepHealedArgs) {
         const deepHealedParse = tool.inputSchema.safeParse(deepHealedArgs);
         if (deepHealedParse.success) {
@@ -82,6 +82,7 @@ export class SelfHealingToolValidator {
 
     return { accepted, rejected };
   }
+
 
   /**
    * Get healed args from cache

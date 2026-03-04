@@ -818,7 +818,7 @@ class CodeSandboxHandle implements SandboxHandle {
     dirPath: string,
     callback: (event: { type: string; path: string; name?: string }) => void
   ): Promise<{ close: () => Promise<void> }> {
-    const resolved = this.resolvePath(dirPath)
+    const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath)
     const intervalMs = 2000
     
     let lastFiles: Map<string, string> = new Map()
@@ -872,7 +872,7 @@ class CodeSandboxHandle implements SandboxHandle {
     filePath: string,
     callback: (event: { type: string; path: string }) => void
   ): Promise<{ close: () => Promise<void> }> {
-    const resolved = this.resolvePath(filePath)
+    const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath)
     const intervalMs = 2000
     
     let lastMtime: number | null = null

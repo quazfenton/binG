@@ -9,7 +9,7 @@ import type {
   PtyOptions,
   PtyConnectOptions,
 } from './sandbox-provider'
-import { ComputerUseService, createComputerUseService } from './daytona-computer-use-service'
+import { ComputerUseService, createComputerUseService, type ScreenRecordingRequest } from './daytona-computer-use-service'
 import { LSPService, createLSPService, type LSPLanguageId } from './daytona-lsp-service'
 import { ObjectStorageService, createObjectStorageService } from './daytona-object-storage-service'
 

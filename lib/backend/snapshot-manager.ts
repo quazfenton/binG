@@ -159,6 +159,17 @@ export class SnapshotManager extends EventEmitter {
     console.log(`Snapshot created: ${snapshotPath} (${result.sizeBytes} bytes)`);
     this.emit('snapshot_created', result);
 
+    // Upload to remote storage backend if available
+    if (this.storageBackend) {
+      try {
+        const remoteKey = `${userId}/${snapshotId}.tar.gz`;
+        await this.storageBackend.upload(snapshotPath, remoteKey);
+        console.log(`[SnapshotManager] Uploaded to storage: ${remoteKey}`);
+      } catch (uploadError: any) {
+        console.warn('[SnapshotManager] Upload to storage failed:', uploadError.message);
+      }
+    }
+
     return result;
   }
 
@@ -307,23 +318,42 @@ export class SnapshotManager extends EventEmitter {
     validateId(userId, 'user_id');
     const userSnapshotDir = join(this.snapshotDir, userId);
     
-    if (!existsSync(userSnapshotDir)) {
-      return [];
+    const snapshots: SnapshotInfo[] = [];
+
+    // Check local filesystem
+    if (existsSync(userSnapshotDir)) {
+      const entries = readdirSync(userSnapshotDir);
+      for (const entry of entries) {
+        if (entry.endsWith('.tar.gz')) {
+          const path = join(userSnapshotDir, entry);
+          const stat = statSync(path);
+          snapshots.push({
+            snapshotId: entry.replace('.tar.gz', ''),
+            sizeBytes: stat.size,
+            createdAt: new Date(stat.mtime),
+            path,
+          });
+        }
+      }
     }
 
-    const snapshots: SnapshotInfo[] = [];
-    const entries = readdirSync(userSnapshotDir);
-
-    for (const entry of entries) {
-      if (entry.endsWith('.tar.gz')) {
-        const path = join(userSnapshotDir, entry);
-        const stat = statSync(path);
-        snapshots.push({
-          snapshotId: entry.replace('.tar.gz', ''),
-          sizeBytes: stat.size,
-          createdAt: new Date(stat.mtime),
-          path,
-        });
+    // If storage backend is available and no local snapshots found, check remote
+    if (snapshots.length === 0 && this.storageBackend) {
+      try {
+        const remoteKeys = await this.storageBackend.list(`${userId}/`);
+        for (const key of remoteKeys) {
+          const filename = key.split('/').pop();
+          if (filename?.endsWith('.tar.gz')) {
+            snapshots.push({
+              snapshotId: filename.replace('.tar.gz', ''),
+              sizeBytes: 0,
+              createdAt: new Date(),
+              path: key,
+            });
+          }
+        }
+      } catch (error: any) {
+        console.warn('[SnapshotManager] Failed to list remote snapshots:', error.message);
       }
     }
 

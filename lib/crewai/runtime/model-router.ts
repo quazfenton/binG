@@ -213,7 +213,17 @@ export class ModelRouter {
   setConfig(tier: ModelTier, config: ModelConfig): void {
     this.config[tier] = config;
   }
+
+  getModel(tier: ModelTier): any {
+    const modelConfig = this.config[tier] || this.config.defaultProvider || defaultModels[tier];
+    return this.getClient(
+      modelConfig.provider,
+      modelConfig.apiKey,
+      modelConfig.baseUrl
+    );
+  }
 }
+
 
 export const modelRouter = new ModelRouter();
 
