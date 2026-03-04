@@ -16,7 +16,7 @@ export class AdvancedToolCallDispatcher {
   private readonly xmlParser = new XMLToolCallParser();
   private readonly validator = new SelfHealingToolValidator();
 
-  dispatch(context: ParserContext, tools: ParserToolDefinition[]): DispatcherResult {
+  async dispatch(context: ParserContext, tools: ParserToolDefinition[]): Promise<DispatcherResult> {
     const mode = this.resolveMode();
 
     const allowContentParsing = process.env.TOOL_CALLING_ALLOW_CONTENT_PARSING === 'true';
@@ -36,7 +36,7 @@ export class AdvancedToolCallDispatcher {
       }
 
       if (parsedCalls.length > 0) {
-        const validated = this.validator.validate(parsedCalls, tools);
+        const validated = await this.validator.validate(parsedCalls, tools);
         return {
           calls: validated.accepted,
           rejected: validated.rejected,

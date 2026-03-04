@@ -41,7 +41,8 @@ export class SandboxSecurityManager {
     'eval ', 'source ', '. ',
   ];
 
-  private static readonly SHELL_METADATA_CHARS = [';', '&&', '||', '|', '`', '$', '>', '<', '&', '\n', '\r'];
+  private static readonly SHELL_METADATA_CHARS = ['`', '$', '\n', '\r'];
+
 
   // Input size limits
   private static readonly MAX_PATH_LENGTH = 500;

@@ -53,7 +53,13 @@ export interface TaskOutput {
   agent: string;
   output_format: 'RAW' | 'JSON' | 'PYDANTIC';
   files?: FileInput;
+  usage?: {
+    total_tokens: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+  };
 }
+
 
 function interpolateTemplate(
   text: string,
@@ -121,10 +127,12 @@ export class Task {
       humanInputResolver: options.humanInputResolver,
     });
 
-    let raw = (await this.agent.kickoff(prompt)).raw;
+    const agentOutput = await this.agent.kickoff(prompt);
+    let raw = agentOutput.raw;
     raw = await this.applyGuardrails(raw);
 
     const output = this.buildOutput(raw, selectedFiles);
+    output.usage = agentOutput.usage_metrics;
     this.output = output;
 
     if (this.output_file) {
@@ -136,6 +144,7 @@ export class Task {
 
     return output;
   }
+
 
   getOutput(): TaskOutput | undefined {
     return this.output;

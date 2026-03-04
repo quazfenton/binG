@@ -234,16 +234,20 @@ export class Crew {
     const output: CrewOutput = {
       raw: tasksOutput.map((item) => item.raw).join('\n\n'),
       tasks_output: tasksOutput,
-      token_usage: {
-        total_tokens: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-      },
+      token_usage: tasksOutput.reduce(
+        (acc, curr) => ({
+          total_tokens: acc.total_tokens + (curr.usage?.total_tokens || 0),
+          prompt_tokens: acc.prompt_tokens + (curr.usage?.prompt_tokens || 0),
+          completion_tokens: acc.completion_tokens + (curr.usage?.completion_tokens || 0),
+        }),
+        { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0 }
+      ),
       metadata: {
         process: this.process,
         durationMs: Date.now() - startedAt,
       },
     };
+
 
     const maybeFinal = this.after_kickoff ? await this.after_kickoff(output) : undefined;
     this.output = maybeFinal || output;
@@ -276,16 +280,20 @@ export class Crew {
     const output: CrewOutput = {
       raw: tasksOutput.map((item) => item.raw).join('\n\n'),
       tasks_output: tasksOutput,
-      token_usage: {
-        total_tokens: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-      },
+      token_usage: tasksOutput.reduce(
+        (acc, curr) => ({
+          total_tokens: acc.total_tokens + (curr.usage?.total_tokens || 0),
+          prompt_tokens: acc.prompt_tokens + (curr.usage?.prompt_tokens || 0),
+          completion_tokens: acc.completion_tokens + (curr.usage?.completion_tokens || 0),
+        }),
+        { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0 }
+      ),
       metadata: {
         process: this.process,
         durationMs: Date.now() - startedAt,
       },
     };
+
     this.output = this.after_kickoff ? (await this.after_kickoff(output)) || output : output;
     yield {
       type: 'metric',
@@ -338,16 +346,20 @@ export class Crew {
     const output: CrewOutput = {
       raw: tasksOutput.map((item) => item.raw).join('\n\n'),
       tasks_output: tasksOutput,
-      token_usage: {
-        total_tokens: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-      },
+      token_usage: tasksOutput.reduce(
+        (acc, curr) => ({
+          total_tokens: acc.total_tokens + (curr.usage?.total_tokens || 0),
+          prompt_tokens: acc.prompt_tokens + (curr.usage?.prompt_tokens || 0),
+          completion_tokens: acc.completion_tokens + (curr.usage?.completion_tokens || 0),
+        }),
+        { total_tokens: 0, prompt_tokens: 0, completion_tokens: 0 }
+      ),
       metadata: {
         process: this.process,
         durationMs: Date.now() - startedAt,
       },
     };
+
 
     const maybeFinal = this.after_kickoff ? await this.after_kickoff(output) : undefined;
     this.output = maybeFinal || output;

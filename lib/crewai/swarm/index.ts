@@ -8,6 +8,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { modelRouter } from '../runtime/model-router';
 import type { Crew } from '../crew/crew';
 import type { CrewOutput, CrewConfig } from '../crew/crew';
 import type { TaskConfig } from '../tasks/task';
@@ -17,6 +18,7 @@ export interface Shard {
   name: string;
   scope: string[];
   input: Record<string, any>;
+  description: string;
 }
 
 export interface ShardResult {
@@ -38,7 +40,7 @@ export interface SwarmConfig {
   maxParallel?: number;
   timeoutPerShard?: number;
   continueOnShardFailure?: boolean;
-  aggregateStrategy?: 'concatenate' | 'consensus' | 'vote';
+  aggregateStrategy?: 'concatenate' | 'consensus' | 'vote' | 'llm';
 }
 
 export interface SwarmEvent {
@@ -49,34 +51,53 @@ export interface SwarmEvent {
 }
 
 export class ShardPlanner extends EventEmitter {
-  /**
-   * Plan shard distribution for parallel execution
-   */
   async plan(input: string, numShards: number = 3): Promise<Shard[]> {
     this.emit('plan:start', { input, numShards });
 
-    // Create mock shards (in production, this would use LLM planning)
-    const mockShards: Shard[] = Array.from({ length: numShards }, (_, i) => ({
+    try {
+      const response = await modelRouter.call('reasoning', [
+        {
+          role: 'system',
+          content: `You are a workload sharding specialist. Your goal is to split a complex task into ${numShards} independent, parallelizable sub-tasks (shards).
+Each shard must have:
+- a unique ID
+- a descriptive name
+- a specific scope of work
+- the necessary context/input to work independently.
+
+Return ONLY a JSON array of shards:
+[{ "id": "shard_1", "name": "...", "scope": ["..."], "input": { ... }, "description": "..." }]`
+        },
+        {
+          role: 'user',
+          content: `Task to shard: ${input}`
+        }
+      ]);
+
+      const shards = JSON.parse(response.content.replace(/^```json\n?|\n?```$/g, '')) as Shard[];
+      this.emit('plan:created', { shards });
+      return shards;
+    } catch (error) {
+      console.error('LLM Shard Planning failed, falling back to basic distribution:', error);
+      return this.planBasic(input, numShards);
+    }
+  }
+
+  private planBasic(input: string, numShards: number = 3): Shard[] {
+    return Array.from({ length: numShards }, (_, i) => ({
       id: `shard_${i}_${Date.now()}`,
       name: `Shard ${i + 1}`,
       scope: [],
+      description: `Part ${i + 1} of the task`,
       input: { 
         originalInput: input, 
         shardIndex: i,
         totalShards: numShards,
       },
     }));
-
-    this.emit('plan:created', { shards: mockShards });
-    return mockShards;
   }
 
-  /**
-   * Plan with LLM assistance
-   */
   async planWithLLM(input: string, numShards: number = 3): Promise<Shard[]> {
-    // In production, this would call an LLM to intelligently shard
-    // For now, use basic planning
     return this.plan(input, numShards);
   }
 }
@@ -94,29 +115,35 @@ export class AggregatorCrew {
   async aggregate(shardResults: ShardResult[]): Promise<AggregatorResult> {
     const startTime = Date.now();
     const successfulResults = shardResults.filter(r => r.success);
-    const totalDurationMs = shardResults.reduce((sum, r) => sum + r.durationMs, 0);
-
+    
     let combinedOutput: string;
 
-    switch (this.strategy) {
-      case 'concatenate':
-        combinedOutput = this.concatenateResults(successfulResults);
-        break;
+    if (successfulResults.length === 0) {
+      return {
+        success: false,
+        combinedOutput: 'No successful shards to aggregate.',
+        shardResults,
+        totalDurationMs: Date.now() - startTime,
+      };
+    }
 
+    switch (this.strategy) {
+      case 'llm':
       case 'consensus':
-        combinedOutput = await this.consensusAggregation(successfulResults);
+        combinedOutput = await this.llmAggregation(successfulResults);
         break;
 
       case 'vote':
         combinedOutput = await this.voteAggregation(successfulResults);
         break;
 
+      case 'concatenate':
       default:
         combinedOutput = this.concatenateResults(successfulResults);
     }
 
     return {
-      success: successfulResults.length > 0,
+      success: true,
       combinedOutput,
       shardResults,
       totalDurationMs: Date.now() - startTime,
@@ -125,46 +152,58 @@ export class AggregatorCrew {
 
   private concatenateResults(results: ShardResult[]): string {
     return results
-      .map(r => `=== ${r.shardId} ===\n${r.output?.raw || r.output?.toString() || ''}`)
-      .join('\n\n');
+      .map(r => `### Shard: ${r.shardId} (${r.durationMs}ms)\n${r.output?.raw || r.output?.toString() || ''}`)
+      .join('\n\n---\n\n');
+  }
+
+  private async llmAggregation(results: ShardResult[]): Promise<string> {
+    const outputs = results.map(r => `Shard ${r.shardId}:\n${r.output?.raw || ''}`).join('\n\n');
+    
+    try {
+      const response = await modelRouter.call('reasoning', [
+        {
+          role: 'system',
+          content: 'You are a master synthesizer. Your goal is to combine results from multiple parallel agent shards into a single, cohesive, and comprehensive final report. Remove redundancies and ensure logical flow.'
+        },
+        {
+          role: 'user',
+          content: `Individual shard results to aggregate:\n\n${outputs}`
+        }
+      ]);
+      return response.content;
+    } catch (error) {
+      console.error('LLM Aggregation failed, falling back to concatenation:', error);
+      return this.concatenateResults(results);
+    }
   }
 
   private async consensusAggregation(results: ShardResult[]): Promise<string> {
-    // In production, this would use an LLM to find consensus
-    const outputs = results.map(r => r.output?.raw || '').filter(Boolean);
-    
-    if (outputs.length === 0) return '';
-    if (outputs.length === 1) return outputs[0];
-
-    // Simple consensus: return the longest output (most detailed)
-    return outputs.reduce((a, b) => (b.length > a.length ? b : a));
+    return this.llmAggregation(results);
   }
 
   private async voteAggregation(results: ShardResult[]): Promise<string> {
-    // In production, this would use voting logic
     const outputs = results.map(r => r.output?.raw || '').filter(Boolean);
     
-    if (outputs.length === 0) return '';
-    
-    // Simple voting: return most common output
-    const counts = new Map<string, number>();
-    for (const output of outputs) {
-      counts.set(output, (counts.get(output) || 0) + 1);
-    }
+    if (outputs.length === 1) return outputs[0];
 
-    let maxCount = 0;
-    let winner = outputs[0];
-    
-    for (const [output, count] of counts) {
-      if (count > maxCount) {
-        maxCount = count;
-        winner = output;
-      }
+    try {
+      const response = await modelRouter.call('fast', [
+        {
+          role: 'system',
+          content: 'You are a judge. Compare the following outputs and select the best, most comprehensive one. Return ONLY the content of the best output.'
+        },
+        {
+          role: 'user',
+          content: outputs.map((o, i) => `Output ${i+1}:\n${o}`).join('\n\n---\n\n')
+        }
+      ]);
+      return response.content;
+    } catch (error) {
+      return outputs.reduce((a, b) => (b.length > a.length ? b : a));
     }
-
-    return winner;
   }
 }
+
 
 export class MultiCrewSwarm extends EventEmitter {
   private config: SwarmConfig;

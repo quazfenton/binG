@@ -1751,7 +1751,7 @@ export default app;`,
                 });
 
                 // Preload common packages if configured
-                const preloadPackages = process.env.PYODIDE_PRELOAD_PACKAGES?.split(',') || [];
+                const preloadPackages = process.env.NEXT_PUBLIC_PYODIDE_PRELOAD_PACKAGES?.split(',') || [];
                 
                 if (preloadPackages.length > 0) {
                   setPyodideOutput(prev => prev + `# Preloading ${preloadPackages.length} package(s)...\n`);

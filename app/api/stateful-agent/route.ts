@@ -75,20 +75,47 @@ export async function POST(request: NextRequest) {
       const crewResult = await runCrewAIWorkflow({
         sessionId: sessionId || requestId,
         userMessage,
+        stream: stream === true,
       });
 
+      if (stream === true && typeof (crewResult as any)[Symbol.asyncIterator] === 'function') {
+        const streamGenerator = crewResult as AsyncGenerator<any>;
+        
+        const encoder = new TextEncoder();
+        const readableStream = new ReadableStream({
+          async start(controller) {
+            for await (const chunk of streamGenerator) {
+              const data = JSON.stringify(chunk) + '\n';
+              controller.enqueue(encoder.encode(data));
+            }
+            controller.close();
+          },
+        });
+
+        return new Response(readableStream, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+        });
+      }
+
+      const finalResult = crewResult as any;
+
       return NextResponse.json({
-        success: crewResult.success,
-        response: crewResult.response,
-        steps: crewResult.tasks.length,
-        errors: crewResult.errors,
+        success: finalResult.success,
+        response: finalResult.response,
+        steps: finalResult.tasks?.length || 0,
+        errors: finalResult.errors,
         metadata: {
           agentType: 'crewai',
-          process: crewResult.process,
+          process: finalResult.process,
           streamRequested: stream === true,
         },
       });
     }
+
 
     // AI SDK streaming mode with tool calling
     if (stream || body.useAI_SDK === true) {
