@@ -685,9 +685,9 @@ export class E2BDesktopProvider {
 
     try {
       // Dynamic import to avoid requiring @e2b/desktop when not used
-      const { Desktop } = await import('@e2b/desktop')
+      const { Sandbox } = await import('@e2b/desktop')
 
-      const sandbox = await Desktop.create({
+      const sandbox = await Sandbox.create({
         template: config.template || 'desktop',
         timeoutMs: config.timeoutMs || DESKTOP_DEFAULT_TIMEOUT,
         resolution: config.resolution || DESKTOP_DEFAULT_RESOLUTION,

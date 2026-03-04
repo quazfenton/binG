@@ -12,9 +12,10 @@
  * - Health checking for provider availability
  */
 
-import type { ToolDefinition, ToolResult } from '../sandbox/types';
+import type { ToolResult } from '../sandbox/types';
 import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
+
 import { runAgentLoop as runV2AgentLoop } from '../sandbox/agent-loop';
 import { llmService, type LLMRequest } from './llm-providers';
 import { 
@@ -26,11 +27,12 @@ import {
 export interface UnifiedAgentConfig {
   // Core
   userMessage: string;
+  sandboxId?: string;
   systemPrompt?: string;
   conversationHistory?: Array<{ role: string; content: string }>;
   
   // Tools
-  tools?: ToolDefinition[];
+  tools?: any[];
   executeTool?: (name: string, args: Record<string, any>) => Promise<ToolResult>;
   onToolExecution?: (name: string, args: Record<string, any>, result: ToolResult) => void;
   
@@ -43,7 +45,7 @@ export interface UnifiedAgentConfig {
   maxTokens?: number;
   
   // Mode override (optional - auto-detected from env if not specified)
-  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'auto';
+  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'auto';
 }
 
 export interface UnifiedAgentResult {
@@ -55,14 +57,16 @@ export interface UnifiedAgentResult {
     result: ToolResult;
   }>;
   totalSteps?: number;
-  mode: 'v1-api' | 'v2-containerized' | 'v2-local';
+  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native';
   error?: string;
   metadata?: {
     model?: string;
     provider?: string;
     duration?: number;
+    [key: string]: any;
   };
 }
+
 
 export interface ProviderHealth {
   v2Containerized: boolean;
@@ -204,6 +208,7 @@ async function runV2Native(config: UnifiedAgentConfig): Promise<UnifiedAgentResu
     },
   };
 
+
   const engine = createOpenCodeEngine(engineConfig);
   const result = await engine.execute(config.userMessage);
 
@@ -255,14 +260,13 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
   
   // Use OpenCode Engine as primary agentic engine
   const engineConfig: OpenCodeEngineConfig = {
-    userId: 'unified-agent', // Should come from auth context
-    sessionId: config.conversationHistory?.[0]?.content, // Use first message as session key
     systemPrompt: config.systemPrompt,
     model: process.env.OPENCODE_MODEL,
+
     maxSteps: config.maxSteps,
     timeout: 300000,
-    containerized: true,
-  };
+  } as any;
+
   
   const engine = createOpenCodeEngine(engineConfig);
   const result = await engine.execute(config.userMessage);
@@ -302,14 +306,11 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
   
   // Use OpenCode Engine as primary agentic engine
   const engineConfig: OpenCodeEngineConfig = {
-    userId: 'unified-agent',
-    sessionId: config.conversationHistory?.[0]?.content,
     systemPrompt: config.systemPrompt,
     model: process.env.OPENCODE_MODEL,
     maxSteps: config.maxSteps,
     timeout: 300000,
-    containerized: false,
-  };
+  } as any;
   
   const engine = createOpenCodeEngine(engineConfig);
   const result = await engine.execute(config.userMessage);
@@ -335,58 +336,10 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
     metadata: {
       provider: 'opencode-engine',
       duration: Date.now() - startTime,
-      commandsExecuted: result.bashCommands?.length || 0,
-      filesModified: result.fileChanges?.length || 0,
     },
   };
 }
 
-/**
- * Run V2 local mode (OpenCode CLI spawned locally) - PRIMARY ENGINE
- */
-async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
-  const startTime = Date.now();
-  
-  // Use OpenCode Engine as primary agentic engine
-  const engineConfig: OpenCodeEngineConfig = {
-    userId: 'unified-agent',
-    sessionId: config.conversationHistory?.[0]?.content,
-    systemPrompt: config.systemPrompt,
-    model: process.env.OPENCODE_MODEL,
-    maxSteps: config.maxSteps,
-    timeout: 300000,
-    containerized: false,
-  };
-  
-  const engine = createOpenCodeEngine(engineConfig);
-  const result = await engine.execute(config.userMessage);
-  
-  if (!result.success) {
-    throw new Error(result.error || 'OpenCode engine failed');
-  }
-  
-  return {
-    success: true,
-    response: result.response,
-    steps: result.commandsExecuted?.map(cmd => ({
-      toolName: 'execute_command',
-      args: { command: cmd.command },
-      result: {
-        success: cmd.exitCode === 0,
-        output: cmd.output,
-        exitCode: cmd.exitCode,
-      },
-    })),
-    totalSteps: result.metadata.steps,
-    mode: 'v2-local',
-    metadata: {
-      provider: 'opencode-engine',
-      duration: Date.now() - startTime,
-      commandsExecuted: result.commandsExecuted?.length || 0,
-      filesModified: result.filesModified?.length || 0,
-    },
-  };
-}
 
 /**
  * Run V1 API mode (LLM provider API)
@@ -395,10 +348,11 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
   const startTime = Date.now();
   
   // Build messages from conversation history + current message
-  const messages: Array<{ role: string; content: string }> = [
+  const messages: any[] = [
     ...(config.conversationHistory || []),
     { role: 'user', content: config.userMessage },
   ];
+
   
   // Get LLM provider
   const llmProvider = getLLMProvider();
@@ -427,6 +381,7 @@ async function runV1ApiWithTools(
   // Use the agent loop from sandbox
   const options = {
     userMessage: config.userMessage,
+    sandboxId: config.sandboxId || 'default',
     systemPrompt: config.systemPrompt || 'You are a helpful AI assistant.',
     tools: config.tools || [],
     maxSteps: config.maxSteps || 15,
@@ -434,6 +389,7 @@ async function runV1ApiWithTools(
     onToolExecution: config.onToolExecution,
     onStreamChunk: config.onStreamChunk,
   };
+
   
   const result = await runV2AgentLoop(options);
   
@@ -455,14 +411,16 @@ async function runV1ApiWithTools(
  */
 async function runV1ApiCompletion(
   config: UnifiedAgentConfig,
-  messages: Array<{ role: string; content: string }>,
+  messages: any[],
   llmProvider: LLMProvider,
   startTime: number
 ): Promise<UnifiedAgentResult> {
   // Use LLM service for simple completion
   const llmRequest: LLMRequest = {
-    messages,
+    messages: messages as any,
+    model: process.env.LLM_MODEL || 'gpt-4o',
     temperature: config.temperature || 0.7,
+
     maxTokens: config.maxTokens || 4096,
     stream: !!config.onStreamChunk,
   };
@@ -471,9 +429,10 @@ async function runV1ApiCompletion(
   
   if (config.onStreamChunk) {
     // Stream response
-    const stream = await llmService.streamResponse(llmRequest);
+    const stream = llmService.generateStreamingResponse(llmRequest);
     
     for await (const chunk of stream) {
+
       if (chunk.content) {
         content += chunk.content;
         config.onStreamChunk(chunk.content);

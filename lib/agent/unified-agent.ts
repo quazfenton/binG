@@ -473,13 +473,20 @@ export class UnifiedAgent {
         }
       }
 
-      // Fallback: Execute via terminal with proper command construction
-      const command = this.getCodeCommand(language, code)
+      // Safe execution: write to temporary file and execute file
+      const ext = this.getCodeExtension(language);
+      const tempPath = `/tmp/agent_exec_${Date.now()}.${ext}`;
+      await sandboxBridge.writeFile(this.session.sandboxId, tempPath, code);
+
+      const command = this.getCodeCommand(language, tempPath);
       const result = await sandboxBridge.executeCommand(
         this.session.sandboxId, 
         command, 
         undefined
       )
+
+      // Cleanup
+      await sandboxBridge.executeCommand(this.session.sandboxId, `rm ${tempPath}`);
 
       return {
         success: result.success,
@@ -496,21 +503,32 @@ export class UnifiedAgent {
     }
   }
 
-  private getCodeCommand(language: string, code: string): string {
-    const escaped = code.replace(/'/g, "'\\''")
+  private getCodeExtension(language: string): string {
     switch (language) {
-      case 'python':
-        return `python3 -c '${escaped}'`
-      case 'javascript':
-      case 'typescript':
-        return `node -e '${escaped}'`
+      case 'python': return 'py';
+      case 'javascript': return 'js';
+      case 'typescript': return 'ts';
       case 'bash':
-      case 'sh':
-        return code
-      default:
-        throw new Error(`Unsupported language for terminal execution: ${language}`)
+      case 'sh': return 'sh';
+      default: return 'txt';
     }
   }
+
+  private getCodeCommand(language: string, filePath: string): string {
+    switch (language) {
+      case 'python':
+        return `python3 ${filePath}`
+      case 'javascript':
+      case 'typescript':
+        return `node ${filePath}`
+      case 'bash':
+      case 'sh':
+        return `bash ${filePath}`
+      default:
+        throw new Error(`Unsupported language for execution: ${language}`)
+    }
+  }
+
 
   // ==================== Git ====================
 

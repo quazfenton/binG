@@ -15,6 +15,21 @@ import { DaytonaProvider } from './daytona-provider'
 import { RunloopProvider } from './runloop-provider'
 import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from './e2b-desktop-provider-enhanced'
 
+/**
+ * Union type for all supported sandbox providers.
+ * Add new provider keys here when registering new providers.
+ */
+export type SandboxProviderType =
+  | 'daytona'
+  | 'e2b'
+  | 'runloop'
+  | 'microsandbox'
+  | 'blaxel'
+  | 'sprites'
+  | 'codesandbox'
+  | 'mistral-agent'
+  | 'mistral'
+
 // Provider registry
 const providerRegistry = new Map<SandboxProviderType, {
   provider: SandboxProvider
@@ -23,8 +38,6 @@ const providerRegistry = new Map<SandboxProviderType, {
   available: boolean
   factory?: () => SandboxProvider
 }>()
-
-// ... (existing code)
 
 function initializeRegistry() {
   // Register providers with priority (lower = higher priority in fallback chain)
@@ -259,7 +272,7 @@ export type {
 
 // Re-export Sprites utilities
 export { SpritesCheckpointManager, createCheckpointManager } from './sprites-checkpoint-manager'
-export type { CheckpointRetention, CheckpointInfo } from './sprites-checkpoint-manager'
+export type { RetentionPolicy, CheckpointInfo } from './sprites-checkpoint-manager'
 
 // Re-export Sprites tar-sync utility
 export { syncFilesToSprite, syncVfsSnapshotToSprite, syncChangedFilesToSprite } from './sprites-tar-sync'
