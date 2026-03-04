@@ -162,10 +162,10 @@ export class UnifiedAgent {
 
     // Initialize Git Manager if capability enabled
     if (this.config.capabilities?.includes('git')) {
-       const provider = getSandboxProvider(this.config.provider as any)
-       const handle = await provider.getSandbox(this.session.sandboxId)
-       this.gitManager = new GitManager(handle)
-    }
+       const provider = await getSandboxProvider(this.config.provider as any)
+        const handle = await provider.getSandbox(this.session.sandboxId)
+        this.gitManager = new GitManager(handle)
+       }
 
     // Initialize capabilities
     if (this.config.capabilities?.includes('terminal')) {
@@ -386,10 +386,10 @@ export class UnifiedAgent {
     if (!this.session) return
 
     try {
-      const provider = getSandboxProvider(this.config.provider as any)
-      const handle = await provider.getSandbox(this.session.sandboxId)
+      const provider = await getSandboxProvider(this.config.provider as any)
+       const handle = await provider.getSandbox(this.session.sandboxId)
       
-      if ('getComputerUseService' in handle) {
+       if ('getComputerUseService' in handle) {
          // Specialized service (Daytona)
          this.desktopHandle = (handle as any).getComputerUseService()
       } else if ('screenshot' in handle) {
@@ -459,10 +459,10 @@ export class UnifiedAgent {
     const startTime = Date.now()
     
     try {
-      const provider = getSandboxProvider(this.config.provider as any)
-      const handle = await provider.getSandbox(this.session.sandboxId)
+      const provider = await getSandboxProvider(this.config.provider as any)
+       const handle = await provider.getSandbox(this.session.sandboxId)
       
-      // Some providers have native runCode (e.g. E2B)
+       // Some providers have native runCode (e.g. E2B)
       if ('runCode' in handle) {
         const result = await (handle as any).runCode(code, language)
         return {

@@ -31,13 +31,19 @@ export type SandboxProviderType =
   | 'mistral'
 
 // Provider registry
-const providerRegistry = new Map<SandboxProviderType, {
+interface ProviderEntry {
   provider: SandboxProvider
   priority: number
   enabled: boolean
   available: boolean
+  healthy: boolean
+  initializing: boolean
+  initPromise: Promise<SandboxProvider> | null
+  failureCount: number
   factory?: () => SandboxProvider
-}>()
+}
+
+const providerRegistry = new Map<SandboxProviderType, ProviderEntry>()
 
 function initializeRegistry() {
   // Register providers with priority (lower = higher priority in fallback chain)
@@ -48,6 +54,10 @@ function initializeRegistry() {
     priority: 1,
     enabled: true,
     available: false,
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
     factory: () => {
       const { DaytonaProvider } = require('./daytona-provider')
       return new DaytonaProvider()
@@ -59,6 +69,10 @@ function initializeRegistry() {
     priority: 2,
     enabled: true,
     available: false,
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
     factory: () => {
       const { E2BProvider } = require('./e2b-provider')
       return new E2BProvider()
@@ -70,6 +84,10 @@ function initializeRegistry() {
     priority: 3,
     enabled: true,
     available: false,
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
     factory: () => {
       const { RunloopProvider } = require('./runloop-provider')
       return new RunloopProvider()
@@ -81,6 +99,10 @@ function initializeRegistry() {
     priority: 4,
     enabled: true,
     available: false,
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
     factory: () => {
       const { MicrosandboxProvider } = require('./microsandbox-provider')
       return new MicrosandboxProvider()
@@ -92,6 +114,10 @@ function initializeRegistry() {
     priority: 5,
     enabled: true,
     available: false,
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
     factory: () => {
       const { BlaxelProvider } = require('./blaxel-provider')
       return new BlaxelProvider()
@@ -103,6 +129,10 @@ function initializeRegistry() {
     priority: 6,
     enabled: true,
     available: false,
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
     factory: () => {
       const { SpritesProvider } = require('./sprites-provider')
       return new SpritesProvider()
@@ -114,6 +144,10 @@ function initializeRegistry() {
     priority: 7,
     enabled: true,
     available: false,
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
     factory: () => {
       const { CodeSandboxProvider } = require('./codesandbox-provider')
       return new CodeSandboxProvider()
@@ -126,6 +160,10 @@ function initializeRegistry() {
     priority: 3,
     enabled: true,
     available: false,
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
     factory: () => {
       const { MistralAgentProvider } = require('./mistral/mistral-agent-provider')
       return new MistralAgentProvider()
@@ -138,6 +176,10 @@ function initializeRegistry() {
     priority: 3,
     enabled: false, // Disabled by default, use mistral-agent instead
     available: false,
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
     factory: () => {
       // Lazy import to avoid circular dependencies
       const { MistralCodeInterpreterProvider } = require('./mistral-code-interpreter-provider')
@@ -149,11 +191,17 @@ function initializeRegistry() {
 // Initialize on module load
 initializeRegistry()
 
+const MAX_RETRIES = 3
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 /**
- * Get a sandbox provider by type
+ * Get a sandbox provider by type with retry logic and race condition prevention.
  * @param type - Provider type (defaults to SANDBOX_PROVIDER env var or 'daytona')
  */
-export function getSandboxProvider(type?: SandboxProviderType): SandboxProvider {
+export async function getSandboxProvider(type?: SandboxProviderType): Promise<SandboxProvider> {
   const providerType = type || (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona';
   const entry = providerRegistry.get(providerType);
 
@@ -164,21 +212,88 @@ export function getSandboxProvider(type?: SandboxProviderType): SandboxProvider 
     )
   }
 
-  // Lazy initialization if factory exists
-  if (!entry.provider && entry.factory) {
-    try {
-      entry.provider = entry.factory()
-      entry.available = true
-    } catch (error: any) {
-      entry.available = false
-      throw new Error(
-        `Failed to initialize provider ${providerType}: ${error.message}. ` +
-        `Check that required environment variables are set.`
-      )
+  // Already initialized and healthy — return immediately
+  if (entry.provider && entry.healthy) {
+    return entry.provider
+  }
+
+  // Race condition prevention: if already initializing, wait for the existing attempt
+  if (entry.initializing && entry.initPromise) {
+    return entry.initPromise
+  }
+
+  // Start initialization with retry logic
+  entry.initializing = true
+  entry.initPromise = (async () => {
+    let lastError: Error | undefined
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        if (entry.factory) {
+          entry.provider = entry.factory()
+        }
+        entry.available = true
+        entry.healthy = true
+        entry.failureCount = 0
+        entry.initializing = false
+        return entry.provider
+      } catch (error: any) {
+        lastError = error
+        entry.failureCount++
+        if (attempt < MAX_RETRIES) {
+          await delay(Math.pow(2, attempt) * 100) // exponential backoff: 200ms, 400ms
+        }
+      }
+    }
+    // All retries exhausted
+    entry.available = false
+    entry.healthy = false
+    entry.initializing = false
+    entry.initPromise = null
+    throw new Error(
+      `Failed to initialize provider ${providerType} after ${MAX_RETRIES} attempts: ${lastError?.message}. ` +
+      `Check that required environment variables are set.`
+    )
+  })()
+
+  return entry.initPromise
+}
+
+/**
+ * Get a sandbox provider with automatic fallback.
+ * Tries providers in priority order (lower number = higher priority).
+ * Skips disabled and unhealthy providers.
+ */
+export async function getSandboxProviderWithFallback(
+  preferredType?: SandboxProviderType,
+): Promise<{ provider: SandboxProvider; type: SandboxProviderType }> {
+  // Build ordered list: preferred first, then by priority
+  const sorted = Array.from(providerRegistry.entries())
+    .filter(([, e]) => e.enabled)
+    .sort((a, b) => a[1].priority - b[1].priority)
+
+  const ordered: SandboxProviderType[] = []
+  if (preferredType) {
+    ordered.push(preferredType)
+  }
+  for (const [t] of sorted) {
+    if (t !== preferredType) {
+      ordered.push(t)
     }
   }
 
-  return entry.provider
+  const errors: string[] = []
+  for (const providerType of ordered) {
+    try {
+      const provider = await getSandboxProvider(providerType)
+      return { provider, type: providerType }
+    } catch (error: any) {
+      errors.push(`${providerType}: ${error.message}`)
+    }
+  }
+
+  throw new Error(
+    `All sandbox providers failed:\n${errors.join('\n')}`
+  )
 }
 
 /**
@@ -190,6 +305,7 @@ export function getAllProviders(): SandboxProviderType[] {
 
 /**
  * Get available providers (initialized and ready)
+ * Uses the same async retry logic as getSandboxProvider() for consistency.
  */
 export async function getAvailableProviders(): Promise<SandboxProviderType[]> {
   const available: SandboxProviderType[] = []
@@ -197,19 +313,19 @@ export async function getAvailableProviders(): Promise<SandboxProviderType[]> {
   for (const [type, entry] of providerRegistry) {
     if (!entry.enabled) continue
 
-    // Try to initialize if not yet done
-    if (!entry.provider && entry.factory) {
-      try {
-        entry.provider = entry.factory()
-        entry.available = true
-      } catch {
-        entry.available = false
-        continue
-      }
+    // If already initialized and healthy, include it
+    if (entry.provider && entry.available) {
+      available.push(type)
+      continue
     }
 
-    if (entry.available) {
+    // Try async initialization with retry (consistent with getSandboxProvider)
+    try {
+      await getSandboxProvider(type)
       available.push(type)
+    } catch {
+      // Provider failed to initialize — skip it
+      continue
     }
   }
 

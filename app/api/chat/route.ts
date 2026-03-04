@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from 'zod';
 import { llmService, PROVIDERS } from "@/lib/api/llm-providers";
 import { errorHandler } from "@/lib/api/error-handler";
 import { priorityRequestRouter } from "@/lib/api/priority-request-router";
@@ -25,9 +26,32 @@ const LLM_AGENT_TOOLS_TIMEOUT_MS = parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_
 // Note: Fast-Agent now has dedicated endpoint at /api/agent
 // This route uses priority router which includes Fast-Agent as Priority 1
 
-// Rate limiting for chat API: 60 messages per minute per user
+// Rate limiting for chat API
 const CHAT_RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
-const CHAT_RATE_LIMIT_MAX = 60;
+const CHAT_RATE_LIMIT_MAX_AUTHENTICATED = 60;
+const CHAT_RATE_LIMIT_MAX_ANONYMOUS = 10;
+
+const chatMessageSchema = z.object({
+  role: z.enum(['user', 'assistant', 'system']),
+  content: z.union([z.string(), z.array(z.any())]),
+}).passthrough();
+
+const chatRequestSchema = z.object({
+  messages: z.array(chatMessageSchema).min(1, 'Messages array cannot be empty'),
+  provider: z.string().min(1, 'Provider is required'),
+  model: z.string().min(1, 'Model is required'),
+  temperature: z.number().min(0).max(2).optional().default(0.7),
+  maxTokens: z.number().int().min(1).max(200000).optional().default(10096),
+  stream: z.boolean().optional().default(true),
+  apiKeys: z.record(z.string()).optional().default({}),
+  requestId: z.string().optional(),
+  conversationId: z.string().optional(),
+  filesystemContext: z.object({
+    attachedFiles: z.any().optional(),
+    applyFileEdits: z.boolean().optional(),
+    scopePath: z.string().optional(),
+  }).optional(),
+});
 
 export async function POST(request: NextRequest) {
   const requestStartTime = Date.now();
@@ -44,15 +68,16 @@ export async function POST(request: NextRequest) {
     console.log('[DEBUG] Chat API: Anonymous request (no auth token/session)');
   }
 
-  // RATE LIMITING: Check rate limit before processing
-  // Use user ID for authenticated users, IP for anonymous
-  const rateLimitIdentifier = authResult.userId && authResult.userId !== 'anonymous'
+  // RATE LIMITING: Use tighter limits for anonymous users
+  const isAuthenticated = authResult.success && authResult.userId && !authResult.userId.startsWith('anon:');
+  const rateLimitMax = isAuthenticated ? CHAT_RATE_LIMIT_MAX_AUTHENTICATED : CHAT_RATE_LIMIT_MAX_ANONYMOUS;
+  const rateLimitIdentifier = isAuthenticated
     ? `user:${authResult.userId}`
     : `ip:${request.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown'}`;
   
   const rateLimitResult = checkRateLimit(
     rateLimitIdentifier,
-    { windowMs: CHAT_RATE_LIMIT_WINDOW_MS, maxRequests: CHAT_RATE_LIMIT_MAX, message: 'Too many chat messages' },
+    { windowMs: CHAT_RATE_LIMIT_WINDOW_MS, maxRequests: rateLimitMax, message: 'Too many chat messages' },
     { name: 'free', multiplier: 1, description: 'Free tier' }
   );
 
@@ -60,7 +85,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         success: false,
-        error: `Rate limit exceeded. Maximum ${CHAT_RATE_LIMIT_MAX} messages per minute.`,
+        error: `Rate limit exceeded. Maximum ${rateLimitMax} messages per minute.`,
         retryAfter: rateLimitResult.retryAfter,
         remaining: rateLimitResult.remaining,
       },
@@ -68,7 +93,7 @@ export async function POST(request: NextRequest) {
         status: 429,
         headers: {
           'Retry-After': String(rateLimitResult.retryAfter || 60),
-          'X-RateLimit-Limit': String(CHAT_RATE_LIMIT_MAX),
+          'X-RateLimit-Limit': String(rateLimitMax),
           'X-RateLimit-Remaining': String(rateLimitResult.remaining),
           'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000 + rateLimitResult.resetAfter / 1000)),
         },
@@ -80,25 +105,36 @@ export async function POST(request: NextRequest) {
   let model = '';
 
   try {
-    const body = await request.json();
-    console.log('[DEBUG] Chat API: Request body parsed:', {
-      hasMessages: !!body.messages,
-      messageCount: body.messages?.length,
+    const rawBody = await request.json();
+
+    // Validate request body with Zod schema
+    const parseResult = chatRequestSchema.safeParse(rawBody);
+    if (!parseResult.success) {
+      const firstError = parseResult.error.errors[0];
+      console.error('[DEBUG] Chat API: Schema validation failed:', firstError);
+      return NextResponse.json(
+        { error: firstError.message, details: parseResult.error.flatten().fieldErrors },
+        { status: 400 },
+      );
+    }
+
+    const body = parseResult.data;
+    console.log('[DEBUG] Chat API: Request body validated:', {
+      messageCount: body.messages.length,
       provider: body.provider,
       model: body.model,
       stream: body.stream,
-      bodyKeys: Object.keys(body),
-      userId: authResult.userId
+      userId: authResult.userId,
     });
 
     const {
       messages,
       provider: requestedProvider,
       model: requestedModel,
-      temperature = 0.7,
-      maxTokens = 10096,
-      stream = true,
-      apiKeys = {},
+      temperature,
+      maxTokens,
+      stream,
+      apiKeys,
       requestId: incomingRequestId,
       conversationId,
       filesystemContext,
@@ -106,10 +142,10 @@ export async function POST(request: NextRequest) {
       messages: LLMMessage[];
       provider: string;
       model: string;
-      temperature?: number;
-      maxTokens?: number;
-      stream?: boolean;
-      apiKeys?: Record<string, string>;
+      temperature: number;
+      maxTokens: number;
+      stream: boolean;
+      apiKeys: Record<string, string>;
       requestId?: string;
       conversationId?: string;
       filesystemContext?: ChatFilesystemContextPayload;
@@ -127,27 +163,8 @@ export async function POST(request: NextRequest) {
       stream
     );
 
-    // Validate required fields
-    if (!messages || !Array.isArray(messages) || messages.length === 0) {
-      console.error('[DEBUG] Chat API: Validation failed - missing or empty messages');
-      return NextResponse.json(
-        { error: "Messages array is required and cannot be empty" },
-        { status: 400 },
-      );
-    }
-
-    if (!provider || !model) {
-      console.error('[DEBUG] Chat API: Validation failed - missing provider or model', { provider, model });
-      return NextResponse.json(
-        { error: "Provider and model are required" },
-        { status: 400 },
-      );
-    }
-
     // Check if provider is valid (exists in our PROVIDERS constant)
-    const isValidProvider = provider in PROVIDERS;
-    
-    if (!isValidProvider) {
+    if (!(provider in PROVIDERS)) {
       console.error('[DEBUG] Chat API: Invalid provider:', provider);
       return NextResponse.json(
         {
@@ -1424,10 +1441,16 @@ export async function GET() {
 /**
  * Error handler with logging
  */
-async function handleError(error: any, requestId: string, provider: string, model: string, userId: string) {
+async function handleError(
+  error: { message: string },
+  requestId: string,
+  provider: string,
+  model: string,
+  userId: string,
+  requestStartTime: number
+) {
   const latencyMs = Date.now() - requestStartTime;
   
-  // Log error
   await chatRequestLogger.logRequestComplete(
     requestId,
     false,
@@ -1437,8 +1460,7 @@ async function handleError(error: any, requestId: string, provider: string, mode
     error.message
   );
   
-  // Return error response
-  return errorHandler.handleError(error, {
+  return errorHandler.handleError(error instanceof Error ? error : new Error(error.message), {
     context: 'chat_api',
     provider,
     model,

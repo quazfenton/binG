@@ -43,6 +43,10 @@ class AuthCache {
     }
   }
 
+  delete(key: string): void {
+    this.cache.delete(key);
+  }
+
   /**
    * Invalidate all cached auth tokens for a user
    * Called when user logs out to prevent stale auth results

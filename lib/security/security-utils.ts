@@ -48,11 +48,16 @@ export function safeJoin(base: string, ...paths: string[]): string {
   // SECURITY: Verify the result is still within base
   // Add trailing separator to prevent partial matches
   // e.g., '/tmp/workspaces-evil' would start with '/tmp/workspaces'
-  const baseWithSeparator = normalizedBase.endsWith(sep)
-    ? normalizedBase
-    : normalizedBase + sep;
+  // Normalize separators to forward slashes for cross-platform comparison
+  // (handles Windows UNC paths like \\server\share)
+  const normalizedBaseForward = normalizedBase.replace(/\\/g, '/');
+  const resolvedForward = resolved.replace(/\\/g, '/');
 
-  if (!resolved.startsWith(baseWithSeparator) && resolved !== normalizedBase) {
+  const baseWithSeparator = normalizedBaseForward.endsWith('/')
+    ? normalizedBaseForward
+    : normalizedBaseForward + '/';
+
+  if (!resolvedForward.startsWith(baseWithSeparator) && resolvedForward !== normalizedBaseForward) {
     throw new Error(
       `Path traversal detected: "${resolved}" is outside base "${normalizedBase}"`
     );
@@ -195,6 +200,45 @@ export const commandSchema = z
         /:\(\)\{\s*:\|:\s*&\s*\}\;/,      // Fork bomb
         /\bchmod\s+[0-7]*\s+\/(etc|bin|usr)/,  // chmod system dirs
         /\bchown\s+.*\s+\/(etc|bin|usr)/,     // chown system dirs
+
+        // Download and execute (remote code execution)
+        /\bwget\s+.*\|\s*(ba)?sh/,
+        /\bcurl\s+.*\|\s*(ba)?sh/,
+        /\bwget\s+.*-O\s*-\s*\|/,
+        /\bcurl\s+.*-o\s*-\s*\|/,
+        
+        // Write to system files
+        /\becho\s+.*>\s*\/etc/,
+        /\bprintf\s+.*>\s*\/etc/,
+        /\btee\s+\/etc/,
+        /\becho\s+.*>\s*\/dev\/sd/,
+        
+        // System control
+        /\bshutdown\s+(-h|-r)/,
+        /\breboot\b/,
+        /\bhalt\b/,
+        /\bpoweroff\b/,
+        /\binit\s+[06]\b/,
+        
+        // Process killing (init / mass kill)
+        /\bkill\s+-9\s+1\b/,
+        /\bkillall\s+-9/,
+        /\bpkill\s+-9/,
+        
+        // Disk operations
+        />\s*\/dev\/sd/,
+        /\bmkfs\.\w+\s+\/dev\/sd/,
+        /\bfdisk\s+\/dev\/sd/,
+        /\bparted\s+\/dev\/sd/,
+        
+        // Environment manipulation
+        /\bexport\s+LD_PRELOAD/,
+        /\bunset\s+PATH\b/,
+        
+        // Kernel / system module loading
+        /\binsmod\b/,
+        /\brmmod\b/,
+        /\bmodprobe\b/,
       ];
       
       return !dangerous.some(pattern => pattern.test(cmd));
@@ -211,7 +255,7 @@ export class RateLimiter {
   private requests = new Map<string, { count: number; resetAt: number }>();
   
   constructor(
-    private maxRequests: number,
+    readonly maxRequests: number,
     private windowMs: number
   ) {}
   
