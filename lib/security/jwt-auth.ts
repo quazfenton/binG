@@ -168,13 +168,21 @@ export async function verifyToken(
       audience: fullConfig.audience,
     });
     
+    // Check token blacklist for revoked tokens
+    const jti = payload.jti;
+    if (jti && globalBlacklist.isRevoked(jti)) {
+      return {
+        valid: false,
+        error: 'Token has been revoked',
+      };
+    }
+    
     return {
       valid: true,
       payload: payload as TokenPayload,
     };
   } catch (error) {
     if (error instanceof Error) {
-      // Check for specific error types
       if (error.message.includes('expired')) {
         return {
           valid: false,
@@ -230,6 +238,7 @@ export function extractTokenFromHeader(authHeader: string | null): string | null
 
 /**
  * Refresh a token (issue new token with extended expiry)
+ * Revokes the old token after issuing a new one (rotation).
  * 
  * @param currentToken - Current valid token
  * @param config - JWT configuration
@@ -239,7 +248,6 @@ export async function refreshToken(
   currentToken: string,
   config: Partial<JWTConfig> = {}
 ): Promise<string> {
-  // Verify current token first
   const verification = await verifyToken(currentToken, config);
   
   if (!verification.valid || !verification.payload) {
@@ -247,7 +255,42 @@ export async function refreshToken(
   }
   
   // Generate new token with same payload
-  return generateToken(verification.payload, config);
+  const newToken = await generateToken(verification.payload, config);
+  
+  // Revoke old token to prevent reuse (token rotation)
+  await revokeToken(currentToken, config);
+  
+  return newToken;
+}
+
+/**
+ * Revoke a JWT token by adding its JTI to the blacklist.
+ * The token remains blacklisted until its original expiry time.
+ * 
+ * @param token - JWT token to revoke
+ * @param config - JWT configuration
+ */
+export async function revokeToken(
+  token: string,
+  config: Partial<JWTConfig> = {}
+): Promise<void> {
+  const fullConfig = { ...DEFAULT_CONFIG, ...config };
+  
+  try {
+    const { payload } = await jwtVerify(token, getSigningKey(fullConfig.secretKey), {
+      issuer: fullConfig.issuer,
+      audience: fullConfig.audience,
+    });
+    
+    const jti = payload.jti;
+    const exp = payload.exp;
+    
+    if (jti && exp) {
+      globalBlacklist.revoke(jti, exp * 1000); // exp is in seconds, convert to ms
+    }
+  } catch {
+    // Token is already expired or invalid — no need to blacklist
+  }
 }
 
 /**
