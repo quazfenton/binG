@@ -183,13 +183,14 @@ export class SnapshotManager extends EventEmitter {
         .then(resolve)
         .catch(reject);
 
-      // Add files to tar
-      this.addDirToTar(packer, workspace, userId);
-      packer.end();
+      // Add files to tar (async to ensure all pipes complete before packer.end())
+      this.addDirToTar(packer, workspace, userId).then(() => {
+        packer.end();
+      }).catch(reject);
     });
   }
 
-  private addDirToTar(packer: any, dir: string, userId: string): void {
+  private async addDirToTar(packer: any, dir: string, userId: string): Promise<void> {
     const entries = readdirSync(dir, { withFileTypes: true });
     
     for (const entry of entries) {
@@ -197,9 +198,16 @@ export class SnapshotManager extends EventEmitter {
       const relativePath = join(userId, fullPath.replace(dir, '').replace(/^[/\\]/, ''));
       
       if (entry.isDirectory()) {
-        this.addDirToTar(packer, fullPath, userId);
+        await this.addDirToTar(packer, fullPath, userId);
       } else {
-        packer.entry({ name: relativePath }, createReadStream(fullPath));
+        const stat = statSync(fullPath);
+        await new Promise<void>((resolve, reject) => {
+          const entryStream = packer.entry({ name: relativePath, size: stat.size }, (err: Error | null) => {
+            if (err) reject(err);
+            else resolve();
+          });
+          createReadStream(fullPath).pipe(entryStream);
+        });
       }
     }
   }

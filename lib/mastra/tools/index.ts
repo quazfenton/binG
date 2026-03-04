@@ -10,10 +10,17 @@
 import { createTool } from '@mastra/core';
 import { z } from 'zod';
 import { VirtualFilesystemService } from '@/lib/virtual-filesystem/virtual-filesystem-service';
-import { getSandboxProvider } from '@/lib/sandbox/providers';
+import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers';
 
 const vfs = new VirtualFilesystemService();
-const sandboxProvider = getSandboxProvider(); // Uses default from env or 'daytona'
+
+let _sandboxProvider: SandboxProvider | null = null;
+async function getProvider(): Promise<SandboxProvider> {
+  if (!_sandboxProvider) {
+    _sandboxProvider = await getSandboxProvider();
+  }
+  return _sandboxProvider;
+}
 
 // ===========================================
 // Virtual Filesystem Tools
@@ -302,9 +309,9 @@ The code runs in an isolated sandbox for safety.`,
         }
       }
       
-      const sandbox = await sandboxProvider.createSandbox({ ownerId });
-      
-      // SECURITY FIXED: Use proper argument passing instead of string interpolation
+      const sandbox = await (await getProvider()).createSandbox({ ownerId });
+       
+       // SECURITY FIXED: Use proper argument passing instead of string interpolation
       // This prevents command injection attacks
       const command = language === 'python' ? 'python3' : 'node';
       const args = language === 'python' ? ['-c', code] : ['-e', code];
@@ -417,8 +424,8 @@ Only install trusted packages from official registries.`,
         }
       }
       
-      const sandbox = await sandboxProvider.createSandbox({ ownerId });
-      const command = language === 'python' ? 'pip' : 'npm';
+      const sandbox = await (await getProvider()).createSandbox({ ownerId });
+       const command = language === 'python' ? 'pip' : 'npm';
       const args = language === 'python' 
         ? ['install', ...packages] 
         : ['install', ...packages];

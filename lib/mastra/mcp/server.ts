@@ -22,10 +22,17 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { VirtualFilesystemService } from '@/lib/virtual-filesystem/virtual-filesystem-service';
-import { getSandboxProvider } from '@/lib/sandbox/providers';
+import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers';
 
 const vfs = new VirtualFilesystemService();
-const sandboxProvider = getSandboxProvider();
+
+let _sandboxProvider: SandboxProvider | null = null;
+async function getProvider(): Promise<SandboxProvider> {
+  if (!_sandboxProvider) {
+    _sandboxProvider = await getSandboxProvider();
+  }
+  return _sandboxProvider;
+}
 
 // ===========================================
 // Tool Definitions
@@ -143,9 +150,9 @@ const mcpTools: MCPTool[] = [
         }
       }
 
-      const sandbox = await sandboxProvider.createSandbox({ ownerId });
-      const command = language === 'python' ? 'python3' : 'node';
-      const args = language === 'python' ? ['-c', code] : ['-e', code];
+      const sandbox = await (await getProvider()).createSandbox({ ownerId });
+       const command = language === 'python' ? 'python3' : 'node';
+       const args = language === 'python' ? ['-c', code] : ['-e', code];
 
       const startTime = Date.now();
       const result = await sandbox.executeCommand(command, args);
@@ -166,8 +173,8 @@ const mcpTools: MCPTool[] = [
       testPattern: z.string().optional().describe('Optional test file pattern'),
     }),
     handler: async ({ ownerId, testPattern }: any) => {
-      const sandbox = await sandboxProvider.createSandbox({ ownerId });
-      const command = testPattern 
+      const sandbox = await (await getProvider()).createSandbox({ ownerId });
+       const command = testPattern
         ? `npm test -- ${testPattern}`
         : 'npm test';
 
@@ -196,9 +203,9 @@ const mcpTools: MCPTool[] = [
         }
       }
 
-      const sandbox = await sandboxProvider.createSandbox({ ownerId });
-      const command = language === 'python' ? 'pip' : 'npm';
-      const args = ['install', ...packages];
+      const sandbox = await (await getProvider()).createSandbox({ ownerId });
+       const command = language === 'python' ? 'pip' : 'npm';
+       const args = ['install', ...packages];
 
       const result = await sandbox.executeCommand(command, args);
       return {

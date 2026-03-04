@@ -172,11 +172,11 @@ export async function POST(request: NextRequest) {
       let sandboxHandle;
 
       if (sandboxId) {
-        const sandboxProvider = getSandboxProvider(DEFAULT_SANDBOX_PROVIDER);
-        sandboxHandle = await sandboxProvider.getSandbox(sandboxId);
-      }
+        const sandboxProvider = await getSandboxProvider(DEFAULT_SANDBOX_PROVIDER);
+         sandboxHandle = await sandboxProvider.getSandbox(sandboxId);
+        }
 
-      const result = await runStatefulAgent(userMessage, {
+        const result = await runStatefulAgent(userMessage, {
         sessionId,
         sandboxHandle,
         enforcePlanActVerify,
@@ -202,8 +202,8 @@ export async function POST(request: NextRequest) {
     let targetSandboxId = sandboxId;
 
     if (!targetSandboxId) {
-      const sandboxProvider = getSandboxProvider(DEFAULT_SANDBOX_PROVIDER);
-      const sandbox = await sandboxProvider.createSandbox({
+      const sandboxProvider = await getSandboxProvider(DEFAULT_SANDBOX_PROVIDER);
+       const sandbox = await sandboxProvider.createSandbox({
         language: 'typescript',
         resources: {
           cpu: 1,

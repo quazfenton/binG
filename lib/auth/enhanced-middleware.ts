@@ -224,9 +224,7 @@ export function withAuth<T extends NextResponse>(
 
         // Role checking (if required)
         if (requiredRoles.length > 0) {
-          // TODO: Implement role extraction from token or database
-          // For now, assume all authenticated users have 'user' role
-          const userRole = 'user';
+          const userRole = (verifyResult as any).role || 'user';
           
           if (!requiredRoles.includes(userRole as any)) {
             logger.warn('Insufficient permissions', {

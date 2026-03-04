@@ -165,9 +165,9 @@ export async function PATCH(req: NextRequest) {
 
     // Resolve sandbox handle through the provider layer
     // Prefer caller-supplied provider, fall back to env / registry default
-    const sandboxProvider = getSandboxProvider(
-      (provider as any) ?? (process.env.SANDBOX_PROVIDER as any) ?? undefined
-    );
+    const sandboxProvider = await getSandboxProvider(
+       (provider as any) ?? (process.env.SANDBOX_PROVIDER as any) ?? undefined
+     );
     const handle = await sandboxProvider.getSandbox(sandboxId);
 
     switch (action) {
