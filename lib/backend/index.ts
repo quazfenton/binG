@@ -3,6 +3,15 @@
  * Exports all backend adapters, managers, and routers
  */
 
+// Backend Service (NEW - centralized initialization)
+export {
+  backendService,
+  initializeBackend,
+  getBackendStatus,
+  type BackendConfig,
+  type BackendStatus,
+} from './backend-service';
+
 // Auth
 export {
   AuthManager,

@@ -346,7 +346,7 @@ export default function CodePreviewPanel({
     }).catch((err: any) => {
       toast.error('Failed to rename: ' + err.message);
     });
-  }, [filesystemCurrentPath, readFilesystemFile, writeFilefilesystemFile, deleteFilesystemPath, listFilesystemDirectory, selectedFilesystemPath]);
+  }, [filesystemCurrentPath, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, listFilesystemDirectory, selectedFilesystemPath]);
 
   // Helper to detect shell code blocks
   const isShellCodeBlock = useCallback((language: string, code: string): boolean => {
@@ -1689,79 +1689,122 @@ export default app;`,
             ([path]) => path === 'requirements.txt'
           );
           
-          // Enhanced Pyodide with package installation
+          // Enhanced Pyodide with package installation and caching
           React.useEffect(() => {
             const loadPyodide = async () => {
               setIsPyodideLoading(true);
               setPyodideOutput('');
-              
+
               try {
-                // Load Pyodide from CDN
-                const script = document.createElement('script');
-                script.src = 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js';
-                script.async = true;
-                script.onload = async () => {
-                  if ((window as any).loadPyodide) {
-                    const pyodide = await (window as any).loadPyodide({
-                      indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/',
+                // Multiple CDN sources for reliability
+                const CDN_SOURCES = [
+                  'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/',
+                  'https://unpkg.com/pyodide@0.23.4/',
+                ];
+                
+                let pyodide: any = null;
+                let lastError: any = null;
+
+                // Try each CDN until one works
+                for (const cdn of CDN_SOURCES) {
+                  try {
+                    const script = document.createElement('script');
+                    script.src = 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js';
+                    script.async = true;
+                    
+                    await new Promise((resolve, reject) => {
+                      script.onload = resolve;
+                      script.onerror = reject;
+                      document.head.appendChild(script);
                     });
-                    pyodideRef.current = pyodide;
-                    
-                    // Enhanced stdout capture
-                    pyodide.setStdout({
-                      batched: (msg: string) => {
-                        setPyodideOutput(prev => prev + msg);
-                      },
-                      write: (msg: string) => {
-                        setPyodideOutput(prev => prev + msg);
-                      },
-                      isatty: () => false,
-                    });
-                    
-                    // Install requirements if present
-                    if (requirementsFile) {
-                      setPyodideOutput(prev => prev + '# Installing requirements...\n');
-                      try {
-                        await pyodide.runPythonAsync(`
-                          import micropip
-                          requirements = """${requirementsFile[1]}"""
-                          for pkg in requirements.strip().split('\\n'):
-                              pkg = pkg.strip()
-                              if pkg and not pkg.startswith('#'):
-                                  try:
-                                      await micropip.install(pkg)
-                                      print(f'✓ Installed {pkg}')
-                                  except Exception as e:
-                                      print(f'⚠ Could not install {pkg}: {e}')
-                        `);
-                      } catch (err: any) {
-                        setPyodideOutput(prev => prev + `⚠ Package installation warning: ${err.message}\n`);
-                      }
+
+                    if ((window as any).loadPyodide) {
+                      pyodide = await (window as any).loadPyodide({
+                        indexURL: cdn,
+                        // Enable IndexedDB caching
+                        packageCacheDir: '/lib/python3.11/site-packages',
+                      });
+                      break; // Success!
                     }
-                    
-                    // Execute main Python file
-                    if (mainFile) {
-                      setPyodideOutput(prev => prev + `\n# Running ${mainFile[0]}...\n# ─────────────────────────────\n`);
-                      try {
-                        await pyodide.runPythonAsync(mainFile[1]);
-                        setPyodideOutput(prev => prev + '\n✅ Execution complete!\n');
-                      } catch (err: any) {
-                        setPyodideOutput(prev => prev + `\n❌ Error: ${err.message}\n`);
-                      }
-                    }
-                    
-                    setIsPyodideLoading(false);
+                  } catch (err: any) {
+                    lastError = err;
+                    console.warn(`CDN ${cdn} failed, trying next...`);
+                    continue;
                   }
-                };
-                document.head.appendChild(script);
+                }
+
+                if (!pyodide) {
+                  throw new Error(`All CDNs failed: ${lastError?.message}`);
+                }
+
+                pyodideRef.current = pyodide;
+
+                // Enhanced stdout capture
+                pyodide.setStdout({
+                  batched: (msg: string) => {
+                    setPyodideOutput(prev => prev + msg);
+                  },
+                  write: (msg: string) => {
+                    setPyodideOutput(prev => prev + msg);
+                  },
+                  isatty: () => false,
+                });
+
+                // Preload common packages if configured
+                const preloadPackages = process.env.PYODIDE_PRELOAD_PACKAGES?.split(',') || [];
+                
+                if (preloadPackages.length > 0) {
+                  setPyodideOutput(prev => prev + `# Preloading ${preloadPackages.length} package(s)...\n`);
+                  try {
+                    await pyodide.loadPackage(preloadPackages);
+                    setPyodideOutput(prev => prev + `✓ Preloaded: ${preloadPackages.join(', ')}\n`);
+                  } catch (err: any) {
+                    setPyodideOutput(prev => prev + `⚠ Preload warning: ${err.message}\n`);
+                  }
+                }
+
+                // Install requirements if present
+                if (requirementsFile) {
+                  setPyodideOutput(prev => prev + '# Installing requirements...\n');
+                  try {
+                    await pyodide.runPythonAsync(`
+                      import micropip
+                      requirements = """${requirementsFile[1]}"""
+                      for pkg in requirements.strip().split('\\n'):
+                          pkg = pkg.strip()
+                          if pkg and not pkg.startswith('#'):
+                              try:
+                                  await micropip.install(pkg)
+                                  print(f'✓ Installed {pkg}')
+                              except Exception as e:
+                                  print(f'⚠ Could not install {pkg}: {e}')
+                    `);
+                  } catch (err: any) {
+                    setPyodideOutput(prev => prev + `⚠ Package installation warning: ${err.message}\n`);
+                  }
+                }
+
+                // Execute main Python file
+                if (mainFile) {
+                  setPyodideOutput(prev => prev + `\n# Running ${mainFile[0]}...\n# ─────────────────────────────\n`);
+                  try {
+                    await pyodide.runPythonAsync(mainFile[1]);
+                    setPyodideOutput(prev => prev + '\n✅ Execution complete!\n');
+                  } catch (err: any) {
+                    setPyodideOutput(prev => prev + `\n❌ Error: ${err.message}\n`);
+                  }
+                }
+
+                setIsPyodideLoading(false);
               } catch (err: any) {
                 console.error('Failed to load Pyodide:', err);
+                setPyodideOutput(prev => prev + `❌ Failed to load Pyodide: ${err.message}\n`);
                 setIsPyodideLoading(false);
               }
             };
-            
+
             loadPyodide();
-            
+
             return () => {
               // Cleanup
               if (pyodideRef.current) {

@@ -400,6 +400,58 @@ export default function TerminalPanel({
     };
   }, [sandboxStatus]);
 
+  // Phase 2: Toggle sandbox connection
+  const toggleSandboxConnection = useCallback(async () => {
+    if (sandboxStatus === 'connected') {
+      // Disconnect - kill sandbox session
+      const term = terminalsRef.current.find(t => t.id === activeTerminalId);
+      if (term?.sandboxInfo.sessionId) {
+        try {
+          await fetch('/api/sandbox/terminal', {
+            method: 'DELETE',
+            headers: {
+              'Content-Type': 'application/json',
+              ...getAuthHeaders(),
+            },
+            body: JSON.stringify({ sessionId: term.sandboxInfo.sessionId }),
+          });
+          setSandboxStatus('disconnected');
+          toast.success('Sandbox disconnected');
+        } catch (error) {
+          toast.error('Failed to disconnect sandbox');
+        }
+      }
+    } else if (sandboxStatus === 'disconnected') {
+      // Connect - create new sandbox session
+      setSandboxStatus('connecting');
+      try {
+        const res = await fetch('/api/sandbox/terminal', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          toast.success('Sandbox connected: ' + data.sandboxId.slice(0, 12) + '...');
+          setSandboxStatus('connected');
+          // Reconnect terminal to sandbox
+          if (activeTerminalId) {
+            connectTerminal(activeTerminalId);
+          }
+        } else {
+          toast.error('Failed to connect sandbox');
+          setSandboxStatus('disconnected');
+        }
+      } catch (error) {
+        toast.error('Failed to connect sandbox');
+        setSandboxStatus('disconnected');
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sandboxStatus, activeTerminalId]);
+
   // Phase 2: Idle timeout monitoring
   useEffect(() => {
     // Only monitor if sandbox is connected and timeout is enabled
@@ -597,7 +649,8 @@ export default function TerminalPanel({
 
     window.addEventListener('terminal-run-command', handleRunCommand);
     return () => window.removeEventListener('terminal-run-command', handleRunCommand);
-  }, [activeTerminalId, executeLocalShellCommand, sendInput]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTerminalId]);
 
   const createTerminal = useCallback((name?: string, sandboxInfo?: any) => {
     const id = generateSecureId('terminal');
@@ -3551,57 +3604,6 @@ export default function TerminalPanel({
       setIsSplitView(true);
     }
   }, [isSplitView, terminals.length, createTerminal, initXterm]);
-
-  // Phase 2: Toggle sandbox connection
-  const toggleSandboxConnection = useCallback(async () => {
-    if (sandboxStatus === 'connected') {
-      // Disconnect - kill sandbox session
-      const term = terminalsRef.current.find(t => t.id === activeTerminalId);
-      if (term?.sandboxInfo.sessionId) {
-        try {
-          await fetch('/api/sandbox/terminal', {
-            method: 'DELETE',
-            headers: {
-              'Content-Type': 'application/json',
-              ...getAuthHeaders(),
-            },
-            body: JSON.stringify({ sessionId: term.sandboxInfo.sessionId }),
-          });
-          setSandboxStatus('disconnected');
-          toast.success('Sandbox disconnected');
-        } catch (error) {
-          toast.error('Failed to disconnect sandbox');
-        }
-      }
-    } else if (sandboxStatus === 'disconnected') {
-      // Connect - create new sandbox session
-      setSandboxStatus('connecting');
-      try {
-        const res = await fetch('/api/sandbox/terminal', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...getAuthHeaders(),
-          },
-        });
-        if (res.ok) {
-          const data = await res.json();
-          toast.success('Sandbox connected: ' + data.sandboxId.slice(0, 12) + '...');
-          setSandboxStatus('connected');
-          // Reconnect terminal to sandbox
-          if (activeTerminalId) {
-            connectTerminal(activeTerminalId);
-          }
-        } else {
-          toast.error('Failed to connect sandbox');
-          setSandboxStatus('disconnected');
-        }
-      } catch (error) {
-        toast.error('Failed to connect sandbox');
-        setSandboxStatus('disconnected');
-      }
-    }
-  }, [sandboxStatus, activeTerminalId, connectTerminal]);
 
   const getModeIndicator = (mode: TerminalMode, status: string) => {
     switch (mode) {

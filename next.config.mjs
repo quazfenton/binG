@@ -1,7 +1,13 @@
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const projectRoot = resolve(__dirname);
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true,
+  turbopack: {
+    root: projectRoot,
   },
   typescript: {
     ignoreBuildErrors: true,
@@ -31,14 +37,6 @@ const nextConfig = {
       'date-fns',
       'lodash'
     ],
-    turbo: {
-      rules: {
-        '*.svg': {
-          loaders: ['@svgr/webpack'],
-          as: '*.js',
-        },
-      },
-    },
   },
   // Compiler optimizations
   compiler: {
