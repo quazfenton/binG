@@ -649,7 +649,7 @@ function shouldHandleFilesystemEdits(
     return false;
   }
 
-  return /\b(file|files|code|edit|patch|create|write|update|project|program)\b/i.test(lastUserMessage);
+  return /\b(file|files|code|edit|patch|create|write|update|project|program|build|run|execute|install|scaffold|component|page|app|module|function|class)\b/i.test(lastUserMessage);
 }
 
 async function buildWorkspaceSessionContext(ownerId: string, scopePath?: string): Promise<string> {

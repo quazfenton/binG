@@ -8,6 +8,9 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { join } from 'path';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('WebSocketTerminal');
 
 export interface TerminalSession {
   sessionId: string;
@@ -47,19 +50,37 @@ export class WebSocketTerminalServer extends EventEmitter {
           this.handleConnection(ws, req);
         });
 
-        this.wss.on('error', (error) => {
-          this.emit('error', error);
-          reject(error);
+        this.wss.on('error', (error: any) => {
+          // Handle specific error types
+          if (error.code === 'EADDRINUSE') {
+            const errorMsg = `Port ${this.port} is already in use. ` +
+              `Try: 1) lsof -i :${this.port} && kill -9 <PID>, or ` +
+              `2) Set WEBSOCKET_PORT to a different value`;
+            logger.error(errorMsg);
+            this.emit('error', { code: 'PORT_IN_USE', message: errorMsg, originalError: error });
+            reject(new Error(errorMsg));
+          } else if (error.code === 'EACCES') {
+            const errorMsg = `Permission denied for port ${this.port}. Try using a port > 1024 or run with sudo`;
+            logger.error(errorMsg);
+            this.emit('error', { code: 'PERMISSION_DENIED', message: errorMsg, originalError: error });
+            reject(new Error(errorMsg));
+          } else {
+            logger.error('WebSocket server error', error);
+            this.emit('error', error);
+            reject(error);
+          }
         });
 
         this.wss.on('listening', () => {
+          logger.info(`WebSocket terminal server listening on port ${this.port}`);
           this.emit('started', { port: this.port });
           resolve();
         });
 
         // Start idle session cleanup
         this.startIdleCleanup();
-      } catch (error) {
+      } catch (error: any) {
+        logger.error('Failed to create WebSocket server', error);
         reject(error);
       }
     });

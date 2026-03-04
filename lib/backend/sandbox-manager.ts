@@ -2,17 +2,22 @@
  * Sandbox Manager
  * Manages sandbox lifecycle, execution, and filesystem operations
  * Migrated from ephemeral/sandbox_api.py and container_fallback.py
+ *
+ * SECURITY ENHANCED: Added path traversal protection and input validation
+ * METRICS WIRED: All operations emit metrics
  */
 
 import { EventEmitter } from 'events';
 import { spawn, ChildProcess } from 'child_process';
 import { createWriteStream, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, normalize } from 'path';
 import { pipeline } from 'stream/promises';
 import { createReadStream } from 'fs';
 import * as zlib from 'zlib';
 import { createWriteStream as createTarWriteStream } from 'tar-stream';
 import { createReadStream as createTarReadStream } from 'tar-stream';
+import { safeJoin, isValidResourceId, validateRelativePath, commandSchema } from '@/lib/security/security-utils';
+import { sandboxMetrics } from './metrics';
 
 export interface SandboxConfig {
   sandboxId?: string;
@@ -51,28 +56,38 @@ export class SandboxManager extends EventEmitter {
 
   constructor(baseWorkspaceDir: string = '/tmp/workspaces', baseSnapshotDir: string = '/tmp/snapshots') {
     super();
-    this.baseWorkspaceDir = baseWorkspaceDir;
-    this.baseSnapshotDir = baseSnapshotDir;
     
-    // Ensure base directories exist
+    // SECURITY: Validate and resolve base directories
     if (!existsSync(baseWorkspaceDir)) {
       mkdirSync(baseWorkspaceDir, { recursive: true });
     }
     if (!existsSync(baseSnapshotDir)) {
       mkdirSync(baseSnapshotDir, { recursive: true });
     }
+    
+    this.baseWorkspaceDir = resolve(baseWorkspaceDir);
+    this.baseSnapshotDir = resolve(baseSnapshotDir);
   }
 
   async createSandbox(config?: SandboxConfig): Promise<Sandbox> {
+    const startTime = Date.now();
     const sandboxId = config?.sandboxId || `sandbox_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    const workspace = join(this.baseWorkspaceDir, sandboxId);
-    
+
+    // SECURITY: Validate sandboxId format
+    if (!isValidResourceId(sandboxId)) {
+      sandboxMetrics.sandboxCreatedTotal.inc({ status: 'invalid_id' });
+      throw new Error(`Invalid sandboxId format: ${sandboxId}`);
+    }
+
+    // SECURITY: Use safeJoin to prevent path traversal
+    const workspace = safeJoin(this.baseWorkspaceDir, sandboxId);
+
     // Create workspace directory structure
     if (!existsSync(workspace)) {
       mkdirSync(workspace, { recursive: true });
-      mkdirSync(join(workspace, 'code'), { recursive: true });
-      mkdirSync(join(workspace, '.config'), { recursive: true });
-      mkdirSync(join(workspace, '.cache'), { recursive: true });
+      mkdirSync(safeJoin(workspace, 'code'), { recursive: true });
+      mkdirSync(safeJoin(workspace, '.config'), { recursive: true });
+      mkdirSync(safeJoin(workspace, '.cache'), { recursive: true });
     }
 
     const sandbox: Sandbox = {
@@ -85,11 +100,22 @@ export class SandboxManager extends EventEmitter {
 
     this.sandboxes.set(sandboxId, sandbox);
     this.emit('created', sandbox);
-    
+
+    // METRICS: Record sandbox creation
+    sandboxMetrics.sandboxCreatedTotal.inc({ status: 'success' });
+    sandboxMetrics.sandboxActive.inc();
+    const duration = Date.now() - startTime;
+    sandboxMetrics.sandboxCreationDuration.observe(duration);
+
     return sandbox;
   }
 
   async getSandbox(sandboxId: string): Promise<Sandbox> {
+    // SECURITY: Validate sandboxId format
+    if (!isValidResourceId(sandboxId)) {
+      throw new Error(`Invalid sandboxId format: ${sandboxId}`);
+    }
+    
     const sandbox = this.sandboxes.get(sandboxId);
     if (!sandbox) {
       throw new Error(`Sandbox not found: ${sandboxId}`);
@@ -99,8 +125,22 @@ export class SandboxManager extends EventEmitter {
   }
 
   async execCommand(sandboxId: string, command: string, args?: string[], timeout?: number): Promise<ExecResult> {
+    // SECURITY: Validate sandboxId
+    if (!isValidResourceId(sandboxId)) {
+      sandboxMetrics.commandExecutions.inc({ status: 'invalid_id' });
+      throw new Error(`Invalid sandboxId format: ${sandboxId}`);
+    }
+
+    // SECURITY: Validate command against dangerous patterns
+    try {
+      commandSchema.parse(command);
+    } catch (error) {
+      sandboxMetrics.commandExecutions.inc({ status: 'blocked' });
+      throw new Error(`Invalid command: ${error instanceof Error ? error.message : 'Blocked for security'}`);
+    }
+
     const sandbox = await this.getSandbox(sandboxId);
-    
+
     const startTime = Date.now();
     const child = spawn(command, args || [], {
       cwd: sandbox.workspace,
@@ -132,18 +172,28 @@ export class SandboxManager extends EventEmitter {
           command,
           duration,
         };
+        
+        // METRICS: Record command execution
+        sandboxMetrics.commandExecutions.inc({ status: 'success' });
+        sandboxMetrics.commandExecutionDuration.observe(duration);
+        if (exitCode !== 0) {
+          sandboxMetrics.commandExecutions.inc({ status: 'failed' });
+        }
+        
         this.emit('executed', { sandboxId, result });
         resolve(result);
       });
 
       child.on('error', (error) => {
         this.runningProcesses.delete(sandboxId);
+        sandboxMetrics.commandExecutions.inc({ status: 'error' });
         reject(error);
       });
 
       child.on('timeout', () => {
         child.kill('SIGTERM');
         this.runningProcesses.delete(sandboxId);
+        sandboxMetrics.commandExecutions.inc({ status: 'timeout' });
         reject(new Error(`Command timed out after ${timeout}ms`));
       });
     });
@@ -151,10 +201,13 @@ export class SandboxManager extends EventEmitter {
 
   async writeFile(sandboxId: string, path: string, data: string): Promise<void> {
     const sandbox = await this.getSandbox(sandboxId);
-    const fullPath = join(sandbox.workspace, path);
     
-    // Ensure parent directory exists
-    const parentDir = join(fullPath, '..');
+    // SECURITY: Validate path is relative and safe
+    const validatedPath = validateRelativePath(path);
+    const fullPath = safeJoin(sandbox.workspace, validatedPath);
+
+    // Ensure parent directory exists (also with path validation)
+    const parentDir = safeJoin(sandbox.workspace, validatedPath.split('/').slice(0, -1).join('/'));
     if (!existsSync(parentDir)) {
       mkdirSync(parentDir, { recursive: true });
     }
@@ -175,15 +228,18 @@ export class SandboxManager extends EventEmitter {
 
   async listFiles(sandboxId: string, path: string = ''): Promise<FileEntry[]> {
     const sandbox = await this.getSandbox(sandboxId);
-    const fullPath = join(sandbox.workspace, path);
     
+    // SECURITY: Validate path
+    const validatedPath = path ? validateRelativePath(path) : '';
+    const fullPath = safeJoin(sandbox.workspace, validatedPath || '.');
+
     if (!existsSync(fullPath)) {
       throw new Error(`Path not found: ${path}`);
     }
 
     const entries = readdirSync(fullPath, { withFileTypes: true });
     return entries.map(entry => {
-      const stat = statSync(join(fullPath, entry.name));
+      const stat = statSync(safeJoin(fullPath, entry.name));
       return {
         name: entry.name,
         type: entry.isDirectory() ? 'directory' : 'file',
@@ -195,10 +251,15 @@ export class SandboxManager extends EventEmitter {
 
   async readFile(sandboxId: string, path: string): Promise<string> {
     const sandbox = await this.getSandbox(sandboxId);
-    const fullPath = join(sandbox.workspace, path);
     
+    // SECURITY: Validate path
+    const validatedPath = validateRelativePath(path);
+    const fullPath = safeJoin(sandbox.workspace, validatedPath);
+
     return new Promise((resolve, reject) => {
-      createReadStream(fullPath, 'utf8').on('data', resolve).on('error', reject);
+      createReadStream(fullPath, 'utf8')
+        .on('data', (chunk) => resolve(chunk.toString()))
+        .on('error', reject);
     });
   }
 

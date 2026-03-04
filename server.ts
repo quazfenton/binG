@@ -1,18 +1,24 @@
 /**
  * Custom Next.js Server with WebSocket Support
- * 
+ *
  * This server extends Next.js to add WebSocket capabilities for real-time terminal streaming.
- * 
+ *
+ * PORT CONFIGURATION:
+ * - Next.js HTTP Server: PORT (default 3000) - handles regular HTTP requests
+ * - WebSocket Server: WEBSOCKET_PORT (default 8080) - handles WebSocket terminal connections
+ * These MUST be different ports as they use different protocols (HTTP vs WebSocket)
+ *
  * Usage:
  *   npm run dev:ws  (development)
  *   npm run start:ws (production)
- * 
+ *
  * Features:
  * - WebSocket upgrade for terminal streaming
  * - Bidirectional communication for input/output
  * - Lower latency than SSE+POST
  * - Automatic reconnection support
- * 
+ * - Backend service initialization on startup
+ *
  * @see https://nextjs.org/docs/advanced-features/custom-server
  */
 
@@ -21,6 +27,10 @@ import { parse } from 'url';
 import next from 'next';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
+import { initializeBackend, getBackendStatus } from '@/lib/backend';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Server');
 
 const dev = process.env.NODE_ENV !== 'production';
 const hostname = 'localhost';
@@ -48,7 +58,33 @@ const server = createServer((req, res) => {
   handle(req, res, parsedUrl);
 });
 
-app.prepare().then(() => {
+// Initialize backend services on startup
+async function startup() {
+  try {
+    logger.info('Starting backend initialization...');
+    
+    const backendStatus = await initializeBackend({
+      websocketPort: parseInt(process.env.WEBSOCKET_PORT || '8080'),
+    });
+    
+    logger.info('Backend initialized successfully', backendStatus);
+    
+    // Log backend status
+    if (!backendStatus.websocket.running) {
+      logger.warn('WebSocket server failed to start', backendStatus.websocket.error);
+    }
+    if (!backendStatus.storage.healthy) {
+      logger.warn('Storage backend unhealthy', backendStatus.storage.error);
+    }
+    
+  } catch (error) {
+    logger.error('Backend initialization failed', error as Error);
+    // Don't crash the server, but log the error
+    // Backend will be lazily initialized on first API call
+  }
+}
+
+app.prepare().then(startup).then(() => {
   // WebSocket server for terminal streaming
   const wss = new WebSocketServer({ noServer: true });
 

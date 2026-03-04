@@ -4,11 +4,13 @@ import { useAuth } from '@/contexts/auth-context';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import IntegrationPanel from '@/components/integrations/IntegrationPanel';
+import UserAPIKeysPanel from '@/components/settings/UserAPIKeysPanel';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { LogIn, User, Mail, Lock } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { LogIn, User, Mail, Lock, Key, Plug } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function SettingsPage() {
@@ -188,14 +190,43 @@ export default function SettingsPage() {
       <div className="container mx-auto max-w-6xl">
         <div className="mb-6">
           <h1 className="text-3xl font-bold text-white mb-2">
-            Third-Party Integrations
+            Settings & Integrations
           </h1>
           <p className="text-gray-400">
-            Connect your favorite services to enhance your AI assistant
+            Manage your API keys, credentials, and third-party integrations
           </p>
         </div>
-        
-        <IntegrationPanel userId={user?.id?.toString() || ''} onClose={() => router.push('/')} />
+
+        <Tabs defaultValue="api-keys" className="space-y-6">
+          <TabsList className="bg-gray-900 border border-gray-800">
+            <TabsTrigger value="api-keys" className="data-[state=active]:bg-purple-600">
+              <Key className="w-4 h-4 mr-2" />
+              API Keys
+            </TabsTrigger>
+            <TabsTrigger value="integrations" className="data-[state=active]:bg-purple-600">
+              <Plug className="w-4 h-4 mr-2" />
+              Integrations
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="api-keys">
+            <UserAPIKeysPanel userId={user?.id?.toString()} />
+          </TabsContent>
+
+          <TabsContent value="integrations">
+            <Card className="bg-gray-900/50 border-gray-800">
+              <CardHeader>
+                <CardTitle className="text-white">Third-Party Integrations</CardTitle>
+                <CardDescription className="text-gray-400">
+                  Connect your favorite services to enhance your AI assistant
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <IntegrationPanel userId={user?.id?.toString() || ''} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
