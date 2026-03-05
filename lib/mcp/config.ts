@@ -259,6 +259,15 @@ export const defaultMcpServers: Record<string, MCPServerConfig> = {
     },
     enabled: true,
   },
+  'arcade-mcp': {
+    id: 'arcade-mcp',
+    name: 'Arcade MCP Gateway',
+    transport: {
+      type: 'sse',
+      url: process.env.ARCADE_MCP_URL || 'https://mcp.arcade.dev',
+    },
+    enabled: !!process.env.ARCADE_API_KEY,
+  },
 }
 
 export const MCPServerPresets = {

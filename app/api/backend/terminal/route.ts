@@ -16,11 +16,9 @@
 // For Next.js WebSocket support, you would need to use a custom server
 // or deploy the WebSocket server separately.
 
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
+// Runtime configuration
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   return new Response(

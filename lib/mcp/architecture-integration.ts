@@ -12,6 +12,7 @@ import { parseMCPServerConfigs, initializeMCP, shutdownMCP, getMCPSettings, isMC
 import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } from './mcporter-integration'
 import { createLogger } from '../utils/logger'
 import { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
+import { ArcadeService, getArcadeService } from '../api/arcade-service'
 
 // Blaxel codegen tool definitions for LLM tool calling
 const getBlaxelCodegenToolDefinitions = (): Array<{
@@ -293,25 +294,80 @@ export async function getMCPToolsForAI_SDK() {
     }
   }> = process.env.BLAXEL_API_KEY ? getBlaxelCodegenToolDefinitions() : []
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools]
+  // Conditionally include Arcade tools when API key is available
+  const arcadeTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = process.env.ARCADE_API_KEY ? await getArcadeToolDefinitions() : []
+
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools]
 
   if (tools.length === 0) {
     logger.debug('MCP not available - no tools to return')
     return []
   }
 
-  logger.debug(`Returning ${tools.length} MCP tools for AI SDK (${blaxelTools.length} Blaxel codegen tools)`)
+  logger.debug(`Returning ${tools.length} MCP tools for AI SDK (${blaxelTools.length} Blaxel, ${arcadeTools.length} Arcade)`)
   return tools
 }
 
 // Cached Blaxel provider instance for tool execution
 let cachedBlaxelProvider: BlaxelProvider | null = null
 
+// Cached Arcade service instance
+let cachedArcadeService: ArcadeService | null = null
+
 function getBlaxelProviderInstance(): BlaxelProvider {
   if (!cachedBlaxelProvider) {
     cachedBlaxelProvider = new BlaxelProvider()
   }
   return cachedBlaxelProvider
+}
+
+function getArcadeServiceInstance(): ArcadeService | null {
+  if (!cachedArcadeService) {
+    cachedArcadeService = getArcadeService()
+  }
+  return cachedArcadeService
+}
+
+// Get Arcade tool definitions for LLM tool calling
+async function getArcadeToolDefinitions(): Promise<Array<{
+  type: 'function'
+  function: {
+    name: string
+    description?: string
+    parameters: any
+  }
+}>> {
+  const arcade = getArcadeServiceInstance()
+  if (!arcade) {
+    return []
+  }
+
+  try {
+    // Get all available tools from Arcade
+    const tools = await arcade.getTools({ limit: 100 })
+    
+    return tools.map(tool => ({
+      type: 'function' as const,
+      function: {
+        name: `arcade_${tool.name}`,
+        description: tool.description,
+        parameters: tool.inputSchema || {
+          type: 'object',
+          properties: {},
+        },
+      },
+    }))
+  } catch (error: any) {
+    logger.warn(`Failed to get Arcade tools: ${error.message}`)
+    return []
+  }
 }
 
 /**
@@ -386,6 +442,58 @@ async function executeBlaxelCodegenTool(
 }
 
 /**
+ * Execute an Arcade tool
+ */
+async function executeArcadeTool(
+  toolName: string,
+  args: Record<string, any>,
+  userId: string = 'default'
+): Promise<{ success: boolean; output: string; error?: string }> {
+  const arcade = getArcadeServiceInstance()
+  if (!arcade) {
+    return {
+      success: false,
+      output: '',
+      error: 'Arcade service not available',
+    }
+  }
+
+  try {
+    // Remove 'arcade_' prefix to get actual tool name
+    const actualToolName = toolName.replace(/^arcade_/, '')
+    const result = await arcade.executeTool(actualToolName, args, userId)
+
+    if (result.requiresAuth && result.authUrl) {
+      return {
+        success: false,
+        output: '',
+        error: `Authorization required. Please visit: ${result.authUrl}`,
+      }
+    }
+
+    if (!result.success) {
+      return {
+        success: false,
+        output: '',
+        error: result.error || 'Arcade tool execution failed',
+      }
+    }
+
+    return {
+      success: true,
+      output: JSON.stringify(result.output),
+    }
+  } catch (error: any) {
+    logger.error(`Arcade tool failed: ${toolName}`, error)
+    return {
+      success: false,
+      output: '',
+      error: error.message || 'Arcade tool execution failed',
+    }
+  }
+}
+
+/**
  * Call MCP tool from Architecture 1 (AI SDK)
  * 
  * Use this when the LLM requests a tool call
@@ -400,6 +508,11 @@ export async function callMCPToolFromAI_SDK(
     // Check if it's a Blaxel codegen tool
     if (toolName.startsWith('blaxel_') && process.env.BLAXEL_API_KEY) {
       return executeBlaxelCodegenTool(toolName, args)
+    }
+
+    // Check if it's an Arcade tool
+    if (toolName.startsWith('arcade_') && process.env.ARCADE_API_KEY) {
+      return executeArcadeTool(toolName, args)
     }
 
     const nativeResult = await mcpToolRegistry.callTool(toolName, args)
