@@ -11,6 +11,204 @@ import { mcpToolRegistry } from './tool-registry'
 import { parseMCPServerConfigs, initializeMCP, shutdownMCP, getMCPSettings, isMCPAvailable, getMCPToolCount } from './config'
 import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } from './mcporter-integration'
 import { createLogger } from '../utils/logger'
+import { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
+
+// Blaxel codegen tool definitions for LLM tool calling
+const getBlaxelCodegenToolDefinitions = (): Array<{
+  type: 'function'
+  function: {
+    name: string
+    description?: string
+    parameters: any
+  }
+}> => [
+  {
+    type: 'function',
+    function: {
+      name: 'blaxel_codegenCodebaseSearch',
+      description: 'Semantic search to find relevant code snippets in a repository',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query string' },
+          options: {
+            type: 'object',
+            properties: {
+              repoId: { type: 'string' },
+              limit: { type: 'number' },
+              fileTypes: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'blaxel_codegenFileSearch',
+      description: 'Fast fuzzy file path search',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: 'File path pattern (supports glob)' },
+          options: {
+            type: 'object',
+            properties: {
+              repoId: { type: 'string' },
+              limit: { type: 'number' },
+            },
+          },
+        },
+        required: ['pattern'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'blaxel_codegenGrepSearch',
+      description: 'Exact regex search using ripgrep engine',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: 'Regex pattern to search' },
+          options: {
+            type: 'object',
+            properties: {
+              repoId: { type: 'string' },
+              path: { type: 'string' },
+              limit: { type: 'number' },
+            },
+          },
+        },
+        required: ['pattern'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'blaxel_codegenListDir',
+      description: 'List directory contents (quick discovery)',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Directory path to list' },
+          options: {
+            type: 'object',
+            properties: {
+              repoId: { type: 'string' },
+              includePatterns: { type: 'array', items: { type: 'string' } },
+              excludePatterns: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'blaxel_codegenReadFileRange',
+      description: 'Read file contents within a specific line range (max 250 lines)',
+      parameters: {
+        type: 'object',
+        properties: {
+          filePath: { type: 'string', description: 'Path to file' },
+          startLine: { type: 'number', description: 'Start line number' },
+          endLine: { type: 'number', description: 'End line number' },
+          options: {
+            type: 'object',
+            properties: {
+              repoId: { type: 'string' },
+            },
+          },
+        },
+        required: ['filePath', 'startLine', 'endLine'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'blaxel_codegenRerank',
+      description: 'Performs semantic search/reranking on code files in a directory',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query' },
+          directory: { type: 'string', description: 'Directory to search in' },
+          options: {
+            type: 'object',
+            properties: {
+              repoId: { type: 'string' },
+              limit: { type: 'number' },
+            },
+          },
+        },
+        required: ['query', 'directory'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'blaxel_codegenParallelApply',
+      description: 'Plan parallel edits across multiple file locations',
+      parameters: {
+        type: 'object',
+        properties: {
+          edits: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                filePath: { type: 'string' },
+                startLine: { type: 'number' },
+                endLine: { type: 'number' },
+                newContent: { type: 'string' },
+              },
+              required: ['filePath', 'startLine', 'endLine', 'newContent'],
+            },
+            description: 'Array of edits to apply',
+          },
+          options: {
+            type: 'object',
+            properties: {
+              repoId: { type: 'string' },
+              dryRun: { type: 'boolean' },
+            },
+          },
+        },
+        required: ['edits'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'blaxel_codegenReapply',
+      description: 'Use smarter model to retry a failed edit',
+      parameters: {
+        type: 'object',
+        properties: {
+          editId: { type: 'string', description: 'ID of the failed edit to reapply' },
+          options: {
+            type: 'object',
+            properties: {
+              model: { type: 'string' },
+              maxRetries: { type: 'number' },
+            },
+          },
+        },
+        required: ['editId'],
+      },
+    },
+  },
+]
 
 const logger = createLogger('MCP:Integration')
 
@@ -84,15 +282,107 @@ export async function getMCPToolsForAI_SDK() {
   }
 
   const nativeTools = isMCPAvailable() ? mcpToolRegistry.getToolDefinitions() : []
-  const tools = [...nativeTools, ...cachedMCPorterTools]
+  
+  // Conditionally include Blaxel codegen tools when API key is available
+  const blaxelTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = process.env.BLAXEL_API_KEY ? getBlaxelCodegenToolDefinitions() : []
+
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools]
 
   if (tools.length === 0) {
     logger.debug('MCP not available - no tools to return')
     return []
   }
 
-  logger.debug(`Returning ${tools.length} MCP tools for AI SDK`)
+  logger.debug(`Returning ${tools.length} MCP tools for AI SDK (${blaxelTools.length} Blaxel codegen tools)`)
   return tools
+}
+
+// Cached Blaxel provider instance for tool execution
+let cachedBlaxelProvider: BlaxelProvider | null = null
+
+function getBlaxelProviderInstance(): BlaxelProvider {
+  if (!cachedBlaxelProvider) {
+    cachedBlaxelProvider = new BlaxelProvider()
+  }
+  return cachedBlaxelProvider
+}
+
+/**
+ * Execute a Blaxel codegen tool
+ */
+async function executeBlaxelCodegenTool(
+  toolName: string,
+  args: Record<string, any>
+): Promise<{ success: boolean; output: string; error?: string }> {
+  try {
+    const blaxel = getBlaxelProviderInstance()
+    
+    // Map tool name to method
+    const methodName = toolName.replace(/^blaxel_/, '')
+    const method = (blaxel as any)[methodName]
+    
+    if (!method || typeof method !== 'function') {
+      return {
+        success: false,
+        output: '',
+        error: `Blaxel tool method not found: ${methodName}`,
+      }
+    }
+
+    // Extract parameters based on tool
+    let result: any
+    switch (methodName) {
+      case 'codegenCodebaseSearch':
+        result = await blaxel.codegenCodebaseSearch(args.query, args.options)
+        break
+      case 'codegenFileSearch':
+        result = await blaxel.codegenFileSearch(args.pattern, args.options)
+        break
+      case 'codegenGrepSearch':
+        result = await blaxel.codegenGrepSearch(args.pattern, args.options)
+        break
+      case 'codegenListDir':
+        result = await blaxel.codegenListDir(args.path, args.options)
+        break
+      case 'codegenReadFileRange':
+        result = await blaxel.codegenReadFileRange(args.filePath, args.startLine, args.endLine, args.options)
+        break
+      case 'codegenRerank':
+        result = await blaxel.codegenRerank(args.query, args.directory, args.options)
+        break
+      case 'codegenParallelApply':
+        result = await blaxel.codegenParallelApply(args.edits, args.options)
+        break
+      case 'codegenReapply':
+        result = await blaxel.codegenReapply(args.editId, args.options)
+        break
+      default:
+        return {
+          success: false,
+          output: '',
+          error: `Unknown Blaxel tool: ${methodName}`,
+        }
+    }
+
+    return {
+      success: true,
+      output: JSON.stringify(result),
+    }
+  } catch (error: any) {
+    logger.error(`Blaxel codegen tool failed: ${toolName}`, error)
+    return {
+      success: false,
+      output: '',
+      error: error.message || 'Blaxel tool execution failed',
+    }
+  }
 }
 
 /**
@@ -106,6 +396,11 @@ export async function callMCPToolFromAI_SDK(
 ): Promise<{ success: boolean; output: string; error?: string }> {
   try {
     logger.debug(`Calling MCP tool: ${toolName}`, { args })
+
+    // Check if it's a Blaxel codegen tool
+    if (toolName.startsWith('blaxel_') && process.env.BLAXEL_API_KEY) {
+      return executeBlaxelCodegenTool(toolName, args)
+    }
 
     const nativeResult = await mcpToolRegistry.callTool(toolName, args)
     if (nativeResult.success || !nativeResult.isError || !nativeResult.content.includes('Tool not found')) {

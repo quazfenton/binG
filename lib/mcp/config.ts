@@ -228,6 +228,39 @@ export function createWebSocketTransport(wsUrl: string): MCPTransportConfig {
 /**
  * Common MCP server presets
  */
+/**
+ * Default MCP server configurations
+ * Added: Blaxel MCP server per docs/sdk/blaxel-llms.txt
+ */
+export const defaultMcpServers: Record<string, MCPServerConfig> = {
+  'e2b-mcp': {
+    id: 'e2b-mcp',
+    name: 'E2B MCP Server',
+    transport: {
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', '@e2b-dev/mcp-server'],
+      env: {
+        E2B_API_KEY: process.env.E2B_API_KEY || '',
+      },
+    },
+    enabled: true,
+  },
+  'blaxel-mcp-server': {
+    id: 'blaxel-mcp-server',
+    name: 'Blaxel MCP Server',
+    transport: {
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', 'blaxel-mcp-server'],
+      env: {
+        BLAXEL_API_KEY: process.env.BLAXEL_API_KEY || '',
+      },
+    },
+    enabled: true,
+  },
+}
+
 export const MCPServerPresets = {
   /**
    * Filesystem server for local file access
