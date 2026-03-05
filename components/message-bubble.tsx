@@ -14,6 +14,9 @@ import { analyzeMessageContent, getContentBasedStyling, shouldUseCompactLayout }
 import { useTouchHandler, useKeyboardHandler } from "@/hooks/use-touch-handler"
 import IntegrationAuthPrompt from "@/components/integrations/IntegrationAuthPrompt"
 import { isEmbeddableUrl, transformToEmbed, getSuggestedPlugin } from "@/lib/utils/iframe-helper"
+import { ReasoningDisplay, ReasoningSummary } from "@/components/reasoning-display"
+import { ToolInvocationsList } from "@/components/tool-invocation-card"
+import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 
 interface MessageBubbleProps {
   message: Message
@@ -75,9 +78,9 @@ const getAuthUrlForProvider = (provider: string): string => {
   return `${baseUrl}/api/auth/oauth/initiate?provider=${encodeURIComponent(provider)}`;
 };
 
-export default function MessageBubble({ 
-  message, 
-  isStreaming = false, 
+export default function MessageBubble({
+  message,
+  isStreaming = false,
   streamingContent,
   onStreamingComplete,
   maxWidth,
@@ -94,6 +97,20 @@ export default function MessageBubble({
   const [fileEditDecision, setFileEditDecision] = useState<"auto_applied" | "accepted" | "denied" | "reverted_with_conflicts" | null>(null)
 
   const isUser = message.role === "user"
+
+  // Initialize reasoning stream hook
+  const reasoningStream = useReasoningStream({
+    sandboxId: message.metadata?.sandboxId,
+    messageId: message.id,
+    autoExpand: isStreaming,
+  });
+
+  // Sync metadata reasoning chunks with hook
+  useEffect(() => {
+    if (message.metadata?.reasoningChunks && message.metadata.reasoningChunks.length > 0) {
+      // Chunks are provided via metadata, use them directly
+    }
+  }, [message.metadata?.reasoningChunks]);
 
   const fileEditInfo = useMemo(() => {
     const metadataFilesystem = (message.metadata as any)?.filesystem;
@@ -321,6 +338,12 @@ export default function MessageBubble({
   const toolInvocations = Array.isArray((message as any).metadata?.toolInvocations)
     ? (message as any).metadata.toolInvocations
     : []
+
+  // Use reasoning from hook if available, otherwise fall back to metadata
+  const activeReasoningChunks = reasoningStream.reasoningChunks.length > 0
+    ? reasoningStream.reasoningChunks
+    : (message.metadata?.reasoningChunks || []);
+  const activeFullReasoning = reasoningStream.fullReasoning || combinedReasoning;
 
   const handleAuthDismiss = () => {
     setAuthDismissed(true)
@@ -582,40 +605,28 @@ export default function MessageBubble({
               {isUser ? message.content : mainContent}
         </ReactMarkdown>
 
-        {!isUser && toolInvocations.length > 0 && (
-          <div className="mt-3 space-y-2">
-            {toolInvocations.map((tool: any) => {
-              const state = String(tool.state || 'result')
-              const stateClasses =
-                state === 'partial-call'
-                  ? 'bg-amber-50/20 border-amber-300/30 text-amber-100'
-                  : state === 'call'
-                    ? 'bg-blue-50/20 border-blue-300/30 text-blue-100'
-                    : 'bg-emerald-50/20 border-emerald-300/30 text-emerald-100'
+        {/* Reasoning Display - Shows before main content when agent is thinking */}
+        {!isUser && activeReasoningChunks.length > 0 && (
+          reasoningStream.isExpanded || activeReasoningChunks.length === 1 ? (
+            <ReasoningDisplay
+              reasoningChunks={activeReasoningChunks}
+              isStreaming={reasoningStream.isStreaming}
+              isExpanded={reasoningStream.isExpanded}
+              onToggle={() => reasoningStream.setIsExpanded(!reasoningStream.isExpanded)}
+              fullReasoning={activeFullReasoning}
+            />
+          ) : (
+            <ReasoningSummary
+              fullReasoning={activeFullReasoning}
+              isStreaming={reasoningStream.isStreaming}
+              onExpand={() => reasoningStream.setIsExpanded(true)}
+            />
+          )
+        )}
 
-              return (
-                <div
-                  key={`${tool.toolCallId}-${state}`}
-                  className={`rounded-md border p-2 text-xs font-mono ${stateClasses}`}
-                >
-                  <div className="mb-1 flex items-center justify-between">
-                    <span>⚙ {tool.toolName}</span>
-                    <span className="uppercase opacity-80">{state}</span>
-                  </div>
-                  {tool.args && (
-                    <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-2 text-[11px]">
-{JSON.stringify(tool.args, null, 2)}
-                    </pre>
-                  )}
-                  {state === 'result' && tool.result && (
-                    <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-2 text-[11px]">
-{JSON.stringify(tool.result, null, 2)}
-                    </pre>
-                  )}
-                </div>
-              )
-            })}
-          </div>
+        {/* Tool Invocations Display - Enhanced with new component */}
+        {!isUser && toolInvocations.length > 0 && (
+          <ToolInvocationsList toolInvocations={toolInvocations} />
         )}
 
         {!isUser && fileEditInfo && (

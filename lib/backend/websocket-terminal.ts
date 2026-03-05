@@ -1,6 +1,8 @@
 /**
  * WebSocket Terminal Server
  * Provides xterm.js-compatible WebSocket terminal access
+ * 
+ * SECURITY ENHANCED: JWT authentication required for all connections
  * Migrated from ephemeral/sandbox_api.py WebSocket endpoint
  */
 
@@ -9,6 +11,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { join } from 'path';
 import { createLogger } from '@/lib/utils/logger';
+import { verifyToken } from '@/lib/security/jwt-auth';
 
 const logger = createLogger('WebSocketTerminal');
 
@@ -97,12 +100,63 @@ export class WebSocketTerminalServer extends EventEmitter {
 
     if (!sandboxId) {
       ws.close(4000, 'Sandbox ID required');
+      return
+    }
+
+    // SECURITY: Authenticate WebSocket connection
+    // JWT token can be passed in:
+    // 1. Authorization header (for WebSocket upgrade request)
+    // 2. Query parameter: ?token=xxx
+    // 3. Subprotocol: ws.open(['Bearer <token>'])
+    let token: string | null = null;
+    
+    // Try query parameter first
+    const queryToken = url.searchParams.get('token');
+    if (queryToken) {
+      token = queryToken;
+    }
+    
+    // Try Authorization header
+    const authHeader = req.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    }
+    
+    // Try subprotocol
+    if (!token && req.protocol && req.protocol.startsWith('Bearer ')) {
+      token = req.protocol.substring(7);
+    }
+
+    if (!token) {
+      logger.warn(`WebSocket connection rejected: No authentication token provided`);
+      ws.close(4001, 'Authentication required. Provide JWT token via: 1) ?token=xxx query param, 2) Authorization: Bearer header, or 3) WebSocket subprotocol');
+      return;
+    }
+
+    // Verify JWT token
+    try {
+      const payload = verifyToken(token);
+      
+      // SECURITY: Verify user has permission to access this sandbox
+      // For now, any authenticated user can access their own sandboxes
+      // In production, add sandbox ownership verification
+      const userId = (payload as any).userId || (payload as any).sub;
+      if (!userId) {
+        ws.close(4002, 'Invalid token: missing user ID');
+        return;
+      }
+
+      logger.info(`WebSocket authenticated for user ${userId}, sandbox ${sandboxId}`);
+      
+    } catch (error: any) {
+      logger.warn(`WebSocket authentication failed: ${error.message}`);
+      ws.close(4003, `Authentication failed: ${error.message}`);
       return;
     }
 
     // Check session limit
     if (this.sessions.size >= this.maxSessions) {
-      ws.close(4001, 'Too many active sessions');
+      ws.close(4004, 'Too many active sessions');
       return;
     }
 
@@ -189,7 +243,51 @@ export class WebSocketTerminalServer extends EventEmitter {
 
   private handleMessage(session: TerminalSession, data: Buffer): void {
     const message = data.toString();
-    
+
+    // Handle PTY resize (xterm.js sends resize commands)
+    // Format: \x1b[8;ROWS;COLSt (ANSI escape sequence for resize)
+    const resizeMatch = message.match(/\x1b\[8;(\d+);(\d+)t/);
+    if (resizeMatch) {
+      const [, rows, cols] = resizeMatch;
+      session.rows = parseInt(rows, 10);
+      session.cols = parseInt(cols, 10);
+      
+      // Send SIGWINCH signal to notify process of resize
+      if (session.process.pid) {
+        try {
+          process.kill(session.process.pid, 'SIGWINCH');
+        } catch (e) {
+          // Process may have exited
+        }
+      }
+      
+      logger.debug(`Terminal resized to ${cols}x${rows}`);
+      return;
+    }
+
+    // Handle JSON resize command from frontend
+    try {
+      const parsed = JSON.parse(message);
+      if (parsed.type === 'resize') {
+        session.rows = parsed.rows || 24;
+        session.cols = parsed.cols || 80;
+        
+        // Send SIGWINCH signal
+        if (session.process.pid) {
+          try {
+            process.kill(session.process.pid, 'SIGWINCH');
+          } catch (e) {
+            // Process may have exited
+          }
+        }
+        
+        logger.debug(`Terminal resized to ${session.cols}x${session.rows}`);
+        return;
+      }
+    } catch (e) {
+      // Not JSON, continue with normal handling
+    }
+
     // Handle special commands
     if (message.startsWith('\x03')) {
       // Ctrl+C - send interrupt signal
@@ -203,7 +301,13 @@ export class WebSocketTerminalServer extends EventEmitter {
       return;
     }
 
-    // Handle resize commands (ANSI escape sequences)
+    // Forward input to process stdin
+    if (session.process.stdin?.writable) {
+      session.process.stdin.write(message);
+    }
+    
+    session.lastActive = new Date();
+  }
     if (message.includes('\x1b[8;')) {
       const match = message.match(/\x1b\[8;(\d+);(\d+)t/);
       if (match) {

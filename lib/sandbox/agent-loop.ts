@@ -35,6 +35,7 @@ interface AgentLoopOptions {
   conversationHistory?: any[]
   onToolExecution?: (toolName: string, args: Record<string, any>, result: ToolResult) => void
   onStreamChunk?: (chunk: string) => void
+  onReasoningChunk?: (chunk: string, type?: 'thought' | 'reasoning' | 'plan' | 'reflection') => void
 }
 
 interface AgentLoopResult {
@@ -44,7 +45,7 @@ interface AgentLoopResult {
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
-  const { userMessage, sandboxId, userId, conversationHistory, onToolExecution, onStreamChunk } = options
+  const { userMessage, sandboxId, userId, conversationHistory, onToolExecution, onStreamChunk, onReasoningChunk } = options
   const providerType = (process.env.SANDBOX_PROVIDER || 'daytona') as any
   const provider = await getSandboxProvider(providerType)
   const llm = getLLMProvider()
@@ -60,12 +61,17 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       systemPrompt,
       maxSteps: 15,
       onToolExecution(toolName: string, args: Record<string, any>, toolResult: ToolResult) {
+        sandboxEvents.emit(sandboxId, 'agent:tool_start', { toolName, args });
         sandboxEvents.emit(sandboxId, 'agent:tool_result', { toolName, args, result: toolResult })
         onToolExecution?.(toolName, args, toolResult)
       },
       onStreamChunk(chunk: string) {
         sandboxEvents.emit(sandboxId, 'agent:stream', { text: chunk })
         onStreamChunk?.(chunk)
+      },
+      onReasoningChunk(chunk: string, type?: 'thought' | 'reasoning' | 'plan' | 'reflection') {
+        sandboxEvents.emit(sandboxId, 'agent:reasoning_chunk', { text: chunk, type })
+        onReasoningChunk?.(chunk, type)
       },
       async executeTool(name: string, args: Record<string, any>): Promise<ToolResult> {
         sandboxEvents.emit(sandboxId, 'agent:tool_start', { toolName: name, args })

@@ -103,6 +103,32 @@ export class SpritesProvider implements SandboxProvider {
     }
   }
 
+  /**
+   * Health check - verifies API connectivity and instance availability
+   */
+  async healthCheck(): Promise<{ healthy: boolean; latency?: number; details?: any }> {
+    const startTime = Date.now()
+    try {
+      const client = await this.ensureClient()
+      // List sprites as health check
+      const sprites = await client.list()
+      const latency = Date.now() - startTime
+      return { 
+        healthy: true, 
+        latency, 
+        details: { spriteCount: sprites?.length || 0, region: this.defaultRegion } 
+      }
+    } catch (error: any) {
+      const latency = Date.now() - startTime
+      console.error('[Sprites] Health check failed:', error.message)
+      return { 
+        healthy: false, 
+        latency, 
+        details: { error: error.message, region: this.defaultRegion } 
+      }
+    }
+  }
+
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
     const client = await this.ensureClient()
 
