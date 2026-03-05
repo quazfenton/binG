@@ -29,6 +29,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import { initializeBackend, getBackendStatus } from '@/lib/backend';
 import { createLogger } from '@/lib/utils/logger';
+import { getDatabaseSessionStore } from '@/lib/database/session-store';
 
 const logger = createLogger('Server');
 
@@ -62,13 +63,23 @@ const server = createServer((req, res) => {
 async function startup() {
   try {
     logger.info('Starting backend initialization...');
-    
+
+    // Initialize database session store for persistence
+    try {
+      const dbSessionStore = getDatabaseSessionStore();
+      dbSessionStore.initialize();
+      logger.info('Database session store initialized');
+    } catch (error: any) {
+      logger.warn('Database session store initialization failed:', error.message);
+      logger.warn('Sessions will be in-memory only (no persistence)');
+    }
+
     const backendStatus = await initializeBackend({
       websocketPort: parseInt(process.env.WEBSOCKET_PORT || '8080'),
     });
-    
+
     logger.info('Backend initialized successfully', backendStatus);
-    
+
     // Log backend status
     if (!backendStatus.websocket.running) {
       logger.warn('WebSocket server failed to start', backendStatus.websocket.error);
@@ -76,7 +87,7 @@ async function startup() {
     if (!backendStatus.storage.healthy) {
       logger.warn('Storage backend unhealthy', backendStatus.storage.error);
     }
-    
+
   } catch (error) {
     logger.error('Backend initialization failed', error as Error);
     // Don't crash the server, but log the error

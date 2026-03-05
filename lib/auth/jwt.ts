@@ -95,7 +95,7 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
 
     try {
       // Decode without verification first to get JTI
-      const decodedUnverified = jwt.decode(token) as JwtPayload | null;
+      const decodedUnverified = (jwt as any).decode(token) as JwtPayload | null;
       if (!decodedUnverified) {
         return { success: false, error: 'Invalid token format' };
       }
@@ -107,7 +107,7 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
       }
 
       // Add validation options for JWT verification
-      const decoded = jwt.verify(token, SECRET, {
+      const decoded = (jwt as any).verify(token, SECRET, {
         algorithms: ['HS256'], // Enforce specific algorithm
         issuer: 'bing-app', // Validate issuer
         audience: 'bing-users', // Validate audience
