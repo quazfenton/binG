@@ -27,6 +27,7 @@ export type SandboxProviderType =
   | 'runloop'
   | 'microsandbox'
   | 'blaxel'
+  | 'blaxel-mcp'
   | 'sprites'
   | 'codesandbox'
   | 'webcontainer'
@@ -130,6 +131,22 @@ function initializeRegistry() {
     factory: () => {
       const { BlaxelProvider } = require('./blaxel-provider')
       return new BlaxelProvider()
+    },
+  })
+
+  // Blaxel MCP mode - uses blaxel-mcp-server for tool-based access
+  providerRegistry.set('blaxel-mcp', {
+    provider: null as any,
+    priority: 5,
+    enabled: true,
+    available: false,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    factory: () => {
+      const { BlaxelMcpServer } = require('./blaxel-mcp-server')
+      return new BlaxelMcpServer()
     },
   })
 
