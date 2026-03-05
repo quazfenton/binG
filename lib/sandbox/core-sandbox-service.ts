@@ -36,6 +36,7 @@ export class SandboxService {
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
     if (sandboxId.startsWith('mistral-')) return 'mistral'
     if (sandboxId.startsWith('blaxel-')) return 'blaxel'
+    if (sandboxId.startsWith('blaxel-mcp-')) return 'blaxel-mcp'
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites'
     if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox'
     if (sandboxId.startsWith('webcontainer-')) return 'webcontainer'
@@ -134,6 +135,7 @@ export class SandboxService {
       'daytona',
       'runloop',
       'blaxel',
+      'blaxel-mcp',
       'sprites',
       'codesandbox',
       'webcontainer',

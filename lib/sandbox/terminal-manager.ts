@@ -60,6 +60,7 @@ const LEGACY_PORT_PATTERNS = [
 export class TerminalManager {
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
     if (sandboxId.startsWith('mistral-')) return 'mistral'
+    if (sandboxId.startsWith('blaxel-mcp-')) return 'blaxel-mcp'
     if (sandboxId.startsWith('blaxel-') || sandboxId.includes('-blaxel-')) return 'blaxel'
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-') || sandboxId.includes('-sprites-')) return 'sprites'
     if (sandboxId.startsWith('webcontainer-')) return 'webcontainer'
@@ -135,7 +136,7 @@ export class TerminalManager {
     
     // Try all known providers to locate the sandbox (supports quota-based fallbacks)
     // This is critical because sandbox-service can create sandboxes on any provider via fallback
-    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'sprites', 'codesandbox', 'webcontainer', 'webcontainer-filesystem', 'webcontainer-spawn', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral']
+    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'blaxel-mcp', 'sprites', 'codesandbox', 'webcontainer', 'webcontainer-filesystem', 'webcontainer-spawn', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral']
     for (const providerType of allProviders) {
       const result = await tryProvider(providerType)
       if (result) return result

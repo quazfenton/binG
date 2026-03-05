@@ -430,6 +430,347 @@ export class BlaxelProvider implements SandboxProvider {
       }
     }
   }
+
+  // ============================================
+  // Extended Features: Codegen Tools
+  // ============================================
+
+  /**
+   * Semantic search to find relevant code snippets
+   * @see https://docs.blaxel.ai/Agents/Code-generation-tools#codegen-codebase-search
+   */
+  async codegenCodebaseSearch(query: string, options?: {
+    repoId?: string;
+    limit?: number;
+    fileTypes?: string[];
+  }): Promise<{ results: Array<{ file: string; content: string; score: number }> }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.codegen.codebaseSearch(query, options)
+    } catch (error: any) {
+      console.error('[Blaxel] codegenCodebaseSearch failed:', error.message)
+      throw new Error(`Codebase search failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Fast fuzzy file path search
+   * @see https://docs.blaxel.ai/Agents/Code-generation-tools#codegen-file-search
+   */
+  async codegenFileSearch(pattern: string, options?: {
+    repoId?: string;
+    limit?: number;
+  }): Promise<{ results: Array<{ path: string; score: number }> }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.codegen.fileSearch(pattern, options)
+    } catch (error: any) {
+      console.error('[Blaxel] codegenFileSearch failed:', error.message)
+      throw new Error(`File search failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Exact regex search using ripgrep engine
+   * @see https://docs.blaxel.ai/Agents/Code-generation-tools#codegen-grep-search
+   */
+  async codegenGrepSearch(pattern: string, options?: {
+    repoId?: string;
+    path?: string;
+    limit?: number;
+  }): Promise<{ results: Array<{ file: string; line: number; content: string }> }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.codegen.grepSearch(pattern, options)
+    } catch (error: any) {
+      console.error('[Blaxel] codegenGrepSearch failed:', error.message)
+      throw new Error(`Grep search failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * List directory contents (quick discovery)
+   * @see https://docs.blaxel.ai/Agents/Code-generation-tools#codegen-list-dir
+   */
+  async codegenListDir(path: string, options?: {
+    repoId?: string;
+    includePatterns?: string[];
+    excludePatterns?: string[];
+  }): Promise<{ results: Array<{ name: string; type: 'file' | 'directory'; path: string }> }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.codegen.listDir(path, options)
+    } catch (error: any) {
+      console.error('[Blaxel] codegenListDir failed:', error.message)
+      throw new Error(`List directory failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Read file contents within a specific line range (max 250 lines)
+   * @see https://docs.blaxel.ai/Agents/Code-generation-tools#codegen-read-file-range
+   */
+  async codegenReadFileRange(filePath: string, startLine: number, endLine: number, options?: {
+    repoId?: string;
+  }): Promise<{ content: string; startLine: number; endLine: number }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.codegen.readFileRange(filePath, startLine, endLine, options)
+    } catch (error: any) {
+      console.error('[Blaxel] codegenReadFileRange failed:', error.message)
+      throw new Error(`Read file range failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Performs semantic search/reranking on code files in a directory
+   * @see https://docs.blaxel.ai/Agents/Code-generation-tools#codegen-rerank
+   */
+  async codegenRerank(query: string, directory: string, options?: {
+    repoId?: string;
+    limit?: number;
+  }): Promise<{ results: Array<{ file: string; score: number; content: string }> }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.codegen.rerank(query, directory, options)
+    } catch (error: any) {
+      console.error('[Blaxel] codegenRerank failed:', error.message)
+      throw new Error(`Rerank failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Plan parallel edits across multiple file locations
+   * @see https://docs.blaxel.ai/Agents/Code-generation-tools#codegen-parallel-apply
+   */
+  async codegenParallelApply(edits: Array<{
+    filePath: string;
+    startLine: number;
+    endLine: number;
+    newContent: string;
+  }>, options?: {
+    repoId?: string;
+    dryRun?: boolean;
+  }): Promise<{ results: Array<{ filePath: string; success: boolean; error?: string }> }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.codegen.parallelApply(edits, options)
+    } catch (error: any) {
+      console.error('[Blaxel] codegenParallelApply failed:', error.message)
+      throw new Error(`Parallel apply failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Use smarter model to retry a failed edit
+   * @see https://docs.blaxel.ai/Agents/Code-generation-tools#codegen-reapply
+   */
+  async codegenReapply(editId: string, options?: {
+    model?: string;
+    maxRetries?: number;
+  }): Promise<{ success: boolean; result?: any; error?: string }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.codegen.reapply(editId, options)
+    } catch (error: any) {
+      console.error('[Blaxel] codegenReapply failed:', error.message)
+      throw new Error(`Reapply failed: ${error.message}`)
+    }
+  }
+
+  // ============================================
+  // Extended Features: Batch Jobs
+  // ============================================
+
+  /**
+   * Create a batch job to trigger HTTP endpoint for batch execution
+   * @see https://docs.blaxel.ai/Jobs/Batch-Jobs
+   */
+  async createBatchJob(config: {
+    name: string;
+    endpoint: string;
+    method?: 'POST' | 'GET' | 'PUT';
+    headers?: Record<string, string>;
+    payload?: any;
+    concurrency?: number;
+  }): Promise<{ jobId: string; endpoint: string }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.jobs.createBatch({
+        name: config.name,
+        endpoint: config.endpoint,
+        method: config.method || 'POST',
+        headers: config.headers,
+        payload: config.payload,
+        concurrency: config.concurrency,
+      })
+    } catch (error: any) {
+      console.error('[Blaxel] createBatchJob failed:', error.message)
+      throw new Error(`Batch job creation failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Trigger batch execution via HTTP endpoint
+   * @see https://docs.blaxel.ai/Jobs/Batch-Jobs#http-trigger
+   */
+  async triggerBatchExecution(jobId: string, inputData: any[]): Promise<{ executionId: string; status: string }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.jobs.trigger(jobId, { data: inputData })
+    } catch (error: any) {
+      console.error('[Blaxel] triggerBatchExecution failed:', error.message)
+      throw new Error(`Batch trigger failed: ${error.message}`)
+    }
+  }
+
+  // ============================================
+  // Extended Features: Deploy Agent
+  // ============================================
+
+  /**
+   * Deploy an agent for delegated tasks (e.g., hosting OpenClaw for more agency)
+   * @see https://docs.blaxel.ai/Agents/Deploy-agent
+   */
+  async deployAgent(config: {
+    name: string;
+    image: string;
+    command?: string[];
+    env?: Record<string, string>;
+    ports?: number[];
+    resources?: {
+      memory?: number;
+      cpu?: number;
+    };
+  }): Promise<{ agentId: string; url: string; status: string }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.agents.deploy({
+        name: config.name,
+        image: config.image,
+        command: config.command,
+        env: config.env,
+        ports: config.ports,
+        resources: config.resources,
+      })
+    } catch (error: any) {
+      console.error('[Blaxel] deployAgent failed:', error.message)
+      throw new Error(`Agent deployment failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Get deployed agent status
+   */
+  async getAgentStatus(agentId: string): Promise<{ status: string; url?: string; metrics?: any }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.agents.getStatus(agentId)
+    } catch (error: any) {
+      console.error('[Blaxel] getAgentStatus failed:', error.message)
+      throw new Error(`Get agent status failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Stop and remove a deployed agent
+   */
+  async destroyAgent(agentId: string): Promise<{ success: boolean }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.agents.destroy(agentId)
+    } catch (error: any) {
+      console.error('[Blaxel] destroyAgent failed:', error.message)
+      throw new Error(`Destroy agent failed: ${error.message}`)
+    }
+  }
+
+  // ============================================
+  // Extended Features: Ports and Previews
+  // ============================================
+
+  /**
+   * Create a port mapping for external access
+   * @see https://docs.blaxel.ai/Networking/Ports
+   */
+  async createPort(port: number, protocol: 'http' | 'tcp' = 'http'): Promise<{ port: number; url: string }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.ports.create({ port, protocol })
+    } catch (error: any) {
+      console.error('[Blaxel] createPort failed:', error.message)
+      throw new Error(`Port creation failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Get all port mappings
+   */
+  async listPorts(): Promise<Array<{ port: number; protocol: string; url: string }>> {
+    const client = await this.ensureClient()
+    try {
+      return await client.ports.list()
+    } catch (error: any) {
+      console.error('[Blaxel] listPorts failed:', error.message)
+      throw new Error(`List ports failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Delete a port mapping
+   */
+  async deletePort(port: number): Promise<{ success: boolean }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.ports.delete(port)
+    } catch (error: any) {
+      console.error('[Blaxel] deletePort failed:', error.message)
+      throw new Error(`Delete port failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Create a preview URL for temporary sharing
+   * @see https://docs.blaxel.ai/Networking/Previews
+   */
+  async createPreview(port: number, options?: {
+    expiresIn?: number;
+    auth?: { username: string; password: string };
+  }): Promise<{ previewUrl: string; expiresAt: string }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.previews.create({ port, ...options })
+    } catch (error: any) {
+      console.error('[Blaxel] createPreview failed:', error.message)
+      throw new Error(`Preview creation failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * List all preview URLs
+   */
+  async listPreviews(): Promise<Array<{ previewUrl: string; port: number; expiresAt: string }>> {
+    const client = await this.ensureClient()
+    try {
+      return await client.previews.list()
+    } catch (error: any) {
+      console.error('[Blaxel] listPreviews failed:', error.message)
+      throw new Error(`List previews failed: ${error.message}`)
+    }
+  }
+
+  /**
+   * Delete a preview URL
+   */
+  async deletePreview(previewUrl: string): Promise<{ success: boolean }> {
+    const client = await this.ensureClient()
+    try {
+      return await client.previews.delete(previewUrl)
+    } catch (error: any) {
+      console.error('[Blaxel] deletePreview failed:', error.message)
+      throw new Error(`Delete preview failed: ${error.message}`)
+    }
+  }
 }
 
 import { SandboxSecurityManager } from '../security-manager'

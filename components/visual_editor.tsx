@@ -1910,6 +1910,475 @@ function craftNodesToJSX(nodes: Record<string, any>): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TAILWIND CATEGORY COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface TailwindCategoryProps {
+  label: string;
+  classes: string[];
+  current: string;
+  onChange: (key: string, value: string) => void;
+  breakpoint: string;
+  search: string;
+  exclusive?: boolean;
+}
+
+function TailwindCategory({ label, classes, current, onChange, breakpoint, search, exclusive = false, onClassUsed }: TailwindCategoryProps & { onClassUsed?: (cls: string) => void }) {
+  const filtered = classes.filter(c => !search || c.includes(search.toLowerCase()));
+  if (filtered.length === 0) return null;
+
+  return (
+    <div className="space-y-1">
+      <p className="text-[9px] text-[#484f58]">{label}</p>
+      <div className="flex flex-wrap gap-1">
+        {filtered.map((cls) => {
+          const fullClass = breakpoint + cls;
+          const isActive = current.includes(fullClass);
+          return (
+            <button
+              key={cls}
+              onClick={() => {
+                const classes = current.split(' ').filter(Boolean);
+                if (exclusive) {
+                  const withoutCategory = classes.filter(c => !classes.includes(c.replace(/sm:|md:|lg:|xl:|2xl:/, '')) || c === fullClass);
+                  if (!isActive) {
+                    withoutCategory.push(fullClass);
+                    onClassUsed?.(fullClass);
+                  }
+                  onChange("className", withoutCategory.join(' '));
+                  onChange("tailwindClasses", withoutCategory.join(' '));
+                } else {
+                  if (isActive) {
+                    const updated = classes.filter(c => c !== fullClass).join(' ');
+                    onChange("className", updated);
+                    onChange("tailwindClasses", updated);
+                  } else {
+                    const updated = [...classes, fullClass].join(' ');
+                    onChange("className", updated);
+                    onChange("tailwindClasses", updated);
+                    onClassUsed?.(fullClass);
+                  }
+                }
+              }}
+              className={`px-2 py-0.5 rounded text-[9px] border transition-colors ${
+                isActive
+                  ? "bg-[#3b82f6] border-[#3b82f6] text-white"
+                  : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
+              }`}
+              title={fullClass}
+            >
+              {fullClass}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOTSTRAP CATEGORY COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface BootstrapCategoryProps {
+  label: string;
+  classes: string[];
+  current: string;
+  onChange: (key: string, value: string) => void;
+  search: string;
+  exclusive?: boolean;
+}
+
+function BootstrapCategory({ label, classes, current, onChange, search, exclusive = false }: BootstrapCategoryProps) {
+  const filtered = classes.filter(c => !search || c.includes(search.toLowerCase()));
+  if (filtered.length === 0) return null;
+
+  return (
+    <div className="space-y-1">
+      <p className="text-[9px] text-[#484f58]">{label}</p>
+      <div className="flex flex-wrap gap-1">
+        {filtered.map((cls) => {
+          const isActive = current.includes(cls);
+          return (
+            <button
+              key={cls}
+              onClick={() => {
+                const classes = current.split(' ').filter(Boolean);
+                if (exclusive) {
+                  const withoutCategory = classes.filter(c => !classes.includes(c.split('-')[0] + '-'));
+                  if (!isActive) {
+                    withoutCategory.push(cls);
+                  }
+                  onChange("className", withoutCategory.join(' '));
+                  onChange("tailwindClasses", withoutCategory.join(' '));
+                } else {
+                  if (isActive) {
+                    const updated = classes.filter(c => c !== cls).join(' ');
+                    onChange("className", updated);
+                    onChange("tailwindClasses", updated);
+                  } else {
+                    const updated = [...classes, cls].join(' ');
+                    onChange("className", updated);
+                    onChange("tailwindClasses", updated);
+                  }
+                }
+              }}
+              className={`px-2 py-0.5 rounded text-[9px] border transition-colors ${
+                isActive
+                  ? "bg-[#7952b3] border-[#7952b3] text-white"
+                  : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
+              }`}
+              title={cls}
+            >
+              {cls}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAILWIND PRESETS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PRESET_CLASSES = [
+  { name: "Flex Center", classes: "flex items-center justify-center" },
+  { name: "Flex Between", classes: "flex items-center justify-between" },
+  { name: "Flex Column", classes: "flex flex-col gap-4" },
+  { name: "Grid 2 Col", classes: "grid grid-cols-2 gap-4" },
+  { name: "Grid 3 Col", classes: "grid grid-cols-3 gap-4" },
+  { name: "Card", classes: "p-6 bg-white rounded-lg shadow-md" },
+  { name: "Button Primary", classes: "px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700" },
+  { name: "Button Secondary", classes: "px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300" },
+  { name: "Badge", classes: "px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-sm" },
+  { name: "Input", classes: "w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500" },
+  { name: "Heading", classes: "text-3xl font-bold text-gray-900" },
+  { name: "Subheading", classes: "text-xl font-semibold text-gray-700" },
+  { name: "Body Text", classes: "text-base text-gray-600 leading-relaxed" },
+  { name: "Link", classes: "text-blue-600 hover:text-blue-800 underline" },
+  { name: "Container", classes: "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8" },
+  { name: "Hero Section", classes: "py-20 bg-gradient-to-r from-blue-600 to-purple-600 text-white" },
+  { name: "Card Elevated", classes: "bg-white rounded-xl shadow-lg hover:shadow-xl transition-shadow" },
+  { name: "Full Width", classes: "w-full h-full" },
+  { name: "Square", classes: "w-32 h-32" },
+  { name: "Circle", classes: "w-32 h-32 rounded-full" },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOTSTRAP CLASSES
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BOOTSTRAP_CLASSES = {
+  display: ["d-none", "d-block", "d-inline", "d-inline-block", "d-flex", "d-grid", "d-inline-flex", "d-inline-grid"],
+  flex: ["flex-row", "flex-column", "flex-row-reverse", "flex-column-reverse", "flex-wrap", "flex-nowrap", "flex-wrap-reverse"],
+  justifyContent: ["justify-content-start", "justify-content-end", "justify-content-center", "justify-content-between", "justify-content-around", "justify-content-evenly"],
+  alignItems: ["align-items-start", "align-items-end", "align-items-center", "align-items-baseline", "align-items-stretch"],
+  alignContent: ["align-content-start", "align-content-end", "align-content-center", "align-content-between", "align-content-around", "align-content-stretch"],
+  sizing: ["w-25", "w-50", "w-75", "w-100", "w-auto", "h-25", "h-50", "h-75", "h-100", "h-auto", "mw-100", "mh-100"],
+  spacing: ["m-0", "m-1", "m-2", "m-3", "m-4", "m-5", "mt-0", "mt-1", "mt-2", "mt-3", "mt-4", "mt-5", "mb-0", "mb-1", "mb-2", "mb-3", "mb-4", "mb-5", "mx-auto", "my-auto"],
+  padding: ["p-0", "p-1", "p-2", "p-3", "p-4", "p-5", "pt-0", "pt-1", "pt-2", "pt-3", "pt-4", "pt-5", "pb-0", "pb-1", "pb-2", "pb-3", "pb-4", "pb-5", "px-4", "py-4"],
+  gap: ["gap-0", "gap-1", "gap-2", "gap-3", "gap-4", "gap-5"],
+  typography: ["h1", "h2", "h3", "h4", "h5", "h6", "display-1", "display-2", "display-3", "display-4", "display-5", "display-6", "lead", "small", "mark", "fw-light", "fw-lighter", "fw-normal", "fw-bold", "fw-bolder", "fst-italic", "fst-normal", "text-lowercase", "text-uppercase", "text-capitalize"],
+  textColors: ["text-primary", "text-secondary", "text-success", "text-danger", "text-warning", "text-info", "text-light", "text-dark", "text-body", "text-muted", "text-white", "text-black-50", "text-white-50"],
+  bgColors: ["bg-primary", "bg-secondary", "bg-success", "bg-danger", "bg-warning", "bg-info", "bg-light", "bg-dark", "bg-body", "bg-white", "bg-transparent", "bg-gradient"],
+  borders: ["border", "border-0", "border-top", "border-bottom", "border-start", "border-end", "border-primary", "border-secondary", "border-success", "border-danger", "border-warning", "border-info", "border-light", "border-dark", "border-white"],
+  borderRadius: ["rounded", "rounded-0", "rounded-1", "rounded-2", "rounded-3", "rounded-circle", "rounded-pill", "rounded-top", "rounded-end", "rounded-bottom", "rounded-start"],
+  shadows: ["shadow-none", "shadow-sm", "shadow", "shadow-lg"],
+  positioning: ["position-static", "position-relative", "position-absolute", "position-fixed", "position-sticky"],
+  zIndex: ["z-0", "z-1", "z-2", "z-3"],
+  overflow: ["overflow-auto", "overflow-hidden", "overflow-visible", "overflow-scroll"],
+  visibility: ["visible", "invisible"],
+  opacity: ["opacity-0", "opacity-25", "opacity-50", "opacity-75", "opacity-100"],
+  cursor: ["cursor-pointer", "cursor-not-allowed"],
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOTSTRAP PRESETS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BOOTSTRAP_PRESETS = [
+  { name: "Flex Center", classes: "d-flex justify-content-center align-items-center" },
+  { name: "Flex Between", classes: "d-flex justify-content-between align-items-center" },
+  { name: "Flex Column", classes: "d-flex flex-column gap-3" },
+  { name: "Card", classes: "card p-4 shadow-sm" },
+  { name: "Button Primary", classes: "btn btn-primary" },
+  { name: "Button Secondary", classes: "btn btn-secondary" },
+  { name: "Button Outline", classes: "btn btn-outline-primary" },
+  { name: "Badge", classes: "badge bg-primary" },
+  { name: "Badge Pill", classes: "badge rounded-pill bg-primary" },
+  { name: "Alert", classes: "alert alert-primary" },
+  { name: "Heading 1", classes: "display-4 fw-bold" },
+  { name: "Heading 2", classes: "display-6" },
+  { name: "Lead Text", classes: "lead" },
+  { name: "Container", classes: "container" },
+  { name: "Container Fluid", classes: "container-fluid" },
+  { name: "Row", classes: "row g-3" },
+  { name: "Col", classes: "col" },
+  { name: "Col Auto", classes: "col-auto" },
+  { name: "Full Width", classes: "w-100 h-100" },
+  { name: "Centered Content", classes: "d-flex justify-content-center align-items-center min-vh-100" },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FRAMER MOTION ANIMATION PRESETS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FRAMER_PRESETS = {
+  fade: {
+    initial: { opacity: 0 },
+    animate: { opacity: 1 },
+    exit: { opacity: 0 },
+  },
+  slideUp: {
+    initial: { opacity: 0, y: 50 },
+    animate: { opacity: 1, y: 0 },
+    exit: { opacity: 0, y: -50 },
+  },
+  slideDown: {
+    initial: { opacity: 0, y: -50 },
+    animate: { opacity: 1, y: 0 },
+    exit: { opacity: 0, y: 50 },
+  },
+  slideLeft: {
+    initial: { opacity: 0, x: 50 },
+    animate: { opacity: 1, x: 0 },
+    exit: { opacity: 0, x: -50 },
+  },
+  slideRight: {
+    initial: { opacity: 0, x: -50 },
+    animate: { opacity: 1, x: 0 },
+    exit: { opacity: 0, x: 50 },
+  },
+  scaleUp: {
+    initial: { opacity: 0, scale: 0.5 },
+    animate: { opacity: 1, scale: 1 },
+    exit: { opacity: 0, scale: 0.5 },
+  },
+  scaleDown: {
+    initial: { opacity: 0, scale: 1.5 },
+    animate: { opacity: 1, scale: 1 },
+    exit: { opacity: 0, scale: 1.5 },
+  },
+  rotate: {
+    initial: { opacity: 0, rotate: -180 },
+    animate: { opacity: 1, rotate: 0 },
+    exit: { opacity: 0, rotate: 180 },
+  },
+  bounce: {
+    initial: { opacity: 0, y: -100 },
+    animate: { 
+      opacity: 1, 
+      y: 0,
+      transition: { type: "spring", stiffness: 300, damping: 10 }
+    },
+    exit: { opacity: 0, y: -100 },
+  },
+  flip: {
+    initial: { rotateY: 180 },
+    animate: { rotateY: 0 },
+    exit: { rotateY: -180 },
+  },
+  expand: {
+    initial: { scaleX: 0, originX: 0 },
+    animate: { scaleX: 1, originX: 0 },
+    exit: { scaleX: 0, originX: 0 },
+  },
+  shrink: {
+    initial: { scaleX: 1, originX: 0 },
+    animate: { scaleX: 0, originX: 0 },
+    exit: { scaleX: 1, originX: 0 },
+  },
+  pulse: {
+    animate: { 
+      scale: [1, 1.1, 1],
+      transition: { repeat: Infinity, duration: 1.5 }
+    },
+  },
+  shake: {
+    animate: {
+      x: [0, -10, 10, -10, 10, 0],
+      transition: { repeat: Infinity, duration: 0.5 }
+    },
+  },
+  float: {
+    animate: {
+      y: [0, -20, 0],
+      transition: { repeat: Infinity, duration: 2, ease: "easeInOut" }
+    },
+  },
+  glow: {
+    animate: {
+      boxShadow: [
+        "0 0 0px rgba(59, 130, 246, 0)",
+        "0 0 20px rgba(59, 130, 246, 0.5)",
+        "0 0 0px rgba(59, 130, 246, 0)"
+      ],
+      transition: { repeat: Infinity, duration: 2 }
+    },
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FRAMER MOTION TRANSITION PRESETS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TRANSITION_PRESETS = {
+  quick: { duration: 0.15 },
+  normal: { duration: 0.3 },
+  slow: { duration: 0.6 },
+  spring: { type: "spring", stiffness: 300, damping: 20 },
+  springGentle: { type: "spring", stiffness: 200, damping: 25 },
+  springBouncy: { type: "spring", stiffness: 500, damping: 10 },
+  easeIn: { ease: "easeIn" },
+  easeOut: { ease: "easeOut" },
+  easeInOut: { ease: "easeInOut" },
+  backIn: { ease: "backIn" },
+  backOut: { ease: "backOut" },
+  circIn: { ease: "circIn" },
+  circOut: { ease: "circOut" },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCESSIBILITY UTILITIES
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Parse hex color to RGB
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16),
+  } : null;
+}
+
+// Calculate relative luminance (WCAG formula)
+function getLuminance(r: number, g: number, b: number): number {
+  const [rs, gs, bs] = [r, g, b].map(c => {
+    c = c / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
+}
+
+// Calculate contrast ratio between two colors
+function getContrastRatio(color1: string, color2: string): number | null {
+  const rgb1 = hexToRgb(color1);
+  const rgb2 = hexToRgb(color2);
+  
+  if (!rgb1 || !rgb2) return null;
+  
+  const l1 = getLuminance(rgb1.r, rgb1.g, rgb1.b);
+  const l2 = getLuminance(rgb2.r, rgb2.g, rgb2.b);
+  
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  
+  return Number(((lighter + 0.05) / (darker + 0.05)).toFixed(2));
+}
+
+// Check WCAG compliance
+function checkWcagCompliance(contrastRatio: number): {
+  levelA: boolean;
+  levelAA: boolean;
+  levelAAA: boolean;
+  size: 'normal' | 'large';
+} {
+  // Large text is 18pt+ or 14pt+ bold
+  return {
+    levelA: contrastRatio >= 3,
+    levelAA: contrastRatio >= 4.5,
+    levelAAA: contrastRatio >= 7,
+    size: 'normal',
+  };
+}
+
+// Common color name to hex mapping
+const COLOR_NAMES: Record<string, string> = {
+  white: '#ffffff',
+  black: '#000000',
+  red: '#ef4444',
+  green: '#22c55e',
+  blue: '#3b82f6',
+  yellow: '#eab308',
+  purple: '#a855f7',
+  pink: '#ec4899',
+  gray: '#6b7280',
+  grey: '#6b7280',
+  orange: '#f97316',
+  teal: '#14b8a6',
+  cyan: '#06b6d4',
+  indigo: '#6366f1',
+  lime: '#84cc16',
+  emerald: '#10b981',
+  rose: '#f43f5e',
+  amber: '#f59e0b',
+  sky: '#0ea5e9',
+  violet: '#8b5cf6',
+  fuchsia: '#d946ef',
+};
+
+// Extract color from Tailwind/Bootstrap class
+function extractColorFromClass(className: string): string | null {
+  for (const [name, hex] of Object.entries(COLOR_NAMES)) {
+    if (className.includes(name)) {
+      return hex;
+    }
+  }
+  // Check for hex colors in className
+  const hexMatch = className.match(/#([a-f\d]{6}|[a-f\d]{3})/i);
+  if (hexMatch) {
+    return hexMatch[0];
+  }
+  return null;
+}
+
+// Generate ARIA suggestions based on element type
+function getAriaSuggestions(elementType: string): Array<{
+  attribute: string;
+  purpose: string;
+  example: string;
+}> {
+  const suggestions: Record<string, Array<{ attribute: string; purpose: string; example: string }>> = {
+    button: [
+      { attribute: 'aria-label', purpose: 'Descriptive label for screen readers', example: 'aria-label="Close dialog"' },
+      { attribute: 'aria-pressed', purpose: 'Indicate toggle state', example: 'aria-pressed={isPressed}' },
+      { attribute: 'aria-disabled', purpose: 'Indicate disabled state', example: 'aria-disabled={isDisabled}' },
+    ],
+    input: [
+      { attribute: 'aria-label', purpose: 'Descriptive label', example: 'aria-label="Email address"' },
+      { attribute: 'aria-describedby', purpose: 'Link to helper text', example: 'aria-describedby="email-help"' },
+      { attribute: 'aria-invalid', purpose: 'Indicate validation error', example: 'aria-invalid={hasError}' },
+      { attribute: 'aria-required', purpose: 'Indicate required field', example: 'aria-required={true}' },
+    ],
+    link: [
+      { attribute: 'aria-label', purpose: 'Descriptive link text', example: 'aria-label="Read more about our services"' },
+      { attribute: 'aria-current', purpose: 'Indicate current page', example: 'aria-current="page"' },
+    ],
+    img: [
+      { attribute: 'alt', purpose: 'Alternative text description', example: 'alt="Company logo"' },
+      { attribute: 'role', purpose: 'Presentational image', example: 'role="presentation"' },
+    ],
+    nav: [
+      { attribute: 'aria-label', purpose: 'Navigation landmark label', example: 'aria-label="Main navigation"' },
+    ],
+    dialog: [
+      { attribute: 'aria-labelledby', purpose: 'Link to dialog title', example: 'aria-labelledby="dialog-title"' },
+      { attribute: 'aria-describedby', purpose: 'Link to dialog description', example: 'aria-describedby="dialog-desc"' },
+      { attribute: 'aria-modal', purpose: 'Indicate modal behavior', example: 'aria-modal={true}' },
+    ],
+    alert: [
+      { attribute: 'role', purpose: 'Alert landmark', example: 'role="alert"' },
+      { attribute: 'aria-live', purpose: 'Live region announcement', example: 'aria-live="assertive"' },
+    ],
+  };
+  
+  return suggestions[elementType] || [];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SETTINGS PANEL — per-node property editor driven by Craft's useEditor
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1929,6 +2398,117 @@ function SettingsPanel() {
 
   const [activeTab, setActiveTab] = useState<"content" | "style" | "layout">("content");
   const [customCSS, setCustomCSS] = useState("");
+  const [tailwindSearch, setTailwindSearch] = useState("");
+  const [currentBreakpoint, setCurrentBreakpoint] = useState("");
+  const [stateVariant, setStateVariant] = useState<"" | "hover:" | "focus:" | "active:" | "dark:">("");
+  const [arbitraryValue, setArbitraryValue] = useState("");
+  const [showConflicts, setShowConflicts] = useState(true);
+  const [cssFramework, setCssFramework] = useState<"tailwind" | "bootstrap" | "bulma">("tailwind");
+  const [animationFramework, setAnimationFramework] = useState<"none" | "framer" | "css">("none");
+  
+  // Framer Motion animation state
+  const [framerInitial, setFramerInitial] = useState<Record<string, any>>({});
+  const [framerAnimate, setFramerAnimate] = useState<Record<string, any>>({});
+  const [framerExit, setFramerExit] = useState<Record<string, any>>({});
+  const [framerTransition, setFramerTransition] = useState<Record<string, any>>({ duration: 0.3 });
+  const [activeGesture, setActiveGesture] = useState<"initial" | "animate" | "exit">("animate");
+  const [showAnimationPanel, setShowAnimationPanel] = useState(false);
+  
+  // Accessibility checker state
+  const [showAccessibilityPanel, setShowAccessibilityPanel] = useState(false);
+  const [accessibilityIssues, setAccessibilityIssues] = useState<Array<{
+    severity: 'error' | 'warning' | 'info';
+    category: 'contrast' | 'aria' | 'keyboard' | 'screen-reader' | 'wcag';
+    message: string;
+    suggestion: string;
+    wcagLevel?: 'A' | 'AA' | 'AAA';
+    wcagCriterion?: string;
+  }>>([]);
+  const [contrastRatio, setContrastRatio] = useState<number | null>(null);
+  const [wcagCompliance, setWcagCompliance] = useState<{
+    levelA: boolean;
+    levelAA: boolean;
+    levelAAA: boolean;
+  }>({ levelA: true, levelAA: true, levelAAA: true });
+  
+  // Bootstrap breakpoint mapping
+  const bootstrapBreakpoints = useMemo(() => {
+    if (cssFramework === "bootstrap") {
+      return { "": "", "sm:": "", "md:": "", "lg:": "", "xl:": "", "2xl:": "" };
+    }
+    return { "": "", "sm:": "sm:", "md:": "md:", "lg:": "lg:", "xl:": "xl:", "2xl:": "xxl:" };
+  }, [cssFramework]);
+  
+  // Recently used classes (persisted in localStorage)
+  const [recentClasses, setRecentClasses] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem("visualEditorRecentClasses");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  
+  // Custom presets (persisted in localStorage)
+  const [customPresets, setCustomPresets] = useState<Array<{ name: string; classes: string }>>(() => {
+    try {
+      const saved = localStorage.getItem("visualEditorCustomPresets");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  
+  // Save recent classes to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem("visualEditorRecentClasses", JSON.stringify(recentClasses.slice(0, 20)));
+    } catch {}
+  }, [recentClasses]);
+  
+  // Save custom presets to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem("visualEditorCustomPresets", JSON.stringify(customPresets));
+    } catch {}
+  }, [customPresets]);
+  
+  // Track recently used classes
+  const addRecentClass = useCallback((cls: string) => {
+    setRecentClasses(prev => {
+      const filtered = prev.filter(c => c !== cls);
+      return [cls, ...filtered].slice(0, 20);
+    });
+  }, []);
+  
+  // Detect class conflicts
+  const classConflicts = useMemo(() => {
+    const current = s.className || s.tailwindClasses || "";
+    const classes = current.split(' ').filter(Boolean);
+    const conflicts: string[] = [];
+    
+    // Check for conflicting display classes
+    const displayClasses = ["flex", "grid", "block", "inline-block", "hidden", "inline", "table", "contents"];
+    const foundDisplay = displayClasses.filter(c => classes.includes(c));
+    if (foundDisplay.length > 1) conflicts.push(`Multiple display: ${foundDisplay.join(', ')}`);
+    
+    // Check for conflicting flex directions
+    const flexDirs = ["flex-row", "flex-col", "flex-row-reverse", "flex-col-reverse"];
+    const foundFlexDir = flexDirs.filter(c => classes.some(cls => cls.includes(c)));
+    if (foundFlexDir.length > 1) conflicts.push(`Multiple flex-direction: ${foundFlexDir.join(', ')}`);
+    
+    // Check for conflicting text sizes
+    const textSizes = ["text-xs", "text-sm", "text-base", "text-lg", "text-xl", "text-2xl", "text-3xl", "text-4xl"];
+    const foundTextSize = textSizes.filter(c => classes.some(cls => cls.includes(c)));
+    if (foundTextSize.length > 1) conflicts.push(`Multiple text sizes: ${foundTextSize.join(', ')}`);
+    
+    // Check for conflicting font weights
+    const fontWeights = ["font-thin", "font-light", "font-normal", "font-medium", "font-semibold", "font-bold", "font-extrabold"];
+    const foundFontWeight = fontWeights.filter(c => classes.some(cls => cls.includes(c)));
+    if (foundFontWeight.length > 1) conflicts.push(`Multiple font weights: ${foundFontWeight.join(', ')}`);
+    
+    return conflicts;
+  }, [s.className, s.tailwindClasses]);
 
   useEffect(() => {
     if (selected) {
@@ -2144,20 +2724,638 @@ function SettingsPanel() {
 
         {activeTab === "style" && (
           <>
+            {/* ── Framework Selector ── */}
+            <div className="mb-3 pb-3 border-b border-[#30363d]">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[9px] text-[#484f58]">CSS Framework</p>
+              </div>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setCssFramework("tailwind")}
+                  className={`flex-1 px-3 py-2 rounded text-[10px] font-semibold border transition-colors ${
+                    cssFramework === "tailwind"
+                      ? "bg-[#3b82f6] border-[#3b82f6] text-white"
+                      : "bg-[#21262d] border-[#30363d] text-[#8b949e] hover:text-white"
+                  }`}
+                >
+                  Tailwind CSS
+                </button>
+                <button
+                  onClick={() => setCssFramework("bootstrap")}
+                  className={`flex-1 px-3 py-2 rounded text-[10px] font-semibold border transition-colors ${
+                    cssFramework === "bootstrap"
+                      ? "bg-[#7952b3] border-[#7952b3] text-white"
+                      : "bg-[#21262d] border-[#30363d] text-[#8b949e] hover:text-white"
+                  }`}
+                >
+                  Bootstrap
+                </button>
+              </div>
+            </div>
+
+            {/* ── Framer Motion Animation Toggle ── */}
+            <div className="mb-3 pb-3 border-b border-[#30363d]">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[9px] text-[#484f58]">Animations</p>
+                <button
+                  onClick={() => setShowAnimationPanel(!showAnimationPanel)}
+                  className="text-[9px] text-[#8b949e] hover:text-white"
+                >
+                  {showAnimationPanel ? "Hide" : "Show"}
+                </button>
+              </div>
+              <div className="flex gap-1 mb-2">
+                <button
+                  onClick={() => setAnimationFramework("none")}
+                  className={`flex-1 px-2 py-1.5 rounded text-[9px] font-semibold border transition-colors ${
+                    animationFramework === "none"
+                      ? "bg-[#3b82f6] border-[#3b82f6] text-white"
+                      : "bg-[#21262d] border-[#30363d] text-[#8b949e] hover:text-white"
+                  }`}
+                >
+                  No Animation
+                </button>
+                <button
+                  onClick={() => { setAnimationFramework("framer"); setShowAnimationPanel(true); }}
+                  className={`flex-1 px-2 py-1.5 rounded text-[9px] font-semibold border transition-colors ${
+                    animationFramework === "framer"
+                      ? "bg-[#00d4aa] border-[#00d4aa] text-white"
+                      : "bg-[#21262d] border-[#30363d] text-[#8b949e] hover:text-white"
+                  }`}
+                >
+                  Framer Motion
+                </button>
+              </div>
+            </div>
+
+            {showAnimationPanel && animationFramework === "framer" && (
+              <>
+            {/* ── Framer Motion Animation Panel ── */}
+            <SectionTitle>Framer Motion</SectionTitle>
+            
+            {/* Gesture Selector */}
+            <div className="mb-3">
+              <p className="text-[9px] text-[#484f58] mb-1">Gesture</p>
+              <div className="flex gap-1">
+                {(["initial", "animate", "exit"] as const).map((gesture) => (
+                  <button
+                    key={gesture}
+                    onClick={() => setActiveGesture(gesture)}
+                    className={`flex-1 px-2 py-1.5 rounded text-[9px] font-semibold border transition-colors ${
+                      activeGesture === gesture
+                        ? "bg-[#00d4aa] border-[#00d4aa] text-white"
+                        : "bg-[#21262d] border-[#30363d] text-[#8b949e] hover:text-white"
+                    }`}
+                  >
+                    {gesture}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Animation Presets */}
+            <div className="mb-3">
+              <p className="text-[9px] text-[#484f58] mb-2">Animation Presets</p>
+              <div className="grid grid-cols-3 gap-1 max-h-48 overflow-y-auto">
+                {Object.keys(FRAMER_PRESETS).map((presetName) => (
+                  <button
+                    key={presetName}
+                    onClick={() => {
+                      const preset = FRAMER_PRESETS[presetName as keyof typeof FRAMER_PRESETS];
+                      if (preset.initial) setFramerInitial(preset.initial);
+                      if (preset.animate) setFramerAnimate(preset.animate);
+                      if (preset.exit) setFramerExit(preset.exit);
+                      toast.success(`Applied preset: ${presetName}`);
+                    }}
+                    className="px-2 py-1.5 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[9px] text-[#8b949e] hover:text-white transition-colors capitalize"
+                  >
+                    {presetName}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Transform Controls for Current Gesture */}
+            <div className="mb-3 space-y-2">
+              <p className="text-[9px] text-[#484f58]">{activeGesture} Properties</p>
+              
+              {/* Opacity */}
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] text-[#484f58] w-16">Opacity</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={
+                    activeGesture === "initial" ? (framerInitial.opacity ?? 1) :
+                    activeGesture === "animate" ? (framerAnimate.opacity ?? 1) :
+                    (framerExit.opacity ?? 1)
+                  }
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    if (activeGesture === "initial") setFramerInitial({ ...framerInitial, opacity: val });
+                    else if (activeGesture === "animate") setFramerAnimate({ ...framerAnimate, opacity: val });
+                    else setFramerExit({ ...framerExit, opacity: val });
+                  }}
+                  className="flex-1 h-1 bg-[#30363d] rounded appearance-none cursor-pointer"
+                />
+                <span className="text-[8px] text-[#8b949e] w-8 text-right">
+                  {
+                    activeGesture === "initial" ? (framerInitial.opacity ?? 1) :
+                    activeGesture === "animate" ? (framerAnimate.opacity ?? 1) :
+                    (framerExit.opacity ?? 1)
+                  }
+                </span>
+              </div>
+
+              {/* X Position */}
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] text-[#484f58] w-16">X</span>
+                <input
+                  type="range"
+                  min="-200"
+                  max="200"
+                  value={
+                    activeGesture === "initial" ? (framerInitial.x ?? 0) :
+                    activeGesture === "animate" ? (framerAnimate.x ?? 0) :
+                    (framerExit.x ?? 0)
+                  }
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    if (activeGesture === "initial") setFramerInitial({ ...framerInitial, x: val });
+                    else if (activeGesture === "animate") setFramerAnimate({ ...framerAnimate, x: val });
+                    else setFramerExit({ ...framerExit, x: val });
+                  }}
+                  className="flex-1 h-1 bg-[#30363d] rounded appearance-none cursor-pointer"
+                />
+                <span className="text-[8px] text-[#8b949e] w-12 text-right">
+                  {
+                    activeGesture === "initial" ? (framerInitial.x ?? 0) :
+                    activeGesture === "animate" ? (framerAnimate.x ?? 0) :
+                    (framerExit.x ?? 0)
+                  }px
+                </span>
+              </div>
+
+              {/* Y Position */}
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] text-[#484f58] w-16">Y</span>
+                <input
+                  type="range"
+                  min="-200"
+                  max="200"
+                  value={
+                    activeGesture === "initial" ? (framerInitial.y ?? 0) :
+                    activeGesture === "animate" ? (framerAnimate.y ?? 0) :
+                    (framerExit.y ?? 0)
+                  }
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    if (activeGesture === "initial") setFramerInitial({ ...framerInitial, y: val });
+                    else if (activeGesture === "animate") setFramerAnimate({ ...framerAnimate, y: val });
+                    else setFramerExit({ ...framerExit, y: val });
+                  }}
+                  className="flex-1 h-1 bg-[#30363d] rounded appearance-none cursor-pointer"
+                />
+                <span className="text-[8px] text-[#8b949e] w-12 text-right">
+                  {
+                    activeGesture === "initial" ? (framerInitial.y ?? 0) :
+                    activeGesture === "animate" ? (framerAnimate.y ?? 0) :
+                    (framerExit.y ?? 0)
+                  }px
+                </span>
+              </div>
+
+              {/* Scale */}
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] text-[#484f58] w-16">Scale</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={
+                    activeGesture === "initial" ? (framerInitial.scale ?? 1) :
+                    activeGesture === "animate" ? (framerAnimate.scale ?? 1) :
+                    (framerExit.scale ?? 1)
+                  }
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    if (activeGesture === "initial") setFramerInitial({ ...framerInitial, scale: val });
+                    else if (activeGesture === "animate") setFramerAnimate({ ...framerAnimate, scale: val });
+                    else setFramerExit({ ...framerExit, scale: val });
+                  }}
+                  className="flex-1 h-1 bg-[#30363d] rounded appearance-none cursor-pointer"
+                />
+                <span className="text-[8px] text-[#8b949e] w-12 text-right">
+                  {
+                    activeGesture === "initial" ? (framerInitial.scale ?? 1) :
+                    activeGesture === "animate" ? (framerAnimate.scale ?? 1) :
+                    (framerExit.scale ?? 1)
+                  }x
+                </span>
+              </div>
+
+              {/* Rotate */}
+              <div className="flex items-center gap-2">
+                <span className="text-[8px] text-[#484f58] w-16">Rotate</span>
+                <input
+                  type="range"
+                  min="-360"
+                  max="360"
+                  value={
+                    activeGesture === "initial" ? (framerInitial.rotate ?? 0) :
+                    activeGesture === "animate" ? (framerAnimate.rotate ?? 0) :
+                    (framerExit.rotate ?? 0)
+                  }
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    if (activeGesture === "initial") setFramerInitial({ ...framerInitial, rotate: val });
+                    else if (activeGesture === "animate") setFramerAnimate({ ...framerAnimate, rotate: val });
+                    else setFramerExit({ ...framerExit, rotate: val });
+                  }}
+                  className="flex-1 h-1 bg-[#30363d] rounded appearance-none cursor-pointer"
+                />
+                <span className="text-[8px] text-[#8b949e] w-12 text-right">
+                  {
+                    activeGesture === "initial" ? (framerInitial.rotate ?? 0) :
+                    activeGesture === "animate" ? (framerAnimate.rotate ?? 0) :
+                    (framerExit.rotate ?? 0)
+                  }°
+                </span>
+              </div>
+            </div>
+
+            {/* Transition Settings */}
+            <div className="mb-3">
+              <p className="text-[9px] text-[#484f58] mb-2">Transition</p>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[8px] text-[#484f58] w-16">Duration</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={framerTransition.duration ?? 0.3}
+                    onChange={(e) => setFramerTransition({ ...framerTransition, duration: parseFloat(e.target.value) })}
+                    className="flex-1 h-1 bg-[#30363d] rounded appearance-none cursor-pointer"
+                  />
+                  <span className="text-[8px] text-[#8b949e] w-12 text-right">
+                    {(framerTransition.duration ?? 0.3).toFixed(1)}s
+                  </span>
+                </div>
+                
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {Object.keys(TRANSITION_PRESETS).map((presetName) => (
+                    <button
+                      key={presetName}
+                      onClick={() => setFramerTransition(TRANSITION_PRESETS[presetName as keyof typeof TRANSITION_PRESETS])}
+                      className="px-2 py-0.5 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[8px] text-[#8b949e] hover:text-white transition-colors capitalize"
+                    >
+                      {presetName}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Generated Code Preview */}
+            <div className="mb-3 p-2 bg-[#0d1117] border border-[#30363d] rounded">
+              <p className="text-[9px] text-[#484f58] mb-1">Generated Code</p>
+              <pre className="text-[8px] font-mono text-[#8b949e] whitespace-pre-wrap break-all">
+{`<motion.div
+  initial={${JSON.stringify(framerInitial, null, 2)}}
+  animate={${JSON.stringify(framerAnimate, null, 2)}}
+  exit={${JSON.stringify(framerExit, null, 2)}}
+  transition={${JSON.stringify(framerTransition, null, 2)}}
+>`}
+              </pre>
+            </div>
+
+            {/* Clear Animation */}
+            <button
+              onClick={() => {
+                setFramerInitial({});
+                setFramerAnimate({});
+                setFramerExit({});
+                setFramerTransition({ duration: 0.3 });
+                toast.success("Animation cleared");
+              }}
+              className="w-full px-3 py-2 bg-red-900/20 hover:bg-red-900/40 border border-red-800/50 rounded text-[9px] text-red-400 hover:text-red-300 transition-colors"
+            >
+              Clear Animation
+            </button>
+              </>
+            )}
+
+            {/* ── Accessibility Checker Panel ── */}
+            <div className="mb-3 pb-3 border-b border-[#30363d]">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[9px] text-[#484f58]">Accessibility</p>
+                <button
+                  onClick={() => {
+                    setShowAccessibilityPanel(!showAccessibilityPanel);
+                    // Run accessibility check when opening
+                    if (!showAccessibilityPanel) {
+                      const issues = [];
+                      const classes = s.className || s.tailwindClasses || "";
+                      
+                      // Check for text color contrast
+                      const bgColor = extractColorFromClass(classes);
+                      const textColor = s.color || extractColorFromClass(classes);
+                      
+                      if (bgColor && textColor) {
+                        const ratio = getContrastRatio(bgColor, textColor);
+                        if (ratio) {
+                          setContrastRatio(ratio);
+                          const compliance = checkWcagCompliance(ratio);
+                          setWcagCompliance({
+                            levelA: compliance.levelA,
+                            levelAA: compliance.levelAA,
+                            levelAAA: compliance.levelAAA,
+                          });
+                          
+                          if (ratio < 3) {
+                            issues.push({
+                              severity: 'error' as const,
+                              category: 'contrast' as const,
+                              message: `Contrast ratio ${ratio}:1 is below WCAG minimum`,
+                              suggestion: 'Increase contrast to at least 3:1 (large text) or 4.5:1 (normal text)',
+                              wcagLevel: 'A' as const,
+                              wcagCriterion: '1.4.3 Contrast (Minimum)',
+                            });
+                          } else if (ratio < 4.5) {
+                            issues.push({
+                              severity: 'warning' as const,
+                              category: 'contrast' as const,
+                              message: `Contrast ratio ${ratio}:1 - OK for large text only`,
+                              suggestion: 'Increase contrast to 4.5:1 for normal text (WCAG AA)',
+                              wcagLevel: 'AA' as const,
+                              wcagCriterion: '1.4.3 Contrast (Minimum)',
+                            });
+                          } else if (ratio < 7) {
+                            issues.push({
+                              severity: 'info' as const,
+                              category: 'contrast' as const,
+                              message: `Contrast ratio ${ratio}:1 - WCAG AA compliant`,
+                              suggestion: 'Consider increasing to 7:1 for WCAG AAA compliance',
+                              wcagLevel: 'AAA' as const,
+                              wcagCriterion: '1.4.6 Contrast (Enhanced)',
+                            });
+                          }
+                        }
+                      }
+                      
+                      // Check for common accessibility issues
+                      if (classes.includes('hidden') || classes.includes('d-none')) {
+                        issues.push({
+                          severity: 'info' as const,
+                          category: 'screen-reader' as const,
+                          message: 'Element is visually hidden',
+                          suggestion: 'Consider using sr-only class for screen reader only content',
+                        });
+                      }
+                      
+                      // Check for interactive elements without proper labels
+                      if (classes.includes('btn') || classes.includes('button')) {
+                        issues.push({
+                          severity: 'warning' as const,
+                          category: 'aria' as const,
+                          message: 'Button may need accessible label',
+                          suggestion: 'Add aria-label or ensure button has visible text content',
+                          wcagLevel: 'A' as const,
+                          wcagCriterion: '4.1.2 Name, Role, Value',
+                        });
+                      }
+                      
+                      // Check for images
+                      if (classes.includes('img') || classes.includes('image')) {
+                        issues.push({
+                          severity: 'error' as const,
+                          category: 'aria' as const,
+                          message: 'Image needs alt text',
+                          suggestion: 'Add alt attribute with descriptive text (or alt="" for decorative images)',
+                          wcagLevel: 'A' as const,
+                          wcagCriterion: '1.1.1 Non-text Content',
+                        });
+                      }
+                      
+                      setAccessibilityIssues(issues);
+                    }
+                  }}
+                  className="text-[9px] text-[#8b949e] hover:text-white"
+                >
+                  {showAccessibilityPanel ? "Hide" : "Check"}
+                </button>
+              </div>
+              <button
+                onClick={() => {
+                  setShowAccessibilityPanel(true);
+                  // Trigger check
+                  setAccessibilityIssues([]);
+                  setContrastRatio(null);
+                }}
+                className={`w-full px-3 py-2 rounded text-[9px] font-semibold border transition-colors ${
+                  accessibilityIssues.some(i => i.severity === 'error')
+                    ? "bg-red-900/20 border-red-800/50 text-red-400"
+                    : accessibilityIssues.some(i => i.severity === 'warning')
+                    ? "bg-yellow-900/20 border-yellow-800/50 text-yellow-400"
+                    : "bg-[#21262d] border-[#30363d] text-[#8b949e] hover:text-white"
+                }`}
+              >
+                {accessibilityIssues.length > 0 
+                  ? `${accessibilityIssues.length} Issue${accessibilityIssues.length > 1 ? 's' : ''} Found` 
+                  : "Run Accessibility Check"}
+              </button>
+            </div>
+
+            {showAccessibilityPanel && (
+              <>
+            {/* ── Accessibility Checker Results ── */}
+            <SectionTitle>Accessibility Checker</SectionTitle>
+            
+            {/* WCAG Compliance Summary */}
+            {contrastRatio && (
+              <div className="mb-3 p-3 bg-[#21262d] border border-[#30363d] rounded">
+                <p className="text-[9px] text-[#484f58] mb-2">Color Contrast</p>
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="text-2xl font-bold text-white">{contrastRatio}:1</div>
+                  <div className="flex-1 h-2 bg-[#30363d] rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full ${
+                        contrastRatio >= 7 ? 'bg-green-500' :
+                        contrastRatio >= 4.5 ? 'bg-yellow-500' :
+                        'bg-red-500'
+                      }`}
+                      style={{ width: `${Math.min(100, (contrastRatio / 7) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <span className={`text-[8px] px-1.5 py-0.5 rounded ${wcagCompliance.levelA ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'}`}>
+                    Level A: {wcagCompliance.levelA ? '✓' : '✗'}
+                  </span>
+                  <span className={`text-[8px] px-1.5 py-0.5 rounded ${wcagCompliance.levelAA ? 'bg-green-900/40 text-green-400' : 'bg-yellow-900/40 text-yellow-400'}`}>
+                    Level AA: {wcagCompliance.levelAA ? '✓' : '✗'}
+                  </span>
+                  <span className={`text-[8px] px-1.5 py-0.5 rounded ${wcagCompliance.levelAAA ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'}`}>
+                    Level AAA: {wcagCompliance.levelAAA ? '✓' : '✗'}
+                  </span>
+                </div>
+              </div>
+            )}
+            
+            {/* Issues List */}
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {accessibilityIssues.length === 0 ? (
+                <div className="p-4 text-center text-[#484f58]">
+                  <CheckCircle className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                  <p className="text-[9px]">No accessibility issues detected</p>
+                  <p className="text-[8px] mt-1">Run the check to analyze this element</p>
+                </div>
+              ) : (
+                accessibilityIssues.map((issue, index) => (
+                  <div
+                    key={index}
+                    className={`p-2 border rounded ${
+                      issue.severity === 'error' ? 'bg-red-900/10 border-red-800/50' :
+                      issue.severity === 'warning' ? 'bg-yellow-900/10 border-yellow-800/50' :
+                      'bg-blue-900/10 border-blue-800/50'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <span className={`text-[10px] flex-shrink-0 ${
+                        issue.severity === 'error' ? 'text-red-400' :
+                        issue.severity === 'warning' ? 'text-yellow-400' :
+                        'text-blue-400'
+                      }`}>
+                        {issue.severity === 'error' ? '⛔' :
+                         issue.severity === 'warning' ? '⚠️' :
+                         'ℹ️'}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[9px] text-white">{issue.message}</p>
+                        <p className="text-[8px] text-[#8b949e] mt-0.5">{issue.suggestion}</p>
+                        {issue.wcagLevel && (
+                          <p className="text-[7px] text-[#484f58] mt-1">
+                            WCAG {issue.wcagLevel} {issue.wcagCriterion && `(${issue.wcagCriterion})`}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            
+            {/* ARIA Suggestions */}
+            <div className="mt-3 pt-3 border-t border-[#30363d]">
+              <p className="text-[9px] text-[#484f58] mb-2">ARIA Suggestions</p>
+              <div className="space-y-1">
+                {getAriaSuggestions('button').map((suggestion, i) => (
+                  <div key={i} className="p-2 bg-[#21262d] border border-[#30363d] rounded">
+                    <p className="text-[8px] text-[#60a5fa] font-mono">{suggestion.attribute}</p>
+                    <p className="text-[7px] text-[#8b949e] mt-0.5">{suggestion.purpose}</p>
+                    <p className="text-[7px] text-[#484f58] mt-0.5">Example: {suggestion.example}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            {/* Quick Fixes */}
+            <div className="mt-3 pt-3 border-t border-[#30363d]">
+              <p className="text-[9px] text-[#484f58] mb-2">Quick Fixes</p>
+              <div className="flex flex-wrap gap-1">
+                <button
+                  onClick={() => {
+                    const current = s.className || s.tailwindClasses || "";
+                    if (!current.includes('focus:')) {
+                      setStyle("className", (current + ' focus:outline-none focus:ring-2 focus:ring-blue-500').trim());
+                      setStyle("tailwindClasses", (current + ' focus:outline-none focus:ring-2 focus:ring-blue-500').trim());
+                      toast.success("Added focus styles");
+                    }
+                  }}
+                  className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[8px] text-[#8b949e] hover:text-white transition-colors"
+                >
+                  Add Focus Styles
+                </button>
+                <button
+                  onClick={() => {
+                    const current = s.className || s.tailwindClasses || "";
+                    if (!current.includes('sr-only')) {
+                      setStyle("className", (current + ' sr-only').trim());
+                      setStyle("tailwindClasses", (current + ' sr-only').trim());
+                      toast.success("Added screen reader only class");
+                    }
+                  }}
+                  className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[8px] text-[#8b949e] hover:text-white transition-colors"
+                >
+                  Add SR-Only
+                </button>
+                <button
+                  onClick={() => {
+                    toast.info("Add aria-label in the component props");
+                  }}
+                  className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[8px] text-[#8b949e] hover:text-white transition-colors"
+                >
+                  Add aria-label
+                </button>
+              </div>
+            </div>
+              </>
+            )}
+
+            {cssFramework === "tailwind" && (
+              <>
             {/* ── Tailwind / CSS Classes Section ── */}
             <SectionTitle>Tailwind / CSS</SectionTitle>
             <PropGroup label="Tailwind Classes">
-              <textarea
-                value={s.className || s.tailwindClasses || ""}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setStyle("className", val);
-                  setStyle("tailwindClasses", val);
-                }}
-                placeholder="flex items-center justify-center p-4 bg-blue-500..."
-                rows={3}
-                className="w-full bg-[#0d1117] border border-[#30363d] rounded text-[11px] font-mono text-white p-2 resize-none focus:outline-none focus:border-[#3b82f6]"
-              />
+              <div className="flex gap-1 mb-2">
+                <textarea
+                  value={s.className || s.tailwindClasses || ""}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setStyle("className", val);
+                    setStyle("tailwindClasses", val);
+                  }}
+                  placeholder="flex items-center justify-center p-4 bg-blue-500..."
+                  rows={2}
+                  className="flex-1 bg-[#0d1117] border border-[#30363d] rounded text-[11px] font-mono text-white p-2 resize-none focus:outline-none focus:border-[#3b82f6]"
+                />
+                <div className="flex flex-col gap-1">
+                  <button
+                    onClick={() => {
+                      const classes = s.className || s.tailwindClasses || "";
+                      navigator.clipboard?.writeText(classes);
+                      toast.info("Classes copied to clipboard");
+                    }}
+                    className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[10px] text-[#8b949e] hover:text-white transition-colors"
+                    title="Copy classes"
+                  >
+                    📋
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const text = await navigator.clipboard?.readText();
+                        if (text) {
+                          setStyle("className", text);
+                          setStyle("tailwindClasses", text);
+                          toast.success("Classes pasted from clipboard");
+                        }
+                      } catch (err) {
+                        toast.error("Failed to paste from clipboard");
+                      }
+                    }}
+                    className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[10px] text-[#8b949e] hover:text-white transition-colors"
+                    title="Paste classes"
+                  >
+                    📥
+                  </button>
+                </div>
+              </div>
             </PropGroup>
             <PropGroup label="CSS Module Class">
               <StringInput
@@ -2166,95 +3364,779 @@ function SettingsPanel() {
                 placeholder="styles.container"
               />
             </PropGroup>
-            
-            {/* Quick Tailwind Pickers */}
-            <div className="pt-2 pb-1">
-              <p className="text-[9px] text-[#484f58] mb-1">Quick Tailwind</p>
-              <div className="flex flex-wrap gap-1">
-                {/* Display */}
-                {["flex", "grid", "block", "hidden"].map((cls) => (
+
+            {/* Class Conflict Warnings */}
+            {showConflicts && classConflicts.length > 0 && (
+              <div className="mb-3 p-2 bg-red-900/20 border border-red-800/50 rounded">
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertCircle className="w-3 h-3 text-red-400" />
+                  <span className="text-[9px] font-semibold text-red-400">Class Conflicts Detected</span>
+                </div>
+                <ul className="text-[9px] text-red-300 space-y-0.5">
+                  {classConflicts.map((conflict, i) => (
+                    <li key={i}>• {conflict}</li>
+                  ))}
+                </ul>
+                <button
+                  onClick={() => setShowConflicts(false)}
+                  className="mt-1 text-[8px] text-red-400 hover:text-red-300"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            {/* State Variants & Arbitrary Value */}
+            <div className="flex items-center gap-2 py-2 flex-wrap">
+              <span className="text-[9px] text-[#484f58]">State:</span>
+              <div className="flex gap-1">
+                {["", "hover:", "focus:", "active:", "dark:"].map((state) => (
                   <button
-                    key={cls}
-                    onClick={() => {
-                      const current = s.className || s.tailwindClasses || "";
-                      const has = current.includes(cls);
-                      const updated = has ? current.split(' ').filter(c => c !== cls).join(' ') : current + ' ' + cls;
-                      setStyle("className", updated.trim());
-                      setStyle("tailwindClasses", updated.trim());
-                    }}
-                    className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
-                      (s.className || s.tailwindClasses || "").includes(cls)
-                        ? "bg-[#3b82f6] border-[#3b82f6] text-white"
+                    key={state || "base"}
+                    onClick={() => setStateVariant(state as "" | "hover:" | "focus:" | "active:" | "dark:")}
+                    className={`px-2 py-0.5 rounded text-[9px] border transition-colors ${
+                      stateVariant === state
+                        ? "bg-[#8b5cf6] border-[#8b5cf6] text-white"
                         : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
                     }`}
                   >
-                    {cls}
+                    {state || "base"}
                   </button>
                 ))}
-                {/* Flex Direction */}
-                {["flex-row", "flex-col", "flex-row-reverse", "flex-col-reverse"].map((cls) => (
+              </div>
+              <div className="flex-1 min-w-[150px]">
+                <input
+                  value={arbitraryValue}
+                  onChange={(e) => setArbitraryValue(e.target.value)}
+                  placeholder="Arbitrary: [350px], [#ff0000]"
+                  className="w-full h-6 bg-[#0d1117] border border-[#30363d] rounded text-[10px] text-white px-2 focus:outline-none focus:border-[#3b82f6]"
+                />
+              </div>
+              <button
+                onClick={() => {
+                  if (arbitraryValue) {
+                    const current = s.className || s.tailwindClasses || "";
+                    const arbitrary = arbitraryValue.startsWith('[') ? arbitraryValue : `[${arbitraryValue}]`;
+                    const updated = (current + ' ' + arbitrary).trim();
+                    setStyle("className", updated);
+                    setStyle("tailwindClasses", updated);
+                    setArbitraryValue("");
+                    toast.success(`Added arbitrary value: ${arbitrary}`);
+                  }
+                }}
+                className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[10px] text-[#8b949e] hover:text-white transition-colors"
+              >
+                Add []
+              </button>
+            </div>
+
+            {/* Recently Used Classes */}
+            {recentClasses.length > 0 && (
+              <div className="mb-3">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-[9px] text-[#484f58]">Recently Used</p>
                   <button
-                    key={cls}
-                    onClick={() => {
-                      const current = s.className || s.tailwindClasses || "";
-                      const flexDirClasses = ["flex-row", "flex-col", "flex-row-reverse", "flex-col-reverse"];
-                      const withoutFlex = current.split(' ').filter(c => !flexDirClasses.includes(c)).join(' ');
-                      const updated = withoutFlex + ' ' + cls;
-                      setStyle("className", updated.trim());
-                      setStyle("tailwindClasses", updated.trim());
-                    }}
-                    className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
-                      (s.className || s.tailwindClasses || "").includes(cls)
-                        ? "bg-[#3b82f6] border-[#3b82f6] text-white"
-                        : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
-                    }`}
+                    onClick={() => setRecentClasses([])}
+                    className="text-[8px] text-[#484f58] hover:text-white"
                   >
-                    {cls}
+                    Clear
                   </button>
-                ))}
-                {/* Spacing */}
-                {["p-2", "p-4", "p-6", "p-8", "m-2", "m-4", "gap-2", "gap-4"].map((cls) => (
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {recentClasses.slice(0, 15).map((cls) => (
+                    <button
+                      key={cls}
+                      onClick={() => {
+                        const current = s.className || s.tailwindClasses || "";
+                        const updated = (current + ' ' + cls).trim();
+                        setStyle("className", updated);
+                        setStyle("tailwindClasses", updated);
+                      }}
+                      className="px-2 py-0.5 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[9px] text-[#8b949e] hover:text-white transition-colors"
+                      title={cls}
+                    >
+                      {cls}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Custom Presets */}
+            {customPresets.length > 0 && (
+              <div className="mb-3">
+                <p className="text-[9px] text-[#484f58] mb-1">My Presets</p>
+                <div className="flex flex-wrap gap-1">
+                  {customPresets.map((preset) => (
+                    <button
+                      key={preset.name}
+                      onClick={() => {
+                        setStyle("className", preset.classes);
+                        setStyle("tailwindClasses", preset.classes);
+                        toast.success(`Applied preset: ${preset.name}`);
+                      }}
+                      className="px-2 py-0.5 bg-[#1d3a6b] hover:bg-[#254a8a] border border-[#3b82f6]/30 rounded text-[9px] text-[#60a5fa] hover:text-white transition-colors"
+                      title={preset.classes}
+                    >
+                      {preset.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Save Current as Preset */}
+            <div className="mb-3 p-2 bg-[#21262d] border border-[#30363d] rounded">
+              <p className="text-[9px] text-[#484f58] mb-1">Save Current as Preset</p>
+              <div className="flex gap-1">
+                <input
+                  id="newPresetName"
+                  placeholder="Preset name..."
+                  className="flex-1 h-6 bg-[#0d1117] border border-[#30363d] rounded text-[10px] text-white px-2 focus:outline-none focus:border-[#3b82f6]"
+                />
+                <button
+                  onClick={() => {
+                    const input = document.getElementById('newPresetName') as HTMLInputElement;
+                    const name = input.value.trim();
+                    const classes = s.className || s.tailwindClasses || "";
+                    if (name && classes) {
+                      setCustomPresets(prev => [...prev, { name, classes }]);
+                      input.value = '';
+                      toast.success(`Saved preset: ${name}`);
+                    }
+                  }}
+                  className="px-2 py-1 bg-[#3b82f6] hover:bg-[#2563eb] rounded text-[10px] text-white transition-colors"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+
+            {/* Responsive Breakpoint Toggle */}
+            <div className="flex items-center gap-2 py-2">
+              <span className="text-[9px] text-[#484f58]">Breakpoint:</span>
+              <div className="flex gap-1">
+                {["", "sm:", "md:", "lg:", "xl:", "2xl:"].map((bp) => (
                   <button
-                    key={cls}
+                    key={bp || "base"}
                     onClick={() => {
-                      const current = s.className || s.tailwindClasses || "";
-                      const has = current.includes(cls);
-                      const updated = has ? current.split(' ').filter(c => c !== cls).join(' ') : current + ' ' + cls;
-                      setStyle("className", updated.trim());
-                      setStyle("tailwindClasses", updated.trim());
+                      setCurrentBreakpoint(bp);
                     }}
-                    className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
-                      (s.className || s.tailwindClasses || "").includes(cls)
+                    className={`px-2 py-0.5 rounded text-[9px] border transition-colors ${
+                      currentBreakpoint === bp
                         ? "bg-[#3b82f6] border-[#3b82f6] text-white"
                         : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
                     }`}
                   >
-                    {cls}
-                  </button>
-                ))}
-                {/* Colors */}
-                {["bg-white", "bg-black", "bg-blue-500", "bg-red-500", "bg-green-500", "text-white", "text-black"].map((cls) => (
-                  <button
-                    key={cls}
-                    onClick={() => {
-                      const current = s.className || s.tailwindClasses || "";
-                      const colorClasses = ["bg-white", "bg-black", "bg-blue-500", "bg-red-500", "bg-green-500", "text-white", "text-black"];
-                      const withoutColors = current.split(' ').filter(c => !colorClasses.includes(c)).join(' ');
-                      const updated = withoutColors + ' ' + cls;
-                      setStyle("className", updated.trim());
-                      setStyle("tailwindClasses", updated.trim());
-                    }}
-                    className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
-                      (s.className || s.tailwindClasses || "").includes(cls)
-                        ? "bg-[#3b82f6] border-[#3b82f6] text-white"
-                        : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
-                    }`}
-                  >
-                    {cls}
+                    {bp || "base"}
                   </button>
                 ))}
               </div>
             </div>
+
+            {/* Tailwind Class Search */}
+            <div className="relative mb-3">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-[#484f58]" />
+              <input
+                value={tailwindSearch}
+                onChange={(e) => setTailwindSearch(e.target.value)}
+                placeholder="Search Tailwind classes..."
+                className="w-full pl-7 pr-2 h-7 bg-[#0d1117] border border-[#30363d] rounded text-xs text-white placeholder-[#484f58] focus:outline-none focus:border-[#3b82f6]"
+              />
+            </div>
+
+            {/* Quick Tailwind Pickers with Categories */}
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {/* Display */}
+              <TailwindCategory 
+                label="Display" 
+                classes={["flex", "grid", "block", "inline-block", "hidden", "contents"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                onClassUsed={addRecentClass}
+              />
+              {/* Flex Direction */}
+              <TailwindCategory 
+                label="Flex Direction" 
+                classes={["flex-row", "flex-col", "flex-row-reverse", "flex-col-reverse"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                exclusive
+                onClassUsed={addRecentClass}
+              />
+              {/* Flex Wrap */}
+              <TailwindCategory 
+                label="Flex Wrap" 
+                classes={["flex-wrap", "flex-nowrap", "flex-wrap-reverse"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                exclusive
+                onClassUsed={addRecentClass}
+              />
+              {/* Align Items */}
+              <TailwindCategory 
+                label="Align Items" 
+                classes={["items-start", "items-end", "items-center", "items-baseline", "items-stretch"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                exclusive
+                onClassUsed={addRecentClass}
+              />
+              {/* Justify Content */}
+              <TailwindCategory 
+                label="Justify Content" 
+                classes={["justify-start", "justify-end", "justify-center", "justify-between", "justify-around", "justify-evenly"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                exclusive
+                onClassUsed={addRecentClass}
+              />
+              {/* Spacing - Padding */}
+              <TailwindCategory 
+                label="Padding" 
+                classes={["p-0", "p-1", "p-2", "p-3", "p-4", "p-6", "p-8", "p-10", "p-12", "p-16", "px-4", "py-4"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                onClassUsed={addRecentClass}
+              />
+              {/* Spacing - Margin */}
+              <TailwindCategory 
+                label="Margin" 
+                classes={["m-0", "m-1", "m-2", "m-4", "m-8", "mx-auto", "mt-4", "mb-4", "ml-4", "mr-4"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                onClassUsed={addRecentClass}
+              />
+              {/* Gap */}
+              <TailwindCategory 
+                label="Gap" 
+                classes={["gap-1", "gap-2", "gap-3", "gap-4", "gap-6", "gap-8", "gap-12"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                onClassUsed={addRecentClass}
+              />
+              {/* Size */}
+              <TailwindCategory 
+                label="Size" 
+                classes={["w-full", "w-auto", "w-1/2", "w-1/3", "w-1/4", "h-full", "h-auto", "h-1/2", "min-h-screen", "max-w-screen", "max-w-md"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                onClassUsed={addRecentClass}
+              />
+              {/* Typography - Font Size */}
+              <TailwindCategory 
+                label="Font Size" 
+                classes={["text-xs", "text-sm", "text-base", "text-lg", "text-xl", "text-2xl", "text-3xl", "text-4xl"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                exclusive
+                onClassUsed={addRecentClass}
+              />
+              {/* Typography - Font Weight */}
+              <TailwindCategory 
+                label="Font Weight" 
+                classes={["font-thin", "font-light", "font-normal", "font-medium", "font-semibold", "font-bold"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                exclusive
+                onClassUsed={addRecentClass}
+              />
+              {/* Text Color - Visual Swatches */}
+              <div className="space-y-1">
+                <p className="text-[9px] text-[#484f58]">Text Color</p>
+                <div className="flex flex-wrap gap-1">
+                  {[
+                    { name: "text-white", color: "#ffffff" },
+                    { name: "text-black", color: "#000000" },
+                    { name: "text-gray-500", color: "#6b7280" },
+                    { name: "text-red-500", color: "#ef4444" },
+                    { name: "text-orange-500", color: "#f97316" },
+                    { name: "text-amber-500", color: "#f59e0b" },
+                    { name: "text-green-500", color: "#22c55e" },
+                    { name: "text-emerald-500", color: "#10b981" },
+                    { name: "text-teal-500", color: "#14b8a6" },
+                    { name: "text-cyan-500", color: "#06b6d4" },
+                    { name: "text-sky-500", color: "#0ea5e9" },
+                    { name: "text-blue-500", color: "#3b82f6" },
+                    { name: "text-indigo-500", color: "#6366f1" },
+                    { name: "text-violet-500", color: "#8b5cf6" },
+                    { name: "text-purple-500", color: "#a855f7" },
+                    { name: "text-fuchsia-500", color: "#d946ef" },
+                    { name: "text-pink-500", color: "#ec4899" },
+                    { name: "text-rose-500", color: "#f43f5e" },
+                  ].filter(({ name }) => !tailwindSearch || name.includes(tailwindSearch.toLowerCase())).map(({ name, color }) => (
+                    <button
+                      key={name}
+                      onClick={() => {
+                        const current = s.className || s.tailwindClasses || "";
+                        const textColorClasses = ["text-white", "text-black", "text-gray-500", "text-red-500", "text-orange-500", "text-amber-500", "text-green-500", "text-emerald-500", "text-teal-500", "text-cyan-500", "text-sky-500", "text-blue-500", "text-indigo-500", "text-violet-500", "text-purple-500", "text-fuchsia-500", "text-pink-500", "text-rose-500"];
+                        const withoutColors = current.split(' ').filter(c => !textColorClasses.includes(c)).join(' ');
+                        const updated = (withoutColors + ' ' + name).trim();
+                        setStyle("className", updated);
+                        setStyle("tailwindClasses", updated);
+                      }}
+                      className="w-6 h-6 rounded border-2 border-[#30363d] hover:border-white transition-colors"
+                      style={{ backgroundColor: color }}
+                      title={name}
+                    />
+                  ))}
+                </div>
+              </div>
+              {/* Background Color - Visual Swatches */}
+              <div className="space-y-1">
+                <p className="text-[9px] text-[#484f58]">Background Color</p>
+                <div className="flex flex-wrap gap-1">
+                  {[
+                    { name: "bg-white", color: "#ffffff" },
+                    { name: "bg-black", color: "#000000" },
+                    { name: "bg-gray-100", color: "#f3f4f6" },
+                    { name: "bg-gray-500", color: "#6b7280" },
+                    { name: "bg-gray-900", color: "#111827" },
+                    { name: "bg-red-500", color: "#ef4444" },
+                    { name: "bg-orange-500", color: "#f97316" },
+                    { name: "bg-amber-500", color: "#f59e0b" },
+                    { name: "bg-green-500", color: "#22c55e" },
+                    { name: "bg-emerald-500", color: "#10b981" },
+                    { name: "bg-teal-500", color: "#14b8a6" },
+                    { name: "bg-cyan-500", color: "#06b6d4" },
+                    { name: "bg-sky-500", color: "#0ea5e9" },
+                    { name: "bg-blue-500", color: "#3b82f6" },
+                    { name: "bg-indigo-500", color: "#6366f1" },
+                    { name: "bg-violet-500", color: "#8b5cf6" },
+                    { name: "bg-purple-500", color: "#a855f7" },
+                    { name: "bg-fuchsia-500", color: "#d946ef" },
+                    { name: "bg-pink-500", color: "#ec4899" },
+                    { name: "bg-rose-500", color: "#f43f5e" },
+                  ].filter(({ name }) => !tailwindSearch || name.includes(tailwindSearch.toLowerCase())).map(({ name, color }) => (
+                    <button
+                      key={name}
+                      onClick={() => {
+                        const current = s.className || s.tailwindClasses || "";
+                        const bgColorClasses = ["bg-white", "bg-black", "bg-gray-100", "bg-gray-500", "bg-gray-900", "bg-red-500", "bg-orange-500", "bg-amber-500", "bg-green-500", "bg-emerald-500", "bg-teal-500", "bg-cyan-500", "bg-sky-500", "bg-blue-500", "bg-indigo-500", "bg-violet-500", "bg-purple-500", "bg-fuchsia-500", "bg-pink-500", "bg-rose-500"];
+                        const withoutColors = current.split(' ').filter(c => !bgColorClasses.includes(c)).join(' ');
+                        const updated = (withoutColors + ' ' + name).trim();
+                        setStyle("className", updated);
+                        setStyle("tailwindClasses", updated);
+                      }}
+                      className="w-6 h-6 rounded border-2 border-[#30363d] hover:border-white transition-colors"
+                      style={{ backgroundColor: color }}
+                      title={name}
+                    />
+                  ))}
+                </div>
+              </div>
+              {/* Border Radius */}
+              <TailwindCategory 
+                label="Border Radius" 
+                classes={["rounded-none", "rounded-sm", "rounded", "rounded-md", "rounded-lg", "rounded-xl", "rounded-2xl", "rounded-full"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                exclusive
+              />
+              {/* Border Width */}
+              <TailwindCategory 
+                label="Border Width" 
+                classes={["border-0", "border", "border-2", "border-4", "border-8"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                exclusive
+              />
+              {/* Shadow */}
+              <TailwindCategory 
+                label="Shadow" 
+                classes={["shadow-none", "shadow-sm", "shadow", "shadow-md", "shadow-lg", "shadow-xl", "shadow-2xl", "shadow-inner"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                exclusive
+              />
+              {/* Effects */}
+              <TailwindCategory 
+                label="Effects" 
+                classes={["opacity-0", "opacity-25", "opacity-50", "opacity-75", "opacity-100", "blur-sm", "blur", "blur-md", "grayscale", "invert"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+              />
+              {/* Position */}
+              <TailwindCategory 
+                label="Position" 
+                classes={["relative", "absolute", "fixed", "sticky", "static", "inset-0", "inset-x-0", "inset-y-0"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+              />
+              {/* Z-Index */}
+              <TailwindCategory 
+                label="Z-Index" 
+                classes={["z-0", "z-10", "z-20", "z-30", "z-40", "z-50", "-z-10"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                exclusive
+              />
+              {/* Cursor */}
+              <TailwindCategory 
+                label="Cursor" 
+                classes={["cursor-auto", "cursor-default", "cursor-pointer", "cursor-wait", "cursor-text", "cursor-move", "cursor-not-allowed"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                exclusive
+              />
+              {/* Transition */}
+              <TailwindCategory 
+                label="Transition" 
+                classes={["transition-none", "transition-all", "transition", "transition-colors", "transition-opacity", "transition-transform", "duration-75", "duration-100", "duration-200", "duration-300", "duration-500"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+              />
+              {/* Transform */}
+              <TailwindCategory
+                label="Transform"
+                classes={["scale-50", "scale-75", "scale-90", "scale-95", "scale-100", "scale-105", "scale-110", "rotate-45", "-rotate-45", "rotate-90", "-rotate-90"]}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                breakpoint={currentBreakpoint}
+                search={tailwindSearch}
+                onClassUsed={addRecentClass}
+              />
+              
+              {/* Gradient Builder */}
+              <div className="pt-2 border-t border-[#30363d]">
+                <p className="text-[9px] text-[#484f58] mb-2">Gradient Builder</p>
+                <div className="space-y-2">
+                  <select
+                    onChange={(e) => {
+                      const current = s.className || s.tailwindClasses || "";
+                      const gradients = ["bg-gradient-to-r", "bg-gradient-to-l", "bg-gradient-to-b", "bg-gradient-to-t", "bg-gradient-to-tr", "bg-gradient-to-tl", "bg-gradient-to-br", "bg-gradient-to-bl"];
+                      const withoutGradients = current.split(' ').filter(c => !gradients.includes(c)).join(' ');
+                      const updated = (withoutGradients + ' ' + e.target.value).trim();
+                      setStyle("className", updated);
+                      setStyle("tailwindClasses", updated);
+                      if (e.target.value) addRecentClass(e.target.value);
+                    }}
+                    className="w-full h-6 bg-[#0d1117] border border-[#30363d] rounded text-[10px] text-white px-2 focus:outline-none focus:border-[#3b82f6]"
+                    defaultValue=""
+                  >
+                    <option value="">Select gradient direction...</option>
+                    <option value="bg-gradient-to-r">→ Right</option>
+                    <option value="bg-gradient-to-l">← Left</option>
+                    <option value="bg-gradient-to-b">↓ Down</option>
+                    <option value="bg-gradient-to-t">↑ Up</option>
+                    <option value="bg-gradient-to-tr">↗ Top-Right</option>
+                    <option value="bg-gradient-to-tl">↖ Top-Left</option>
+                    <option value="bg-gradient-to-br">↘ Bottom-Right</option>
+                    <option value="bg-gradient-to-bl">↙ Bottom-Left</option>
+                  </select>
+                  <div className="flex gap-1 flex-wrap">
+                    {["from-blue-500", "from-purple-500", "from-red-500", "from-green-500", "from-yellow-500", "from-pink-500", "from-indigo-500", "from-teal-500"].map((cls) => (
+                      <button
+                        key={cls}
+                        onClick={() => {
+                          const current = s.className || s.tailwindClasses || "";
+                          const fromClasses = ["from-blue-500", "from-purple-500", "from-red-500", "from-green-500", "from-yellow-500", "from-pink-500", "from-indigo-500", "from-teal-500", "from-gray-500", "from-white", "from-black"];
+                          const withoutFrom = current.split(' ').filter(c => !fromClasses.includes(c)).join(' ');
+                          const updated = (withoutFrom + ' ' + cls).trim();
+                          setStyle("className", updated);
+                          setStyle("tailwindClasses", updated);
+                          addRecentClass(cls);
+                        }}
+                        className="w-5 h-5 rounded border border-[#30363d] hover:border-white transition-colors"
+                        style={{ backgroundColor: cls.includes('blue') ? '#3b82f6' : cls.includes('purple') ? '#a855f7' : cls.includes('red') ? '#ef4444' : cls.includes('green') ? '#22c55e' : cls.includes('yellow') ? '#eab308' : cls.includes('pink') ? '#ec4899' : cls.includes('indigo') ? '#6366f1' : '#14b8a6' }}
+                        title={cls}
+                      />
+                    ))}
+                  </div>
+                  <div className="flex gap-1 flex-wrap">
+                    {["to-blue-500", "to-purple-500", "to-red-500", "to-green-500", "to-yellow-500", "to-pink-500", "to-indigo-500", "to-teal-500"].map((cls) => (
+                      <button
+                        key={cls}
+                        onClick={() => {
+                          const current = s.className || s.tailwindClasses || "";
+                          const toClasses = ["to-blue-500", "to-purple-500", "to-red-500", "to-green-500", "to-yellow-500", "to-pink-500", "to-indigo-500", "to-teal-500", "to-gray-500", "to-white", "to-black"];
+                          const withoutTo = current.split(' ').filter(c => !toClasses.includes(c)).join(' ');
+                          const updated = (withoutTo + ' ' + cls).trim();
+                          setStyle("className", updated);
+                          setStyle("tailwindClasses", updated);
+                          addRecentClass(cls);
+                        }}
+                        className="w-5 h-5 rounded border border-[#30363d] hover:border-white transition-colors"
+                        style={{ backgroundColor: cls.includes('blue') ? '#3b82f6' : cls.includes('purple') ? '#a855f7' : cls.includes('red') ? '#ef4444' : cls.includes('green') ? '#22c55e' : cls.includes('yellow') ? '#eab308' : cls.includes('pink') ? '#ec4899' : cls.includes('indigo') ? '#6366f1' : '#14b8a6' }}
+                        title={cls}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+              
+              {/* Animation Quick Select */}
+              <div className="pt-2 border-t border-[#30363d]">
+                <p className="text-[9px] text-[#484f58] mb-2">Animation</p>
+                <div className="flex flex-wrap gap-1">
+                  {["animate-none", "animate-spin", "animate-ping", "animate-pulse", "animate-bounce", "animate-spin-slow"].map((cls) => (
+                    <button
+                      key={cls}
+                      onClick={() => {
+                        const current = s.className || s.tailwindClasses || "";
+                        const animClasses = ["animate-none", "animate-spin", "animate-ping", "animate-pulse", "animate-bounce", "animate-spin-slow"];
+                        const withoutAnim = current.split(' ').filter(c => !animClasses.includes(c)).join(' ');
+                        const updated = (withoutAnim + ' ' + cls).trim();
+                        setStyle("className", updated);
+                        setStyle("tailwindClasses", updated);
+                        addRecentClass(cls);
+                        toast.success(`Applied: ${cls}`);
+                      }}
+                      className={`px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[9px] transition-colors ${
+                        (s.className || s.tailwindClasses || "").includes(cls) ? "text-[#a78bfa] border-[#8b5cf6]/50" : "text-[#8b949e]"
+                      }`}
+                    >
+                      {cls.replace('animate-', '')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Presets */}
+              <div className="pt-2 border-t border-[#30363d]">
+                <p className="text-[9px] text-[#484f58] mb-2">Presets</p>
+                <div className="flex flex-wrap gap-1">
+                  {PRESET_CLASSES.map((preset) => (
+                    <button
+                      key={preset.name}
+                      onClick={() => {
+                        setStyle("className", preset.classes);
+                        setStyle("tailwindClasses", preset.classes);
+                        toast.success(`Applied preset: ${preset.name}`);
+                      }}
+                      className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[10px] text-[#8b949e] hover:text-white transition-colors"
+                      title={preset.classes}
+                    >
+                      {preset.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+              </>
+            )}
+
+            {cssFramework === "bootstrap" && (
+              <>
+            {/* ── Bootstrap Classes Section ── */}
+            <SectionTitle>Bootstrap Classes</SectionTitle>
+            <PropGroup label="Bootstrap Classes">
+              <div className="flex gap-1 mb-2">
+                <textarea
+                  value={s.className || s.tailwindClasses || ""}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setStyle("className", val);
+                    setStyle("tailwindClasses", val);
+                  }}
+                  placeholder="d-flex justify-content-center align-items-center..."
+                  rows={2}
+                  className="flex-1 bg-[#0d1117] border border-[#30363d] rounded text-[11px] font-mono text-white p-2 resize-none focus:outline-none focus:border-[#7952b3]"
+                />
+                <div className="flex flex-col gap-1">
+                  <button
+                    onClick={() => {
+                      const classes = s.className || s.tailwindClasses || "";
+                      navigator.clipboard?.writeText(classes);
+                      toast.info("Classes copied to clipboard");
+                    }}
+                    className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[10px] text-[#8b949e] hover:text-white transition-colors"
+                    title="Copy classes"
+                  >
+                    📋
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        const text = await navigator.clipboard?.readText();
+                        if (text) {
+                          setStyle("className", text);
+                          setStyle("tailwindClasses", text);
+                          toast.success("Classes pasted from clipboard");
+                        }
+                      } catch (err) {
+                        toast.error("Failed to paste from clipboard");
+                      }
+                    }}
+                    className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[10px] text-[#8b949e] hover:text-white transition-colors"
+                    title="Paste classes"
+                  >
+                    📥
+                  </button>
+                </div>
+              </div>
+            </PropGroup>
+
+            {/* Bootstrap Class Categories */}
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              <BootstrapCategory 
+                label="Display" 
+                classes={BOOTSTRAP_CLASSES.display}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+              />
+              <BootstrapCategory 
+                label="Flex" 
+                classes={BOOTSTRAP_CLASSES.flex}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+                exclusive
+              />
+              <BootstrapCategory 
+                label="Justify Content" 
+                classes={BOOTSTRAP_CLASSES.justifyContent}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+                exclusive
+              />
+              <BootstrapCategory 
+                label="Align Items" 
+                classes={BOOTSTRAP_CLASSES.alignItems}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+                exclusive
+              />
+              <BootstrapCategory 
+                label="Spacing" 
+                classes={BOOTSTRAP_CLASSES.spacing}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+              />
+              <BootstrapCategory 
+                label="Padding" 
+                classes={BOOTSTRAP_CLASSES.padding}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+              />
+              <BootstrapCategory 
+                label="Sizing" 
+                classes={BOOTSTRAP_CLASSES.sizing}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+              />
+              <BootstrapCategory 
+                label="Typography" 
+                classes={BOOTSTRAP_CLASSES.typography}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+              />
+              <BootstrapCategory 
+                label="Text Colors" 
+                classes={BOOTSTRAP_CLASSES.textColors}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+                exclusive
+              />
+              <BootstrapCategory 
+                label="Background Colors" 
+                classes={BOOTSTRAP_CLASSES.bgColors}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+                exclusive
+              />
+              <BootstrapCategory 
+                label="Borders" 
+                classes={BOOTSTRAP_CLASSES.borders}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+              />
+              <BootstrapCategory 
+                label="Border Radius" 
+                classes={BOOTSTRAP_CLASSES.borderRadius}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+                exclusive
+              />
+              <BootstrapCategory 
+                label="Shadows" 
+                classes={BOOTSTRAP_CLASSES.shadows}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+                exclusive
+              />
+              <BootstrapCategory 
+                label="Positioning" 
+                classes={BOOTSTRAP_CLASSES.positioning}
+                current={s.className || s.tailwindClasses || ""}
+                onChange={setStyle}
+                search={tailwindSearch}
+                exclusive
+              />
+              
+              {/* Bootstrap Presets */}
+              <div className="pt-2 border-t border-[#30363d]">
+                <p className="text-[9px] text-[#484f58] mb-2">Bootstrap Presets</p>
+                <div className="flex flex-wrap gap-1">
+                  {BOOTSTRAP_PRESETS.map((preset) => (
+                    <button
+                      key={preset.name}
+                      onClick={() => {
+                        setStyle("className", preset.classes);
+                        setStyle("tailwindClasses", preset.classes);
+                        toast.success(`Applied preset: ${preset.name}`);
+                      }}
+                      className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[10px] text-[#8b949e] hover:text-white transition-colors"
+                      title={preset.classes}
+                    >
+                      {preset.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+              </>
+            )}
 
             <SectionTitle>Typography</SectionTitle>
             <PropGroup label="Font Size">
