@@ -14,6 +14,23 @@
  * - Viewport switcher (desktop / tablet / mobile)
  * - Full keyboard shortcuts
  * - VFS handoff on save
+ *
+ * CLI COMPONENT INSTALLER (NEW):
+ * - Install real UI components from HeroUI, shadcn/ui, Magic UI, Aceternity UI, DaisyUI, Radix UI
+ * - Variant-aware component selection (e.g., button variants: outline, ghost, solid, etc.)
+ * - Live terminal with streaming output from npx CLI commands
+ * - Queue multiple components for batch installation
+ * - Progress tracking and abort capability
+ *
+ * KNOWN LIMITATIONS:
+ * - Craft.js Resolver Gap: CLI-installed components (HeroUI, shadcn, etc.) are installed into
+ *   project files but NOT available in the Craft.js drag-and-drop palette. The Craft resolver
+ *   only contains built-in craft components. Use CLI installer to add dependencies, then use
+ *   Craft components for visual prototyping. Exported JSX will reference installed components.
+ * - JSX Parser: Only handles basic inline styles. Tailwind classes, CSS modules, and styled-components
+ *   are not parsed into editable Craft props.
+ * - Component Mapping: Incoming code from Sandpack may use custom/third-party components not in
+ *   the resolver. These will render as generic containers.
  */
 
 import React, {
@@ -2288,6 +2305,854 @@ function ColorInput({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CLI COMPONENT INSTALLER
+// Full in-editor UI for `npx @heroui/cli add`, `npx shadcn@latest add`, etc.
+// Calls /api/cli-install (SSE stream) to run commands server-side.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── CLI adapter registry ────────────────────────────────────────────────────
+
+interface CLIVariant {
+  name: string;
+  flag?: string;
+  description?: string;
+}
+
+interface CLIComponent {
+  name: string;
+  description?: string;
+  tags?: string[];
+  variants?: CLIVariant[];
+}
+
+interface CLIAdapter {
+  id: string;
+  label: string;
+  color: string;          // accent hex
+  bgClass: string;        // tailwind bg for chip
+  baseCmd: string;        // e.g. "@heroui/cli"
+  subCmd: string;         // e.g. "add"
+  nonInteractiveFlag?: string; // e.g. "--yes"
+  components: CLIComponent[];
+  docs?: string;
+}
+
+const CLI_ADAPTERS: CLIAdapter[] = [
+  {
+    id: "heroui",
+    label: "HeroUI",
+    color: "#7c3aed",
+    bgClass: "bg-purple-900/40 border-purple-700/50 text-purple-300",
+    baseCmd: "@heroui/cli",
+    subCmd: "add",
+    nonInteractiveFlag: "--yes",
+    docs: "https://heroui.com/docs",
+    components: [
+      { name: "button", description: "Accessible button component", tags: ["interactive"], variants: [{ name: "default" }, { name: "outline", flag: "--variant outline" }, { name: "ghost", flag: "--variant ghost" }, { name: "solid", flag: "--variant solid" }, { name: "faded", flag: "--variant faded" }, { name: "shadow", flag: "--variant shadow" }, { name: "bordered", flag: "--variant bordered" }] },
+      { name: "card", description: "Surface container card", tags: ["layout"] },
+      { name: "input", description: "Text & form input", tags: ["form"], variants: [{ name: "flat" }, { name: "bordered" }, { name: "faded" }, { name: "underlined" }] },
+      { name: "modal", description: "Dialog overlay", tags: ["overlay"] },
+      { name: "navbar", description: "Top navigation bar", tags: ["navigation"] },
+      { name: "table", description: "Data table with sorting", tags: ["data"] },
+      { name: "select", description: "Dropdown select", tags: ["form"] },
+      { name: "checkbox", description: "Checkbox input", tags: ["form"] },
+      { name: "switch", description: "Toggle switch", tags: ["form"] },
+      { name: "avatar", description: "User avatar", tags: ["display"] },
+      { name: "badge", description: "Status badge", tags: ["display"] },
+      { name: "chip", description: "Tag/chip element", tags: ["display"] },
+      { name: "tooltip", description: "Hover tooltip", tags: ["overlay"] },
+      { name: "dropdown", description: "Dropdown menu", tags: ["overlay"] },
+      { name: "progress", description: "Progress bar", tags: ["display"] },
+      { name: "spinner", description: "Loading spinner", tags: ["display"] },
+      { name: "tabs", description: "Tab navigation", tags: ["navigation"] },
+      { name: "accordion", description: "Expandable panels", tags: ["layout"] },
+      { name: "slider", description: "Range slider", tags: ["form"] },
+      { name: "pagination", description: "Page navigation", tags: ["navigation"] },
+    ],
+  },
+  {
+    id: "shadcn",
+    label: "shadcn/ui",
+    color: "#18181b",
+    bgClass: "bg-zinc-800/60 border-zinc-600/50 text-zinc-300",
+    baseCmd: "shadcn@latest",
+    subCmd: "add",
+    nonInteractiveFlag: "--yes",
+    docs: "https://ui.shadcn.com/docs",
+    components: [
+      { name: "button", description: "Button variants", tags: ["interactive"] },
+      { name: "card", description: "Card with header/content/footer", tags: ["layout"] },
+      { name: "input", description: "Form input", tags: ["form"] },
+      { name: "dialog", description: "Modal dialog", tags: ["overlay"] },
+      { name: "sheet", description: "Side sheet/drawer", tags: ["overlay"] },
+      { name: "dropdown-menu", description: "Dropdown menu", tags: ["overlay"] },
+      { name: "navigation-menu", description: "Nav menu", tags: ["navigation"] },
+      { name: "table", description: "Data table", tags: ["data"] },
+      { name: "form", description: "React Hook Form wrapper", tags: ["form"] },
+      { name: "select", description: "Select input", tags: ["form"] },
+      { name: "checkbox", description: "Checkbox", tags: ["form"] },
+      { name: "switch", description: "Toggle switch", tags: ["form"] },
+      { name: "tabs", description: "Tab panels", tags: ["layout"] },
+      { name: "accordion", description: "Collapsible sections", tags: ["layout"] },
+      { name: "alert", description: "Alert messages", tags: ["display"] },
+      { name: "badge", description: "Status badge", tags: ["display"] },
+      { name: "avatar", description: "Avatar", tags: ["display"] },
+      { name: "toast", description: "Toast notifications", tags: ["feedback"] },
+      { name: "tooltip", description: "Hover tooltip", tags: ["overlay"] },
+      { name: "skeleton", description: "Loading skeleton", tags: ["display"] },
+      { name: "calendar", description: "Date calendar", tags: ["data"] },
+      { name: "command", description: "Command palette", tags: ["navigation"] },
+      { name: "combobox", description: "Searchable select", tags: ["form"] },
+      { name: "data-table", description: "Full data table with tanstack", tags: ["data"] },
+      { name: "carousel", description: "Image/content carousel", tags: ["display"] },
+      { name: "chart", description: "Chart wrapper", tags: ["data"] },
+      { name: "resizable", description: "Resizable panels", tags: ["layout"] },
+      { name: "separator", description: "Divider line", tags: ["layout"] },
+      { name: "scroll-area", description: "Custom scrollbar area", tags: ["layout"] },
+      { name: "collapsible", description: "Show/hide content", tags: ["layout"] },
+    ],
+  },
+  {
+    id: "magicui",
+    label: "Magic UI",
+    color: "#a855f7",
+    bgClass: "bg-fuchsia-900/40 border-fuchsia-700/50 text-fuchsia-300",
+    baseCmd: "magicui-cli",
+    subCmd: "add",
+    docs: "https://magicui.design",
+    components: [
+      { name: "animated-beam", description: "Beam connecting elements", tags: ["effect"] },
+      { name: "bento-grid", description: "Bento grid layout", tags: ["layout"] },
+      { name: "blur-in", description: "Blur-in text animation", tags: ["effect"] },
+      { name: "border-beam", description: "Animated border beam", tags: ["effect"] },
+      { name: "confetti", description: "Confetti celebration", tags: ["effect"] },
+      { name: "cool-mode", description: "Particle cursor effect", tags: ["effect"] },
+      { name: "dot-pattern", description: "Dot background pattern", tags: ["background"] },
+      { name: "globe", description: "Interactive 3D globe", tags: ["display"] },
+      { name: "grid-pattern", description: "Grid background pattern", tags: ["background"] },
+      { name: "lens", description: "Zoom lens hover effect", tags: ["effect"] },
+      { name: "marquee", description: "Horizontal scroll ticker", tags: ["display"] },
+      { name: "meteor-shower", description: "Meteor rain effect", tags: ["effect"] },
+      { name: "neon-gradient-card", description: "Neon glow card", tags: ["display"] },
+      { name: "number-ticker", description: "Animated counter", tags: ["display"] },
+      { name: "orbiting-circles", description: "Orbiting circles animation", tags: ["effect"] },
+      { name: "particles", description: "Interactive particles", tags: ["background"] },
+      { name: "retro-grid", description: "Retro perspective grid", tags: ["background"] },
+      { name: "ripple", description: "Ripple animation", tags: ["effect"] },
+      { name: "safari", description: "Browser frame mockup", tags: ["display"] },
+      { name: "shine-border", description: "Animated shine border", tags: ["effect"] },
+      { name: "shiny-button", description: "Shiny animated button", tags: ["interactive"] },
+      { name: "sparkles-text", description: "Text with sparkles", tags: ["effect"] },
+      { name: "spinning-text", description: "Spinning text animation", tags: ["effect"] },
+      { name: "text-animate", description: "Text entrance animation", tags: ["effect"] },
+      { name: "tweet-card", description: "Twitter card mockup", tags: ["display"] },
+      { name: "word-pull-up", description: "Word pull-up animation", tags: ["effect"] },
+      { name: "word-rotate", description: "Word rotation animation", tags: ["effect"] },
+    ],
+  },
+  {
+    id: "aceternity",
+    label: "Aceternity UI",
+    color: "#06b6d4",
+    bgClass: "bg-cyan-900/40 border-cyan-700/50 text-cyan-300",
+    baseCmd: "shadcn@latest",
+    subCmd: "add",
+    docs: "https://ui.aceternity.com",
+    components: [
+      { name: "@aceternity/3d-card", description: "3D perspective card", tags: ["effect"] },
+      { name: "@aceternity/animated-tooltip", description: "Animated tooltip", tags: ["overlay"] },
+      { name: "@aceternity/aurora-background", description: "Aurora gradient bg", tags: ["background"] },
+      { name: "@aceternity/background-beams", description: "Beam background effect", tags: ["background"] },
+      { name: "@aceternity/background-boxes", description: "Glowing box grid", tags: ["background"] },
+      { name: "@aceternity/background-gradient-animation", description: "Animated gradient", tags: ["background"] },
+      { name: "@aceternity/bento-grid", description: "Aceternity bento layout", tags: ["layout"] },
+      { name: "@aceternity/card-hover-effect", description: "Card hover parallax", tags: ["effect"] },
+      { name: "@aceternity/card-stack", description: "Stacked card carousel", tags: ["display"] },
+      { name: "@aceternity/compare", description: "Before/after slider", tags: ["display"] },
+      { name: "@aceternity/container-scroll-animation", description: "Scroll-driven 3D", tags: ["effect"] },
+      { name: "@aceternity/floating-navbar", description: "Floating nav bar", tags: ["navigation"] },
+      { name: "@aceternity/follow-pointer", description: "Cursor follow element", tags: ["effect"] },
+      { name: "@aceternity/glare-card", description: "Glare reflection card", tags: ["effect"] },
+      { name: "@aceternity/glowing-stars", description: "Star field background", tags: ["background"] },
+      { name: "@aceternity/hero-highlight", description: "Text highlight effect", tags: ["effect"] },
+      { name: "@aceternity/infinite-moving-cards", description: "Infinite scroll cards", tags: ["display"] },
+      { name: "@aceternity/lamp", description: "Lamp glow effect", tags: ["background"] },
+      { name: "@aceternity/layout-grid", description: "Masonry layout grid", tags: ["layout"] },
+      { name: "@aceternity/macbook-scroll", description: "MacBook scroll reveal", tags: ["display"] },
+      { name: "@aceternity/multi-step-loader", description: "Multi-step progress", tags: ["feedback"] },
+      { name: "@aceternity/shooting-stars", description: "Shooting stars bg", tags: ["background"] },
+      { name: "@aceternity/sparkles", description: "Sparkle hover effect", tags: ["effect"] },
+      { name: "@aceternity/spotlight", description: "Cursor spotlight effect", tags: ["effect"] },
+      { name: "@aceternity/sticky-scroll-reveal", description: "Sticky scroll reveal", tags: ["effect"] },
+      { name: "@aceternity/tabs", description: "Animated tab panels", tags: ["layout"] },
+      { name: "@aceternity/text-generate-effect", description: "Typewriter text", tags: ["effect"] },
+      { name: "@aceternity/timeline", description: "Vertical timeline", tags: ["display"] },
+      { name: "@aceternity/tracing-beam", description: "Tracing beam scroll", tags: ["effect"] },
+      { name: "@aceternity/typewriter-effect", description: "Typewriter animation", tags: ["effect"] },
+      { name: "@aceternity/wavy-background", description: "Animated wavy bg", tags: ["background"] },
+    ],
+  },
+  {
+    id: "daisyui",
+    label: "DaisyUI",
+    color: "#f472b6",
+    bgClass: "bg-pink-900/40 border-pink-700/50 text-pink-300",
+    baseCmd: "daisyui",
+    subCmd: "add",
+    docs: "https://daisyui.com/components",
+    components: [
+      { name: "btn", description: "Button", tags: ["interactive"], variants: [{ name: "btn-primary" }, { name: "btn-secondary" }, { name: "btn-accent" }, { name: "btn-ghost" }, { name: "btn-outline" }] },
+      { name: "card", description: "Card component", tags: ["layout"] },
+      { name: "modal", description: "Dialog modal", tags: ["overlay"] },
+      { name: "navbar", description: "Top navbar", tags: ["navigation"] },
+      { name: "drawer", description: "Side drawer", tags: ["overlay"] },
+      { name: "badge", description: "Badge/tag", tags: ["display"] },
+      { name: "alert", description: "Alert messages", tags: ["feedback"] },
+      { name: "loading", description: "Loading indicator", tags: ["feedback"] },
+      { name: "progress", description: "Progress bar", tags: ["display"] },
+      { name: "steps", description: "Step indicator", tags: ["display"] },
+      { name: "table", description: "Data table", tags: ["data"] },
+      { name: "chat", description: "Chat bubbles", tags: ["display"] },
+      { name: "hero", description: "Hero section", tags: ["layout"] },
+      { name: "stat", description: "Stat display", tags: ["display"] },
+      { name: "timeline", description: "Timeline component", tags: ["display"] },
+    ],
+  },
+  {
+    id: "radix",
+    label: "Radix UI",
+    color: "#6366f1",
+    bgClass: "bg-indigo-900/40 border-indigo-700/50 text-indigo-300",
+    baseCmd: "shadcn@latest",
+    subCmd: "add",
+    docs: "https://www.radix-ui.com/primitives",
+    components: [
+      { name: "accordion", description: "Collapsible sections", tags: ["layout"] },
+      { name: "alert-dialog", description: "Alert dialog", tags: ["overlay"] },
+      { name: "aspect-ratio", description: "Aspect ratio container", tags: ["layout"] },
+      { name: "avatar", description: "Avatar fallback", tags: ["display"] },
+      { name: "checkbox", description: "Checkbox primitive", tags: ["form"] },
+      { name: "collapsible", description: "Collapsible primitive", tags: ["layout"] },
+      { name: "context-menu", description: "Right-click menu", tags: ["overlay"] },
+      { name: "dialog", description: "Modal dialog", tags: ["overlay"] },
+      { name: "dropdown-menu", description: "Dropdown menu", tags: ["overlay"] },
+      { name: "form", description: "Accessible form", tags: ["form"] },
+      { name: "hover-card", description: "Hover card", tags: ["overlay"] },
+      { name: "label", description: "Form label", tags: ["form"] },
+      { name: "menubar", description: "Menu bar", tags: ["navigation"] },
+      { name: "navigation-menu", description: "Navigation menu", tags: ["navigation"] },
+      { name: "popover", description: "Popover", tags: ["overlay"] },
+      { name: "progress", description: "Progress indicator", tags: ["display"] },
+      { name: "radio-group", description: "Radio button group", tags: ["form"] },
+      { name: "scroll-area", description: "Custom scroll area", tags: ["layout"] },
+      { name: "select", description: "Select input", tags: ["form"] },
+      { name: "separator", description: "Separator", tags: ["layout"] },
+      { name: "slider", description: "Slider input", tags: ["form"] },
+      { name: "switch", description: "Toggle switch", tags: ["form"] },
+      { name: "tabs", description: "Tab panels", tags: ["layout"] },
+      { name: "toast", description: "Toast / Sonner", tags: ["feedback"] },
+      { name: "toggle", description: "Toggle button", tags: ["form"] },
+      { name: "toggle-group", description: "Toggle group", tags: ["form"] },
+      { name: "tooltip", description: "Tooltip", tags: ["overlay"] },
+    ],
+  },
+];
+
+// Flat tag list for filter chips
+const ALL_TAGS = Array.from(
+  new Set(CLI_ADAPTERS.flatMap((a) => a.components.flatMap((c) => c.tags ?? [])))
+).sort();
+
+// ── Types for install state ─────────────────────────────────────────────────
+
+type InstallStatus = "idle" | "running" | "done" | "error";
+
+interface InstallerSelection {
+  adapterId: string;
+  componentName: string;
+  variantFlag?: string;
+}
+
+// ── Error Boundary for ComponentInstaller ────────────────────────────────────
+
+class ComponentInstallerErrorBoundary extends React.Component<
+  { children: React.ReactNode; onError: () => void },
+  { hasError: boolean; error?: Error }
+> {
+  constructor(props: { children: React.ReactNode; onError: () => void }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("[ComponentInstaller] Error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: "rgba(0,0,0,0.75)" }}>
+          <div className="bg-[#0d1117] border border-[#30363d] rounded-2xl p-8 max-w-md text-center">
+            <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-white mb-2">Something went wrong</h3>
+            <p className="text-sm text-[#8b949e] mb-4">
+              {this.state.error?.message || "An unexpected error occurred"}
+            </p>
+            <button
+              onClick={this.props.onError}
+              className="px-4 py-2 bg-[#3b82f6] hover:bg-[#2563eb] text-white text-sm rounded-lg transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// ── ComponentInstaller Modal ─────────────────────────────────────────────────
+
+function ComponentInstallerInner({
+  open,
+  onClose,
+  projectPath,
+}: {
+  open: boolean;
+  onClose: () => void;
+  projectPath: string;
+}) {
+  const [activeAdapter, setActiveAdapter] = useState<string>("heroui");
+  const [search, setSearch] = useState("");
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [selections, setSelections] = useState<InstallerSelection[]>([]);
+  const [expandedComponent, setExpandedComponent] = useState<string | null>(null);
+  const [status, setStatus] = useState<InstallStatus>("idle");
+  const [log, setLog] = useState<string[]>([]);
+  const [progress, setProgress] = useState(0);
+  const logRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<(() => void) | null>(null);
+
+  const adapter = CLI_ADAPTERS.find((a) => a.id === activeAdapter)!;
+
+  // Auto-scroll log
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [log]);
+
+  // Filter components
+  const filteredComponents = useMemo(() => {
+    const q = search.toLowerCase();
+    return adapter.components.filter((c) => {
+      const matchSearch = !q || c.name.includes(q) || (c.description ?? "").toLowerCase().includes(q);
+      const matchTag = !selectedTag || (c.tags ?? []).includes(selectedTag);
+      return matchSearch && matchTag;
+    });
+  }, [adapter, search, selectedTag]);
+
+  const toggleSelection = (adapterId: string, componentName: string, variantFlag?: string) => {
+    const key = `${adapterId}::${componentName}::${variantFlag ?? ""}`;
+    setSelections((prev) => {
+      const exists = prev.some(
+        (s) => s.adapterId === adapterId && s.componentName === componentName && s.variantFlag === variantFlag
+      );
+      if (exists) {
+        return prev.filter(
+          (s) => !(s.adapterId === adapterId && s.componentName === componentName && s.variantFlag === variantFlag)
+        );
+      }
+      return [...prev, { adapterId, componentName, variantFlag }];
+    });
+  };
+
+  const isSelected = (adapterId: string, componentName: string, variantFlag?: string) =>
+    selections.some(
+      (s) => s.adapterId === adapterId && s.componentName === componentName && s.variantFlag === variantFlag
+    );
+
+  const handleInstall = async () => {
+    if (selections.length === 0) return;
+    setStatus("running");
+    setLog([]);
+    setProgress(0);
+
+    const total = selections.length;
+    let done = 0;
+
+    for (const sel of selections) {
+      const adp = CLI_ADAPTERS.find((a) => a.id === sel.adapterId)!;
+      const args = [sel.componentName, ...(sel.variantFlag ? sel.variantFlag.split(" ") : [])];
+      if (adp.nonInteractiveFlag) args.push(adp.nonInteractiveFlag);
+
+      const cmdLabel = `npx ${adp.baseCmd} ${adp.subCmd} ${args.join(" ")}`;
+      setLog((l) => [...l, `\n▶ Running: ${cmdLabel}`, ""]);
+
+      try {
+        const resp = await fetch("/api/cli-install", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            baseCmd: adp.baseCmd,
+            subCmd: adp.subCmd,
+            args,
+            projectPath,
+          }),
+        });
+
+        if (!resp.ok || !resp.body) {
+          setLog((l) => [...l, `✗ HTTP ${resp.status}: ${await resp.text()}`]);
+          setStatus("error");
+          return;
+        }
+
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let cancelled = false;
+        abortRef.current = () => { cancelled = true; };
+
+        while (true) {
+          const { done: rDone, value } = await reader.read();
+          if (rDone || cancelled) break;
+          const text = dec.decode(value);
+          // Parse SSE lines: "data: ...\n\n"
+          for (const line of text.split("\n")) {
+            const stripped = line.replace(/^data:\s*/, "").trim();
+            if (!stripped) continue;
+            try {
+              const msg = JSON.parse(stripped);
+              if (msg.done) {
+                setLog((l) => [...l, msg.code === 0 ? "✓ Done" : `✗ Exit code ${msg.code}`]);
+                if (msg.code !== 0) { setStatus("error"); return; }
+              } else if (msg.line) {
+                setLog((l) => [...l, msg.line]);
+              }
+            } catch {
+              setLog((l) => [...l, stripped]);
+            }
+          }
+        }
+
+        done++;
+        setProgress(Math.round((done / total) * 100));
+      } catch (err) {
+        setLog((l) => [...l, `✗ ${err instanceof Error ? err.message : String(err)}`]);
+        setStatus("error");
+        return;
+      }
+    }
+
+    setStatus("done");
+    setLog((l) => [...l, `\n✅ All ${total} component(s) installed successfully.`]);
+  };
+
+  const handleAbort = () => {
+    abortRef.current?.();
+    setStatus("idle");
+    setLog((l) => [...l, "⚠ Cancelled"]);
+  };
+
+  const handleReset = () => {
+    setStatus("idle");
+    setLog([]);
+    setSelections([]);
+    setProgress(0);
+  };
+
+  if (!open) return null;
+
+  return (
+    // Backdrop
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        className="relative flex flex-col bg-[#0d1117] border border-[#30363d] rounded-2xl overflow-hidden"
+        style={{
+          width: "min(96vw, 900px)",
+          height: "min(92vh, 680px)",
+          boxShadow: "0 32px 80px rgba(0,0,0,0.7)",
+        }}
+      >
+        {/* ── Header ── */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[#30363d] flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-[#3b82f6]/10 border border-[#3b82f6]/20 flex items-center justify-center">
+              <Package className="w-4 h-4 text-[#3b82f6]" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-white" style={{ fontFamily: "Syne, sans-serif" }}>
+                Install Components
+              </h2>
+              <p className="text-[10px] text-[#484f58]">Run CLI installs directly from the editor</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg text-[#484f58] hover:text-white hover:bg-[#21262d] transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex flex-1 overflow-hidden">
+          {/* ── Left: Adapter picker + component list ── */}
+          <div className="flex flex-col w-[54%] border-r border-[#30363d] overflow-hidden">
+            {/* Adapter tabs */}
+            <div className="flex gap-1 px-3 pt-3 pb-2 flex-wrap flex-shrink-0 border-b border-[#30363d]">
+              {CLI_ADAPTERS.map((adp) => (
+                <button
+                  key={adp.id}
+                  onClick={() => setActiveAdapter(adp.id)}
+                  className={`px-2.5 py-1 rounded-full text-[10px] font-semibold border transition-all ${
+                    activeAdapter === adp.id
+                      ? adp.bgClass + " ring-1 ring-white/20"
+                      : "bg-[#21262d] border-[#30363d] text-[#8b949e] hover:text-white"
+                  }`}
+                >
+                  {adp.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Search + tag filters */}
+            <div className="px-3 py-2 space-y-2 flex-shrink-0 border-b border-[#30363d]">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[#484f58]" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={`Search ${adapter.label} components…`}
+                  className="w-full pl-7 pr-2 h-7 bg-[#161b22] border border-[#30363d] rounded-lg text-xs text-white placeholder-[#484f58] focus:outline-none focus:border-[#3b82f6]"
+                />
+              </div>
+              <div className="flex gap-1 flex-wrap">
+                <button
+                  onClick={() => setSelectedTag(null)}
+                  className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
+                    !selectedTag ? "bg-[#3b82f6] border-[#3b82f6] text-white" : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
+                  }`}
+                >
+                  all
+                </button>
+                {ALL_TAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() => setSelectedTag(tag === selectedTag ? null : tag)}
+                    className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
+                      selectedTag === tag ? "bg-[#3b82f6] border-[#3b82f6] text-white" : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Component list */}
+            <div className="flex-1 overflow-y-auto">
+              {filteredComponents.map((comp) => {
+                const isExpanded = expandedComponent === `${activeAdapter}::${comp.name}`;
+                const hasVariants = (comp.variants?.length ?? 0) > 0;
+                const anySelected = selections.some(
+                  (s) => s.adapterId === activeAdapter && s.componentName === comp.name
+                );
+
+                return (
+                  <div key={comp.name} className="border-b border-[#21262d]">
+                    <div
+                      className={`flex items-center gap-2 px-3 py-2.5 cursor-pointer transition-colors ${
+                        anySelected ? "bg-[#1a2744]" : "hover:bg-[#161b22]"
+                      }`}
+                      onClick={() => {
+                        if (hasVariants) {
+                          setExpandedComponent(isExpanded ? null : `${activeAdapter}::${comp.name}`);
+                        } else {
+                          toggleSelection(activeAdapter, comp.name);
+                        }
+                      }}
+                    >
+                      {/* Checkbox (only for non-variant components) */}
+                      {!hasVariants && (
+                        <div
+                          className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                            isSelected(activeAdapter, comp.name)
+                              ? "bg-[#3b82f6] border-[#3b82f6]"
+                              : "border-[#484f58] bg-transparent"
+                          }`}
+                        >
+                          {isSelected(activeAdapter, comp.name) && (
+                            <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-mono ${anySelected ? "text-white" : "text-[#e6edf3]"}`}>
+                            {comp.name}
+                          </span>
+                          {anySelected && (
+                            <span className="text-[9px] bg-[#3b82f6]/20 text-[#60a5fa] border border-[#3b82f6]/30 px-1 py-0.5 rounded">
+                              selected
+                            </span>
+                          )}
+                        </div>
+                        {comp.description && (
+                          <p className="text-[10px] text-[#484f58] truncate mt-0.5">{comp.description}</p>
+                        )}
+                      </div>
+
+                      {/* Tags */}
+                      <div className="flex gap-1 flex-shrink-0">
+                        {(comp.tags ?? []).slice(0, 2).map((t) => (
+                          <span key={t} className="text-[9px] text-[#484f58] bg-[#21262d] px-1 py-0.5 rounded">
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+
+                      {hasVariants && (
+                        <ChevronRight
+                          className={`w-3 h-3 text-[#484f58] flex-shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                        />
+                      )}
+                    </div>
+
+                    {/* Variants sub-list */}
+                    {hasVariants && isExpanded && (
+                      <div className="bg-[#0a0d12] border-t border-[#21262d]">
+                        {/* "all variants" row */}
+                        <div
+                          className={`flex items-center gap-2 pl-8 pr-3 py-2 cursor-pointer hover:bg-[#161b22] transition-colors ${
+                            isSelected(activeAdapter, comp.name) ? "bg-[#1a2744]" : ""
+                          }`}
+                          onClick={() => toggleSelection(activeAdapter, comp.name)}
+                        >
+                          <div
+                            className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 ${
+                              isSelected(activeAdapter, comp.name)
+                                ? "bg-[#3b82f6] border-[#3b82f6]"
+                                : "border-[#484f58]"
+                            }`}
+                          >
+                            {isSelected(activeAdapter, comp.name) && (
+                              <svg className="w-2 h-2 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </div>
+                          <span className="text-[11px] text-[#8b949e]">default (no variant)</span>
+                        </div>
+                        {comp.variants!.map((v) => (
+                          <div
+                            key={v.name}
+                            className={`flex items-center gap-2 pl-8 pr-3 py-2 cursor-pointer hover:bg-[#161b22] transition-colors ${
+                              isSelected(activeAdapter, comp.name, v.flag) ? "bg-[#1a2744]" : ""
+                            }`}
+                            onClick={() => toggleSelection(activeAdapter, comp.name, v.flag)}
+                          >
+                            <div
+                              className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 ${
+                                isSelected(activeAdapter, comp.name, v.flag)
+                                  ? "bg-[#3b82f6] border-[#3b82f6]"
+                                  : "border-[#484f58]"
+                              }`}
+                            >
+                              {isSelected(activeAdapter, comp.name, v.flag) && (
+                                <svg className="w-2 h-2 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                            <span className="text-[11px] font-mono text-[#8b949e]">
+                              {v.flag ?? v.name}
+                            </span>
+                            {v.description && (
+                              <span className="text-[10px] text-[#484f58] ml-1">{v.description}</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {filteredComponents.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-12 text-[#484f58]">
+                  <Search className="w-8 h-8 opacity-20 mb-2" />
+                  <p className="text-xs">No components match your search</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Right: selections + terminal ── */}
+          <div className="flex flex-col flex-1 overflow-hidden">
+            {/* Selected queue */}
+            <div className="flex-shrink-0 border-b border-[#30363d]">
+              <div className="px-4 py-2.5 flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-widest text-[#484f58]">
+                  Queue ({selections.length})
+                </span>
+                {selections.length > 0 && (
+                  <button
+                    onClick={() => setSelections([])}
+                    className="text-[10px] text-[#484f58] hover:text-red-400 transition-colors"
+                  >
+                    clear all
+                  </button>
+                )}
+              </div>
+              <div className="px-3 pb-2 max-h-28 overflow-y-auto space-y-1">
+                {selections.length === 0 ? (
+                  <p className="text-[11px] text-[#484f58] italic px-1 pb-1">
+                    Select components from the list to queue them for install
+                  </p>
+                ) : (
+                  selections.map((sel, i) => {
+                    const adp = CLI_ADAPTERS.find((a) => a.id === sel.adapterId)!;
+                    const cmd = `npx ${adp.baseCmd} ${adp.subCmd} ${sel.componentName}${sel.variantFlag ? " " + sel.variantFlag : ""}`;
+                    return (
+                      <div key={i} className="flex items-center gap-2 bg-[#161b22] rounded px-2 py-1.5">
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded border ${adp.bgClass}`}>
+                          {adp.label}
+                        </span>
+                        <code className="flex-1 text-[10px] font-mono text-[#e6edf3] truncate">{cmd}</code>
+                        <button
+                          onClick={() => toggleSelection(sel.adapterId, sel.componentName, sel.variantFlag)}
+                          className="text-[#484f58] hover:text-red-400 transition-colors flex-shrink-0"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Terminal log */}
+            <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+              <div className="px-4 py-2 flex items-center gap-2 border-b border-[#30363d] flex-shrink-0">
+                <span className="text-[10px] uppercase tracking-widest text-[#484f58]">Terminal</span>
+                {status === "running" && (
+                  <div className="flex items-center gap-1.5 ml-auto">
+                    <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                    <span className="text-[10px] text-green-400">{progress}%</span>
+                  </div>
+                )}
+                {(status === "done" || status === "error") && (
+                  <button onClick={handleReset} className="ml-auto text-[10px] text-[#484f58] hover:text-white">
+                    clear
+                  </button>
+                )}
+              </div>
+
+              {/* Progress bar */}
+              {status === "running" && (
+                <div className="h-0.5 bg-[#21262d] flex-shrink-0">
+                  <div
+                    className="h-full bg-gradient-to-r from-[#3b82f6] to-[#8b5cf6] transition-all duration-300"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+              )}
+
+              <div
+                ref={logRef}
+                className="flex-1 overflow-y-auto p-3 font-mono text-[11px] leading-relaxed bg-[#070b0f]"
+                style={{ fontFamily: "DM Mono, monospace" }}
+              >
+                {log.length === 0 ? (
+                  <p className="text-[#484f58] italic">
+                    {status === "idle"
+                      ? "Select components and press Install to begin…"
+                      : "Waiting…"}
+                  </p>
+                ) : (
+                  log.map((line, i) => (
+                    <div
+                      key={i}
+                      className={
+                        line.startsWith("✓") || line.startsWith("✅")
+                          ? "text-green-400"
+                          : line.startsWith("✗") || line.startsWith("⚠")
+                          ? "text-red-400"
+                          : line.startsWith("▶")
+                          ? "text-[#3b82f6] font-semibold"
+                          : "text-[#8b949e]"
+                      }
+                    >
+                      {line || "\u00a0"}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Action bar */}
+            <div className="flex items-center gap-2 px-4 py-3 border-t border-[#30363d] flex-shrink-0">
+              {adapter.docs && (
+                <a
+                  href={adapter.docs}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-[10px] text-[#484f58] hover:text-white transition-colors mr-auto"
+                >
+                  <Link className="w-3 h-3" />
+                  Docs
+                </a>
+              )}
+
+              {status === "running" ? (
+                <button
+                  onClick={handleAbort}
+                  className="px-4 h-8 rounded-lg text-xs font-semibold bg-red-900/40 hover:bg-red-900/70 text-red-400 border border-red-800/50 transition-colors"
+                >
+                  Cancel
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={onClose}
+                    className="px-4 h-8 rounded-lg text-xs text-[#8b949e] hover:text-white bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] transition-colors"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={handleInstall}
+                    disabled={selections.length === 0 || status === "done"}
+                    className="flex items-center gap-2 px-4 h-8 rounded-lg text-xs font-semibold bg-[#3b82f6] hover:bg-[#2563eb] disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Install {selections.length > 0 ? `(${selections.length})` : ""}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Wrapper component with error boundary
+function ComponentInstaller(props: React.ComponentProps<typeof ComponentInstallerInner>) {
+  return (
+    <ComponentInstallerErrorBoundary onError={props.onClose}>
+      <ComponentInstallerInner {...props} />
+    </ComponentInstallerErrorBoundary>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // COMPONENT LIBRARY (drag palette)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2378,10 +3243,11 @@ const LIBRARY_CATEGORIES: { label: string; icon: React.ElementType; items: LibIt
   },
 ];
 
-function ComponentLibrary() {
+function ComponentLibrary({ projectPath = "" }: { projectPath?: string }) {
   const { connectors } = useEditor();
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set(["Layout", "Interactive"]));
+  const [installerOpen, setInstallerOpen] = useState(false);
 
   const toggle = (label: string) =>
     setExpanded((prev) => {
@@ -2400,61 +3266,92 @@ function ComponentLibrary() {
   }, [search]);
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="px-3 py-3 border-b border-[#30363d]">
-        <p className="text-[10px] uppercase tracking-widest text-[#484f58] mb-2">Components</p>
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[#484f58]" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search…"
-            className="w-full pl-7 pr-2 h-7 bg-[#0d1117] border border-[#30363d] rounded text-xs text-white placeholder-[#484f58] focus:outline-none focus:border-[#3b82f6]"
-          />
+    <>
+      {/* ── Installer Modal (portal-like, rendered here but covers whole screen) ── */}
+      <ComponentInstaller
+        open={installerOpen}
+        onClose={() => setInstallerOpen(false)}
+        projectPath={projectPath}
+      />
+
+      <div className="flex flex-col h-full overflow-hidden">
+        {/* Header with search + install button */}
+        <div className="px-3 py-3 border-b border-[#30363d] space-y-2">
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-[10px] uppercase tracking-widest text-[#484f58]">Components</p>
+            <button
+              onClick={() => setInstallerOpen(true)}
+              title="Install from CLI (HeroUI, shadcn, Magic UI, Aceternity…)"
+              className="flex items-center gap-1 px-2 py-1 rounded-md bg-[#3b82f6]/10 hover:bg-[#3b82f6]/20 border border-[#3b82f6]/30 text-[#60a5fa] hover:text-[#93c5fd] text-[10px] font-semibold transition-all group"
+            >
+              <Download className="w-3 h-3 group-hover:animate-bounce" />
+              Install
+            </button>
+          </div>
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[#484f58]" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search components…"
+              className="w-full pl-7 pr-2 h-7 bg-[#0d1117] border border-[#30363d] rounded text-xs text-white placeholder-[#484f58] focus:outline-none focus:border-[#3b82f6]"
+            />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto py-1">
+          {filtered.map((cat) => {
+            const CatIcon = cat.icon;
+            const isOpen = expanded.has(cat.label);
+            return (
+              <div key={cat.label}>
+                <button
+                  onClick={() => toggle(cat.label)}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-[#8b949e] hover:text-white hover:bg-[#21262d] text-xs transition-colors"
+                >
+                  <CatIcon className="w-3.5 h-3.5" />
+                  <span className="flex-1 text-left font-medium">{cat.label}</span>
+                  {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                </button>
+
+                {isOpen && (
+                  <div className="pb-1">
+                    {cat.items.map((item) => (
+                      <div
+                        key={item.name}
+                        ref={(ref) => {
+                          if (ref) {
+                            connectors.create(
+                              ref,
+                              React.createElement(item.component as any, item.defaultProps)
+                            );
+                          }
+                        }}
+                        className="flex items-center gap-2 mx-2 px-2 py-2 rounded text-xs text-[#8b949e] hover:text-white hover:bg-[#21262d] cursor-grab active:cursor-grabbing transition-colors group"
+                      >
+                        <Grip className="w-3 h-3 text-[#30363d] group-hover:text-[#484f58]" />
+                        <span>{item.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer install prompt */}
+        <div className="px-3 py-2.5 border-t border-[#30363d]">
+          <button
+            onClick={() => setInstallerOpen(true)}
+            className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-dashed border-[#30363d] hover:border-[#3b82f6]/50 text-[#484f58] hover:text-[#60a5fa] text-[11px] transition-all hover:bg-[#3b82f6]/5 group"
+          >
+            <Plus className="w-3 h-3 group-hover:rotate-90 transition-transform duration-200" />
+            Install from HeroUI / shadcn / Magic UI…
+          </button>
         </div>
       </div>
-
-      <div className="flex-1 overflow-y-auto py-1">
-        {filtered.map((cat) => {
-          const CatIcon = cat.icon;
-          const isOpen = expanded.has(cat.label);
-          return (
-            <div key={cat.label}>
-              <button
-                onClick={() => toggle(cat.label)}
-                className="w-full flex items-center gap-2 px-3 py-2 text-[#8b949e] hover:text-white hover:bg-[#21262d] text-xs transition-colors"
-              >
-                <CatIcon className="w-3.5 h-3.5" />
-                <span className="flex-1 text-left font-medium">{cat.label}</span>
-                {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-              </button>
-
-              {isOpen && (
-                <div className="pb-1">
-                  {cat.items.map((item) => (
-                    <div
-                      key={item.name}
-                      ref={(ref) => {
-                        if (ref) {
-                          connectors.create(
-                            ref,
-                            React.createElement(item.component as any, item.defaultProps)
-                          );
-                        }
-                      }}
-                      className="flex items-center gap-2 mx-2 px-2 py-2 rounded text-xs text-[#8b949e] hover:text-white hover:bg-[#21262d] cursor-grab active:cursor-grabbing transition-colors group"
-                    >
-                      <Grip className="w-3 h-3 text-[#30363d] group-hover:text-[#484f58]" />
-                      <span>{item.name}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    </>
   );
 }
 
@@ -3068,7 +3965,7 @@ export function VisualEditorMain({
               showComponents ? "w-56" : "w-0 border-r-0"
             }`}
           >
-            {editorMode !== "code" && <ComponentLibrary />}
+            {editorMode !== "code" && <ComponentLibrary projectPath={(project as any).filesystemScopePath ?? ""} />}
           </div>
 
           {/* ── CENTER ── */}
