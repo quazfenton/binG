@@ -64,6 +64,12 @@ export {
   shutdownMCPServer,
 } from './mcp-cli-server'
 
+export {
+  mcporterIntegration,
+  getMCPorterToolDefinitions,
+  callMCPorterTool,
+} from './mcporter-integration'
+
 // Environment Loader
 export { loadMCPEnv } from './load-env'
 

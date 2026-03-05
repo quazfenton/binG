@@ -38,6 +38,8 @@ export class SandboxService {
     if (sandboxId.startsWith('blaxel-')) return 'blaxel'
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites'
     if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox'
+    if (sandboxId.startsWith('webcontainer-')) return 'webcontainer'
+    if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) return 'opensandbox'
     return null
   }
 
@@ -127,9 +129,11 @@ export class SandboxService {
     const allProviderTypes: SandboxProviderType[] = [
       'daytona',
       'runloop',
-      'blaxel',      // NEW
-      'sprites',     // NEW
-      'codesandbox', // NEW: CodeSandbox SDK cloud VMs
+      'blaxel',
+      'sprites',
+      'codesandbox',
+      'webcontainer',
+      'opensandbox',
       'microsandbox',
       'e2b',
       'mistral'

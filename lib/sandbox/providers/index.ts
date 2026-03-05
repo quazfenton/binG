@@ -27,6 +27,8 @@ export type SandboxProviderType =
   | 'blaxel'
   | 'sprites'
   | 'codesandbox'
+  | 'webcontainer'
+  | 'opensandbox'
   | 'mistral-agent'
   | 'mistral'
 
@@ -151,6 +153,36 @@ function initializeRegistry() {
     factory: () => {
       const { CodeSandboxProvider } = require('./codesandbox-provider')
       return new CodeSandboxProvider()
+    },
+  })
+
+  providerRegistry.set('webcontainer', {
+    provider: null as any,
+    priority: 8,
+    enabled: true,
+    available: false,
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    factory: () => {
+      const { WebContainerProvider } = require('./webcontainer-provider')
+      return new WebContainerProvider()
+    },
+  })
+
+  providerRegistry.set('opensandbox', {
+    provider: null as any,
+    priority: 9,
+    enabled: true,
+    available: false,
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    factory: () => {
+      const { OpenSandboxProvider } = require('./opensandbox-provider')
+      return new OpenSandboxProvider()
     },
   })
 
@@ -367,6 +399,8 @@ export { BlaxelProvider, verifyCallbackSignature, verifyCallbackMiddleware } fro
 export type { BlaxelSandboxHandle } from './blaxel-provider'
 export { SpritesProvider } from './sprites-provider'
 export { CodeSandboxProvider } from './codesandbox-provider'
+export { WebContainerProvider } from './webcontainer-provider'
+export { OpenSandboxProvider } from './opensandbox-provider'
 export { E2BProvider, E2BGitIntegration, createE2BGitIntegration } from './e2b-provider'
 // export { MistralAgentProvider } from './mistral/mistral-agent-provider' // Lazy export
 

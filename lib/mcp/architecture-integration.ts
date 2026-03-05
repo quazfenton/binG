@@ -9,9 +9,32 @@
 
 import { mcpToolRegistry } from './tool-registry'
 import { parseMCPServerConfigs, initializeMCP, shutdownMCP, getMCPSettings, isMCPAvailable, getMCPToolCount } from './config'
+import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } from './mcporter-integration'
 import { createLogger } from '../utils/logger'
 
 const logger = createLogger('MCP:Integration')
+
+let cachedMCPorterTools: Array<{
+  type: 'function'
+  function: {
+    name: string
+    description?: string
+    parameters: any
+  }
+}> = []
+
+async function refreshMCPorterToolsCache(): Promise<void> {
+  if (!mcporterIntegration.isEnabled()) {
+    cachedMCPorterTools = []
+    return
+  }
+
+  try {
+    cachedMCPorterTools = await getMCPorterToolDefinitions()
+  } catch (error: any) {
+    logger.warn(`Failed to refresh mcporter tools: ${error?.message || 'unknown error'}`)
+  }
+}
 
 /**
  * Initialize MCP for Architecture 1 (Main LLM - AI SDK)
@@ -37,8 +60,11 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
     logger.info(`Connecting to ${configs.length} MCP server(s)...`)
     await mcpToolRegistry.connectAll()
     
+    await refreshMCPorterToolsCache()
+
     const toolCount = getMCPToolCount()
-    logger.info(`MCP initialized with ${toolCount} tools available`)
+    const mcporterTools = cachedMCPorterTools.length
+    logger.info(`MCP initialized with ${toolCount} native tools and ${mcporterTools} mcporter tools available`)
     
   } catch (error) {
     logger.error('Failed to initialize MCP for Architecture 1', error as Error)
@@ -52,15 +78,20 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
  * Use this in your chat/agent implementation to get MCP tools
  * in the format expected by AI SDK's tool calling
  */
-export function getMCPToolsForAI_SDK() {
-  if (!isMCPAvailable()) {
+export async function getMCPToolsForAI_SDK() {
+  if (mcporterIntegration.isEnabled()) {
+    await refreshMCPorterToolsCache()
+  }
+
+  const nativeTools = isMCPAvailable() ? mcpToolRegistry.getToolDefinitions() : []
+  const tools = [...nativeTools, ...cachedMCPorterTools]
+
+  if (tools.length === 0) {
     logger.debug('MCP not available - no tools to return')
     return []
   }
 
-  const tools = mcpToolRegistry.getToolDefinitions()
   logger.debug(`Returning ${tools.length} MCP tools for AI SDK`)
-  
   return tools
 }
 
@@ -75,19 +106,24 @@ export async function callMCPToolFromAI_SDK(
 ): Promise<{ success: boolean; output: string; error?: string }> {
   try {
     logger.debug(`Calling MCP tool: ${toolName}`, { args })
-    
-    const result = await mcpToolRegistry.callTool(toolName, args)
-    
-    logger.debug(`MCP tool result: ${toolName}`, { 
-      success: result.success, 
-      duration: result.duration 
-    })
 
-    return {
-      success: result.success,
-      output: result.content,
-      error: result.isError ? result.content : undefined,
+    const nativeResult = await mcpToolRegistry.callTool(toolName, args)
+    if (nativeResult.success || !nativeResult.isError || !nativeResult.content.includes('Tool not found')) {
+      logger.debug(`MCP tool result: ${toolName}`, {
+        success: nativeResult.success,
+        duration: nativeResult.duration,
+      })
+
+      return {
+        success: nativeResult.success,
+        output: nativeResult.content,
+        error: nativeResult.isError ? nativeResult.content : undefined,
+      }
     }
+
+    const mcporterResult = await callMCPorterTool(toolName, args)
+    logger.debug(`mcporter tool result: ${toolName}`, { success: mcporterResult.success })
+    return mcporterResult
   } catch (error: any) {
     logger.error(`MCP tool call failed: ${toolName}`, error)
     return {
