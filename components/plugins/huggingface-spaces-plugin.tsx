@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useState } from 'react';
 import { secureRandomInt } from '@/lib/utils';
 import { Button } from '../ui/button';

@@ -7,10 +7,43 @@
  * @see https://mastra.ai/docs/tools/overview
  */
 
-import { createTool } from '@mastra/core';
+import { Mastra } from '@mastra/core';
 import { z } from 'zod';
 import { VirtualFilesystemService } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers';
+
+// Local tool factory since @mastra/core doesn't export createTool
+interface ToolConfig<T extends z.ZodObject<any>, U extends z.ZodObject<any>> {
+  id: string;
+  name: string;
+  description: string;
+  inputSchema: T;
+  outputSchema: U;
+  metadata?: {
+    category?: string;
+    risk?: string;
+    requiresApproval?: boolean;
+  };
+  execute: (params: { context: z.infer<T> }) => Promise<z.infer<U>>;
+  retries?: number;
+  timeout?: number;
+}
+
+export function createTool<T extends z.ZodObject<any>, U extends z.ZodObject<any>>(
+  config: ToolConfig<T, U>
+) {
+  return {
+    id: config.id,
+    name: config.name,
+    description: config.description,
+    inputSchema: config.inputSchema,
+    outputSchema: config.outputSchema,
+    metadata: config.metadata,
+    execute: config.execute,
+    retries: config.retries,
+    timeout: config.timeout,
+  };
+}
 
 const vfs = new VirtualFilesystemService();
 
