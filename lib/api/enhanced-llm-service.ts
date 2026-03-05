@@ -18,6 +18,7 @@ import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
 import { getProviderForTask, getModelForTask } from '../config/task-providers';
 import { advancedToolCallDispatcher } from '../tool-integration/parsers/dispatcher';
+import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -526,7 +527,10 @@ export class EnhancedLLMService {
 
     for (const call of toolCalls) {
       const resolvedTool = this.resolveToolKey(call.name);
-      if (!resolvedTool) {
+      const resolvedMCPTool = resolvedTool ? null : await this.resolveMCPToolName(call.name);
+      const selectedTool = resolvedTool || resolvedMCPTool;
+
+      if (!selectedTool) {
         toolResults.push({
           name: call.name,
           success: false,
@@ -535,42 +539,44 @@ export class EnhancedLLMService {
         continue;
       }
 
-      executedCalls.push({ name: resolvedTool, arguments: call.arguments });
-      const toolCallId = `tool-${resolvedTool}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      executedCalls.push({ name: selectedTool, arguments: call.arguments });
+      const toolCallId = `tool-${selectedTool}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       toolInvocations.push({
         toolCallId,
-        toolName: resolvedTool,
+        toolName: selectedTool,
         state: 'partial-call',
         args: call.arguments,
       });
       toolInvocations.push({
         toolCallId,
-        toolName: resolvedTool,
+        toolName: selectedTool,
         state: 'call',
         args: call.arguments,
       });
-      reasoningTrace.push(`Selected tool '${resolvedTool}' with parsed arguments.`);
+      reasoningTrace.push(`Selected tool '${selectedTool}' with parsed arguments.`);
 
-      const result = await toolManager.executeTool(
-        resolvedTool,
-        call.arguments,
-        {
-          userId,
-          conversationId,
-          metadata: { source: 'llm_tool_use' }
-        }
-      );
+      const result = resolvedTool
+        ? await toolManager.executeTool(
+            selectedTool,
+            call.arguments,
+            {
+              userId,
+              conversationId,
+              metadata: { source: 'llm_tool_use' }
+            }
+          )
+        : await callMCPToolFromAI_SDK(selectedTool, call.arguments);
 
       toolResults.push({
-        name: resolvedTool,
+        name: selectedTool,
         success: result.success,
         output: result.output,
         error: result.error,
-        authUrl: result.authUrl
+        authUrl: (result as any).authUrl
       });
       toolInvocations.push({
         toolCallId,
-        toolName: resolvedTool,
+        toolName: selectedTool,
         state: 'result',
         args: call.arguments,
         result: result.success
@@ -579,8 +585,8 @@ export class EnhancedLLMService {
       });
       reasoningTrace.push(
         result.success
-          ? `Tool '${resolvedTool}' completed successfully.`
-          : `Tool '${resolvedTool}' failed: ${result.error || 'unknown error'}.`,
+          ? `Tool '${selectedTool}' completed successfully.`
+          : `Tool '${selectedTool}' failed: ${result.error || 'unknown error'}.`,
       );
     }
 
@@ -638,11 +644,31 @@ export class EnhancedLLMService {
     return match || null;
   }
 
+  private async resolveMCPToolName(rawName: string): Promise<string | null> {
+    if (!rawName) return null;
+
+    const mcpToolNames = (await getMCPToolsForAI_SDK()).map((tool) => tool.function.name);
+    if (mcpToolNames.includes(rawName)) return rawName;
+
+    const normalized = rawName.toLowerCase().replace(/[\s_/-]+/g, '.');
+    const normalizedMatch = mcpToolNames.find((name) => name.toLowerCase().replace(/[\s_/-]+/g, '.') === normalized);
+    if (normalizedMatch) return normalizedMatch;
+
+    const compact = normalized.replace(/[^a-z0-9]/g, '');
+    const compactMatch = mcpToolNames.find((name) => name.toLowerCase().replace(/[^a-z0-9]/g, '') === compact);
+    return compactMatch || null;
+  }
+
   private async extractToolCallsFromLLMResponse(response: LLMResponse): Promise<Array<{ name: string; arguments: Record<string, any> }>> {
-    const tools = Object.entries(TOOL_REGISTRY).map(([name, cfg]) => ({
+    const nativeTools = Object.entries(TOOL_REGISTRY).map(([name, cfg]) => ({
       name,
       inputSchema: cfg.inputSchema as any,
     }));
+    const mcpTools = (await getMCPToolsForAI_SDK()).map((tool) => ({
+      name: tool.function.name,
+      inputSchema: tool.function.parameters as any,
+    }));
+    const tools = [...nativeTools, ...mcpTools];
     const dispatch = await advancedToolCallDispatcher.dispatch(
       {
         provider: (response as any)?.provider,

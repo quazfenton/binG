@@ -87,6 +87,7 @@ import DataVisualizationBuilderPlugin from "./plugins/data-visualization-builder
 import NetworkRequestBuilderPlugin from "./plugins/network-request-builder-plugin";
 import LegalDocumentPlugin from "./plugins/legal-document-plugin";
 import GitHubExplorerPlugin from "./plugins/github-explorer-plugin";
+import GitHubTrendingExplorerPlugin from "./plugins/github-trending-explorer-plugin";
 import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
@@ -101,7 +102,7 @@ import CloudStorageProPlugin from "./plugins/cloud-storage-pro-plugin";
 import CodeSandboxPlugin from "./plugins/code-sandbox-plugin";
 import CreativeStudioPlugin from "./plugins/creative-studio-plugin";
 import DataScienceWorkbenchPlugin from "./plugins/data-science-workbench-plugin";
-import GitHubExplorerAdvancedPlugin from "./plugins/github-explorer-advanced-plugin";
+import GitHubExplorerAdvancedPlugin from "./plugins/git-explorer-pro-plugin";
 import HuggingFaceSpacesProPlugin from "./plugins/huggingface-spaces-pro-plugin";
 import JsonValidatorPlugin from "./plugins/json-validator-plugin";
 import UrlUtilitiesPlugin from "./plugins/url-utilities-plugin";
@@ -573,14 +574,24 @@ export default function InteractionPanel({
       minSize: { width: 700, height: 500 },
     },
     {
-      id: "github-explorer-advanced",
-      name: "GitHub Explorer Pro",
-      description: "Advanced GitHub analytics and code search",
+      id: "git-explorer-pro",
+      name: "Codebase Explorer Pro",
+      description: "Advanced codebase analytics and code search",
       icon: GitBranch,
       component: GitHubExplorerAdvancedPlugin,
       category: "code",
       defaultSize: { width: 1000, height: 800 },
       minSize: { width: 800, height: 600 },
+    },
+    {
+      id: "github-trending-explorer",
+      name: "GitHub Trending Explorer",
+      description: "Discover hot OSS projects with visual GUI and one-click clone",
+      icon: GitBranch,
+      component: GitHubTrendingExplorerPlugin,
+      category: "code",
+      defaultSize: { width: 1100, height: 800 },
+      minSize: { width: 900, height: 600 },
     },
     // Utility plugins
     {
