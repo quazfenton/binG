@@ -39,6 +39,8 @@ export class SandboxService {
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites'
     if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox'
     if (sandboxId.startsWith('webcontainer-')) return 'webcontainer'
+    if (sandboxId.startsWith('wc-fs-')) return 'webcontainer-filesystem'
+    if (sandboxId.startsWith('wc-spawn-')) return 'webcontainer-spawn'
     if (sandboxId.startsWith('osb-ci-')) return 'opensandbox-code-interpreter'
     if (sandboxId.startsWith('osb-agent-')) return 'opensandbox-agent'
     if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) return 'opensandbox'
@@ -135,6 +137,8 @@ export class SandboxService {
       'sprites',
       'codesandbox',
       'webcontainer',
+      'webcontainer-filesystem',
+      'webcontainer-spawn',
       'opensandbox',
       'opensandbox-code-interpreter',
       'opensandbox-agent',

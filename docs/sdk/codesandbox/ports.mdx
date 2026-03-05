@@ -1,0 +1,68 @@
+---
+title: Ports
+description: Learn how you can interact with ports in your sandbox.
+---
+
+import { Callout } from 'nextra-theme-docs'
+
+# Ports
+
+The Ports API allows you to monitor and interact with HTTP ports in your sandbox. This is particularly useful when working with development servers or any other services that need to listen on specific ports.
+
+Whenever a port is opened within a sandbox, we'll automatically expose it under `https://<sandbox-id>-<port>.csb.app`.
+
+<Callout>
+If the sandbox is private you need to use the [host tokens](./hosts).
+</Callout>
+
+We automatically resume a sandbox whenever a port is accessed while the sandbox is hibernated.
+
+## API
+
+The Ports API is available under `client.ports`. It provides methods for monitoring port activity.
+
+### Monitoring Ports
+
+You can listen for ports being opened and closed in your sandbox:
+
+```ts
+// Listen for ports being opened
+const listener1 = client.ports.onDidPortOpen((portInfo) => {
+  console.log(`Port ${portInfo.port} opened`);
+  console.log(`URL: ${client.hosts.getUrl(portInfo.port)}`);
+});
+
+// Listen for ports being closed
+const listener2 = client.ports.onDidPortClose((port) => {
+  console.log(`Port ${port} closed`);
+});
+
+// Remove listeners when done
+listener1.dispose();
+listener2.dispose();
+```
+
+### Getting Port Information
+
+You can get information about currently opened ports:
+
+```ts
+// Get all opened ports
+const openPorts = client.ports.getAll();
+for (const port of openPorts) {
+  console.log(`Port ${port.port} is open at ${port.host}`);
+}
+```
+
+### Waiting for Ports
+
+When starting services, you often need to wait for a port to become available:
+
+```ts
+// Start a development server
+const command = client.commands.runBackground("npm run dev");
+
+// Wait for the dev server port to open
+const portInfo = await client.ports.waitForPort(3000);
+console.log(`Dev server is ready at: ${portInfo.host}`);
+```

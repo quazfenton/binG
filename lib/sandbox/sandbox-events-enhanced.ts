@@ -9,11 +9,14 @@
 
 import { EventEmitter } from 'events'
 
-export type EnhancedSandboxEventType = 
-  | 'agent:tool_start' 
-  | 'agent:tool_result' 
-  | 'agent:stream' 
-  | 'agent:complete' 
+export type EnhancedSandboxEventType =
+  | 'agent:tool_start'
+  | 'agent:tool_result'
+  | 'agent:stream'
+  | 'agent:reasoning_start'
+  | 'agent:reasoning_chunk'
+  | 'agent:reasoning_complete'
+  | 'agent:complete'
   | 'agent:error'
   | 'port_detected'
   | 'connected'

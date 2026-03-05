@@ -30,6 +30,8 @@ export type SandboxProviderType =
   | 'sprites'
   | 'codesandbox'
   | 'webcontainer'
+  | 'webcontainer-filesystem'
+  | 'webcontainer-spawn'
   | 'opensandbox'
   | 'opensandbox-code-interpreter'
   | 'opensandbox-agent'
@@ -173,6 +175,36 @@ function initializeRegistry() {
     factory: () => {
       const { WebContainerProvider } = require('./webcontainer-provider')
       return new WebContainerProvider()
+    },
+  })
+
+  providerRegistry.set('webcontainer-filesystem', {
+    provider: null as any,
+    priority: 8,
+    enabled: true,
+    available: false,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    factory: () => {
+      const { WebContainerFileSystemProvider } = require('./webcontainer-filesystem-provider')
+      return new WebContainerFileSystemProvider()
+    },
+  })
+
+  providerRegistry.set('webcontainer-spawn', {
+    provider: null as any,
+    priority: 8,
+    enabled: true,
+    available: false,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    factory: () => {
+      const { WebContainerSpawnProvider } = require('./webcontainer-spawn-provider')
+      return new WebContainerSpawnProvider()
     },
   })
 
@@ -370,7 +402,7 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
 /**
  * Get a sandbox provider with automatic fallback.
  * Tries providers in priority order (lower number = higher priority).
- * Skips disabled and unhealthy providers.
+ * Skips disabled, unhealthy, and circuit-breaker-OPEN providers.
  */
 export async function getSandboxProviderWithFallback(
   preferredType?: SandboxProviderType,
@@ -392,6 +424,17 @@ export async function getSandboxProviderWithFallback(
 
   const errors: string[] = []
   for (const providerType of ordered) {
+    // CIRCUIT BREAKER CHECK: Skip providers with OPEN circuit breakers
+    if (!providerCircuitBreakers.isAvailable(providerType)) {
+      const stats = providerCircuitBreakers.get(providerType).getStats()
+      console.warn(
+        `[ProviderFallback] Skipping ${providerType} - circuit breaker ${stats.state}. ` +
+        `Next attempt at: ${stats.nextAttemptTime?.toISOString() || 'unknown'}`
+      )
+      errors.push(`${providerType}: Circuit breaker ${stats.state}`)
+      continue
+    }
+
     try {
       const provider = await getSandboxProvider(providerType)
       return { provider, type: providerType }
@@ -401,7 +444,7 @@ export async function getSandboxProviderWithFallback(
   }
 
   throw new Error(
-    `All sandbox providers failed:\n${errors.join('\n')}`
+    `All sandbox providers failed or unavailable:\n${errors.join('\n')}`
   )
 }
 
@@ -477,6 +520,8 @@ export type { BlaxelSandboxHandle } from './blaxel-provider'
 export { SpritesProvider } from './sprites-provider'
 export { CodeSandboxProvider } from './codesandbox-provider'
 export { WebContainerProvider } from './webcontainer-provider'
+export { WebContainerFileSystemProvider } from './webcontainer-filesystem-provider'
+export { WebContainerSpawnProvider } from './webcontainer-spawn-provider'
 export { OpenSandboxProvider } from './opensandbox-provider'
 export { OpenSandboxCodeInterpreterProvider } from './opensandbox-code-interpreter-provider'
 export { OpenSandboxAgentSandboxProvider } from './opensandbox-agent-sandbox-provider'

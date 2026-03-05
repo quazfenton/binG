@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button';
 import {
   Terminal as TerminalIcon, X, Minimize2, Maximize2, Square,
   Trash2, Copy, ChevronUp, ChevronDown, GripHorizontal,
-  Cpu, MemoryStick, Plus, Split, Wifi, WifiOff, Loader2
+  Cpu, MemoryStick, Plus, Split, Wifi, WifiOff, Loader2,
+  ClipboardPaste, Check
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion } from 'framer-motion';
@@ -150,6 +151,8 @@ export default function TerminalPanel({
   const [sandboxStatus, setSandboxStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const [autoConnectSandbox, setAutoConnectSandbox] = useState(false); // Default: off (lazy init)
   const [idleTimeLeft, setIdleTimeLeft] = useState<number | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; terminalId: string } | null>(null);
+  const [isSelectingMode, setIsSelectingMode] = useState(false);
   const [lastActivity, setLastActivity] = useState<number>(Date.now());
   
   // Idle timeout configuration (15 minutes default, 0 to disable)
@@ -459,11 +462,11 @@ export default function TerminalPanel({
       setIdleTimeLeft(null);
       return;
     }
-    
+
     const checkIdle = setInterval(() => {
       const elapsed = Date.now() - lastActivity;
       const remaining = IDLE_TIMEOUT_MS - elapsed;
-      
+
       if (remaining <= 0) {
         // Timeout reached - auto disconnect
         console.log('[Sandbox Idle] Timeout reached, disconnecting...');
@@ -478,9 +481,50 @@ export default function TerminalPanel({
         setIdleTimeLeft(null);
       }
     }, 10000); // Check every 10 seconds
-    
+
     return () => clearInterval(checkIdle);
   }, [sandboxStatus, lastActivity, IDLE_TIMEOUT_MS, IDLE_WARNING_MS, toggleSandboxConnection]);
+
+  // Keyboard shortcuts for copy/paste and context menu handling
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle if terminal is open and not typing in an input
+      if (!isOpen) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      // Ctrl+Shift+C - Copy selection or all output
+      if (e.ctrlKey && e.shiftKey && e.key === 'C') {
+        e.preventDefault();
+        void copyOutput();
+      }
+
+      // Ctrl+Shift+V - Paste from clipboard
+      if (e.ctrlKey && e.shiftKey && e.key === 'V') {
+        e.preventDefault();
+        void pasteFromClipboard();
+      }
+
+      // Ctrl+Shift+A - Select all (copy all visible)
+      if (e.ctrlKey && e.shiftKey && e.key === 'A') {
+        e.preventDefault();
+        selectAll();
+      }
+    };
+
+    // Click outside to close context menu
+    const handleClick = () => {
+      if (contextMenu) {
+        closeContextMenu();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('click', handleClick);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('click', handleClick);
+    };
+  }, [isOpen, copyOutput, pasteFromClipboard, selectAll, contextMenu, closeContextMenu]);
 
   // Update last activity on user input
   const updateActivity = useCallback(() => {
@@ -2320,6 +2364,7 @@ export default function TerminalPanel({
       const { Terminal } = await import('@xterm/xterm');
       const { FitAddon } = await import('@xterm/addon-fit');
       const { WebLinksAddon } = await import('@xterm/addon-web-links');
+      const { SearchAddon } = await import('@xterm/addon-search');
 
       const terminal = new Terminal({
         cursorBlink: true,
@@ -2355,6 +2400,7 @@ export default function TerminalPanel({
       const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
       terminal.loadAddon(new WebLinksAddon());
+      terminal.loadAddon(new SearchAddon());
 
       terminal.open(containerEl);
       containerEl.addEventListener('click', () => terminal.focus());
@@ -3538,6 +3584,55 @@ export default function TerminalPanel({
     }
   }, [activeTerminalId]);
 
+  const pasteFromClipboard = useCallback(async () => {
+    const active = terminalsRef.current.find(t => t.id === activeTerminalId);
+    if (!active?.terminal) return;
+
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        active.terminal.input(text);
+        toast.success('Pasted from clipboard');
+      }
+    } catch {
+      toast.error('Failed to paste from clipboard');
+    }
+  }, [activeTerminalId]);
+
+  const selectAll = useCallback(() => {
+    const active = terminalsRef.current.find(t => t.id === activeTerminalId);
+    if (!active?.terminal) return;
+
+    // Select all content in the viewport
+    const buffer = active.terminal.buffer.active;
+    const startLine = buffer.viewportY;
+    const endLine = buffer.viewportY + active.terminal.rows;
+    let allText = '';
+    
+    for (let i = startLine; i < endLine && i < buffer.length; i++) {
+      const line = buffer.getLine(i)?.translateToString();
+      if (line) allText += line + '\n';
+    }
+    
+    // Write to clipboard
+    navigator.clipboard.writeText(allText.trim());
+    toast.success('All visible content copied');
+  }, [activeTerminalId]);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent, terminalId: string) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, terminalId });
+  }, []);
+
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  const toggleSelectionMode = useCallback(() => {
+    setIsSelectingMode(prev => !prev);
+    toast.info(isSelectingMode ? 'Selection mode disabled' : 'Selection mode enabled - click and drag to select text');
+  }, [isSelectingMode]);
+
   const killTerminal = useCallback(async (terminalId: string) => {
     const terminal = terminalsRef.current.find(t => t.id === terminalId);
     if (!terminal?.sandboxInfo?.sessionId) {
@@ -3828,17 +3923,29 @@ export default function TerminalPanel({
             variant="ghost"
             size="sm"
             onClick={copyOutput}
-            className="text-white/60 hover:text-white hidden sm:inline-flex"
+            className="text-white/60 hover:text-white"
             aria-label="Copy terminal output"
+            title="Copy (Ctrl+Shift+C)"
           >
             <Copy className="w-4 h-4" />
           </Button>
           <Button
             variant="ghost"
             size="sm"
+            onClick={pasteFromClipboard}
+            className="text-white/60 hover:text-white"
+            aria-label="Paste from clipboard"
+            title="Paste (Ctrl+Shift+V)"
+          >
+            <ClipboardPaste className="w-4 h-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => clearTerminal()}
-            className="text-white/60 hover:text-white hidden sm:inline-flex"
+            className="text-white/60 hover:text-white"
             aria-label="Clear terminal"
+            title="Clear"
           >
             <Trash2 className="w-4 h-4" />
           </Button>
@@ -3899,15 +4006,81 @@ export default function TerminalPanel({
             } ${
               isSplitView && terminals.length > 1 ? 'border-r border-white/10 last:border-r-0' : ''
             }`}
+            onContextMenu={(e) => handleContextMenu(e, terminal.id)}
           >
             <div
               ref={setXtermContainer(terminal.id)}
-              className="w-full h-full p-2"
+              className={`w-full h-full p-2 ${isSelectingMode ? 'cursor-crosshair' : ''}`}
               aria-label={`${terminal.name} terminal`}
+              style={{ userSelect: isSelectingMode ? 'text' : 'none' }}
             />
           </div>
         ))}
       </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <div
+          className="fixed z-[100] bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl py-1 min-w-[180px]"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+        >
+          <button
+            onClick={() => {
+              void copyOutput();
+              closeContextMenu();
+            }}
+            className="w-full px-4 py-2 text-left text-sm text-white hover:bg-zinc-800 flex items-center gap-2"
+          >
+            <Copy className="w-4 h-4" />
+            Copy Selection
+            <span className="ml-auto text-xs text-zinc-500">Ctrl+Shift+C</span>
+          </button>
+          <button
+            onClick={() => {
+              void pasteFromClipboard();
+              closeContextMenu();
+            }}
+            className="w-full px-4 py-2 text-left text-sm text-white hover:bg-zinc-800 flex items-center gap-2"
+          >
+            <ClipboardPaste className="w-4 h-4" />
+            Paste
+            <span className="ml-auto text-xs text-zinc-500">Ctrl+Shift+V</span>
+          </button>
+          <button
+            onClick={() => {
+              selectAll();
+              closeContextMenu();
+            }}
+            className="w-full px-4 py-2 text-left text-sm text-white hover:bg-zinc-800 flex items-center gap-2"
+          >
+            <Copy className="w-4 h-4" />
+            Copy All
+            <span className="ml-auto text-xs text-zinc-500">Ctrl+Shift+A</span>
+          </button>
+          <div className="border-t border-zinc-700 my-1" />
+          <button
+            onClick={() => {
+              toggleSelectionMode();
+              closeContextMenu();
+            }}
+            className="w-full px-4 py-2 text-left text-sm text-white hover:bg-zinc-800 flex items-center gap-2"
+          >
+            {isSelectingMode ? <Check className="w-4 h-4 text-green-400" /> : <Square className="w-4 h-4" />}
+            {isSelectingMode ? 'Disable Selection' : 'Enable Selection'}
+          </button>
+          <div className="border-t border-zinc-700 my-1" />
+          <button
+            onClick={() => {
+              clearTerminal(contextMenu.terminalId);
+              closeContextMenu();
+            }}
+            className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-900/20 flex items-center gap-2"
+          >
+            <Trash2 className="w-4 h-4" />
+            Clear Terminal
+          </button>
+        </div>
+      )}
 
       {activeTerminal && (
         <div className="flex items-center justify-between px-4 py-1.5 border-t border-white/10 bg-black/50 text-[10px] text-white/40 shrink-0">

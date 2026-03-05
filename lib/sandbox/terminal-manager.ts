@@ -63,6 +63,8 @@ export class TerminalManager {
     if (sandboxId.startsWith('blaxel-') || sandboxId.includes('-blaxel-')) return 'blaxel'
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-') || sandboxId.includes('-sprites-')) return 'sprites'
     if (sandboxId.startsWith('webcontainer-')) return 'webcontainer'
+    if (sandboxId.startsWith('wc-fs-')) return 'webcontainer-filesystem'
+    if (sandboxId.startsWith('wc-spawn-')) return 'webcontainer-spawn'
     if (sandboxId.startsWith('osb-ci-')) return 'opensandbox-code-interpreter'
     if (sandboxId.startsWith('osb-agent-')) return 'opensandbox-agent'
     if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) return 'opensandbox'
@@ -133,7 +135,7 @@ export class TerminalManager {
     
     // Try all known providers to locate the sandbox (supports quota-based fallbacks)
     // This is critical because sandbox-service can create sandboxes on any provider via fallback
-    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'sprites', 'codesandbox', 'webcontainer', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral']
+    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'sprites', 'codesandbox', 'webcontainer', 'webcontainer-filesystem', 'webcontainer-spawn', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral']
     for (const providerType of allProviders) {
       const result = await tryProvider(providerType)
       if (result) return result
