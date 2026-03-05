@@ -2369,7 +2369,13 @@ export default function TerminalPanel({
       const { Terminal } = await import('@xterm/xterm');
       const { FitAddon } = await import('@xterm/addon-fit');
       const { WebLinksAddon } = await import('@xterm/addon-web-links');
-      const { SearchAddon } = await import('@xterm/addon-search');
+      // SearchAddon is optional - skip if not installed
+      let SearchAddon: any = null;
+      try {
+        SearchAddon = (await import('@xterm/addon-search')).SearchAddon;
+      } catch {
+        console.warn('SearchAddon not available, skipping search functionality');
+      }
 
       const terminal = new Terminal({
         cursorBlink: true,

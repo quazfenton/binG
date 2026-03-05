@@ -4828,7 +4828,8 @@ function ComponentInstallerInner({
         });
 
         if (!resp.ok || !resp.body) {
-          setLog((l) => [...l, `✗ HTTP ${resp.status}: ${await resp.text()}`]);
+          const errorText = await resp.text();
+          setLog((l) => [...l, `✗ HTTP ${resp.status}: ${errorText}`]);
           setStatus("error");
           return;
         }

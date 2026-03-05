@@ -19,7 +19,7 @@ import {
   Zap,
   FileCode,
   Folder,
-  Lightning,
+  CloudLightning,
   Cpu,
   CheckCircle,
 } from 'lucide-react';
@@ -309,7 +309,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
               {/* Info Footer */}
               <div className="p-2 border-t border-violet-800/50 bg-violet-950/50 flex items-center justify-between text-xs">
                 <div className="flex items-center gap-3 text-violet-200/60">
-                  <Lightning className="w-3 h-3" />
+                  <CloudLightning className="w-3 h-3" />
                   <span>Instant Boot</span>
                 </div>
                 <div className="flex items-center gap-2 text-violet-200/60">
