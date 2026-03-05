@@ -72,7 +72,6 @@ export class EnhancedTerminalManager {
     },
   ): Promise<string> {
     const { handle, providerType } = await this.resolveHandleForSandbox(sandboxId)
-    const provider = getSandboxProvider(providerType)
 
     // Clean up existing connection
     await this.disconnectTerminal(sessionId)

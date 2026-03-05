@@ -88,6 +88,14 @@ import NetworkRequestBuilderPlugin from "./plugins/network-request-builder-plugi
 import LegalDocumentPlugin from "./plugins/legal-document-plugin";
 import GitHubExplorerPlugin from "./plugins/github-explorer-plugin";
 import GitHubTrendingExplorerPlugin from "./plugins/github-trending-explorer-plugin";
+import WorldMonitorEmbedPlugin from "./plugins/world-monitor-embed-plugin";
+import WikipediaEmbedPlugin from "./plugins/wikipedia-embed-plugin";
+import ArchiveOrgEmbedPlugin from "./plugins/archive-org-embed-plugin";
+import OpenStreetMapEmbedPlugin from "./plugins/openstreetmap-embed-plugin";
+import DuckDuckGoEmbedPlugin from "./plugins/duckduckgo-embed-plugin";
+import CodeSandboxEmbedPlugin from "./plugins/codesandbox-embed-plugin";
+import StackBlitzEmbedPlugin from "./plugins/stackblitz-embed-plugin";
+import GenericEmbedPlugin from "./plugins/generic-embed-plugin";
 import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
@@ -304,6 +312,28 @@ export default function InteractionPanel({
       setInput(result.content);
     }
   };
+
+  // Handle embed plugin opening from message links
+  useEffect(() => {
+    const handleOpenEmbed = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const { url, suggestedPlugin } = customEvent.detail || {};
+      
+      if (url) {
+        // Open the suggested plugin or fallback to generic embed
+        const pluginToOpen = suggestedPlugin || 'generic-embed';
+        setPluginToOpen(pluginToOpen);
+        
+        // Store the URL in sessionStorage for the plugin to retrieve
+        sessionStorage.setItem('embed-plugin-initial-url', url);
+        
+        toast.success(`Opening ${pluginToOpen.replace('-embed', '')} viewer`);
+      }
+    };
+
+    window.addEventListener('open-embed-plugin', handleOpenEmbed as EventListener);
+    return () => window.removeEventListener('open-embed-plugin', handleOpenEmbed as EventListener);
+  }, []);
 
   // Adjust panel height on window/viewport resize (mobile orientation + keyboard)
   useEffect(() => {
@@ -591,6 +621,86 @@ export default function InteractionPanel({
       component: GitHubTrendingExplorerPlugin,
       category: "code",
       defaultSize: { width: 1100, height: 800 },
+      minSize: { width: 900, height: 600 },
+    },
+    {
+      id: "world-monitor-embed",
+      name: "World Monitor",
+      description: "Global service status monitoring and uptime tracking",
+      icon: Globe,
+      component: WorldMonitorEmbedPlugin,
+      category: "utility",
+      defaultSize: { width: 1000, height: 700 },
+      minSize: { width: 800, height: 600 },
+    },
+    {
+      id: "wikipedia-embed",
+      name: "Wikipedia",
+      description: "The free encyclopedia - browse and search articles",
+      icon: BookOpen,
+      component: WikipediaEmbedPlugin,
+      category: "utility",
+      defaultSize: { width: 1000, height: 700 },
+      minSize: { width: 800, height: 600 },
+    },
+    {
+      id: "archive-org-embed",
+      name: "Internet Archive",
+      description: "Wayback Machine and digital library",
+      icon: Archive,
+      component: ArchiveOrgEmbedPlugin,
+      category: "utility",
+      defaultSize: { width: 1000, height: 700 },
+      minSize: { width: 800, height: 600 },
+    },
+    {
+      id: "openstreetmap-embed",
+      name: "OpenStreetMap",
+      description: "Free wiki world map with search and navigation",
+      icon: Map,
+      component: OpenStreetMapEmbedPlugin,
+      category: "utility",
+      defaultSize: { width: 1000, height: 700 },
+      minSize: { width: 800, height: 600 },
+    },
+    {
+      id: "duckduckgo-embed",
+      name: "DuckDuckGo",
+      description: "Privacy-focused web search",
+      icon: Search,
+      component: DuckDuckGoEmbedPlugin,
+      category: "utility",
+      defaultSize: { width: 1000, height: 700 },
+      minSize: { width: 800, height: 600 },
+    },
+    {
+      id: "codesandbox-embed",
+      name: "CodeSandbox",
+      description: "Online code editor and development environment",
+      icon: Code,
+      component: CodeSandboxEmbedPlugin,
+      category: "code",
+      defaultSize: { width: 1100, height: 750 },
+      minSize: { width: 900, height: 600 },
+    },
+    {
+      id: "stackblitz-embed",
+      name: "StackBlitz",
+      description: "Instant dev environments with WebContainers",
+      icon: Terminal,
+      component: StackBlitzEmbedPlugin,
+      category: "code",
+      defaultSize: { width: 1100, height: 750 },
+      minSize: { width: 900, height: 600 },
+    },
+    {
+      id: "generic-embed",
+      name: "Universal Embed",
+      description: "Embed any website - YouTube, Spotify, Reddit, Twitter, and more",
+      icon: Globe,
+      component: GenericEmbedPlugin,
+      category: "utility",
+      defaultSize: { width: 1100, height: 750 },
       minSize: { width: 900, height: 600 },
     },
     // Utility plugins

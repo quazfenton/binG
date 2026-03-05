@@ -31,6 +31,26 @@ export class DaytonaProvider implements SandboxProvider {
     })
   }
 
+  /**
+   * Health check - verifies API connectivity and sandbox creation capability
+   */
+  async healthCheck(): Promise<{ healthy: boolean; latency?: number; details?: any }> {
+    const startTime = Date.now()
+    try {
+      // Try to list workspaces as health check
+      const workspaces = await this.client.list()
+      const latency = Date.now() - startTime
+
+      // Check if we can access the API
+      const healthy = Array.isArray(workspaces)
+      return { healthy, latency }
+    } catch (error: any) {
+      const latency = Date.now() - startTime
+      console.error('[Daytona] Health check failed:', error.message)
+      return { healthy: false, latency, details: { error: error.message } }
+    }
+  }
+
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
     // Map language to Docker image
     // Using official Docker Hub images - Daytona accepts any valid Docker image reference

@@ -13,11 +13,27 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { sandboxMetrics } from '@/lib/backend';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
+    if (process.env.NODE_ENV === 'production') {
+      const configuredMetricsKey = process.env.METRICS_API_KEY;
+      if (configuredMetricsKey) {
+        const providedMetricsKey = request.headers.get('x-metrics-key');
+        if (providedMetricsKey !== configuredMetricsKey) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+      } else {
+        const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+        if (!authResult.success || !authResult.userId) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+      }
+    }
+
     const metrics = sandboxMetrics.registry.toPrometheusFormat();
 
     return new NextResponse(metrics, {
