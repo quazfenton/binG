@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useState, useCallback, useEffect } from 'react';
 import { Octokit } from 'octokit';
 import { Button } from '../ui/button';
