@@ -569,40 +569,56 @@ export default function CodePreviewPanel({
   // Listen for VFS save events from visual editor
   useEffect(() => {
     const VFS_SAVE_CHANNEL = "visual_editor_vfs_save";
-    
+
     // BroadcastChannel listener
     const bc = new BroadcastChannel(VFS_SAVE_CHANNEL);
     bc.onmessage = async (event) => {
       if (event.data?.type === "VFS_SAVE") {
         const { filesystemScopePath: savedScopePath, files: updatedFiles } = event.data;
         console.log("[CodePreviewPanel] Received VFS_SAVE from visual editor:", savedScopePath);
-        
+        console.log("[CodePreviewPanel] Updated files:", Object.keys(updatedFiles));
+
         // Write updated files back to VFS
         for (const [filePath, content] of Object.entries(updatedFiles)) {
           const fullPath = `${savedScopePath || 'project'}/${filePath}`;
           try {
             await writeFilesystemFile(fullPath, content);
+            console.log("[CodePreviewPanel] Written to VFS:", fullPath);
           } catch (err) {
             console.error(`[CodePreviewPanel] Failed to write ${fullPath}:`, err);
           }
         }
-        
+
         // Refresh the file listing
-        await listFilesystemDirectory(filesystemScopePath);
-        
+        try {
+          await listFilesystemDirectory(filesystemScopePath);
+          console.log("[CodePreviewPanel] Refreshed filesystem");
+        } catch (err) {
+          console.error("[CodePreviewPanel] Failed to refresh filesystem:", err);
+        }
+
         // Update local state
         setScopedPreviewFiles(updatedFiles);
-        
+
+        // Trigger manual preview refresh if preview tab is active
+        if (selectedTab === 'preview') {
+          console.log("[CodePreviewPanel] Auto-refreshing preview after VFS save");
+          // Small delay to ensure VFS writes complete
+          setTimeout(() => {
+            handleManualPreview(filesystemScopePath);
+          }, 500);
+        }
+
         toast.success("Visual editor changes synced to filesystem");
       }
     };
-    
+
     // Also listen for direct window messages (for same-window communication)
     const handleWindowMessage = async (e: MessageEvent) => {
       if (e.data?.type === "VFS_SAVE") {
         const { filesystemScopePath: savedScopePath, files: updatedFiles } = e.data;
         console.log("[CodePreviewPanel] Received VFS_SAVE via window message:", savedScopePath);
-        
+
         // Write updated files back to VFS
         for (const [filePath, content] of Object.entries(updatedFiles)) {
           const fullPath = `${savedScopePath || 'project'}/${filePath}`;
@@ -612,24 +628,35 @@ export default function CodePreviewPanel({
             console.error(`[CodePreviewPanel] Failed to write ${fullPath}:`, err);
           }
         }
-        
+
         // Refresh the file listing
-        await listFilesystemDirectory(filesystemScopePath);
-        
+        try {
+          await listFilesystemDirectory(filesystemScopePath);
+        } catch (err) {
+          console.error("[CodePreviewPanel] Failed to refresh filesystem:", err);
+        }
+
         // Update local state
         setScopedPreviewFiles(updatedFiles);
-        
+
+        // Trigger manual preview refresh
+        if (selectedTab === 'preview') {
+          setTimeout(() => {
+            handleManualPreview(filesystemScopePath);
+          }, 500);
+        }
+
         toast.success("Visual editor changes synced to filesystem");
       }
     };
-    
+
     window.addEventListener("message", handleWindowMessage);
-    
+
     return () => {
       bc.close();
       window.removeEventListener("message", handleWindowMessage);
     };
-  }, [filesystemScopePath, writeFilesystemFile, listFilesystemDirectory]);
+  }, [filesystemScopePath, writeFilesystemFile, listFilesystemDirectory, selectedTab, handleManualPreview]);
 
   // Extract code blocks from messages using centralized parser
   const codeBlocks = useMemo(() => {

@@ -216,29 +216,13 @@ export function decryptApiKey(encryptedData: string): string {
     decrypted += decipher.final('utf8');
     return decrypted;
   } catch (newFormatError) {
-    // New format failed - try legacy format (createCipher with EVP_BytesToKey)
-    // Legacy data also has IV:encrypted format, but the IV was randomly generated and unused
-    // createCipher derived both key and IV from the password using MD5
+    // New format failed - try legacy format (createDecipheriv with IV)
     try {
-      const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
-      let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+      const iv = Buffer.from(encrypted.substring(0, 44), 'base64');
+      const encryptedData = encrypted.substring(45);
+      const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+      let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
       decrypted += decipher.final('utf8');
-
-      // SECURITY WARNING: Legacy format detected
-      // This data was encrypted with deprecated createDecipher using MD5 key derivation
-      // which is vulnerable to known-plaintext attacks.
-      // 
-      // ACTION REQUIRED: Re-encrypt this API key using the secure format by calling
-      // encryptApiKey() with the decrypted value and updating the database record.
-      // 
-      // The legacy fallback will be removed in a future version.
-      console.warn(
-        '[decryptApiKey] ⚠️  SECURITY WARNING: Legacy encryption format detected!',
-        'Data encrypted with deprecated createDecipher (MD5 key derivation) is vulnerable.',
-        'Please migrate this API key by re-encrypting with encryptApiKey() and updating the database.',
-        'Legacy support will be removed in a future release.'
-      );
-
       return decrypted;
     } catch (legacyError) {
       // Both formats failed - this is truly corrupted data

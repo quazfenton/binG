@@ -305,22 +305,6 @@ export class WebSocketTerminalServer extends EventEmitter {
     if (session.process.stdin?.writable) {
       session.process.stdin.write(message);
     }
-    
-    session.lastActive = new Date();
-  }
-    if (message.includes('\x1b[8;')) {
-      const match = message.match(/\x1b\[8;(\d+);(\d+)t/);
-      if (match) {
-        session.rows = parseInt(match[1]);
-        session.cols = parseInt(match[2]);
-        this.emit('session_resize', session);
-      }
-    }
-
-    // Forward input to process
-    if (session.process.stdin?.writable) {
-      session.process.stdin.write(message);
-    }
 
     session.lastActive = new Date();
   }

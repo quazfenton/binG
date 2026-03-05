@@ -27,10 +27,17 @@
  *   project files but NOT available in the Craft.js drag-and-drop palette. The Craft resolver
  *   only contains built-in craft components. Use CLI installer to add dependencies, then use
  *   Craft components for visual prototyping. Exported JSX will reference installed components.
- * - JSX Parser: Only handles basic inline styles. Tailwind classes, CSS modules, and styled-components
- *   are not parsed into editable Craft props.
+ * - JSX Parser: Handles inline styles AND Tailwind classes. Complex CSS-in-JS (styled-components,
+ *   emotion) are not parsed into editable Craft props.
  * - Component Mapping: Incoming code from Sandpack may use custom/third-party components not in
  *   the resolver. These will render as generic containers.
+ *
+ * TAILWIND / CSS SUPPORT:
+ * - Edit Tailwind classes directly in the Style tab
+ * - Quick Tailwind picker buttons for common classes (flex, grid, spacing, colors)
+ * - CSS Modules support (e.g., className={styles.container})
+ * - Inline styles still supported for fine-grained control
+ * - Exported JSX preserves both Tailwind classes and inline styles
  */
 
 import React, {
@@ -40,6 +47,7 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
+import { toast } from "sonner";
 
 // ─── Craft.js ────────────────────────────────────────────────────────────────
 import { Editor, Frame, Element, useEditor, useNode } from "@craftjs/core";
@@ -105,6 +113,11 @@ import type { VFSProject } from "../app/visual-editor/page";
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface CraftStyleProps {
+  // Tailwind CSS Classes
+  className?: string;           // User-entered Tailwind classes
+  tailwindClasses?: string;     // Alias for className
+  // CSS Modules
+  moduleClass?: string;         // CSS module class name
   // Layout
   display?: string;
   flexDirection?: string;
@@ -1739,17 +1752,91 @@ const RESOLVER = {
 // CRAFT → JSX STRING SERIALISER
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Map of craft component names to their import paths
+const COMPONENT_IMPORTS: Record<string, string> = {
+  ContainerCraft: './components/ui/container',
+  TextCraft: './components/ui/text',
+  ButtonCraft: './components/ui/button',
+  ImageCraft: './components/ui/image',
+  CardCraft: './components/ui/card',
+  BadgeCraft: './components/ui/badge',
+  DividerCraft: './components/ui/divider',
+  InputCraft: './components/ui/input',
+  HeroCraft: './components/ui/hero',
+  NavBarCraft: './components/ui/navbar',
+  GridCraft: './components/ui/grid',
+  FormCraft: './components/ui/form',
+  CodeBlockCraft: './components/ui/code-block',
+  AlertCraft: './components/ui/alert',
+  StatCardCraft: './components/ui/stat-card',
+  AvatarCraft: './components/ui/avatar',
+  TableCraft: './components/ui/table',
+  BentoGridCraft: './components/ui/bento-grid',
+  SpotlightCardCraft: './components/ui/spotlight-card',
+  ShinyButtonCraft: './components/ui/shiny-button',
+  GradientTextCraft: './components/ui/gradient-text',
+  BackgroundBeamsCraft: './components/ui/background-beams',
+  PricingCardCraft: './components/ui/pricing-card',
+  TestimonialCardCraft: './components/ui/testimonial-card',
+  FeatureListCraft: './components/ui/feature-list',
+  MobileNavCraft: './components/ui/mobile-nav',
+  BottomTabBarCraft: './components/ui/bottom-tab-bar',
+  StatusBarCraft: './components/ui/status-bar',
+  AppHeaderCraft: './components/ui/app-header',
+};
+
+// Map craft component names to clean export names
+const COMPONENT_NAMES: Record<string, string> = {
+  ContainerCraft: 'Container',
+  TextCraft: 'Text',
+  ButtonCraft: 'Button',
+  ImageCraft: 'Image',
+  CardCraft: 'Card',
+  BadgeCraft: 'Badge',
+  DividerCraft: 'Divider',
+  InputCraft: 'Input',
+  HeroCraft: 'Hero',
+  NavBarCraft: 'NavBar',
+  GridCraft: 'Grid',
+  FormCraft: 'Form',
+  CodeBlockCraft: 'CodeBlock',
+  AlertCraft: 'Alert',
+  StatCardCraft: 'StatCard',
+  AvatarCraft: 'Avatar',
+  TableCraft: 'Table',
+  BentoGridCraft: 'BentoGrid',
+  SpotlightCardCraft: 'SpotlightCard',
+  ShinyButtonCraft: 'ShinyButton',
+  GradientTextCraft: 'GradientText',
+  BackgroundBeamsCraft: 'BackgroundBeams',
+  PricingCardCraft: 'PricingCard',
+  TestimonialCardCraft: 'TestimonialCard',
+  FeatureListCraft: 'FeatureList',
+  MobileNavCraft: 'MobileNav',
+  BottomTabBarCraft: 'BottomTabBar',
+  StatusBarCraft: 'StatusBar',
+  AppHeaderCraft: 'AppHeader',
+};
+
 function craftNodesToJSX(nodes: Record<string, any>): string {
+  const usedComponents = new Set<string>();
+  
   function renderNode(nodeId: string, depth = 1): string {
     const node = nodes[nodeId];
     if (!node) return "";
     const indent = "  ".repeat(depth);
     const { type, props, nodes: childIds = [], linkedNodes } = node;
 
-    const name = typeof type === "string" ? type : type?.resolvedName ?? "div";
+    const craftName = typeof type === "string" ? type : type?.resolvedName ?? "div";
+    const componentName = COMPONENT_NAMES[craftName] || craftName;
+    
+    // Track used components for imports
+    if (COMPONENT_NAMES[craftName]) {
+      usedComponents.add(craftName);
+    }
 
     const propsStr = Object.entries(props ?? {})
-      .filter(([k]) => k !== "children")
+      .filter(([k]) => k !== "children" && k !== "styles")
       .map(([k, v]) => {
         if (typeof v === "string") return `${k}="${v}"`;
         if (typeof v === "boolean") return v ? k : `${k}={false}`;
@@ -1760,24 +1847,66 @@ function craftNodesToJSX(nodes: Record<string, any>): string {
       .filter(Boolean)
       .join(" ");
 
+    // Handle Tailwind classes and CSS modules
+    let classNameAttr = "";
+    const tailwindClasses = props?.styles?.className || props?.styles?.tailwindClasses;
+    const moduleClass = props?.styles?.moduleClass;
+    
+    if (tailwindClasses || moduleClass) {
+      const classes = [];
+      if (tailwindClasses) classes.push(tailwindClasses);
+      if (moduleClass) classes.push(`\${${moduleClass}}`);
+      
+      if (classes.length === 1 && !classes[0].includes('${')) {
+        classNameAttr = ` className="${classes[0]}"`;
+      } else {
+        classNameAttr = ` className={\`${classes.join(' ')}\`}`;
+      }
+    }
+
+    // Convert inline styles prop to style attribute (for non-Tailwind styling)
+    let styleAttr = "";
+    if (props?.styles && Object.keys(props.styles).length > 0) {
+      // Exclude className, tailwindClasses, moduleClass from inline styles
+      const styleEntries = Object.entries(props.styles)
+        .filter(([k]) => !['className', 'tailwindClasses', 'moduleClass'].includes(k))
+        .map(([k, v]) => {
+          const cssKey = k.replace(/([A-Z])/g, '-$1').toLowerCase();
+          return `  ${cssKey}: ${JSON.stringify(v)}`;
+        })
+        .join(',\n');
+      if (styleEntries) {
+        styleAttr = ` style={{\n${styleEntries}\n  }}`;
+      }
+    }
+
     const allChildIds = [
       ...(childIds ?? []),
       ...Object.values(linkedNodes ?? {}).map(String),
     ];
 
     if (allChildIds.length === 0) {
-      return `${indent}<${name}${propsStr ? " " + propsStr : ""} />`;
+      return `${indent}<${componentName}${classNameAttr}${propsStr ? " " + propsStr : ""}${styleAttr} />`;
     }
 
     const children = allChildIds.map((cid) => renderNode(String(cid), depth + 1)).join("\n");
-    return `${indent}<${name}${propsStr ? " " + propsStr : ""}>\n${children}\n${indent}</${name}>`;
+    return `${indent}<${componentName}${classNameAttr}${propsStr ? " " + propsStr : ""}${styleAttr}>\n${children}\n${indent}</${componentName}>`;
   }
 
   const root = nodes["ROOT"];
   if (!root) return "";
   const rootChildren = (root.nodes ?? []).map((id: string) => renderNode(id)).join("\n");
 
-  return `import React from "react";\n\nexport default function Page() {\n  return (\n    <div>\n${rootChildren}\n    </div>\n  );\n}\n`;
+  // Generate import statements for used components
+  const importStatements = Array.from(usedComponents)
+    .map(craftName => {
+      const componentName = COMPONENT_NAMES[craftName];
+      const importPath = COMPONENT_IMPORTS[craftName];
+      return `import { ${componentName} } from "${importPath}";`;
+    })
+    .join("\n");
+
+  return `${importStatements ? importStatements + "\n\n" : ""}import React from "react";\n\nexport default function Page() {\n  return (\n    <div>\n${rootChildren}\n    </div>\n  );\n}\n`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2015,6 +2144,118 @@ function SettingsPanel() {
 
         {activeTab === "style" && (
           <>
+            {/* ── Tailwind / CSS Classes Section ── */}
+            <SectionTitle>Tailwind / CSS</SectionTitle>
+            <PropGroup label="Tailwind Classes">
+              <textarea
+                value={s.className || s.tailwindClasses || ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setStyle("className", val);
+                  setStyle("tailwindClasses", val);
+                }}
+                placeholder="flex items-center justify-center p-4 bg-blue-500..."
+                rows={3}
+                className="w-full bg-[#0d1117] border border-[#30363d] rounded text-[11px] font-mono text-white p-2 resize-none focus:outline-none focus:border-[#3b82f6]"
+              />
+            </PropGroup>
+            <PropGroup label="CSS Module Class">
+              <StringInput
+                value={s.moduleClass ?? ""}
+                onChange={(v) => setStyle("moduleClass", v)}
+                placeholder="styles.container"
+              />
+            </PropGroup>
+            
+            {/* Quick Tailwind Pickers */}
+            <div className="pt-2 pb-1">
+              <p className="text-[9px] text-[#484f58] mb-1">Quick Tailwind</p>
+              <div className="flex flex-wrap gap-1">
+                {/* Display */}
+                {["flex", "grid", "block", "hidden"].map((cls) => (
+                  <button
+                    key={cls}
+                    onClick={() => {
+                      const current = s.className || s.tailwindClasses || "";
+                      const has = current.includes(cls);
+                      const updated = has ? current.split(' ').filter(c => c !== cls).join(' ') : current + ' ' + cls;
+                      setStyle("className", updated.trim());
+                      setStyle("tailwindClasses", updated.trim());
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
+                      (s.className || s.tailwindClasses || "").includes(cls)
+                        ? "bg-[#3b82f6] border-[#3b82f6] text-white"
+                        : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
+                    }`}
+                  >
+                    {cls}
+                  </button>
+                ))}
+                {/* Flex Direction */}
+                {["flex-row", "flex-col", "flex-row-reverse", "flex-col-reverse"].map((cls) => (
+                  <button
+                    key={cls}
+                    onClick={() => {
+                      const current = s.className || s.tailwindClasses || "";
+                      const flexDirClasses = ["flex-row", "flex-col", "flex-row-reverse", "flex-col-reverse"];
+                      const withoutFlex = current.split(' ').filter(c => !flexDirClasses.includes(c)).join(' ');
+                      const updated = withoutFlex + ' ' + cls;
+                      setStyle("className", updated.trim());
+                      setStyle("tailwindClasses", updated.trim());
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
+                      (s.className || s.tailwindClasses || "").includes(cls)
+                        ? "bg-[#3b82f6] border-[#3b82f6] text-white"
+                        : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
+                    }`}
+                  >
+                    {cls}
+                  </button>
+                ))}
+                {/* Spacing */}
+                {["p-2", "p-4", "p-6", "p-8", "m-2", "m-4", "gap-2", "gap-4"].map((cls) => (
+                  <button
+                    key={cls}
+                    onClick={() => {
+                      const current = s.className || s.tailwindClasses || "";
+                      const has = current.includes(cls);
+                      const updated = has ? current.split(' ').filter(c => c !== cls).join(' ') : current + ' ' + cls;
+                      setStyle("className", updated.trim());
+                      setStyle("tailwindClasses", updated.trim());
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
+                      (s.className || s.tailwindClasses || "").includes(cls)
+                        ? "bg-[#3b82f6] border-[#3b82f6] text-white"
+                        : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
+                    }`}
+                  >
+                    {cls}
+                  </button>
+                ))}
+                {/* Colors */}
+                {["bg-white", "bg-black", "bg-blue-500", "bg-red-500", "bg-green-500", "text-white", "text-black"].map((cls) => (
+                  <button
+                    key={cls}
+                    onClick={() => {
+                      const current = s.className || s.tailwindClasses || "";
+                      const colorClasses = ["bg-white", "bg-black", "bg-blue-500", "bg-red-500", "bg-green-500", "text-white", "text-black"];
+                      const withoutColors = current.split(' ').filter(c => !colorClasses.includes(c)).join(' ');
+                      const updated = withoutColors + ' ' + cls;
+                      setStyle("className", updated.trim());
+                      setStyle("tailwindClasses", updated.trim());
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
+                      (s.className || s.tailwindClasses || "").includes(cls)
+                        ? "bg-[#3b82f6] border-[#3b82f6] text-white"
+                        : "bg-transparent border-[#30363d] text-[#8b949e] hover:text-white"
+                    }`}
+                  >
+                    {cls}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <SectionTitle>Typography</SectionTitle>
             <PropGroup label="Font Size">
               <StringInput value={s.fontSize ?? ""} onChange={(v) => setStyle("fontSize", v)} placeholder="16px" />
@@ -3645,36 +3886,50 @@ function jsxToCraftNodes(jsxCode: string): Record<string, unknown> {
   function parseSimpleJSX(jsx: string): Record<string, unknown> | null {
     const openTagMatch = jsx.match(/<(\w+)([^>]*)>/);
     if (!openTagMatch) return null;
-    
+
     const tagName = openTagMatch[1];
     const propsStr = openTagMatch[2];
     const props: Record<string, unknown> = {};
-    
+
     const styleMatch = propsStr.match(/style\s*=\s*["']([^"']*)["']/);
     if (styleMatch) {
       props.styles = parseStyle(styleMatch[1]);
     }
-    
+
+    // Parse className for Tailwind classes
     const classMatch = propsStr.match(/className\s*=\s*["']([^"']*)["']/);
     if (classMatch) {
-      props.className = classMatch[1];
+      const className = classMatch[1];
+      // Initialize styles if not exists
+      if (!props.styles) props.styles = {};
+      // Store as both className and tailwindClasses for compatibility
+      (props.styles as Record<string, string>).className = className;
+      (props.styles as Record<string, string>).tailwindClasses = className;
     }
-    
+
+    // Parse CSS module classes (e.g., className={styles.container})
+    const moduleClassMatch = propsStr.match(/className\s*=\s*\{([^}]+)\}/);
+    if (moduleClassMatch) {
+      const moduleClass = moduleClassMatch[1].trim();
+      if (!props.styles) props.styles = {};
+      (props.styles as Record<string, string>).moduleClass = moduleClass;
+    }
+
     const srcMatch = propsStr.match(/src\s*=\s*["']([^"']*)["']/);
     if (srcMatch) {
       props.src = srcMatch[1];
     }
-    
+
     const altMatch = propsStr.match(/alt\s*=\s*["']([^"']*)["']/);
     if (altMatch) {
       props.alt = altMatch[1];
     }
-    
+
     const textMatch = jsx.match(/>([^<]*)<\/\w+>/);
     if (textMatch && tagName !== 'img' && tagName !== 'input' && tagName !== 'br' && tagName !== 'hr') {
       props.text = textMatch[1].trim();
     }
-    
+
     const componentMap: Record<string, string> = {
       'div': 'ContainerCraft',
       'span': 'TextCraft',
@@ -3693,9 +3948,9 @@ function jsxToCraftNodes(jsxCode: string): Record<string, unknown> {
       'article': 'ContainerCraft',
       'aside': 'ContainerCraft',
     };
-    
+
     const craftType = componentMap[tagName] || 'ContainerCraft';
-    
+
     return {
       type: craftType,
       resolvedName: craftType,
@@ -3895,7 +4150,15 @@ export function VisualEditorMain({
   const handleSave = useCallback(() => {
     // Serialize craft nodes → JSX and inject into project files
     const craftNodes = craftJsonRef.current;
+    
+    if (!craftNodes || Object.keys(craftNodes).length <= 1) {
+      console.warn("[VisualEditor] No nodes to save");
+      toast.error("No changes to save. Add some components first.");
+      return;
+    }
+    
     const jsxString = craftNodesToJSX(craftNodes as Record<string, any>);
+    console.log("[VisualEditor] Generated JSX:", jsxString.substring(0, 500) + "...");
 
     // Find the main entry file to update
     const mainFile =
@@ -3906,9 +4169,9 @@ export function VisualEditorMain({
       ) ?? Object.keys(files)[0];
 
     const updatedFiles = { ...files };
-    if (mainFile && Object.keys(craftNodes).length > 1) {
-      // Only override if user actually placed craft nodes
+    if (mainFile) {
       updatedFiles[mainFile] = jsxString;
+      console.log("[VisualEditor] Saving to file:", mainFile);
     }
 
     onSave(updatedFiles);
@@ -3919,7 +4182,10 @@ export function VisualEditorMain({
       resolver={RESOLVER}
       onRender={({ render }) => render}
       onNodesChange={(query) => {
-        craftJsonRef.current = query.getSerializedNodes() as Record<string, unknown>;
+        // Capture serialized nodes on every change (drag, drop, edit, delete)
+        const serialized = query.getSerializedNodes() as Record<string, unknown>;
+        craftJsonRef.current = serialized;
+        console.log("[VisualEditor] Nodes changed:", Object.keys(serialized).length, "nodes");
       }}
     >
       <div
