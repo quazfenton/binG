@@ -402,7 +402,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<SyncResponse>
     // STEP 5: Get sandbox provider
     let sandboxProvider;
     try {
-      sandboxProvider = getSandboxProvider(provider as SandboxProviderType);
+      sandboxProvider = await getSandboxProvider(provider as SandboxProviderType);
     } catch (providerError: any) {
       return NextResponse.json(
         {
@@ -534,9 +534,9 @@ export async function GET(req: NextRequest): Promise<NextResponse<any>> {
     }
 
     // Get sandbox info and validate provider exists
-    let sandboxProvider: ReturnType<typeof getSandboxProvider>;
+    let sandboxProvider: Awaited<ReturnType<typeof getSandboxProvider>>;
     try {
-      sandboxProvider = getSandboxProvider(provider as SandboxProviderType);
+      sandboxProvider = await getSandboxProvider(provider as SandboxProviderType);
     } catch (error: any) {
       // getSandboxProvider throws on unknown provider - return proper 400 error
       return NextResponse.json(

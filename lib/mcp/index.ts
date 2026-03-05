@@ -35,7 +35,7 @@ export {
   createStdioTransport,
   createSSETransport,
   createWebSocketTransport,
-  MCSPerverPresets,
+  MCPServerPresets,
   callMCPTool,
   getMCPTools,
   getMCPServerStatuses,

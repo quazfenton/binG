@@ -319,6 +319,8 @@ export class SandboxMetrics {
   public snapshotCreatedTotal: Counter;
   public snapshotRestoredTotal: Counter;
   public snapshotSizeBytes: Histogram;
+  public snapshotCreationDuration: Histogram;
+  public snapshotRestorationDuration: Histogram;
 
   // HTTP metrics
   public httpRequestsTotal: Counter;
@@ -327,26 +329,133 @@ export class SandboxMetrics {
   // Quota metrics
   public quotaViolationsTotal: Counter;
 
+  // Circuit breaker metrics
+  public circuitBreakerOperations: Counter;
+  public circuitBreakerDuration: Histogram;
+  public circuitBreakerStateChanges: Counter;
+
+  // Storage backend metrics
+  public storageUploadsTotal: Counter;
+  public storageDownloadsTotal: Counter;
+  public storageUploadSize: Histogram;
+  public storageDownloadSize: Histogram;
+  public storageOperationDuration: Histogram;
+
+  // Provider metrics
+  public providerInitTotal: Counter;
+  public providerInitDuration: Histogram;
+  public providerHealthCheckTotal: Counter;
+  public providerHealthCheckDuration: Histogram;
+
   constructor() {
     this.registry = new MetricsRegistry();
 
     // Sandbox metrics
-    this.sandboxCreatedTotal = new Counter('sandbox_created_total', 'Total number of sandboxes created');
+    this.sandboxCreatedTotal = new Counter('sandbox_created_total', 'Total number of sandboxes created', ['status']);
     this.sandboxActive = new Gauge('sandbox_active', 'Number of currently active sandboxes');
-    this.sandboxExecTotal = new Counter('sandbox_exec_total', 'Total number of command executions', ['sandbox_id', 'command']);
-    this.sandboxExecDuration = new Histogram('sandbox_exec_duration_seconds', 'Command execution duration', ['sandbox_id', 'command']);
+    this.sandboxExecTotal = new Counter('sandbox_exec_total', 'Total number of command executions', ['status']);
+    this.sandboxExecDuration = new Histogram(
+      'sandbox_exec_duration_seconds',
+      'Command execution duration in seconds',
+      ['status']
+    );
 
     // Snapshot metrics
-    this.snapshotCreatedTotal = new Counter('snapshot_created_total', 'Total number of snapshots created');
-    this.snapshotRestoredTotal = new Counter('snapshot_restored_total', 'Total number of snapshots restored');
-    this.snapshotSizeBytes = new Histogram('snapshot_size_bytes', 'Snapshot size distribution', [], [1024, 10240, 102400, 1048576, 10485760, 104857600]);
+    this.snapshotCreatedTotal = new Counter('snapshot_created_total', 'Total number of snapshots created', ['status']);
+    this.snapshotRestoredTotal = new Counter('snapshot_restored_total', 'Total number of snapshots restored', ['status']);
+    this.snapshotSizeBytes = new Histogram(
+      'snapshot_size_bytes',
+      'Snapshot size distribution',
+      [],
+      [1024, 10240, 102400, 1048576, 10485760, 104857600]
+    );
+    this.snapshotCreationDuration = new Histogram(
+      'snapshot_creation_duration_seconds',
+      'Snapshot creation duration in seconds',
+      ['userId']
+    );
+    this.snapshotRestorationDuration = new Histogram(
+      'snapshot_restoration_duration_seconds',
+      'Snapshot restoration duration in seconds',
+      ['userId']
+    );
 
     // HTTP metrics
     this.httpRequestsTotal = new Counter('http_requests_total', 'Total HTTP requests', ['method', 'path', 'status']);
-    this.httpRequestDuration = new Histogram('http_request_duration_seconds', 'HTTP request duration', ['method', 'path']);
+    this.httpRequestDuration = new Histogram(
+      'http_request_duration_seconds',
+      'HTTP request duration in seconds',
+      ['method', 'path']
+    );
 
     // Quota metrics
     this.quotaViolationsTotal = new Counter('quota_violations_total', 'Total quota violations', ['type']);
+
+    // Circuit breaker metrics
+    this.circuitBreakerOperations = new Counter(
+      'circuit_breaker_operations_total',
+      'Total circuit breaker operations',
+      ['provider', 'operation', 'result']
+    );
+    this.circuitBreakerDuration = new Histogram(
+      'circuit_breaker_operation_duration_seconds',
+      'Circuit breaker operation duration in seconds',
+      ['provider', 'operation']
+    );
+    this.circuitBreakerStateChanges = new Counter(
+      'circuit_breaker_state_changes_total',
+      'Total circuit breaker state changes',
+      ['provider', 'from', 'to']
+    );
+
+    // Storage backend metrics
+    this.storageUploadsTotal = new Counter(
+      'storage_uploads_total',
+      'Total storage upload operations',
+      ['backend', 'status']
+    );
+    this.storageDownloadsTotal = new Counter(
+      'storage_downloads_total',
+      'Total storage download operations',
+      ['backend', 'status']
+    );
+    this.storageUploadSize = new Histogram(
+      'storage_upload_size_bytes',
+      'Storage upload size distribution',
+      ['backend']
+    );
+    this.storageDownloadSize = new Histogram(
+      'storage_download_size_bytes',
+      'Storage download size distribution',
+      ['backend']
+    );
+    this.storageOperationDuration = new Histogram(
+      'storage_operation_duration_seconds',
+      'Storage operation duration in seconds',
+      ['backend', 'operation']
+    );
+
+    // Provider metrics
+    this.providerInitTotal = new Counter(
+      'provider_init_total',
+      'Total provider initialization attempts',
+      ['provider', 'status']
+    );
+    this.providerInitDuration = new Histogram(
+      'provider_init_duration_seconds',
+      'Provider initialization duration in seconds',
+      ['provider']
+    );
+    this.providerHealthCheckTotal = new Counter(
+      'provider_health_check_total',
+      'Total provider health check attempts',
+      ['provider', 'status']
+    );
+    this.providerHealthCheckDuration = new Histogram(
+      'provider_health_check_duration_seconds',
+      'Provider health check duration in seconds',
+      ['provider']
+    );
 
     // Register all metrics
     this.registry.register(this.sandboxCreatedTotal);
@@ -356,9 +465,23 @@ export class SandboxMetrics {
     this.registry.register(this.snapshotCreatedTotal);
     this.registry.register(this.snapshotRestoredTotal);
     this.registry.register(this.snapshotSizeBytes);
+    this.registry.register(this.snapshotCreationDuration);
+    this.registry.register(this.snapshotRestorationDuration);
     this.registry.register(this.httpRequestsTotal);
     this.registry.register(this.httpRequestDuration);
     this.registry.register(this.quotaViolationsTotal);
+    this.registry.register(this.circuitBreakerOperations);
+    this.registry.register(this.circuitBreakerDuration);
+    this.registry.register(this.circuitBreakerStateChanges);
+    this.registry.register(this.storageUploadsTotal);
+    this.registry.register(this.storageDownloadsTotal);
+    this.registry.register(this.storageUploadSize);
+    this.registry.register(this.storageDownloadSize);
+    this.registry.register(this.storageOperationDuration);
+    this.registry.register(this.providerInitTotal);
+    this.registry.register(this.providerInitDuration);
+    this.registry.register(this.providerHealthCheckTotal);
+    this.registry.register(this.providerHealthCheckDuration);
   }
 }
 

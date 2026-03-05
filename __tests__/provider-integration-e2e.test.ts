@@ -284,7 +284,7 @@ describe('Provider Integration E2E Tests', () => {
       
       for (const providerName of providers) {
         try {
-          const provider = getSandboxProvider(providerName as any);
+          const provider = await getSandboxProvider(providerName as any);
           expect(provider).toBeDefined();
           expect(provider.name).toBe(providerName);
         } catch (error) {
@@ -298,7 +298,7 @@ describe('Provider Integration E2E Tests', () => {
       const { getSandboxProvider } = await import('@/lib/sandbox/providers');
       
       try {
-        const provider = getSandboxProvider('microsandbox');
+        const provider = await getSandboxProvider('microsandbox');
         
         // Try to create sandbox (will fail without proper config)
         await provider.createSandbox({

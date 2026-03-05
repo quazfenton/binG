@@ -63,6 +63,8 @@ export class TerminalManager {
     if (sandboxId.startsWith('blaxel-') || sandboxId.includes('-blaxel-')) return 'blaxel'
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-') || sandboxId.includes('-sprites-')) return 'sprites'
     if (sandboxId.startsWith('webcontainer-')) return 'webcontainer'
+    if (sandboxId.startsWith('osb-ci-')) return 'opensandbox-code-interpreter'
+    if (sandboxId.startsWith('osb-agent-')) return 'opensandbox-agent'
     if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) return 'opensandbox'
     return null
   }
@@ -93,7 +95,7 @@ export class TerminalManager {
     const inferredProvider = this.inferProviderFromSandboxId(sandboxId)
     if (inferredProvider) {
       try {
-        const provider = getSandboxProvider(inferredProvider)
+        const provider = await getSandboxProvider(inferredProvider)
         const handle = await provider.getSandbox(sandboxId)
         return { handle, providerType: inferredProvider }
       } catch {
@@ -112,7 +114,7 @@ export class TerminalManager {
       if (tried.has(providerType)) return null
       tried.add(providerType)
       try {
-        const provider = getSandboxProvider(providerType)
+        const provider = await getSandboxProvider(providerType)
         const handle = await withTimeout(
           provider.getSandbox(sandboxId),
           PROVIDER_TIMEOUT_MS,
@@ -131,7 +133,7 @@ export class TerminalManager {
     
     // Try all known providers to locate the sandbox (supports quota-based fallbacks)
     // This is critical because sandbox-service can create sandboxes on any provider via fallback
-    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'sprites', 'codesandbox', 'webcontainer', 'opensandbox', 'microsandbox', 'e2b', 'mistral']
+    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'sprites', 'codesandbox', 'webcontainer', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral']
     for (const providerType of allProviders) {
       const result = await tryProvider(providerType)
       if (result) return result
@@ -164,7 +166,7 @@ export class TerminalManager {
     userId?: string,
   ): Promise<string> {
     const { handle, providerType } = await this.resolveHandleForSandbox(sandboxId)
-    const provider = getSandboxProvider(providerType)
+    const provider = await getSandboxProvider(providerType)
     const ptyId = `pty-${sessionId}-${Date.now()}`
 
     // Clean up existing connection in either mode.
@@ -287,7 +289,7 @@ export class TerminalManager {
     onPortDetected?: (info: PreviewInfo) => void,
   ): Promise<void> {
     const { handle, providerType } = await this.resolveHandleForSandbox(sandboxId)
-    const provider = getSandboxProvider(providerType)
+    const provider = await getSandboxProvider(providerType)
 
     if (!handle.connectPty) {
       throw new Error(`Provider '${provider.name}' does not support PTY reconnection`)
@@ -482,7 +484,7 @@ export class TerminalManager {
    * - History tracking
    */
   private async executeCommandModeCommand(conn: CommandModeConnection, command: string): Promise<void> {
-    const provider = getSandboxProvider(conn.providerType)
+    const provider = await getSandboxProvider(conn.providerType)
     const handle = await provider.getSandbox(conn.sandboxId)
 
     // Emit command start event
@@ -617,7 +619,7 @@ export class TerminalManager {
   ): Promise<void> {
     if (!handle.getPreviewLink) return
 
-    for (const pattern of PORT_PATTERNS) {
+    for (const pattern of LEGACY_PORT_PATTERNS) {
       const match = output.match(pattern)
       if (match) {
         const port = parseInt(match[1], 10)

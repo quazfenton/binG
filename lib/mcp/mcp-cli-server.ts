@@ -94,7 +94,7 @@ function handleHealth(res: any): void {
     status: 'healthy',
     tools: tools.length,
     servers: servers.length,
-    connected: servers.filter(s => s.connected).length,
+    connected: servers.filter(s => s.info.state === 'connected').length,
     timestamp: new Date().toISOString(),
   }))
 }
@@ -107,11 +107,11 @@ async function handleListTools(res: any): Promise<void> {
   
   res.writeHead(200)
   res.end(JSON.stringify({
-    tools: tools.map(tool => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-      serverId: (tool as any).serverId,
+    tools: tools.map(wrapper => ({
+      name: wrapper.tool.name,
+      description: wrapper.tool.description,
+      inputSchema: wrapper.tool.inputSchema,
+      serverId: wrapper.serverId,
     })),
   }))
 }
@@ -162,7 +162,7 @@ async function handleCallTool(req: any, res: any): Promise<void> {
 /**
  * Discover endpoint - provides full MCP configuration for CLI
  */
-async function handleDiscover(res: Promise<void>): Promise<void> {
+async function handleDiscover(res: any): Promise<void> {
   const tools = mcpToolRegistry.getAllTools()
   const servers = mcpToolRegistry.getAllServerStatuses()
 
@@ -170,15 +170,15 @@ async function handleDiscover(res: Promise<void>): Promise<void> {
   res.end(JSON.stringify({
     version: '1.0.0',
     protocol: 'mcp-http',
-    tools: tools.map(tool => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
+    tools: tools.map(wrapper => ({
+      name: wrapper.tool.name,
+      description: wrapper.tool.description,
+      inputSchema: wrapper.tool.inputSchema,
     })),
     servers: servers.map(s => ({
       id: s.id,
       name: s.name,
-      connected: s.connected,
+      connected: s.info.state === 'connected',
     })),
     endpoints: {
       health: '/health',

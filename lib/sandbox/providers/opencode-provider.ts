@@ -253,7 +253,7 @@ export class OpencodeProvider implements LLMProvider {
     let finalResponse = ''
 
     try {
-      const provider = getSandboxProvider()
+      const provider = await getSandboxProvider()
       const sessionId = process.env.OPENCODE_SESSION_ID || `opencode-${Date.now()}`
       
       let sandbox: SandboxHandle

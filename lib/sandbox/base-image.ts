@@ -295,7 +295,7 @@ export class WarmPool {
   }
 
   private async createAndProvision(): Promise<SandboxHandle> {
-    const provider = getSandboxProvider()
+    const provider = await getSandboxProvider()
     const cpu = parsePositiveInt(process.env.SANDBOX_WARM_POOL_CPU, 1)
     const memory = parsePositiveInt(process.env.SANDBOX_WARM_POOL_MEMORY, 2)
     const handle = await provider.createSandbox({

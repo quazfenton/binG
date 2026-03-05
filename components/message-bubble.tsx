@@ -6,13 +6,14 @@ import remarkGfm from "remark-gfm"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Button } from "@/components/ui/button"
-import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal } from "lucide-react"
+import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal, ExternalLink } from "lucide-react"
 import type { Message } from "@/types"
 import { useEnhancedStreamingDisplay } from "@/hooks/use-enhanced-streaming-display"
 import { useResponsiveLayout, calculateDynamicWidth, getOverflowStrategy } from "@/hooks/use-responsive-layout"
 import { analyzeMessageContent, getContentBasedStyling, shouldUseCompactLayout } from "@/lib/message-content-analyzer"
 import { useTouchHandler, useKeyboardHandler } from "@/hooks/use-touch-handler"
 import IntegrationAuthPrompt from "@/components/integrations/IntegrationAuthPrompt"
+import { isEmbeddableUrl, transformToEmbed, getSuggestedPlugin } from "@/lib/utils/iframe-helper"
 
 interface MessageBubbleProps {
   message: Message
@@ -483,19 +484,47 @@ export default function MessageBubble({
                     {children}
                   </blockquote>
                 ),
-                a: ({ children, href, ...props }) => (
-                  <a
-                    href={href}
-                    className={`text-purple-300 hover:text-purple-200 underline ${
-                      layout.isMobile && dynamicStyles.overflowStrategy === 'ellipsis'
-                        ? 'truncate inline-block max-w-full'
-                        : 'break-all'
-                    }`}
-                    {...props}
-                  >
-                    {children}
-                  </a>
-                ),
+                a: ({ children, href, ...props }) => {
+                  const isEmbeddable = href && isEmbeddableUrl(href);
+                  const embedInfo = href ? transformToEmbed(href) : null;
+                  const suggestedPlugin = embedInfo?.suggestedPluginId;
+                  
+                  return (
+                    <div className="inline-flex flex-col items-start gap-1">
+                      <a
+                        href={href}
+                        className={`text-purple-300 hover:text-purple-200 underline inline-flex items-center gap-1 ${
+                          layout.isMobile && dynamicStyles.overflowStrategy === 'ellipsis'
+                            ? 'truncate inline-block max-w-full'
+                            : 'break-all'
+                        }`}
+                        {...props}
+                      >
+                        {children}
+                        {isEmbeddable && (
+                          <span 
+                            className="use-iframe inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 hover:bg-purple-500/30 transition-colors cursor-pointer"
+                            title={`Open in ${suggestedPlugin ? suggestedPlugin.replace('-embed', '') : 'embed'} viewer`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              // Dispatch custom event to open in embed plugin
+                              window.dispatchEvent(new CustomEvent('open-embed-plugin', {
+                                detail: { 
+                                  url: href,
+                                  suggestedPlugin,
+                                  embedInfo 
+                                }
+                              }));
+                            }}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            Embed
+                          </span>
+                        )}
+                      </a>
+                    </div>
+                  );
+                },
                 table: ({ children }) => (
                   <div className="table-wrapper">
                     <table className="w-full border-collapse">
