@@ -1,5 +1,16 @@
-import '@testing-library/jest-dom'
 import { vi } from 'vitest'
+import { config } from 'dotenv'
+import { resolve } from 'path'
+
+// Load environment variables from .env file
+config({
+  path: resolve(__dirname, '../.env')
+})
+
+// Only import DOM matchers when running in a browser-like environment
+if (typeof window !== 'undefined') {
+  await import('@testing-library/jest-dom');
+}
 
 // Mock Next.js router
 vi.mock('next/router', () => ({
@@ -29,59 +40,65 @@ vi.mock('next/navigation', () => ({
 // Mock fetch
 global.fetch = vi.fn()
 
-// Mock localStorage
-Object.defineProperty(window, 'localStorage', {
-  value: {
-    getItem: vi.fn(),
-    setItem: vi.fn(),
-    removeItem: vi.fn(),
-    clear: vi.fn(),
-  },
-  writable: true,
-})
+// Mock browser globals (only when window is available)
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, 'localStorage', {
+    value: {
+      getItem: vi.fn(),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+    },
+    writable: true,
+  })
 
-// Mock sessionStorage
-Object.defineProperty(window, 'sessionStorage', {
-  value: {
-    getItem: vi.fn(),
-    setItem: vi.fn(),
-    removeItem: vi.fn(),
-    clear: vi.fn(),
-  },
-  writable: true,
-})
+  Object.defineProperty(window, 'sessionStorage', {
+    value: {
+      getItem: vi.fn(),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+    },
+    writable: true,
+  })
 
-// Mock window.matchMedia
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  value: vi.fn().mockImplementation(query => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
-})
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation(query => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  })
+}
 
 // Mock IntersectionObserver
-global.IntersectionObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}))
+if (typeof globalThis.IntersectionObserver === 'undefined') {
+  (globalThis as any).IntersectionObserver = vi.fn().mockImplementation(() => ({
+    observe: vi.fn(),
+    unobserve: vi.fn(),
+    disconnect: vi.fn(),
+  }))
+}
 
 // Mock ResizeObserver
-global.ResizeObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}))
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  (globalThis as any).ResizeObserver = vi.fn().mockImplementation(() => ({
+    observe: vi.fn(),
+    unobserve: vi.fn(),
+    disconnect: vi.fn(),
+  }))
+}
 
 // Mock HTMLElement.scrollIntoView
-HTMLElement.prototype.scrollIntoView = vi.fn()
+if (typeof HTMLElement !== 'undefined') {
+  HTMLElement.prototype.scrollIntoView = vi.fn()
+}
 
 // Mock console methods to reduce noise in tests
 global.console = {

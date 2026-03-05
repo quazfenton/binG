@@ -1,8 +1,10 @@
+import NodePolyfillPlugin from 'node-polyfill-webpack-plugin';
+import { env, nodeless } from 'unenv';
+
+const { alias: turbopackAlias } = env(nodeless, {});
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -16,30 +18,12 @@ const nextConfig = {
     'localhost:3003',
     'localhost:3004',
     'localhost:3005',
-    'ddhhst-3000.csb.app', // For CodeSandbox environment
+    'ddhhst-3000.csb.app',
   ],
   // Performance optimizations
   compress: true,
   poweredByHeader: false,
   generateEtags: true,
-  // Bundle optimization
-  experimental: {
-    optimizeCss: true,
-    optimizePackageImports: [
-      'lucide-react',
-      '@radix-ui/react-icons',
-      'date-fns',
-      'lodash'
-    ],
-    turbo: {
-      rules: {
-        '*.svg': {
-          loaders: ['@svgr/webpack'],
-          as: '*.js',
-        },
-      },
-    },
-  },
   // Compiler optimizations
   compiler: {
     removeConsole: process.env.NODE_ENV === 'production' ? {
@@ -48,6 +32,18 @@ const nextConfig = {
   },
   // Output optimization
   output: 'standalone',
+  // Turbopack configuration (Next.js 16+)
+  turbopack: {
+    rules: {
+      '*.svg': {
+        loaders: ['@svgr/webpack'],
+        as: '*.js',
+      },
+    },
+    resolveAlias: {
+      ...turbopackAlias,
+    },
+  },
   env: {
     DEFAULT_LLM_PROVIDER: process.env.DEFAULT_LLM_PROVIDER,
     DEFAULT_MODEL: process.env.DEFAULT_MODEL,
@@ -60,37 +56,45 @@ const nextConfig = {
     PORTKEY_API_KEY: process.env.PORTKEY_API_KEY,
     PORTKEY_VIRTUAL_KEY: process.env.PORTKEY_VIRTUAL_KEY,
     REPLICATE_API_TOKEN: process.env.REPLICATE_API_TOKEN,
+    CSP_REPORT_URI: process.env.CSP_REPORT_URI || '/api/csp-report',
+    ENABLE_SRI: process.env.ENABLE_SRI || 'true',
   },
   serverExternalPackages: [
-      "livekit-server-sdk",
-      "@anthropic-ai/sdk",
-      "openai",
-      "cohere-ai",
-      "together-ai",
-      "replicate",
-      "@google/generative-ai",
-      "portkey-ai",
-    ],
+    "livekit-server-sdk",
+    "@anthropic-ai/sdk",
+    "openai",
+    "cohere-ai",
+    "together-ai",
+    "replicate",
+    "@google/generative-ai",
+    "portkey-ai",
+  ],
   webpack: (config, { isServer, dev }) => {
+    // Add Node polyfills for Daytona SDK compatibility
+    if (!isServer) {
+      config.plugins.push(new NodePolyfillPlugin());
+    }
+
     // Suppress specific warnings in development
     if (dev) {
       const existingIgnoreWarnings = config.ignoreWarnings || [];
       config.ignoreWarnings = [
         ...existingIgnoreWarnings,
-        // Suppress require-in-the-middle warnings (OpenTelemetry)
         (warning) => {
           const moduleName = typeof warning.module === 'string' ? warning.module : (warning.module?.resource || '');
           const message = warning.message || '';
-          
+
           if (moduleName && moduleName.includes('require-in-the-middle')) {
             return true;
           }
           if (message.includes('Critical dependency: require function is used')) {
             return true;
           }
+          if (message.includes('module factory is not available')) {
+            return true;
+          }
           return false;
         },
-        // Suppress viewport metadata warnings
         (warning) => {
           const message = warning.message || '';
           if (message.includes('viewport')) {
@@ -103,12 +107,11 @@ const nextConfig = {
 
     // Handle ESM modules with proper extension priority
     config.resolve.extensionAlias = {
-      ".js": [".js", ".ts", ".tsx", ".jsx"], // Prioritize .js over .ts
+      ".js": [".js", ".ts", ".tsx", ".jsx"],
       ".mjs": [".mjs", ".mts"],
       ".cjs": [".cjs", ".cts"]
     };
 
-    // Explicitly define main fields for ESM/CJS resolution
     config.resolve.mainFields = ['module', 'main'];
 
     // Fix for canvas and other node-specific modules
@@ -134,7 +137,6 @@ const nextConfig = {
         events: false,
       };
 
-      // Handle node: protocol imports by mapping them to false (exclude from bundle)
       config.resolve.alias = {
         ...config.resolve.alias,
         'node:crypto': false,
@@ -169,7 +171,29 @@ const nextConfig = {
           },
           {
             key: "Access-Control-Allow-Headers",
-            value: "Content-Type, Authorization",
+            value: "Content-Type, Authorization, X-Request-ID",
+          },
+        ],
+      },
+      {
+        source: "/api/:path*",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value: "default-src 'none'; script-src 'none'; style-src 'none'; frame-ancestors 'none';",
+          },
+        ],
+      },
+      {
+        source: '/_next/static/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=31536000, immutable',
+          },
+          {
+            key: 'X-Content-Type-Options',
+            value: 'nosniff',
           },
         ],
       },

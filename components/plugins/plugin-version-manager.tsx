@@ -26,33 +26,46 @@ interface PluginVersionInfo {
   updateWarnings: string[];
 }
 
+const DEMO_VERSION_DATA: PluginVersionInfo[] = [
+  { id: 'calculator', name: 'Calculator', currentVersion: '1.0.0', dependents: [], canUpdate: true, updateWarnings: [] },
+  { id: 'json-validator', name: 'JSON Validator', currentVersion: '1.0.0', dependents: [], canUpdate: true, updateWarnings: [] },
+  { id: 'url-utilities', name: 'URL Utilities', currentVersion: '1.0.0', dependents: ['markdown-editor'], canUpdate: true, updateWarnings: ['1 plugins depend on this'] },
+];
+
 export const PluginVersionManager: React.FC = () => {
   const [plugins, setPlugins] = useState<PluginVersionInfo[]>([]);
   const [selectedPlugin, setSelectedPlugin] = useState<string>('');
   const [newVersion, setNewVersion] = useState<string>('');
   const [updateResult, setUpdateResult] = useState<any>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isDemo, setIsDemo] = useState(false);
 
   useEffect(() => {
     loadPluginVersions();
   }, []);
 
   const loadPluginVersions = () => {
-    const allPlugins = enhancedPluginManager.getAllPlugins();
-    const versionInfo: PluginVersionInfo[] = allPlugins.map(plugin => {
-      const dependents = enhancedPluginManager.getPluginDependencies(plugin.id).dependents;
-      
-      return {
-        id: plugin.id,
-        name: plugin.name,
-        currentVersion: plugin.version,
-        dependents,
-        canUpdate: true, // Simplified - in real implementation, check for update availability
-        updateWarnings: dependents.length > 0 ? [`${dependents.length} plugins depend on this`] : []
-      };
-    });
-    
-    setPlugins(versionInfo);
+    try {
+      const allPlugins = enhancedPluginManager.getAllPlugins();
+      if (allPlugins.length === 0) throw new Error('No plugins');
+      const versionInfo: PluginVersionInfo[] = allPlugins.map(plugin => {
+        const dependents = enhancedPluginManager.getPluginDependencies(plugin.id).dependents;
+
+        return {
+          id: plugin.id,
+          name: plugin.name,
+          currentVersion: plugin.version,
+          dependents,
+          canUpdate: true,
+          updateWarnings: dependents.length > 0 ? [`${dependents.length} plugins depend on this`] : []
+        };
+      });
+      setPlugins(versionInfo);
+      setIsDemo(false);
+    } catch {
+      setPlugins(DEMO_VERSION_DATA);
+      setIsDemo(true);
+    }
   };
 
   const handleVersionUpdate = async () => {
@@ -98,6 +111,7 @@ export const PluginVersionManager: React.FC = () => {
         <CardTitle className="text-lg flex items-center gap-2">
           <Package className="w-5 h-5 text-purple-400" />
           Plugin Version Manager
+          {isDemo && <Badge className="ml-2 text-xs bg-yellow-500/20 text-yellow-300 border-yellow-500/30">Demo Data</Badge>}
         </CardTitle>
       </CardHeader>
       

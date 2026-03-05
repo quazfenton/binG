@@ -104,7 +104,7 @@ export default function CodeSandboxPlugin({ onClose }: PluginProps) {
     const startTime = Date.now();
 
     try {
-      const res = await fetch('/api/execute', {
+      const res = await fetch('/api/sandbox/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -147,7 +147,7 @@ export default function CodeSandboxPlugin({ onClose }: PluginProps) {
       await new Promise(resolve => setTimeout(resolve, 1000));
       setPackages([...packages, newPackage]);
       setNewPackage('');
-      toast.success(`Installed ${newPackage}`);
+      toast.info(`Added ${newPackage} (packages are available if supported by the execution environment)`);
     } catch (err) {
       toast.error('Failed to install package');
     } finally {
@@ -231,7 +231,7 @@ export default function CodeSandboxPlugin({ onClose }: PluginProps) {
               
               <Button onClick={runCode} disabled={isRunning} className="flex-1">
                 {isRunning ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 mr-2 thinking-spinner" />
                 ) : (
                   <Play className="w-4 h-4 mr-2" />
                 )}
@@ -282,7 +282,7 @@ export default function CodeSandboxPlugin({ onClose }: PluginProps) {
                     className="flex-1 bg-black border border-white/10 rounded px-2 py-1 text-sm"
                   />
                   <Button size="sm" onClick={installPackage} disabled={installingPackage}>
-                    {installingPackage ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Install'}
+                    {installingPackage ? <Loader2 className="w-3 h-3 thinking-spinner" /> : 'Install'}
                   </Button>
                 </div>
                 <div className="flex flex-wrap gap-2">

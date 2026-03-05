@@ -5,25 +5,19 @@ import { useEnhancedChat } from "@/hooks/use-enhanced-chat"; // Import enhanced 
 import type { ChatHistory } from "@/types";
 
 import InteractionPanel from "@/components/interaction-panel";
-import AccessibilityControls from "@/components/accessibility-controls";
+import Settings from "@/components/settings";
 import ChatHistoryModal from "@/components/chat-history-modal";
 import { ChatPanel } from "@/components/chat-panel";
 import CodePreviewPanel from "@/components/code-preview-panel";
-import CodeMode from "@/components/code-mode";
 import TerminalPanel from "@/components/terminal/TerminalPanel";
 // import { useConversation } from "@/hooks/use-conversation"; // No longer needed
 import { useChatHistory } from "@/hooks/use-chat-history";
 import { voiceService } from "@/lib/voice/voice-service";
 import { toast } from "sonner";
 import type { LLMProvider } from "@/lib/api/llm-providers";
-import {
-  CodeServiceProvider,
-  useCodeService,
-} from "@/contexts/code-service-context";
-import { parseCodeBlocksFromMessages } from "@/lib/code-parser";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
-import { modeManager, setCurrentMode, processResponse } from "@/lib/mode-manager";
+import { setCurrentMode } from "@/lib/mode-manager";
 import {
   createInputContext,
   processSafeContent,
@@ -31,23 +25,12 @@ import {
   debugContentProcessing
 } from "@/lib/input-response-separator";
 import { useAuth } from "@/contexts/auth-context";
-import { secureRandom, generateSecureId } from "@/lib/utils";
-
-// Main component wrapped with CodeServiceProvider
-export default function ConversationInterface() {
-  return (
-    <CodeServiceProvider>
-      <ConversationInterfaceContent />
-    </CodeServiceProvider>
-  );
-}
+import { generateSecureId } from "@/lib/utils";
+import type { AttachedVirtualFile } from "@/hooks/use-virtual-filesystem";
 
 /**
- * Render the main conversation interface with chat and code-mode features, providers/models selection, history, voice integration, streaming, code previews, and advertisement flow.
- *
- * This component manages UI state, event handlers, and side-effect wiring for embedding, provider initialization, chat history persistence, code-service integration (project files, diffs, and commands), voice events, streaming state, and modal/panel visibility. It composes ChatPanel, InteractionPanel, CodePreviewPanel, CodeMode, ChatHistoryModal, and AccessibilityControls and exposes handlers for chat submission, code actions, provider rotation, and history management.
- *
- * @returns A JSX element that renders the conversation interface and its associated panels and controls.
+ * Render the main conversation interface with chat, filesystem attachments, providers/models selection,
+ * history, voice integration, streaming state, code previews, and terminal visibility.
  */
 function getStableSessionId(): string {
   if (typeof window === 'undefined') return 'server-session';
@@ -60,7 +43,27 @@ function getStableSessionId(): string {
   return sessionId;
 }
 
-function ConversationInterfaceContent() {
+function getFilesystemScopeMappingKey(chatId: string): string {
+  return `chat_filesystem_scope_${chatId}`;
+}
+
+function persistFilesystemScope(chatId: string, scopeId: string) {
+  if (typeof window === "undefined" || !chatId || !scopeId) return;
+  try {
+    localStorage.setItem(getFilesystemScopeMappingKey(chatId), scopeId);
+  } catch {}
+}
+
+function restoreFilesystemScope(chatId: string): string | null {
+  if (typeof window === "undefined" || !chatId) return null;
+  try {
+    return localStorage.getItem(getFilesystemScopeMappingKey(chatId));
+  } catch {
+    return null;
+  }
+}
+
+export default function ConversationInterface() {
   const { user } = useAuth();
   const [embedMode, setEmbedMode] = useState(false);
 
@@ -91,15 +94,9 @@ function ConversationInterfaceContent() {
   const [showAccessibility, setShowAccessibility] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showCodePreview, setShowCodePreview] = useState(false);
-  const [showCodeMode, setShowCodeMode] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const [terminalMinimized, setTerminalMinimized] = useState(false);
-  const [projectFiles, setProjectFiles] = useState<{ [key: string]: string }>(
-    {},
-  );
-  const [pendingDiffs, setPendingDiffs] = useState<
-    { path: string; diff: string }[]
-  >([]);
+  const [attachedFilesystemFiles, setAttachedFilesystemFiles] = useState<Record<string, AttachedVirtualFile>>({});
   const [commandsByFile, setCommandsByFile] = useState<
     Record<string, string[]>
   >({});
@@ -113,29 +110,41 @@ function ConversationInterfaceContent() {
   );
   const [currentModel, setCurrentModel] = useState<string>(
     typeof window !== 'undefined'
-      ? (localStorage.getItem("chat_model") || "deepseek/deepseek-r1-0528:free")
-      : "deepseek/deepseek-r1-0528:free"
+      ? (localStorage.getItem("chat_model") || "nvidia/nemotron-3-nano-30b-a3b:free")
+      : "nvidia/nemotron-3-nano-30b-a3b:free"
   );
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
     string | null
   >(null);
+  const [filesystemSessionId, setFilesystemSessionId] = useState<string>(
+    () => `draft-chat_${Date.now()}_${generateSecureId("chat")}`,
+  );
+  const filesystemScopePath = useMemo(
+    () => `project/sessions/${filesystemSessionId}`,
+    [filesystemSessionId],
+  );
 
-  // Enhanced code system integration
-  const [activeTab, setActiveTab] = useState<"chat" | "code" | "extras" | "integrations" | "shell">("chat");
-  const codeServiceContext = useCodeService();
+  const [activeTab, setActiveTab] = useState<"chat" | "extras" | "integrations" | "shell">("chat");
 
   // Update mode manager when active tab changes
   useEffect(() => {
     setCurrentMode(activeTab);
 
-    // Auto-open terminal when shell tab is selected
-    if (activeTab === 'shell' && !showTerminal) {
-      setShowTerminal(true);
-      setTerminalMinimized(false);
+    // Auto-open and auto-connect terminal when shell tab is selected
+    if (activeTab === 'shell') {
+      if (!showTerminal) {
+        setShowTerminal(true);
+        setTerminalMinimized(false);
+      }
+      // Auto-connect after a short delay to allow terminal to initialize
+      setTimeout(() => {
+        // Trigger auto-connect by dispatching a custom event
+        window.dispatchEvent(new CustomEvent('terminal-auto-connect'));
+      }, 500);
     }
-    
+
     // Auto-focus terminal when shell tab is selected
     if (activeTab === 'shell' && showTerminal) {
       setTimeout(() => {
@@ -162,9 +171,19 @@ function ConversationInterfaceContent() {
   });
 
   // Advertisement system
-  const [promptCount, setPromptCount] = useState(0);
-  const [showAd, setShowAd] = useState(false);
+  const [, setPromptCount] = useState(0);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const filesystemContext = useMemo(() => ({
+    attachedFiles: Object.values(attachedFilesystemFiles).map((file) => ({
+      path: file.path,
+      content: file.content,
+      language: file.language,
+      version: file.version,
+      lastModified: file.lastModified,
+    })),
+    applyFileEdits: true,
+    scopePath: filesystemScopePath,
+  }), [attachedFilesystemFiles, filesystemScopePath]);
 
   // ESC key handler for closing temporary panels
   useEffect(() => {
@@ -190,7 +209,6 @@ function ConversationInterfaceContent() {
   const {
     messages,
     input,
-    handleInputChange,
     handleSubmit: originalHandleSubmit,
     isLoading,
     error,
@@ -203,6 +221,8 @@ function ConversationInterfaceContent() {
       provider: currentProvider,
       model: currentModel,
       stream: true,
+      conversationId: filesystemSessionId,
+      filesystemContext,
     },
     onResponse: async (response) => {
       if (response.status === 401) {
@@ -217,7 +237,7 @@ function ConversationInterfaceContent() {
       // Clean up any active streaming sessions on error
       enhancedBufferManager.cleanup();
     },
-    onFinish: (message) => {
+    onFinish: () => {
       if (messages.length > 0) {
         const savedChatId = saveCurrentChat(
           messages,
@@ -233,87 +253,13 @@ function ConversationInterfaceContent() {
     },
   });
 
-  // Enhanced submit handler that routes to appropriate service based on active tab
   const handleSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
-
-      if (activeTab === "code") {
-        // Use enhanced code service
-        try {
-          const selectedFiles: { [key: string]: string } = {};
-
-          // Extract current project files if available
-          Object.entries(projectFiles).forEach(([path, content]) => {
-            selectedFiles[path] = content;
-          });
-
-          await codeServiceContext.startSession({
-            prompt: input,
-            selectedFiles,
-            context: {
-              messages,
-            },
-          });
-
-          // Clear input after starting session
-          setInput("");
-
-          // Show code preview panel if not already visible and in code mode
-          if (!showCodePreview && activeTab === 'code') {
-            setShowCodePreview(true);
-          }
-        } catch (error) {
-          toast.error("Failed to start code session");
-          console.error("Code session error:", error);
-        }
-      } else {
-        // Use regular chat
-        originalHandleSubmit(e);
-      }
+      originalHandleSubmit(e);
     },
-    [
-      activeTab,
-      input,
-      projectFiles,
-      messages,
-      codeServiceContext,
-      setInput,
-      showCodePreview,
-      originalHandleSubmit,
-    ],
+    [originalHandleSubmit],
   );
-
-  // Update code preview panel data when code service completes
-  useEffect(() => {
-    if (codeServiceContext.state.lastSessionResult) {
-      const { files, diffs } = codeServiceContext.state.lastSessionResult;
-
-      // Update project files
-      if (files) {
-        setProjectFiles((prevFiles) => ({ ...prevFiles, ...files }));
-      }
-
-      // Update pending diffs only in code mode
-      if (diffs && activeTab === 'code') {
-        setPendingDiffs(diffs);
-      }
-
-      // Parse code blocks from messages and add to project files only in code mode
-      if (activeTab === 'code') {
-        const parsedData = parseCodeBlocksFromMessages(messages);
-        if (parsedData.codeBlocks.length > 0) {
-          const newFiles: { [key: string]: string } = {};
-          parsedData.codeBlocks.forEach((block) => {
-            if (block.filename && !block.isError) {
-              newFiles[block.filename] = block.code;
-            }
-          });
-          setProjectFiles((prevFiles) => ({ ...prevFiles, ...newFiles }));
-        }
-      }
-    }
-  }, [codeServiceContext.state.lastSessionResult, messages, activeTab]);
 
   const {
     saveCurrentChat,
@@ -337,6 +283,7 @@ function ConversationInterfaceContent() {
         // If it was a new chat and an ID was returned, set it as the current conversation ID
         if (!currentConversationId && savedChatId) {
           setCurrentConversationId(savedChatId);
+          persistFilesystemScope(savedChatId, filesystemSessionId);
         }
 
         // Update chat history state to reflect the saved chat
@@ -353,13 +300,14 @@ function ConversationInterfaceContent() {
     isLoading,
     saveCurrentChat,
     currentConversationId,
+    filesystemSessionId,
     isVoiceEnabled,
     getAllChats, // Added dependency
   ]);
 
-  // Extract and persist streamed COMMANDS blocks into a per-file map (only in code mode)
+  // Extract and persist streamed COMMANDS blocks into a per-file map
   useEffect(() => {
-    if (messages.length === 0 || activeTab !== 'code') return;
+    if (messages.length === 0) return;
     
     const lastAssistant = [...messages]
       .reverse()
@@ -396,7 +344,7 @@ function ConversationInterfaceContent() {
       }
       return next;
     });
-  }, [messages, activeTab]);
+  }, [messages]);
 
   // Persist commands map by conversation id
   useEffect(() => {
@@ -542,7 +490,7 @@ function ConversationInterfaceContent() {
 
     voiceService.addEventListener(handleVoiceEvent);
     return () => voiceService.removeEventListener(handleVoiceEvent);
-  }, [handleInputChange]); // Added handleInputChange to dependency array
+  }, []);
 
   // Show error notifications
   useEffect(() => {
@@ -563,6 +511,7 @@ function ConversationInterfaceContent() {
 
     setMessages([]);
     setCurrentConversationId(null); // Ensure current conversation ID is reset for a new chat
+    setFilesystemSessionId(`draft-chat_${Date.now()}_${generateSecureId("chat")}`);
 
     // Update chat history to reflect the saved chat
     setChatHistory(getAllChats());
@@ -586,6 +535,8 @@ function ConversationInterfaceContent() {
     if (chat) {
       setMessages(chat.messages); // Load messages using useChat's setMessages
       setCurrentConversationId(chatId);
+      const restoredScopeId = restoreFilesystemScope(chatId);
+      setFilesystemSessionId(restoredScopeId || chatId);
       toast.success("Chat loaded");
     }
 
@@ -682,12 +633,10 @@ function ConversationInterfaceContent() {
 
   // Check if there are code blocks in messages for preview button glow (mode-aware)
   const hasCodeBlocks = useMemo(() => {
-    // Check for code blocks in any assistant message
-    return messages.some((message) => {
-      if (message.role === "assistant" && message.content.includes("```")) {
-        return true;
-      }
-    });
+    return messages.some(
+      (message) =>
+        message.role === "assistant" && message.content.includes("```"),
+    );
   }, [messages]);
 
   const handleToggleCodePreview = () => {
@@ -695,46 +644,6 @@ function ConversationInterfaceContent() {
       const newState = !prevShowCodePreview;
       return newState;
     });
-  };
-
-  const handleToggleCodeMode = () => {
-    setShowCodeMode((prev) => !prev);
-  };
-
-  const handleUpdateProjectFiles = (files: { [key: string]: string }) => {
-    setProjectFiles(files);
-  };
-
-  const handleCodeModeMessage = (message: string, _context?: any) => {
-    // Send the formatted code mode message
-    setInput(message);
-    setTimeout(() => {
-      const fakeEvent = {
-        preventDefault: () => {},
-        currentTarget: { reset: () => {} },
-      } as React.FormEvent<HTMLFormElement>;
-      handleSubmit(fakeEvent);
-    }, 0);
-  };
-
-  const acceptPendingDiffs = () => {
-    // Only allow accepting diffs in code mode
-    if (activeTab !== 'code') {
-      toast.error("Diffs can only be applied in Code mode");
-      return;
-    }
-    
-    if (pendingDiffs.length === 0) return;
-    const diffMessages = pendingDiffs.map((d, idx) => ({
-      id: `diff-${Date.now()}-${idx}`,
-      role: "assistant" as const,
-      content: `\`\`\`diff ${d.path}\n${d.diff}\n\`\`\``,
-    }));
-    setMessages((prev) => [...prev, ...diffMessages]);
-    setPendingDiffs([]);
-    toast.success(
-      "Applied diffs to preview. Press Code Preview to view updated state.",
-    );
   };
 
   // Commands map actions
@@ -797,12 +706,6 @@ function ConversationInterfaceContent() {
     toast.success(`Squashed diffs for ${path}.`);
   };
 
-  const dismissPendingDiffs = () => {
-    if (pendingDiffs.length === 0) return;
-    setPendingDiffs([]);
-    toast.info("Dismissed pending diffs");
-  };
-
   // Handle chat submission - no login restrictions
   const handleChatSubmit = (content: string) => {
     // Increment prompt count for tracking (no restrictions)
@@ -820,6 +723,40 @@ function ConversationInterfaceContent() {
       handleSubmit(fakeEvent);
     }, 0);
   };
+
+  useEffect(() => {
+    if (!currentConversationId) return;
+    persistFilesystemScope(currentConversationId, filesystemSessionId);
+  }, [currentConversationId, filesystemSessionId]);
+
+  const handleAttachedFilesChange = useCallback((files: Record<string, AttachedVirtualFile>) => {
+    setAttachedFilesystemFiles(files);
+  }, []);
+
+  useEffect(() => {
+    const lastAssistant = [...messages]
+      .reverse()
+      .find((message) => message.role === "assistant");
+    const requestedFiles = (lastAssistant?.metadata as any)?.filesystem?.requestedFiles;
+    if (!Array.isArray(requestedFiles) || requestedFiles.length === 0) {
+      return;
+    }
+
+    setAttachedFilesystemFiles((previous) => {
+      const next = { ...previous };
+      for (const file of requestedFiles) {
+        if (!file?.path || typeof file?.content !== "string") continue;
+        next[file.path] = {
+          path: file.path,
+          content: file.content,
+          language: file.language || "text",
+          version: typeof file.version === "number" ? file.version : 1,
+          lastModified: new Date().toISOString(),
+        };
+      }
+      return next;
+    });
+  }, [messages]);
 
   // Retry function to resend the last user message
   const handleRetry = () => {
@@ -846,14 +783,26 @@ function ConversationInterfaceContent() {
   };
 
   return (
-    <div className="relative w-full h-screen bg-black overflow-hidden touch-pan-y">
+    <div className="relative w-full h-screen overflow-hidden touch-pan-y z-[1]">
       {/* Subtle animated background */}
-      <div className="absolute inset-0 opacity-20">
-        <div className="absolute inset-0 bg-gradient-to-br from-gray-900/30 via-black to-gray-800/20"></div>
+      <div className="absolute inset-0 opacity-45">
+        <div
+          className="absolute inset-0"
+          style={{ background: "var(--app-scene-overlay)" }}
+        />
         <div className="absolute inset-0 animate-pulse-slow">
-          <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-gray-700/10 rounded-full blur-3xl animate-float-slow"></div>
-          <div className="absolute top-3/4 right-1/4 w-80 h-80 bg-gray-600/10 rounded-full blur-3xl animate-float-reverse"></div>
-          <div className="absolute bottom-1/4 left-1/2 w-64 h-64 bg-gray-800/10 rounded-full blur-3xl animate-float-slow"></div>
+          <div
+            className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full blur-3xl animate-float-slow"
+            style={{ backgroundColor: "var(--app-orb-1)" }}
+          />
+          <div
+            className="absolute top-3/4 right-1/4 w-80 h-80 rounded-full blur-3xl animate-float-reverse"
+            style={{ backgroundColor: "var(--app-orb-2)" }}
+          />
+          <div
+            className="absolute bottom-1/4 left-1/2 w-64 h-64 rounded-full blur-3xl animate-float-slow"
+            style={{ backgroundColor: "var(--app-orb-3)" }}
+          />
         </div>
       </div>
       <div className="flex flex-col md:flex-row h-full min-h-0">
@@ -917,30 +866,26 @@ function ConversationInterfaceContent() {
       <InteractionPanel
         onSubmit={handleChatSubmit} // Pass the intermediary function
         onNewChat={handleNewChat}
-        isProcessing={isLoading || codeServiceContext.state.isProcessing}
+        isProcessing={isLoading}
         toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
         toggleHistory={() => setShowHistory(!showHistory)}
         toggleCodePreview={() => {
           handleToggleCodePreview();
         }} // Pass the function with an additional log
-        toggleCodeMode={handleToggleCodeMode}
         onStopGeneration={stop} // Pass useChat's stop function
         onRetry={handleRetry} // Pass the retry function
         currentProvider={currentProvider}
         currentModel={currentModel}
-        error={error?.message || codeServiceContext.state.error}
+        error={error?.message}
         input={input} // Pass input to InteractionPanel
         setInput={setInput} // Pass setInput to InteractionPanel
         availableProviders={availableProviders}
         onProviderChange={handleProviderChange}
         hasCodeBlocks={hasCodeBlocks}
-        pendingDiffs={pendingDiffs}
-        onAcceptPendingDiffs={acceptPendingDiffs}
-        onDismissPendingDiffs={dismissPendingDiffs}
         activeTab={activeTab}
         onActiveTabChange={setActiveTab}
-        streamingState={streamingState}
         userId={user?.id?.toString() || getStableSessionId()} // Use stable user ID or session ID
+        onAttachedFilesChange={handleAttachedFilesChange}
       />
 
       {/* Chat History Modal */}
@@ -954,11 +899,14 @@ function ConversationInterfaceContent() {
         />
       )}
 
-      {/* Accessibility Controls Modal */}
+      {/* Settings Modal */}
       {showAccessibility && (
-        <AccessibilityControls
+        <Settings
           onClose={() => setShowAccessibility(false)}
-          onLogin={setIsLoggedIn}
+          messages={messages}
+          isProcessing={isLoading}
+          voiceEnabled={isVoiceEnabled}
+          onVoiceToggle={handleVoiceToggle}
         />
       )}
 
@@ -968,22 +916,13 @@ function ConversationInterfaceContent() {
           isOpen={showCodePreview}
           messages={messages}
           onClose={() => setShowCodePreview(false)}
+          filesystemScopePath={filesystemScopePath}
           commandsByFile={commandsByFile}
           onApplyAllCommandDiffs={applyAllCommandDiffs}
           onApplyFileCommandDiffs={applyDiffsForFile}
           onClearAllCommandDiffs={clearAllCommandDiffs}
           onClearFileCommandDiffs={clearCommandDiffsForFile}
           onSquashFileCommandDiffs={squashCommandDiffsForFile}
-        />
-      )}
-
-      {/* Code Mode Panel */}
-      {showCodeMode && (
-        <CodeMode
-          onClose={() => setShowCodeMode(false)}
-          onSendMessage={handleCodeModeMessage}
-          projectFiles={projectFiles}
-          onUpdateFiles={handleUpdateProjectFiles}
         />
       )}
 

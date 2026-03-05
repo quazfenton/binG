@@ -1,10 +1,10 @@
-import React, { useReducer, useRef, useState } from 'react';
+import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Textarea } from '../ui/textarea';
 import { Input } from '../ui/input';
 import { Film, Plus, Trash, ArrowLeft, ArrowRight, Download, Upload, GripVertical, X, Square, Circle, Type } from 'lucide-react';
-import { useToast } from '../ui/use-toast';
+import { toast } from 'sonner';
 
 // --- Types ---
 interface CanvasObject {
@@ -98,8 +98,9 @@ const storyboardReducer = (state: StoryboardState, action: Action): StoryboardSt
         })),
       };
     case 'ADD_CANVAS_OBJECT': {
+      // Use crypto.randomUUID() for unique IDs instead of timestamp
       const newObject: CanvasObject = {
-        id: `obj-${Date.now()}`,
+        id: `obj-${crypto.randomUUID().split('-')[0]}`,
         type: action.payload.type,
         x: 50,
         y: 50,
@@ -454,11 +455,48 @@ interface InteractiveStoryboardPluginProps {
   onResult?: (result: any) => void;
 }
 
+const STORYBOARD_STORAGE_KEY = 'interactive-storyboard-state';
+
+function loadStoryboardFromStorage(): StoryboardState {
+  try {
+    const stored = localStorage.getItem(STORYBOARD_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed.scenes && Array.isArray(parsed.scenes)) {
+        // Deduplicate canvas objects by ID and fix any duplicates
+        const scenes = parsed.scenes.map((s: any) => {
+          const seenIds = new Set<string>();
+          const canvasObjects = (s.canvasObjects || []).map((obj: any) => {
+            // If duplicate ID found, generate new unique ID
+            if (seenIds.has(obj.id)) {
+              const newId = `obj-${crypto.randomUUID().split('-')[0]}`;
+              console.warn(`Fixed duplicate object ID: ${obj.id} -> ${newId}`);
+              return { ...obj, id: newId };
+            }
+            seenIds.add(obj.id);
+            return obj;
+          });
+          return { ...s, canvasObjects };
+        });
+        return {
+          ...initialState,
+          ...parsed,
+          scenes,
+        };
+      }
+    }
+  } catch {}
+  return initialState;
+}
+
 const InteractiveStoryboardPlugin: React.FC<InteractiveStoryboardPluginProps> = ({ onClose, onResult }) => {
-  const [state, dispatch] = useReducer(storyboardReducer, initialState);
-  const { toast } = useToast();
+  const [state, dispatch] = useReducer(storyboardReducer, initialState, loadStoryboardFromStorage);
 
   const currentScene = state.scenes[state.currentSceneIndex];
+
+  useEffect(() => {
+    localStorage.setItem(STORYBOARD_STORAGE_KEY, JSON.stringify(state));
+  }, [state]);
 
   const handleExport = () => {
     const storyboardData = {
@@ -473,7 +511,7 @@ const InteractiveStoryboardPlugin: React.FC<InteractiveStoryboardPluginProps> = 
     a.download = `${state.title.replace(/\s+/g, '_').toLowerCase()}_storyboard.json`;
     a.click();
     URL.revokeObjectURL(url);
-    toast({ title: "Success", description: "Storyboard exported successfully." });
+    toast.success("Storyboard exported successfully.");
     onResult?.(storyboardData);
   };
 
@@ -487,16 +525,12 @@ const InteractiveStoryboardPlugin: React.FC<InteractiveStoryboardPluginProps> = 
         const importedData = JSON.parse(event.target?.result as string);
         if (importedData.scenes && Array.isArray(importedData.scenes)) {
           dispatch({ type: 'LOAD_STORYBOARD', payload: { ...initialState, ...importedData } });
-          toast({ title: "Success", description: "Storyboard imported successfully." });
+          toast.success("Storyboard imported successfully.");
         } else {
           throw new Error("Invalid storyboard format.");
         }
       } catch (error) {
-        toast({
-          variant: "destructive",
-          title: "Import Error",
-          description: error instanceof Error ? error.message : "Could not parse the file.",
-        });
+        toast.error(error instanceof Error ? error.message : "Could not parse the file.");
       }
     };
     reader.readAsText(file);

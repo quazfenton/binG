@@ -32,6 +32,15 @@ interface PluginDependencyVisualizerProps {
   onClose?: () => void;
 }
 
+const DEMO_PLUGINS = ['calculator', 'json-validator', 'url-utilities'];
+const DEMO_REGISTRY_INFO = { totalPlugins: 3, pluginsWithDependencies: 1, totalDependencies: 1, circularDependencies: [] };
+const DEMO_DEPENDENCY_TREES: Record<string, any> = {
+  calculator: { plugin: 'calculator', dependencies: [] },
+  'json-validator': { plugin: 'json-validator', dependencies: [] },
+  'url-utilities': { plugin: 'url-utilities', dependencies: [{ plugin: 'clipboard-api', version: '1.0.0', status: 'available', optional: false }] },
+};
+const DEMO_COMPATIBILITY: PluginCompatibility = { compatible: true, missingDependencies: [], incompatibleVersions: [], availableFallbacks: [], warnings: [] };
+
 export const PluginDependencyVisualizer: React.FC<PluginDependencyVisualizerProps> = ({
   pluginId,
   onClose
@@ -42,14 +51,20 @@ export const PluginDependencyVisualizer: React.FC<PluginDependencyVisualizerProp
   const [availablePlugins, setAvailablePlugins] = useState<string[]>([]);
   const [showDetails, setShowDetails] = useState(false);
   const [registryInfo, setRegistryInfo] = useState<any>(null);
+  const [isDemo, setIsDemo] = useState(false);
 
   useEffect(() => {
-    // Get available plugins
-    const plugins = enhancedPluginManager.getAllPlugins();
-    setAvailablePlugins(plugins.map(p => p.id));
-    
-    // Get registry information
-    setRegistryInfo(enhancedPluginManager.getDependencyRegistryInfo());
+    try {
+      const plugins = enhancedPluginManager.getAllPlugins();
+      if (plugins.length === 0) throw new Error('No plugins');
+      setAvailablePlugins(plugins.map(p => p.id));
+      setRegistryInfo(enhancedPluginManager.getDependencyRegistryInfo());
+      setIsDemo(false);
+    } catch {
+      setAvailablePlugins(DEMO_PLUGINS);
+      setRegistryInfo(DEMO_REGISTRY_INFO);
+      setIsDemo(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -62,15 +77,15 @@ export const PluginDependencyVisualizer: React.FC<PluginDependencyVisualizerProp
     if (!selectedPlugin) return;
 
     try {
+      if (isDemo) throw new Error('Using demo data');
       const depInfo = enhancedPluginManager.getPluginDependencies(selectedPlugin);
       setDependencyTree(depInfo.tree);
       
       const compat = await depInfo.compatibility;
       setCompatibility(compat);
-    } catch (error) {
-      console.error('Failed to get dependency info:', error);
-      setDependencyTree(null);
-      setCompatibility(null);
+    } catch {
+      setDependencyTree(DEMO_DEPENDENCY_TREES[selectedPlugin] || { plugin: selectedPlugin, dependencies: [] });
+      setCompatibility(DEMO_COMPATIBILITY);
     }
   };
 
@@ -139,6 +154,7 @@ export const PluginDependencyVisualizer: React.FC<PluginDependencyVisualizerProp
           <CardTitle className="text-lg flex items-center gap-2">
             <GitBranch className="w-5 h-5 text-blue-400" />
             Plugin Dependency Visualizer
+            {isDemo && <Badge className="ml-2 text-xs bg-yellow-500/20 text-yellow-300 border-yellow-500/30">Demo Data</Badge>}
           </CardTitle>
           {onClose && (
             <Button size="sm" variant="ghost" onClick={onClose}>

@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AuthProvider } from '@/contexts/auth-context'
-import AccessibilityControls from '@/components/accessibility-controls'
+import Settings from '@/components/settings'
 import ModalLoginForm from '@/components/auth/modal-login-form'
 import ModalSignupForm from '@/components/auth/modal-signup-form'
 
@@ -278,7 +278,7 @@ describe('Authentication Workflow Integration Tests', () => {
     it('should display correct UI for unauthenticated users', async () => {
       render(
         <TestWrapper>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -304,7 +304,7 @@ describe('Authentication Workflow Integration Tests', () => {
 
       render(
         <TestWrapper authOverrides={{ isAuthenticated: true, user: mockUser }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -335,7 +335,7 @@ describe('Authentication Workflow Integration Tests', () => {
           user: mockUser, 
           logout: mockLogout 
         }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -368,7 +368,7 @@ describe('Authentication Workflow Integration Tests', () => {
           user: { id: '1', email: 'test@example.com' },
           validateSession: mockValidateSession
         }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -394,7 +394,7 @@ describe('Authentication Workflow Integration Tests', () => {
           validateSession: mockValidateSession,
           logout: mockLogout
         }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -418,7 +418,7 @@ describe('Authentication Workflow Integration Tests', () => {
           user: { id: '1', email: 'test@example.com' },
           validateSession: mockValidateSession
         }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -445,7 +445,7 @@ describe('Authentication Workflow Integration Tests', () => {
 
       render(
         <TestWrapper authOverrides={{ isAuthenticated: true, user: mockUser }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -473,7 +473,7 @@ describe('Authentication Workflow Integration Tests', () => {
 
       render(
         <TestWrapper authOverrides={{ isAuthenticated: true, user: mockUser }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -509,7 +509,7 @@ describe('Authentication Workflow Integration Tests', () => {
           getApiKeys: mockGetApiKeys,
           setApiKeys: mockSetApiKeys
         }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}

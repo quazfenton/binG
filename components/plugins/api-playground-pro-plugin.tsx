@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Textarea } from '../ui/textarea';
@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Badge } from '../ui/badge';
 import { 
   Send, Plus, Trash2, Copy, Save, Folder, Loader2, XCircle, 
-  Code, Globe, FileText
+  Code, Globe, FileText, Settings
 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
 import { toast } from 'sonner';
@@ -39,6 +39,13 @@ interface Collection {
   requests: Request[];
 }
 
+interface EnvVar {
+  key: string;
+  value: string;
+}
+
+const COLLECTIONS_STORAGE_KEY = 'api-playground-pro-collections';
+
 export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
   const [method, setMethod] = useState<HttpMethod>('GET');
   const [url, setUrl] = useState('');
@@ -48,9 +55,29 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
   const [body, setBody] = useState('');
   const [response, setResponse] = useState<any>(null);
   const [loading, setLoading] = useState(false);
-  const [collections, setCollections] = useState<Collection[]>([]);
+  const [collections, setCollections] = useState<Collection[]>(() => {
+    try {
+      const stored = localStorage.getItem(COLLECTIONS_STORAGE_KEY);
+      return stored ? JSON.parse(stored) : [];
+    } catch { return []; }
+  });
   const [graphqlQuery, setGraphqlQuery] = useState('');
   const [graphqlVars, setGraphqlVars] = useState('{}');
+  const [collectionNameInput, setCollectionNameInput] = useState('');
+  const [envVars, setEnvVars] = useState<EnvVar[]>([{ key: '', value: '' }]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLLECTIONS_STORAGE_KEY, JSON.stringify(collections));
+    } catch {}
+  }, [collections]);
+
+  const replaceEnvVars = useCallback((text: string) => {
+    return text.replace(/\{\{(\w+)\}\}/g, (match, varName) => {
+      const found = envVars.find(v => v.key === varName);
+      return found ? found.value : match;
+    });
+  }, [envVars]);
 
   const addHeader = () => {
     setHeaders([...headers, { id: Date.now(), key: '', value: '', enabled: true }]);
@@ -64,20 +91,25 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
     setHeaders(headers.map(h => h.id === id ? { ...h, [field]: value } : h));
   };
 
-  const sendRequest = async () => {
+  const sendRequest = async (overrides?: { method?: HttpMethod; headers?: Record<string, string>; body?: string }) => {
     setLoading(true);
     const startTime = Date.now();
-    
-    try {
-      const requestHeaders: Record<string, string> = {};
-      headers.filter(h => h.enabled && h.key).forEach(h => {
-        requestHeaders[h.key] = h.value;
-      });
+    const reqMethod = overrides?.method ?? method;
+    const resolvedUrl = replaceEnvVars(url);
+    const resolvedBody = overrides?.body ?? replaceEnvVars(body);
 
-      const res = await fetch(url, {
-        method,
+    try {
+      const requestHeaders: Record<string, string> = overrides?.headers ?? {};
+      if (!overrides?.headers) {
+        headers.filter(h => h.enabled && h.key).forEach(h => {
+          requestHeaders[h.key] = h.value;
+        });
+      }
+
+      const res = await fetch(resolvedUrl, {
+        method: reqMethod,
         headers: requestHeaders,
-        body: ['POST', 'PUT', 'PATCH'].includes(method) ? body : undefined
+        body: ['POST', 'PUT', 'PATCH'].includes(reqMethod) ? resolvedBody : undefined
       });
 
       const time = Date.now() - startTime;
@@ -90,10 +122,15 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
         responseData = await res.text();
       }
 
+      const responseHeaders: Record<string, string> = {};
+      res.headers.forEach((value, key) => {
+        responseHeaders[key] = value;
+      });
+
       setResponse({
         status: res.status,
         statusText: res.statusText,
-        headers: Object.fromEntries(res.headers.entries()),
+        headers: responseHeaders,
         body: responseData,
         time
       });
@@ -108,6 +145,7 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
   };
 
   const saveToCollection = () => {
+    const name = collectionNameInput.trim() || `${method} ${url}`;
     const request: Request = {
       id: Date.now().toString(),
       name: `${method} ${url}`,
@@ -118,11 +156,12 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
     };
     const newCollection: Collection = {
       id: Date.now().toString(),
-      name: 'New Collection',
+      name,
       requests: [request]
     };
     setCollections([...collections, newCollection]);
-    toast.success('Saved to collection');
+    setCollectionNameInput('');
+    toast.success(`Saved to collection: ${name}`);
   };
 
   return (
@@ -151,10 +190,25 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
               </CardHeader>
               <CardContent className="p-3 space-y-2">
                 {collections.map(c => (
-                  <div key={c.id} className="text-sm p-2 hover:bg-white/5 rounded">
+                  <div key={c.id} className="text-sm p-2 hover:bg-white/5 rounded cursor-pointer" onClick={() => {
+                    const req = c.requests[0];
+                    if (req) {
+                      setMethod(req.method);
+                      setUrl(req.url);
+                      setHeaders(req.headers.map((h, i) => ({ ...h, id: Date.now() + i })));
+                      setBody(req.body);
+                      toast.success(`Loaded: ${c.name}`);
+                    }
+                  }}>
                     {c.name}
                   </div>
                 ))}
+                <Input
+                  placeholder="Collection name..."
+                  value={collectionNameInput}
+                  onChange={(e) => setCollectionNameInput(e.target.value)}
+                  className="text-sm"
+                />
                 <Button size="sm" variant="outline" className="w-full" onClick={saveToCollection}>
                   <Save className="w-3 h-3 mr-2" />
                   Save Current
@@ -180,8 +234,8 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
                 className="flex-1"
                 onKeyDown={(e) => e.key === 'Enter' && sendRequest()}
               />
-              <Button onClick={sendRequest} disabled={loading || !url}>
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              <Button onClick={() => sendRequest()} disabled={loading || !url}>
+                {loading ? <Loader2 className="w-4 h-4 thinking-spinner" /> : <Send className="w-4 h-4" />}
               </Button>
             </div>
 
@@ -190,6 +244,7 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
                 <TabsTrigger value="headers">Headers</TabsTrigger>
                 <TabsTrigger value="body">Body</TabsTrigger>
                 <TabsTrigger value="graphql">GraphQL</TabsTrigger>
+                <TabsTrigger value="env" className="flex items-center gap-1"><Settings className="w-3 h-3" />Env</TabsTrigger>
               </TabsList>
 
               <TabsContent value="headers" className="space-y-2">
@@ -233,6 +288,50 @@ export default function APIPlaygroundProPlugin({ onClose }: PluginProps) {
                   rows={4}
                   className="font-mono text-sm"
                 />
+                <Button
+                  onClick={() => {
+                    try {
+                      const vars = JSON.parse(graphqlVars);
+                      sendRequest({
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ query: graphqlQuery, variables: vars }),
+                      });
+                    } catch {
+                      toast.error('Invalid GraphQL variables JSON');
+                    }
+                  }}
+                  disabled={loading || !url || !graphqlQuery.trim()}
+                >
+                  <Send className="w-4 h-4 mr-2" />
+                  Send GraphQL
+                </Button>
+              </TabsContent>
+
+              <TabsContent value="env" className="space-y-2">
+                <p className="text-xs text-gray-400">Define variables to replace <code className="bg-white/10 px-1 rounded">{'{{varName}}'}</code> in URL and body.</p>
+                {envVars.map((v, idx) => (
+                  <div key={idx} className="flex gap-2 items-center">
+                    <Input
+                      placeholder="Variable name"
+                      value={v.key}
+                      onChange={(e) => setEnvVars(envVars.map((ev, i) => i === idx ? { ...ev, key: e.target.value } : ev))}
+                      className="flex-1"
+                    />
+                    <Input
+                      placeholder="Value"
+                      value={v.value}
+                      onChange={(e) => setEnvVars(envVars.map((ev, i) => i === idx ? { ...ev, value: e.target.value } : ev))}
+                      className="flex-1"
+                    />
+                    <Button size="icon" variant="ghost" onClick={() => setEnvVars(envVars.filter((_, i) => i !== idx))}>
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                ))}
+                <Button size="sm" variant="outline" onClick={() => setEnvVars([...envVars, { key: '', value: '' }])}>
+                  <Plus className="w-3 h-3 mr-2" />Add Variable
+                </Button>
               </TabsContent>
             </Tabs>
 

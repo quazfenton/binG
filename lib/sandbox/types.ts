@@ -13,6 +13,7 @@ export interface ToolResult {
   success: boolean
   output: string
   exitCode?: number
+  binary?: Uint8Array
 }
 
 export interface AgentMessage {

@@ -52,7 +52,6 @@ interface CodeMetrics {
   totalLines: number;
   languages: Record<string, number>;
   fileCount: number;
-  avgComplexity: number;
 }
 
 interface Issue {
@@ -98,6 +97,8 @@ export default function GitHubExplorerAdvancedPlugin({ onClose }: PluginProps) {
   const [prs, setPrs] = useState<PullRequest[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowRun[]>([]);
   const [readme, setReadme] = useState('');
+  const [showAllFiles, setShowAllFiles] = useState(false);
+  const [fileFilter, setFileFilter] = useState('');
 
   const parseRepoUrl = (url: string) => {
     const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)/);
@@ -111,6 +112,12 @@ export default function GitHubExplorerAdvancedPlugin({ onClose }: PluginProps) {
     const headers: HeadersInit = { 'Accept': 'application/vnd.github.v3+json' };
     if (token) headers['Authorization'] = `token ${token}`;
     const res = await fetch(url, { headers });
+    if (res.status === 403) {
+      const retryAfter = res.headers.get('retry-after');
+      throw new Error(
+        `GitHub API rate limit exceeded.${retryAfter ? ` Try again in ${retryAfter} seconds.` : ''} ${token ? '' : 'Add a token for higher limits.'}`
+      );
+    }
     if (!res.ok) throw new Error(`GitHub API error: ${res.statusText}`);
     return res.json();
   };
@@ -198,8 +205,7 @@ export default function GitHubExplorerAdvancedPlugin({ onClose }: PluginProps) {
       setMetrics({
         totalLines: Math.floor(totalBytes / 50), // rough estimate
         languages: langs,
-        fileCount: tree.tree.length,
-        avgComplexity: 0
+        fileCount: tree.tree.length
       });
 
       // Load issues
@@ -298,7 +304,7 @@ export default function GitHubExplorerAdvancedPlugin({ onClose }: PluginProps) {
             className="w-48"
           />
           <Button onClick={loadRepository} disabled={loading || !repoUrl}>
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            {loading ? <Loader2 className="w-4 h-4 thinking-spinner" /> : <Search className="w-4 h-4" />}
           </Button>
         </div>
 
@@ -357,8 +363,8 @@ export default function GitHubExplorerAdvancedPlugin({ onClose }: PluginProps) {
               {readme && (
                 <Card className="bg-white/5">
                   <CardHeader><CardTitle>README</CardTitle></CardHeader>
-                  <CardContent className="prose prose-invert max-w-none">
-                    <pre className="whitespace-pre-wrap text-sm">{readme.slice(0, 1000)}...</pre>
+                  <CardContent className="prose prose-invert max-w-none max-h-96 overflow-y-auto">
+                    <pre className="whitespace-pre-wrap text-sm">{readme}</pre>
                   </CardContent>
                 </Card>
               )}
@@ -367,7 +373,30 @@ export default function GitHubExplorerAdvancedPlugin({ onClose }: PluginProps) {
             <TabsContent value="files" className="grid grid-cols-2 gap-4">
               <div className="border border-white/10 rounded p-2 h-96 overflow-auto">
                 <h3 className="font-bold mb-2">File Tree</h3>
-                {renderFileTree(fileTree.slice(0, 50))}
+                <Input
+                  placeholder="Filter files..."
+                  value={fileFilter}
+                  onChange={(e) => setFileFilter(e.target.value)}
+                  className="mb-2"
+                />
+                {renderFileTree(
+                  (() => {
+                    const filtered = fileFilter
+                      ? fileTree.filter(n => n.path.toLowerCase().includes(fileFilter.toLowerCase()))
+                      : fileTree;
+                    return showAllFiles ? filtered : filtered.slice(0, 50);
+                  })()
+                )}
+                {!showAllFiles && fileTree.length > 50 && (
+                  <Button variant="ghost" size="sm" className="w-full mt-2" onClick={() => setShowAllFiles(true)}>
+                    Show all ({fileTree.length} items)
+                  </Button>
+                )}
+                {showAllFiles && fileTree.length > 50 && (
+                  <Button variant="ghost" size="sm" className="w-full mt-2" onClick={() => setShowAllFiles(false)}>
+                    Show less
+                  </Button>
+                )}
               </div>
               <div className="border border-white/10 rounded p-2 h-96 overflow-auto">
                 <h3 className="font-bold mb-2">{selectedFile || 'Select a file'}</h3>

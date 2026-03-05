@@ -12,7 +12,7 @@ import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/re
 import userEvent from '@testing-library/user-event'
 import { AuthProvider } from '@/contexts/auth-context'
 import InteractionPanel from '@/components/interaction-panel'
-import AccessibilityControls from '@/components/accessibility-controls'
+import Settings from '@/components/settings'
 import CodeMode from '@/components/code-mode'
 import ConversationInterface from '@/components/conversation-interface'
 
@@ -114,7 +114,7 @@ describe('Application Stability Integration Tests', () => {
       
       render(
         <TestWrapper>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -140,7 +140,7 @@ describe('Application Stability Integration Tests', () => {
 
       render(
         <TestWrapper authOverrides={{ isAuthenticated: true, user: mockUser }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -210,7 +210,7 @@ describe('Application Stability Integration Tests', () => {
 
       render(
         <TestWrapper authOverrides={{ isAuthenticated: true, user: mockUser }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -232,7 +232,7 @@ describe('Application Stability Integration Tests', () => {
     it('should restrict theme access for non-authenticated users', async () => {
       render(
         <TestWrapper>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -433,7 +433,7 @@ describe('Application Stability Integration Tests', () => {
       // Start with unauthenticated state
       const { rerender } = render(
         <TestWrapper authOverrides={{ register: mockRegister, login: mockLogin }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -466,7 +466,7 @@ describe('Application Stability Integration Tests', () => {
           register: mockRegister,
           login: mockLogin 
         }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -504,7 +504,7 @@ describe('Application Stability Integration Tests', () => {
 
       render(
         <TestWrapper authOverrides={{ register: mockRegister }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}
@@ -569,7 +569,7 @@ describe('Application Stability Integration Tests', () => {
       // Switch to accessibility controls
       rerender(
         <TestWrapper authOverrides={{ isAuthenticated: true, user: authenticatedUser }}>
-          <AccessibilityControls
+          <Settings
             onClose={vi.fn()}
             messages={[]}
             isProcessing={false}

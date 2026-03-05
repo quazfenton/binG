@@ -1,13 +1,15 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Button } from '../ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Textarea } from '../ui/textarea';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
+import { Download } from 'lucide-react';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '../ui/chart';
-import { Bar, BarChart, CartesianGrid, Line, LineChart, Pie, PieChart, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Line, LineChart, Pie, PieChart, XAxis, YAxis, Tooltip, Legend } from 'recharts';
+import { toast } from 'sonner';
 
 interface DataVisualizationBuilderPluginProps {
   onClose: () => void;
@@ -38,6 +40,7 @@ const DataVisualizationBuilderPlugin: React.FC<DataVisualizationBuilderPluginPro
   const [chartTitle, setChartTitle] = useState('Sample Bar Chart');
   const [error, setError] = useState<string | null>(null);
   const [parsedChartData, setParsedChartData] = useState<any[]>([]);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     try {
@@ -84,9 +87,46 @@ const DataVisualizationBuilderPlugin: React.FC<DataVisualizationBuilderPluginPro
     },
   };
 
+  const exportChartAsPNG = () => {
+    const container = chartContainerRef.current;
+    if (!container) return;
+    const svg = container.querySelector('svg');
+    if (!svg) {
+      toast.error('No chart to export');
+      return;
+    }
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const canvas = document.createElement('canvas');
+    const svgRect = svg.getBoundingClientRect();
+    canvas.width = svgRect.width * 2;
+    canvas.height = svgRect.height * 2;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.scale(2, 2);
+    const img = new Image();
+    img.onload = () => {
+      ctx.fillStyle = '#374151';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${chartTitle || 'chart'}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        toast.success('Chart exported as PNG');
+      });
+    };
+    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+  };
+
   const handleInsertVisualization = () => {
     if (error) {
-      alert('Please fix the errors before inserting the visualization.');
+      toast.error('Please fix the errors before inserting the visualization.');
       return;
     }
     const vizData = {
@@ -149,48 +189,44 @@ const DataVisualizationBuilderPlugin: React.FC<DataVisualizationBuilderPluginPro
         </div>
         <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 flex flex-col">
           <h3 className="text-md font-bold mb-2">Live Preview</h3>
-          <div className="flex-grow bg-gray-700 rounded p-2 overflow-auto flex items-center justify-center">
+          <div ref={chartContainerRef} className="flex-grow bg-gray-700 rounded p-2 overflow-auto flex items-center justify-center">
             {error ? (
               <p className="text-red-400 text-center">Cannot render preview due to data errors.</p>
+            ) : chartType === 'bar-chart' ? (
+              <ChartContainer config={chartConfig} className="min-h-[200px] w-full">
+                <BarChart data={parsedChartData}>
+                  <CartesianGrid vertical={false} />
+                  <XAxis dataKey="label" tickLine={false} tickMargin={10} axisLine={false} />
+                  <YAxis tickLine={false} tickMargin={10} axisLine={false} />
+                  <Tooltip content={<ChartTooltipContent />} />
+                  <Bar dataKey="value" fill="var(--color-value)" radius={4} />
+                </BarChart>
+              </ChartContainer>
+            ) : chartType === 'line-chart' ? (
+              <ChartContainer config={chartConfig} className="min-h-[200px] w-full">
+                <LineChart data={parsedChartData}>
+                  <CartesianGrid vertical={false} />
+                  <XAxis dataKey="label" tickLine={false} tickMargin={10} axisLine={false} />
+                  <YAxis tickLine={false} tickMargin={10} axisLine={false} />
+                  <Tooltip content={<ChartTooltipContent />} />
+                  <Line type="monotone" dataKey="value" stroke="var(--color-value)" strokeWidth={2} dot={{ r: 6 }} />
+                </LineChart>
+              </ChartContainer>
             ) : (
               <ChartContainer config={chartConfig} className="min-h-[200px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <>
-                    {chartType === 'bar-chart' && (
-                      <BarChart data={parsedChartData}>
-                        <CartesianGrid vertical={false} />
-                        <XAxis dataKey="label" tickLine={false} tickMargin={10} axisLine={false} />
-                        <YAxis tickLine={false} tickMargin={10} axisLine={false} />
-                        <Tooltip content={<ChartTooltipContent />} />
-                        <Bar dataKey="value" fill="var(--color-value)" radius={4} />
-                      </BarChart>
-                    )}
-                    {chartType === 'line-chart' && (
-                      <LineChart data={parsedChartData}>
-                        <CartesianGrid vertical={false} />
-                        <XAxis dataKey="label" tickLine={false} tickMargin={10} axisLine={false} />
-                        <YAxis tickLine={false} tickMargin={10} axisLine={false} />
-                        <Tooltip content={<ChartTooltipContent />} />
-                        <Line type="monotone" dataKey="value" stroke="var(--color-value)" strokeWidth={2} dot={{ r: 6 }} />
-                      </LineChart>
-                    )}
-                    {chartType === 'pie-chart' && (
-                      <PieChart>
-                        <Tooltip content={<ChartTooltipContent nameKey="name" />} />
-                        <Pie
-                          data={parsedChartData}
-                          dataKey="value"
-                          nameKey="name"
-                          cx="50%"
-                          cy="50%"
-                          outerRadius={80}
-                          fill="#8884d8"
-                          label
-                        />
-                      </PieChart>
-                    )}
-                  </>
-                </ResponsiveContainer>
+                <PieChart>
+                  <Tooltip content={<ChartTooltipContent nameKey="name" />} />
+                  <Pie
+                    data={parsedChartData}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={80}
+                    fill="#8884d8"
+                    label
+                  />
+                </PieChart>
               </ChartContainer>
             )}
           </div>
@@ -198,6 +234,10 @@ const DataVisualizationBuilderPlugin: React.FC<DataVisualizationBuilderPluginPro
       </div>
 
       <div className="mt-4 flex justify-end gap-2">
+        <Button variant="outline" onClick={exportChartAsPNG} disabled={!!error}>
+          <Download className="w-4 h-4 mr-2" />
+          Export PNG
+        </Button>
         <Button variant="outline" onClick={onClose}>Cancel</Button>
         <Button onClick={handleInsertVisualization} disabled={!!error}>Insert Visualization</Button>
       </div>

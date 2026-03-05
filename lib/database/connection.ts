@@ -9,17 +9,25 @@ const DB_PATH = process.env.DATABASE_PATH || join(process.cwd(), 'data', 'binG.d
 // Encryption key - MUST be set via environment variable in production
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 
-// Ensure the encryption key is 32 bytes (pad or truncate as needed)
+// CRITICAL: Validate and derive encryption key with proper security checks
 const encryptionKey = (() => {
   if (!ENCRYPTION_KEY) {
     if (process.env.NODE_ENV === 'production') {
-      throw new Error('ENCRYPTION_KEY must be set in production');
+      throw new Error('ENCRYPTION_KEY must be set in production for data security');
     }
-    console.warn('⚠️  WARNING: ENCRYPTION_KEY not set! Using insecure fallback for development only.');
+    // In development, generate random key per session (not persistent)
+    console.warn('⚠️  WARNING: ENCRYPTION_KEY not set! Using random dev key.');
+    console.warn('API keys will NOT persist across restarts in development.');
     console.warn('Set ENCRYPTION_KEY environment variable to a secure 32+ character random string.');
-    console.warn('Example: ENCRYPTION_KEY=$(openssl rand -hex 32)');
-    return Buffer.from('default-insecure-key-change-me!!'); // exactly 32 bytes
+    return crypto.randomBytes(32);
   }
+  
+  // Validate key strength
+  if (ENCRYPTION_KEY.length < 16) {
+    throw new Error('ENCRYPTION_KEY must be at least 16 characters for secure encryption');
+  }
+  
+  // Pad or truncate to exactly 32 bytes for AES-256
   return Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
 })();
 
@@ -86,6 +94,10 @@ export function getDatabase(): Database.Database {
       db.pragma('synchronous = NORMAL');
       db.pragma('cache_size = 1000');
       db.pragma('temp_store = memory');
+      
+      // SECURITY: Enable foreign key enforcement
+      // Without this, ON DELETE CASCADE and foreign key constraints are silently ignored
+      db.pragma('foreign_keys = ON');
 
       // Initialize schema synchronously first time
       if (!dbInitialized) {

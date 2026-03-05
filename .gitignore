@@ -1,5 +1,5 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
+data/virtual-filesystem/*
 # dependencies
 /node_modules
 
@@ -28,6 +28,9 @@ venv/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local sandbox workspace (development fallback)
+/local-workspace
 .aider*
 
 node_modules*

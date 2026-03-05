@@ -2,6 +2,12 @@
 //fix
 import type React from "react";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+
+// Tabs that need taller height when opened
+const TALL_TABS = ['images', 'extras', 'shell'];
+const DEFAULT_TAB_HEIGHT = 'min-h-[200px]';
+const TALL_TAB_HEIGHT = 'min-h-[400px]';
+const EXPAND_TRANSITION = 'transition-all duration-300 ease-out';
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
 import { Switch } from "../components/ui/switch";
@@ -13,7 +19,6 @@ import {
 } from "../components/ui/tabs";
 import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
-import type { Message, ConversationContext } from "../types";
 import { toast } from "sonner";
 import {
   Select,
@@ -28,7 +33,6 @@ import Send from "lucide-react/dist/esm/icons/send";
 import Plus from "lucide-react/dist/esm/icons/plus";
 import Sparkles from "lucide-react/dist/esm/icons/sparkles";
 import Settings from "lucide-react/dist/esm/icons/settings";
-import Accessibility from "lucide-react/dist/esm/icons/accessibility";
 import HelpCircle from "lucide-react/dist/esm/icons/help-circle";
 import History from "lucide-react/dist/esm/icons/history";
 import Loader2 from "lucide-react/dist/esm/icons/loader-2";
@@ -67,8 +71,11 @@ import Cloud from "lucide-react/dist/esm/icons/cloud";
 import Server from "lucide-react/dist/esm/icons/server";
 import Scale from "lucide-react/dist/esm/icons/scale";
 import Terminal from "lucide-react/dist/esm/icons/terminal";
+import Link from "lucide-react/dist/esm/icons/link";
+import X from "lucide-react/dist/esm/icons/x";
+import ArrowUp from "lucide-react/dist/esm/icons/arrow-up";
+import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import type { LLMProvider } from "../lib/api/llm-providers";
-import { templateCache, cacheKey } from "../lib/cache";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
 import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";
@@ -84,14 +91,25 @@ import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
 import IntegrationPanel from "./integrations/IntegrationPanel";
-import { useInteractionCodeMode } from "../hooks/use-interaction-code-mode";
+import { useVirtualFilesystem, type AttachedVirtualFile } from "../hooks/use-virtual-filesystem";
 import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
-import { processResponse } from "../lib/mode-manager";
-import { secureRandom, generateSecureId } from "../lib/utils";
+import { secureRandom } from "../lib/utils";
 import DevOpsCommandCenterPlugin from "./plugins/devops-command-center-plugin";
+import AIPromptLibraryPlugin from "./plugins/ai-prompt-library-plugin";
+import APIPlaygroundProPlugin from "./plugins/api-playground-pro-plugin";
+import CloudStorageProPlugin from "./plugins/cloud-storage-pro-plugin";
+import CodeSandboxPlugin from "./plugins/code-sandbox-plugin";
+import CreativeStudioPlugin from "./plugins/creative-studio-plugin";
+import DataScienceWorkbenchPlugin from "./plugins/data-science-workbench-plugin";
+import GitHubExplorerAdvancedPlugin from "./plugins/github-explorer-advanced-plugin";
+import HuggingFaceSpacesProPlugin from "./plugins/huggingface-spaces-pro-plugin";
+import JsonValidatorPlugin from "./plugins/json-validator-plugin";
+import UrlUtilitiesPlugin from "./plugins/url-utilities-plugin";
+import WikiKnowledgeBasePlugin from "./plugins/wiki-knowledge-base-plugin";
+import ImageGenerationTab from "./image-generation-tab";
 
-// Define available plugins for PluginManager
-const availablePlugins: Plugin[] = [
+// Pop-out plugin windows for Plugins tab
+const popOutPlugins: Plugin[] = [
   {
     id: "huggingface-spaces",
     name: "Hugging Face Spaces",
@@ -194,126 +212,6 @@ const availablePlugins: Plugin[] = [
   },
 ];
 
-// Plugin modules for Extras tab
-const pluginModules = [
-  {
-    id: "ai-tutor",
-    name: "AI Tutor",
-    description: "Interactive learning assistant with step-by-step explanations",
-    icon: Brain,
-    color: "text-purple-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Act as an expert tutor. Break down complex topics into digestible steps with examples and practice questions. Topic: ",
-      ),
-  },
-  {
-    id: "code-reviewer",
-    name: "Code Reviewer",
-    description: "Professional code review with best practices and optimizations",
-    icon: Code,
-    color: "text-blue-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Review this code for best practices, performance, security, and maintainability. Provide specific suggestions:\n\n```\n// Paste your code here\n```",
-      ),
-  },
-  {
-    id: "data-analyst",
-    name: "Data Analyst",
-    description: "Analyze data patterns and generate insights with visualizations",
-    icon: Database,
-    color: "text-green-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Analyze this data and provide insights, patterns, and recommendations. Create visualizations where helpful:\n\n",
-      ),
-  },
-  {
-    id: "creative-writer",
-    name: "Creative Writer",
-    description: "Craft engaging stories, scripts, and creative content",
-    icon: FileText,
-    color: "text-pink-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Write a compelling story with vivid characters, engaging dialogue, and descriptive settings. Genre: ",
-      ),
-  },
-  {
-    id: "math-solver",
-    name: "Math Solver",
-    description: "Solve mathematical problems with step-by-step solutions",
-    icon: Calculator,
-    color: "text-orange-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Solve this math problem step by step, explaining each step clearly:\n\n",
-      ),
-  },
-  {
-    id: "travel-planner",
-    name: "Travel Planner",
-    description: "Plan detailed itineraries and travel recommendations",
-    icon: Globe,
-    color: "text-cyan-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Create a detailed travel itinerary for ",
-      ),
-  },
-  {
-    id: "legal-assistant",
-    name: "Legal Assistant",
-    description: "Generate legal documents and analyze existing ones",
-    icon: Scale,
-    color: "text-indigo-400",
-    action: (setInput: (value: string) => void) =>
-      setInput(
-        "Draft a legal document or analyze this legal text: ",
-      ),
-  },
-  {
-    id: "image-generator",
-    name: "HF Image Generator",
-    description: "Generate images using Hugging Face Spaces models",
-    icon: ImageIcon,
-    color: "text-yellow-400",
-    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
-      if (setPluginToOpen && onActiveTabChange) {
-        setPluginToOpen("huggingface-spaces");
-        onActiveTabChange("integrations");
-      }
-    },
-  },
-  {
-    id: "github-explorer",
-    name: "GitHub Explorer",
-    description: "Browse trending repositories and analyze code",
-    icon: GitBranch,
-    color: "text-gray-400",
-    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
-      if (setPluginToOpen && onActiveTabChange) {
-        setPluginToOpen("github-explorer");
-        onActiveTabChange("integrations");
-      }
-    },
-  },
-  {
-    id: "cloud-storage",
-    name: "Cloud Storage 5GB",
-    description: "Access encrypted files from cloud providers",
-    icon: Cloud,
-    color: "text-sky-400",
-    action: (setInput: (value: string) => void, onActiveTabChange?: (tab: string) => void, setPluginToOpen?: (id: string) => void) => {
-      if (setPluginToOpen && onActiveTabChange) {
-        setPluginToOpen("cloud-storage");
-        onActiveTabChange("integrations");
-      }
-    },
-  },
-];
-
 interface InteractionPanelProps {
   onSubmit: (content: string) => void;
   onNewChat: () => void;
@@ -321,9 +219,6 @@ interface InteractionPanelProps {
   toggleAccessibility: () => void;
   toggleHistory: () => void;
   toggleCodePreview: () => void;
-  toggleCodeMode?: () => void;
-  onAcceptPendingDiffs?: () => void;
-  onDismissPendingDiffs?: () => void;
   onStopGeneration?: () => void;
   onRetry?: () => void;
   currentProvider?: string;
@@ -334,10 +229,10 @@ interface InteractionPanelProps {
   availableProviders: LLMProvider[];
   onProviderChange: (provider: string, model: string) => void;
   hasCodeBlocks?: boolean;
-  pendingDiffs?: { path: string; diff: string }[];
-  activeTab?: "chat" | "code" | "extras" | "integrations" | "shell";
-  onActiveTabChange?: (tab: "chat" | "code" | "extras" | "integrations" | "shell") => void;
+  activeTab?: "chat" | "extras" | "integrations" | "shell" | "images";
+  onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell" | "images") => void;
   userId?: string;
+  onAttachedFilesChange?: (files: Record<string, AttachedVirtualFile>) => void;
 }
 
 export default function InteractionPanel({
@@ -347,26 +242,21 @@ export default function InteractionPanel({
   toggleAccessibility,
   toggleHistory,
   toggleCodePreview,
-  toggleCodeMode,
   onStopGeneration,
-  onRetry,
+  onRetry: _onRetry,
   currentProvider = "openrouter",
-  currentModel = "deepseek/deepseek-r1-0528:free",
-  error,
+  currentModel = "nvidia/nemotron-3-nano-30b-a3b:free",
+  error: _error,
   input,
   setInput,
   availableProviders,
   onProviderChange,
   hasCodeBlocks = false,
-  pendingDiffs = [],
-  onAcceptPendingDiffs,
-  onDismissPendingDiffs,
   activeTab = "chat",
   onActiveTabChange,
-  userId,
+  onAttachedFilesChange,
 }: InteractionPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const codeTextareaRef = useRef<HTMLTextAreaElement>(null);
   const dragHandleRef = useRef<HTMLDivElement>(null);
 
   // Plugin state
@@ -375,14 +265,34 @@ export default function InteractionPanel({
   // Panel state
   const [panelHeight, setPanelHeight] = useState(() => {
     if (typeof window !== "undefined" && window.innerWidth <= 768) {
-      return Math.min(250, window.innerHeight * 0.4);
+      return Math.min(420, window.innerHeight * 0.58);
     }
     return 320; // Increased from 280 to ensure input is always visible
   });
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  
+  // Track tall tab transitions for smooth animation
+  const [prevTab, setPrevTab] = useState<string | null>(null);
+  const [isExpanding, setIsExpanding] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const prevPanelHeightRef = useRef<number | null>(null);
+  const getPanelMaxHeight = useCallback(() => {
+    if (typeof window === "undefined") {
+      return 600;
+    }
+    return Math.max(240, window.innerHeight - 60);
+  }, []);
+
+  const getPanelMinHeight = useCallback(() => {
+    if (typeof window === "undefined") return 240;
+    return window.innerWidth <= 768 ? 320 : 240;
+  }, []);
+
+  const toggleMinimized = useCallback(() => {
+    setIsMinimized((prev) => !prev);
+  }, []);
 
   // Handle plugin result
   const handlePluginResult = (pluginId: string, result: any) => {
@@ -406,7 +316,7 @@ export default function InteractionPanel({
         const viewportH = vw?.height ?? window.innerHeight;
 
         if (window.innerWidth <= 768) {
-          const maxMobileHeight = Math.min(250, viewportH * 0.4);
+          const maxMobileHeight = Math.max(240, viewportH - 60);
           setPanelHeight((prev) =>
             prev > maxMobileHeight ? maxMobileHeight : prev,
           );
@@ -467,9 +377,20 @@ export default function InteractionPanel({
       }, 400);
     }
   }, []);
-  // Code Mode Integration
-  const [codeModeState, codeModeActions] = useInteractionCodeMode();
-  // pending diffs come from parent via props now
+  // Virtual filesystem integration
+  const virtualFilesystem = useVirtualFilesystem("project");
+  const selectedFilePaths = useMemo(
+    () => Object.keys(virtualFilesystem.attachedFiles),
+    [virtualFilesystem.attachedFiles],
+  );
+  const virtualFileNodes = useMemo(
+    () => virtualFilesystem.nodes.filter((node) => node.type === 'file' || node.type === 'directory'),
+    [virtualFilesystem.nodes],
+  );
+
+  useEffect(() => {
+    onAttachedFilesChange?.(virtualFilesystem.attachedFiles);
+  }, [onAttachedFilesChange, virtualFilesystem.attachedFiles]);
 
   // Initialize plugin migration service
   useEffect(() => {
@@ -610,9 +531,194 @@ export default function InteractionPanel({
       defaultSize: { width: 800, height: 600 },
       minSize: { width: 600, height: 400 },
     },
+    {
+      id: "devops-command-center",
+      name: "DevOps Command Center",
+      description: "Manage deployments and infrastructure",
+      icon: Server,
+      component: DevOpsCommandCenterPlugin,
+      category: "developer",
+      defaultSize: { width: 1000, height: 800 },
+      minSize: { width: 800, height: 600 },
+    },
+    // Pro versions with advanced features
+    {
+      id: "cloud-storage-pro",
+      name: "Cloud Storage Pro",
+      description: "Advanced cloud storage with 10GB and multi-provider sync",
+      icon: Cloud,
+      component: CloudStorageProPlugin,
+      category: "utility",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "huggingface-spaces-pro",
+      name: "HF Image Generator Pro",
+      description: "Advanced image generation with multiple models and upscaling",
+      icon: ImageIcon,
+      component: HuggingFaceSpacesProPlugin,
+      category: "ai",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "api-playground-pro",
+      name: "API Tester Pro",
+      description: "Advanced API testing with collections and automation",
+      icon: Globe,
+      component: APIPlaygroundProPlugin,
+      category: "developer",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "github-explorer-advanced",
+      name: "GitHub Explorer Pro",
+      description: "Advanced GitHub analytics and code search",
+      icon: GitBranch,
+      component: GitHubExplorerAdvancedPlugin,
+      category: "code",
+      defaultSize: { width: 1000, height: 800 },
+      minSize: { width: 800, height: 600 },
+    },
+    // Utility plugins
+    {
+      id: "code-sandbox",
+      name: "Code Sandbox",
+      description: "Live code execution and testing environment",
+      icon: Code,
+      component: CodeSandboxPlugin,
+      category: "code",
+      defaultSize: { width: 900, height: 700 },
+      minSize: { width: 700, height: 500 },
+    },
+    {
+      id: "creative-studio",
+      name: "Creative Studio",
+      description: "All-in-one creative tools for design and content",
+      icon: Palette,
+      component: CreativeStudioPlugin,
+      category: "design",
+      defaultSize: { width: 1000, height: 800 },
+      minSize: { width: 800, height: 600 },
+    },
+    {
+      id: "data-science-workbench",
+      name: "Data Science Workbench",
+      description: "Advanced data analysis and ML model building",
+      icon: Database,
+      component: DataScienceWorkbenchPlugin,
+      category: "data",
+      defaultSize: { width: 1100, height: 800 },
+      minSize: { width: 900, height: 600 },
+    },
+    {
+      id: "json-validator",
+      name: "JSON Validator",
+      description: "Validate and format JSON data",
+      icon: CheckCircle,
+      component: JsonValidatorPlugin,
+      category: "utility",
+      defaultSize: { width: 700, height: 600 },
+      minSize: { width: 500, height: 400 },
+    },
+    {
+      id: "url-utilities",
+      name: "URL Utilities",
+      description: "URL shortening, parsing, and validation tools",
+      icon: Link,
+      component: UrlUtilitiesPlugin,
+      category: "utility",
+      defaultSize: { width: 600, height: 500 },
+      minSize: { width: 400, height: 350 },
+    },
+    {
+      id: "wiki-knowledge-base",
+      name: "Wiki Knowledge Base",
+      description: "Search and browse Wikipedia knowledge",
+      icon: FileText,
+      component: WikiKnowledgeBasePlugin,
+      category: "utility",
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 450 },
+    },
+    {
+      id: "ai-prompt-library",
+      name: "AI Prompt Library",
+      description: "Browse and use pre-made AI prompts",
+      icon: Brain,
+      component: AIPromptLibraryPlugin,
+      category: "ai",
+      defaultSize: { width: 800, height: 600 },
+      minSize: { width: 600, height: 450 },
+    },
   ];
 
   const [showFileSelector, setShowFileSelector] = useState(false);
+  const fileSelectorRef = useRef<HTMLDivElement>(null);
+
+  // Close file selector when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        showFileSelector &&
+        fileSelectorRef.current &&
+        !fileSelectorRef.current.contains(event.target as Node)
+      ) {
+        setShowFileSelector(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showFileSelector]);
+
+  useEffect(() => {
+    if (showFileSelector) {
+      void virtualFilesystem.listDirectory(virtualFilesystem.currentPath);
+    }
+  }, [showFileSelector, virtualFilesystem.currentPath, virtualFilesystem.listDirectory]);
+
+  const handleToggleFileAttachment = useCallback(async (filePath: string, checked: boolean) => {
+    try {
+      if (checked) {
+        await virtualFilesystem.attachFile(filePath);
+      } else {
+        virtualFilesystem.detachFile(filePath);
+      }
+    } catch (attachError) {
+      const message = attachError instanceof Error ? attachError.message : 'Failed to attach file';
+      toast.error(message);
+    }
+  }, [virtualFilesystem]);
+
+  const handleUploadFilesToVirtualFilesystem = useCallback(async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const files = Array.from(event.target.files || []);
+    if (files.length === 0) {
+      return;
+    }
+
+    try {
+      for (const file of files) {
+        const uploadedPath = await virtualFilesystem.uploadBrowserFile(file, {
+          targetDirectory: virtualFilesystem.currentPath,
+        });
+        await virtualFilesystem.attachFile(uploadedPath);
+      }
+      toast.success(`Attached ${files.length} file${files.length === 1 ? '' : 's'} from local device`);
+    } catch (uploadError) {
+      const message = uploadError instanceof Error ? uploadError.message : 'Failed to upload files';
+      toast.error(message);
+    } finally {
+      event.target.value = '';
+    }
+  }, [virtualFilesystem]);
+
   const [showMultiModelComparison, setShowMultiModelComparison] =
     useState(false);
 
@@ -635,28 +741,8 @@ export default function InteractionPanel({
     return [...suggestions].sort(() => 0.5 - secureRandom()).slice(0, 4);
   }, []);
 
-  // Code-specific prompt templates
-  const codeTemplates = [
-    {
-      title: "Component Creation",
-      template: "Create a [framework] component that [functionality]. Include:\n- TypeScript types\n- Props interface\n- Error handling\n- Unit tests\n- Documentation",
-    },
-    {
-      title: "API Development",
-      template: "Build a [language] API for [purpose] with:\n- RESTful endpoints\n- Input validation\n- Error handling\n- Authentication\n- Database integration\n- API documentation",
-    },
-    {
-      title: "Full Stack App",
-      template: "Create a full-stack [type] application with:\n- Frontend: [frontend-tech]\n- Backend: [backend-tech]\n- Database: [database]\n- Authentication\n- Responsive design\n- Deployment configuration",
-    },
-    {
-      title: "Code Review",
-      template: "Review this code for:\n- Performance optimizations\n- Security vulnerabilities\n- Best practices\n- Code quality\n- Potential bugs\n- Refactoring suggestions\n\n[paste your code here]",
-    },
-  ];
-
-  // Plugin modules with randomization
-  const pluginModules = useMemo(() => {
+  // Extra modules for Extras tab (prompt templates, not full plugins)
+  const extraModules = useMemo(() => {
     const modules = [
       {
         id: "ai-tutor",
@@ -1076,9 +1162,9 @@ export default function InteractionPanel({
         style={{
           bottom: bottomPosition,
           height: isMinimized
-            ? "60px"
+            ? "56px"
             : isExpanded
-              ? `min(${panelHeight * 1.5}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`
+              ? "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)"
               : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
           maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)",
         }}
@@ -1100,14 +1186,18 @@ export default function InteractionPanel({
             isDragging ? 'bg-white/40 cursor-ns-resize' : 'bg-transparent cursor-default'
           }`}
           style={{ zIndex: 50 }}
+          onDoubleClick={toggleMinimized}
           onMouseDown={(e) => {
+            setIsExpanded(false);
             setIsDragging(true);
             const startY = e.clientY;
             const startHeight = panelHeight;
 
             const handleMouseMove = (e: MouseEvent) => {
               const delta = startY - e.clientY;
-              setPanelHeight(Math.max(240, Math.min(600, startHeight + delta)));
+              setPanelHeight(
+                Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), startHeight + delta)),
+              );
             };
 
             const handleMouseUp = () => {
@@ -1131,7 +1221,22 @@ export default function InteractionPanel({
           }}
         />
 
-        <div className="p-2 sm:p-3 h-full overflow-hidden flex flex-col relative" style={{ cursor: 'default' }}>
+        <div className="p-2 sm:p-3 h-full flex flex-col relative" style={{ cursor: 'default' }}>
+          {/* Minimize Button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleMinimized}
+            className="absolute top-1 right-8 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
+            title={isMinimized ? "Reopen panel" : "Hide panel"}
+          >
+            {isMinimized ? (
+              <ArrowDownToLine className="w-3 h-3 rotate-180" />
+            ) : (
+              <ArrowDownToLine className="w-3 h-3" />
+            )}
+          </Button>
+
           {/* Expand/Minimize Button - Far Top Right Corner */}
           <Button
             variant="ghost"
@@ -1149,7 +1254,7 @@ export default function InteractionPanel({
           </Button>
 
           {/* Header - Compact layout */}
-          <div className="flex justify-between items-center mb-1 mt-5 px-1">
+          <div className="flex justify-between items-center mb-1 mt-3 sm:mt-5 px-1" onDoubleClick={toggleMinimized}>
             <div className="flex items-center gap-2">
               <div className="">
                 <Sparkles className="h-3 w-3 text-white" />
@@ -1163,18 +1268,78 @@ export default function InteractionPanel({
             </div>
           </div>
 
+          {isMinimized && (
+            <div className="mt-1 flex items-center justify-between px-1">
+              <span className="text-xs text-white/70">Panel hidden</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={toggleMinimized}
+                className="h-7 px-2 text-xs bg-black/40 border-white/20 hover:bg-white/10"
+                title="Reopen interaction panel"
+              >
+                Reopen
+              </Button>
+            </div>
+          )}
+
           {!isMinimized && (
-            <Tabs value={activeTab} onValueChange={(value) => onActiveTabChange?.(value as "chat" | "code" | "extras" | "integrations" | "shell")} className="flex-1 flex flex-col min-h-0">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
-                <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
-                  <TabsList className="bg-black/40">
+            <Tabs
+              value={activeTab}
+              onValueChange={(value) => {
+                // Handle height transition for tall tabs
+                const newTab = value as string;
+                const isNewTabTall = TALL_TABS.includes(newTab);
+                const isCurrentTabTall = activeTab ? TALL_TABS.includes(activeTab) : false;
+
+                // Auto-expand panel when switching to tall tabs (smooth animation)
+                if (isNewTabTall && !isExpanded && !isCurrentTabTall) {
+                  // Calculate target height for tall tabs (slightly higher than default)
+                  const targetHeight = window.innerWidth <= 768 
+                    ? Math.min(520, window.innerHeight * 0.65)  // Mobile: 65% of viewport
+                    : 520;  // Desktop: fixed 520px (higher than default 320px)
+                  
+                  // Animate height change
+                  const startHeight = panelHeight;
+                  const startTime = performance.now();
+                  const duration = 300; // 300ms smooth animation
+                  
+                  const animateHeight = (currentTime: number) => {
+                    const elapsed = currentTime - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    
+                    // Ease-out cubic bezier for smooth deceleration
+                    const easeOut = 1 - Math.pow(1 - progress, 3);
+                    
+                    const currentHeight = startHeight + (targetHeight - startHeight) * easeOut;
+                    setPanelHeight(currentHeight);
+                    
+                    if (progress < 1) {
+                      requestAnimationFrame(animateHeight);
+                    } else {
+                      setIsExpanding(false);
+                    }
+                  };
+                  
+                  setIsExpanding(true);
+                  requestAnimationFrame(animateHeight);
+                }
+
+                setPrevTab(activeTab || null);
+                onActiveTabChange?.(value as "chat" | "images" | "extras" | "integrations" | "shell");
+              }}
+              className={`flex-1 flex flex-col min-h-0 transition-all duration-300 ease-out`}
+            >
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2 sticky top-0 z-20 bg-black/70 backdrop-blur-sm py-1">
+                <div className="w-full sm:w-auto overflow-x-auto no-scrollbar">
+                  <TabsList className="bg-black/40 w-max min-w-full sm:min-w-0 sm:w-auto">
                     <TabsTrigger value="chat" className="text-xs sm:text-sm">
                       <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                       <span className="hidden sm:inline">Chat</span>
                     </TabsTrigger>
-                    <TabsTrigger value="code" className="text-xs sm:text-sm">
-                      <Code className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                      <span className="hidden sm:inline">Code</span>
+                    <TabsTrigger value="images" className="text-xs sm:text-sm">
+                      <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Images</span>
                     </TabsTrigger>
                     <TabsTrigger value="extras" className="text-xs sm:text-sm">
                       <ImageIcon className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
@@ -1191,13 +1356,13 @@ export default function InteractionPanel({
                   </TabsList>
                 </div>
 
-                <div className="flex space-x-1 sm:space-x-2 flex-shrink-0">
+                <div className="grid grid-cols-4 gap-1 w-full sm:w-auto sm:flex sm:space-x-2 flex-shrink-0">
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={onNewChat}
                     title="New Chat"
-                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                    className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
                   >
                     <Plus className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
@@ -1206,7 +1371,7 @@ export default function InteractionPanel({
                     size="sm"
                     onClick={toggleHistory}
                     title="Chat History"
-                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                    className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
                   >
                     <History className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
@@ -1215,16 +1380,16 @@ export default function InteractionPanel({
                     size="sm"
                     onClick={toggleAccessibility}
                     title="Accessibility Options"
-                    className="h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                    className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
                   >
-                    <Accessibility className="h-3 w-3 sm:h-4 sm:w-4" />
+                    <Settings className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={toggleCodePreview}
                     title="Code Preview"
-                    className={`h-8 w-8 sm:h-10 sm:w-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
+                    className={`h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
                       hasCodeBlocks
                         ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse"
                         : ""
@@ -1240,7 +1405,7 @@ export default function InteractionPanel({
               </div>
 
               {/* Provider/Model Selection - Restored */}
-              <div className="flex items-center gap-2 mb-3 text-xs text-white/60">
+              <div className="flex items-center gap-2 mb-2 text-xs text-white/60">
                 <Select
                   value={`${currentProvider}:${currentModel}`}
                   onValueChange={(value) => {
@@ -1249,7 +1414,7 @@ export default function InteractionPanel({
                     onProviderChange(provider, model);
                   }}
                 >
-                  <SelectTrigger className="w-[280px] bg-black/40 border-white/20">
+                  <SelectTrigger className="w-full sm:w-[280px] bg-black/40 border-white/20">
                     <SelectValue placeholder="Select a model" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1277,7 +1442,7 @@ export default function InteractionPanel({
               </div>
 
               {/* Tab Content Sections */}
-              <TabsContent value="chat" className="m-0 flex-1 flex flex-col min-h-0">
+              <TabsContent value="chat" className={`m-0 flex-1 flex flex-col min-h-0 overflow-visible ${activeTab === 'chat' ? DEFAULT_TAB_HEIGHT : ''} ${activeTab && activeTab !== 'chat' && TALL_TABS.includes(activeTab) ? 'min-h-[200px]' : ''} ${EXPAND_TRANSITION}`}>
                 {/* Suggestions - Compact row */}
                 <div className="flex flex-wrap gap-2 mb-2 shrink-0">
                   {chatSuggestions.map((suggestion, index) => (
@@ -1298,8 +1463,17 @@ export default function InteractionPanel({
                 </div>
 
                 {/* Input Form - Always visible at bottom */}
-                <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1 min-h-0">
-                  <div className="relative flex-1 min-h-[60px]">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const trimmed = input.trim();
+                    if (!trimmed) return;
+                    onSubmit(trimmed);
+                    setInput("");
+                  }}
+                  className="flex flex-col gap-2 flex-1 min-h-0 overflow-visible"
+                >
+                  <div className="relative flex-1 min-h-[60px] overflow-visible">
                     <Textarea
                       ref={textareaRef}
                       value={input}
@@ -1310,8 +1484,10 @@ export default function InteractionPanel({
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
-                          onSubmit(input);
-                          setInput('');
+                          const trimmed = input.trim();
+                          if (!trimmed) return;
+                          onSubmit(trimmed);
+                          setInput("");
                         }
                       }}
                       onFocus={() => {
@@ -1327,15 +1503,20 @@ export default function InteractionPanel({
                       }}
                       disabled={isProcessing}
                     />
-                    <div className="absolute right-3 top-3 flex gap-1">
+                    <div className="absolute right-3 top-3 flex gap-1" style={{ zIndex: 10 }}>
                       <button
                         type="button"
                         onClick={() => {
                           setShowFileSelector(!showFileSelector);
                         }}
-                        className="p-1.5 rounded-md bg-white/5 hover:bg-white/15 border border-white/10 transition-colors"
+                        className={`p-1.5 rounded-md border transition-colors relative ${
+                          selectedFilePaths.length > 0
+                            ? "bg-blue-500/20 border-blue-400/50 hover:bg-blue-500/30"
+                            : "bg-white/5 border-white/10 hover:bg-white/15"
+                        }`}
                         title="Attach Files"
                         disabled={isProcessing}
+                        style={{ zIndex: 11 }}
                       >
                         <FolderPlus className="w-4 h-4 text-blue-400" />
                       </button>
@@ -1354,64 +1535,147 @@ export default function InteractionPanel({
                     </div>
 
                     {showFileSelector && (
-                      <div className="absolute right-0 top-10 w-64 bg-black/90 border border-white/20 rounded-lg shadow-lg z-10 p-2">
-                        <h4 className="text-sm font-medium text-white/80">
-                          Attach Files
-                        </h4>
-                        <div className="max-h-32 overflow-y-auto">
-                          <div className="mb-3">
-                            <h5 className="text-xs font-medium mb-1">
-                              Project Files
-                            </h5>
-                            {[
-                              "src/components/App.tsx",
-                              "src/utils/helpers.ts",
-                              "package.json",
-                              "README.md",
-                              "src/styles/globals.css",
-                            ].map((file) => (
-                              <div
-                                key={file}
-                                className="flex items-center gap-2 text-xs p-1 hover:bg-white/10 rounded"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={selectedFiles.includes(file)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setSelectedFiles([
-                                        ...selectedFiles,
-                                        file,
-                                      ]);
-                                    } else {
-                                      setSelectedFiles(
-                                        selectedFiles.filter((f) => f !== file),
-                                      );
-                                    }
-                                  }}
-                                />
-                                <span className="truncate">{file}</span>
-                              </div>
-                            ))}
-                          </div>
+                      <div
+                        ref={fileSelectorRef}
+                        className="absolute right-0 bottom-full mb-2 w-80 bg-black/98 border border-white/20 rounded-lg shadow-2xl z-50 p-3"
+                        style={{ zIndex: 100000 }}
+                      >
+                        <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/10">
+                          <h4 className="text-sm font-medium text-white/80">
+                            Attach Files ({selectedFilePaths.length})
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={() => setShowFileSelector(false)}
+                            className="text-white/50 hover:text-white/80"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
 
-                          <div>
-                            <h5 className="text-xs font-medium mb-1">
-                              Cloud Storage
-                            </h5>
-                            <button
-                              onClick={() => {
-                                onActiveTabChange?.("chat");
-                                setPluginToOpen("cloud-storage");
-                              }}
-                              className="text-xs w-full text-left p-2 bg-blue-500/20 hover:bg-blue-500/30 rounded"
-                            >
-                              <div className="flex items-center gap-2">
-                                <Cloud className="w-4 h-4" />
-                                <span>Select from Cloud Storage</span>
-                              </div>
-                            </button>
+                        {/* Quick Upload Section */}
+                        <div className="mb-3 pb-3 border-b border-white/10">
+                          <button
+                            type="button"
+                            className="w-full px-3 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-400/30 rounded text-xs text-blue-300 flex items-center justify-center gap-2 transition-colors"
+                            onClick={() => fileInputRef.current?.click()}
+                          >
+                            <Plus className="w-3 h-3" />
+                            Upload from Computer
+                          </button>
+                        </div>
+
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          multiple
+                          className="hidden"
+                          onChange={handleUploadFilesToVirtualFilesystem}
+                        />
+
+                        {/* Filesystem Navigation */}
+                        <div className="mb-2 p-2 rounded bg-black/40 border border-white/10">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-[10px] text-white/60 truncate flex-1">
+                              {virtualFilesystem.currentPath}
+                            </span>
+                            <div className="flex gap-1 ml-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const current = virtualFilesystem.currentPath.replace(/\/+$/, "");
+                                  const parts = current.split("/").filter(Boolean);
+                                  if (parts.length > 1) {
+                                    const parentPath = parts.slice(0, -1).join("/");
+                                    void virtualFilesystem.listDirectory(parentPath || "project");
+                                  }
+                                }}
+                                className="p-1 hover:bg-white/10 rounded"
+                                title="Parent Directory"
+                              >
+                                <ArrowUp className="w-3 h-3 text-white/70" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void virtualFilesystem.listDirectory(virtualFilesystem.currentPath)}
+                                className="p-1 hover:bg-white/10 rounded"
+                                title="Refresh"
+                              >
+                                <RefreshCw className="w-3 h-3 text-white/70" />
+                              </button>
+                            </div>
                           </div>
+                        </div>
+
+                        {/* File List */}
+                        <div className="max-h-48 overflow-y-auto pr-1 space-y-1">
+                          {virtualFilesystem.isLoading && (
+                            <div className="text-xs text-white/60 py-4 text-center">
+                              <Loader2 className="w-4 h-4 mx-auto mb-1 animate-spin" />
+                              Loading files...
+                            </div>
+                          )}
+                          {!virtualFilesystem.isLoading && virtualFileNodes.length === 0 && (
+                            <div className="text-xs text-white/50 py-4 text-center">
+                              No files yet. Upload one or create files through chat.
+                            </div>
+                          )}
+                          {virtualFileNodes.map((fileNode) => (
+                            <div
+                              key={fileNode.path}
+                              className={`flex items-center gap-2 text-xs p-2 rounded cursor-pointer transition-colors ${
+                                selectedFilePaths.includes(fileNode.path)
+                                  ? "bg-blue-600/20 border border-blue-400/30"
+                                  : "hover:bg-white/10 border border-transparent"
+                              }`}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (fileNode.type === "directory") {
+                                  void virtualFilesystem.listDirectory(fileNode.path);
+                                }
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={fileNode.type === "file" && selectedFilePaths.includes(fileNode.path)}
+                                onChange={(event) => {
+                                  event.stopPropagation();
+                                  if (fileNode.type === "file") {
+                                    void handleToggleFileAttachment(fileNode.path, event.target.checked);
+                                  }
+                                }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                }}
+                                className="w-3 h-3"
+                                disabled={fileNode.type === "directory"}
+                              />
+                              <FileText className="w-3 h-3 text-white/50 flex-shrink-0" />
+                              <span className="truncate flex-1 text-white/80">{fileNode.name}</span>
+                              {fileNode.type === "directory" && (
+                                <ChevronRight className="w-3 h-3 text-white/30" />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Cloud Storage Section */}
+                        <div className="mt-3 pt-3 border-t border-white/10">
+                          <h5 className="text-[10px] font-medium mb-2 text-white/50 uppercase tracking-wider">
+                            External Storage
+                          </h5>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onActiveTabChange?.("chat");
+                              setPluginToOpen("cloud-storage");
+                            }}
+                            className="w-full text-xs p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded flex items-center gap-2 transition-colors"
+                          >
+                            <Cloud className="w-3 h-3 text-blue-400" />
+                            <span className="text-white/70">Browse Cloud Storage</span>
+                          </button>
                         </div>
                       </div>
                     )}
@@ -1433,7 +1697,7 @@ export default function InteractionPanel({
                       disabled={isProcessing || !input.trim()}
                     >
                       {isProcessing ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <Loader2 className="h-4 w-4 thinking-spinner" />
                       ) : (
                         <>
                           <Send className="h-4 w-4 mr-2" />
@@ -1445,194 +1709,64 @@ export default function InteractionPanel({
                 </form>
               </TabsContent>
 
-              {/* Code Tab Content */}
-              <TabsContent value="code" className="m-0 flex-1 flex flex-col min-h-0">
-                {/* Code Templates - Compact row */}
-                <div className="flex flex-wrap gap-2 mb-2 shrink-0">
-                  {codeTemplates.map((template, index) => (
-                    <Button
-                      key={index}
-                      variant="outline"
-                      size="sm"
-                      className="text-xs bg-black/20 hover:bg-black/40 border-white/20 text-left justify-start h-auto p-2 shrink-0"
-                      onClick={() => setInput(template.template)}
-                      disabled={isProcessing}
-                    >
-                      <div>
-                        <div className="font-medium">{template.title}</div>
-                      </div>
-                    </Button>
-                  ))}
-                </div>
-
-                <form onSubmit={(e) => { e.preventDefault(); onSubmit(input); setInput(''); }} className="flex flex-col gap-2 flex-1 min-h-0">
-                  <div className="relative flex-1">
-                    <Textarea
-                      ref={codeTextareaRef}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      placeholder="Describe your coding task in detail. Be specific about:\n• Framework/language preferences\n• Required features and functionality\n• Performance or security requirements\n• Testing and documentation needs"
-                      className="min-h-[120px] max-h-[300px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20 rounded-2xl"
-                      rows={6}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                        e.preventDefault();
-                        onSubmit(input);
-                        setInput('');
-                      }
-                    }}
-                    onFocus={() => {
-                      // Scroll to input on mobile when focused
-                      if (
-                        window.innerWidth <= 768 &&
-                        codeTextareaRef.current
-                      ) {
-                        setTimeout(() => {
-                          codeTextareaRef.current?.scrollIntoView({
-                            behavior: "smooth",
-                            block: "center",
-                          });
-                        }, 300); // Delay to allow keyboard to appear
-                      }
-                    }}
-                    disabled={isProcessing}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const enhancePrompt = `Please enhance and improve this coding request to be more detailed and specific:\n\n"${input}"\n\nProvide an enhanced version that includes:
-- Specific framework/language requirements
-- Detailed feature specifications
-- Performance and security considerations
-- Code structure and architecture preferences
-- Testing and documentation requirements`;
-                      setInput(enhancePrompt);
-                    }}
-                    className="absolute right-3 top-3 p-1 rounded hover:bg-white/10 transition-colors"
-                    title="Enhance this coding request"
-                    disabled={!input.trim() || isProcessing}
-                  >
-                    <Code
-                      className={`h-4 w-4 ${
-                        input.trim() && !isProcessing
-                          ? "text-blue-400 hover:text-blue-300"
-                          : "text-gray-500"
-                      }`}
+              {/* Images Tab Content - Taller height for image generation */}
+              <TabsContent 
+                value="images" 
+                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'images' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
+                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                  <CardContent className="pt-0 h-full flex flex-col min-h-0 overflow-hidden">
+                    <ImageGenerationTab 
+                      onImageGenerated={(imageUrl) => {
+                        toast.success("Image generated successfully!");
+                      }}
                     />
-                  </button>
-                </div>
-
-                {/* Send Button for Code Tab */}
-                <div className="flex justify-end mt-2">
-                  {isProcessing && onStopGeneration ? (
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      className="self-end min-w-[80px] bg-red-600/80 hover:bg-red-600 border border-red-500/50 rounded-2xl z-20"
-                      onClick={onStopGeneration}
-                    >
-                      <Square className="h-4 w-4 mr-2" />
-                      Stop
-                    </Button>
-                  ) : (
-                    <Button
-                      type="submit"
-                      className="self-end min-w-[80px] bg-white/10 hover:bg-white/20 border border-white/20 rounded-2xl z-20"
-                      disabled={isProcessing || !input.trim()}
-                    >
-                      {isProcessing ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <>
-                          <Send className="h-4 w-4 mr-2" />
-                          Send
-                        </>
-                      )}
-                    </Button>
-                  )}
-                </div>
-                </form>
+                  </CardContent>
+                </Card>
               </TabsContent>
 
-              {/* Extras Tab Content */}
-              <TabsContent value="extras" className="m-0 flex-1 overflow-auto">
-                <Card className="bg-black/40 border-white/10">
-                  <CardContent className="pt-6">
-                    <div className="space-y-4">
-                      {/* Quick Prompt Templates Section */}
+              {/* Extras Tab Content - Taller height for prompt templates */}
+              <TabsContent 
+                value="extras" 
+                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'extras' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
+                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                  <CardContent className="pt-6 h-full flex flex-col min-h-0">
+                    <div className="space-y-4 flex-1 min-h-0 flex flex-col">
+                      {/* Extras - Quick Prompt Templates */}
                       <div className="text-center mb-4">
                         <h3 className="font-medium text-white mb-2">
-                          Quick Prompt Templates
+                          Extras
                         </h3>
                         <p className="text-xs text-white/60">
                           Click to insert a specialized prompt into the chat
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto mb-6">
-                        {pluginModules.map((plugin) => {
-                          const IconComponent = plugin.icon;
+                      <div className="grid grid-cols-2 gap-3 overflow-y-auto flex-1 min-h-0 content-start">
+                        {extraModules.map((extra) => {
+                          const IconComponent = extra.icon;
                           return (
                             <button
-                              key={plugin.id}
+                              key={extra.id}
                               onClick={() => {
-                                plugin.action(setInput, onActiveTabChange, setPluginToOpen);
+                                extra.action(setInput, onActiveTabChange, setPluginToOpen);
                                 toast.success(
-                                  `${plugin.name} prompt loaded! Check the chat input.`,
+                                  `${extra.name} prompt loaded! Check the chat input.`,
                                 );
                               }}
                               className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
                             >
                               <div className="flex items-center gap-2 w-full">
                                 <IconComponent
-                                  className={`h-4 w-4 ${plugin.color} group-hover:scale-110 transition-transform`}
+                                  className={`h-4 w-4 ${extra.color} group-hover:scale-110 transition-transform`}
                                 />
                                 <span className="font-medium text-sm text-white truncate">
-                                  {plugin.name}
+                                  {extra.name}
                                 </span>
                               </div>
                               <p className="text-xs text-white/60 line-clamp-2 w-full">
-                                {plugin.description}
-                              </p>
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {/* Pop-out Plugin Windows Section */}
-                      <div className="text-center mb-4 pt-4 border-t border-white/10">
-                        <h3 className="font-medium text-white mb-2">
-                          Plugin Windows
-                        </h3>
-                        <p className="text-xs text-white/60">
-                          Click to open a plugin in a pop-out window
-                        </p>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3 max-h-80 overflow-y-auto">
-                        {availablePlugins.map((plugin) => {
-                          const IconComponent = plugin.icon;
-                          return (
-                            <button
-                              key={plugin.id}
-                              onClick={() => {
-                                setPluginToOpen(plugin.id);
-                                toast.success(
-                                  `${plugin.name} window opened!`,
-                                );
-                              }}
-                              className="flex flex-col items-center gap-2 p-3 bg-black/30 hover:bg-black/50 border border-white/10 hover:border-white/20 rounded-lg transition-all duration-200 text-left group"
-                            >
-                              <div className="flex items-center gap-2 w-full">
-                                <IconComponent
-                                  className={`h-4 w-4 ${plugin.category === 'ai' ? 'text-purple-400' : plugin.category === 'code' ? 'text-blue-400' : plugin.category === 'utility' ? 'text-green-400' : plugin.category === 'design' ? 'text-pink-400' : plugin.category === 'data' ? 'text-indigo-400' : plugin.category === 'media' ? 'text-yellow-400' : 'text-gray-400'} group-hover:scale-110 transition-transform`}
-                                />
-                                <span className="font-medium text-sm text-white truncate">
-                                  {plugin.name}
-                                </span>
-                              </div>
-                              <p className="text-xs text-white/60 line-clamp-2 w-full">
-                                {plugin.description}
+                                {extra.description}
                               </p>
                             </button>
                           );
@@ -1644,10 +1778,13 @@ export default function InteractionPanel({
               </TabsContent>
 
               {/* Integrations Tab Content */}
-              <TabsContent value="integrations" className="m-0 flex-1 overflow-auto">
-                <Card className="bg-black/40 border-white/10">
-                  <CardContent className="pt-6">
-                    <div className="space-y-3">
+              <TabsContent 
+                value="integrations" 
+                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'integrations' ? 'min-h-[350px]' : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
+                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                  <CardContent className="pt-6 h-full flex flex-col min-h-0">
+                    <div className="space-y-3 flex-1 min-h-0 overflow-y-auto">
                       <div className="flex items-center gap-2 mb-2">
                         <Zap className="h-4 w-4 text-yellow-400" />
                         <span className="text-sm font-medium">
@@ -1658,14 +1795,24 @@ export default function InteractionPanel({
                         <p className="text-xs text-white/60 mb-2">
                           Pop-out plugin windows for advanced functionality:
                         </p>
+                        {/* PluginManager for pop-out windows */}
+                        <PluginManager
+                          availablePlugins={availablePlugins}
+                          onPluginResult={handlePluginResult}
+                          openPluginId={pluginToOpen}
+                          onOpenComplete={() => setPluginToOpen(null)}
+                        />
                       </div>
                     </div>
                   </CardContent>
                 </Card>
               </TabsContent>
 
-              {/* Shell Tab Content */}
-              <TabsContent value="shell" className="m-0 flex-1 overflow-auto">
+              {/* Shell Tab Content - Taller height for terminal */}
+              <TabsContent 
+                value="shell" 
+                className={`m-0 flex-1 overflow-auto ${activeTab === 'shell' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
                 <Card className="bg-white/5 border-white/10 h-full">
                   <CardContent className="pt-4 h-full flex flex-col">
                     <div className="flex items-center justify-between mb-4">
@@ -1685,13 +1832,6 @@ export default function InteractionPanel({
                 </Card>
               </TabsContent>
             </Tabs>
-            {/* PluginManager for pop-out windows - single instance outside Tabs */}
-            <PluginManager
-              availablePlugins={availablePlugins}
-              onPluginResult={handlePluginResult}
-              openPluginId={pluginToOpen}
-              onOpenComplete={() => setPluginToOpen(null)}
-            />
           )}
         </div>
       </div>
