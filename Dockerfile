@@ -1,5 +1,5 @@
 # Base image - Using debian instead of alpine for better compatibility with native modules
-FROM node:20-bullseye AS base
+FROM node:20.20.0-trixie-slim AS base
 WORKDIR /app
 RUN corepack enable
 ENV NEXT_TELEMETRY_DISABLED=1
