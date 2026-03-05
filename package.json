@@ -88,7 +88,7 @@
     "diff": "^8.0.3",
     "diff-match-patch": "^1.0.5",
     "embla-carousel-react": "8.5.1",
-    "expo": "latest",
+    "expo": "55.0.0",
     "expo-asset": "latest",
     "expo-file-system": "latest",
     "expo-gl": "latest",
