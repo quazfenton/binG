@@ -1,0 +1,349 @@
+# Documentation
+
+## Docs
+
+- [Asynchronous triggers](https://docs.blaxel.ai/Agents/Asynchronous-triggers.md): Use asynchronous triggers for long-running agent tasks
+- [Deploy agents](https://docs.blaxel.ai/Agents/Deploy-an-agent.md): Host your custom AI agents on Blaxel as serverless autoscalable endpoints.
+- [Deploy with a Dockerfile](https://docs.blaxel.ai/Agents/Deploy-dockerfile.md): Ship your AI agent on Blaxel using a custom Dockerfile.
+- [Deploy multiple resources](https://docs.blaxel.ai/Agents/Deploy-multiple.md): Deploy multiple agents with shared context from a mono-repo.
+- [Development guide](https://docs.blaxel.ai/Agents/Develop-an-agent.md): Run any custom AI agent on Blaxel.
+- [Develop agents in Python](https://docs.blaxel.ai/Agents/Develop-an-agent-py.md): Use the Blaxel SDK to develop and run a custom agent in Python.
+- [Develop agents in TypeScript](https://docs.blaxel.ai/Agents/Develop-an-agent-ts.md): Use the Blaxel SDK to develop and run a custom agent in TypeScript.
+- [Deploy from GitHub](https://docs.blaxel.ai/Agents/Github-integration.md): Automatically deploy your GitHub repository with Blaxel.
+- [Integrate in your apps](https://docs.blaxel.ai/Agents/Integrate-in-apps.md): Integrate and use Blaxel agents in your applications and communication platforms.
+- [Agents Hosting](https://docs.blaxel.ai/Agents/Overview.md): Deploy your agents as serverless auto-scalable endpoints.
+- [Query an agent](https://docs.blaxel.ai/Agents/Query-agents.md): Make inference requests on your agents.
+- [Quickstart: run an agent on Blaxel](https://docs.blaxel.ai/Agents/Quickstart-agent.md): Deploy and run your existing code as a serverless auto-scalable API.
+- [Variables and secrets](https://docs.blaxel.ai/Agents/Variables-and-secrets.md): Manage variables and secrets in your job/agent/MCP code.
+- [Example Applications](https://docs.blaxel.ai/Examples/Overview.md): Discover sample applications that you can use as reference or deploy to Blaxel.
+- [Quickstart: Adapt an existing MCP server for Blaxel](https://docs.blaxel.ai/Functions/Adapt-Existing-MCP-server.md): Modify and deploy your existing stdio MCP server.
+- [Code mode](https://docs.blaxel.ai/Functions/Code-mode.md): Turn any OpenAPI specification into a code mode MCP server on Blaxel
+- [Quickstart: Develop a custom MCP server](https://docs.blaxel.ai/Functions/Create-MCP-server.md): Create your own custom MCP Servers.
+- [Deploy custom MCP servers](https://docs.blaxel.ai/Functions/Deploy-a-function.md): Host your custom MCP Servers on Blaxel as serverless autoscalable endpoints.
+- [Query MCP servers](https://docs.blaxel.ai/Functions/Invoke-functions.md): Make invocation requests on your MCP servers.
+- [MCP servers](https://docs.blaxel.ai/Functions/Overview.md): Deploy MCP servers as serverless APIs to equip your agents with tools.
+- [Variables and secrets](https://docs.blaxel.ai/Functions/Variables-and-secrets.md): Manage variables and secrets in your job/agent/MCP code.
+- [OAuth flow for MCP integrations](https://docs.blaxel.ai/Functions/oauth-flow-mcp.md): Setup a user-facing OAuth flow to create integration connections on Blaxel.
+- [Get started](https://docs.blaxel.ai/Get-started.md): Deploy your first Blaxel compute environment.
+- [Custom domains](https://docs.blaxel.ai/Infrastructure/Custom-domains.md): Expose Blaxel resources using your own custom domains.
+- [Generations](https://docs.blaxel.ai/Infrastructure/Gens.md): Understand our infrastructure generations.
+- [Regions](https://docs.blaxel.ai/Infrastructure/Regions.md): Choose in which region to run your workloads.
+- [Integrations](https://docs.blaxel.ai/Integrations.md): Create agents that connect to private systems, LLMs, SaaS, databases, and APIs.
+- [AgentMail](https://docs.blaxel.ai/Integrations/AgentMail.md): Build an intelligent assistant that answers technical queries via email
+- [Anthropic integration](https://docs.blaxel.ai/Integrations/Anthropic.md): Connect your agents to LLMs from Anthropic.
+- [Azure AI Foundry integration](https://docs.blaxel.ai/Integrations/Azure-AI-Foundry.md): Connect your agents to LLMs deployed in Azure AI Inference, Azure OpenAI Service, and Azure AI Services.
+- [Cohere integration](https://docs.blaxel.ai/Integrations/Cohere.md): Connect your agents to LLMs from Cohere.
+- [DeepSeek integration](https://docs.blaxel.ai/Integrations/DeepSeek.md): Connect your agents to LLMs from DeepSeek.
+- [Gmail](https://docs.blaxel.ai/Integrations/Gmail.md): Integrate Gmail services into your agents for email communication capabilities.
+- [Google Maps](https://docs.blaxel.ai/Integrations/Google-Maps.md): Integrate Google Maps services into your agents for location-based capabilities.
+- [HuggingFace integration](https://docs.blaxel.ai/Integrations/HuggingFace.md): Deploy public or private AI models from HuggingFace.
+- [Mistral AI integration](https://docs.blaxel.ai/Integrations/MistralAI.md): Connect your agents to LLMs from Mistral AI.
+- [OpenAI integration](https://docs.blaxel.ai/Integrations/OpenAI.md): Connect your agents to LLMs from OpenAI.
+- [Rippletide](https://docs.blaxel.ai/Integrations/Rippletide.md): Ensure agent safety and trust with guardrails and secure execution.
+- [OAuth flow for integrations](https://docs.blaxel.ai/Integrations/oauth-flow.md): Setup a user-facing OAuth flow to create integration connections on Blaxel.
+- [xAI integration](https://docs.blaxel.ai/Integrations/xAI.md): Connect your agents to LLMs from xAI.
+- [Deploy jobs](https://docs.blaxel.ai/Jobs/Deploy-a-job.md): Deploy your batch jobs on Blaxel as serverless autoscalable endpoints.
+- [Deploy with a Dockerfile](https://docs.blaxel.ai/Jobs/Deploy-dockerfile-jobs.md): Ship your AI batch job on Blaxel using a custom Dockerfile.
+- [Deploy multiple resources](https://docs.blaxel.ai/Jobs/Deploy-multiple-jobs.md): Deploy multiple batch jobs with shared context from a mono-repo.
+- [Develop a job](https://docs.blaxel.ai/Jobs/Develop-a-job.md): Develop and run custom AI batch jobs on Blaxel.
+- [Manage job execution in Python](https://docs.blaxel.ai/Jobs/Manage-job-execution-py.md): Use the Blaxel SDK to manage batch job execution in Python.
+- [Manage job execution in TypeScript](https://docs.blaxel.ai/Jobs/Manage-job-execution-ts.md): Use the Blaxel SDK to manage batch job execution in TypeScript.
+- [Jobs](https://docs.blaxel.ai/Jobs/Overview.md): Scheduled jobs of batch processing tasks for your AI workflows.
+- [Variables and secrets](https://docs.blaxel.ai/Jobs/Variables-and-secrets-jobs.md): Manage variables and secrets in your job/agent/MCP code.
+- [Connect your AI to this documentation](https://docs.blaxel.ai/MCP-docs.md): Make your coding assistant access this documentation.
+- [Use Blaxel MCP server](https://docs.blaxel.ai/MCP-server.md): Manage your Blaxel resources from your AI tools via MCP over HTTP.
+- [Policies](https://docs.blaxel.ai/Model-Governance/Policies.md): Create and enforce fine-grained deployment rules.
+- [External model APIs](https://docs.blaxel.ai/Models/External-model-apis.md): Control & secure access to AI models from top providers behind Blaxel Global Inference Network.
+- [Model APIs](https://docs.blaxel.ai/Models/Overview.md): Empower your agents with AI models from anywhere.
+- [Query a model API](https://docs.blaxel.ai/Models/Query-a-model.md): Make inference requests on your model APIs.
+- [Logs & traces](https://docs.blaxel.ai/Observability/Overview.md): Monitor your agents executions.
+- [Blaxel Documentation](https://docs.blaxel.ai/Overview.md): Welcome to Blaxel!
+- [Code generation tools](https://docs.blaxel.ai/Sandboxes/Codegen-tools.md): Tools and functions that are optimized for AI codegen use cases.
+- [Expiration policies](https://docs.blaxel.ai/Sandboxes/Expiration.md): Automatically delete sandboxes based on specific conditions.
+- [File system](https://docs.blaxel.ai/Sandboxes/Filesystem.md): A simple file system interface for managing files in sandboxes.
+- [Log streaming](https://docs.blaxel.ai/Sandboxes/Log-streaming.md): Access logs generated by a sandbox in real time.
+- [MCP server](https://docs.blaxel.ai/Sandboxes/MCP.md): Built-in MCP server that allows agents to operate a sandbox using tool calls.
+- [Sandboxes](https://docs.blaxel.ai/Sandboxes/Overview.md): Lightweight virtual machines where your agents can run AI code with sub-25ms cold starts.
+- [Ports](https://docs.blaxel.ai/Sandboxes/Ports.md): Expose specific ports on your sandbox and connect to them.
+- [Real-time previews](https://docs.blaxel.ai/Sandboxes/Preview-url.md): Render an application in real-time via a direct preview URL for its running sandbox.
+- [Process execution](https://docs.blaxel.ai/Sandboxes/Processes.md): Execute and manage processes in sandboxes.
+- [Client-side sessions](https://docs.blaxel.ai/Sandboxes/Sessions.md): Operate sandboxes from a frontend client using sessions.
+- [Templates](https://docs.blaxel.ai/Sandboxes/Templates.md): Create sandboxes from customized templates
+- [Volumes](https://docs.blaxel.ai/Sandboxes/Volumes.md): Persist files long-term by attaching and using volumes.
+- [Volume templates](https://docs.blaxel.ai/Sandboxes/Volumes-templates.md): Pre-populate volumes with files for faster environment setup.
+- [Best practices](https://docs.blaxel.ai/Sandboxes/best-practices.md): Understand best practices for using Blaxel sandboxes.
+- [Access tokens](https://docs.blaxel.ai/Security/Access-tokens.md): Interact with Blaxel by API or CLI using access tokens.
+- [Usage and quotas](https://docs.blaxel.ai/Security/Quotas.md): Monitor usage and manage quotas associated with your account.
+- [Service accounts](https://docs.blaxel.ai/Security/Service-accounts.md): Automate the life-cycle of Blaxel resources via API through service accounts.
+- [Workspaces, users and roles](https://docs.blaxel.ai/Security/Workspace-access-control.md): Control authentication and authorization over all resources in your workspace.
+- [Run Google ADK agents on Blaxel](https://docs.blaxel.ai/Tutorials/ADK.md): Learn how to leverage Blaxel with Google ADK agents.
+- [Overview](https://docs.blaxel.ai/Tutorials/Agents-Overview.md): Ship agents in any Python/TypeScript framework on Blaxel.
+- [Run Astro in a sandbox](https://docs.blaxel.ai/Tutorials/Astro.md): Configure an Astro application to run in a Blaxel sandbox
+- [Run Claude Agent SDK agents on Blaxel](https://docs.blaxel.ai/Tutorials/Claude-Agent-SDK-Index.md): Run Claude Agent SDK agents on Blaxel
+- [Connect Claude Agent SDK to a Blaxel sandbox](https://docs.blaxel.ai/Tutorials/Claude-Agent-SDK-MCP.md): Connect Claude Agent SDK (Claude Code SDK) to a Blaxel sandbox and operate it using its MCP server.
+- [Run Claude Code in a sandbox](https://docs.blaxel.ai/Tutorials/Claude-Code.md): Configure Claude Code to run in a Blaxel sandbox
+- [Run CrewAI agents on Blaxel](https://docs.blaxel.ai/Tutorials/CrewAI.md): Learn how to leverage Blaxel with CrewAI agents.
+- [Run custom agents on Blaxel](https://docs.blaxel.ai/Tutorials/Custom-Agents.md): Build and deploy custom agents on Blaxel in Python or TypeScript
+- [Run Expo in a sandbox](https://docs.blaxel.ai/Tutorials/Expo.md): Configure an Expo application to run in a Blaxel sandbox
+- [Run LangChain agents on Blaxel](https://docs.blaxel.ai/Tutorials/LangChain.md): Learn how to leverage Blaxel with LangChain and LangGraph.
+- [Run LlamaIndex agents on Blaxel](https://docs.blaxel.ai/Tutorials/LlamaIndex.md): Learn how to leverage Blaxel with LlamaIndex agents.
+- [Run Mastra agents on Blaxel](https://docs.blaxel.ai/Tutorials/Mastra.md): Learn how to leverage Blaxel with Mastra agents.
+- [Run Next.js in a sandbox](https://docs.blaxel.ai/Tutorials/Nextjs.md): Configure a Next.js application to run in a Blaxel sandbox
+- [Run OpenAI Agents SDK agents on Blaxel](https://docs.blaxel.ai/Tutorials/OpenAI-Agents.md): Learn how to leverage Blaxel with OpenAI Agents framework.
+- [Run OpenClaw on Blaxel](https://docs.blaxel.ai/Tutorials/OpenClaw.md): Run OpenClaw in a Blaxel sandbox
+- [Run PydanticAI agents on Blaxel](https://docs.blaxel.ai/Tutorials/PydanticAI.md): Learn how to leverage Blaxel with PydanticAI agents.
+- [Overview](https://docs.blaxel.ai/Tutorials/Sandboxes-Overview.md): Run Web applications inside a Blaxel sandbox and expose them securely
+- [Run Vercel AI SDK agents on Blaxel](https://docs.blaxel.ai/Tutorials/Vercel-AI.md): Learn how to leverage Blaxel with Vercel AI SDK agents.
+- [Orchestrate agents with n8n on Blaxel](https://docs.blaxel.ai/Tutorials/n8n.md): Orchestrate Blaxel agents using n8n workflows.
+- [Create agent](https://docs.blaxel.ai/api-reference/agents/create-agent.md): Creates a new AI agent deployment from your code. The agent will be built and deployed as a serverless auto-scaling endpoint. Use the Blaxel CLI 'bl deploy' for a simpler deployment experience.
+- [Delete agent](https://docs.blaxel.ai/api-reference/agents/delete-agent.md): Permanently deletes an agent and all its deployment history. The agent's inference endpoint will immediately stop responding. This action cannot be undone.
+- [Get agent](https://docs.blaxel.ai/api-reference/agents/get-agent.md): Returns detailed information about an agent including its current deployment status, configuration, events history, and inference endpoint URL.
+- [List all agent revisions](https://docs.blaxel.ai/api-reference/agents/list-all-agent-revisions.md)
+- [List all agents](https://docs.blaxel.ai/api-reference/agents/list-all-agents.md): Returns all AI agents deployed in the workspace. Each agent includes its deployment status, runtime configuration, and global inference endpoint URL.
+- [Update agent](https://docs.blaxel.ai/api-reference/agents/update-agent.md): Updates an agent's configuration and triggers a new deployment. Changes to runtime settings, environment variables, or scaling parameters will be applied on the next deployment.
+- [Code reranking/semantic search](https://docs.blaxel.ai/api-reference/codegen/code-rerankingsemantic-search.md): Uses Relace's code reranking model to find the most relevant files for a given query. This is useful as a first pass in agentic exploration to narrow down the search space.
+
+Based on: https://docs.relace.ai/docs/code-reranker/agent
+
+Query Construction: The query can be a short question or a more detailed conversation with the user request included. For a first pass, use the full conversation; for subsequent calls, use more targeted questions.
+
+Token Limit and Score Threshold: For 200k token context models like Claude 4 Sonnet, recommended defaults are scoreThreshold=0.5 and tokenLimit=30000.
+
+The response will be a list of file paths and contents ordered from most relevant to least relevant.
+- [Create sandbox](https://docs.blaxel.ai/api-reference/compute/create-sandbox.md): Creates a new sandbox VM for secure AI code execution. Sandboxes automatically scale to zero when idle and resume instantly, preserving memory state including running processes and filesystem.
+- [Create Sandbox Preview](https://docs.blaxel.ai/api-reference/compute/create-sandbox-preview.md): Create a preview
+- [Create token for Sandbox Preview](https://docs.blaxel.ai/api-reference/compute/create-token-for-sandbox-preview.md): Creates a token for a Sandbox Preview.
+- [Delete sandbox](https://docs.blaxel.ai/api-reference/compute/delete-sandbox.md): Permanently deletes a sandbox and all its data. If no volumes are attached, this guarantees zero data retention (ZDR). This action cannot be undone.
+- [Delete Sandbox Preview](https://docs.blaxel.ai/api-reference/compute/delete-sandbox-preview.md): Deletes a Sandbox Preview by name.
+- [Delete token for Sandbox Preview](https://docs.blaxel.ai/api-reference/compute/delete-token-for-sandbox-preview.md): Deletes a token for a Sandbox Preview by name.
+- [Get sandbox](https://docs.blaxel.ai/api-reference/compute/get-sandbox.md): Returns detailed information about a sandbox including its configuration, attached volumes, lifecycle policies, and API endpoint URL.
+- [Get Sandbox Preview](https://docs.blaxel.ai/api-reference/compute/get-sandbox-preview.md): Returns a Sandbox Preview by name.
+- [Get tokens for Sandbox Preview](https://docs.blaxel.ai/api-reference/compute/get-tokens-for-sandbox-preview.md): Gets tokens for a Sandbox Preview.
+- [List sandboxes](https://docs.blaxel.ai/api-reference/compute/list-sandboxes.md): Returns all sandboxes in the workspace. Each sandbox includes its configuration, status, and endpoint URL.
+- [List Sandboxes](https://docs.blaxel.ai/api-reference/compute/list-sandboxes-1.md): Returns a list of Sandbox Previews in the workspace.
+- [Update sandbox](https://docs.blaxel.ai/api-reference/compute/update-sandbox.md): Updates a sandbox's configuration. Note that certain changes (like image or memory) may reset the sandbox state. Use lifecycle policies to control automatic cleanup.
+- [Update Sandbox Preview](https://docs.blaxel.ai/api-reference/compute/update-sandbox-preview.md): Updates a Sandbox Preview by name.
+- [Get platform configuration](https://docs.blaxel.ai/api-reference/configurations/get-platform-configuration.md): Returns global platform configuration including available regions, countries, continents, and private locations for deployment policies.
+- [Create custom domain](https://docs.blaxel.ai/api-reference/customdomains/create-custom-domain.md): Creates a new custom domain for preview deployments. After creation, you must configure DNS records and verify domain ownership before it becomes active.
+- [Delete custom domain](https://docs.blaxel.ai/api-reference/customdomains/delete-custom-domain.md)
+- [Get custom domain](https://docs.blaxel.ai/api-reference/customdomains/get-custom-domain.md)
+- [List custom domains](https://docs.blaxel.ai/api-reference/customdomains/list-custom-domains.md): Returns all custom domains configured in the workspace. Custom domains allow serving preview deployments under your own domain (e.g., preview.yourdomain.com).
+- [Update custom domain](https://docs.blaxel.ai/api-reference/customdomains/update-custom-domain.md)
+- [Verify custom domain](https://docs.blaxel.ai/api-reference/customdomains/verify-custom-domain.md)
+- [Create a drive](https://docs.blaxel.ai/api-reference/drives/create-a-drive.md): Creates a new drive in the workspace. Drives are backed by SeaweedFS buckets and can be mounted at runtime to sandboxes.
+- [Delete a drive](https://docs.blaxel.ai/api-reference/drives/delete-a-drive.md): Deletes a drive immediately. The drive record is removed from the database synchronously.
+- [Get a drive](https://docs.blaxel.ai/api-reference/drives/get-a-drive.md): Retrieves details of a specific drive including its status and events.
+- [List drives](https://docs.blaxel.ai/api-reference/drives/list-drives.md): Returns all drives in the workspace. Drives provide persistent storage that can be attached to agents, functions, and sandboxes.
+- [Update a drive](https://docs.blaxel.ai/api-reference/drives/update-a-drive.md): Updates an existing drive. Metadata fields like displayName and labels can be changed. Size can be set if not already configured.
+- [Apply code edit](https://docs.blaxel.ai/api-reference/fastapply/apply-code-edit.md): Uses the configured LLM provider (Relace or Morph) to apply a code edit to the original content.
+
+To use this endpoint as an agent tool, follow these guidelines:
+
+Use this tool to make an edit to an existing file. This will be read by a less intelligent model, which will quickly apply the edit. You should make it clear what the edit is, while also minimizing the unchanged code you write.
+
+When writing the edit, you should specify each edit in sequence, with the special comment "// ... existing code ..." to represent unchanged code in between edited lines.
+
+Example format:
+// ... existing code ...
+FIRST_EDIT
+// ... existing code ...
+SECOND_EDIT
+// ... existing code ...
+THIRD_EDIT
+// ... existing code ...
+
+You should still bias towards repeating as few lines of the original file as possible to convey the change. But, each edit should contain minimally sufficient context of unchanged lines around the code you're editing to resolve ambiguity.
+
+DO NOT omit spans of pre-existing code (or comments) without using the "// ... existing code ..." comment to indicate its absence. If you omit the existing code comment, the model may inadvertently delete these lines.
+
+If you plan on deleting a section, you must provide context before and after to delete it. If the initial code is "Block 1\nBlock 2\nBlock 3", and you want to remove Block 2, you would output "// ... existing code ...\nBlock 1\nBlock 3\n// ... existing code ...".
+
+Make sure it is clear what the edit should be, and where it should be applied. Make edits to a file in a single edit_file call instead of multiple edit_file calls to the same file. The apply model can handle many distinct edits at once.
+- [Retrieve feature flag evaluation for workspace](https://docs.blaxel.ai/api-reference/featureflags/retrieve-feature-flag-evaluation-for-workspace.md): Evaluates a specific feature flag for the workspace with full details including variant and payload. Useful for testing and debugging feature flag targeting.
+- [Abort multipart upload](https://docs.blaxel.ai/api-reference/filesystem/abort-multipart-upload.md): Abort a multipart upload and clean up all parts
+- [Complete multipart upload](https://docs.blaxel.ai/api-reference/filesystem/complete-multipart-upload.md): Complete a multipart upload by assembling all parts
+- [Create or update a file or directory](https://docs.blaxel.ai/api-reference/filesystem/create-or-update-a-file-or-directory.md): Create or update a file or directory
+- [Create or update directory tree](https://docs.blaxel.ai/api-reference/filesystem/create-or-update-directory-tree.md): Create or update multiple files within a directory tree structure
+- [Delete directory tree](https://docs.blaxel.ai/api-reference/filesystem/delete-directory-tree.md): Delete a directory tree recursively
+- [Delete file or directory](https://docs.blaxel.ai/api-reference/filesystem/delete-file-or-directory.md): Delete a file or directory
+- [Find files and directories](https://docs.blaxel.ai/api-reference/filesystem/find-files-and-directories.md): Finds files and directories using the find command.
+- [Fuzzy search for files and directories](https://docs.blaxel.ai/api-reference/filesystem/fuzzy-search-for-files-and-directories.md): Performs fuzzy search on filesystem paths using fuzzy matching algorithm. Optimized alternative to find and grep commands.
+- [Get directory tree](https://docs.blaxel.ai/api-reference/filesystem/get-directory-tree.md): Get a recursive directory tree structure starting from the specified path
+- [Get file or directory information](https://docs.blaxel.ai/api-reference/filesystem/get-file-or-directory-information.md): Get content of a file or listing of a directory. Use Accept header to control response format for files.
+- [Initiate multipart upload](https://docs.blaxel.ai/api-reference/filesystem/initiate-multipart-upload.md): Initiate a multipart upload session for a file
+- [List multipart uploads](https://docs.blaxel.ai/api-reference/filesystem/list-multipart-uploads.md): List all active multipart uploads
+- [List parts](https://docs.blaxel.ai/api-reference/filesystem/list-parts.md): List all uploaded parts for a multipart upload
+- [Search for text content in files](https://docs.blaxel.ai/api-reference/filesystem/search-for-text-content-in-files.md): Searches for text content inside files using ripgrep. Returns matching lines with context.
+- [Stream file modification events in a directory](https://docs.blaxel.ai/api-reference/filesystem/stream-file-modification-events-in-a-directory.md): Streams the path of modified files (one per line) in the given directory. Closes when the client disconnects.
+- [Upload part](https://docs.blaxel.ai/api-reference/filesystem/upload-part.md): Upload a single part of a multipart upload
+- [Create MCP server](https://docs.blaxel.ai/api-reference/functions/create-mcp-server.md): Creates a new MCP server function deployment. The function will expose tools via the Model Context Protocol that can be used by AI agents. Supports streamable HTTP transport.
+- [Delete MCP server](https://docs.blaxel.ai/api-reference/functions/delete-mcp-server.md): Permanently deletes an MCP server function and all its deployment history. Any agents using this function's tools will no longer be able to invoke them.
+- [Get MCP server](https://docs.blaxel.ai/api-reference/functions/get-mcp-server.md): Returns detailed information about an MCP server function including its deployment status, available tools, transport configuration, and endpoint URL.
+- [List all MCP servers](https://docs.blaxel.ai/api-reference/functions/list-all-mcp-servers.md): Returns all MCP server functions deployed in the workspace. Each function includes its deployment status, transport protocol (websocket or http-stream), and endpoint URL.
+- [List function revisions](https://docs.blaxel.ai/api-reference/functions/list-function-revisions.md): Returns revisions for a function by name.
+- [Update MCP server](https://docs.blaxel.ai/api-reference/functions/update-mcp-server.md): Updates an MCP server function's configuration and triggers a new deployment. Changes to runtime settings, integrations, or transport protocol will be applied on the next deployment.
+- [Get template](https://docs.blaxel.ai/api-reference/get-template.md): Returns detailed information about a deployment template including its configuration, source code reference, and available parameters.
+- [Cleanup unused container images](https://docs.blaxel.ai/api-reference/images/cleanup-unused-container-images.md): Cleans up unused container images in the workspace registry. Only removes images that are not currently referenced by any active agent, function, sandbox, or job deployment.
+- [Delete container image](https://docs.blaxel.ai/api-reference/images/delete-container-image.md): Deletes a container image and all its tags from the workspace registry. Will fail if the image is currently in use by an active deployment.
+- [Delete container image tag](https://docs.blaxel.ai/api-reference/images/delete-container-image-tag.md): Deletes a specific tag from a container image. The underlying image layers are kept if other tags reference them. Will fail if the tag is currently in use.
+- [Get container image](https://docs.blaxel.ai/api-reference/images/get-container-image.md): Returns detailed information about a container image including all available tags, creation dates, and size information.
+- [List container images](https://docs.blaxel.ai/api-reference/images/list-container-images.md): Returns all container images stored in the workspace registry, grouped by repository with their available tags. Images are created during deployments of agents, functions, sandboxes, and jobs.
+- [Inference API](https://docs.blaxel.ai/api-reference/inference.md): Run inferences on your Blaxel deployments.
+- [Create integration connection](https://docs.blaxel.ai/api-reference/integrations/create-integration-connection.md): Creates a new integration connection with credentials for an external service. The connection can then be used by models, functions, and other resources to authenticate with the service.
+- [Delete integration connection](https://docs.blaxel.ai/api-reference/integrations/delete-integration-connection.md): Permanently deletes an integration connection. Any resources using this connection will lose access to the external service.
+- [Get integration connection](https://docs.blaxel.ai/api-reference/integrations/get-integration-connection.md): Returns detailed information about an integration connection including its provider type, configuration (secrets are masked), and usage status.
+- [Get integration connection model](https://docs.blaxel.ai/api-reference/integrations/get-integration-connection-model.md): Returns a model for an integration connection by ID.
+- [Get integration connection model endpoint configurations](https://docs.blaxel.ai/api-reference/integrations/get-integration-connection-model-endpoint-configurations.md): Returns a list of all endpoint configurations for a model.
+- [Get integration provider info](https://docs.blaxel.ai/api-reference/integrations/get-integration-provider-info.md): Returns metadata about an integration provider including available endpoints, authentication methods, and supported models or features.
+- [List integration connection models](https://docs.blaxel.ai/api-reference/integrations/list-integration-connection-models.md): Returns a list of all models for an integration connection.
+- [List integration connections](https://docs.blaxel.ai/api-reference/integrations/list-integration-connections.md): Returns all configured integration connections in the workspace. Each connection stores credentials and settings for an external service (LLM provider, API, database).
+- [Update integration connection](https://docs.blaxel.ai/api-reference/integrations/update-integration-connection.md): Updates an integration connection's configuration or credentials. Changes take effect immediately for all resources using this connection.
+- [Overview](https://docs.blaxel.ai/api-reference/introduction.md): Interact with Blaxel through APIs.
+- [Cancel job execution](https://docs.blaxel.ai/api-reference/jobs/cancel-job-execution.md): Cancels a running job execution. Tasks already in progress will complete, but no new tasks will be started. The execution status changes to 'cancelling' then 'cancelled'.
+- [Create batch job](https://docs.blaxel.ai/api-reference/jobs/create-batch-job.md): Creates a new batch job definition for parallel AI task processing. Jobs can be triggered via API or scheduled, and support configurable parallelism, timeouts, and retry logic.
+- [Create job execution](https://docs.blaxel.ai/api-reference/jobs/create-job-execution.md): Triggers a new execution of the batch job. Each execution runs multiple tasks in parallel according to the job's configured concurrency. Tasks can be parameterized via the request body.
+- [Delete batch job](https://docs.blaxel.ai/api-reference/jobs/delete-batch-job.md): Permanently deletes a batch job definition and cancels any running executions. Historical execution data will be retained for a limited time.
+- [Get batch job](https://docs.blaxel.ai/api-reference/jobs/get-batch-job.md): Returns detailed information about a batch job including its runtime configuration, execution history, and deployment status.
+- [Get job execution](https://docs.blaxel.ai/api-reference/jobs/get-job-execution.md): Returns detailed information about a specific job execution including status, task statistics (success/failure/running counts), and timing information.
+- [List batch jobs](https://docs.blaxel.ai/api-reference/jobs/list-batch-jobs.md): Returns all batch job definitions in the workspace. Each job can be triggered to run multiple parallel tasks with configurable concurrency and retry settings.
+- [List job executions](https://docs.blaxel.ai/api-reference/jobs/list-job-executions.md): Returns paginated list of executions for a batch job, sorted by creation time. Each execution contains status, task counts, and timing information.
+- [List job revisions](https://docs.blaxel.ai/api-reference/jobs/list-job-revisions.md): Returns revisions for a job by name.
+- [Update batch job](https://docs.blaxel.ai/api-reference/jobs/update-batch-job.md): Updates a batch job's configuration. Changes affect new executions; running executions continue with their original configuration.
+- [List deployment regions](https://docs.blaxel.ai/api-reference/locations/list-deployment-regions.md): Returns all deployment regions with their current availability status and supported hardware flavors. Use this to discover where resources can be deployed.
+- [List MCP Hub servers](https://docs.blaxel.ai/api-reference/mcphub/list-mcp-hub-servers.md): Returns all pre-built MCP server definitions available in the Blaxel Hub. These can be deployed directly to your workspace with pre-configured tools and integrations.
+- [Create model endpoint](https://docs.blaxel.ai/api-reference/models/create-model-endpoint.md): Creates a new model gateway endpoint that proxies requests to an external LLM provider. Requires an integration connection with valid API credentials for the target provider.
+- [Delete model endpoint](https://docs.blaxel.ai/api-reference/models/delete-model-endpoint.md): Permanently deletes a model gateway endpoint. Any agents or applications using this endpoint will need to be updated to use a different model.
+- [Get model endpoint](https://docs.blaxel.ai/api-reference/models/get-model-endpoint.md): Returns detailed information about a model gateway endpoint including its provider configuration, integration connection, and usage status.
+- [List model endpoints](https://docs.blaxel.ai/api-reference/models/list-model-endpoints.md): Returns all model gateway endpoints configured in the workspace. Each model represents a proxy to an external LLM provider (OpenAI, Anthropic, etc.) with unified access control.
+- [List model revisions](https://docs.blaxel.ai/api-reference/models/list-model-revisions.md): Returns revisions for a model by name.
+- [Update model endpoint](https://docs.blaxel.ai/api-reference/models/update-model-endpoint.md): Updates a model gateway endpoint's configuration. Changes to provider settings or integration connection take effect immediately.
+- [Disconnect tunnel](https://docs.blaxel.ai/api-reference/network/disconnect-tunnel.md): Stop the network tunnel and restore the original network configuration. WARNING: After disconnecting, the sandbox will lose all outbound internet connectivity (no egress). Inbound connections to the sandbox will still work. Use PUT /network/tunnel/config to re-establish the tunnel.
+- [Get open ports for a process](https://docs.blaxel.ai/api-reference/network/get-open-ports-for-a-process.md): Get a list of all open ports for a process
+- [Start monitoring ports for a process](https://docs.blaxel.ai/api-reference/network/start-monitoring-ports-for-a-process.md): Start monitoring for new ports opened by a process
+- [Stop monitoring ports for a process](https://docs.blaxel.ai/api-reference/network/stop-monitoring-ports-for-a-process.md): Stop monitoring for new ports opened by a process
+- [Update tunnel configuration](https://docs.blaxel.ai/api-reference/network/update-tunnel-configuration.md): Apply a new tunnel configuration on the fly. The existing tunnel is torn down and a new one is established. This endpoint is write-only; there is no corresponding GET to read the config back.
+- [Create governance policy](https://docs.blaxel.ai/api-reference/policies/create-governance-policy.md): Creates a new governance policy to control where and how resources are deployed. Policies can restrict deployment to specific regions, countries, or continents for compliance.
+- [Delete governance policy](https://docs.blaxel.ai/api-reference/policies/delete-governance-policy.md): Permanently deletes a governance policy. Resources using this policy will need to be updated to use a different policy.
+- [Get governance policy](https://docs.blaxel.ai/api-reference/policies/get-governance-policy.md): Returns detailed information about a governance policy including its type (location, flavor, or maxToken), restrictions, and which resource types it applies to.
+- [List governance policies](https://docs.blaxel.ai/api-reference/policies/list-governance-policies.md): Returns all governance policies in the workspace. Policies control deployment locations, hardware flavors, and token limits for agents, functions, and models.
+- [Update governance policy](https://docs.blaxel.ai/api-reference/policies/update-governance-policy.md): Updates a governance policy's restrictions. Changes take effect on the next deployment of resources using this policy.
+- [Execute a command](https://docs.blaxel.ai/api-reference/process/execute-a-command.md): Execute a command and return process information. If Accept header is text/event-stream, streams logs in SSE format and returns the process response as a final event.
+- [Get process by identifier](https://docs.blaxel.ai/api-reference/process/get-process-by-identifier.md): Get information about a process by its PID or name
+- [Get process logs](https://docs.blaxel.ai/api-reference/process/get-process-logs.md): Get the stdout and stderr output of a process
+- [Kill a process](https://docs.blaxel.ai/api-reference/process/kill-a-process.md): Forcefully kill a running process
+- [List all processes](https://docs.blaxel.ai/api-reference/process/list-all-processes.md): Get a list of all running and completed processes
+- [Stop a process](https://docs.blaxel.ai/api-reference/process/stop-a-process.md): Gracefully stop a running process
+- [Stream process logs in real time](https://docs.blaxel.ai/api-reference/process/stream-process-logs-in-real-time.md): Streams the stdout and stderr output of a process in real time, one line per log, prefixed with 'stdout:' or 'stderr:'. Closes when the process exits or the client disconnects.
+- [List public ips](https://docs.blaxel.ai/api-reference/publicips:list/list-public-ips.md): Returns a list of all public ips used in Blaxel..
+- [List Sandbox Hub templates](https://docs.blaxel.ai/api-reference/sandboxhub/list-sandbox-hub-templates.md): Returns all pre-built sandbox templates available in the Blaxel Hub. These include popular development environments with pre-installed tools and frameworks.
+- [Create service account](https://docs.blaxel.ai/api-reference/service_accounts/create-service-account.md): Creates a new service account for machine-to-machine authentication. Returns client ID and secret (secret is only shown once at creation). Use these credentials for OAuth client_credentials flow.
+- [Create service account API key](https://docs.blaxel.ai/api-reference/service_accounts/create-service-account-api-key.md): Creates a new long-lived API key for a service account. The full key value is only returned once at creation. API keys can have optional expiration dates.
+- [Delete service account](https://docs.blaxel.ai/api-reference/service_accounts/delete-service-account.md): Permanently deletes a service account and invalidates all its credentials. Any systems using this service account will lose access immediately.
+- [List service account API keys](https://docs.blaxel.ai/api-reference/service_accounts/list-service-account-api-keys.md): Returns all long-lived API keys created for a service account. API keys provide an alternative to OAuth for simpler authentication scenarios.
+- [List service accounts](https://docs.blaxel.ai/api-reference/service_accounts/list-service-accounts.md): Returns all service accounts in the workspace. Service accounts are machine identities for external systems to authenticate with Blaxel via OAuth or API keys.
+- [Revoke service account API key](https://docs.blaxel.ai/api-reference/service_accounts/revoke-service-account-api-key.md): Revokes an API key for a service account. The key becomes invalid immediately and any requests using it will fail authentication.
+- [Update service account](https://docs.blaxel.ai/api-reference/service_accounts/update-service-account.md): Updates a service account's name or description. Credentials (client ID/secret) cannot be changed.
+- [Health check](https://docs.blaxel.ai/api-reference/system/health-check.md): Returns health status and system information including upgrade count and binary details
+Also includes last upgrade attempt status with detailed error information if available
+- [Upgrade the sandbox-api](https://docs.blaxel.ai/api-reference/system/upgrade-the-sandbox-api.md): Triggers an upgrade of the sandbox-api process. Returns 200 immediately before upgrading.
+The upgrade will: download the specified binary from GitHub releases, validate it, and restart.
+All running processes will be preserved across the upgrade.
+Available versions: "develop" (default), "main", "latest", or specific tag like "v1.0.0"
+You can also specify a custom baseUrl for forks (defaults to https://github.com/blaxel-ai/sandbox/releases)
+- [List deployment templates](https://docs.blaxel.ai/api-reference/templates/list-deployment-templates.md): Returns all deployment templates available for creating agents, functions, and other resources with pre-configured settings and code.
+- [Create persistent volume](https://docs.blaxel.ai/api-reference/volumes/create-persistent-volume.md): Creates a new persistent storage volume that can be attached to sandboxes. Volumes must be created in a specific region and can only attach to sandboxes in the same region.
+- [Delete persistent volume](https://docs.blaxel.ai/api-reference/volumes/delete-persistent-volume.md): Permanently deletes a volume and all its data. The volume must not be attached to any sandbox. This action cannot be undone.
+- [Get persistent volume](https://docs.blaxel.ai/api-reference/volumes/get-persistent-volume.md): Returns detailed information about a volume including its size, region, attachment status, and any events history.
+- [List persistent volumes](https://docs.blaxel.ai/api-reference/volumes/list-persistent-volumes.md): Returns all persistent storage volumes in the workspace. Volumes can be attached to sandboxes for durable file storage that persists across sessions and sandbox deletions.
+- [Update volume](https://docs.blaxel.ai/api-reference/volumes/update-volume.md): Updates a volume.
+- [Create or update volume template](https://docs.blaxel.ai/api-reference/volumetemplates/create-or-update-volume-template.md): Creates or updates a volume template.
+- [Create volume template](https://docs.blaxel.ai/api-reference/volumetemplates/create-volume-template.md): Creates a new volume template for initializing volumes with pre-configured filesystem contents. Optionally returns a presigned URL for uploading the template archive.
+- [Delete volume template](https://docs.blaxel.ai/api-reference/volumetemplates/delete-volume-template.md): Deletes a volume template by name.
+- [Delete volume template version](https://docs.blaxel.ai/api-reference/volumetemplates/delete-volume-template-version.md): Deletes a specific version of a volume template.
+- [Get volume template](https://docs.blaxel.ai/api-reference/volumetemplates/get-volume-template.md): Returns a volume template by name.
+- [List volume templates](https://docs.blaxel.ai/api-reference/volumetemplates/list-volume-templates.md): Returns all volume templates in the workspace. Volume templates contain pre-configured filesystem snapshots that can be used to initialize new volumes.
+- [Allocate a new egress IP from the gateway](https://docs.blaxel.ai/api-reference/vpcs/allocate-a-new-egress-ip-from-the-gateway.md)
+- [Create a VPC for the workspace](https://docs.blaxel.ai/api-reference/vpcs/create-a-vpc-for-the-workspace.md)
+- [Create an egress gateway in a VPC](https://docs.blaxel.ai/api-reference/vpcs/create-an-egress-gateway-in-a-vpc.md)
+- [Delete a VPC](https://docs.blaxel.ai/api-reference/vpcs/delete-a-vpc.md)
+- [Delete an egress gateway](https://docs.blaxel.ai/api-reference/vpcs/delete-an-egress-gateway.md)
+- [Delete an egress IP](https://docs.blaxel.ai/api-reference/vpcs/delete-an-egress-ip.md)
+- [Get a VPC by name](https://docs.blaxel.ai/api-reference/vpcs/get-a-vpc-by-name.md)
+- [Get an egress gateway by name](https://docs.blaxel.ai/api-reference/vpcs/get-an-egress-gateway-by-name.md)
+- [Get an egress IP by name](https://docs.blaxel.ai/api-reference/vpcs/get-an-egress-ip-by-name.md)
+- [List all egress gateways across all VPCs in the workspace](https://docs.blaxel.ai/api-reference/vpcs/list-all-egress-gateways-across-all-vpcs-in-the-workspace.md)
+- [List all egress IPs across all VPCs and gateways in the workspace](https://docs.blaxel.ai/api-reference/vpcs/list-all-egress-ips-across-all-vpcs-and-gateways-in-the-workspace.md)
+- [List all VPCs in the workspace](https://docs.blaxel.ai/api-reference/vpcs/list-all-vpcs-in-the-workspace.md)
+- [List egress gateways in a VPC](https://docs.blaxel.ai/api-reference/vpcs/list-egress-gateways-in-a-vpc.md)
+- [List egress IPs in a gateway](https://docs.blaxel.ai/api-reference/vpcs/list-egress-ips-in-a-gateway.md)
+- [Accept invitation to workspace](https://docs.blaxel.ai/api-reference/workspaces/accept-invitation-to-workspace.md): Accepts an invitation to a workspace.
+- [Check workspace availability](https://docs.blaxel.ai/api-reference/workspaces/check-workspace-availability.md): Check if a workspace is available.
+- [Create workspace tenant](https://docs.blaxel.ai/api-reference/workspaces/create-workspace-tenant.md): Creates a new workspace tenant. The authenticated user becomes the workspace admin. Requires a linked billing account.
+- [Decline invitation to workspace](https://docs.blaxel.ai/api-reference/workspaces/decline-invitation-to-workspace.md): Declines an invitation to a workspace.
+- [Delete workspace tenant](https://docs.blaxel.ai/api-reference/workspaces/delete-workspace-tenant.md): Permanently deletes a workspace and ALL its resources (agents, functions, sandboxes, volumes, etc.). This action cannot be undone. Only workspace admins can delete a workspace.
+- [Get enabled features for workspace](https://docs.blaxel.ai/api-reference/workspaces/get-enabled-features-for-workspace.md): Returns only the feature flags that are currently enabled for the specified workspace. Disabled features are not included to prevent information leakage.
+- [Get workspace details](https://docs.blaxel.ai/api-reference/workspaces/get-workspace-details.md): Returns detailed information about a workspace including its display name, account ID, status, and runtime configuration.
+- [Invite user to workspace](https://docs.blaxel.ai/api-reference/workspaces/invite-user-to-workspace.md): Invites a new team member to the workspace by email. The invitee will receive an email to accept the invitation before gaining access to workspace resources.
+- [Leave workspace](https://docs.blaxel.ai/api-reference/workspaces/leave-workspace.md): Leaves a workspace.
+- [List accessible workspaces](https://docs.blaxel.ai/api-reference/workspaces/list-accessible-workspaces.md): Returns all workspaces the authenticated user has access to. Each workspace is a separate tenant with its own resources, team members, and billing.
+- [List workspace team members](https://docs.blaxel.ai/api-reference/workspaces/list-workspace-team-members.md): Returns all team members in the workspace including their roles (admin or member) and invitation status.
+- [Remove user from workspace or revoke invitation](https://docs.blaxel.ai/api-reference/workspaces/remove-user-from-workspace-or-revoke-invitation.md): Removes a user from the workspace (or revokes an invitation if the user has not accepted the invitation yet).
+- [Update user role in workspace](https://docs.blaxel.ai/api-reference/workspaces/update-user-role-in-workspace.md): Updates the role of a user in the workspace.
+- [Update workspace](https://docs.blaxel.ai/api-reference/workspaces/update-workspace.md): Updates a workspace's settings such as display name and labels. The workspace name cannot be changed after creation.
+- [bl apply](https://docs.blaxel.ai/cli-reference/commands/bl_apply.md)
+- [bl chat](https://docs.blaxel.ai/cli-reference/commands/bl_chat.md)
+- [bl completion](https://docs.blaxel.ai/cli-reference/commands/bl_completion.md)
+- [bl completion bash](https://docs.blaxel.ai/cli-reference/commands/bl_completion_bash.md)
+- [bl completion fish](https://docs.blaxel.ai/cli-reference/commands/bl_completion_fish.md)
+- [bl completion powershell](https://docs.blaxel.ai/cli-reference/commands/bl_completion_powershell.md)
+- [bl completion zsh](https://docs.blaxel.ai/cli-reference/commands/bl_completion_zsh.md)
+- [bl connect](https://docs.blaxel.ai/cli-reference/commands/bl_connect.md)
+- [bl connect sandbox](https://docs.blaxel.ai/cli-reference/commands/bl_connect_sandbox.md)
+- [bl delete](https://docs.blaxel.ai/cli-reference/commands/bl_delete.md)
+- [bl delete agent](https://docs.blaxel.ai/cli-reference/commands/bl_delete_agent.md)
+- [bl delete function](https://docs.blaxel.ai/cli-reference/commands/bl_delete_function.md)
+- [bl delete image](https://docs.blaxel.ai/cli-reference/commands/bl_delete_image.md)
+- [bl delete integrationconnection](https://docs.blaxel.ai/cli-reference/commands/bl_delete_integrationconnection.md)
+- [bl delete job](https://docs.blaxel.ai/cli-reference/commands/bl_delete_job.md)
+- [bl delete model](https://docs.blaxel.ai/cli-reference/commands/bl_delete_model.md)
+- [bl delete policy](https://docs.blaxel.ai/cli-reference/commands/bl_delete_policy.md)
+- [bl delete sandbox](https://docs.blaxel.ai/cli-reference/commands/bl_delete_sandbox.md)
+- [bl delete volume](https://docs.blaxel.ai/cli-reference/commands/bl_delete_volume.md)
+- [bl delete volumetemplate](https://docs.blaxel.ai/cli-reference/commands/bl_delete_volumetemplate.md)
+- [bl deploy](https://docs.blaxel.ai/cli-reference/commands/bl_deploy.md)
+- [bl get](https://docs.blaxel.ai/cli-reference/commands/bl_get.md)
+- [bl get agents](https://docs.blaxel.ai/cli-reference/commands/bl_get_agents.md)
+- [bl get functions](https://docs.blaxel.ai/cli-reference/commands/bl_get_functions.md)
+- [bl get image](https://docs.blaxel.ai/cli-reference/commands/bl_get_image.md)
+- [bl get integrationconnections](https://docs.blaxel.ai/cli-reference/commands/bl_get_integrationconnections.md)
+- [bl get jobs](https://docs.blaxel.ai/cli-reference/commands/bl_get_jobs.md)
+- [bl get models](https://docs.blaxel.ai/cli-reference/commands/bl_get_models.md)
+- [bl get policies](https://docs.blaxel.ai/cli-reference/commands/bl_get_policies.md)
+- [bl get sandboxes](https://docs.blaxel.ai/cli-reference/commands/bl_get_sandboxes.md)
+- [bl get volumes](https://docs.blaxel.ai/cli-reference/commands/bl_get_volumes.md)
+- [bl get volumetemplates](https://docs.blaxel.ai/cli-reference/commands/bl_get_volumetemplates.md)
+- [bl login](https://docs.blaxel.ai/cli-reference/commands/bl_login.md)
+- [bl logout](https://docs.blaxel.ai/cli-reference/commands/bl_logout.md)
+- [bl logs](https://docs.blaxel.ai/cli-reference/commands/bl_logs.md)
+- [bl new](https://docs.blaxel.ai/cli-reference/commands/bl_new.md)
+- [bl run](https://docs.blaxel.ai/cli-reference/commands/bl_run.md)
+- [bl serve](https://docs.blaxel.ai/cli-reference/commands/bl_serve.md)
+- [bl token](https://docs.blaxel.ai/cli-reference/commands/bl_token.md)
+- [bl upgrade](https://docs.blaxel.ai/cli-reference/commands/bl_upgrade.md)
+- [bl version](https://docs.blaxel.ai/cli-reference/commands/bl_version.md)
+- [bl workspaces](https://docs.blaxel.ai/cli-reference/commands/bl_workspaces.md)
+- [Overview](https://docs.blaxel.ai/cli-reference/introduction.md): Interact with Blaxel through a command line interface.
+- [Deployment File Reference](https://docs.blaxel.ai/deployment-reference.md): Understand the blaxel.toml file
+- [Overview](https://docs.blaxel.ai/sdk-reference/introduction.md): Manage Blaxel resources programmatically using our SDKs.
+- [Python SDK](https://docs.blaxel.ai/sdk-reference/sdk-python.md): Manage Blaxel resources programmatically using our Python SDK.
+- [TypeScript SDK](https://docs.blaxel.ai/sdk-reference/sdk-ts.md): Manage Blaxel resources programmatically using our TypeScript SDK.
+- [Troubleshooting](https://docs.blaxel.ai/troubleshooting.md): Troubleshoot common problems with Blaxel deployments
+
+## OpenAPI Specs
+
+- [controlplane](https://docs.blaxel.ai/api-reference/controlplane.yml)
+- [openapi](https://raw.githubusercontent.com/blaxel-ai/sandbox/refs/heads/main/sandbox-api/docs/openapi.yml)
+
+## Optional
+
+- [Changelog](https://docs.blaxel.ai/changelog)

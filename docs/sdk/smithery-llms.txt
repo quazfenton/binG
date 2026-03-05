@@ -1,0 +1,58 @@
+# Smithery Documentation
+
+## Docs
+
+- [Create connection](https://smithery.ai/docs/api-reference/connect/create-connection.md): Create a new MCP connection with an auto-generated ID. Requires API key and namespace ownership.
+- [Create or update connection](https://smithery.ai/docs/api-reference/connect/create-or-update-connection.md): Create or update an MCP connection with the given ID. mcpUrl is required when creating a new connection, but optional when updating (omit to keep the existing URL). Returns 409 if a different mcpUrl is provided - delete and recreate to change URL. Requires API key and namespace ownership.
+- [Delete connection](https://smithery.ai/docs/api-reference/connect/delete-connection.md): Delete a connection and terminate its MCP session. Requires API key and namespace ownership.
+- [Get connection](https://smithery.ai/docs/api-reference/connect/get-connection.md): Get details for a specific connection. Requires service token with connections:read scope.
+- [List connections](https://smithery.ai/docs/api-reference/connect/list-connections.md): List all connections in a namespace. Supports filtering by metadata using `metadata.{key}={value}` query params (e.g., `metadata.userId=alice`).
+- [Poll events (unstable)](https://smithery.ai/docs/api-reference/connectevents/poll-events-unstable.md): Poll for MCP server events. Returns available events and deletes them atomically (queue semantics). When done is true, no events remain — wait and retry later.
+- [MCP endpoint](https://smithery.ai/docs/api-reference/connectmcp/mcp-endpoint.md): Stateless MCP endpoint using Streamable HTTP transport. Accepts JSON-RPC requests and notifications. Session management is handled internally by Connect—clients should not send mcp-session-id headers. Requires service token with mcp scope.
+- [Health check](https://smithery.ai/docs/api-reference/health-check.md): Check if the service is running
+- [Create a new namespace](https://smithery.ai/docs/api-reference/namespaces/create-a-new-namespace.md): Create a new namespace owned by the authenticated user. This endpoint is idempotent - if the namespace already exists and is owned by the user, returns success.
+- [Create a new namespace with generated name](https://smithery.ai/docs/api-reference/namespaces/create-a-new-namespace-with-generated-name.md): Create a new namespace with a server-generated human-readable name, owned by the authenticated user
+- [Create a server under a namespace (deprecated)](https://smithery.ai/docs/api-reference/namespaces/create-a-server-under-a-namespace-deprecated.md): **Deprecated:** Use PUT /servers/{namespace}/{server} instead. Create a new server under the specified namespace. This endpoint is idempotent.
+- [Delete a namespace](https://smithery.ai/docs/api-reference/namespaces/delete-a-namespace.md): Delete a namespace owned by the authenticated user. The namespace must not contain any servers. Skills and connections in the namespace will be deleted automatically.
+- [Get user's namespaces or search namespaces](https://smithery.ai/docs/api-reference/namespaces/get-users-namespaces-or-search-namespaces.md): When called without query params, returns the authenticated user's namespaces (backwards compatible). When query params are provided, searches public namespaces with pagination. Use ownerId to filter by owner, hasServers/hasSkills to filter by content, q for text search.
+- [Create a server](https://smithery.ai/docs/api-reference/servers/create-a-server.md): Create a new server. Idempotent — returns success if the server already exists and is owned by the caller.
+- [Delete a server](https://smithery.ai/docs/api-reference/servers/delete-a-server.md): Permanently delete a server, its releases, and associated resources.
+- [Delete server icon](https://smithery.ai/docs/api-reference/servers/delete-server-icon.md): Remove the server's icon.
+- [Download server bundle](https://smithery.ai/docs/api-reference/servers/download-server-bundle.md): Download the MCPB bundle for the latest successful stdio release.
+- [Get a release](https://smithery.ai/docs/api-reference/servers/get-a-release.md): Retrieve release details including status, git metadata, pipeline logs, and MCP endpoint URL.
+- [Get a server](https://smithery.ai/docs/api-reference/servers/get-a-server.md): Retrieve server details including connections, tools, and security status.
+- [Get server icon](https://smithery.ai/docs/api-reference/servers/get-server-icon.md): Retrieve the server's icon image. Returns the image directly with appropriate content type.
+- [List all servers](https://smithery.ai/docs/api-reference/servers/list-all-servers.md): Search and browse public MCP servers in the Smithery registry. Supports full-text and semantic search via the `q` parameter, and filtering by deployment status, verification, ownership, and more.
+- [List releases](https://smithery.ai/docs/api-reference/servers/list-releases.md): List releases ordered by most recent first. Logs are omitted — fetch a specific release to see logs.
+- [List runtime logs](https://smithery.ai/docs/api-reference/servers/list-runtime-logs.md): Fetch recent runtime logs grouped by invocation.
+- [Publish a server](https://smithery.ai/docs/api-reference/servers/publish-a-server.md): Submit a release via multipart form. Supports hosted (JS module upload), external (URL), stdio (MCPB bundle), and repo (GitHub build) release types.
+- [Resume a release](https://smithery.ai/docs/api-reference/servers/resume-a-release.md): Resume a paused release (e.g. after OAuth authorization). Use id='latest' to resume the most recent one.
+- [Stream release logs](https://smithery.ai/docs/api-reference/servers/stream-release-logs.md): Real-time SSE stream of release logs and status updates.
+- [Update a server](https://smithery.ai/docs/api-reference/servers/update-a-server.md): Update server metadata such as display name, description, icon, or visibility.
+- [Upload server icon](https://smithery.ai/docs/api-reference/servers/upload-server-icon.md): Upload or replace the server icon. Accepts a single image file via multipart/form-data. Max 1MB. Supported formats: PNG, JPEG, GIF, SVG, WebP.
+- [Create a new skill (deprecated)](https://smithery.ai/docs/api-reference/skills/create-a-new-skill-deprecated.md): **Deprecated:** Use PUT /skills/{namespace}/{slug} instead. Create a new skill by linking a GitHub repository containing a SKILL.md file.
+- [Create or update a skill](https://smithery.ai/docs/api-reference/skills/create-or-update-a-skill.md): Idempotent endpoint to create or sync a skill. If the skill does not exist, creates it. If it exists, updates displayName, description, and externalStars from GitHub.
+- [Delete a skill](https://smithery.ai/docs/api-reference/skills/delete-a-skill.md): Delete a skill by namespace and slug. Requires ownership of the namespace.
+- [Get a skill](https://smithery.ai/docs/api-reference/skills/get-a-skill.md): Get a single skill by its namespace and slug.
+- [List or search skills](https://smithery.ai/docs/api-reference/skills/list-or-search-skills.md): Search and browse reusable prompt-based skills. Supports full-text and semantic search via the `q` parameter, and filtering by category, namespace, or slug.
+- [Create a service token](https://smithery.ai/docs/api-reference/tokens/create-a-service-token.md): Create a service token for machine-to-machine authentication. Accepts API key or bearer token. Optionally apply restrictions.
+- [Create uplink token](https://smithery.ai/docs/api-reference/uplink/create-uplink-token.md): Create or retrieve an authtoken for uplink connections
+- [Overview](https://smithery.ai/docs/build/index.md): Publish your MCP servers on Smithery for distribution and analytics.
+- [Publish](https://smithery.ai/docs/build/publish.md): Publish your MCP server on Smithery for distribution and analytics.
+- [Smithery CLI](https://smithery.ai/docs/concepts/cli.md): Use the Smithery CLI to search, connect, and manage MCP servers and skills from the command line.
+- [Namespaces](https://smithery.ai/docs/concepts/namespaces.md): Namespaces group your servers, connections, and skills under a shared identifier.
+- [What is MCP?](https://smithery.ai/docs/concepts/what_is_mcp.md): What is MCP? How does it work? What does Smithery do with MCP?
+- [Build an OAuth-compatible client](https://smithery.ai/docs/cookbooks/typescript_oauth_client.md): How to build an OAuth client in Typescript using Next.js
+- [Connect to servers](https://smithery.ai/docs/getting_started/quickstart_connect.md): Connect to an MCP server
+- [Introduction](https://smithery.ai/docs/index.md): Smithery is the largest open marketplace of [Model Context Protocol](https://modelcontextprotocol.io/docs/getting-started/intro) (MCP) servers. Discover and use MCP servers that enable LLMs to search the web, access databases, and much more.
+- [Vercel AI SDK Integration](https://smithery.ai/docs/integrations/vercel_ai_sdk.md): Integrate MCP servers with Vercel AI SDK using Smithery Connect
+- [Connect to MCPs](https://smithery.ai/docs/use/connect.md): Manage MCP connections with a simple REST API - OAuth, tokens, and sessions handled for you.
+- [Deep Linking](https://smithery.ai/docs/use/deep-linking.md): Deep links provide a seamless way to integrate Smithery MCPs into supported clients.
+- [Overview](https://smithery.ai/docs/use/index.md): Learn how to integrate MCP servers into your AI agents with Smithery Connect.
+- [Listing Your Client](https://smithery.ai/docs/use/listing_your_client.md): Get your MCP client listed on Smithery for easy discovery and installation by end users
+- [Token Scoping](https://smithery.ai/docs/use/token-scoping.md): Control which connections and operations a token can access — by user, workspace, or any custom dimension.
+
+## OpenAPI Specs
+
+- [openapi.documented](https://app.stainless.com/api/spec/documented/smithery/openapi.documented.yml)
+- [openapi](https://smithery.ai/docs/openapi.json)
