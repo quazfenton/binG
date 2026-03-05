@@ -14,6 +14,8 @@ import { E2BProvider } from './e2b-provider'
 import { DaytonaProvider } from './daytona-provider'
 import { RunloopProvider } from './runloop-provider'
 import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from './e2b-desktop-provider-enhanced'
+import { CircuitBreaker, providerCircuitBreakers, createCircuitBreakerWithMetrics } from '@/lib/utils/circuit-breaker'
+import { sandboxMetrics } from '@/lib/backend/metrics'
 
 /**
  * Union type for all supported sandbox providers.
@@ -29,6 +31,8 @@ export type SandboxProviderType =
   | 'codesandbox'
   | 'webcontainer'
   | 'opensandbox'
+  | 'opensandbox-code-interpreter'
+  | 'opensandbox-agent'
   | 'mistral-agent'
   | 'mistral'
 
@@ -42,6 +46,7 @@ interface ProviderEntry {
   initializing: boolean
   initPromise: Promise<SandboxProvider> | null
   failureCount: number
+  circuitBreaker?: CircuitBreaker
   factory?: () => SandboxProvider
 }
 
@@ -56,7 +61,7 @@ function initializeRegistry() {
     priority: 1,
     enabled: true,
     available: false,
-    healthy: true,
+    healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
@@ -71,7 +76,7 @@ function initializeRegistry() {
     priority: 2,
     enabled: true,
     available: false,
-    healthy: true,
+    healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
@@ -86,7 +91,7 @@ function initializeRegistry() {
     priority: 3,
     enabled: true,
     available: false,
-    healthy: true,
+    healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
@@ -101,7 +106,7 @@ function initializeRegistry() {
     priority: 4,
     enabled: true,
     available: false,
-    healthy: true,
+    healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
@@ -116,7 +121,7 @@ function initializeRegistry() {
     priority: 5,
     enabled: true,
     available: false,
-    healthy: true,
+    healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
@@ -131,7 +136,7 @@ function initializeRegistry() {
     priority: 6,
     enabled: true,
     available: false,
-    healthy: true,
+    healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
@@ -146,7 +151,7 @@ function initializeRegistry() {
     priority: 7,
     enabled: true,
     available: false,
-    healthy: true,
+    healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
@@ -161,7 +166,7 @@ function initializeRegistry() {
     priority: 8,
     enabled: true,
     available: false,
-    healthy: true,
+    healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
@@ -176,7 +181,7 @@ function initializeRegistry() {
     priority: 9,
     enabled: true,
     available: false,
-    healthy: true,
+    healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
@@ -186,13 +191,43 @@ function initializeRegistry() {
     },
   })
 
+  providerRegistry.set('opensandbox-code-interpreter', {
+    provider: null as any,
+    priority: 9,
+    enabled: true,
+    available: false,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    factory: () => {
+      const { OpenSandboxCodeInterpreterProvider } = require('./opensandbox-code-interpreter-provider')
+      return new OpenSandboxCodeInterpreterProvider()
+    },
+  })
+
+  providerRegistry.set('opensandbox-agent', {
+    provider: null as any,
+    priority: 9,
+    enabled: true,
+    available: false,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    factory: () => {
+      const { OpenSandboxAgentSandboxProvider } = require('./opensandbox-agent-sandbox-provider')
+      return new OpenSandboxAgentSandboxProvider()
+    },
+  })
+
   // Mistral Agent provider (lazy initialization)
   providerRegistry.set('mistral-agent', {
     provider: null as any,
     priority: 3,
     enabled: true,
     available: false,
-    healthy: true,
+    healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
@@ -208,7 +243,7 @@ function initializeRegistry() {
     priority: 3,
     enabled: false, // Disabled by default, use mistral-agent instead
     available: false,
-    healthy: true,
+    healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
@@ -230,7 +265,7 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Get a sandbox provider by type with retry logic and race condition prevention.
+ * Get a sandbox provider by type with retry logic, race condition prevention, and circuit breaker protection.
  * @param type - Provider type (defaults to SANDBOX_PROVIDER env var or 'daytona')
  */
 export async function getSandboxProvider(type?: SandboxProviderType): Promise<SandboxProvider> {
@@ -242,6 +277,30 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
       `Unknown sandbox provider type: ${providerType}. ` +
       `Available providers: ${Array.from(providerRegistry.keys()).join(', ')}`
     )
+  }
+
+  if (!entry.enabled) {
+    throw new Error(`Provider ${providerType} is disabled`)
+  }
+
+  if (!entry.provider && !entry.factory) {
+    throw new Error(`Provider ${providerType} has no initialization factory`)
+  }
+
+  // Get or create circuit breaker for this provider
+  if (!entry.circuitBreaker) {
+    entry.circuitBreaker = createCircuitBreakerWithMetrics(providerType);
+  }
+  const circuitBreaker = entry.circuitBreaker;
+
+  // Check circuit breaker before attempting initialization
+  if (!circuitBreaker.canExecute()) {
+    const stats = circuitBreaker.getStats();
+    sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'circuit_open' });
+    throw new Error(
+      `Provider ${providerType} is unavailable (circuit breaker ${stats.state}). ` +
+      `Next attempt at: ${stats.nextAttemptTime?.toISOString() || 'unknown'}`
+    );
   }
 
   // Already initialized and healthy — return immediately
@@ -256,6 +315,8 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
 
   // Start initialization with retry logic
   entry.initializing = true
+  const initStartTime = Date.now();
+
   entry.initPromise = (async () => {
     let lastError: Error | undefined
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -263,14 +324,30 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
         if (entry.factory) {
           entry.provider = entry.factory()
         }
+        if (!entry.provider) {
+          throw new Error(`Provider ${providerType} initialization returned no instance`)
+        }
         entry.available = true
         entry.healthy = true
         entry.failureCount = 0
         entry.initializing = false
+
+        // Record successful initialization metrics
+        const initDuration = (Date.now() - initStartTime) / 1000;
+        sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'success' });
+        sandboxMetrics.providerInitDuration.observe({ provider: providerType }, initDuration);
+        circuitBreaker.getState(); // Record success in circuit breaker
+
         return entry.provider
       } catch (error: any) {
         lastError = error
         entry.failureCount++
+
+        // Record failed initialization metrics
+        const initDuration = (Date.now() - initStartTime) / 1000;
+        sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'failure' });
+        sandboxMetrics.providerInitDuration.observe({ provider: providerType }, initDuration);
+
         if (attempt < MAX_RETRIES) {
           await delay(Math.pow(2, attempt) * 100) // exponential backoff: 200ms, 400ms
         }
@@ -346,7 +423,7 @@ export async function getAvailableProviders(): Promise<SandboxProviderType[]> {
     if (!entry.enabled) continue
 
     // If already initialized and healthy, include it
-    if (entry.provider && entry.available) {
+    if (entry.provider && entry.available && entry.healthy) {
       available.push(type)
       continue
     }
@@ -401,6 +478,8 @@ export { SpritesProvider } from './sprites-provider'
 export { CodeSandboxProvider } from './codesandbox-provider'
 export { WebContainerProvider } from './webcontainer-provider'
 export { OpenSandboxProvider } from './opensandbox-provider'
+export { OpenSandboxCodeInterpreterProvider } from './opensandbox-code-interpreter-provider'
+export { OpenSandboxAgentSandboxProvider } from './opensandbox-agent-sandbox-provider'
 export { E2BProvider, E2BGitIntegration, createE2BGitIntegration } from './e2b-provider'
 // export { MistralAgentProvider } from './mistral/mistral-agent-provider' // Lazy export
 

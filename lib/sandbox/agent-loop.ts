@@ -46,7 +46,7 @@ interface AgentLoopResult {
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
   const { userMessage, sandboxId, userId, conversationHistory, onToolExecution, onStreamChunk } = options
   const providerType = (process.env.SANDBOX_PROVIDER || 'daytona') as any
-  const provider = getSandboxProvider(providerType)
+  const provider = await getSandboxProvider(providerType)
   const llm = getLLMProvider()
 
   const sandboxHandle = await provider.getSandbox(sandboxId)
@@ -236,6 +236,10 @@ async function executeToolOnSandbox(
         await rateLimiter.record(rateLimitKey, 'codeExecution')
 
         // Execute code using sandbox's code interpreter if available
+        if ('runCode' in sandbox) {
+          return (sandbox as unknown as { runCode(c: string, l: string): Promise<ToolResult> }).runCode(code, language)
+        }
+
         // Otherwise, write to temp file and execute
         const tempFile = `/tmp/code_${Date.now()}.${getCodeExtension(language)}`
         await sandbox.writeFile(tempFile, code)

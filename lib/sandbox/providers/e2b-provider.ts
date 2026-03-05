@@ -106,6 +106,24 @@ export class E2BProvider implements SandboxProvider {
   }
 
   /**
+   * Health check - verifies API connectivity by listing active sandboxes
+   */
+  async healthCheck(): Promise<{ healthy: boolean; latency?: number; details?: any }> {
+    const startTime = Date.now()
+    try {
+      await this.ensureE2BModule()
+      const Sandbox = this.e2bModule.Sandbox
+      const sandboxes = await Sandbox.list()
+      const latency = Date.now() - startTime
+      return { healthy: true, latency, details: { activeSandboxes: sandboxes.length } }
+    } catch (error: any) {
+      const latency = Date.now() - startTime
+      console.error('[E2BProvider] Health check failed:', error.message)
+      return { healthy: false, latency, details: { error: error.message } }
+    }
+  }
+
+  /**
    * Lazily load E2B SDK module
    */
   private async ensureE2BModule(): Promise<void> {

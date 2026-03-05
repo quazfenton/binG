@@ -264,7 +264,7 @@ export class SandboxResourceMonitor extends EventEmitter {
       if (providerType) {
         // Try to fetch from provider
         try {
-          const provider = getSandboxProvider(providerType);
+          const provider = await getSandboxProvider(providerType);
           const sandbox = await provider.getSandbox(sandboxId);
           
           // Collect actual metrics from sandbox

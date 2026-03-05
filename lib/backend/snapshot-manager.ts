@@ -3,6 +3,8 @@
  * Pure-TypeScript snapshot creation, restoration, and lifecycle management
  * with retry logic and optional remote storage backend support.
  * Migrated from ephemeral/snapshot_manager.py
+ *
+ * METRICS WIRED: All operations emit metrics
  */
 
 import { EventEmitter } from 'events';
@@ -13,6 +15,7 @@ import * as zlib from 'zlib';
 import { createGzip, createGunzip } from 'zlib';
 import { pack, unpack } from 'tar-stream';
 import { randomBytes } from 'crypto';
+import { sandboxMetrics } from './metrics';
 
 export interface RetryConfig {
   maxRetries: number;
@@ -134,8 +137,12 @@ export class SnapshotManager extends EventEmitter {
     snapshotId = snapshotId || this.generateSnapshotId();
     validateId(snapshotId, 'snapshot_id');
 
+    const startTime = Date.now();
+    sandboxMetrics.snapshotCreatedTotal.inc({ status: 'started' });
+
     const workspace = this.userWorkspace(userId);
     if (!existsSync(workspace)) {
+      sandboxMetrics.snapshotCreatedTotal.inc({ status: 'workspace_not_found' });
       throw new Error(`Workspace not found: ${workspace}`);
     }
 
@@ -156,8 +163,13 @@ export class SnapshotManager extends EventEmitter {
       createdAt: new Date(stat.mtime),
     };
 
+    const duration = (Date.now() - startTime) / 1000;
+
     console.log(`Snapshot created: ${snapshotPath} (${result.sizeBytes} bytes)`);
     this.emit('snapshot_created', result);
+    sandboxMetrics.snapshotCreatedTotal.inc({ status: 'success' });
+    sandboxMetrics.snapshotSizeBytes.observe({}, result.sizeBytes);
+    sandboxMetrics.snapshotCreationDuration.observe({ userId }, duration);
 
     // Upload to remote storage backend if available
     if (this.storageBackend) {
@@ -220,8 +232,12 @@ export class SnapshotManager extends EventEmitter {
     validateId(userId, 'user_id');
     validateId(snapshotId, 'snapshot_id');
 
+    const startTime = Date.now();
+    sandboxMetrics.snapshotRestoredTotal.inc({ status: 'started' });
+
     const snapshotPath = this.snapshotPath(userId, snapshotId);
     if (!existsSync(snapshotPath)) {
+      sandboxMetrics.snapshotRestoredTotal.inc({ status: 'not_found' });
       throw new Error(`Snapshot not found: ${snapshotPath}`);
     }
 
@@ -233,8 +249,12 @@ export class SnapshotManager extends EventEmitter {
 
     await withRetry(extract, retryConfig, `restore_snapshot(${userId}/${snapshotId})`);
 
+    const duration = (Date.now() - startTime) / 1000;
+
     console.log(`Snapshot restored: ${snapshotPath} -> ${workspace}`);
     this.emit('snapshot_restored', { userId, snapshotId });
+    sandboxMetrics.snapshotRestoredTotal.inc({ status: 'success' });
+    sandboxMetrics.snapshotRestorationDuration.observe({ userId }, duration);
 
     return true;
   }

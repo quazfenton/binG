@@ -44,7 +44,7 @@
 import { enhancedTerminalManager } from '@/lib/sandbox/enhanced-terminal-manager'
 import { getSandboxProvider } from '@/lib/sandbox/providers'
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge'
-import { MCPClient, type MCPToolResult } from '@/lib/mcp'
+import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp'
 import type { PreviewInfo } from '@/lib/sandbox/types'
 import type { DesktopHandle } from '@/lib/sandbox/providers/sandbox-provider'
 import { GitManager, type GitStatusResult } from './git-manager'
@@ -127,81 +127,253 @@ export class UnifiedAgent {
   private session: AgentSession | null = null
   private terminalOutput: TerminalOutput[] = []
   private desktopHandle: DesktopHandle | null = null
-  private mcpClient: MCPClient | null = null
+  private mcpInitialized: boolean = false
   private gitManager: GitManager | null = null
   private onOutputCallback?: (output: TerminalOutput) => void
+  private initializedCapabilities: Set<AgentCapability> = new Set()
+  private initializationErrors: Map<AgentCapability, Error> = new Map()
 
   constructor(config: UnifiedAgentConfig) {
     this.config = config
+    
+    // Validate configuration
+    if (!config.provider) {
+      throw new Error('Provider is required')
+    }
+    
+    const validProviders = ['e2b', 'daytona', 'blaxel', 'sprites', 'codesandbox', 'microsandbox']
+    if (!validProviders.includes(config.provider)) {
+      throw new Error(`Invalid provider: ${config.provider}. Valid providers: ${validProviders.join(', ')}`)
+    }
   }
 
   // ==================== Lifecycle ====================
 
   /**
    * Initialize the agent session with real sandbox
+   * 
+   * ERROR HANDLING: Each capability initialization is wrapped in try-catch
+   * CAPABILITY TRACKING: Tracks which capabilities were successfully initialized
    */
   async initialize(): Promise<AgentSession> {
     const userId = this.config.userId || 'anonymous-agent'
+    const initStartTime = Date.now()
     console.log(`[UnifiedAgent] Initializing session for ${userId}...`)
 
-    // Create real sandbox session via bridge
-    const workspaceSession = await sandboxBridge.getOrCreateSession(userId, {
-      provider: this.config.provider,
-      env: this.config.env,
-    })
+    try {
+      // Create real sandbox session via bridge with error handling
+      let workspaceSession
+      try {
+        workspaceSession = await sandboxBridge.getOrCreateSession(userId, {
+          provider: this.config.provider,
+          env: this.config.env,
+        })
+      } catch (error: any) {
+        console.error('[UnifiedAgent] Failed to create sandbox session:', error.message)
+        throw new Error(
+          `Failed to initialize sandbox: ${error.message}. ` +
+          `Check that provider "${this.config.provider}" is properly configured.`
+        )
+      }
 
-    this.session = {
-      sessionId: workspaceSession.sessionId,
-      sandboxId: workspaceSession.sandboxId,
-      userId,
-      provider: this.config.provider,
-      capabilities: this.config.capabilities || ['terminal'],
-      createdAt: Date.now(),
-      lastActive: Date.now(),
+      this.session = {
+        sessionId: workspaceSession.sessionId,
+        sandboxId: workspaceSession.sandboxId,
+        userId,
+        provider: this.config.provider,
+        capabilities: this.config.capabilities || ['terminal'],
+        createdAt: Date.now(),
+        lastActive: Date.now(),
+      }
+
+      // Initialize capabilities with individual error handling
+      const capabilities = this.config.capabilities || ['terminal']
+      const initResults: Record<string, boolean> = {}
+
+      for (const capability of capabilities) {
+        try {
+          switch (capability) {
+            case 'terminal':
+              await this.initializeTerminal()
+              this.initializedCapabilities.add('terminal')
+              initResults.terminal = true
+              break
+
+            case 'desktop':
+              if (this.config.desktop?.enabled !== false) {
+                await this.initializeDesktop()
+                if (this.desktopHandle) {
+                  this.initializedCapabilities.add('desktop')
+                  initResults.desktop = true
+                } else {
+                  initResults.desktop = false
+                }
+              }
+              break
+
+            case 'mcp':
+              if (this.config.mcp) {
+                await this.initializeMCP()
+                if (this.mcpInitialized) {
+                  this.initializedCapabilities.add('mcp')
+                  initResults.mcp = true
+                } else {
+                  initResults.mcp = false
+                }
+              }
+              break
+
+            case 'git':
+              await this.initializeGit()
+              if (this.gitManager) {
+                this.initializedCapabilities.add('git')
+                initResults.git = true
+              } else {
+                initResults.git = false
+              }
+              break
+
+            case 'code-execution':
+              this.initializedCapabilities.add('code-execution')
+              initResults['code-execution'] = true
+              break
+
+            case 'file-ops':
+              this.initializedCapabilities.add('file-ops')
+              initResults['file-ops'] = true
+              break
+
+            case 'preview':
+              this.initializedCapabilities.add('preview')
+              initResults.preview = true
+              break
+
+            default:
+              console.warn(`[UnifiedAgent] Unknown capability: ${capability}`)
+              initResults[capability] = false
+          }
+        } catch (error: any) {
+          console.error(`[UnifiedAgent] Failed to initialize capability ${capability}:`, error.message)
+          this.initializationErrors.set(capability, error)
+          initResults[capability] = false
+          
+          // Don't fail entire initialization for non-critical capabilities
+          if (['desktop', 'mcp', 'git'].includes(capability)) {
+            console.warn(`[UnifiedAgent] Continuing without ${capability} capability`)
+          }
+        }
+      }
+
+      const initDuration = Date.now() - initStartTime
+      console.log(
+        `[UnifiedAgent] Session initialized: ${this.session.sessionId} ` +
+        `(${initDuration}ms). Capabilities: ${JSON.stringify(initResults)}`
+      )
+
+      return this.session
+
+    } catch (error: any) {
+      console.error('[UnifiedAgent] Initialization failed:', error.message)
+      throw error
     }
-
-    // Initialize Git Manager if capability enabled
-    if (this.config.capabilities?.includes('git')) {
-       const provider = await getSandboxProvider(this.config.provider as any)
-        const handle = await provider.getSandbox(this.session.sandboxId)
-        this.gitManager = new GitManager(handle)
-       }
-
-    // Initialize capabilities
-    if (this.config.capabilities?.includes('terminal')) {
-      await this.initializeTerminal()
-    }
-
-    if (this.config.capabilities?.includes('desktop')) {
-      await this.initializeDesktop()
-    }
-
-    if (this.config.capabilities?.includes('mcp') && this.config.mcp) {
-      await this.initializeMCP()
-    }
-
-    console.log('[UnifiedAgent] Session initialized:', this.session.sessionId)
-    return this.session
   }
 
   /**
-   * Clean up all resources
+   * Get capability initialization status
+   */
+  getCapabilityStatus(): {
+    initialized: AgentCapability[]
+    failed: AgentCapability[]
+    errors: Map<AgentCapability, Error>
+  } {
+    const allCapabilities = this.config.capabilities || ['terminal']
+    const failed = allCapabilities.filter(c => !this.initializedCapabilities.has(c)) as AgentCapability[]
+    
+    return {
+      initialized: Array.from(this.initializedCapabilities) as AgentCapability[],
+      failed,
+      errors: new Map(this.initializationErrors),
+    }
+  }
+
+  /**
+   * Clean up all resources with comprehensive error handling
    */
   async cleanup(): Promise<void> {
-    if (!this.session) return
-    console.log(`[UnifiedAgent] Cleaning up session ${this.session.sessionId}...`)
-
-    if (this.mcpClient) {
-      await this.mcpClient.disconnect()
-      this.mcpClient = null
+    if (!this.session) {
+      console.log('[UnifiedAgent] No session to cleanup')
+      return
     }
 
-    // Disconnect terminal but keep sandbox alive unless explicitly requested
-    await enhancedTerminalManager.disconnectTerminal(this.session.sessionId)
-    
-    this.session = null
-    this.terminalOutput = []
-    console.log('[UnifiedAgent] Cleanup complete')
+    console.log(`[UnifiedAgent] Cleaning up session ${this.session.sessionId}...`)
+    const cleanupErrors: Error[] = []
+
+    try {
+      this.mcpInitialized = false
+
+      // Disconnect terminal but keep sandbox alive unless explicitly requested
+      try {
+        await enhancedTerminalManager.disconnectTerminal(this.session.sessionId)
+        this.initializedCapabilities.delete('terminal')
+      } catch (error: any) {
+        console.error('[UnifiedAgent] Terminal disconnect failed:', error.message)
+        cleanupErrors.push(error)
+      }
+
+      // Cleanup desktop handle if exists
+      if (this.desktopHandle && 'cleanup' in this.desktopHandle) {
+        try {
+          await (this.desktopHandle as any).cleanup()
+          this.desktopHandle = null
+          this.initializedCapabilities.delete('desktop')
+        } catch (error: any) {
+          console.error('[UnifiedAgent] Desktop cleanup failed:', error.message)
+          cleanupErrors.push(error)
+        }
+      }
+
+      // Cleanup Git manager if exists
+      this.gitManager = null
+      this.initializedCapabilities.delete('git')
+
+      // Clear terminal output
+      this.terminalOutput = []
+      this.initializationErrors.clear()
+
+      this.session = null
+
+      if (cleanupErrors.length > 0) {
+        console.warn(
+          `[UnifiedAgent] Cleanup completed with ${cleanupErrors.length} error(s)`,
+          cleanupErrors.map(e => e.message)
+        )
+      } else {
+        console.log('[UnifiedAgent] Cleanup complete')
+      }
+
+    } catch (error: any) {
+      console.error('[UnifiedAgent] Cleanup failed:', error.message)
+      throw error
+    }
+  }
+
+  /**
+   * Initialize Git manager with error handling
+   */
+  private async initializeGit(): Promise<void> {
+    if (!this.session) {
+      throw new Error('Session not initialized')
+    }
+
+    try {
+      const provider = await getSandboxProvider(this.config.provider as any)
+      const handle = await provider.getSandbox(this.session.sandboxId)
+      this.gitManager = new GitManager(handle)
+      console.log('[UnifiedAgent] Git manager initialized')
+    } catch (error: any) {
+      console.error('[UnifiedAgent] Git initialization failed:', error.message)
+      throw new Error(`Failed to initialize Git: ${error.message}`)
+    }
   }
 
   // ==================== Terminal ====================
@@ -410,35 +582,33 @@ export class UnifiedAgent {
   /**
    * Call MCP tool
    */
-  async mcpCall(toolName: string, args: Record<string, any>): Promise<MCPToolResult> {
-    if (!this.mcpClient) {
+  async mcpCall(toolName: string, args: Record<string, any>): Promise<{ success: boolean; output: string; error?: string }> {
+    if (!this.mcpInitialized) {
       throw new Error('MCP not initialized')
     }
 
-    return this.mcpClient.callTool(toolName, args)
+    return callMCPToolFromAI_SDK(toolName, args)
   }
 
   /**
    * List available MCP tools
    */
-  async mcpListTools(): Promise<Array<{ name: string; description: string }>> {
-    if (!this.mcpClient) {
+  async mcpListTools(): Promise<Array<{ name: string; description?: string }>> {
+    if (!this.mcpInitialized) {
       throw new Error('MCP not initialized')
     }
 
-    return this.mcpClient.listTools()
+    const tools = await getMCPToolsForAI_SDK()
+    return tools.map(t => ({ name: t.function.name, description: t.function.description }))
   }
 
   private async initializeMCP(): Promise<void> {
     if (!this.config.mcp) return
 
-    this.mcpClient = new MCPClient()
-
     try {
-      await this.mcpClient.connect({
-        servers: this.config.mcp,
-      })
-      console.log(`[UnifiedAgent] MCP initialized`)
+      const tools = await getMCPToolsForAI_SDK()
+      this.mcpInitialized = true
+      console.log(`[UnifiedAgent] MCP initialized with ${tools.length} tools`)
     } catch (error) {
       console.warn('[UnifiedAgent] MCP initialization failed:', error)
     }
@@ -613,7 +783,7 @@ export class UnifiedAgent {
       uptime: Date.now() - this.session.createdAt,
       terminalOutputLength: this.terminalOutput.length,
       desktopEnabled: !!this.desktopHandle,
-      mcpEnabled: !!this.mcpClient,
+      mcpEnabled: this.mcpInitialized,
     }
   }
 }

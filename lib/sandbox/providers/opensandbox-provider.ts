@@ -1,4 +1,4 @@
-import * as path from 'node:path'
+import path from 'node:path'
 import type { ToolResult, PreviewInfo } from '../types'
 import type {
   SandboxProvider,
@@ -6,7 +6,6 @@ import type {
   SandboxCreateConfig,
 } from './sandbox-provider'
 import { SandboxSecurityManager } from '../security-manager'
-import path from 'path'
 
 const WORKSPACE_DIR = '/workspace'
 const DEFAULT_TIMEOUT_SECONDS = 3600
