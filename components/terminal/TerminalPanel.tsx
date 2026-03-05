@@ -159,6 +159,11 @@ export default function TerminalPanel({
   const IDLE_TIMEOUT_MS = parseInt(process.env.NEXT_PUBLIC_SANDBOX_IDLE_TIMEOUT_MS || '900000', 10);
   const IDLE_WARNING_MS = parseInt(process.env.NEXT_PUBLIC_SANDBOX_IDLE_WARNING_MS || '60000', 10);
 
+  // WebSocket terminal configuration
+  const WS_TERMINAL_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || `ws://localhost:${process.env.NEXT_PUBLIC_WEBSOCKET_PORT || 8080}`;
+  const wsReconnectAttempts = useRef<number>(0);
+  const WS_MAX_RECONNECT_ATTEMPTS = 5;
+
   const terminalsRef = useRef<TerminalInstance[]>([]);
   terminalsRef.current = terminals;
   const resizeStartY = useRef<number>(0);
