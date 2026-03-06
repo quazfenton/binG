@@ -46,7 +46,7 @@ import { getSandboxProvider } from '@/lib/sandbox/providers'
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge'
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp'
 import type { PreviewInfo } from '@/lib/sandbox/types'
-import type { DesktopHandle } from '@/lib/sandbox/providers/sandbox-provider'
+import type { DesktopHandle } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
 import { GitManager, type GitStatusResult } from './git-manager'
 
 // ==================== Types ====================

@@ -109,27 +109,8 @@ function getAuthHeaders(): Record<string, string> {
   return headers;
 }
 
-const createInitialFileSystem = (): LocalFileSystem => ({
+const createMinimalProject = (): LocalFileSystem => ({
   'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
-  'project/README.md': { 
-    type: 'file', 
-    content: '# My Project\n\nWelcome to your project!\n\nThis is a local shell simulation.\n',
-    createdAt: Date.now(), 
-    modifiedAt: Date.now() 
-  },
-  'project/package.json': {
-    type: 'file',
-    content: '{\n  "name": "my-project",\n  "version": "1.0.0",\n  "description": "A sample project"\n}\n',
-    createdAt: Date.now(),
-    modifiedAt: Date.now()
-  },
-  'project/src': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
-  'project/src/index.js': {
-    type: 'file',
-    content: 'console.log("Hello, World!");\n',
-    createdAt: Date.now(),
-    modifiedAt: Date.now()
-  },
 });
 
 export default function TerminalPanel({
@@ -182,40 +163,40 @@ export default function TerminalPanel({
   } = virtualFilesystem;
 
   // Sync local filesystem with virtual filesystem on mount and when scope changes
+  const [isVfsSynced, setIsVfsSynced] = useState(false);
+  const [vfsFileCount, setVfsFileCount] = useState(0);
+  
   useEffect(() => {
    if (!isOpen) return;
-   
+
    const syncVfsToLocal = async () => {
      try {
        const snapshot = await getVfsSnapshot();
        const files = snapshot?.files || [];
-       
+
+       console.log('[TerminalPanel] VFS Snapshot received:', {
+         fileCount: files.length,
+         samplePaths: files.slice(0, 5).map(f => f.path),
+         scopePath: filesystemScopePath,
+       });
+
        if (files.length === 0) {
-         // Keep mock filesystem when VFS is empty
-         if (Object.keys(localFileSystemRef.current).length <= 1) {
-           localFileSystemRef.current = createInitialFileSystem();
-         }
+         // VFS is empty - create minimal project structure (no mock files)
+         localFileSystemRef.current = createMinimalProject();
+         setIsVfsSynced(true);
+         setVfsFileCount(0);
+         console.log('[TerminalPanel] VFS is empty, using minimal project structure');
          return;
        }
 
-       // Merge VFS files into existing local filesystem (don't destroy local-only files)
-       const fs = localFileSystemRef.current;
-       
-       // Ensure project root exists
-       if (!fs['project']) {
-         fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
-       }
-       
+       // Use ONLY VFS files with their original paths
+       const fs: LocalFileSystem = {};
+
        for (const file of files) {
-         // Normalize VFS path to project-relative
-         let relativePath = file.path;
-         // Strip session prefix if present
-         relativePath = relativePath.replace(/^project\/sessions\/[^/]+\//, '');
-         // Strip leading project/ to avoid duplication
-         relativePath = relativePath.replace(/^project\//, '');
-         
-         const fullPath = `project/${relativePath}`;
-         
+         // Use the file path as-is from VFS
+         // VFS returns paths like: project/sessions/XXX_chat_YYY/src/App.tsx
+         const fullPath = file.path;
+
          // Create intermediate directories
          const parts = fullPath.split('/');
          for (let i = 1; i < parts.length; i++) {
@@ -224,7 +205,7 @@ export default function TerminalPanel({
              fs[dirPath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
            }
          }
-         
+
          // Add file
          if (file.content !== undefined) {
            fs[fullPath] = {
@@ -235,26 +216,75 @@ export default function TerminalPanel({
            };
          }
        }
-       
-       console.log('[TerminalPanel] Merged VFS into project/:', Object.keys(fs).length, 'entries');
+
+       localFileSystemRef.current = fs;
+       setVfsFileCount(files.length);
+       console.log('[TerminalPanel] Synced VFS files:', Object.keys(fs).length, 'entries');
+       console.log('[TerminalPanel] Sample paths:', Object.keys(fs).slice(0, 10));
+       setIsVfsSynced(true);
      } catch (error) {
        console.error('[TerminalPanel] Failed to sync VFS:', error);
+       setIsVfsSynced(true); // Still mark as synced to avoid blocking
      }
    };
-   
+
    syncVfsToLocal();
   }, [isOpen, filesystemScopePath, getVfsSnapshot]);
 
-  // Bidirectional sync: Poll VFS for changes from code-preview-panel/editor
+  // Update terminal display when VFS sync completes
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !isVfsSynced || terminals.length === 0) return;
     
+    // Update terminal display with loaded files
+    terminals.forEach(term => {
+      if (term.terminal && term.mode === 'local') {
+        // Clear terminal and show updated status
+        term.terminal.clear();
+        term.terminal.writeln('');
+        term.terminal.writeln('\x1b[1;32m● Terminal Ready\x1b[0m');
+        
+        if (vfsFileCount > 0) {
+          term.terminal.writeln(`\x1b[90m  Loaded ${vfsFileCount} files from workspace.\x1b[0m`);
+          term.terminal.writeln('\x1b[90m  Type "ls" to list files.\x1b[0m');
+          
+          // Show file listing
+          const fs = localFileSystemRef.current;
+          const projectFiles = Object.keys(fs).filter(k => k.startsWith('project/') && k.split('/').length === 2);
+          if (projectFiles.length > 0) {
+            term.terminal.writeln('');
+            term.terminal.writeln('\x1b[1;34mWorkspace files:\x1b[0m');
+            projectFiles.forEach(f => {
+              const info = fs[f];
+              const icon = info?.type === 'directory' ? '\x1b[34m📁\x1b[0m' : '\x1b[37m📄\x1b[0m';
+              term.terminal.writeln(`  ${icon} ${f.replace('project/', '')}`);
+            });
+            term.terminal.writeln('');
+          }
+        } else {
+          term.terminal.writeln('\x1b[90m  No files in workspace yet.\x1b[0m');
+          term.terminal.writeln('\x1b[90m  Files created here will sync with code preview.\x1b[0m');
+        }
+        
+        term.terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
+        term.terminal.writeln('');
+        
+        const cwd = localShellCwdRef.current[term.id] || 'project';
+        term.terminal.write(getPrompt('local', cwd));
+      }
+    });
+  }, [isVfsSynced, vfsFileCount, isOpen]);
+
+  // Bidirectional sync: Poll VFS for changes from code-preview-panel/editor
+  // Only poll when connected to sandbox to avoid unnecessary requests
+  useEffect(() => {
+    if (!isOpen || sandboxStatus !== 'connected') return;
+
     const pollInterval = setInterval(async () => {
       try {
         const snapshot = await getVfsSnapshot();
         const currentFiles = Object.keys(localFileSystemRef.current);
         const vfsFiles = snapshot?.files?.map(f => f.path) || [];
-        
+
         // Check if VFS has new/changed files
         const hasChanges = vfsFiles.some(f => !currentFiles.includes(f));
         if (hasChanges) {
@@ -266,8 +296,9 @@ export default function TerminalPanel({
               const files = snapshot?.files || [];
 
               if (files.length === 0) {
-                if (Object.keys(localFileSystemRef.current).length <= 1) {
-                  localFileSystemRef.current = createInitialFileSystem();
+                // VFS is empty - ensure minimal project structure exists
+                if (!localFileSystemRef.current['project']) {
+                  localFileSystemRef.current = createMinimalProject();
                 }
                 return;
               }
@@ -279,11 +310,7 @@ export default function TerminalPanel({
               }
 
               for (const file of files) {
-                let relativePath = file.path;
-                relativePath = relativePath.replace(/^project\/sessions\/[^/]+\//, '');
-                relativePath = relativePath.replace(/^project\//, '');
-
-                const fullPath = `project/${relativePath}`;
+                const fullPath = file.path;
 
                 const parts = fullPath.split('/');
                 for (let i = 1; i < parts.length; i++) {
@@ -314,12 +341,13 @@ export default function TerminalPanel({
         console.error('[Terminal] Poll error:', error);
       }
     }, 2000);
-    
-    return () => clearInterval(pollInterval);
-  }, [isOpen, getVfsSnapshot]);
 
-  const localFileSystemRef = useRef<LocalFileSystem>(createInitialFileSystem());
+    return () => clearInterval(pollInterval);
+  }, [isOpen, sandboxStatus, getVfsSnapshot]);
+
+  const localFileSystemRef = useRef<LocalFileSystem>({});
   const localShellCwdRef = useRef<Record<string, string>>({});
+  const lastConnectionAttemptRef = useRef<Record<string, number>>({});
   const reconnectCooldownUntilRef = useRef<Record<string, number>>({});
   const commandQueueRef = useRef<Record<string, string[]>>({});
   const commandHistoryRef = useRef<Record<string, string[]>>({});
@@ -490,6 +518,12 @@ export default function TerminalPanel({
     return () => clearInterval(checkIdle);
   }, [sandboxStatus, lastActivity, IDLE_TIMEOUT_MS, IDLE_WARNING_MS, toggleSandboxConnection]);
 
+  // Refs for callback functions to avoid circular dependency
+  const copyOutputRef = useRef<() => Promise<void>>();
+  const pasteFromClipboardRef = useRef<() => Promise<void>>();
+  const selectAllRef = useRef<() => void>();
+  const closeContextMenuRef = useRef<() => void>();
+
   // Keyboard shortcuts for copy/paste and context menu handling
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -500,26 +534,26 @@ export default function TerminalPanel({
       // Ctrl+Shift+C - Copy selection or all output
       if (e.ctrlKey && e.shiftKey && e.key === 'C') {
         e.preventDefault();
-        void copyOutput();
+        void copyOutputRef.current?.();
       }
 
       // Ctrl+Shift+V - Paste from clipboard
       if (e.ctrlKey && e.shiftKey && e.key === 'V') {
         e.preventDefault();
-        void pasteFromClipboard();
+        void pasteFromClipboardRef.current?.();
       }
 
       // Ctrl+Shift+A - Select all (copy all visible)
       if (e.ctrlKey && e.shiftKey && e.key === 'A') {
         e.preventDefault();
-        selectAll();
+        selectAllRef.current?.();
       }
     };
 
     // Click outside to close context menu
     const handleClick = () => {
       if (contextMenu) {
-        closeContextMenu();
+        closeContextMenuRef.current?.();
       }
     };
 
@@ -529,7 +563,7 @@ export default function TerminalPanel({
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('click', handleClick);
     };
-  }, [isOpen, copyOutput, pasteFromClipboard, selectAll, contextMenu, closeContextMenu]);
+  }, [isOpen, contextMenu]);
 
   // Update last activity on user input
   const updateActivity = useCallback(() => {
@@ -716,8 +750,8 @@ export default function TerminalPanel({
       isConnected: false,
     };
 
-    // Set default cwd to project (matches createInitialFileSystem)
-    localShellCwdRef.current[id] = 'project';
+    // Set default cwd to the filesystem scope path (matches code preview panel)
+    localShellCwdRef.current[id] = filesystemScopePathRef.current || 'project';
     reconnectCooldownUntilRef.current[id] = 0;
     commandQueueRef.current[id] = [];
     commandHistoryRef.current[id] = [];
@@ -868,6 +902,26 @@ export default function TerminalPanel({
     }
     return stack.join('/');
   }, []);
+
+  const getSandboxWorkspaceRoot = useCallback((sandboxId?: string): string => {
+    if (!sandboxId) return '/workspace';
+    if (sandboxId.startsWith('bing-') || sandboxId.startsWith('sprite-')) return '/home/sprite/workspace';
+    if (sandboxId.startsWith('daytona-')) return '/home/daytona/workspace';
+    if (sandboxId.startsWith('e2b-')) return '/home/user';
+    if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return '/project/workspace';
+    return '/workspace';
+  }, []);
+
+  const toSandboxScopedPath = useCallback((scopePath?: string, sandboxId?: string): string => {
+    const root = getSandboxWorkspaceRoot(sandboxId);
+    const rawScope = (scopePath || 'project').replace(/\\/g, '/').replace(/^\/+/, '');
+    const normalizedScope = rawScope.startsWith('project/')
+      ? rawScope
+      : rawScope === 'project'
+        ? 'project'
+        : `project/${rawScope.replace(/^project\/?/, '')}`;
+    return `${root}/${normalizedScope}`.replace(/\/+/g, '/');
+  }, [getSandboxWorkspaceRoot]);
 
   const syncFileToVFS = useCallback(async (filePath: string, content: string) => {
     try {
@@ -1091,9 +1145,23 @@ export default function TerminalPanel({
         const target = showLong ? (arg1.startsWith('-') ? arg2 : arg1) : (arg1 || cwd);
         const targetPath = resolveLocalPath(cwd, target);
         const fs = localFileSystemRef.current;
-        
+
+        console.log('[Terminal ls] cwd:', cwd, 'target:', target, 'targetPath:', targetPath);
+        console.log('[Terminal ls] filesystem keys:', Object.keys(fs).slice(0, 20));
+        console.log('[Terminal ls] fs[targetPath] exists:', !!fs[targetPath]);
+
         if (!fs[targetPath]) {
-          writeError(`ls: cannot access '${target}': No such file or directory`);
+          // Check if we have any files at all
+          const fileCount = Object.keys(fs).length;
+          if (fileCount === 0) {
+            writeLine('\x1b[33m⚠ Filesystem is empty. Files will appear here when created via code preview or sandbox.\x1b[0m');
+            writeLine('\x1b[90mType "connect" to connect to a sandbox, or create files in the code preview panel.\x1b[0m');
+          } else {
+            writeError(`ls: cannot access '${target}': No such file or directory`);
+            writeLine('\x1b[90mAvailable paths:\x1b[0m');
+            const roots = Object.keys(fs).filter(k => k.split('/').length === 1);
+            roots.forEach(r => writeLine(`  ${r}/`));
+          }
           return true;
         }
         
@@ -2346,18 +2414,18 @@ export default function TerminalPanel({
 
   const initXterm = useCallback(async (terminalId: string, containerEl: HTMLDivElement) => {
     const existing = terminalsRef.current.find(t => t.id === terminalId);
-    
+
     // CRITICAL: Prevent double initialization - check multiple times
     if (!existing) {
       console.warn('[TerminalPanel] Terminal not found during init:', terminalId);
       return;
     }
-    
+
     if (existing.terminal) {
       console.log('[TerminalPanel] Terminal already initialized, skipping:', terminalId);
       return;
     }
-    
+
     // Set initializing flag to prevent concurrent init attempts
     if ((existing as any)._initializing) {
       console.log('[TerminalPanel] Terminal already initializing, skipping:', terminalId);
@@ -2421,11 +2489,10 @@ export default function TerminalPanel({
         terminal.focus();
       });
 
-      // Write welcome message
+      // Write welcome message - will be updated by VFS sync effect
       terminal.writeln('');
       terminal.writeln('\x1b[1;32m● Terminal Ready\x1b[0m');
-      terminal.writeln('\x1b[90m  Local shell mode active immediately.\x1b[0m');
-      terminal.writeln('\x1b[90m  Type "help" for commands.\x1b[0m');
+      terminal.writeln('\x1b[90m  Initializing workspace...\x1b[0m');
       terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
       terminal.writeln('');
 
@@ -2664,12 +2731,12 @@ export default function TerminalPanel({
           // Enhanced tab completion
           const lastWord = lineBuffer.split(' ').pop() || '';
           if (lastWord) {
-            const cwd = localShellCwdRef.current[terminalId] || 'workspace';
+            const cwd = localShellCwdRef.current[terminalId] || 'project';
             
             // Get completions from filesystem
             const completions = Object.keys(localFileSystemRef.current)
               .filter(k => {
-                const relativePath = k.replace(/^workspace\//, '');
+                const relativePath = k.replace(/^project\//, '');
                 return relativePath.startsWith(lastWord);
               })
               .map(k => k.split('/').pop() || k);
@@ -2702,7 +2769,7 @@ export default function TerminalPanel({
           );
           
           if (match) {
-            const prompt = getPrompt(term.mode, localShellCwdRef.current[terminalId] || 'workspace');
+            const prompt = getPrompt(term.mode, localShellCwdRef.current[terminalId] || 'project');
             // Clear line and write match
             term.terminal?.write('\r\x1b[K' + prompt + match);
             lineBufferRef.current[terminalId] = match;
@@ -2801,8 +2868,8 @@ export default function TerminalPanel({
         }
       }
 
-      const cwd = term.sandboxInfo.sessionId ? '/workspace' : '~';
-      term.terminal?.write(`\x1b[1;32m${cwd}$\x1b[0m `);
+      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+      term.terminal?.write(getPrompt('sandbox-cmd', cwd));
       return;
     }
 
@@ -2822,8 +2889,8 @@ export default function TerminalPanel({
     if (data === '\x03') { // Ctrl+C
       term.terminal?.write('^C\r\n');
       lineBufferRef.current[terminalId] = '';
-      const cwd = term.sandboxInfo.sessionId ? '/workspace' : '~';
-      term.terminal?.write(`\x1b[1;32m${cwd}$\x1b[0m `);
+      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+      term.terminal?.write(getPrompt('sandbox-cmd', cwd));
       return;
     }
 
@@ -2835,8 +2902,8 @@ export default function TerminalPanel({
         idx--;
         historyIndexRef.current[terminalId] = idx;
         const cmd = history[idx] || '';
-        const cwd = term.sandboxInfo.sessionId ? '/workspace' : '~';
-        term.terminal?.write('\r\x1b[K' + ` ${cwd}$ ` + cmd);
+        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+        term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', cwd) + cmd);
         lineBufferRef.current[terminalId] = cmd;
       }
       return;
@@ -2850,14 +2917,14 @@ export default function TerminalPanel({
         idx++;
         historyIndexRef.current[terminalId] = idx;
         const cmd = history[idx] || '';
-        const cwd = term.sandboxInfo.sessionId ? '/workspace' : '~';
-        term.terminal?.write('\r\x1b[K' + ` ${cwd}$ ` + cmd);
+        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+        term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', cwd) + cmd);
         lineBufferRef.current[terminalId] = cmd;
       } else {
         idx = history.length;
         historyIndexRef.current[terminalId] = idx;
-        const cwd = term.sandboxInfo.sessionId ? '/workspace' : '~';
-        term.terminal?.write('\r\x1b[K' + ` ${cwd}$ `);
+        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+        term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', cwd));
         lineBufferRef.current[terminalId] = '';
       }
       return;
@@ -2867,20 +2934,35 @@ export default function TerminalPanel({
       lineBufferRef.current[terminalId] = lineBuffer + data;
       term.terminal?.write(data);
     }
-  }, [sendInput]);
+  }, [filesystemScopePathRef, getPrompt, sendInput]);
 
   // Spinner animation frames for connecting status
   const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
   // Connection timeout in milliseconds (configurable, default 15 seconds)
   const CONNECTION_TIMEOUT_MS = parseInt(
-    process.env.NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS || '15000',
+    process.env.NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS || '45000',
     10
-  ) || 15000;
+  ) || 45000;
   const CONNECTION_TIMEOUT_SECONDS = Math.round(CONNECTION_TIMEOUT_MS / 1000);
 
   const connectTerminal = useCallback(async (terminalId: string) => {
     connectTerminalRef.current = connectTerminal;
+    
+    // Check if we're in a cooldown period from a previous failed connection
+    const now = Date.now();
+    const lastAttempt = lastConnectionAttemptRef.current[terminalId] || 0;
+    const cooldownPeriod = 10000; // 10 second cooldown between connection attempts
+    
+    if (now - lastAttempt < cooldownPeriod) {
+      const remaining = Math.ceil((cooldownPeriod - (now - lastAttempt)) / 1000);
+      console.log(`[Terminal] Connection attempt throttled. Try again in ${remaining}s`);
+      return;
+    }
+    
+    // Record this connection attempt
+    lastConnectionAttemptRef.current[terminalId] = now;
+    
     // Abort any pending connection
     connectAbortRef.current[terminalId]?.abort();
     const ac = new AbortController();
@@ -2932,8 +3014,8 @@ export default function TerminalPanel({
         }
         // Fall back to command-mode
         const scopePath = filesystemScopePathRef.current;
-        const sandboxPath = scopePath ? scopePath.replace(/^project\//, '/workspace/') : '/workspace';
-        const cwd = sandboxPath;
+        const sandboxPath = toSandboxScopedPath(scopePath, currentTerm?.sandboxInfo?.sandboxId);
+        const cwd = scopePath || 'project';
         localShellCwdRef.current[terminalId] = cwd;
         updateTerminalState(terminalId, {
           sandboxInfo: { status: 'active' },
@@ -2948,7 +3030,7 @@ export default function TerminalPanel({
         currentTerm.terminal?.writeln('\x1b[90mCommands execute line-by-line. Type "connect" to retry PTY.\x1b[0m');
         currentTerm.terminal?.writeln('');
         currentTerm.terminal?.writeln(`\x1b[90m→ cd ${sandboxPath}\x1b[0m`);
-        currentTerm.terminal?.write(`\x1b[1;32m${sandboxPath.replace(/^\/workspace/, '~')}$\x1b[0m `);
+        currentTerm.terminal?.write(getPrompt('sandbox-cmd', cwd));
       }
     }, CONNECTION_TIMEOUT_MS);
 
@@ -2972,7 +3054,7 @@ export default function TerminalPanel({
         if (sessionRes.status === 401 && errorData.requiresAuth) {
           // Fall back to local shell mode for anonymous users
           console.log('[Terminal] Sandbox requires auth, using local shell mode');
-          const cwd = localShellCwdRef.current[terminalId] || '/workspace';
+          const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
           updateTerminalState(terminalId, {
             sandboxInfo: { status: 'active' },
             isConnected: true,
@@ -2990,7 +3072,7 @@ export default function TerminalPanel({
             currentTerm.terminal?.writeln('\x1b[90mPlease sign in to use the sandbox terminal.\x1b[0m');
             currentTerm.terminal?.writeln('\x1b[90mUsing local shell mode in the meantime.\x1b[0m');
             currentTerm.terminal?.writeln('');
-            currentTerm.terminal?.write(`\x1b[1;32m${cwd.replace(/^\/workspace/, '~')}$\x1b[0m `);
+            currentTerm.terminal?.write(getPrompt('local', cwd));
           }
           return;
         }
@@ -3044,8 +3126,10 @@ export default function TerminalPanel({
           let reconnectAttempts = 0;
           const MAX_RECONNECT_ATTEMPTS = 5;
           const INITIAL_RECONNECT_DELAY = 1000; // 1 second
+          let wsWasOpen = false; // Track if connection was ever successful
 
           ws.onopen = () => {
+            wsWasOpen = true;
             reconnectAttempts = 0; // Reset on successful connection
             logger.debug('WebSocket connected', { sessionId, sandboxId });
           };
@@ -3057,6 +3141,23 @@ export default function TerminalPanel({
               if (!currentTerm?.terminal) return;
 
               switch (msg.type) {
+                case 'error': {
+                  // Server rejected WebSocket - no PTY available
+                  logger.warn('WebSocket error from server:', msg.error);
+                  
+                  // Immediately fall back to command-mode
+                  updateTerminalState(terminalId, {
+                    isConnected: false,
+                    mode: 'sandbox-cmd',
+                  });
+                  currentTerm.isConnected = false;
+                  currentTerm.mode = 'sandbox-cmd';
+                  currentTerm.terminal.writeln('\x1b[33m⚠ PTY not available. Using command-mode.\x1b[0m');
+                  currentTerm.terminal.writeln('\x1b[90mType "connect" to retry PTY connection.\x1b[0m');
+                  const cwd = localShellCwdRef.current[terminalId] || 'project';
+                  currentTerm.terminal.write(`\x1b[1;32m${cwd.replace(/^project/, '~')}$\x1b[0m `);
+                  break;
+                }
                 case 'connected': {
                   const connectedInfo: SandboxInfo = {
                     sessionId,
@@ -3097,8 +3198,8 @@ export default function TerminalPanel({
                   // Auto-cd to filesystem scope path if available
                   const scopePath = filesystemScopePathRef.current;
                   if (scopePath) {
-                    // Convert VFS path (project/sessions/...) to sandbox path (/workspace/sessions/...)
-                    const sandboxPath = scopePath.replace(/^project\//, '/workspace/');
+                    const sandboxPath = toSandboxScopedPath(scopePath, sandboxId);
+                    localShellCwdRef.current[terminalId] = scopePath;
                     currentTerm.terminal.writeln(`\x1b[90m→ cd ${sandboxPath}\x1b[0m`);
                     ws.send(JSON.stringify({ type: 'input', data: `cd ${sandboxPath}\n` }));
                   }
@@ -3205,25 +3306,55 @@ export default function TerminalPanel({
             } catch {}
           };
 
-          ws.onerror = () => {
-            logger.warn('WebSocket error, falling back to SSE');
-            ws.close();
-            // Fall through to SSE implementation - don't throw, just let code continue
+          ws.onerror = (err) => {
+            logger.warn('WebSocket error, cannot establish PTY connection', err);
+            const currentTerm = terminalsRef.current.find(t => t.id === terminalId);
+            
+            // Immediately fall back to command-mode - no PTY available
+            if (currentTerm) {
+              updateTerminalState(terminalId, {
+                isConnected: false,
+                mode: 'sandbox-cmd',
+              });
+              currentTerm.isConnected = false;
+              currentTerm.mode = 'sandbox-cmd';
+              currentTerm.terminal.writeln('\x1b[33m⚠ PTY unavailable. Falling back to command-mode.\x1b[0m');
+              currentTerm.terminal.writeln('\x1b[90mType "connect" to retry PTY connection.\x1b[0m');
+              const cwd = localShellCwdRef.current[terminalId] || 'project';
+              currentTerm.terminal.write(`\x1b[1;32m${cwd.replace(/^project/, '~')}$\x1b[0m `);
+            }
           };
 
           ws.onclose = (event) => {
             const currentTerm = terminalsRef.current.find(t => t.id === terminalId);
-            
+
             // Don't reconnect if already in command-mode or explicitly closed
             if (!currentTerm?.isConnected || currentTerm.mode === 'sandbox-cmd') {
               return;
             }
 
-            // Attempt reconnection with exponential backoff
-            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            // If connection closed before successful open (reconnectAttempts === 0 and never opened),
+            // fall back to command-mode immediately - no point retrying
+            if (reconnectAttempts === 0 && !wsWasOpen) {
+              logger.warn('WebSocket closed before connection, falling back to command-mode');
+              updateTerminalState(terminalId, {
+                isConnected: false,
+                mode: 'sandbox-cmd',
+              });
+              currentTerm.isConnected = false;
+              currentTerm.mode = 'sandbox-cmd';
+              currentTerm.terminal.writeln('\x1b[33m⚠ Cannot establish PTY connection. Using command-mode.\x1b[0m');
+              currentTerm.terminal.writeln('\x1b[90mType "connect" to retry PTY connection.\x1b[0m');
+              const cwd = localShellCwdRef.current[terminalId] || 'project';
+              currentTerm.terminal.write(`\x1b[1;32m${cwd.replace(/^project/, '~')}$\x1b[0m `);
+              return;
+            }
+
+            // Attempt reconnection with exponential backoff (only if previously connected)
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && wsWasOpen) {
               const delay = INITIAL_RECONNECT_DELAY * Math.pow(2, reconnectAttempts);
               reconnectAttempts++;
-              
+
               logger.info('WebSocket closed, attempting reconnection', {
                 attempt: reconnectAttempts,
                 maxAttempts: MAX_RECONNECT_ATTEMPTS,
@@ -3234,24 +3365,64 @@ export default function TerminalPanel({
 
               setTimeout(() => {
                 // Reconnect with same parameters
-                const tokenParam = connectionToken
-                  ? `?token=${encodeURIComponent(connectionToken)}`
-                  : '';
                 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const newWsUrl = `${wsProtocol}//${window.location.host}/api/sandbox/terminal/ws${tokenParam}&sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}`;
-                
+                const wsParams = new URLSearchParams({
+                  sessionId,
+                  sandboxId,
+                });
+                if (connectionToken) {
+                  wsParams.set('token', connectionToken);
+                }
+                const newWsUrl = `${wsProtocol}//${window.location.host}/api/sandbox/terminal/ws?${wsParams.toString()}`;
+
                 const newWs = new WebSocket(newWsUrl);
                 currentTerm.websocket = newWs;
-                
-                // Re-attach handlers (simplified - would need to extract handler logic)
+
+                // Track if this reconnection succeeds
+                let reconnectWsWasOpen = false;
+
+                // Re-attach handlers
                 newWs.onopen = () => {
+                  reconnectWsWasOpen = true;
                   reconnectAttempts = 0;
                   logger.debug('WebSocket reconnected');
                   currentTerm.terminal?.writeln('\x1b[32m✓ Reconnected!\x1b[0m');
                 };
                 newWs.onmessage = ws.onmessage;
                 newWs.onerror = ws.onerror;
-                newWs.onclose = ws.onclose;
+                // Update close handler to use the new wsWasOpen flag
+                newWs.onclose = (event) => {
+                  // Don't reconnect if already in command-mode or explicitly closed
+                  if (!currentTerm?.isConnected || currentTerm.mode === 'sandbox-cmd') {
+                    return;
+                  }
+
+                  // If reconnection also failed to open, fall back to command-mode
+                  if (!reconnectWsWasOpen) {
+                    logger.warn('Reconnection failed, falling back to command-mode');
+                    updateTerminalState(terminalId, {
+                      isConnected: false,
+                      mode: 'sandbox-cmd',
+                    });
+                    currentTerm.isConnected = false;
+                    currentTerm.mode = 'sandbox-cmd';
+                    currentTerm.terminal.writeln('\x1b[33m⚠ Cannot establish PTY connection. Using command-mode.\x1b[0m');
+                    currentTerm.terminal.writeln('\x1b[90mType "connect" to retry PTY connection.\x1b[0m');
+                    const cwd = localShellCwdRef.current[terminalId] || 'project';
+                    currentTerm.terminal.write(`\x1b[1;32m${cwd.replace(/^project/, '~')}$\x1b[0m `);
+                    return;
+                  }
+
+                  // Continue reconnection logic for established connections
+                  if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                    const nextDelay = INITIAL_RECONNECT_DELAY * Math.pow(2, reconnectAttempts);
+                    reconnectAttempts++;
+                    setTimeout(() => {
+                      // Would need to recursively create new WebSocket - simplified here
+                      logger.warn('Max reconnection attempts reached');
+                    }, nextDelay);
+                  }
+                };
               }, delay);
             } else {
               // Max reconnection attempts reached, fall back to command-mode
@@ -3638,6 +3809,23 @@ export default function TerminalPanel({
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
   }, []);
+
+  // Update refs when callbacks change (must be after callback definitions)
+  useEffect(() => {
+    copyOutputRef.current = copyOutput;
+  }, [copyOutput]);
+
+  useEffect(() => {
+    pasteFromClipboardRef.current = pasteFromClipboard;
+  }, [pasteFromClipboard]);
+
+  useEffect(() => {
+    selectAllRef.current = selectAll;
+  }, [selectAll]);
+
+  useEffect(() => {
+    closeContextMenuRef.current = closeContextMenu;
+  }, [closeContextMenu]);
 
   const toggleSelectionMode = useCallback(() => {
     setIsSelectingMode(prev => !prev);

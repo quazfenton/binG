@@ -46,6 +46,8 @@ export interface ArcadeExecutionResult {
   requiresAuth?: boolean;
   authUrl?: string;
   connectionId?: string;
+  toolName?: string;
+  provider?: string;
 }
 
 /**
@@ -79,8 +81,7 @@ export class ArcadeService {
 
       this.client = new Arcade({
         apiKey: this.config.apiKey,
-        baseUrl: this.config.baseUrl,
-        organizationId: this.config.organizationId,
+        baseURL: this.config.baseUrl,
       });
 
       this.initialized = true;
@@ -190,9 +191,12 @@ export class ArcadeService {
 
   /**
    * Search for tools
+   *
+   * @param query - Search query
+   * @param options - Optional search options (limit, etc.)
    */
   async searchTools(
-    query: string, 
+    query: string,
     options?: { limit?: number }
   ): Promise<ArcadeTool[]> {
     await this.initialize();
@@ -234,20 +238,6 @@ export class ArcadeService {
   }
 
   /**
-   * Search for tools
-   */
-  async searchTools(query: string, toolkit?: string): Promise<ArcadeTool[]> {
-    const allTools = await this.getTools(toolkit);
-    const queryLower = query.toLowerCase();
-
-    return allTools.filter(tool =>
-      tool.name.toLowerCase().includes(queryLower) ||
-      tool.description.toLowerCase().includes(queryLower) ||
-      tool.toolkit.toLowerCase().includes(queryLower)
-    );
-  }
-
-  /**
    * Get contextual authorization for a tool
    * 
    * ADDED: Contextual auth support per Arcade docs
@@ -275,6 +265,7 @@ export class ArcadeService {
     authUrl?: string;
     connectionId?: string;
     context?: Record<string, any>;
+    error?: string;
   }> {
     await this.initialize();
 
@@ -361,7 +352,7 @@ export class ArcadeService {
     }
 
     // Execute tool
-    return this.executeTool(userId, toolName, input);
+    return this.executeTool(toolName, input, userId);
   }
 
   /**
@@ -396,9 +387,9 @@ export class ArcadeService {
       // Execute tool via SDK
       if (this.client?.tools) {
         const result = await this.client.tools.execute({
-          name: toolName,
+          tool_name: toolName,
           input: args,
-          connectionId: connection.id,
+          user_id: userId,
         });
 
         return {

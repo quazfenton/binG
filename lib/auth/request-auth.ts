@@ -1,147 +1,36 @@
 import { NextRequest } from 'next/server';
 import { verifyAuth } from './jwt';
 import { authService } from './auth-service';
+import { AuthCache, type ResolvedRequestAuth } from './auth-cache';
 
-// Enhanced cache entry with validation metadata
-interface CachedAuthResult {
-  result: ResolvedRequestAuth;
-  expires: number;
-  // For session auth: store session expiration time
-  sessionExpiresAt?: number;
-  // For JWT auth: store JTI for blacklist checking (but we don't cache JWT success anymore)
-  jti?: string;
-  jwtExpiresAt?: number;
-}
-
-// Simple LRU cache for auth results
-class AuthCache {
-  private cache = new Map<string, CachedAuthResult>();
-  private readonly ttl = 5 * 60 * 1000; // 5 minutes
-
-  get(key: string): CachedAuthResult | null {
-    const entry = this.cache.get(key);
-    if (!entry) return null;
-    if (Date.now() > entry.expires) {
-      this.cache.delete(key);
-      return null;
-    }
-    return entry;
-  }
-
-  set(key: string, result: ResolvedRequestAuth, metadata?: { sessionExpiresAt?: number; jti?: string; jwtExpiresAt?: number }): void {
-    this.cache.set(key, {
-      result,
-      expires: Date.now() + this.ttl,
-      ...metadata,
-    });
-
-    // Cleanup if cache gets too large
-    if (this.cache.size > 1000) {
-      const entries = Array.from(this.cache.entries());
-      const oldestKey = entries[0][0];
-      this.cache.delete(oldestKey);
-    }
-  }
-
-  delete(key: string): void {
-    this.cache.delete(key);
-  }
-
-  /**
-   * Invalidate all cached auth tokens for a user
-   * Called when user logs out to prevent stale auth results
-   */
-  invalidateAllForUser(userId: string): void {
-    for (const key of this.cache.keys()) {
-      if (key.includes(`:${userId}:`) || key.endsWith(`:${userId}`)) {
-        this.cache.delete(key)
-      }
-    }
-  }
-
-  /**
-   * Invalidate cache entries matching a session ID
-   * Called when session is destroyed
-   */
-  invalidateSession(sessionId: string): void {
-    for (const key of this.cache.keys()) {
-      if (key.includes(`:${sessionId}:`)) {
-        this.cache.delete(key)
-      }
-    }
-  }
-
-  /**
-   * Invalidate all anonymous user caches
-   */
-  invalidateAnonymous(anonId: string): void {
-    for (const key of this.cache.keys()) {
-      if (key.includes(`:anon:${anonId}`) || key.endsWith(`:${anonId}`)) {
-        this.cache.delete(key)
-      }
-    }
-  }
-
-  /**
-   * Clear entire cache
-   * Use with caution - affects all users
-   */
-  clear(): void {
-    this.cache.clear()
-  }
-
-  /**
-   * Get cache statistics
-   */
-  getStats(): { size: number; keys: string[] } {
-    return {
-      size: this.cache.size,
-      keys: Array.from(this.cache.keys()),
-    }
-  }
-
-  /**
-   * Sanitize error messages to prevent credential leakage
-   * Removes API keys, tokens, passwords, and secrets from error messages
-   */
-  static sanitizeError(error: any): string {
-    const message = error?.message || String(error)
-
-    // Remove potential secrets from error messages
-    const sanitized = message
-      // API keys (various formats)
-      .replace(/sk-[a-zA-Z0-9]{20,}/g, '[REDACTED_API_KEY]')
-      .replace(/key-[a-zA-Z0-9]{20,}/g, '[REDACTED_API_KEY]')
-      // Bearer tokens
-      .replace(/Bearer\s+[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+/g, 'Bearer [REDACTED_TOKEN]')
-      // JWT tokens
-      .replace(/eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+/gi, '[REDACTED_JWT]')
-      // Passwords in various formats
-      .replace(/password[=:]\s*[^\s,;]+/gi, 'password=[REDACTED]')
-      .replace(/pwd[=:]\s*[^\s,;]+/gi, 'pwd=[REDACTED]')
-      // Secrets
-      .replace(/secret[=:]\s*[^\s,;]+/gi, 'secret=[REDACTED]')
-      .replace(/api[_-]?key[=:]\s*[^\s,;]+/gi, 'api_key=[REDACTED]')
-      // Tokens
-      .replace(/token[=:]\s*[^\s,;]+/gi, 'token=[REDACTED]')
-      .replace(/access[_-]?token[=:]\s*[^\s,;]+/gi, 'access_token=[REDACTED]')
-      // Private keys
-      .replace(/-----BEGIN\s+\w+\s+PRIVATE\s+KEY-----[\s\S]+?-----END\s+\w+\s+PRIVATE\s+KEY-----/g, '[REDACTED_PRIVATE_KEY]')
-
-    return sanitized
-  }
-}
-
+// Simple LRU cache for auth results (using shared AuthCache from auth-cache.ts)
 const authCache = new AuthCache();
 
-// Export for use in auth-service for cache invalidation on logout
-export { authCache, AuthCache };
+// Export for use in other modules
+export { authCache };
 
-export interface ResolvedRequestAuth {
-  success: boolean;
-  userId?: string;
-  source?: 'jwt' | 'session' | 'anonymous';
-  error?: string;
+/**
+ * Get cached user auth result
+ * @deprecated Use authCache.get() directly
+ */
+export function getCachedUser(key: string): ResolvedRequestAuth | undefined {
+  return authCache.get(key)?.result;
+}
+
+/**
+ * Set cached user auth result
+ * @deprecated Use authCache.set() directly
+ */
+export function setCachedUser(key: string, result: ResolvedRequestAuth, options?: { sessionExpiresAt?: number }): void {
+  authCache.set(key, result, options);
+}
+
+/**
+ * Invalidate user cache
+ * @deprecated Use authCache.delete() directly
+ */
+export function invalidateUserCache(key: string): void {
+  authCache.delete(key);
 }
 
 interface ResolveRequestAuthOptions {

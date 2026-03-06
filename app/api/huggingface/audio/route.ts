@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
-          'Content-Type': audio.type || 'application/octet-stream',
+          'Content-Type': (audio as any).type || 'application/octet-stream',
         },
         body: audio,
       });

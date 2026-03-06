@@ -166,7 +166,11 @@ Respond with a list of file paths, one per line. No other text.`;
     this.steps++;
   }
 
-  private async runPlanningPhase(userMessage: string) {
+  /**
+   * Run planning phase - creates a systematic plan for the task
+   * @public - Exposed for LangGraph integration
+   */
+  public async runPlanningPhase(userMessage: string) {
     if (!this.enforcePlanActVerify) {
       this.steps++;
       return;
@@ -216,7 +220,11 @@ Return a JSON object:
     this.steps++;
   }
 
-  private async runEditingPhase(userMessage: string) {
+  /**
+   * Run editing phase - executes changes to files
+   * @public - Exposed for LangGraph integration
+   */
+  public async runEditingPhase(userMessage: string) {
     const editPrompt = `You are an automated editor. Execute these changes surgically.
 
 TASK: ${this.currentPlan?.task || userMessage}
@@ -276,7 +284,11 @@ Use 'createFile' for new files.`;
     this.steps++;
   }
 
-  private async runVerificationPhase() {
+  /**
+   * Run verification phase - validates changes
+   * @public - Exposed for LangGraph integration
+   */
+  public async runVerificationPhase() {
     const modifiedFiles = Object.keys(this.vfs);
     if (modifiedFiles.length === 0) return;
 
@@ -301,6 +313,32 @@ Use 'createFile' for new files.`;
     }
     
     this.steps++;
+  }
+
+  /**
+   * Run self-healing phase - attempts to fix errors
+   * @public - Exposed for LangGraph integration
+   */
+  public async runSelfHealingPhase(errors: any[]) {
+    if (errors.length === 0) {
+      return this.getState();
+    }
+
+    const errorMessages = errors.map(e => e.message).join('\n');
+    
+    try {
+      await this.runEditingPhase(`Fix the following errors:\n${errorMessages}`);
+    } catch (err: any) {
+      console.error('[StatefulAgent] Self-healing failed:', err);
+      this.errors.push({
+        step: this.steps,
+        message: `Self-healing failed: ${err.message}`,
+        timestamp: Date.now(),
+      });
+    }
+
+    this.steps++;
+    return this.getState();
   }
 
   getState() {

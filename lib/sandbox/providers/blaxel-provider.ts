@@ -137,17 +137,31 @@ export class BlaxelProvider implements SandboxProvider {
 
     try {
       const blaxelSdk = await import('@blaxel/core') as any
+      
+      // Handle different export formats from Blaxel SDK
+      // The SDK might export as default or as named exports
+      const blaxelClient = blaxelSdk.default || blaxelSdk;
+      
+      if (!blaxelClient) {
+        throw new Error('Blaxel SDK import returned undefined');
+      }
+      
       // Initialize Blaxel SDK per documentation
       // https://docs.blaxel.ai/Infrastructure/Middleware#initialize-the-sdk
-      await blaxelSdk.default.initialize({
-        apiKey: this.apiKey,
-        workspace: this.workspace,
-      })
-      this.client = blaxelSdk.default
-      return this.client
+      if (typeof blaxelClient.initialize === 'function') {
+        await blaxelClient.initialize({
+          apiKey: this.apiKey,
+          workspace: this.workspace,
+        });
+      } else {
+        console.warn('[Blaxel] SDK does not have initialize method, using as-is');
+      }
+      
+      this.client = blaxelClient;
+      return this.client;
     } catch (error: any) {
-      console.error('[Blaxel] Failed to initialize client:', error.message)
-      throw new Error(`Blaxel SDK not available. Install with: pnpm add @blaxel/core. Error: ${error.message}`)
+      console.error('[Blaxel] Failed to initialize client:', error.message);
+      throw new Error(`Blaxel SDK not available. Install with: pnpm add @blaxel/core. Error: ${error.message}`);
     }
   }
 

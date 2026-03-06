@@ -176,21 +176,22 @@ export class NodeWasmAdapter extends EventEmitter {
 
     try {
       // Dynamic import of QuickJS WASM (optional dependency)
-      let newQuickJS: any;
+      let getQuickJS: any;
       try {
         const quickjsModule = await import('quickjs-emscripten');
-        newQuickJS = quickjsModule.newQuickJS;
+        getQuickJS = quickjsModule.getQuickJS;
       } catch (importError) {
         console.warn('quickjs-emscripten not installed, skipping WASM runtime');
         this.emit('load_error', new Error('quickjs-emscripten not installed'));
         return;
       }
 
-      if (!newQuickJS) {
-        throw new Error('newQuickJS not available');
+      if (!getQuickJS) {
+        throw new Error('getQuickJS not available');
       }
 
-      const quickjs = await newQuickJS();
+      const quickjsModule = await getQuickJS();
+      const quickjs = await quickjsModule.createQuickJS();
 
       this.runtime = {
         eval: (code: string) => quickjs.evalCode(code),

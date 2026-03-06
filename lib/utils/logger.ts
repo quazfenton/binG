@@ -16,7 +16,7 @@ export interface LogEntry {
   source: string;
   message: string;
   data?: any;
-  error?: Error;
+  error?: { name: string; message: string; stack?: string };
 }
 
 export interface LoggerConfig {
@@ -60,7 +60,7 @@ class Logger {
       source: this.source,
       message,
       ...(data !== undefined && { data }),
-      ...(error && { error: { message: error.message, stack: error.stack } }),
+      ...(error && { error: { name: error.name, message: error.message, stack: error.stack } }),
     };
   }
 

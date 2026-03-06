@@ -26,7 +26,35 @@ const MAX_SEARCH_LIMIT = 100;
 
 export type FilesystemChangeType = 'create' | 'update' | 'delete';
 
-// ... (existing interface/const code)
+/**
+ * Internal workspace state interface
+ */
+interface WorkspaceState {
+  files: Map<string, VirtualFile>;
+  version: number;
+  updatedAt: string;
+  loaded: boolean;
+}
+
+/**
+ * Persisted workspace data structure
+ */
+interface PersistedWorkspace {
+  root: string;
+  version: number;
+  updatedAt: string;
+  files: VirtualFile[];
+}
+
+/**
+ * Filesystem change event
+ */
+export interface FilesystemChangeEvent {
+  path: string;
+  type: FilesystemChangeType;
+  ownerId: string;
+  version: number;
+}
 
 export class VirtualFilesystemService {
   private readonly workspaceRoot: string;

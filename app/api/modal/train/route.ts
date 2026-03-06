@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 type TrainBody = {
   algorithm: 'linear' | 'kmeans' | 'logistic' | 'rf';

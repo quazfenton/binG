@@ -520,7 +520,7 @@ export class BlaxelMcpServer {
    */
   async start(): Promise<void> {
     try {
-      const { McpServer } = await import('@modelcontextprotocol/sdk/server/index.js')
+      const { Server: McpServer } = await import('@modelcontextprotocol/sdk/server/index.js')
       const { StdioServerTransport } = await import(
         '@modelcontextprotocol/sdk/server/stdio.js'
       )
@@ -528,7 +528,7 @@ export class BlaxelMcpServer {
       this.server = new McpServer({
         name: 'blaxel-sandbox',
         version: '1.0.0',
-      } as McpServerOptions)
+      } as any)
 
       this.registerTools()
 
@@ -572,7 +572,7 @@ export class BlaxelMcpServer {
    */
   async deployHttpMcp(port: number = 3000): Promise<string> {
     try {
-      const { McpServer } = await import('@modelcontextprotocol/sdk/server/index.js')
+      const { Server: McpServer } = await import('@modelcontextprotocol/sdk/server/index.js')
       const { StreamableHTTPServerTransport } = await import(
         '@modelcontextprotocol/sdk/server/streamableHttp.js'
       )
@@ -580,7 +580,7 @@ export class BlaxelMcpServer {
       this.server = new McpServer({
         name: 'blaxel-sandbox',
         version: '1.0.0',
-      } as McpServerOptions)
+      } as any)
 
       this.registerTools()
 

@@ -36,5 +36,5 @@ if (typeof global.crypto === 'undefined') {
 }
 
 // Mock environment variables for tests
-process.env.JWT_SECRET_KEY = 'test-secret-key-for-testing-only-min-16-chars';
+process.env.JWT_SECRET = 'test-secret-key-for-testing-only-min-16-chars';
 process.env.NODE_ENV = 'test';

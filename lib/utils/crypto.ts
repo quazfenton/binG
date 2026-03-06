@@ -8,7 +8,7 @@
  * @security Never log encrypted data or encryption keys
  */
 
-import { createCipheriv, createDecipheriv, randomBytes, scrypt } from 'crypto';
+import { createCipheriv, createDecipheriv, randomBytes, scryptSync, createHash, timingSafeEqual as nodeTimingSafeEqual } from 'crypto';
 
 /**
  * Derive a 32-byte key from a password/passphrase using scrypt
@@ -16,17 +16,6 @@ import { createCipheriv, createDecipheriv, randomBytes, scrypt } from 'crypto';
  */
 export function deriveKey(password: string, salt: Buffer): Buffer {
   return scryptSync(password, salt, 32);
-}
-
-/**
- * Synchronous scrypt key derivation
- */
-function scryptSync(password: string, salt: Buffer, keylen: number): Buffer {
-  return scrypt(password, salt, keylen, {
-    N: 16384, // CPU/memory cost parameter
-    r: 8,     // Block size
-    p: 1,     // Parallelization parameter
-  }) as Buffer;
 }
 
 /**
@@ -151,33 +140,30 @@ export function generateSecureSecret(length: number = 32): string {
 /**
  * Hash a value using SHA-256
  * Useful for creating non-reversible identifiers
- * 
+ *
  * @param value - Value to hash
  * @returns Hex-encoded SHA-256 hash
  */
 export function hashValue(value: string): string {
-  const { createHash } = require('crypto');
   return createHash('sha256').update(value).digest('hex');
 }
 
 /**
  * Timing-safe comparison of two strings
  * Prevents timing attacks when comparing secrets
- * 
+ *
  * @param a - First string
  * @param b - Second string
  * @returns true if strings are equal
  */
 export function timingSafeEqual(a: string, b: string): boolean {
-  const { timingSafeEqual: nodeTimingSafeEqual } = require('crypto');
-  
   const aBuffer = Buffer.from(a);
   const bBuffer = Buffer.from(b);
-  
+
   if (aBuffer.length !== bBuffer.length) {
     return false;
   }
-  
+
   return nodeTimingSafeEqual(aBuffer, bBuffer);
 }
 

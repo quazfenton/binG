@@ -3,6 +3,8 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { terminalManager } from '@/lib/sandbox/terminal-manager';
 import { checkCommandSecurity } from '@/lib/terminal/terminal-security';
+import { terminalCommandRateLimiter } from '@/lib/utils/rate-limiter';
+import { TERMINAL_LIMITS } from '@/lib/terminal/terminal-constants';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('TerminalInputAPI');
@@ -10,84 +12,34 @@ const logger = createLogger('TerminalInputAPI');
 export const runtime = 'nodejs';
 
 /**
- * Rate limiter for terminal commands
- * Prevents DoS attacks via rapid command execution
- * Max 10 commands per second per user
- */
-const commandRateLimiter = new Map<string, { count: number; resetAt: number }>();
-
-/**
  * Command buffer for assembling multi-chunk commands
  * SECURITY: Buffer input per session to validate complete commands before execution
  * This prevents bypassing security checks by splitting dangerous commands across requests
- * 
+ *
  * Sessions are added to this buffer when they first send a command without an existing PTY connection.
  * Once a complete command is validated, the data is forwarded and the buffer is cleared.
  */
 const commandBuffers = new Map<string, { buffer: string; lastActivity: number }>();
 
-function checkRateLimit(userId: string): { allowed: boolean; retryAfter?: number } {
-  const now = Date.now();
-  const userLimit = commandRateLimiter.get(userId) || { count: 0, resetAt: now + 1000 };
-
-  if (now > userLimit.resetAt) {
-    userLimit.count = 0;
-    userLimit.resetAt = now + 1000;
-  }
-
-  if (userLimit.count >= 10) { // Max 10 commands/second
-    const retryAfter = Math.ceil((userLimit.resetAt - now) / 1000);
-    return { allowed: false, retryAfter };
-  }
-
-  userLimit.count++;
-  commandRateLimiter.set(userId, userLimit);
-  return { allowed: true };
-}
-
 // Cleanup old entries every minute to prevent memory leaks
 setInterval(() => {
   const now = Date.now();
-  // Cleanup rate limiter entries
-  for (const [userId, limit] of commandRateLimiter.entries()) {
-    if (now > limit.resetAt + 60000) {
-      commandRateLimiter.delete(userId);
-    }
-  }
   // Cleanup stale command buffers (older than 5 minutes)
   for (const [sessionId, entry] of commandBuffers.entries()) {
     if (now > entry.lastActivity + 300000) {
       commandBuffers.delete(sessionId);
     }
   }
-}, 60000);
+}, TERMINAL_LIMITS.CLEANUP_INTERVAL_MS);
 
 export async function POST(req: NextRequest) {
   try {
     const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
     if (!authResult.success || !authResult.userId) {
+      logger.warn('Terminal input auth failed', { source: authResult.source });
       return NextResponse.json(
-        { error: 'Unauthorized: valid authentication token, session, or anonymous session required' },
+        { error: 'Unauthorized' },
         { status: 401 }
-      );
-    }
-
-    // Check rate limit
-    const rateLimitResult = checkRateLimit(authResult.userId);
-    if (!rateLimitResult.allowed) {
-      return NextResponse.json(
-        { 
-          error: 'Rate limit exceeded. Too many terminal commands.',
-          retryAfter: rateLimitResult.retryAfter,
-        },
-        { 
-          status: 429,
-          headers: {
-            'Retry-After': String(rateLimitResult.retryAfter || 1),
-            'X-RateLimit-Limit': '10',
-            'X-RateLimit-Remaining': '0',
-          },
-        }
       );
     }
 
@@ -101,12 +53,79 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // SECURITY: Buffer ALL input for security validation
+    // ✅ INPUT SIZE LIMIT (max 10KB per input)
+    if (data.length > TERMINAL_LIMITS.MAX_INPUT_SIZE) {
+      logger.warn('Input too large', {
+        size: data.length,
+        limit: TERMINAL_LIMITS.MAX_INPUT_SIZE,
+        userId: authResult.userId,
+        sessionId,
+      });
+      return NextResponse.json(
+        { error: `Input too large (max ${TERMINAL_LIMITS.MAX_INPUT_SIZE / 1024}KB)` },
+        { status: 400 }
+      );
+    }
+
+    // ✅ VALIDATE SESSION BEFORE BUFFERING (prevents probing attacks)
+    const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
+    if (!userSession || userSession.sessionId !== sessionId) {
+      logger.warn('Unauthorized terminal input attempt', {
+        userId: authResult.userId,
+        requestedSessionId: sessionId,
+        ownedSessionId: userSession?.sessionId,
+      });
+      return NextResponse.json(
+        { error: 'Unauthorized: session does not belong to this user' },
+        { status: 403 }
+      );
+    }
+
+    // ✅ CHECK RATE LIMIT (after auth and session validation)
+    const rateLimitResult = terminalCommandRateLimiter.check(authResult.userId);
+    if (!rateLimitResult.allowed) {
+      logger.debug('Terminal command rate limit exceeded', {
+        userId: authResult.userId,
+        retryAfter: rateLimitResult.retryAfter,
+      });
+      return NextResponse.json(
+        {
+          error: 'Rate limit exceeded. Too many terminal commands.',
+          retryAfter: rateLimitResult.retryAfter,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(rateLimitResult.retryAfter || 1),
+            'X-RateLimit-Limit': String(rateLimitResult.limit),
+            'X-RateLimit-Remaining': String(rateLimitResult.remaining || 0),
+          },
+        }
+      );
+    }
+
+    // ✅ SECURITY: Buffer ALL input for security validation
     // We cannot distinguish between "PTY interactive" and "line-based" input reliably
     // Attackers could bypass security by sending dangerous commands without newlines
     const bufferEntry = commandBuffers.get(sessionId) || { buffer: '', lastActivity: Date.now() };
     bufferEntry.buffer += data;
     bufferEntry.lastActivity = Date.now();
+    
+    // ✅ BUFFER SIZE LIMIT
+    if (bufferEntry.buffer.length > TERMINAL_LIMITS.MAX_BUFFER_SIZE) {
+      logger.warn('Command buffer overflow', {
+        size: bufferEntry.buffer.length,
+        limit: TERMINAL_LIMITS.MAX_BUFFER_SIZE,
+        userId: authResult.userId,
+        sessionId,
+      });
+      commandBuffers.delete(sessionId);
+      return NextResponse.json(
+        { error: `Command buffer overflow (max ${TERMINAL_LIMITS.MAX_BUFFER_SIZE / 1024}KB)` },
+        { status: 400 }
+      );
+    }
+    
     commandBuffers.set(sessionId, bufferEntry);
 
     // Check if we have a complete command (contains newline or carriage return)
@@ -116,12 +135,18 @@ export async function POST(req: NextRequest) {
       const securityResult = checkCommandSecurity(fullCommand);
 
       if (!securityResult.allowed) {
+        // ✅ TRUNCATE LOGGED COMMANDS (prevent secret exposure)
+        const truncatedCommand = fullCommand.length > 100
+          ? fullCommand.substring(0, 100) + '...'
+          : fullCommand;
+        
         logger.warn('Blocked dangerous command', {
-          command: fullCommand.substring(0, 100), // Truncate for logging
+          command: truncatedCommand,
           reason: securityResult.reason,
           severity: securityResult.severity,
           userId: authResult.userId,
           sessionId,
+          wasObfuscated: securityResult.wasObfuscated,
         });
 
         // Clear the buffer to prevent partial execution
@@ -137,20 +162,17 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      // SECURITY: Only forward data to terminal AFTER validation passes
-      // This ensures no partial command data reaches the terminal before security check
-      const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
-      if (!userSession || userSession.sessionId !== sessionId) {
-        return NextResponse.json(
-          { error: 'Unauthorized: session does not belong to this user' },
-          { status: 403 }
-        );
-      }
-
+      // ✅ SECURITY CHECK PASSES - NOW FORWARD TO TERMINAL
       await terminalManager.sendInput(sessionId, data);
 
       // Clear buffer after successful validation and forwarding
       commandBuffers.delete(sessionId);
+
+      logger.debug('Terminal input sent successfully', {
+        sessionId,
+        userId: authResult.userId,
+        commandLength: data.length,
+      });
 
       return NextResponse.json({ success: true });
     }
@@ -159,7 +181,12 @@ export async function POST(req: NextRequest) {
     // This prevents partial command execution before security validation
     return NextResponse.json({ success: true, buffered: true });
   } catch (error) {
-    logger.error('Terminal input error', error as Error);
-    return NextResponse.json({ error: 'Failed to send input' }, { status: 500 });
+    const err = error as Error;
+    logger.error('Terminal input error', {
+      message: err.message,
+      stack: err.stack,
+      name: err.name,
+    });
+    return NextResponse.json({ error: 'Failed to send input', details: err.message }, { status: 500 });
   }
 }

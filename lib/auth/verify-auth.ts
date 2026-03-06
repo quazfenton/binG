@@ -6,7 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { withAuth, type EnhancedAuthResult } from './enhanced-middleware';
+import { checkAuth, type EnhancedAuthResult } from './enhanced-middleware';
 
 /**
  * Verify authentication for a request
@@ -16,7 +16,7 @@ export async function verifyAuth(
   request: NextRequest
 ): Promise<EnhancedAuthResult | null> {
   try {
-    const authResult = await withAuth(request);
+    const authResult = await checkAuth(request);
     return authResult;
   } catch (error) {
     console.error('[verifyAuth] Error:', error);

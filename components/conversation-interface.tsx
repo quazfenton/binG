@@ -147,11 +147,12 @@ export default function ConversationInterface() {
         setShowTerminal(true);
         setTerminalMinimized(false);
       }
-      // Auto-connect after a short delay to allow terminal to initialize
+      // Auto-focus terminal when opened (disabled auto-connect to prevent sandbox connection loops)
+      // Users can manually click "connect" if they want sandbox access
       setTimeout(() => {
-        // Trigger auto-connect by dispatching a custom event
-        window.dispatchEvent(new CustomEvent('terminal-auto-connect'));
-      }, 500);
+        const xtermEl = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
+        xtermEl?.focus();
+      }, 100);
     }
 
     // Auto-focus terminal when shell tab is selected
@@ -382,7 +383,7 @@ export default function ConversationInterface() {
 
   // Fetch available providers on mount and align defaults with server config
   useEffect(() => {
-    fetch("/api/providers")
+    fetch("/api/providers", { credentials: 'include' })
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {

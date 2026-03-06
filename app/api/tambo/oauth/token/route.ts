@@ -103,7 +103,7 @@ async function exchangeForTamboToken(
 ): Promise<{ tamboToken: string; expiresAt: number }> {
   const { sign } = await import('jsonwebtoken');
 
-  const TAMBO_SECRET = process.env.TAMBO_API_KEY || process.env.JWT_SECRET;
+  const TAMBO_SECRET = process.env.NEXT_PUBLIC_TAMBO_API_KEY || process.env.JWT_SECRET;
   
   // Require a configured secret in non-development environments
   if (!TAMBO_SECRET && process.env.NODE_ENV !== 'development') {

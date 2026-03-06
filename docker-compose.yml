@@ -1,7 +1,6 @@
 # Production Docker Compose Configuration
 # Orchestrates all binG backend services
-
-version: '3.8'
+# Note: 'version' key removed - obsolete in Compose v2+
 
 services:
   # ===========================================
@@ -25,25 +24,67 @@ services:
       - LOCAL_SNAPSHOT_DIR=/tmp/snapshots
       - WORKSPACE_DIR=/tmp/workspaces
       - RUNTIME_TYPE=${RUNTIME_TYPE:-process}
-      
+
       # Authentication
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - JWT_SECRET=${JWT_SECRET:-change-this-to-a-secure-random-string-in-production}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
+
+      # Encryption keys (REQUIRED for production)
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-change-this-to-a-secure-32-char-key}
+      - BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY:-change-this-to-a-secure-32-char-key}
+
+      # Nango integration
+      - NANGO_SECRET_KEY=${NANGO_SECRET_KEY:-}
+
+      # Database (PostgreSQL for Mastra + App)
+      - DATABASE_URL=${DATABASE_URL:-postgresql://bing:bing_secure_password_change_me@postgres:5432/bing}
       
+      # Mastra configuration
+      - MASTRA_TELEMETRY_ENABLED=${MASTRA_TELEMETRY_ENABLED:-false}
+      - MASTRA_SCHEMA=${MASTRA_SCHEMA:-mastra}
+
+      # LLM Provider API Keys (loaded from .env)
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENCODE_API_KEY=${OPENCODE_API_KEY}
+
+      # Sandbox Provider API Keys (loaded from .env)
+      - DAYTONA_API_KEY=${DAYTONA_API_KEY}
+      - E2B_API_KEY=${E2B_API_KEY}
+      - BLAXEL_API_KEY=${BLAXEL_API_KEY}
+      - CSB_API_KEY=${CSB_API_KEY}
+      - SANDBOX_PROVIDER=${SANDBOX_PROVIDER:-daytona}
+
+      # Other Integration API Keys (loaded from .env)
+      - BREVO_API_KEY=${BREVO_API_KEY}
+      - MAILERSEND_API_KEY=${MAILERSEND_API_KEY}
+      - ARCADE_API_KEY=${ARCADE_API_KEY}
+      - NANGO_SECRET_KEY=${NANGO_SECRET_KEY}
+      - SMITHERY_API_KEY=${SMITHERY_API_KEY}
+      - NEXT_PUBLIC_TAMBO_API_KEY=${NEXT_PUBLIC_TAMBO_API_KEY}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+      - MODAL_API_TOKEN=${MODAL_API_TOKEN}
+      - COMPOSIO_API_KEY=${COMPOSIO_API_KEY}
+
       # S3 Storage (optional)
       - S3_ENDPOINT=${S3_ENDPOINT}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET:-ephemeral-snapshots}
       - S3_REGION=${S3_REGION:-us-east-1}
-      
+
       # Quotas
       - MAX_EXECUTIONS_PER_HOUR=${MAX_EXECUTIONS_PER_HOUR:-1000}
       - MAX_CONCURRENT_SANDBOXES=${MAX_CONCURRENT_SANDBOXES:-10}
       - MAX_MEMORY_MB=${MAX_MEMORY_MB:-2048}
       - MAX_STORAGE_MB=${MAX_STORAGE_MB:-10240}
-      
+
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - LOG_FORMAT=${LOG_FORMAT:-json}
@@ -52,6 +93,8 @@ services:
       - app-snapshots:/tmp/snapshots
       - app-firecracker:/tmp/firecracker
     depends_on:
+      postgres:
+        condition: service_healthy
       minio:
         condition: service_healthy
       prometheus:
@@ -72,6 +115,34 @@ services:
         reservations:
           cpus: '2'
           memory: 2G
+
+  # ===========================================
+  # PostgreSQL Database (for Mastra & App)
+  # ===========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: bing-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-bing}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bing_secure_password_change_me}
+      - POSTGRES_DB=${POSTGRES_DB:-bing}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bing}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
 
   # ===========================================
   # MinIO (S3-Compatible Storage)
@@ -239,12 +310,14 @@ services:
 # ===========================================
 # Networks
 # ===========================================
+# Note: Using default network driver for Windows compatibility
+# If you encounter "protocol not available" errors, run:
+#   1) docker network prune -f
+#   2) Restart Docker Desktop
+#   3) Try: docker compose --compatibility up -d
 networks:
   bing-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16
+    name: bing-network
 
 # ===========================================
 # Volumes
@@ -263,4 +336,6 @@ volumes:
   grafana-data:
     driver: local
   microsandbox-workspaces:
+    driver: local
+  postgres-data:
     driver: local

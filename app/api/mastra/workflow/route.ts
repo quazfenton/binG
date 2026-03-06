@@ -3,8 +3,6 @@
  *
  * Streams workflow execution results via SSE.
  * Supports both code-agent and hitl workflows.
- * 
- * FIXED: Added comprehensive error handling, client disconnect detection, and stream timeout
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -29,33 +27,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const authResult = await verifyAuth(request);
-    if (!authResult.success) {
-      return NextResponse.json(
-        { error: 'Authentication required', requestId },
-        { status: 401 }
-      );
-    }
-
-    const { task, workflowType = 'code-agent' } = body;
-    const ownerId = authResult.userId;
-    if (!ownerId) {
-      return NextResponse.json(
-        { error: 'Authenticated user is missing userId', requestId },
-        { status: 401 }
-      );
-    }
-
-    // Validate required fields
-    if (!task || typeof task !== 'string') {
-      return NextResponse.json(
-        { error: 'task is required and must be a string', requestId },
-        { status: 400 }
-      );
-    }
+    const { workflowType, inputData, userId } = body;
 
     // Validate workflow type
-    if (!VALID_WORKFLOWS.includes(workflowType)) {
+    if (!workflowType || !VALID_WORKFLOWS.includes(workflowType)) {
       return NextResponse.json(
         { error: `Invalid workflowType. Must be one of: ${VALID_WORKFLOWS.join(', ')}`, requestId },
         { status: 400 }
@@ -72,75 +47,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create run
+    // Execute workflow
     const run = await workflow.createRun();
+    const result = await run.start({ data: inputData || {} });
 
-    // Handle client disconnect
-    request.signal.addEventListener('abort', () => {
-      abortController.abort();
-      console.log(`[Mastra API] Client disconnected (run: ${run.runId}, request: ${requestId})`);
-    });
-
-    // Stream execution with abort signal
-    const stream = await run.stream({
-      inputData: { task, ownerId },
-      abortSignal: abortController.signal,
-    });
-
-    // Convert to SSE stream
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
-    const readableStream = new ReadableStream({
-      async start(controller) {
-        const timeout = setTimeout(() => {
-          abortController.abort();
-          controller.error(new Error('Stream timeout after 5 minutes'));
-        }, 300000); // 5 minute timeout
-
-        try {
-          for await (const chunk of stream.toReadableStream()) {
-            if (abortController.signal.aborted) {
-              break;
-            }
-            const data = decoder.decode(chunk);
-            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-          }
-          clearTimeout(timeout);
-          controller.close();
-        } catch (error) {
-          clearTimeout(timeout);
-          if (!abortController.signal.aborted) {
-            console.error(`[Mastra API] Stream error (request: ${requestId}):`, error);
-            controller.error(error);
-          }
-        }
-      },
-      cancel() {
-        abortController.abort();
-      },
-    });
-
-    return new Response(readableStream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Request-ID': requestId,
-        'X-Run-ID': run.runId,
-      },
+    return NextResponse.json({
+      success: true,
+      runId: run.runId,
+      result,
+      requestId,
     });
   } catch (error) {
-    console.error(`[Mastra API] Workflow execution error (${requestId}):`, error);
-
-    // Don't expose internal error details in production
-    const isDev = process.env.NODE_ENV === 'development';
-
+    console.error(`[Mastra API] Workflow error (${requestId}):`, error);
     return NextResponse.json(
-      {
-        error: isDev && error instanceof Error ? error.message : 'Workflow execution failed',
-        requestId,
-        stack: isDev && error instanceof Error ? error.stack : undefined,
-      },
+      { error: error instanceof Error ? error.message : 'Workflow execution failed', requestId },
       { status: 500 }
     );
   }

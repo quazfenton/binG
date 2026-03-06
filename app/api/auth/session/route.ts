@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
           user: {
             id: sessionAuth.user.id?.toString() || sessionAuth.user.id,
             email: sessionAuth.user.email,
-            name: sessionAuth.user.name,
+            name: sessionAuth.user.username || null,
           },
         });
       }

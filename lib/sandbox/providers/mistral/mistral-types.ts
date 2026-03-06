@@ -1,13 +1,13 @@
 /**
  * Mistral Agent Provider Types
- * 
+ *
  * Type definitions for the Mistral Agent SDK sandbox provider implementation.
  */
 
-import type { ToolResult } from '../types'
 import type {
   SandboxCreateConfig,
   SandboxHandle,
+  PtyConnectOptions,
 } from '../sandbox-provider'
 
 // ============================================================================
@@ -35,6 +35,8 @@ export interface MistralProviderConfig {
   enableStreaming: boolean
   /** Enable quota tracking */
   enableQuotaTracking: boolean
+  /** Enable web search tool */
+  enableWebSearch?: boolean
 }
 
 // ============================================================================

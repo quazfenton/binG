@@ -20,6 +20,9 @@ export interface FastAgentRequest {
   enableReflection?: boolean;
   stepByStep?: boolean;
   multiModal?: boolean;
+  stream?: boolean;
+  apiKeys?: Record<string, string>;
+  userId?: string;
 }
 
 export interface FastAgentResponse {
@@ -95,7 +98,45 @@ export interface FastAgentConfig {
 import { ComplexityAnalyzer } from '../utils/complexity-analyzer';
 
 class FastAgentService {
-  // ... (existing properties)
+  private config: FastAgentConfig;
+  private isHealthy: boolean = true;
+  private metrics: any = {};
+  private adaptedRequest: FastAgentRequest | null = null;
+  private lastHealthCheck: number = 0;
+  private readonly HEALTH_CHECK_INTERVAL: number = 60000;
+
+  constructor(config?: Partial<FastAgentConfig>) {
+    this.config = {
+      enabled: true,
+      endpoint: 'http://localhost:8080',
+      timeout: 30000,
+      fallbackOnError: true,
+      supportedProviders: ['openai', 'anthropic', 'google'],
+      capabilities: {
+        tools: true,
+        fileHandling: true,
+        agentChaining: true,
+        mcpTools: true,
+        qualityOptimization: true,
+        multiThreadedReflection: true,
+        stepByStepProcessing: true,
+        multiModalHandling: true,
+      },
+      qualitySettings: {
+        defaultMode: 'standard',
+        reflectionEnabled: true,
+        maxIterations: 3,
+        qualityThreshold: 0.8,
+      },
+      processingSettings: {
+        complexityDetection: true,
+        adaptiveTimeout: true,
+        parallelProcessing: true,
+        stepBreakdown: true,
+      },
+      ...config,
+    };
+  }
 
   /**
    * Check if fast-agent should handle this request with enhanced complexity detection
@@ -159,26 +200,55 @@ class FastAgentService {
    */
   async processRequest(request: FastAgentRequest): Promise<FastAgentResponse> {
     try {
-      // ... (existing logic)
+      // Detect complexity for adaptive processing
+      const content = request.messages[request.messages.length - 1]?.content || '';
+      const metrics = ComplexityAnalyzer.analyze(content);
       
+      // Adapt request for quality optimization
+      const adaptedRequest = this.adaptRequestForQuality(request, metrics.complexity);
+      this.adaptedRequest = adaptedRequest;
+      this.metrics = metrics;
+
+      const response = await fetch(`${this.config.endpoint}/agent`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.config.apiKey && { 'Authorization': `Bearer ${this.config.apiKey}` }),
+        },
+        body: JSON.stringify(adaptedRequest),
+      });
+
+      if (!response.ok) {
+        if (this.config.fallbackOnError) {
+          return { success: false, fallbackToOriginal: true };
+        }
+        throw new Error(`Fast-agent endpoint returned ${response.status}`);
+      }
+
       const result: FastAgentResponse = await response.json();
 
-      // NEW: Trigger multi-threaded reflection if enabled and task is complex
+      // Trigger multi-threaded reflection if enabled and task is complex
       if (this.config.capabilities.multiThreadedReflection && metrics.complexity === 'complex') {
         const reflections = await this.performMultiThreadedReflection(request, result.content || '');
         if (reflections?.length) {
           result.reflectionResults = reflections;
-          
+
           // If any reflection has low confidence, trigger iterative improvement
           const lowConfidence = reflections.some(r => r.confidence < 0.7);
           if (lowConfidence && this.config.qualitySettings.reflectionEnabled) {
-             return await this.attemptQualityImprovement(adaptedRequest, result);
+            return await this.attemptQualityImprovement(adaptedRequest, result);
           }
         }
       }
-      
-      // ... (rest of the logic)
-    } catch (error) { /* ... */ }
+
+      return result;
+    } catch (error) {
+      console.error('[FastAgent] processRequest failed:', error);
+      if (this.config.fallbackOnError) {
+        return { success: false, fallbackToOriginal: true };
+      }
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   /**

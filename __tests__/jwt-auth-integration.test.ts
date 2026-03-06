@@ -15,7 +15,7 @@ describe('JWT Auth Flow Integration', () => {
 
   beforeAll(async () => {
     // Set test environment
-    process.env.JWT_SECRET_KEY = 'test-secret-key-for-integration-testing-min-16-chars';
+    process.env.JWT_SECRET = 'test-secret-key-for-integration-testing-min-16-chars';
     process.env.NODE_ENV = 'test';
     process.env.JWT_ISSUER = 'test-bing';
     process.env.JWT_AUDIENCE = 'test-bing-app';
@@ -214,42 +214,42 @@ describe('JWT Auth Flow Integration', () => {
   });
 
   describe('Production Security Checks', () => {
-    it('should throw error in production without JWT_SECRET_KEY', async () => {
+    it('should throw error in production without JWT_SECRET', async () => {
       const originalEnv = process.env.NODE_ENV;
-      const originalSecret = process.env.JWT_SECRET_KEY;
-      
+      const originalSecret = process.env.JWT_SECRET;
+
       try {
         process.env.NODE_ENV = 'production';
-        delete process.env.JWT_SECRET_KEY;
-        
+        delete process.env.JWT_SECRET;
+
         // Clear module cache to force re-import
         const modulePath = '@/lib/security/jwt-auth';
         // Note: In real tests, you'd need to use dynamic import or reset modules
-        
+
         // This would throw in a real production environment
         // For testing, we just verify the check exists
-        expect(process.env.JWT_SECRET_KEY).toBeUndefined();
+        expect(process.env.JWT_SECRET).toBeUndefined();
       } finally {
         process.env.NODE_ENV = originalEnv;
-        process.env.JWT_SECRET_KEY = originalSecret;
+        process.env.JWT_SECRET = originalSecret;
       }
     });
 
     it('should validate secret key strength', async () => {
-      const originalSecret = process.env.JWT_SECRET_KEY;
-      
+      const originalSecret = process.env.JWT_SECRET;
+
       try {
-        process.env.JWT_SECRET_KEY = 'weak'; // Too short
-        
+        process.env.JWT_SECRET = 'weak'; // Too short
+
         // The getSecretKey function should throw
         expect(() => {
-          const secret = process.env.JWT_SECRET_KEY;
+          const secret = process.env.JWT_SECRET;
           if (secret && secret.length < 16) {
-            throw new Error('JWT_SECRET_KEY must be at least 16 characters');
+            throw new Error('JWT_SECRET must be at least 16 characters');
           }
         }).toThrow();
       } finally {
-        process.env.JWT_SECRET_KEY = originalSecret;
+        process.env.JWT_SECRET = originalSecret;
       }
     });
   });

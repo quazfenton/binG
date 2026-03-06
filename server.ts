@@ -22,12 +22,16 @@
  * @see https://nextjs.org/docs/advanced-features/custom-server
  */
 
+// Load environment variables before anything else
+import 'dotenv/config';
+
 import { createServer } from 'http';
 import { parse } from 'url';
 import next from 'next';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import { initializeBackend, getBackendStatus } from '@/lib/backend';
+import { terminalManager } from '@/lib/sandbox/terminal-manager';
 import { createLogger } from '@/lib/utils/logger';
 import { getDatabaseSessionStore } from '@/lib/database/session-store';
 
@@ -131,6 +135,25 @@ app.prepare().then(startup).then(() => {
 
     console.log(`[WebSocket] Client connected: ${sessionKey}`);
 
+    // Check if there's an actual PTY connection available for this session
+    // If not, close WebSocket immediately so client falls back to command-mode
+    const hasPty = terminalManager.hasPtyConnection(sessionId);
+    if (!hasPty) {
+      console.log(`[WebSocket] No PTY available for ${sessionId}, closing so client can fallback`);
+      ws.send(JSON.stringify({
+        type: 'error',
+        error: 'PTY not available - using command-mode',
+      }));
+      // Give client time to receive error message, then close
+      setTimeout(() => {
+        ws.close(4000, 'PTY not available');
+      }, 100);
+      return;
+    }
+
+    // Register with terminalManager for input API integration
+    terminalManager.registerWebSocketConnection(ws, sessionId, sandboxId);
+
     // Store session
     const session: TerminalSession = {
       sessionId,
@@ -153,22 +176,24 @@ app.prepare().then(startup).then(() => {
 
         switch (msg.type) {
           case 'input':
-            // Forward input to sandbox terminal
-            // This would integrate with your terminal manager
+            // Forward input to sandbox terminal via terminalManager
             console.log(`[WebSocket] Input received: ${msg.data?.substring(0, 50)}...`);
-            
-            // In production, forward to terminal manager:
-            // const terminal = await terminalManager.getTerminal(sessionId);
-            // terminal?.write(msg.data);
+            try {
+              await terminalManager.sendInput(sessionId, msg.data);
+            } catch (err: any) {
+              console.error('[WebSocket] Failed to send input:', err.message);
+              ws.send(JSON.stringify({ type: 'error', error: err.message }));
+            }
             break;
 
           case 'resize':
-            // Forward resize to sandbox
+            // Forward resize to sandbox via terminalManager
             console.log(`[WebSocket] Resize: ${msg.cols}x${msg.rows}`);
-            
-            // In production, forward to terminal manager:
-            // const terminal = await terminalManager.getTerminal(sessionId);
-            // terminal?.resize(msg.cols, msg.rows);
+            try {
+              await terminalManager.resizeTerminal(sessionId, msg.cols, msg.rows);
+            } catch (err: any) {
+              console.error('[WebSocket] Failed to resize:', err.message);
+            }
             break;
 
           case 'ping':
@@ -183,16 +208,6 @@ app.prepare().then(startup).then(() => {
       }
     });
 
-    ws.on('close', () => {
-      console.log(`[WebSocket] Client disconnected: ${sessionKey}`);
-      terminalSessions.delete(sessionKey);
-    });
-
-    ws.on('error', (err) => {
-      console.error('[WebSocket] Error:', err);
-      terminalSessions.delete(sessionKey);
-    });
-
     // Keep-alive ping
     const pingInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -201,6 +216,16 @@ app.prepare().then(startup).then(() => {
     }, 30000);
 
     ws.on('close', () => {
+      console.log(`[WebSocket] Client disconnected: ${sessionKey}`);
+      terminalSessions.delete(sessionKey);
+      terminalManager.unregisterWebSocketConnection(sessionId);
+      clearInterval(pingInterval);
+    });
+
+    ws.on('error', (err) => {
+      console.error('[WebSocket] Error:', err);
+      terminalSessions.delete(sessionKey);
+      terminalManager.unregisterWebSocketConnection(sessionId);
       clearInterval(pingInterval);
     });
   });

@@ -75,6 +75,8 @@ import Link from "lucide-react/dist/esm/icons/link";
 import X from "lucide-react/dist/esm/icons/x";
 import ArrowUp from "lucide-react/dist/esm/icons/arrow-up";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
+import BookOpen from "lucide-react/dist/esm/icons/book-open";
+import Archive from "lucide-react/dist/esm/icons/archive";
 import type { LLMProvider } from "../lib/api/llm-providers";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
@@ -657,7 +659,7 @@ export default function InteractionPanel({
       id: "openstreetmap-embed",
       name: "OpenStreetMap",
       description: "Free wiki world map with search and navigation",
-      icon: Map,
+      icon: MapIcon,
       component: OpenStreetMapEmbedPlugin,
       category: "utility",
       defaultSize: { width: 1000, height: 700 },

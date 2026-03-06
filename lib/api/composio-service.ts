@@ -30,6 +30,8 @@ export interface ComposioToolResponse {
   authToolkit?: string;
   toolCalls?: any[];
   connectedAccounts?: any[];
+  toolName?: string;
+  provider?: string;
   metadata?: {
     sessionId?: string;
     toolsUsed?: string[];
@@ -595,13 +597,13 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
                     userId: request.userId,
                     arguments: toolArgs,
                     dangerouslySkipVersionCheck: true,
-                  });
+                  } as any);
                 } catch {
                   // Backward-compatible payload shape fallback for older SDKs expecting 'input' key
                   result = await composio.tools.execute(toolSlug, {
                     connectedAccountId: request.userId,
                     input: toolArgs,
-                  });
+                  } as any);
                 }
 
                 // Some SDK versions return auth-required as a normal unsuccessful payload, not thrown error

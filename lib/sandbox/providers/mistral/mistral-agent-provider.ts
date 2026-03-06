@@ -285,10 +285,10 @@ export class MistralAgentProvider implements SandboxProvider {
       description: agentConfig.description,
       instructions: agentConfig.instructions,
       tools: agentConfig.tools?.map(type => ({ type })) || [],
-      completionArgs: agentConfig.completionArgs || {
+      completionArgs: (agentConfig.completionArgs || {
         temperature: this.config.defaultTemperature,
         topP: this.config.defaultTopP,
-      },
+      }) as any,
     })
     return agent
   }
@@ -303,7 +303,7 @@ export class MistralAgentProvider implements SandboxProvider {
         description: update.description,
         instructions: update.instructions,
         tools: update.tools?.map(type => ({ type })),
-        completionArgs: update.completionArgs,
+        completionArgs: update.completionArgs as any,
       },
     })
   }

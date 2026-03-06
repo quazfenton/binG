@@ -166,8 +166,14 @@ class BackendService {
 
         return this.status;
       } catch (error) {
-        logger.error('Backend initialization failed', error as Error);
-        throw error;
+        // Only log as error if we haven't successfully initialized
+        if (!this.initialized) {
+          logger.error('Backend initialization failed', error as Error);
+          throw error;
+        } else {
+          // Already initialized, this might be a post-init async operation
+          logger.warn('Post-initialization error (non-fatal)', error as Error);
+        }
       } finally {
         this.initializing = false;
       }
@@ -268,6 +274,7 @@ class BackendService {
   private async initializeWebSocket(): Promise<void> {
     logger.info('Starting WebSocket terminal server...', { port: this.config.websocketPort });
 
+    const websocketRequired = process.env.WEBSOCKET_REQUIRED === 'true';
     try {
       await webSocketTerminalServer.start(this.config.websocketPort);
 
@@ -285,7 +292,10 @@ class BackendService {
         sessions: 0,
         error: error instanceof Error ? error.message : 'Unknown error',
       };
-      throw error;
+      if (websocketRequired) {
+        throw error;
+      }
+      logger.warn('WebSocket terminal server unavailable; continuing without internal WS server', error as Error);
     }
   }
 

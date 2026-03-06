@@ -14,7 +14,9 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 
 # Install dependencies
-RUN npm ci --only=production && npm cache clean --force
+# Using npm install instead of ci to resolve peer dependency conflicts dynamically
+# Install ALL dependencies (including dev) for build step
+RUN npm install --legacy-peer-deps && npm cache clean --force
 
 # ===========================================
 # Stage 2: Builder
@@ -32,6 +34,14 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Build Next.js application
+# Skip telemetry and use standalone output for Docker
+ENV NEXT_TELEMETRY_DISABLED=1
+# Provide minimal required env vars for build (NOT for production use!)
+ENV ENCRYPTION_KEY=build-time-temporary-key-32chars!!
+ENV JWT_SECRET=build-time-temporary-secret-key-for-build-only
+ENV BLAXEL_SECRET_ENCRYPTION_KEY=build-time-blaxel-key-32chars!
+ENV NANGO_SECRET_KEY=nango_build_temp_key
+ENV DATABASE_URL=postgresql://build:build@localhost:5432/build_temp
 RUN npm run build
 
 # ===========================================
@@ -88,4 +98,5 @@ ENV WORKSPACE_DIR=/tmp/workspaces
 ENV RUNTIME_TYPE=process
 
 # Start application
-CMD ["sh", "-c", "node scripts/init-backend.js & node server.js"]
+# Note: Backend services (WebSocket, etc.) are initialized lazily on first API call
+CMD ["node", "server.js"]

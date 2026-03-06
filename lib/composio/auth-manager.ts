@@ -80,8 +80,9 @@ export class ComposioAuthManager {
    * Get connected accounts for user
    */
   async getConnectedAccounts(userId: string): Promise<ConnectedAccount[]> {
-    const accounts = await this.composio.connectedAccounts.list({ userId });
-    return accounts.filter((a: any) => a.userId === userId) as ConnectedAccount[];
+    const response = await this.composio.connectedAccounts.list({ userId });
+    const accounts = (response as any).items || response;
+    return (accounts as any[]).filter((a: any) => a.userId === userId) as ConnectedAccount[];
   }
 
   /**
@@ -166,7 +167,7 @@ export class ComposioAuthManager {
    * For API Key: Validates the key is still valid
    */
   async refreshAccount(accountId: string): Promise<ConnectedAccount> {
-    const account = await this.composio.connectedAccounts.get({ id: accountId });
+    const account = await this.composio.connectedAccounts.get({ id: accountId }) as any;
     
     // Trigger refresh
     await this.composio.connectedAccounts.refresh({ id: accountId });
@@ -185,7 +186,7 @@ export class ComposioAuthManager {
     error?: string;
   }> {
     try {
-      const account = await this.composio.connectedAccounts.get({ id: accountId });
+      const account = await this.composio.connectedAccounts.get({ id: accountId }) as any;
       
       // Check status
       if (account.status !== 'active') {
@@ -256,7 +257,7 @@ export class ComposioAuthManager {
   }> {
     try {
       // Exchange code for token
-      const result = await this.composio.authSessions.exchange({ code, state });
+      const result = await this.composio.authSessions.exchange({ code, state }) as any;
       
       // Get the connected account
       const account = await this.composio.connectedAccounts.get({

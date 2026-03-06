@@ -9,4 +9,8 @@
 
 export { composioAuthManager, ComposioAuthManager } from './composio-auth-manager';
 
-export type { AuthManagerConfig } from './auth-manager';
+export type AuthManagerConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  timeout?: number;
+};

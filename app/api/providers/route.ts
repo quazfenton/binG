@@ -4,15 +4,9 @@ import { resolveRequestAuth } from "@/lib/auth/request-auth";
 
 export async function GET(request: NextRequest) {
   try {
-    // SECURITY: Require authentication to prevent enumeration of provider configuration
-    const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
-    if (!authResult.success || !authResult.userId) {
-      return NextResponse.json(
-        { error: 'Authentication required' },
-        { status: 401 }
-      );
-    }
-
+    // Allow anonymous access - provider list is not sensitive (only shows which providers have keys configured)
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
+    
     // Get providers that have API keys configured
     const availableProviders = llmService.getAvailableProviders();
     const availableProviderIds = availableProviders.map(p => p.id);

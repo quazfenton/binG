@@ -275,6 +275,9 @@ export function createComposioAuthManager(apiKey?: string): ComposioAuthManager 
   return new ComposioAuthManager(apiKey);
 }
 
+// Singleton instance
+export const composioAuthManager = new ComposioAuthManager();
+
 /**
  * Get or create connected account helper
  */

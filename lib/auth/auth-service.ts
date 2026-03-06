@@ -4,7 +4,7 @@ import * as crypto from 'crypto';
 import { getDatabase } from '../database/connection';
 import { DatabaseOperations } from '../database/connection';
 import { generateToken, blacklistToken, isTokenExpiringSoon } from './jwt';
-import { authCache } from './request-auth';  // Import for cache invalidation
+import { authCache } from './auth-cache';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Auth:Service');

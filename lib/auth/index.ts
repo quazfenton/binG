@@ -1,6 +1,6 @@
 /**
  * Auth Module Exports
- * 
+ *
  * Central export for all authentication utilities
  */
 
@@ -8,8 +8,8 @@
 export {
   authService,
   type User,
-  type Session,
-  type AuthTokens,
+  type SessionInfo,
+  type AuthResult,
 } from './auth-service';
 
 // JWT utilities
@@ -20,19 +20,23 @@ export {
   isTokenBlacklisted,
   getBlacklistStats,
   type JwtPayload,
-  type AuthResult,
+  type AuthResult as JwtAuthResult,
 } from './jwt';
 
 // OAuth service
 export {
   oauthService,
-  type OAuthProvider,
-  type OAuthConfig,
 } from './oauth-service';
+
+// Auth cache (shared)
+export {
+  authCache,
+  AuthCache,
+  type ResolvedRequestAuth,
+} from './auth-cache';
 
 // Request auth helpers
 export {
-  authCache,
   getCachedUser,
   setCachedUser,
   invalidateUserCache,

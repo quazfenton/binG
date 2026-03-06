@@ -4,7 +4,7 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
 const loadDocker = async () => {
   // Standard dynamic import - no eval-like constructs
   const mod = await import('dockerode');
-  return mod.default;
+  return (mod as any).default || mod;
 };
 
 // Whitelist of allowed commands to prevent command injection
@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
     });
 
     const output = await new Promise<string>((resolve, reject) => {
-      exec.start((err: Error, stream: any) => {
+      exec.start({}, (err: any, stream: any) => {
         if (err) {
           reject(err);
           return;
