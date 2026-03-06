@@ -1405,7 +1405,7 @@ export async function GET() {
     const configuredProviderIds = llmService.getAvailableProviders().map(p => p.id);
 
     // Return all providers with availability status (based on API key configuration)
-    const allProviders = Object.values(PROVIDERS).map(provider => ({
+    const allProviders = Object.values(PROVIDERS).map((provider: any) => ({
       ...provider,
       isAvailable: configuredProviderIds.includes(provider.id)
     }));
@@ -1460,8 +1460,8 @@ async function handleError(
     error.message
   );
   
-  return errorHandler.handleError(error instanceof Error ? error : new Error(error.message), {
-    context: 'chat_api',
+  return errorHandler.processError(error instanceof Error ? error : new Error(error.message), {
+    operation: 'chat_api',
     provider,
     model,
     userId,

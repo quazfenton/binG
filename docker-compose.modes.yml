@@ -1,4 +1,5 @@
-version: "3.8"
+# Docker Compose Modes Configuration
+# Note: 'version' key removed - obsolete in Compose v2+
 
 services:
   app-standard:

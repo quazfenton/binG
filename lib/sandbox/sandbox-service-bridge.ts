@@ -195,6 +195,31 @@ export class SandboxServiceBridge {
       console.warn(`[SandboxBridge] Mounting failed: ${error.message}`);
     }
   }
+
+  /**
+   * Execute a tool with user isolation
+   * Gets the user's session and executes the tool within their sandbox
+   */
+  async executeToolWithIsolation(userId: string, toolName: string, args: Record<string, any>) {
+    const session = this.getSessionByUserId(userId);
+    if (!session) {
+      throw new Error(`No active session for user: ${userId}`);
+    }
+
+    // Execute based on tool name
+    switch (toolName) {
+      case 'executeCommand':
+        return this.executeCommand(session.sandboxId, args.command, args.cwd);
+      case 'writeFile':
+        return this.writeFile(session.sandboxId, args.path, args.content);
+      case 'readFile':
+        return this.readFile(session.sandboxId, args.path);
+      case 'listDirectory':
+        return this.listDirectory(session.sandboxId, args.path);
+      default:
+        throw new Error(`Unknown tool: ${toolName}`);
+    }
+  }
 }
 
 export const sandboxBridge = new SandboxServiceBridge();

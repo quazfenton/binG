@@ -1,11 +1,11 @@
 /**
  * JWT Authentication Utilities
- * 
+ *
  * Secure JWT token generation, validation, and verification
  * using the jose library for cryptographic operations.
  */
 
-import { SignJWT, jwtVerify, JWTPayload, KeyLike } from 'jose';
+import { SignJWT, jwtVerify, JWTPayload } from 'jose';
 import { createSecureHash } from './crypto-utils';
 
 /**
@@ -41,7 +41,7 @@ export interface VerificationResult {
 /**
  * Default configuration
  *
- * SECURITY: Throws error in production if JWT_SECRET_KEY not set
+ * SECURITY: Throws error in production if JWT_SECRET not set
  */
 const DEFAULT_CONFIG: JWTConfig = {
   secretKey: getSecretKey(),
@@ -55,19 +55,19 @@ const DEFAULT_CONFIG: JWTConfig = {
  * Throws error in production if not configured
  */
 function getSecretKey(): string {
-  const secretKey = process.env.JWT_SECRET_KEY;
+  const secretKey = process.env.JWT_SECRET;
 
   if (!secretKey) {
     if (process.env.NODE_ENV === 'production') {
       throw new Error(
-        'CRITICAL: JWT_SECRET_KEY environment variable is required in production. ' +
+        'CRITICAL: JWT_SECRET environment variable is required in production. ' +
         'Set a secure random string (min 32 characters).'
       );
     }
     // Development only - generate warning
     console.warn(
-      '⚠️  WARNING: JWT_SECRET_KEY not set. Using insecure development key.\n' +
-      'Set JWT_SECRET_KEY environment variable for production.'
+      '⚠️  WARNING: JWT_SECRET not set. Using insecure development key.\n' +
+      'Set JWT_SECRET environment variable for production.'
     );
     return 'dev-insecure-key-change-in-production-' + Date.now();
   }
@@ -75,7 +75,7 @@ function getSecretKey(): string {
   // Validate key strength
   if (secretKey.length < 16) {
     throw new Error(
-      'JWT_SECRET_KEY must be at least 16 characters. ' +
+      'JWT_SECRET must be at least 16 characters. ' +
       'Use a secure random string (e.g., openssl rand -hex 32)'
     );
   }

@@ -46,8 +46,17 @@ interface CommandModeConnection {
   providerType: SandboxProviderType
 }
 
+interface WebSocketConnection {
+  sandboxId: string
+  sessionId: string
+  lastActive: number
+  detectedPorts: Set<number>
+  ws: any // WebSocket instance
+}
+
 const activePtyConnections = new Map<string, PtyConnection>()
 const commandModeConnections = new Map<string, CommandModeConnection>()
+const websocketConnections = new Map<string, WebSocketConnection>()
 
 // Legacy port patterns (kept for backward compatibility)
 const LEGACY_PORT_PATTERNS = [
@@ -342,9 +351,22 @@ export class TerminalManager {
     }
 
     const cmdConn = commandModeConnections.get(sessionId)
-    if (!cmdConn) throw new Error(`No active terminal session for ${sessionId}`)
-    cmdConn.lastActive = Date.now()
-    await this.sendCommandModeInput(cmdConn, data)
+    if (cmdConn) {
+      cmdConn.lastActive = Date.now()
+      await this.sendCommandModeInput(cmdConn, data)
+      return
+    }
+
+    // Check WebSocket connection
+    const wsConn = websocketConnections.get(sessionId)
+    if (wsConn) {
+      wsConn.lastActive = Date.now()
+      // Send input through WebSocket
+      wsConn.ws.send(JSON.stringify({ type: 'input', data }))
+      return
+    }
+
+    throw new Error(`No active terminal session for ${sessionId}`)
   }
 
   async resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
@@ -353,7 +375,48 @@ export class TerminalManager {
       await conn.ptyHandle.resize(cols, rows)
       return
     }
+
+    // Check WebSocket connection
+    const wsConn = websocketConnections.get(sessionId)
+    if (wsConn) {
+      wsConn.ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+      return
+    }
     // Command mode is line-based; no-op for resize.
+  }
+
+  /**
+   * Register a WebSocket connection for terminal session
+   */
+  registerWebSocketConnection(ws: any, sessionId: string, sandboxId: string): void {
+    websocketConnections.set(sessionId, {
+      ws,
+      sandboxId,
+      sessionId,
+      lastActive: Date.now(),
+      detectedPorts: new Set(),
+    })
+  }
+
+  /**
+   * Unregister a WebSocket connection
+   */
+  unregisterWebSocketConnection(sessionId: string): void {
+    websocketConnections.delete(sessionId)
+  }
+
+  /**
+   * Check if session has WebSocket connection
+   */
+  hasWebSocketConnection(sessionId: string): boolean {
+    return websocketConnections.has(sessionId)
+  }
+
+  /**
+   * Check if session has an actual PTY connection (not just WebSocket)
+   */
+  hasPtyConnection(sessionId: string): boolean {
+    return activePtyConnections.has(sessionId)
   }
 
   /**

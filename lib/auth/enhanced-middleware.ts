@@ -46,6 +46,7 @@ export interface AuthMiddlewareOptions {
  */
 export interface EnhancedAuthResult {
   authenticated: boolean;
+  success: boolean;
   userId?: string;
   email?: string;
   error?: string;
@@ -57,7 +58,7 @@ export interface EnhancedAuthResult {
  * Get client IP from request
  * Handles Cloudflare, Cloudfront, and other proxy headers
  */
-function getClientIP(request: NextRequest): string {
+export function getClientIP(request: NextRequest): string {
   // Check various proxy headers
   const headers = [
     'cf-connecting-ip',      // Cloudflare
@@ -122,6 +123,7 @@ export function withAuth<T extends NextResponse>(
     // Initialize auth result
     const authResult: EnhancedAuthResult = {
       authenticated: false,
+      success: false,
       rateLimitRemaining: 0,
     };
 
@@ -172,6 +174,7 @@ export function withAuth<T extends NextResponse>(
       if (!authHeader || !authHeader.startsWith('Bearer ')) {
         if (allowAnonymous) {
           authResult.authenticated = true;
+          authResult.success = true;
         } else {
           logger.warn('Missing authorization header', {
             path: request.nextUrl.pathname,
@@ -219,6 +222,7 @@ export function withAuth<T extends NextResponse>(
 
         // Extract user info
         authResult.authenticated = true;
+        authResult.success = true;
         authResult.userId = verifyResult.userId;
         authResult.email = verifyResult.email;
 
@@ -313,10 +317,11 @@ export async function checkAuth(
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     if (allowAnonymous) {
-      return { authenticated: true };
+      return { authenticated: true, success: true };
     }
     return {
       authenticated: false,
+      success: false,
       error: 'Authorization required',
       statusCode: 401,
     };
@@ -327,6 +332,7 @@ export async function checkAuth(
   if (!verifyResult.success) {
     return {
       authenticated: false,
+      success: false,
       error: verifyResult.error,
       statusCode: 401,
     };
@@ -334,6 +340,7 @@ export async function checkAuth(
 
   return {
     authenticated: true,
+    success: true,
     userId: verifyResult.userId,
     email: verifyResult.email,
   };

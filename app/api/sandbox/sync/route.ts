@@ -49,7 +49,7 @@ const SUPPORTED_PROVIDERS = [
 const PROVIDER_WORKSPACE_DIRS: Record<string, string> = {
   sprites: '/home/sprite/workspace',
   blaxel: '/workspace',
-  daytona: '/workspace',
+  daytona: '/home/daytona/workspace',
   e2b: '/home/user',
   microsandbox: '/workspace',
   codesandbox: '/workspace',

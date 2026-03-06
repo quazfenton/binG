@@ -8,7 +8,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   sandboxManager,
   previewRouter,
-  webSocketTerminalServer,
   getS3Backend,
   getLocalBackend,
   getFirecrackerRuntime,
@@ -19,12 +18,28 @@ import {
   snapshotManager,
 } from '@/lib/backend';
 
+// Lazy import WebSocket terminal server to avoid constructor issues
+let _webSocketTerminalServer: any = null;
+
+async function getWebSocketTerminalServer() {
+  if (!_webSocketTerminalServer) {
+    try {
+      const { webSocketTerminalServer } = await import('@/lib/backend/websocket-terminal');
+      _webSocketTerminalServer = webSocketTerminalServer;
+    } catch (error) {
+      console.warn('[Backend] Failed to load WebSocket terminal server:', (error as Error).message);
+      return null;
+    }
+  }
+  return _webSocketTerminalServer;
+}
+
 // Initialize backend services
 let initialized = false;
 
 async function initializeBackend() {
   if (initialized) return;
-  
+
   try {
     // Initialize storage backend
     const storageType = process.env.STORAGE_TYPE || 'local';
@@ -53,9 +68,16 @@ async function initializeBackend() {
       getProcessRuntime(process.env.WORKSPACE_DIR || '/tmp/workspaces');
     }
 
-    // Start WebSocket terminal server
+    // Start WebSocket terminal server (lazy load)
     const wsPort = parseInt(process.env.WEBSOCKET_PORT || '8080');
-    await webSocketTerminalServer.start(wsPort);
+    const wsServer = await getWebSocketTerminalServer();
+    if (wsServer) {
+      try {
+        await wsServer.start(wsPort);
+      } catch (error: any) {
+        console.warn('[Backend] WebSocket server unavailable, continuing without internal WS:', error.message);
+      }
+    }
 
     initialized = true;
     console.log('[Backend] Initialized successfully');
@@ -69,22 +91,23 @@ async function initializeBackend() {
 export async function GET(request: NextRequest) {
   try {
     await initializeBackend();
-    
+
     // Check if it's a health check or a search/list request
     const url = new URL(request.url);
     const path = url.pathname;
 
     if (path.endsWith('/health')) {
+      const wsServer = await getWebSocketTerminalServer();
       const health = {
         status: 'healthy',
         version: '1.0.0',
         services: {
-          websocket: webSocketTerminalServer.getActiveSessions() >= 0,
+          websocket: !!wsServer,
           storage: true,
           runtime: true,
           metrics: true,
         },
-        activeSessions: webSocketTerminalServer.getActiveSessions(),
+        activeSessions: wsServer ? wsServer.getActiveSessions() : 0,
         timestamp: new Date().toISOString(),
       };
       sandboxMetrics.httpRequestsTotal.inc({ method: 'GET', path: '/api/backend/health', status: '200' });

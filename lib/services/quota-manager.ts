@@ -49,6 +49,23 @@ class QuotaManager {
   }
 
   /**
+   * Configure quotas with custom limits
+   */
+  configure(config: { maxExecutionsPerHour?: number; maxStorageMB?: number }): void {
+    if (config.maxExecutionsPerHour) {
+      // Apply to all providers - distribute across providers
+      const perProvider = Math.floor(config.maxExecutionsPerHour / Object.keys(DEFAULT_QUOTAS).length);
+      for (const [provider, quota] of this.quotas) {
+        quota.monthlyLimit = perProvider;
+      }
+    }
+    if (config.maxStorageMB) {
+      // Storage is tracked per-sandbox, not per-provider
+      console.log('[QuotaManager] maxStorageMB not implemented per-provider');
+    }
+  }
+
+  /**
    * Lazily initialize database connection only when needed
    */
   private ensureDatabase(): void {
@@ -481,18 +498,36 @@ class QuotaManager {
 
   /**
    * Returns a circular fallback order for sandbox providers beginning with `primary`.
+   * Reads from SANDBOX_PROVIDER_FALLBACK_CHAIN env var if set, otherwise uses defaults.
    */
   getSandboxProviderChain(primary: string): string[] {
+    // Check for environment variable override first
+    const envChain = process.env.SANDBOX_PROVIDER_FALLBACK_CHAIN;
+    if (envChain && envChain.trim()) {
+      const providers = envChain.split(',').map(p => p.trim().toLowerCase());
+      // Rotate chain to start with primary
+      const primaryIndex = providers.indexOf(primary.toLowerCase());
+      if (primaryIndex >= 0) {
+        const rotated = [...providers.slice(primaryIndex), ...providers.slice(0, primaryIndex)];
+        return rotated.filter(provider => this.isAvailable(provider));
+      }
+      // If primary not in chain, prepend it
+      return [primary, ...providers].filter(provider => this.isAvailable(provider));
+    }
+
+    // Default fallback chains (used when env var not set)
+    // Note: opensandbox added as last resort (code-interpreter focused)
     const explicitChains: Record<string, string[]> = {
-      daytona: ['daytona', 'runloop', 'blaxel', 'sprites', 'microsandbox', 'e2b', 'mistral'],
-      runloop: ['runloop', 'blaxel', 'sprites', 'daytona', 'microsandbox', 'e2b', 'mistral'],
-      blaxel: ['blaxel', 'sprites', 'runloop', 'daytona', 'microsandbox', 'e2b', 'mistral'], // NEW
-      sprites: ['sprites', 'blaxel', 'runloop', 'daytona', 'microsandbox', 'e2b', 'mistral'], // NEW
-      microsandbox: ['microsandbox', 'runloop', 'blaxel', 'sprites', 'daytona', 'e2b', 'mistral'],
-      e2b: ['e2b', 'daytona', 'runloop', 'blaxel', 'sprites', 'microsandbox', 'mistral'],
-      mistral: ['mistral', 'microsandbox', 'blaxel', 'sprites', 'runloop', 'daytona', 'e2b'],
+      daytona: ['daytona', 'runloop', 'blaxel', 'sprites', 'microsandbox', 'e2b', 'mistral', 'opensandbox'],
+      runloop: ['runloop', 'blaxel', 'sprites', 'daytona', 'microsandbox', 'e2b', 'mistral', 'opensandbox'],
+      blaxel: ['blaxel', 'sprites', 'runloop', 'daytona', 'microsandbox', 'e2b', 'mistral', 'opensandbox'],
+      sprites: ['sprites', 'blaxel', 'runloop', 'daytona', 'microsandbox', 'e2b', 'mistral', 'opensandbox'],
+      microsandbox: ['microsandbox', 'runloop', 'blaxel', 'sprites', 'daytona', 'e2b', 'mistral', 'opensandbox'],
+      e2b: ['e2b', 'daytona', 'runloop', 'blaxel', 'sprites', 'microsandbox', 'mistral', 'opensandbox'],
+      mistral: ['mistral', 'microsandbox', 'blaxel', 'sprites', 'runloop', 'daytona', 'e2b', 'opensandbox'],
+      opensandbox: ['opensandbox', 'microsandbox', 'daytona', 'runloop', 'e2b', 'mistral'],
     };
-    const base = explicitChains[primary] || [primary, 'daytona', 'runloop', 'blaxel', 'sprites', 'microsandbox', 'e2b', 'mistral'];
+    const base = explicitChains[primary] || [primary, 'daytona', 'runloop', 'blaxel', 'sprites', 'microsandbox', 'e2b', 'mistral', 'opensandbox'];
     const deduped = Array.from(new Set(base));
     return deduped.filter(provider => this.isAvailable(provider));
   }
@@ -751,6 +786,19 @@ class QuotaManager {
       quota.resetDate = this.getNextResetDate();
       this.saveQuotaToDatabase(quota);
       console.log(`[QuotaManager] Reset quota for ${provider}`);
+    }
+  }
+
+  /**
+   * Enable a provider that was previously disabled
+   */
+  enableProvider(provider: string): void {
+    this.ensureInitialized();
+    const quota = this.quotas.get(provider);
+    if (quota) {
+      quota.isDisabled = false;
+      this.saveQuotaToDatabase(quota);
+      console.log(`[QuotaManager] Enabled provider: ${provider}`);
     }
   }
 }

@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
   try {
     // Verify authentication
     const authResult = await verifyAuth(request);
-    if (!authResult.valid) {
+    if (!authResult || !authResult.success) {
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
   try {
     // Verify authentication
     const authResult = await verifyAuth(request);
-    if (!authResult.valid) {
+    if (!authResult || !authResult.success) {
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
@@ -98,7 +98,7 @@ export async function DELETE(request: NextRequest) {
   try {
     // Verify authentication
     const authResult = await verifyAuth(request);
-    if (!authResult.valid) {
+    if (!authResult || !authResult.success) {
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }

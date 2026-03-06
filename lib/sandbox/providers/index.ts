@@ -542,7 +542,8 @@ export { WebContainerSpawnProvider } from './webcontainer-spawn-provider'
 export { OpenSandboxProvider } from './opensandbox-provider'
 export { OpenSandboxCodeInterpreterProvider } from './opensandbox-code-interpreter-provider'
 export { OpenSandboxAgentSandboxProvider } from './opensandbox-agent-sandbox-provider'
-export { E2BProvider, E2BGitIntegration, createE2BGitIntegration } from './e2b-provider'
+export { E2BProvider, E2BGitIntegration, createE2BGitIntegration, createAmpService, executeAmpTask } from './e2b-provider'
+export { CodexSchemas, createCodexService, executeCodexTask } from './e2b-codex-service'
 // export { MistralAgentProvider } from './mistral/mistral-agent-provider' // Lazy export
 
 // Re-export CodeSandbox advanced integration

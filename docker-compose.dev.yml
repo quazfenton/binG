@@ -1,7 +1,6 @@
 # Development Docker Compose Configuration
 # Optimized for local development with hot-reload
-
-version: '3.8'
+# Note: 'version' key removed - obsolete in Compose v2+
 
 services:
   # ===========================================
@@ -17,6 +16,10 @@ services:
     ports:
       - "3000:3000"
       - "8080:8080"
+    env_file:
+      - .env
+      - .env.local
+      - .env.development
     environment:
       - NODE_ENV=development
       - PORT=3000
@@ -25,24 +28,421 @@ services:
       - LOCAL_SNAPSHOT_DIR=/tmp/snapshots
       - WORKSPACE_DIR=/tmp/workspaces
       - RUNTIME_TYPE=process
-      
-      # Authentication (dev keys)
-      - JWT_SECRET_KEY=dev-secret-key-change-in-production
-      - JWT_ALGORITHM=HS256
-      - JWT_EXPIRATION_HOURS=24
-      
+
+      # Authentication (dev keys - overridden by .env if present)
+      - JWT_SECRET=${JWT_SECRET:-dev-secret-key-change-in-production}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
+
       # Logging
-      - LOG_LEVEL=debug
-      - LOG_FORMAT=pretty
-      
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+      - LOG_FORMAT=${LOG_FORMAT:-pretty}
+
       # Hot reload
       - WATCHPACK_POLLING=true
+
+      # Feature Flags (all enabled for comprehensive dev testing)
+      - ENABLE_VOICE_FEATURES=${ENABLE_VOICE_FEATURES:-true}
+      - ENABLE_IMAGE_GENERATION=${ENABLE_IMAGE_GENERATION:-true}
+      - ENABLE_CHAT_HISTORY=${ENABLE_CHAT_HISTORY:-true}
+      - ENABLE_CODE_EXECUTION=${ENABLE_CODE_EXECUTION:-true}
+      - ENABLE_MCP_TOOL_SERVER=${ENABLE_MCP_TOOL_SERVER:-false}
+      - ENABLE_MULTI_AGENT=${ENABLE_MULTI_AGENT:-false}
+      - USE_LANGGRAPH=${USE_LANGGRAPH:-false}
+      - USE_CREWAI=${USE_CREWAI:-false}
+      - MASTRA_TELEMETRY_ENABLED=${MASTRA_TELEMETRY_ENABLED:-false}
+      - MASTRA_MEMORY_ENABLED=${MASTRA_MEMORY_ENABLED:-true}
+      - MASTRA_EVALS_ENABLED=${MASTRA_EVALS_ENABLED:-false}
+      - COMPOSIO_MCP_ENABLED=${COMPOSIO_MCP_ENABLED:-false}
+      - LLM_AGENT_TOOLS_ENABLED=${LLM_AGENT_TOOLS_ENABLED:-true}
+      - NEXT_PUBLIC_TAMBO_ENABLED=${NEXT_PUBLIC_TAMBO_ENABLED:-false}
+      - FAST_AGENT_ENABLED=${FAST_AGENT_ENABLED:-false}
+      - N8N_ENABLED=${N8N_ENABLED:-false}
+
+      # Email (dev mode - logs to console)
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-auto}
+      - REQUIRE_EMAIL_VERIFICATION=${REQUIRE_EMAIL_VERIFICATION:-false}
+
+      # Sandbox
+      - SANDBOX_PROVIDER=${SANDBOX_PROVIDER:-microsandbox}
+      - SANDBOX_IDLE_TIMEOUT_MS=${SANDBOX_IDLE_TIMEOUT_MS:-900000}
+
+      # Database (SQLite for app, PostgreSQL for Mastra)
+      - DATABASE_PATH=${DATABASE_PATH:-/tmp/data/binG.db}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://bing:bing_secure_password_change_me@postgres:5432/bing}
+      - MASTRA_SCHEMA=${MASTRA_SCHEMA:-mastra}
+
+      # MinIO (local S3-compatible storage)
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-http://minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+
+      # Encryption keys (dev defaults - CHANGE FOR PRODUCTION)
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-dev-encryption-key-must-be-32-chars-min}
+      - BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY:-dev-blaxel-secret-key-32-chars-min}
+
+      # Image Generation
+      - IMAGE_GENERATION_PROVIDERS=${IMAGE_GENERATION_PROVIDERS:-mistral,replicate}
+      - IMAGE_GENERATION_DEFAULT_QUALITY=${IMAGE_GENERATION_DEFAULT_QUALITY:-high}
+
+      # Rate Limiting (relaxed for dev)
+      - RATE_LIMIT_LOGIN_MAX=${RATE_LIMIT_LOGIN_MAX:-100}
+      - RATE_LIMIT_REGISTER_MAX=${RATE_LIMIT_REGISTER_MAX:-50}
+
+      # Email Quotas (dev tracking)
+      - EMAIL_QUOTA_BREVO_MONTHLY=${EMAIL_QUOTA_BREVO_MONTHLY:-9000}
+      - EMAIL_QUOTA_MAILERSEND_MONTHLY=${EMAIL_QUOTA_MAILERSEND_MONTHLY:-3000}
+
+      # Livekit (voice)
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-dev-livekit-key}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-dev-livekit-secret}
+      - LIVEKIT_URL=${LIVEKIT_URL:-ws://livekit:7880}
+      - NEXT_PUBLIC_LIVEKIT_URL=${NEXT_PUBLIC_LIVEKIT_URL:-ws://localhost:7880}
+
+      # Composio
+      - COMPOSIO_API_KEY=${COMPOSIO_API_KEY:-dev-composio-key}
+
+      # Nango
+      - NANGO_SECRET_KEY=${NANGO_SECRET_KEY:-dev-nango-secret}
+      - NANGO_PUBLIC_KEY=${NANGO_PUBLIC_KEY:-dev-nango-public}
+
+      # Smithery
+      - SMITHERY_API_KEY=${SMITHERY_API_KEY:-dev-smithery-key}
+
+      # Arcade
+      - ARCADE_API_KEY=${ARCADE_API_KEY:-dev-arcade-key}
+
+      # Tambo (Generative UI)
+      - NEXT_PUBLIC_TAMBO_ENABLED=${NEXT_PUBLIC_TAMBO_ENABLED:-false}
+      - NEXT_PUBLIC_TAMBO_API_KEY=${NEXT_PUBLIC_TAMBO_API_KEY:-dev-tambo-key}
+
+      # n8n
+      - N8N_ENDPOINT=${N8N_ENDPOINT:-http://n8n:5678/webhook}
+      - N8N_API_KEY=${N8N_API_KEY:-dev-n8n-key}
+
+      # Fast Agent
+      - FAST_AGENT_ENDPOINT=${FAST_AGENT_ENDPOINT:-http://fast-agent:8080/api/chat}
+      - FAST_AGENT_API_KEY=${FAST_AGENT_API_KEY:-dev-fast-agent-key}
+
+      # LLM Provider API Keys (from .env)
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+      - TOGETHER_API_KEY=${TOGETHER_API_KEY}
+      - COHERE_API_KEY=${COHERE_API_KEY}
+      - GITHUB_MODELS_API_KEY=${GITHUB_MODELS_API_KEY}
+      - CHUTES_API_KEY=${CHUTES_API_KEY}
+      - CODEX_API_KEY=${CODEX_API_KEY}
+      - AMP_API_KEY=${AMP_API_KEY}
+
+      # LLM Base URLs (for custom/self-hosted endpoints)
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
+      - MISTRAL_BASE_URL=${MISTRAL_BASE_URL}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+      - CHUTES_BASE_URL=${CHUTES_BASE_URL}
+      - GITHUB_MODELS_BASE_URL=${GITHUB_MODELS_BASE_URL}
+      - OPENCODE_BASE_URL=${OPENCODE_BASE_URL}
+
+      # OpenCode (V2 Containerized Mode)
+      - OPENCODE_API_KEY=${OPENCODE_API_KEY}
+      - OPENCODE_MODEL=${OPENCODE_MODEL:-claude-3-5-sonnet}
+      - OPENCODE_CONTAINERIZED=${OPENCODE_CONTAINERIZED:-false}
+      - OPENCODE_BIN=${OPENCODE_BIN:-opencode}
+      - OPENCODE_SESSION_ID=${OPENCODE_SESSION_ID}
+
+      # Local LLM Fallbacks
+      - LOCAL_OPENAI_API_KEY=${LOCAL_OPENAI_API_KEY}
+      - LOCAL_OPENAI_BASE_URL=${LOCAL_OPENAI_BASE_URL}
+      - LOCAL_ANTHROPIC_API_KEY=${LOCAL_ANTHROPIC_API_KEY}
+      - LOCAL_ANTHROPIC_BASE_URL=${LOCAL_ANTHROPIC_BASE_URL}
+      - LOCAL_GOOGLE_API_KEY=${LOCAL_GOOGLE_API_KEY}
+      - LOCAL_GOOGLE_BASE_URL=${LOCAL_GOOGLE_BASE_URL}
+      - CUSTOM_LOCAL_API_KEY=${CUSTOM_LOCAL_API_KEY}
+      - CUSTOM_LOCAL_BASE_URL=${CUSTOM_LOCAL_BASE_URL}
+      - CUSTOM_FALLBACK_ENABLED=${CUSTOM_FALLBACK_ENABLED:-false}
+      - CUSTOM_FALLBACK_ENDPOINT=${CUSTOM_FALLBACK_ENDPOINT}
+      - CUSTOM_FALLBACK_API_KEY=${CUSTOM_FALLBACK_API_KEY}
+      - CUSTOM_FALLBACK_TIMEOUT=${CUSTOM_FALLBACK_TIMEOUT:-1000}
+
+      # Sandbox Provider API Keys (from .env)
+      - DAYTONA_API_KEY=${DAYTONA_API_KEY}
+      - E2B_API_KEY=${E2B_API_KEY}
+      - BLAXEL_API_KEY=${BLAXEL_API_KEY}
+      - CSB_API_KEY=${CSB_API_KEY}
+      - SPRITES_TOKEN=${SPRITES_TOKEN}
+      - RUNLOOP_API_KEY=${RUNLOOP_API_KEY}
+      - BROWSERBASE_API_KEY=${BROWSERBASE_API_KEY}
+      - BROWSERBASE_PROJECT_ID=${BROWSERBASE_PROJECT_ID}
+      - OPEN_SANDBOX_API_KEY=${OPEN_SANDBOX_API_KEY}
+
+      # Sandbox Provider Settings
+      - SANDBOX_PROVIDER=${SANDBOX_PROVIDER:-microsandbox}
+      - SANDBOX_PROVIDER_FALLBACK_CHAIN=${SANDBOX_PROVIDER_FALLBACK_CHAIN}
+      - SANDBOX_PERSISTENT_CACHE=${SANDBOX_PERSISTENT_CACHE:-false}
+      - SANDBOX_CACHE_VOLUME_NAME=${SANDBOX_CACHE_VOLUME_NAME:-global-package-cache}
+      - SANDBOX_CACHE_SIZE=${SANDBOX_CACHE_SIZE:-2GB}
+      - SANDBOX_WARM_POOL=${SANDBOX_WARM_POOL:-false}
+      - SANDBOX_IDLE_TIMEOUT_MS=${SANDBOX_IDLE_TIMEOUT_MS:-900000}
+      - SANDBOX_SYNC_INTERVAL_MS=${SANDBOX_SYNC_INTERVAL_MS:-5000}
+      - SANDBOX_DEFAULT_CPU=${SANDBOX_DEFAULT_CPU:-2}
+      - SANDBOX_DEFAULT_MEMORY=${SANDBOX_DEFAULT_MEMORY:-4096}
+      - SANDBOX_BASE_PACKAGES=${SANDBOX_BASE_PACKAGES}
+      - SANDBOX_EXTRA_PACKAGES_NODE=${SANDBOX_EXTRA_PACKAGES_NODE}
+      - SANDBOX_EXTRA_PACKAGES_PYTHON=${SANDBOX_EXTRA_PACKAGES_PYTHON}
+
+      # Blaxel Sandbox Settings
+      - BLAXEL_WORKSPACE=${BLAXEL_WORKSPACE}
+      - BLAXEL_DEFAULT_REGION=${BLAXEL_DEFAULT_REGION:-us-east-1}
+      - BLAXEL_DEFAULT_IMAGE=${BLAXEL_DEFAULT_IMAGE:-node:20}
+      - BLAXEL_DEFAULT_MEMORY=${BLAXEL_DEFAULT_MEMORY:-2048}
+      - BLAXEL_DEFAULT_TTL=${BLAXEL_DEFAULT_TTL:-3600}
+      - BLAXEL_API_BASE=${BLAXEL_API_BASE:-https://api.blaxel.ai}
+      - BLAXEL_CALLBACK_SECRET=${BLAXEL_CALLBACK_SECRET}
+
+      # CodeSandbox Settings
+      - CSB_DEFAULT_TEMPLATE=${CSB_DEFAULT_TEMPLATE:-node}
+      - CSB_PRIVACY=${CSB_PRIVACY:-private}
+      - CSB_HIBERNATION_TIMEOUT=${CSB_HIBERNATION_TIMEOUT:-300}
+      - CSB_AUTO_WAKEUP=${CSB_AUTO_WAKEUP:-true}
+      - CSB_VM_TIER=${CSB_VM_TIER:-standard}
+      - CSB_COMMAND_TIMEOUT=${CSB_COMMAND_TIMEOUT:-60000}
+
+      # Sprites Settings
+      - SPRITES_DEFAULT_REGION=${SPRITES_DEFAULT_REGION:-us-east}
+      - SPRITES_DEFAULT_PLAN=${SPRITES_DEFAULT_PLAN:-dev}
+      - SPRITES_ENABLE_CHECKPOINTS=${SPRITES_ENABLE_CHECKPOINTS:-true}
+      - SPRITES_AUTO_SERVICES=${SPRITES_AUTO_SERVICES:-false}
+      - SPRITES_ENABLE_AUTO_SUSPEND=${SPRITES_ENABLE_AUTO_SUSPEND:-true}
+      - SPRITES_CHECKPOINT_AUTO_CREATE=${SPRITES_CHECKPOINT_AUTO_CREATE:-true}
+      - SPRITES_STORAGE_QUOTA_GB=${SPRITES_STORAGE_QUOTA_GB:-10}
+
+      # OpenSandbox Settings
+      - OPEN_SANDBOX_BASE_URL=${OPEN_SANDBOX_BASE_URL}
+      - OPEN_SANDBOX_EXECD_BASE_URL=${OPEN_SANDBOX_EXECD_BASE_URL}
+      - OPEN_SANDBOX_EXECD_ACCESS_TOKEN=${OPEN_SANDBOX_EXECD_ACCESS_TOKEN}
+      - OPEN_SANDBOX_IMAGE=${OPEN_SANDBOX_IMAGE}
+      - OPEN_SANDBOX_CI_IMAGE=${OPEN_SANDBOX_CI_IMAGE}
+      - OPEN_SANDBOX_CI_ENTRYPOINT=${OPEN_SANDBOX_CI_ENTRYPOINT}
+      - OPEN_SANDBOX_CI_POOL_REF=${OPEN_SANDBOX_CI_POOL_REF}
+
+      # Email Configuration
+      - EMAIL_PROVIDER=${EMAIL_PROVIDER:-auto}
+      - EMAIL_FROM=${EMAIL_FROM:-noreply@bing.local}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-binG}
+      - EMAIL_AUTO_FAILOVER=${EMAIL_AUTO_FAILOVER:-true}
+      - BREVO_API_KEY=${BREVO_API_KEY}
+      - MAILERSEND_API_KEY=${MAILERSEND_API_KEY}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+
+      # Other Integration API Keys (from .env)
+      - MODAL_API_TOKEN=${MODAL_API_TOKEN}
+      - PORTKEY_API_KEY=${PORTKEY_API_KEY}
+      - DIGITALOCEAN_API_TOKEN=${DIGITALOCEAN_API_TOKEN}
+      - NEXTCLOUD_USERNAME=${NEXTCLOUD_USERNAME}
+      - NEXTCLOUD_PASSWORD=${NEXTCLOUD_PASSWORD}
+      - SERPER_API_KEY=${SERPER_API_KEY}
+      - VERCEL_TOKEN=${VERCEL_TOKEN}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+
+      # Notion OAuth
+      - NOTION_CLIENT_ID=${NOTION_CLIENT_ID}
+      - NOTION_CLIENT_SECRET=${NOTION_CLIENT_SECRET}
+      - NOTION_REDIRECT_URI=${NOTION_REDIRECT_URI:-http://localhost:3000/api/oauth/notion/callback}
+
+      # Default LLM settings
+      - DEFAULT_LLM_PROVIDER=${DEFAULT_LLM_PROVIDER:-mistral}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-mistral-large-latest}
+      - DEFAULT_TEMPERATURE=${DEFAULT_TEMPERATURE:-0.7}
+      - DEFAULT_MAX_TOKENS=${DEFAULT_MAX_TOKENS:-80000}
+
+      # LLM Provider mode
+      - LLM_PROVIDER=${LLM_PROVIDER:-mistral}
+
+      # Mistral Agent Settings
+      - MISTRAL_CODE_INTERPRETER_MODEL=${MISTRAL_CODE_INTERPRETER_MODEL:-mistral-large-latest}
+      - MISTRAL_AGENT_MODEL=${MISTRAL_AGENT_MODEL:-mistral-large-latest}
+      - MISTRAL_AGENT_TEMPERATURE=${MISTRAL_AGENT_TEMPERATURE:-0.7}
+      - MISTRAL_AGENT_TOP_P=${MISTRAL_AGENT_TOP_P:-1}
+      - MISTRAL_CODE_EXECUTION_MAX_RETRIES=${MISTRAL_CODE_EXECUTION_MAX_RETRIES:-3}
+      - MISTRAL_CODE_EXECUTION_TIMEOUT_MS=${MISTRAL_CODE_EXECUTION_TIMEOUT_MS:-300000}
+      - MISTRAL_ENABLE_STREAMING=${MISTRAL_ENABLE_STREAMING:-true}
+      - MISTRAL_ENABLE_WEB_SEARCH=${MISTRAL_ENABLE_WEB_SEARCH:-false}
+
+      # Quotas
+      - MAX_EXECUTIONS_PER_HOUR=${MAX_EXECUTIONS_PER_HOUR:-1000}
+      - MAX_CONCURRENT_SANDBOXES=${MAX_CONCURRENT_SANDBOXES:-10}
+      - MAX_MEMORY_MB=${MAX_MEMORY_MB:-2048}
+      - MAX_STORAGE_MB=${MAX_STORAGE_MB:-10240}
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-10485760}
+      - MAX_SELF_HEAL_ATTEMPTS=${MAX_SELF_HEAL_ATTEMPTS:-3}
+      - MAX_SANDBOX_IDLE=${MAX_SANDBOX_IDLE:-300000}
+      - AI_SDK_MAX_STEPS=${AI_SDK_MAX_STEPS:-10}
+
+      # Terminal settings
+      - NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS=${NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS:-15000}
+      - NEXT_PUBLIC_SKIP_AUTH_IN_DEV=${NEXT_PUBLIC_SKIP_AUTH_IN_DEV:-false}
+      - WEBSOCKET_PORT=${WEBSOCKET_PORT:-8080}
+      - WEBSOCKET_PROTOCOL=${WEBSOCKET_PROTOCOL:-ws}
+      - WEBSOCKET_HOST=${WEBSOCKET_HOST:-localhost:8080}
+
+      # App URL
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+
+      # Authentication
+      - JWT_ISSUER=${JWT_ISSUER:-bing-app}
+      - JWT_AUDIENCE=${JWT_AUDIENCE:-bing-app}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-24h}
+      - AUTH_PUBLIC_KEY=${AUTH_PUBLIC_KEY}
+      - VISUAL_EDITOR_SECRET=${VISUAL_EDITOR_SECRET:-visual-editor-secret}
+
+      # Database/Storage
+      - DATABASE_PATH=${DATABASE_PATH:-/tmp/data/binG.db}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - STORAGE_TYPE=${STORAGE_TYPE:-local}
+      - WORKSPACE_DIR=${WORKSPACE_DIR:-/tmp/workspaces}
+      - RUNTIME_TYPE=${RUNTIME_TYPE:-process}
+      - BACKUP_PROVIDER=${BACKUP_PROVIDER:-local}
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+      - LOG_FORMAT=${LOG_FORMAT:-pretty}
+
+      # MCP (Model Context Protocol)
+      - MCP_SERVERS=${MCP_SERVERS}
+      - MCP_CLI_PORT=${MCP_CLI_PORT:-3001}
+      - MCP_AUTH_TOKEN=${MCP_AUTH_TOKEN}
+      - MCP_ALLOWED_ORIGINS=${MCP_ALLOWED_ORIGINS:-*}
+      - MCP_DEFAULT_TIMEOUT_MS=${MCP_DEFAULT_TIMEOUT_MS:-30000}
+      - MCP_GATEWAY_URL=${MCP_GATEWAY_URL}
+      - MCP_GATEWAY_AUTH_TOKEN=${MCP_GATEWAY_AUTH_TOKEN}
+      - MCP_GATEWAY_TIMEOUT_MS=${MCP_GATEWAY_TIMEOUT_MS:-30000}
+      - MCPORTER_REFRESH_MS=${MCPORTER_REFRESH_MS:-60000}
+      - MCPORTER_CALL_TIMEOUT_MS=${MCPORTER_CALL_TIMEOUT_MS:-30000}
+
+      # Composio
+      - COMPOSIO_API_KEY=${COMPOSIO_API_KEY}
+      - COMPOSIO_BASE_URL=${COMPOSIO_BASE_URL:-https://backend.composio.dev}
+      - COMPOSIO_HOST=${COMPOSIO_HOST:-https://backend.composio.dev}
+      - COMPOSIO_REDIRECT_URL=${COMPOSIO_REDIRECT_URL:-http://localhost:3000/api/oauth/composio/callback}
+      - COMPOSIO_MANAGE_CONNECTIONS=${COMPOSIO_MANAGE_CONNECTIONS:-false}
+      - COMPOSIO_LLM_PROVIDER=${COMPOSIO_LLM_PROVIDER:-openai}
+      - COMPOSIO_LLM_MODEL=${COMPOSIO_LLM_MODEL:-gpt-4o}
+      - COMPOSIO_ENABLE_ALL_TOOLS=${COMPOSIO_ENABLE_ALL_TOOLS:-false}
+      - COMPOSIO_WEBHOOK_SECRET=${COMPOSIO_WEBHOOK_SECRET}
+
+      # Nango
+      - NANGO_SECRET_KEY=${NANGO_SECRET_KEY}
+      - NANGO_PUBLIC_KEY=${NANGO_PUBLIC_KEY}
+      - NANGO_HOST=${NANGO_HOST:-https://api.nango.dev}
+      - NANGO_WEBHOOK_SECRET=${NANGO_WEBHOOK_SECRET}
+
+      # Arcade
+      - ARCADE_API_KEY=${ARCADE_API_KEY}
+      - ARCADE_BASE_URL=${ARCADE_BASE_URL:-https://api.arcade.dev}
+      - ARCADE_ORGANIZATION_ID=${ARCADE_ORGANIZATION_ID}
+      - ARCADE_WEBHOOK_SECRET=${ARCADE_WEBHOOK_SECRET}
+      - ARCADE_USER_ID_STRATEGY=${ARCADE_USER_ID_STRATEGY:-session}
+
+      # Smithery
+      - SMITHERY_API_KEY=${SMITHERY_API_KEY}
+      - SMITHERY_API_BASE=${SMITHERY_API_BASE:-https://api.smithery.ai}
+
+      # Tambo
+      - NEXT_PUBLIC_TAMBO_ENABLED=${NEXT_PUBLIC_TAMBO_ENABLED:-false}
+      - NEXT_PUBLIC_TAMBO_API_KEY=${NEXT_PUBLIC_TAMBO_API_KEY}
+      - TAMBO_BASE_URL=${TAMBO_BASE_URL:-https://api.tambo.ai}
+      - TAMBO_DEFAULT_USER_ID=${TAMBO_DEFAULT_USER_ID}
+
+      # LiveKit (Voice)
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - LIVEKIT_URL=${LIVEKIT_URL:-ws://livekit:7880}
+      - NEXT_PUBLIC_LIVEKIT_URL=${NEXT_PUBLIC_LIVEKIT_URL:-ws://localhost:7880}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - CARTESIA_API_KEY=${CARTESIA_API_KEY}
+
+      # CrewAI
+      - CREWAI_DEFAULT_PROCESS=${CREWAI_DEFAULT_PROCESS:-sequential}
+      - CREWAI_AGENTS_CONFIG=${CREWAI_AGENTS_CONFIG:-src/config/agents.yaml}
+      - CREWAI_PLANNER_AGENT=${CREWAI_PLANNER_AGENT:-planner}
+      - CREWAI_CODER_AGENT=${CREWAI_CODER_AGENT:-coder}
+      - CREWAI_CRITIC_AGENT=${CREWAI_CRITIC_AGENT:-critic}
+      - CREWAI_MANAGER_AGENT=${CREWAI_MANAGER_AGENT:-manager}
+      - CREWAI_PROCESS_LLM=${CREWAI_PROCESS_LLM:-gpt-4o}
+
+      # Mastra
+      - MASTRA_SCHEMA=${MASTRA_SCHEMA:-mastra}
+      - MASTRA_MEMORY_MAX_MESSAGES=${MASTRA_MEMORY_MAX_MESSAGES:-100}
+      - MASTRA_EVALS_MIN_QUALITY=${MASTRA_EVALS_MIN_QUALITY:-7}
+      - MASTRA_EVALS_MIN_SECURITY=${MASTRA_EVALS_MIN_SECURITY:-8}
+      - MASTRA_EVALS_AUTO_REJECT=${MASTRA_EVALS_AUTO_REJECT:-true}
+
+      # Rate Limiting
+      - RATE_LIMIT_LOGIN_MAX=${RATE_LIMIT_LOGIN_MAX:-5}
+      - RATE_LIMIT_LOGIN_WINDOW_MS=${RATE_LIMIT_LOGIN_WINDOW_MS:-900000}
+      - RATE_LIMIT_REGISTER_MAX=${RATE_LIMIT_REGISTER_MAX:-3}
+      - RATE_LIMIT_REGISTER_WINDOW_MS=${RATE_LIMIT_REGISTER_WINDOW_MS:-3600000}
+      - RATE_LIMIT_VERIFY_MAX=${RATE_LIMIT_VERIFY_MAX:-10}
+      - RATE_LIMIT_VERIFY_WINDOW_MS=${RATE_LIMIT_VERIFY_WINDOW_MS:-3600000}
+      - RATE_LIMIT_SEND_VERIFICATION_MAX=${RATE_LIMIT_SEND_VERIFICATION_MAX:-3}
+      - RATE_LIMIT_SEND_VERIFICATION_WINDOW_MS=${RATE_LIMIT_SEND_VERIFICATION_WINDOW_MS:-3600000}
+      - RATE_LIMIT_PASSWORD_RESET_MAX=${RATE_LIMIT_PASSWORD_RESET_MAX:-3}
+      - RATE_LIMIT_PASSWORD_RESET_WINDOW_MS=${RATE_LIMIT_PASSWORD_RESET_WINDOW_MS:-3600000}
+      - RATE_LIMIT_GENERIC_MAX=${RATE_LIMIT_GENERIC_MAX:-30}
+      - RATE_LIMIT_GENERIC_WINDOW_MS=${RATE_LIMIT_GENERIC_WINDOW_MS:-60000}
+
+      # Image Generation
+      - IMAGE_GENERATION_PROVIDERS=${IMAGE_GENERATION_PROVIDERS:-mistral,replicate}
+      - IMAGE_GENERATION_DEFAULT_QUALITY=${IMAGE_GENERATION_DEFAULT_QUALITY:-high}
+      - IMAGE_GENERATION_TIMEOUT_MS=${IMAGE_GENERATION_TIMEOUT_MS:-120000}
+
+      # Tool Router
+      - TOOL_ROUTER_PROVIDER_CHAIN=${TOOL_ROUTER_PROVIDER_CHAIN}
+      - TOOL_CALLING_MODE=${TOOL_CALLING_MODE:-auto}
+
+      # Virtual Filesystem
+      - DEFAULT_WORKSPACE_ROOT=${DEFAULT_WORKSPACE_ROOT:-/tmp/workspaces}
+      - VIRTUAL_FILESYSTEM_STORAGE_DIR=${VIRTUAL_FILESYSTEM_STORAGE_DIR:-/tmp/vfs}
+
+      # Other Settings
+      - PORT=${PORT:-3000}
+      - HOST=${HOST:-0.0.0.0}
+      - REQUIRE_EMAIL_VERIFICATION=${REQUIRE_EMAIL_VERIFICATION:-false}
+      - HITL_TIMEOUT=${HITL_TIMEOUT:-300000}
+      - ARCHITECT_MODEL=${ARCHITECT_MODEL:-claude-sonnet-4-20250514}
+      - BUILDER_MODEL=${BUILDER_MODEL:-gpt-5-codex}
+      - LINTER_MODEL=${LINTER_MODEL:-claude-haiku-3-20250711}
+      - DEFAULT_PUTER_KEY=${DEFAULT_PUTER_KEY}
+
+      # Client-side NEXT_PUBLIC variables
+      - NEXT_PUBLIC_WEBSOCKET_URL=${NEXT_PUBLIC_WEBSOCKET_URL}
+      - NEXT_PUBLIC_WEBSOCKET_PORT=${NEXT_PUBLIC_WEBSOCKET_PORT:-8080}
+      - NEXT_PUBLIC_BG_MEDIA_URL=${NEXT_PUBLIC_BG_MEDIA_URL}
+      - NEXT_PUBLIC_COMPOSIO_HOST=${NEXT_PUBLIC_COMPOSIO_HOST}
+      - NEXT_PUBLIC_ENABLE_SERVER_CHAT_STORAGE=${NEXT_PUBLIC_ENABLE_SERVER_CHAT_STORAGE:-false}
+      - NEXT_PUBLIC_LIVEKIT_URL=${NEXT_PUBLIC_LIVEKIT_URL:-ws://localhost:7880}
+      - NEXT_PUBLIC_CORS_PROXY_URL=${NEXT_PUBLIC_CORS_PROXY_URL}
+      - NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID=${NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID}
+      - NEXT_PUBLIC_WEBCONTAINER_SCOPE=${NEXT_PUBLIC_WEBCONTAINER_SCOPE}
+      - NEXT_PUBLIC_PYODIDE_PRELOAD_PACKAGES=${NEXT_PUBLIC_PYODIDE_PRELOAD_PACKAGES}
     volumes:
       - .:/app:cached
       - /app/node_modules
       - /app/.next
       - app-workspaces:/tmp/workspaces
       - app-snapshots:/tmp/snapshots
+      - app-data:/tmp/data
     command: npm run dev
     networks:
       - bing-network
@@ -63,9 +463,12 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+    env_file:
+      - .env
+      - .env.local
     environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - minio-data:/data
     command: server /data --console-address ":9001"
@@ -183,6 +586,88 @@ services:
     depends_on:
       - app
 
+  # ===========================================
+  # PostgreSQL Database (for Mastra Workflows)
+  # ===========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: bing-postgres-dev
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    env_file:
+      - .env
+      - .env.local
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-bing}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bing_secure_password_change_me}
+      - POSTGRES_DB=${POSTGRES_DB:-bing}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bing}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================
+  # Livekit (Voice/Room Server - Optional)
+  # ===========================================
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: bing-livekit-dev
+    restart: unless-stopped
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    env_file:
+      - .env
+      - .env.local
+    environment:
+      - LIVEKIT_KEYS=${LIVEKIT_API_KEY:-dev-key}:${LIVEKIT_API_SECRET:-dev-secret}
+    command: >
+      --dev
+      --bind 0.0.0.0
+      --node-ip livekit
+    networks:
+      - bing-network
+    volumes:
+      - livekit-data:/data
+
+  # ===========================================
+  # Terminal WebSocket Server (PTY Backend)
+  # ===========================================
+  terminal-ws:
+    image: node:20-alpine
+    container_name: bing-terminal-ws-dev
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    env_file:
+      - .env
+      - .env.local
+    environment:
+      - NODE_ENV=development
+      - PORT=8080
+      - WORKSPACE_DIR=/workspace
+      - JWT_SECRET=${JWT_SECRET:-dev-secret-key-change-in-production}
+    volumes:
+      - terminal-workspaces:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: >
+      sh -c "
+      npm install -g tsx &&
+      echo 'Terminal WebSocket server - configure your terminal backend script' &&
+      sleep infinity
+      "
+    networks:
+      - bing-network
+    depends_on:
+      - app
+
 # ===========================================
 # Networks
 # ===========================================
@@ -198,6 +683,8 @@ volumes:
     driver: local
   app-snapshots:
     driver: local
+  app-data:
+    driver: local
   minio-data:
     driver: local
   prometheus-data:
@@ -207,4 +694,10 @@ volumes:
   redis-data:
     driver: local
   microsandbox-workspaces:
+    driver: local
+  postgres-data:
+    driver: local
+  livekit-data:
+    driver: local
+  terminal-workspaces:
     driver: local
