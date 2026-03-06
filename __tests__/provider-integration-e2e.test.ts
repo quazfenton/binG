@@ -322,14 +322,14 @@ describe('Provider Integration E2E Tests', () => {
     it('should initialize Tambo service', async () => {
       const { createTamboService } = await import('@/lib/tools');
       
-      if (!process.env.TAMBO_API_KEY) {
+      if (!process.env.NEXT_PUBLIC_TAMBO_API_KEY) {
         console.log('Tambo not configured, skipping test');
         return;
       }
 
       try {
         const service = createTamboService({
-          apiKey: process.env.TAMBO_API_KEY,
+          apiKey: process.env.NEXT_PUBLIC_TAMBO_API_KEY,
         });
         
         expect(service).toBeDefined();

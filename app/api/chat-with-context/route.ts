@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from 'webdav';
 import { diffLines } from 'diff';
-import fs from 'node:fs/promises';
+import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { FEATURE_FLAGS } from '@/config/features';
 
@@ -26,7 +26,7 @@ export async function POST(req: Request) {
     // Process file changes using ETag caching
     if (currentFile) {
       try {
-        const stats = await client.stat(currentFile);
+        const stats = await client.stat(currentFile) as any;
         const cachePath = path.join('/tmp', `${currentFile.replace(/\//g, '_')}`);
         
         let cachedETag = '';

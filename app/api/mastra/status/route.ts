@@ -2,8 +2,6 @@
  * Mastra Workflow Status API
  *
  * Gets the current status of a workflow run.
- * 
- * FIXED: Added comprehensive status information including step details and history
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -45,11 +43,17 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Create run with existing runId
-    const run = await workflow.createRun({ runId });
+    // Get run state
+    const runState = await workflow.getWorkflowRunById(runId);
 
-    // Get status
-    const status = await run.getStatus();
+    if (!runState) {
+      return NextResponse.json(
+        { error: `Run ${runId} not found` },
+        { status: 404 }
+      );
+    }
+
+    const status = runState.status;
 
     // Build response
     const response: any = {
@@ -62,10 +66,9 @@ export async function GET(request: NextRequest) {
     // Get history if requested
     if (includeHistory) {
       try {
-        const history = await run.getHistory();
-        response.history = history;
-        response.createdAt = history[0]?.timestamp;
-        response.updatedAt = history[history.length - 1]?.timestamp;
+        response.history = runState.steps || {};
+        response.createdAt = runState.createdAt;
+        response.updatedAt = runState.updatedAt;
       } catch (historyError) {
         console.warn(`Failed to get history for run ${runId}:`, historyError);
         response.history = [];
@@ -75,8 +78,7 @@ export async function GET(request: NextRequest) {
     // Get step details if suspended
     if (status === 'suspended') {
       try {
-        const suspendedSteps = await run.getSuspendedSteps();
-        response.suspendedSteps = suspendedSteps;
+        response.suspendedSteps = runState.activeStepsPath;
       } catch (suspendError) {
         console.warn(`Failed to get suspended steps for run ${runId}:`, suspendError);
       }
@@ -87,7 +89,7 @@ export async function GET(request: NextRequest) {
     console.error(`[Mastra API] Status error (run: ${runId}):`, error);
 
     const isDev = process.env.NODE_ENV === 'development';
-    
+
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : 'Status check failed',

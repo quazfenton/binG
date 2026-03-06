@@ -8,7 +8,7 @@
  * @see {@link ../../stateful-agent/tools/sandbox-tools.ts} Existing tools
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/index.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { allTools } from '@/lib/stateful-agent/tools/sandbox-tools';
 import type { SandboxHandle } from '@/lib/sandbox/providers';
@@ -21,10 +21,10 @@ export interface MCPServerOptions {
 
 /**
  * Create and start MCP tool server
- * 
+ *
  * @param options - Server options
  * @returns MCP server instance
- * 
+ *
  * @example
  * ```typescript
  * const server = await createMCPToolServer({
@@ -37,8 +37,8 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
   const port = options.port || 3001;
   const sandboxHandle = options.sandboxHandle;
 
-  // Create MCP server
-  const server = new McpServer({
+  // Create MCP server (using Server from MCP SDK)
+  const server = new Server({
     name: 'bing-virtual-fs',
     version: '1.0.0',
     capabilities: {
@@ -325,7 +325,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
 /**
  * Stop MCP tool server
  */
-export async function stopMCPToolServer(server: McpServer) {
+export async function stopMCPToolServer(server: Server) {
   await server.close();
   console.log('MCP Tool Server stopped');
 }

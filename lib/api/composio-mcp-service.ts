@@ -58,7 +58,7 @@ export class ComposioMCPServer {
       capabilities: {
         tools: {},
       },
-    })
+    } as any)
   }
 
   /**
@@ -153,7 +153,7 @@ export class ComposioMCPServer {
       }
 
       // Register tool with MCP server
-      this.server.tool(
+      (this.server as any).tool(
         toolName,
         toolDescription,
         paramsSchema,

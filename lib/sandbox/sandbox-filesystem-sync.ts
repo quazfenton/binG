@@ -18,7 +18,7 @@ function getWorkspaceDirForSandbox(sandboxId: string): string {
   // Infer provider from sandbox ID prefix
   if (sandboxId.startsWith('mistral-')) return '/workspace';
   if (sandboxId.startsWith('blaxel-')) return '/workspace';
-  if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return '/workspace';
+  if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return '/home/sprite/workspace';
   if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return '/workspace'; // CodeSandbox
   if (sandboxId.startsWith('e2b-')) return '/home/user';
   

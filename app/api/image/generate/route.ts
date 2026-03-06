@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     const registry = getDefaultRegistry()
 
     // Initialize providers with environment variables
-    const initializedRegistry = registry.initializeAll({
+    registry.initializeAll({
       mistral: {
         apiKey: process.env.MISTRAL_API_KEY,
         baseURL: process.env.MISTRAL_BASE_URL,
@@ -81,7 +81,9 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    if (!initializedRegistry) {
+    const hasInitializedProvider = registry.getAvailableProviders().length > 0;
+
+    if (!hasInitializedProvider) {
       clearTimeout(timeoutId)
       return NextResponse.json(
         { error: 'Image generation service unavailable. Please try again later.' },
@@ -112,10 +114,10 @@ export async function POST(req: NextRequest) {
 
     if (preferredProvider) {
       // Use specific provider
-      result = await initializedRegistry.generateWithProvider(preferredProvider, params, controller.signal)
+      result = await registry.generateWithProvider(preferredProvider, params, controller.signal)
     } else {
       // Use fallback chain
-      result = await initializedRegistry.generateWithFallback(params, undefined, controller.signal)
+      result = await registry.generateWithFallback(params, undefined, controller.signal)
     }
 
     clearTimeout(timeoutId)

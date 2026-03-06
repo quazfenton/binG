@@ -1,9 +1,9 @@
 /**
  * Smithery.ai MCP Integration Service
- * 
+ *
  * Provides access to the Smithery MCP marketplace for discovering,
  * connecting to, and managing MCP servers.
- * 
+ *
  * API Reference: https://smithery.ai/docs
  */
 
@@ -11,7 +11,8 @@ import { z } from 'zod';
 
 const SMITHERY_API_BASE = 'https://api.smithery.ai';
 
-export interface SmitheryServer {
+// Service-specific types (different API structure than smithery-registry.ts)
+export interface SmitheryServiceServer {
   namespace: string;
   name: string;
   displayName: string;
@@ -24,7 +25,7 @@ export interface SmitheryServer {
   starCount?: number;
 }
 
-export interface SmitheryConnection {
+export interface SmitheryServiceConnection {
   id: string;
   namespace: string;
   serverName: string;
@@ -122,9 +123,9 @@ export class SmitheryService {
     deploymentStatus?: 'hosted' | 'external' | 'stdio' | 'repo';
     namespace?: string;
     ownerId?: string;
-  }): Promise<SmitheryServer[]> {
+  }): Promise<SmitheryServiceServer[]> {
     const params = new URLSearchParams({ q: query });
-    
+
     if (options?.limit) params.set('limit', String(options.limit));
     if (options?.offset) params.set('offset', String(options.offset));
     if (options?.verified !== undefined) params.set('verified', String(options.verified));
@@ -132,10 +133,10 @@ export class SmitheryService {
     if (options?.namespace) params.set('namespace', options.namespace);
     if (options?.ownerId) params.set('ownerId', options.ownerId);
 
-    const result = await this.request<{ servers: SmitheryServer[] }>(
+    const result = await this.request<{ servers: SmitheryServiceServer[] }>(
       `/servers?${params.toString()}`
     );
-    
+
     return result.servers.map(server => SmitheryServerSchema.parse(server));
   }
 
@@ -143,8 +144,8 @@ export class SmitheryService {
    * Get details of a specific server
    * @see https://smithery.ai/docs/api-reference/servers/get-a-server
    */
-  async getServer(namespace: string, serverName: string): Promise<SmitheryServer> {
-    const server = await this.request<SmitheryServer>(`/servers/${namespace}/${serverName}`);
+  async getServer(namespace: string, serverName: string): Promise<SmitheryServiceServer> {
+    const server = await this.request<SmitheryServiceServer>(`/servers/${namespace}/${serverName}`);
     return SmitheryServerSchema.parse(server);
   }
 
@@ -152,12 +153,12 @@ export class SmitheryService {
    * List all connections in a namespace
    * @see https://smithery.ai/docs/api-reference/connect/list-connections
    */
-  async listConnections(namespace?: string): Promise<SmitheryConnection[]> {
-    const endpoint = namespace 
+  async listConnections(namespace?: string): Promise<SmitheryServiceConnection[]> {
+    const endpoint = namespace
       ? `/connections?namespace=${encodeURIComponent(namespace)}`
       : '/connections';
-    
-    const result = await this.request<{ connections: SmitheryConnection[] }>(endpoint);
+
+    const result = await this.request<{ connections: SmitheryServiceConnection[] }>(endpoint);
     return result.connections.map(conn => SmitheryConnectionSchema.parse(conn));
   }
 
@@ -165,8 +166,8 @@ export class SmitheryService {
    * Get a specific connection
    * @see https://smithery.ai/docs/api-reference/connect/get-connection
    */
-  async getConnection(connectionId: string): Promise<SmitheryConnection> {
-    const conn = await this.request<SmitheryConnection>(`/connections/${connectionId}`);
+  async getConnection(connectionId: string): Promise<SmitheryServiceConnection> {
+    const conn = await this.request<SmitheryServiceConnection>(`/connections/${connectionId}`);
     return SmitheryConnectionSchema.parse(conn);
   }
 
@@ -175,10 +176,10 @@ export class SmitheryService {
    * @see https://smithery.ai/docs/api-reference/connect/create-connection
    */
   async createConnection(
-    mcpUrl: string, 
+    mcpUrl: string,
     metadata?: Record<string, string>
-  ): Promise<SmitheryConnection> {
-    const conn = await this.request<SmitheryConnection>('/connections', {
+  ): Promise<SmitheryServiceConnection> {
+    const conn = await this.request<SmitheryServiceConnection>('/connections', {
       method: 'POST',
       body: JSON.stringify({ mcpUrl, metadata }),
     });
@@ -190,10 +191,10 @@ export class SmitheryService {
    * @see https://smithery.ai/docs/api-reference/connect/create-or-update-connection
    */
   async createOrUpdateConnection(
-    connectionId: string, 
+    connectionId: string,
     mcpUrl?: string
-  ): Promise<SmitheryConnection> {
-    const conn = await this.request<SmitheryConnection>(`/connections/${connectionId}`, {
+  ): Promise<SmitheryServiceConnection> {
+    const conn = await this.request<SmitheryServiceConnection>(`/connections/${connectionId}`, {
       method: 'PUT',
       body: JSON.stringify(mcpUrl ? { mcpUrl } : {}),
     });
@@ -288,8 +289,8 @@ export class SmitheryService {
       description?: string;
       iconUrl?: string;
     }
-  ): Promise<SmitheryServer> {
-    const response = await this.request<SmitheryServer>(`/servers/${qualifiedName}`, {
+  ): Promise<SmitheryServiceServer> {
+    const response = await this.request<SmitheryServiceServer>(`/servers/${qualifiedName}`, {
       method: 'PATCH',
       body: JSON.stringify(config),
     });
@@ -432,7 +433,7 @@ export class SmitheryService {
     qualifiedName: string,
     iconBuffer: Buffer,
     mimeType: string
-  ): Promise<SmitheryServer> {
+  ): Promise<SmitheryServiceServer> {
     if (!this.apiKey) {
       throw new Error('Smithery API key not configured');
     }

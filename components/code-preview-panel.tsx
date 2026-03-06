@@ -234,6 +234,7 @@ export default function CodePreviewPanel({
       setSelectedFilesystemPath(file.path);
       setSelectedFilesystemLanguage(file.language || "text");
       setSelectedFilesystemContent(file.content || "");
+      setSelectedFileIndex(null); // Clear snippet selection when viewing real files
     } finally {
       setIsFilesystemFileLoading(false);
     }
@@ -677,18 +678,22 @@ export default function CodePreviewPanel({
     if (!isOpen || selectedTab !== "files") {
       return;
     }
+    let cancelled = false;
+    
     const initializeExplorer = async () => {
       setSelectedFilesystemPath("");
       setSelectedFilesystemContent("");
       setSelectedFilesystemLanguage("text");
 
       const initialNodes = await listFilesystemDirectory(filesystemScopePath);
+      if (cancelled) return;
       setFilesystemCurrentPath(filesystemScopePath);
       if (initialNodes.length > 0) return;
 
       const sessionsRoot = "project/sessions";
       const sessionDirectories = (await listFilesystemDirectory(sessionsRoot))
         .filter((node) => node.type === "directory");
+      if (cancelled) return;
       if (sessionDirectories.length === 0) return;
 
       const preferred = sessionDirectories
@@ -702,6 +707,7 @@ export default function CodePreviewPanel({
 
       for (const directory of preferred) {
         const nodes = await listFilesystemDirectory(directory.path);
+        if (cancelled) return;
         if (nodes.length > 0) {
           setFilesystemCurrentPath(directory.path);
           return;
@@ -710,7 +716,11 @@ export default function CodePreviewPanel({
     };
 
     void initializeExplorer();
-  }, [filesystemScopePath, isOpen, listFilesystemDirectory, selectedTab, setFilesystemCurrentPath]);
+    
+    return () => {
+      cancelled = true;
+    };
+  }, [filesystemScopePath, isOpen, selectedTab]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -1278,11 +1288,37 @@ Generated on: ${new Date().toLocaleString()}
             // Skip empty or invalid files
             if (typeof content !== "string" || !content.trim()) return acc;
 
+            // Transform require() to import for browser compatibility
+            let transformedContent = content;
+            const hasRequire = /require\(['"][^'"]+['"]\)/.test(content);
+            
+            if (hasRequire) {
+              console.log(`[Sandpack] Transforming require() statements in ${path}`);
+              // Convert CommonJS require to ES6 import (basic transformation)
+              transformedContent = transformedContent.replace(
+                /const\s+(\w+)\s*=\s*require\(['"]([^'"]+)['"]\)/g,
+                "import $1 from '$2'"
+              );
+              transformedContent = transformedContent.replace(
+                /var\s+(\w+)\s*=\s*require\(['"]([^'"]+)['"]\)/g,
+                "import $1 from '$2'"
+              );
+              transformedContent = transformedContent.replace(
+                /let\s+(\w+)\s*=\s*require\(['"]([^'"]+)['"]\)/g,
+                "import $1 from '$2'"
+              );
+              // Handle destructured requires
+              transformedContent = transformedContent.replace(
+                /const\s*\{([^}]+)\}\s*=\s*require\(['"]([^'"]+)['"]\)/g,
+                "import { $1 } from '$2'"
+              );
+            }
+
             // The path should already be correctly formatted by cleanFilename.
             // We just need to ensure it's prefixed with '/' for Sandpack.
             const sandpackPath = path.startsWith("/") ? path : `/${path}`;
 
-            acc[sandpackPath] = { code: content };
+            acc[sandpackPath] = { code: transformedContent };
             return acc;
           },
           {} as Record<string, { code: string }>,
@@ -3040,6 +3076,8 @@ export default app;`,
                                   onClick={() => {
                                     setSelectedFileIndex(index);
                                     setSelectedFilesystemPath("");
+                                    setSelectedFilesystemContent("");
+                                    setSelectedFilesystemLanguage("text");
                                   }}
                                 >
                                   <CodeIcon className="w-3 h-3 mr-2 flex-shrink-0" />

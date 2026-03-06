@@ -41,8 +41,6 @@ export async function POST(request: NextRequest) {
       approved,
       feedback,
       modifications,
-      // SECURITY: approverId and approverEmail are now ignored from client input
-      // They are derived from the authenticated user instead
     } = body;
 
     // Validate required fields
@@ -61,7 +59,6 @@ export async function POST(request: NextRequest) {
     }
 
     // SECURITY: Use authenticated user's identity for audit trail
-    // This prevents forgery of approver identity
     const approverId = authResult.userId!;
     const approverEmail = authResult.email!;
 
@@ -75,14 +72,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create run with existing runId
-    const run = await workflow.createRun({ runId });
+    // Get workflow state
+    const runState = await workflow.getWorkflowRunById(runId);
 
-    // Check run status - must be suspended to resume
-    const status = await run.getStatus();
+    if (!runState) {
+      return NextResponse.json(
+        {
+          error: `Run ${runId} not found`,
+          requestId,
+        },
+        { status: 404 }
+      );
+    }
+
+    const status = runState.status;
     if (status !== 'suspended') {
       return NextResponse.json(
-        { 
+        {
           error: `Run is not suspended. Current status: ${status}`,
           currentStatus: status,
           requestId,
@@ -91,14 +97,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get suspended steps
-    const suspendedSteps = await run.getSuspendedSteps();
-    if (!suspendedSteps || suspendedSteps.length === 0) {
+    // Check if there are active suspended steps
+    const suspendedSteps = runState.activeStepsPath;
+    if (!suspendedSteps || Object.keys(suspendedSteps).length === 0) {
       return NextResponse.json(
         { error: 'No suspended steps found', requestId },
         { status: 400 }
       );
     }
+
+    // Create run instance for resuming
+    const run = await workflow.createRun({ runId });
 
     // Get approval step
     const approvalStep = getApprovalStep();
@@ -106,8 +115,8 @@ export async function POST(request: NextRequest) {
     // Resume with approval data
     const result = await run.resume({
       step: approvalStep,
-      resumeData: { 
-        approved, 
+      resumeData: {
+        approved,
         feedback,
         modifications,
         approverId,
@@ -131,7 +140,7 @@ export async function POST(request: NextRequest) {
     console.error(`[Mastra API] Resume error (${requestId}):`, error);
 
     const isDev = process.env.NODE_ENV === 'development';
-    
+
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : 'Resume failed',

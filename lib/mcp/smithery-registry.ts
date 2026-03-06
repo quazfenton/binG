@@ -1,21 +1,20 @@
 /**
  * Smithery MCP Registry Integration
- * 
+ *
  * Provides access to the Smithery MCP server registry for discovering,
  * installing, and managing MCP servers.
- * 
+ *
  * Features:
  * - Server discovery and search
  * - Server installation and deployment
  * - Connection management
  * - Bundle download
  * - Release management
- * 
+ *
  * @see https://smithery.ai/docs/api-reference
  */
 
-import { SmitheryClient, SmitherySearchOptions, SmitherySearchResults, SmitheryServer, SmitheryRelease, SmitheryConnection, SmitheryConfig } from './smithery-registry';
-
+// Type definitions (also exported for use in smithery-service.ts)
 export interface SmitheryServer {
   qualifiedName: string;
   namespace: string;
@@ -84,11 +83,11 @@ export interface SmitheryConfig {
 export class SmitheryRegistry {
   private client: SmitheryClient;
   private installedServers: Map<string, SmitheryServer> = new Map();
-  
+
   constructor(config?: SmitheryConfig) {
     this.client = new SmitheryClient(config);
   }
-  
+
   /**
    * Search for servers in the registry
    */
@@ -96,7 +95,7 @@ export class SmitheryRegistry {
     const results = await this.client.searchServers({ q: query });
     return results.servers;
   }
-  
+
   /**
    * Get server details
    */
@@ -113,7 +112,7 @@ export class SmitheryRegistry {
       },
     };
   }
-  
+
   /**
    * Install a server
    */
@@ -122,70 +121,13 @@ export class SmitheryRegistry {
     this.installedServers.set(qualifiedName, server);
     return { success: true, serverId: qualifiedName };
   }
-  
+
   /**
    * Get installed servers
    */
   getInstalledServers(): SmitheryServer[] {
     return Array.from(this.installedServers.values());
   }
-}
-
-export { SmitheryClient };
-
-export interface SmitheryRelease {
-  id: string;
-  version: string;
-  status: 'success' | 'failed' | 'building';
-  deploymentType: 'stdio' | 'http' | 'container';
-  createdAt: string;
-  logs?: string;
-  mcpEndpointUrl?: string;
-}
-
-export interface SmitheryConnection {
-  id: string;
-  namespace: string;
-  serverQualifiedName: string;
-  mcpUrl: string;
-  status: 'active' | 'inactive' | 'error';
-  metadata?: Record<string, any>;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface SmitherySearchOptions {
-  /** Search query for full-text and semantic search */
-  q?: string;
-  /** Filter by deployment status */
-  deploymentStatus?: 'stdio' | 'http' | 'container';
-  /** Filter by verification status */
-  verified?: boolean;
-  /** Filter by owner namespace */
-  ownerId?: string;
-  /** Filter servers with MCP tools */
-  hasTools?: boolean;
-  /** Filter servers with MCP skills */
-  hasSkills?: boolean;
-  /** Page number for pagination */
-  page?: number;
-  /** Page size */
-  pageSize?: number;
-}
-
-export interface SmitherySearchResults {
-  servers: SmitheryServer[];
-  total: number;
-  page: number;
-  pageSize: number;
-  hasMore: boolean;
-}
-
-export interface SmitheryConfig {
-  /** Smithery API key (required for authenticated operations) */
-  apiKey?: string;
-  /** Base URL (default: https://smithery.ai/api) */
-  baseUrl?: string;
 }
 
 /**

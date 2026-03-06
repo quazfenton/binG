@@ -2480,6 +2480,8 @@ function SettingsPanel() {
       return [cls, ...filtered].slice(0, 20);
     });
   }, []);
+
+  const s: Record<string, string> = (selected?.props?.styles as Record<string, string>) ?? {};
   
   // Detect class conflicts
   const classConflicts = useMemo(() => {
@@ -2562,7 +2564,6 @@ function SettingsPanel() {
     });
   };
 
-  const s: Record<string, string> = (selected.props?.styles as Record<string, string>) ?? {};
   const p = selected.props ?? {};
 
   const FONT_FAMILIES = [

@@ -44,7 +44,7 @@ export async function POST(req: Request) {
     }
 
     const db = await initializeDatabase();
-    const user = db.prepare('SELECT id, email FROM users WHERE email = ?').get(email);
+    const user = db.prepare('SELECT id, email FROM users WHERE email = ?').get(email) as any;
 
     if (!user) {
       // Don't reveal whether the email exists or not for security

@@ -4,7 +4,22 @@
  * Migrated from ephemeral/auth.py
  */
 
-import { jwtVerify, importSPKI, JWTPayload } from 'jose';
+import { jwtVerify, importSPKI, importSecretKey, JWTPayload } from 'jose';
+
+/**
+ * Import a symmetric secret key for JWT verification
+ */
+async function importAsymmetricKey(secret: string, algorithm: string): Promise<CryptoKey> {
+  const encoder = new TextEncoder();
+  const keyData = encoder.encode(secret);
+  return crypto.subtle.importKey(
+    'raw',
+    keyData,
+    { name: algorithm },
+    false,
+    ['verify']
+  );
+}
 
 export interface AuthConfig {
   algorithm: string;
@@ -21,7 +36,7 @@ const DEFAULT_AUTH_CONFIG: AuthConfig = {
   issuer: process.env.IDP_ISSUER,
   audience: process.env.IDP_AUDIENCE,
   publicKey: process.env.AUTH_PUBLIC_KEY,
-  secretKey: process.env.JWT_SECRET_KEY,
+  secretKey: process.env.JWT_SECRET,
 };
 
 /**
@@ -51,7 +66,7 @@ export async function getUserId(token: string, config: AuthConfig = DEFAULT_AUTH
       if (!config.secretKey) {
         throw new Error('Secret key required for symmetric algorithm');
       }
-      key = new TextEncoder().encode(config.secretKey);
+      key = await importAsymmetricKey(config.secretKey, config.algorithm);
     }
 
     // Verify and decode JWT
@@ -150,8 +165,8 @@ export async function validateToken(token: string, config: AuthConfig = DEFAULT_
  */
 export async function getTokenExpiration(token: string): Promise<Date | null> {
   try {
-    const { payload } = await import('jose');
-    const decoded = payload(token);
+    const { decodeJwt } = await import('jose');
+    const decoded = decodeJwt(token);
     
     if (decoded.exp) {
       return new Date(decoded.exp * 1000);

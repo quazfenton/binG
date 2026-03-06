@@ -101,8 +101,8 @@ export class TamboService {
     if (this.initialized) return;
 
     try {
-      const { Tambo } = await import('@tambo-ai/typescript-sdk');
-      this.client = new Tambo({
+      const { TamboAI } = await import('@tambo-ai/typescript-sdk');
+      this.client = new TamboAI({
         apiKey: this.config.apiKey,
         baseUrl: this.config.baseUrl,
       });
@@ -329,7 +329,7 @@ let tamboServiceInstance: TamboService | null = null;
  */
 export function getTamboService(): TamboService | null {
   if (!tamboServiceInstance) {
-    const apiKey = process.env.TAMBO_API_KEY;
+    const apiKey = process.env.NEXT_PUBLIC_TAMBO_API_KEY;
     if (!apiKey) {
       return null;
     }
@@ -351,7 +351,7 @@ export function initializeTamboService(config?: Partial<TamboConfig>): TamboServ
     return tamboServiceInstance;
   }
 
-  const apiKey = config?.apiKey || process.env.TAMBO_API_KEY;
+  const apiKey = config?.apiKey || process.env.NEXT_PUBLIC_TAMBO_API_KEY;
   if (!apiKey) {
     return null;
   }

@@ -46,8 +46,13 @@ export const AgentState = Annotation.Root({
   errors: Annotation<Array<{
     message: string;
     path?: string;
-    step?: number;
+    step?: number | string;
     timestamp?: number;
+    operation?: string;
+    parameters?: any;
+    stack?: string;
+    recoverable?: boolean;
+    suggestions?: string[];
   }>>({
     reducer: (left: any[], right: any[]) => [...left, ...right],
     default: () => [],

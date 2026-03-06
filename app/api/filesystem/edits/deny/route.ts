@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const tx = filesystemEditSessionService.getTransaction(transactionId);
+    const tx = await filesystemEditSessionService.getTransaction(transactionId);
     if (!tx || tx.ownerId !== owner.ownerId) {
       return NextResponse.json(
         { success: false, error: 'Edit transaction not found' },

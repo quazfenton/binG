@@ -107,14 +107,19 @@ export function getDatabase(): Database.Database {
         // Without this, requests can execute before migrations complete, causing
         // "no such column" errors for migration-added columns like email_verification_token
         try {
-          // Require here to avoid circular import at module load time
-          const { migrationRunner } = require('./migration-runner');
-          if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
-            // Use synchronous migration runner
-            migrationRunner.runMigrationsSync();
-            console.log('[database] Migrations completed successfully');
+          // Respect AUTO_RUN_MIGRATIONS environment variable
+          if (process.env.AUTO_RUN_MIGRATIONS !== 'false') {
+            // Require here to avoid circular import at module load time
+            const { migrationRunner } = require('./migration-runner');
+            if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
+              // Use synchronous migration runner
+              migrationRunner.runMigrationsSync();
+              console.log('[database] Migrations completed successfully');
+            } else {
+              console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
+            }
           } else {
-            console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
+            console.log('[database] Auto-run migrations disabled via environment variable');
           }
         } catch (error) {
           console.warn('[database] Migrations failed (continuing with base schema):', error);

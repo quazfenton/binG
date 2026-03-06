@@ -71,32 +71,32 @@ export class CrewStreamingOutputImpl<T> extends EventEmitter implements CrewStre
   attachToCrew(crew: Crew): void {
     this.crew = crew;
 
-    // Subscribe to crew events
-    crew.on('agent_started', (data: any) => {
+    // Subscribe to crew events via the events EventEmitter
+    crew.events.on('agent_started', (data: any) => {
       this.emitAgentStart(data.agentId, data.role);
     });
 
-    crew.on('agent_ended', (data: any) => {
+    crew.events.on('agent_ended', (data: any) => {
       this.emitAgentEnd(data.agentId, data.output);
     });
 
-    crew.on('task_started', (data: any) => {
+    crew.events.on('task_started', (data: any) => {
       this.emitTaskStart(data.taskId, data.description);
     });
 
-    crew.on('task_ended', (data: any) => {
+    crew.events.on('task_ended', (data: any) => {
       this.emitTaskEnd(data.taskId, data.output);
     });
 
-    crew.on('tool_started', (data: any) => {
+    crew.events.on('tool_started', (data: any) => {
       this.emitToolCall(data.toolName, data.toolInput);
     });
 
-    crew.on('tool_ended', (data: any) => {
+    crew.events.on('tool_ended', (data: any) => {
       this.emitToolOutput(data.toolName, data.toolOutput);
     });
 
-    crew.on('error', (error: Error) => {
+    crew.events.on('error', (error: Error) => {
       this.setError(error);
     });
   }
@@ -109,7 +109,7 @@ export class CrewStreamingOutputImpl<T> extends EventEmitter implements CrewStre
       throw new Error('No crew attached to stream');
     }
 
-    this.crew.kickoff(input).then(
+    this.crew.kickoff({ inputs: { message: input } }).then(
       (result) => {
         this.setResult(result as unknown as T);
       },
