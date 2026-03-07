@@ -102,7 +102,7 @@ describe('BackendService', () => {
     it('should throw error if storage initialization fails', async () => {
       // This would require mocking the storage backend to throw
       // For now, we document the expected behavior
-      expect(service.initialize({
+      await expect(service.initialize({
         storageType: 's3',
         s3AccessKey: undefined, // Will fail
         s3SecretKey: undefined,

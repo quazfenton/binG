@@ -107,7 +107,7 @@ const WorldMonitorEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
   };
 
   const handleOpenExternal = () => {
-    window.open(iframeUrl, '_blank');
+    window.open(iframeUrl, '_blank', 'noopener,noreferrer');
   };
 
   const toggleBookmark = (url: string) => {
@@ -463,7 +463,7 @@ const WorldMonitorEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => window.open(url, '_blank')}
+                          onClick={() => window.open(url, '_blank', 'noopener,noreferrer')}
                           className="hover:bg-slate-700"
                         >
                           <ExternalLink className="w-4 h-4" />

@@ -187,16 +187,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const normalizedRepoUrl = normalizeRepoUrl(validation.data.repoUrl);
     // SECURITY: Validate repository URL against allowlist
-    const urlValidation = validateRepoUrl(validation.data.repoUrl);
+    const urlValidation = validateRepoUrl(normalizedRepoUrl);
     if (!urlValidation.valid) {
       return NextResponse.json(
         { error: urlValidation.error, allowedHosts: FULL_ALLOWED_HOSTS },
         { status: 400 }
       );
     }
-
-    const normalizedRepoUrl = normalizeRepoUrl(validation.data.repoUrl);
     const safeDestinationPath = validateDestinationPath(validation.data.destinationPath);
     const repoName = extractRepoName(normalizedRepoUrl);
 

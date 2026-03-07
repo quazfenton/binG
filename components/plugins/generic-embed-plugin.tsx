@@ -192,7 +192,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
   };
 
   const handleOpenExternal = () => {
-    window.open(currentUrl, '_blank');
+    window.open(currentUrl, '_blank', 'noopener,noreferrer');
   };
 
   const toggleBookmark = () => {

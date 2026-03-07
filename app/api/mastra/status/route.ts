@@ -7,6 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 // Valid workflow types - allowlist for security
 const VALID_WORKFLOWS = ['code-agent', 'hitl-code-review'];

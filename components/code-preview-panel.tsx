@@ -2788,7 +2788,7 @@ export default app;`,
                           "visualEditorProject",
                           JSON.stringify(projectStructureWithScopedFiles || projectStructure),
                         );
-                        window.open("/visual-editor", "_blank");
+                        window.open("/visual-editor", "_blank", "noopener,noreferrer");
                       }}
                       className="bg-purple-600 hover:bg-purple-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
                     >

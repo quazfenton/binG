@@ -379,7 +379,7 @@ const GitHubTrendingExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClo
                             <Button
                               size="sm"
                               variant="outline"
-                              onClick={() => window.open(repo.url, '_blank')}
+                              onClick={() => window.open(repo.url, '_blank', 'noopener,noreferrer')}
                               className="border-zinc-700 hover:bg-zinc-800"
                             >
                               <ExternalLink className="w-4 h-4" />
@@ -494,7 +494,7 @@ const GitHubTrendingExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClo
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => window.open(`file://${job.destinationPath}`, '_blank')}
+                          onClick={() => window.open(`file://${job.destinationPath}`, '_blank', 'noopener,noreferrer')}
                           className="hover:bg-zinc-800"
                         >
                           <FolderOpen className="w-4 h-4" />

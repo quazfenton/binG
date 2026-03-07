@@ -119,10 +119,10 @@ export class ReplicateImageProvider implements ImageGenerationProvider {
 
     try {
       // Apply aspect ratio if specified
-      let { width, height } = this.resolveDimensions(params);
+      const { width, height } = this.resolveDimensions(params);
       
       // Apply quality preset if specified
-      let { steps, guidance } = this.resolveQualitySettings(params);
+      const { steps, guidance } = this.resolveQualitySettings(params);
 
       // Build input based on model
       const input = this.buildModelInput(model, params, width, height, steps, guidance);

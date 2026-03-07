@@ -33,7 +33,7 @@ export class VirtualFS extends EventEmitter {
    */
   resolve(path: string): string {
     // Remove leading slash
-    let cleanPath = path.startsWith('/') ? path.substring(1) : path;
+    const cleanPath = path.startsWith('/') ? path.substring(1) : path;
     
     // Check if the first component is a registered mount alias
     const parts = cleanPath.split('/');

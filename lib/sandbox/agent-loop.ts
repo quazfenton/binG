@@ -287,7 +287,7 @@ async function executeToolOnSandbox(
           return { success: false, output: 'Invalid repository URL format', exitCode: 1 }
         }
 
-        let clonePath = path || getRepoNameFromUrl(url)
+        const clonePath = path || getRepoNameFromUrl(url)
 
         // Validate clone path
         if (!/^[a-zA-Z0-9._\-/]+$/.test(clonePath)) {
