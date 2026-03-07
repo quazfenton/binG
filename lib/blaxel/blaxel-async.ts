@@ -3,6 +3,8 @@
  * Provides async execution and webhook handling for Blaxel functions.
  */
 
+import { createHmac, timingSafeEqual } from 'crypto';
+
 export interface AsyncTriggerConfig {
   webhookUrl?: string;
   callbackUrl?: string;
@@ -40,8 +42,9 @@ export class BlaxelAsyncManager {
       status: 'pending',
     });
 
-    // Execute asynchronously
-    fn()
+    // Execute asynchronously - wrap in Promise.resolve to handle synchronous throws
+    Promise.resolve()
+      .then(() => fn())
       .then((result) => {
         this.executions.set(executionId, {
           success: true,
@@ -73,7 +76,61 @@ export class BlaxelAsyncManager {
 
 export const blaxelAsyncManager = new BlaxelAsyncManager();
 
-export function verifyWebhookFromRequest(payload: any, signature: string): boolean {
-  // Basic webhook verification stub
-  return !!payload && !!signature;
+/**
+ * Verify webhook signature from request
+ * Implements HMAC-SHA256 signature verification with timestamp validation
+ *
+ * @param request - Request object with body and headers
+ * @param secret - Webhook secret for signature verification
+ * @returns True if signature is valid, false otherwise
+ */
+export function verifyWebhookFromRequest(
+  request: {
+    body: string;
+    headers: Record<string, string | undefined>;
+  },
+  secret: string
+): boolean {
+  if (!secret) {
+    console.warn('[BlaxelWebhook] No webhook secret configured - rejecting all webhooks');
+    return false;
+  }
+
+  const signature = request.headers['x-blaxel-signature'];
+  const timestamp = request.headers['x-blaxel-timestamp'];
+
+  if (!signature || !timestamp) {
+    return false;
+  }
+
+  // Verify timestamp is recent (within 5 minutes)
+  const now = Math.floor(Date.now() / 1000);
+  const timestampNum = parseInt(timestamp, 10);
+  if (isNaN(timestampNum) || Math.abs(now - timestampNum) > 300) {
+    console.warn('[BlaxelWebhook] Webhook timestamp too old or invalid');
+    return false;
+  }
+
+  // Compute expected signature
+  const payload = `${timestamp}.${request.body}`;
+  const expectedSignature = createHmac('sha256', secret)
+    .update(payload)
+    .digest('hex');
+
+  // Verify signature format (sha256=<hex>)
+  if (!signature.startsWith('sha256=')) {
+    return false;
+  }
+
+  const receivedSignature = signature.substring(7);
+
+  // Use timing-safe comparison to prevent timing attacks
+  const signatureBuffer = Buffer.from(receivedSignature, 'hex');
+  const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+
+  if (signatureBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return timingSafeEqual(signatureBuffer, expectedBuffer);
 }

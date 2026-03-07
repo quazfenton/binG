@@ -626,7 +626,7 @@ class LLMService {
     const toolCalls = this.extractAnthropicToolCalls(response.content as any[])
 
     return {
-      content: response.content[0]?.text || '',
+      content: (response.content[0] as any)?.text || '',
       tokensUsed: response.usage?.input_tokens + response.usage?.output_tokens || 0,
       finishReason: response.stop_reason || 'stop',
       timestamp: new Date(),
@@ -845,7 +845,7 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
-    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
+    const toolCalls = this.normalizeOpenAIToolCalls((response.choices[0]?.message as any)?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
@@ -853,7 +853,7 @@ class LLMService {
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
       metadata: toolCalls.length ? { toolCalls } : undefined,
-      usage: response.usage
+      usage: response.usage as any
     }
   }
 

@@ -35,8 +35,9 @@ export class SandboxService {
 
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
     if (sandboxId.startsWith('mistral-')) return 'mistral'
-    if (sandboxId.startsWith('blaxel-')) return 'blaxel'
+    // Check specific blaxel-mcp prefix BEFORE the general blaxel- prefix
     if (sandboxId.startsWith('blaxel-mcp-')) return 'blaxel-mcp'
+    if (sandboxId.startsWith('blaxel-')) return 'blaxel'
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites'
     if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox'
     if (sandboxId.startsWith('webcontainer-')) return 'webcontainer'

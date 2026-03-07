@@ -32,6 +32,28 @@ interface ToolConfig<T extends z.ZodObject<any>, U extends z.ZodObject<any>> {
 export function createTool<T extends z.ZodObject<any>, U extends z.ZodObject<any>>(
   config: ToolConfig<T, U>
 ) {
+  // Wrap execute with schema validation to enforce input/output constraints
+  const validatedExecute = async (params: { context: z.infer<T> }) => {
+    // Validate input against schema - catches invalid UUIDs, oversized content, path traversal, etc.
+    const parsedInput = config.inputSchema.safeParse(params.context);
+
+    if (!parsedInput.success) {
+      throw new Error(`Invalid input: ${parsedInput.error.message}`);
+    }
+
+    // Execute with validated input
+    const result = await config.execute({ context: parsedInput.data });
+
+    // Validate output against schema - catches malformed responses
+    const parsedOutput = config.outputSchema.safeParse(result);
+
+    if (!parsedOutput.success) {
+      throw new Error(`Invalid output: ${parsedOutput.error.message}`);
+    }
+
+    return parsedOutput.data;
+  };
+
   return {
     id: config.id,
     name: config.name,
@@ -39,7 +61,7 @@ export function createTool<T extends z.ZodObject<any>, U extends z.ZodObject<any
     inputSchema: config.inputSchema,
     outputSchema: config.outputSchema,
     metadata: config.metadata,
-    execute: config.execute,
+    execute: validatedExecute,
     retries: config.retries,
     timeout: config.timeout,
   };
@@ -523,11 +545,12 @@ export function getToolsByCategory(category: 'vfs' | 'sandbox') {
 /**
  * Get all tools including agent filesystem tools
  * For use with LLM tool calling
+ * @deprecated Use createFilesystemTools(userId) directly for proper tenant isolation
  */
-export function getAllToolsWithAgentTools() {
-  const { getFilesystemTools } = require('../tools/filesystem-tools');
-  const agentTools = getFilesystemTools();
-  
+export function getAllToolsWithAgentTools(userId: string = 'anonymous') {
+  const { createFilesystemTools } = require('../tools/filesystem-tools');
+  const agentTools = createFilesystemTools(userId);
+
   return [
     ...Object.values(allTools),
     ...agentTools,

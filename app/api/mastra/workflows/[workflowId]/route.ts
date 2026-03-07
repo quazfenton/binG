@@ -3,10 +3,27 @@
  *
  * Provides REST API for workflow execution, status, and management.
  * Supports streaming, suspend/resume, and cancellation.
+ *
+ * LAZY LOADING: Mastra is loaded on first request to avoid build-time initialization
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { mastra } from '@/lib/mastra/mastra-instance';
+
+// Lazy load Mastra to avoid build-time initialization
+let _mastra: any = null;
+
+async function getMastra() {
+  if (!_mastra) {
+    try {
+      const { mastra } = await import('@/lib/mastra/mastra-instance');
+      _mastra = mastra;
+    } catch (error) {
+      console.error('[Mastra API] Failed to load Mastra:', error);
+      throw new Error('Mastra not available');
+    }
+  }
+  return _mastra;
+}
 
 /**
  * POST /api/mastra/workflows/:workflowId/run
@@ -21,6 +38,9 @@ export async function POST(
     const { workflowId } = await params;
     const body = await request.json();
     const { inputData, userId } = body;
+
+    // Get Mastra instance (lazy loaded)
+    const mastra = await getMastra();
 
     // Get workflow
     const workflow = mastra.getWorkflow(workflowId);
@@ -70,6 +90,9 @@ export async function GET(
         { status: 400 }
       );
     }
+
+    // Get Mastra instance (lazy loaded)
+    const mastra = await getMastra();
 
     // Get workflow
     const workflow = mastra.getWorkflow(workflowId);

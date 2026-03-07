@@ -180,10 +180,24 @@ export class NodeWasmAdapter extends EventEmitter {
       try {
         const quickjsModule = await import('quickjs-emscripten');
         getQuickJS = quickjsModule.getQuickJS;
-      } catch (importError) {
-        console.warn('quickjs-emscripten not installed, skipping WASM runtime');
-        this.emit('load_error', new Error('quickjs-emscripten not installed'));
-        return;
+      } catch (importError: any) {
+        // Check if this is actually a "module not found" error
+        const isModuleNotFound = 
+          importError?.code === 'MODULE_NOT_FOUND' ||
+          importError?.message?.includes('Cannot find module') ||
+          importError?.message?.includes('quickjs-emscripten');
+        
+        if (isModuleNotFound) {
+          // Module genuinely not installed - skip gracefully
+          console.warn('quickjs-emscripten not installed, skipping WASM runtime');
+          this.emit('load_error', new Error('quickjs-emscripten not installed'));
+          return;
+        }
+        
+        // Real error - rethrow so it's not masked
+        console.error('Failed to load quickjs-emscripten:', importError);
+        this.emit('load_error', importError);
+        throw importError;
       }
 
       if (!getQuickJS) {

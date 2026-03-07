@@ -59,6 +59,18 @@ export class QuotaManager extends EventEmitter {
   }
 
   /**
+   * Configure the quota manager with new settings
+   */
+  configure(config: { maxExecutionsPerHour?: number; maxStorageMB?: number }): void {
+    if (config.maxExecutionsPerHour !== undefined) {
+      (this.config as any).maxExecutionsPerHour = config.maxExecutionsPerHour;
+    }
+    if (config.maxStorageMB !== undefined) {
+      (this.config as any).maxStorageMB = config.maxStorageMB;
+    }
+  }
+
+  /**
    * Check if an execution is allowed for the given sandbox
    */
   allowExecution(sandboxId: string): boolean {

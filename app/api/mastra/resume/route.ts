@@ -5,12 +5,29 @@
  *
  * SECURITY: Requires JWT authentication. Approver identity is verified server-side
  * using the authenticated user's identity, not client-supplied fields.
+ *
+ * LAZY LOADING: Mastra is loaded on first request to avoid build-time initialization
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { mastra } from '@/lib/mastra/mastra-instance';
 import { getApprovalStep } from '@/lib/mastra/workflows/hitl-workflow';
 import { verifyAuth } from '@/lib/auth/jwt';
+
+// Lazy load Mastra to avoid build-time initialization
+let _mastra: any = null;
+
+async function getMastra() {
+  if (!_mastra) {
+    try {
+      const { mastra } = await import('@/lib/mastra/mastra-instance');
+      _mastra = mastra;
+    } catch (error) {
+      console.error('[Mastra API] Failed to load Mastra:', error);
+      throw new Error('Mastra not available');
+    }
+  }
+  return _mastra;
+}
 
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
@@ -61,6 +78,9 @@ export async function POST(request: NextRequest) {
     // SECURITY: Use authenticated user's identity for audit trail
     const approverId = authResult.userId!;
     const approverEmail = authResult.email!;
+
+    // Get Mastra instance (lazy loaded)
+    const mastra = await getMastra();
 
     // Get workflow
     const workflow = mastra.getWorkflow('hitl-code-review');

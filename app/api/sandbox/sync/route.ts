@@ -548,8 +548,18 @@ export async function GET(req: NextRequest): Promise<NextResponse<any>> {
       );
     }
 
-    // Note: Full ownership validation would require checking if this sandboxId
-    // belongs to authResult.userId - this is a basic status endpoint
+    // SECURITY: Verify sandbox ownership (same as POST handler)
+    const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
+    if (!userSession || userSession.sandboxId !== sandboxId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Unauthorized: You do not own this sandbox',
+        },
+        { status: 403 }
+      );
+    }
+
     return NextResponse.json({
       sandboxId,
       provider,

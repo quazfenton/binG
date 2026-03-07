@@ -281,15 +281,19 @@ export async function revokeToken(
       issuer: fullConfig.issuer,
       audience: fullConfig.audience,
     });
-    
+
     const jti = payload.jti;
     const exp = payload.exp;
-    
+
     if (jti && exp) {
       globalBlacklist.revoke(jti, exp * 1000); // exp is in seconds, convert to ms
     }
-  } catch {
+  } catch (error) {
     // Token is already expired or invalid — no need to blacklist
+    // Log in debug mode for troubleshooting
+    if (process.env.NODE_ENV === 'development') {
+      console.debug('[JWT] Token already expired or invalid, skipping blacklist:', error);
+    }
   }
 }
 

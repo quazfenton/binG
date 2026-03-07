@@ -25,14 +25,15 @@ services:
       - WORKSPACE_DIR=/tmp/workspaces
       - RUNTIME_TYPE=${RUNTIME_TYPE:-process}
 
-      # Authentication
-      - JWT_SECRET=${JWT_SECRET:-change-this-to-a-secure-random-string-in-production}
+      # Authentication - MUST be overridden in production
+      # Generate secure secrets with: openssl rand -hex 32
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET environment variable is required. Generate with: openssl rand -hex 32}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
 
-      # Encryption keys (REQUIRED for production)
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-change-this-to-a-secure-32-char-key}
-      - BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY:-change-this-to-a-secure-32-char-key}
+      # Encryption keys - MUST be overridden in production
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY environment variable is required. Generate with: openssl rand -hex 32}
+      - BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY:?BLAXEL_SECRET_ENCRYPTION_KEY environment variable is required. Generate with: openssl rand -hex 32}
 
       # Nango integration
       - NANGO_SECRET_KEY=${NANGO_SECRET_KEY:-}

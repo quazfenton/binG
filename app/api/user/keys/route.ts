@@ -3,8 +3,17 @@ import { initializeDatabase } from '@/lib/database/db';
 import jwt from 'jsonwebtoken';
 import { encryptSecret, decryptSecret, isEncryptedFormat } from '@/lib/utils/crypto';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
+// SECURITY: Fail-closed - require JWT_SECRET to be set
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('CRITICAL: JWT_SECRET environment variable is not set. Refusing to start.');
+  throw new Error('JWT_SECRET is required in production. Set this environment variable before deploying.');
+}
+
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+if (!ENCRYPTION_KEY && process.env.NODE_ENV === 'production') {
+  console.warn('WARNING: ENCRYPTION_KEY not set in production. API keys will be stored unencrypted.');
+}
 
 // Helper to verify JWT token
 async function verifyToken(req: Request) {

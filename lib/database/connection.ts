@@ -211,29 +211,33 @@ export function encryptApiKey(apiKey: string): { encrypted: string; hash: string
 }
 
 export function decryptApiKey(encryptedData: string): string {
-  const [ivHex, encrypted] = encryptedData.split(':');
-
-  // Try new format first (createCipheriv with proper IV usage)
-  try {
-    const iv = Buffer.from(ivHex, 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
-  } catch (newFormatError) {
-    // New format failed - try legacy format (createDecipheriv with IV)
+  const parts = encryptedData.split(':');
+  
+  // Check if it's new format (iv:encrypted) or legacy format (just encrypted)
+  if (parts.length === 2) {
+    // New format with IV
+    const [ivHex, encrypted] = parts;
     try {
-      const iv = Buffer.from(encrypted.substring(0, 44), 'base64');
-      const encryptedData = encrypted.substring(45);
-      const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
-      let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
+      const iv = Buffer.from(ivHex, 'hex');
+      const decipher = crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
+      let decrypted = decipher.update(encrypted, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
       return decrypted;
-    } catch (legacyError) {
-      // Both formats failed - this is truly corrupted data
-      console.error('[decryptApiKey] Failed to decrypt: both new and legacy formats failed');
-      throw new Error('Failed to decrypt API key: data may be corrupted');
+    } catch (error) {
+      console.error('[decryptApiKey] New format decryption failed:', error);
     }
+  }
+  
+  // Try legacy format (no IV, uses deprecated createDecipher)
+  try {
+    // Legacy format used createDecipher which derived IV from password
+    const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
+    let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (legacyError) {
+    console.error('[decryptApiKey] Legacy format decryption failed:', legacyError);
+    throw new Error('Failed to decrypt API key: data may be corrupted');
   }
 }
 

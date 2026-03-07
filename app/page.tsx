@@ -1,15 +1,36 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import dynamic from "next/dynamic"
 import { ThemeProvider } from "../components/theme-provider"
 import FallbackUI from "../components/fallback-ui"
 import { startCacheCleanup } from "../lib/cache"
-import { TamboWrapper } from "../components/tambo/tambo-wrapper"
-import { PWAInstallPrompt } from "../components/pwa-install-prompt"
+import dynamic from "next/dynamic"
 
-// Import the main conversation interface
-import ConversationInterface from "../components/conversation-interface";
+// Dynamically import components to avoid build-time SSR errors
+// These components will only load on the client side
+const TamboWrapper = dynamic(
+  () => import("../components/tambo/tambo-wrapper").then(mod => mod.TamboWrapper),
+  { 
+    ssr: false,
+    loading: () => <FallbackUI message="Loading Tambo..." />
+  }
+)
+
+const PWAInstallPrompt = dynamic(
+  () => import("../components/pwa-install-prompt").then(mod => mod.PWAInstallPrompt),
+  { 
+    ssr: false,
+    loading: () => null
+  }
+)
+
+const ConversationInterface = dynamic(
+  () => import("../components/conversation-interface"),
+  { 
+    ssr: false,
+    loading: () => <FallbackUI message="Loading interface..." />
+  }
+)
 
 export default function ChatBox() {
   const [mounted, setMounted] = useState(false)
@@ -23,9 +44,9 @@ export default function ChatBox() {
 
     // Apply persisted or env-provided custom background media URL.
     const root = document.documentElement
-    const saved = localStorage.getItem(CUSTOM_BG_MEDIA_KEY)
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(CUSTOM_BG_MEDIA_KEY) : null
     const fallback = process.env.NEXT_PUBLIC_BG_MEDIA_URL || ""
-    const mediaUrl = (saved || fallback).trim()
+    const mediaUrl = (saved || fallback || "").trim()
 
     if (mediaUrl) {
       root.style.setProperty("--app-bg-media", `url("${mediaUrl}")`)
@@ -52,4 +73,3 @@ export default function ChatBox() {
     </ThemeProvider>
   )
 }
-  

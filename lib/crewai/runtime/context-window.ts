@@ -7,8 +7,15 @@
  * @see https://docs.crewai.com/en/concepts/memory.md
  */
 
-import type { Agent } from '@crewai/core';
 import { getModel } from './model-router';
+
+// Note: @crewai/core is a Python package - using any type for Node.js compatibility
+interface CrewAIAgent {
+  role?: string;
+  goal?: string;
+  backstory?: string;
+  [key: string]: any;
+}
 
 export interface Message {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -56,7 +63,7 @@ export class ContextWindowManager {
   private messageHistory: Message[] = [];
   private tokenCount = 0;
   private summary?: string;
-  private agent?: Agent;
+  private agent?: CrewAIAgent;
 
   constructor(config: Partial<ContextWindowConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -65,7 +72,7 @@ export class ContextWindowManager {
   /**
    * Set the agent to use for summarization
    */
-  setAgent(agent: Agent): void {
+  setAgent(agent: CrewAIAgent): void {
     this.agent = agent;
   }
 
@@ -268,13 +275,13 @@ export class ContextWindowManager {
  */
 export function createContextWindow(
   config: Partial<ContextWindowConfig> = {},
-  agent?: Agent
+  agent?: CrewAIAgent
 ): ContextWindowManager {
   const manager = new ContextWindowManager(config);
-  
+
   if (agent) {
     manager.setAgent(agent);
   }
-  
+
   return manager;
 }

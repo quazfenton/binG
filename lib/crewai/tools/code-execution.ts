@@ -1,9 +1,19 @@
 /**
  * CrewAI Code Execution Tools
  *
- * Safe code execution with Docker isolation and sandbox support.
- *
- * @see https://docs.crewai.com/en/guides/coding-tools/agents-md.md
+ * ⚠️  SECURITY WARNING: This module executes code on the HOST system.
+ * 
+ * CRITICAL SECURITY ISSUE:
+ * - Bash execution via 'bash -c' allows arbitrary command execution
+ * - Even "safe" mode uses regex checks that are trivially bypassed
+ * - No proper sandboxing/isolation from host system
+ * 
+ * RECOMMENDED FIX:
+ * - DO NOT USE this module in production
+ * - Use sandbox providers instead (E2B, Daytona, Blaxel, etc.)
+ * - Sandbox providers offer proper isolation and security
+ * 
+ * @deprecated Use lib/sandbox/providers/* instead for secure code execution
  */
 
 import { EventEmitter } from 'events';
@@ -12,6 +22,14 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { createHash } from 'crypto';
+
+// SECURITY: Disable CrewAI code execution in production by default
+const ALLOW_CREWAI_CODE_EXECUTION = process.env.ALLOW_CREWAI_CODE_EXECUTION === 'true';
+
+if (!ALLOW_CREWAI_CODE_EXECUTION && process.env.NODE_ENV === 'production') {
+  console.warn('⚠️  CrewAI code execution is DISABLED in production. Set ALLOW_CREWAI_CODE_EXECUTION=true to enable (NOT RECOMMENDED).');
+  console.warn('⚠️  Use sandbox providers (E2B, Daytona, Blaxel) for secure code execution instead.');
+}
 
 export interface CodeExecutionConfig {
   mode: 'safe' | 'unsafe';
@@ -56,15 +74,11 @@ const SUPPORTED_LANGUAGES: Record<string, CodeLanguage> = {
   python: {
     name: 'Python',
     extensions: ['.py'],
-    dockerImage: 'python:3.11-slim',
+    dockerImage: 'python:311-slim',
     runCommand: (code) => ['python3', '-c', code],
   },
-  bash: {
-    name: 'Bash',
-    extensions: ['.sh'],
-    dockerImage: 'bash:5',
-    runCommand: (code) => ['bash', '-c', code],
-  },
+  // SECURITY: Bash removed from supported languages in production
+  // bash execution allows arbitrary command execution on host
 };
 
 export class DockerCodeExecutor extends EventEmitter {
@@ -95,8 +109,22 @@ export class DockerCodeExecutor extends EventEmitter {
 
   /**
    * Execute code in a specified language
+   * 
+   * SECURITY: This method is disabled in production unless explicitly enabled
    */
   async execute(code: string, language: string): Promise<ExecutionResult> {
+    // SECURITY: Block execution in production unless explicitly enabled
+    if (!ALLOW_CREWAI_CODE_EXECUTION && process.env.NODE_ENV === 'production') {
+      return {
+        success: false,
+        stdout: '',
+        stderr: 'CREWAI CODE EXECUTION DISABLED: Use sandbox providers (E2B, Daytona, Blaxel) for secure code execution in production.',
+        exitCode: -1,
+        durationMs: 0,
+        error: 'Code execution disabled in production for security'
+      };
+    }
+
     const startTime = Date.now();
     const executionId = createHash('sha256').update(code + Date.now().toString()).digest('hex').slice(0, 8);
 
@@ -108,6 +136,18 @@ export class DockerCodeExecutor extends EventEmitter {
         stderr: `Language not allowed: ${language}. Allowed: ${this.config.allowedLanguages.join(', ')}`,
         exitCode: -1,
         durationMs: 0,
+      };
+    }
+
+    // SECURITY: Block bash execution entirely - allows arbitrary command execution
+    if (language === 'bash') {
+      return {
+        success: false,
+        stdout: '',
+        stderr: 'Bash execution is disabled for security. Use sandbox providers for shell commands.',
+        exitCode: -1,
+        durationMs: 0,
+        error: 'Bash execution disabled'
       };
     }
 

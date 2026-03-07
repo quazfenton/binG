@@ -56,15 +56,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'message is required' }, { status: 400 });
     }
 
-    // Build unified config
+    // Build unified config with bounds validation
     const config: UnifiedAgentConfig = {
       userMessage: message,
       systemPrompt: systemPrompt,
       conversationHistory: history,
       tools: tools || [],
-      maxSteps: maxSteps || 15,
-      temperature: temperature || 0.7,
-      maxTokens: maxTokens || 4096,
+      maxSteps: Math.min(Math.max(maxSteps || 15, 1), 50),
+      temperature: Math.min(Math.max(temperature || 0.7, 0), 2),
+      maxTokens: Math.min(maxTokens || 4096, 32000),
       mode: mode || 'auto',
     };
 

@@ -32,6 +32,7 @@
 
 import { spawn } from "child_process";
 import path from "path";
+import { promises as fs } from "fs";
 import { NextRequest } from "next/server";
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -63,10 +64,16 @@ const ALLOWED_CMDS = new Set([
 ]);
 
 /** Validate an absolute path is under PROJECT_ROOT. */
-function isSafePath(p: string): boolean {
-  const resolved = path.resolve(p);
-  const root = path.resolve(PROJECT_ROOT);
-  return resolved.startsWith(root + path.sep) || resolved === root;
+async function isSafePath(p: string): Promise<boolean> {
+  try {
+    const resolved = await fs.realpath(p);
+    const root = await fs.realpath(PROJECT_ROOT);
+    return resolved.startsWith(root + path.sep) || resolved === root;
+  } catch (error) {
+    // Path doesn't exist or can't be resolved - reject
+    console.warn(`Path resolution failed: ${p}`, error);
+    return false;
+  }
 }
 
 /** Send a single SSE event string. */
@@ -78,11 +85,21 @@ function sse(data: unknown): string {
 
 export async function POST(req: NextRequest) {
   // ── Auth ──────────────────────────────────────────────────────────────────
+  // SECURITY: Require BOTH standard JWT auth AND visual editor secret
+  const authResult = await resolveRequestAuth(req);
+  if (!authResult.success || !authResult.userId) {
+    return new Response("Unauthorized - JWT authentication required", { status: 401 });
+  }
+  
+  // Additional secret header check (for visual editor integration)
   if (SECRET) {
     const auth = req.headers.get("x-visual-editor-secret") ?? "";
     if (auth !== SECRET) {
-      return new Response("Unauthorized", { status: 401 });
+      return new Response("Unauthorized - Invalid visual editor secret", { status: 401 });
     }
+  } else if (process.env.NODE_ENV === 'production') {
+    // Fail closed in production if secret not set
+    return new Response("Service Unavailable - VISUAL_EDITOR_SECRET not configured", { status: 503 });
   }
 
   // ── Parse body ────────────────────────────────────────────────────────────
@@ -104,9 +121,23 @@ export async function POST(req: NextRequest) {
     return new Response(`Command not allowed: ${baseCmd}`, { status: 403 });
   }
 
+  // ── Type validation ───────────────────────────────────────────────────────
+  // Validate projectPath is a string
+  if (projectPath !== undefined && typeof projectPath !== 'string') {
+    return new Response("projectPath must be a string", { status: 400 });
+  }
+
+  const safeProjectPath = typeof projectPath === 'string' ? projectPath : PROJECT_ROOT;
+
+  // Validate args is an array
+  if (!Array.isArray(args)) {
+    return new Response("args must be an array", { status: 400 });
+  }
+
   // ── Path safety ───────────────────────────────────────────────────────────
-  if (!isSafePath(projectPath)) {
-    return new Response(`Path not allowed: ${projectPath}`, { status: 403 });
+  const isPathSafe = await isSafePath(safeProjectPath);
+  if (!isPathSafe) {
+    return new Response(`Path not allowed: ${safeProjectPath}`, { status: 403 });
   }
 
   // ── Sanitize args (no shell metacharacters) ───────────────────────────────
@@ -116,7 +147,9 @@ export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
-    start(controller) {
+    async start(controller) {
+      let finalized = false;
+
       const enqueue = (data: unknown) => {
         try {
           controller.enqueue(encoder.encode(sse(data)));
@@ -125,9 +158,17 @@ export async function POST(req: NextRequest) {
         }
       };
 
+      const finalize = (code?: number) => {
+        if (finalized) return;
+        finalized = true;
+        enqueue({ done: true, code: code ?? 1 });
+        clearTimeout(watchdog);
+        controller.close();
+      };
+
       // Spawn: npx <baseCmd> <subCmd> [...args]
       const child = spawn("npx", [baseCmd, subCmd, ...sanitizedArgs], {
-        cwd: path.resolve(projectPath),
+        cwd: path.resolve(safeProjectPath),
         env: { ...process.env, FORCE_COLOR: "0" },
         shell: false,
       });
@@ -151,22 +192,17 @@ export async function POST(req: NextRequest) {
 
       child.on("error", (err) => {
         enqueue({ line: `✗ Spawn error: ${err.message}` });
-        enqueue({ done: true, code: 1 });
-        clearTimeout(watchdog);
-        controller.close();
+        finalize(1);
       });
 
       child.on("close", (code) => {
-        enqueue({ done: true, code: code ?? 1 });
-        clearTimeout(watchdog);
-        controller.close();
+        finalize(code);
       });
 
       // Clean up if client disconnects
       req.signal.addEventListener("abort", () => {
         child.kill("SIGTERM");
-        clearTimeout(watchdog);
-        controller.close();
+        finalize();
       });
     },
   });

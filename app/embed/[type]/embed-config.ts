@@ -251,11 +251,14 @@ const embedConfigs: Record<string, EmbedConfig> = {
 };
 
 export function getEmbedConfig(type: string): EmbedConfig {
-  return embedConfigs[type] || embedConfigs['default'];
+  if (Object.prototype.hasOwnProperty.call(embedConfigs, type)) {
+    return embedConfigs[type];
+  }
+  return embedConfigs['default'];
 }
 
 export function isValidEmbedType(type: string): boolean {
-  return type in embedConfigs;
+  return Object.prototype.hasOwnProperty.call(embedConfigs, type);
 }
 
 export function getAllEmbedTypes(): string[] {

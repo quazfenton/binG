@@ -4,24 +4,31 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Auth:JWT');
 
-// CRITICAL FIX: Enforce JWT_SECRET in production
+// CRITICAL FIX: STRICT enforcement of JWT_SECRET
+// No fallback in production - must be explicitly configured
 const JWT_SECRET = process.env.JWT_SECRET;
 
 // Validate JWT_SECRET is set in production
 if (process.env.NODE_ENV === 'production' && !JWT_SECRET) {
   logger.error('CRITICAL: JWT_SECRET is not configured in production!');
-  throw new Error('JWT_SECRET must be set in production environment');
+  throw new Error('JWT_SECRET is required in production environment');
 }
 
-// Fallback for development only (with warning)
-if (!JWT_SECRET) {
-  logger.warn('JWT_SECRET not configured. Using development default. DO NOT USE IN PRODUCTION.');
+// Validate JWT_SECRET format if provided
+if (JWT_SECRET && JWT_SECRET.length < 32) {
+  logger.error('CRITICAL: JWT_SECRET must be at least 32 characters for security');
+  throw new Error('JWT_SECRET must be at least 32 characters (256 bits)');
 }
 
-const DEVELOPMENT_SECRET = process.env.NODE_ENV === 'production' 
-  ? undefined 
-  : require('crypto').randomBytes(32).toString('hex');
-const SECRET = JWT_SECRET || DEVELOPMENT_SECRET;
+// Development fallback with prominent warning (only if not in production)
+const SECRET = JWT_SECRET || (() => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET is required in production environment');
+  }
+  logger.warn('⚠️  WARNING: JWT_SECRET not configured. Using random development key. DO NOT USE IN PRODUCTION.');
+  logger.warn('Generate a secure key: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+  return require('crypto').randomBytes(32).toString('hex');
+})();
 
 // Token blacklist for immediate revocation
 // Stores token JTI (unique identifier) until expiration
@@ -145,12 +152,12 @@ export function generateToken(payload: { userId: string; email: string; type?: s
   const jti = require('crypto').randomBytes(16).toString('hex');
 
   // Add issuer and audience claims for better security
-  const fullPayload: JwtPayload = {
+  const fullPayload = {
     ...payload,
     jti,
     iss: 'bing-app',
     aud: 'bing-users',
-  };
+  } as any;
 
   const token = jwt.sign(fullPayload, SECRET, {
     expiresIn,

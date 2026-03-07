@@ -425,16 +425,92 @@ export interface AgentSandboxHandle {
   readonly agentId?: string
   /** Conversation ID */
   readonly conversationId?: string
-  
+
   // Standard sandbox methods (from SandboxHandle)
   executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult>
   writeFile(filePath: string, content: string): Promise<ToolResult>
   readFile(filePath: string): Promise<ToolResult>
   listDirectory(dirPath: string): Promise<ToolResult>
-  
+
   // Agent-specific methods
   executeCode(code: string, options?: ExecutionEnvironment): Promise<CodeExecutionResult>
   streamCodeExecution(code: string): AsyncIterable<StreamChunk>
   getConversationHistory(): Promise<ConversationEntry[]>
   clearConversation(): Promise<void>
+}
+
+// ============================================================================
+// Additional Missing Types
+// ============================================================================
+
+/**
+ * Workspace state for Mistral agent sessions
+ */
+export interface WorkspaceState {
+  /** Workspace ID */
+  id: string
+  /** Workspace files */
+  files: Record<string, string>
+  /** Last modified timestamp */
+  lastModified: number
+}
+
+/**
+ * Code execution result from Mistral code interpreter
+ */
+export interface CodeExecutionResult {
+  /** Whether execution was successful */
+  success: boolean
+  /** Execution output */
+  output?: string
+  /** Error message if failed */
+  error?: string
+  /** Exit code */
+  exitCode?: number
+  /** Execution time in milliseconds */
+  executionTime?: number
+  /** Token usage */
+  tokenUsage?: TokenUsage
+}
+
+/**
+ * Stream chunk for code execution streaming
+ */
+export interface StreamChunk {
+  /** Chunk type */
+  type: 'stdout' | 'stderr' | 'error' | 'done'
+  /** Chunk content */
+  content?: string
+  /** Error if type is 'error' */
+  error?: string
+}
+
+/**
+ * Execution environment configuration
+ */
+export interface ExecutionEnvironment {
+  /** Working directory */
+  cwd?: string
+  /** Environment variables */
+  env?: Record<string, string>
+  /** Execution timeout */
+  timeout?: number
+  /** Language for execution */
+  language?: 'python' | 'javascript' | 'typescript' | 'bash'
+}
+
+/**
+ * Tool execution result
+ */
+export interface ToolResult {
+  /** Whether tool execution was successful */
+  success: boolean
+  /** Tool output */
+  output?: string
+  /** Error message if failed */
+  error?: string
+  /** Tool name */
+  toolName?: string
+  /** Execution time in milliseconds */
+  executionTime?: number
 }

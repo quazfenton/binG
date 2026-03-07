@@ -32,8 +32,22 @@ export async function POST(request: NextRequest) {
     // Get raw body for signature verification
     const body = await request.text();
 
-    // Verify signature if secret is configured
+    // SECURITY: Require webhook secret in production
     const secret = process.env.COMPOSIO_WEBHOOK_SECRET;
+    if (!secret && process.env.NODE_ENV === 'production') {
+      console.error(`[ComposioWebhook] CRITICAL: COMPOSIO_WEBHOOK_SECRET not set in production (${requestId})`);
+      const response = NextResponse.json({
+        success: false,
+        error: {
+          type: 'configuration_error',
+          message: 'Webhook secret not configured',
+        },
+        requestId,
+      }, { status: 500 });
+      return addCORSHeaders(response);
+    }
+
+    // Verify signature if secret is configured
     if (secret) {
       if (!signature) {
         console.warn(`[ComposioWebhook] Missing signature (${requestId})`);
@@ -46,6 +60,25 @@ export async function POST(request: NextRequest) {
           requestId,
         }, { status: 401 });
         return addCORSHeaders(response);
+      }
+
+      // SECURITY: Validate timestamp freshness (prevent replay attacks)
+      if (timestamp) {
+        const timestampNum = parseInt(timestamp, 10);
+        const now = Math.floor(Date.now() / 1000);
+        const maxAge = 5 * 60; // 5 minutes
+        if (Math.abs(now - timestampNum) > maxAge) {
+          console.warn(`[ComposioWebhook] Timestamp too old (${requestId})`);
+          const response = NextResponse.json({
+            success: false,
+            error: {
+              type: 'invalid_timestamp',
+              message: 'Webhook timestamp too old',
+            },
+            requestId,
+          }, { status: 401 });
+          return addCORSHeaders(response);
+        }
       }
 
       const isValid = verifyWebhookSignature(body, signature, secret);

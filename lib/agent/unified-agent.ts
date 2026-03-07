@@ -125,13 +125,20 @@ export interface CodeExecutionResult {
 export class UnifiedAgent {
   private config: UnifiedAgentConfig
   private session: AgentSession | null = null
+  
+  // Bounded terminal output array to prevent memory leaks
+  private readonly MAX_OUTPUT_LENGTH = 1000
   private terminalOutput: TerminalOutput[] = []
+  
   private desktopHandle: DesktopHandle | null = null
   private mcpInitialized: boolean = false
   private gitManager: GitManager | null = null
   private onOutputCallback?: (output: TerminalOutput) => void
   private initializedCapabilities: Set<AgentCapability> = new Set()
   private initializationErrors: Map<AgentCapability, Error> = new Map()
+  
+  // Session timeout enforcement
+  private sessionCheckInterval?: NodeJS.Timeout
 
   constructor(config: UnifiedAgentConfig) {
     this.config = config
@@ -164,10 +171,9 @@ export class UnifiedAgent {
       // Create real sandbox session via bridge with error handling
       let workspaceSession
       try {
-        workspaceSession = await sandboxBridge.getOrCreateSession(userId, {
-          provider: this.config.provider,
+        workspaceSession = await sandboxBridge.createWorkspace(userId, {
           env: this.config.env,
-        })
+        } as any)
       } catch (error: any) {
         console.error('[UnifiedAgent] Failed to create sandbox session:', error.message)
         throw new Error(
@@ -270,6 +276,11 @@ export class UnifiedAgent {
         `(${initDuration}ms). Capabilities: ${JSON.stringify(initResults)}`
       )
 
+      // Start session timeout checker if configured
+      if (this.config.session?.timeout) {
+        this.startSessionTimeoutChecker()
+      }
+
       return this.session
 
     } catch (error: any) {
@@ -309,6 +320,9 @@ export class UnifiedAgent {
     const cleanupErrors: Error[] = []
 
     try {
+      // Stop session timeout checker
+      this.stopSessionTimeoutChecker()
+      
       this.mcpInitialized = false
 
       // Disconnect terminal but keep sandbox alive unless explicitly requested
@@ -336,9 +350,11 @@ export class UnifiedAgent {
       this.gitManager = null
       this.initializedCapabilities.delete('git')
 
-      // Clear terminal output
+      // Clear all resources to prevent memory leaks
       this.terminalOutput = []
       this.initializationErrors.clear()
+      this.initializedCapabilities.clear()
+      this.onOutputCallback = undefined
 
       this.session = null
 
@@ -429,7 +445,7 @@ export class UnifiedAgent {
   private async initializeTerminal(): Promise<void> {
     if (!this.session) return
 
-    await enhancedTerminalManager.createTerminalSession(
+    await enhancedTerminalManager.createTerminalSessionWithDesktop(
       this.session.sessionId,
       this.session.sandboxId,
       (data) => this.handleTerminalOutput(data),
@@ -453,6 +469,11 @@ export class UnifiedAgent {
     }
 
     this.terminalOutput.push(output)
+    
+    // Prevent unbounded growth - keep only last N entries
+    if (this.terminalOutput.length > this.MAX_OUTPUT_LENGTH) {
+      this.terminalOutput = this.terminalOutput.slice(-this.MAX_OUTPUT_LENGTH)
+    }
 
     if (this.onOutputCallback) {
       this.onOutputCallback(output)
@@ -476,6 +497,36 @@ export class UnifiedAgent {
   private updateLastActive(): void {
     if (this.session) {
       this.session.lastActive = Date.now()
+    }
+  }
+
+  /**
+   * Start session timeout checker to enforce idle timeout
+   */
+  private startSessionTimeoutChecker(): void {
+    const timeout = this.config.session?.timeout || 300000 // Default 5 minutes
+    const checkInterval = Math.min(timeout / 2, 60000) // Check every 30s or half timeout
+
+    this.sessionCheckInterval = setInterval(() => {
+      if (this.session) {
+        const idleTime = Date.now() - this.session.lastActive
+        if (idleTime > timeout) {
+          console.warn(`[UnifiedAgent] Session idle timeout (${timeout}ms). Cleaning up...`)
+          this.cleanup().catch((error) => {
+            console.error('[UnifiedAgent] Cleanup after timeout failed:', error)
+          })
+        }
+      }
+    }, checkInterval)
+  }
+
+  /**
+   * Stop session timeout checker
+   */
+  private stopSessionTimeoutChecker(): void {
+    if (this.sessionCheckInterval) {
+      clearInterval(this.sessionCheckInterval)
+      this.sessionCheckInterval = undefined
     }
   }
 
@@ -587,7 +638,8 @@ export class UnifiedAgent {
       throw new Error('MCP not initialized')
     }
 
-    return callMCPToolFromAI_SDK(toolName, args)
+    const userId = this.config.userId || 'anonymous-agent'
+    return callMCPToolFromAI_SDK(toolName, args, userId)
   }
 
   /**

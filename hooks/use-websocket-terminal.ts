@@ -100,16 +100,13 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
 
   // Build WebSocket URL with authentication
   const buildWebSocketUrl = useCallback(() => {
-    const token = getAuthToken();
     const url = new URL(`${WS_URL}/sandboxes/${sandboxId}/terminal`);
     
-    // Add token as query parameter (simplest for WebSocket)
-    if (token) {
-      url.searchParams.set('token', token);
-    }
+    // Note: Token is now sent via WebSocket subprotocol, NOT in URL
+    // This prevents token leakage in server logs and browser history
     
     return url.toString();
-  }, [sandboxId, getAuthToken]);
+  }, [sandboxId]);
 
   // Connect to WebSocket
   const connect = useCallback(() => {
@@ -127,9 +124,17 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
 
     try {
       const url = buildWebSocketUrl();
-      console.log('[WebSocketTerminal] Connecting to:', url);
+      const authToken = getAuthToken();
       
-      wsRef.current = new WebSocket(url);
+      console.log('[WebSocketTerminal] Connecting to:', url);
+
+      // SECURITY: Send token via WebSocket subprotocol (not URL query param)
+      // This prevents token leakage in logs and browser history
+      const wsOptions: string[] | undefined = authToken 
+        ? [`Bearer ${authToken}`] 
+        : undefined;
+
+      wsRef.current = new WebSocket(url, wsOptions);
 
       wsRef.current.onopen = () => {
         console.log('[WebSocketTerminal] Connected');
@@ -169,7 +174,7 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
         if (event.code !== 1000 && reconnectCount < reconnectAttempts) {
           const delay = reconnectDelay * Math.pow(2, reconnectCount); // Exponential backoff
           console.log(`[WebSocketTerminal] Reconnecting in ${delay}ms (attempt ${reconnectCount + 1}/${reconnectAttempts})`);
-          
+
           reconnectTimeoutRef.current = setTimeout(() => {
             setReconnectCount(prev => prev + 1);
             connect();

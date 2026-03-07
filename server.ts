@@ -68,16 +68,7 @@ async function startup() {
   try {
     logger.info('Starting backend initialization...');
 
-    // Initialize database session store for persistence
-    try {
-      const dbSessionStore = getDatabaseSessionStore();
-      dbSessionStore.initialize();
-      logger.info('Database session store initialized');
-    } catch (error: any) {
-      logger.warn('Database session store initialization failed:', error.message);
-      logger.warn('Sessions will be in-memory only (no persistence)');
-    }
-
+    // Session store is initialized by initializeBackend() - don't duplicate
     const backendStatus = await initializeBackend({
       websocketPort: parseInt(process.env.WEBSOCKET_PORT || '8080'),
     });
@@ -107,36 +98,137 @@ app.prepare().then(startup).then(() => {
     const { pathname, query } = parse(req.url || '', true);
 
     // Handle WebSocket upgrade for terminal streaming
-    if (pathname === '/api/sandbox/terminal/ws') {
+    if (pathname === '/ws' || pathname === '/api/sandbox/terminal/ws') {
       const sessionId = query.sessionId as string;
       const sandboxId = query.sandboxId as string;
-      const token = query.token as string;
+      
+      // SECURITY: Extract token from headers (NOT query params)
+      // Priority 1: Authorization header (Bearer token)
+      let token: string | null = null;
+      const authHeader = req.headers['authorization'];
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+      }
+      
+      // Priority 2: WebSocket subprotocol (for wscat/browser WS clients)
+      if (!token && req.protocol && req.protocol.startsWith('Bearer ')) {
+        token = req.protocol.substring(7);
+      }
+      
+      // Fallback: Query param (deprecated, log warning)
+      if (!token && query.token) {
+        console.warn('[WebSocket] Token received via query param (insecure). Use Authorization header instead.');
+        token = query.token as string;
+      }
+      
+      // Get anonymous session ID from header (if no auth token)
+      const anonymousSessionId = query.anonymousSessionId as string || 
+                                 req.headers['x-anonymous-session-id'] as string;
 
       if (!sessionId || !sandboxId) {
+        console.warn('[WebSocket] Missing sessionId or sandboxId');
         socket.destroy();
         return;
       }
 
-      // Authenticate the connection
-      // In production, validate the token against your auth system
-      const userId = token || 'anonymous';
-
       wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit('connection', ws, req, { sessionId, sandboxId, userId });
+        wss.emit('connection', ws, req, { 
+          sessionId, 
+          sandboxId, 
+          token,
+          anonymousSessionId 
+        });
       });
     } else {
       socket.destroy();
     }
   });
 
-  wss.on('connection', (ws: WebSocket, req: IncomingMessage, context: any) => {
-    const { sessionId, sandboxId, userId } = context;
-    const sessionKey = `${sessionId}-${userId}`;
+  wss.on('connection', async (ws: WebSocket, req: IncomingMessage, context: any) => {
+    const { sessionId, sandboxId, token, anonymousSessionId } = context;
+    let userId: string | null = null;
+    let isAuthenticated = false;
 
+    // ===========================================
+    // SECURITY: Authenticate WebSocket Connection
+    // ===========================================
+    
+    // Priority 1: Validate JWT token from Authorization header or subprotocol
+    if (token) {
+      try {
+        const { verifyToken } = await import('@/lib/security/jwt-auth');
+        const payload = verifyToken(token);
+        userId = (payload as any).userId || (payload as any).sub;
+        
+        if (!userId) {
+          console.warn('[WebSocket] Invalid token: missing user ID');
+          ws.close(4001, 'Invalid token');
+          return;
+        }
+        
+        isAuthenticated = true;
+        console.log(`[WebSocket] Authenticated user ${userId} via JWT`);
+      } catch (error: any) {
+        console.warn(`[WebSocket] Token validation failed: ${error.message}`);
+        ws.close(4001, `Authentication failed: ${error.message}`);
+        return;
+      }
+    }
+    
+    // Priority 2: Validate anonymous session ID (if anonymous access allowed)
+    if (!userId && anonymousSessionId) {
+      // Verify anonymous session exists and is valid
+      const { getDatabaseSessionStore } = await import('@/lib/database/session-store');
+      const sessionStore = getDatabaseSessionStore();
+      const session = await sessionStore.getSession(anonymousSessionId);
+      
+      if (session && session.userId) {
+        userId = session.userId;
+        console.log(`[WebSocket] Authenticated anonymous user ${userId}`);
+      }
+    }
+    
+    // Reject if no valid authentication
+    if (!userId) {
+      // SECURITY: In production, reject all anonymous connections
+      if (process.env.NODE_ENV === 'production') {
+        console.warn('[WebSocket] Production: Anonymous connections rejected');
+        ws.close(4001, 'Authentication required in production. Provide JWT token via Authorization header.');
+        return;
+      }
+      
+      // Development: allow anonymous with warning
+      console.warn('[WebSocket] Anonymous connection allowed in development only. Use authentication in production.');
+      userId = 'anonymous';
+    }
+
+    // ===========================================
+    // SECURITY: Authorize Access to Sandbox
+    // ===========================================
+    
+    // Verify user owns this sandbox session
+    const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
+    const userSession = sandboxBridge.getSessionByUserId(userId);
+    
+    if (!userSession) {
+      console.warn(`[WebSocket] User ${userId} has no active sandbox session`);
+      ws.close(4003, 'No active sandbox session');
+      return;
+    }
+    
+    // CRITICAL: Verify user is accessing THEIR OWN sandbox
+    if (userSession.sessionId !== sessionId || userSession.sandboxId !== sandboxId) {
+      console.warn(`[WebSocket] User ${userId} attempted to access unauthorized sandbox ${sandboxId}`);
+      ws.close(4003, 'Unauthorized: You do not own this sandbox session');
+      return;
+    }
+    
+    console.log(`[WebSocket] User ${userId} authorized for sandbox ${sandboxId}`);
+
+    const sessionKey = `${sessionId}-${userId}`;
     console.log(`[WebSocket] Client connected: ${sessionKey}`);
 
     // Check if there's an actual PTY connection available for this session
-    // If not, close WebSocket immediately so client falls back to command-mode
     const hasPty = terminalManager.hasPtyConnection(sessionId);
     if (!hasPty) {
       console.log(`[WebSocket] No PTY available for ${sessionId}, closing so client can fallback`);
@@ -144,7 +236,6 @@ app.prepare().then(startup).then(() => {
         type: 'error',
         error: 'PTY not available - using command-mode',
       }));
-      // Give client time to receive error message, then close
       setTimeout(() => {
         ws.close(4000, 'PTY not available');
       }, 100);

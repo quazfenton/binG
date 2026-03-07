@@ -31,6 +31,9 @@ export class AuthCache {
       this.cache.delete(key);
       return null;
     }
+    // LRU promotion: re-insert to mark as recently used
+    this.cache.delete(key);
+    this.cache.set(key, entry);
     return entry;
   }
 
@@ -54,8 +57,8 @@ export class AuthCache {
   }
 
   invalidateAllForUser(userId: string): void {
-    for (const key of this.cache.keys()) {
-      if (key.includes(`:${userId}:`) || key.endsWith(`:${userId}`)) {
+    for (const [key, entry] of this.cache.entries()) {
+      if (entry.result.userId === userId) {
         this.cache.delete(key);
       }
     }

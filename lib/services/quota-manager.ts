@@ -52,15 +52,14 @@ class QuotaManager {
    * Configure quotas with custom limits
    */
   configure(config: { maxExecutionsPerHour?: number; maxStorageMB?: number }): void {
+    this.ensureInitialized();
     if (config.maxExecutionsPerHour) {
-      // Apply to all providers - distribute across providers
       const perProvider = Math.floor(config.maxExecutionsPerHour / Object.keys(DEFAULT_QUOTAS).length);
       for (const [provider, quota] of this.quotas) {
         quota.monthlyLimit = perProvider;
       }
     }
     if (config.maxStorageMB) {
-      // Storage is tracked per-sandbox, not per-provider
       console.log('[QuotaManager] maxStorageMB not implemented per-provider');
     }
   }

@@ -55,6 +55,14 @@ export interface MCPConfig {
   }
 }
 
+/**
+ * Desktop sandbox handle for computer use operations
+ */
+export interface DesktopHandle {
+  sessionId?: string
+  sandboxId?: string
+}
+
 // ==================== Desktop Action Types ====================
 // Used for computer use agent interactions
 

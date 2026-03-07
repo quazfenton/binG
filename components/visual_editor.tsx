@@ -1868,11 +1868,12 @@ function craftNodesToJSX(nodes: Record<string, any>): string {
     let styleAttr = "";
     if (props?.styles && Object.keys(props.styles).length > 0) {
       // Exclude className, tailwindClasses, moduleClass from inline styles
+      // NOTE: React inline styles use camelCase (e.g., backgroundColor), NOT kebab-case
       const styleEntries = Object.entries(props.styles)
         .filter(([k]) => !['className', 'tailwindClasses', 'moduleClass'].includes(k))
         .map(([k, v]) => {
-          const cssKey = k.replace(/([A-Z])/g, '-$1').toLowerCase();
-          return `  ${cssKey}: ${JSON.stringify(v)}`;
+          // Keep camelCase for React inline styles - do NOT convert to kebab-case
+          return `  ${k}: ${JSON.stringify(v)}`;
         })
         .join(',\n');
       if (styleEntries) {
@@ -4289,7 +4290,7 @@ function SettingsPanel() {
             <div className="grid grid-cols-2 gap-1.5">
               {(["top", "right", "bottom", "left"] as const).map((d) => (
                 <PropGroup key={d} label={d.charAt(0).toUpperCase() + d.slice(1)}>
-                  <StringInput value={(s as any)[d] ?? ""} onChange={(v) => setStyle(d, v)} placeholder="auto" />
+                  <StringInput value={(s as Record<string, string | undefined>)[d] ?? ""} onChange={(v) => setStyle(d, v)} placeholder="auto" />
                 </PropGroup>
               ))}
             </div>
@@ -5758,7 +5759,7 @@ function jsxToCraftNodes(jsxCode: string): Record<string, unknown> {
       }
       
       node.nodes = childElements.map((c: Record<string, unknown>) => {
-        const childId = c.type === 'text' ? getNextId() : (c as any).id || getNextId();
+        const childId = c.type === 'text' ? getNextId() : (c.id as string) || getNextId();
         nodes[childId] = { ...c, id: childId };
         return childId;
       });
@@ -6034,15 +6035,22 @@ export function VisualEditorMain({
   const handleSave = useCallback(() => {
     // Serialize craft nodes → JSX and inject into project files
     const craftNodes = craftJsonRef.current;
-    
-    if (!craftNodes || Object.keys(craftNodes).length <= 1) {
+
+    // Only require craft nodes for visual/design mode saves
+    // Code mode can save without craft nodes (user edits code directly)
+    if (editorMode === 'design' && (!craftNodes || Object.keys(craftNodes).length <= 1)) {
       console.warn("[VisualEditor] No nodes to save");
       toast.error("No changes to save. Add some components first.");
       return;
     }
-    
-    const jsxString = craftNodesToJSX(craftNodes as Record<string, any>);
-    console.log("[VisualEditor] Generated JSX:", jsxString.substring(0, 500) + "...");
+
+    // For visual mode, generate JSX from craft nodes
+    let jsxString = '';
+    if (craftNodes && Object.keys(craftNodes).length > 1) {
+      jsxString = craftNodesToJSX(craftNodes as Record<string, any>);
+      console.log("[VisualEditor] Generated JSX:", jsxString.substring(0, 500) + "...");
+    }
+    // For code mode without craft nodes, use existing file content
 
     // Find the main entry file to update
     const mainFile =
@@ -6053,13 +6061,13 @@ export function VisualEditorMain({
       ) ?? Object.keys(files)[0];
 
     const updatedFiles = { ...files };
-    if (mainFile) {
+    if (mainFile && jsxString) {
       updatedFiles[mainFile] = jsxString;
       console.log("[VisualEditor] Saving to file:", mainFile);
     }
 
     onSave(updatedFiles);
-  }, [files, onSave]);
+  }, [files, onSave, editorMode]);
 
   return (
     <Editor
@@ -6115,7 +6123,7 @@ export function VisualEditorMain({
               showComponents ? "w-56" : "w-0 border-r-0"
             }`}
           >
-            {editorMode !== "code" && <ComponentLibrary projectPath={(project as any).filesystemScopePath ?? ""} />}
+            {editorMode !== "code" && <ComponentLibrary projectPath={(project as Record<string, string>).filesystemScopePath ?? ""} />}
           </div>
 
           {/* ── CENTER ── */}

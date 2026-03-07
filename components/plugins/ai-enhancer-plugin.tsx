@@ -46,14 +46,18 @@ export const AIEnhancerPlugin: React.FC<PluginProps> = ({
           messages: [
             { role: 'system', content: `You are a text enhancement assistant. Rewrite the user's text in a ${mode} tone. Only output the enhanced text, nothing else.` },
             { role: 'user', content: input }
-          ]
+          ],
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          stream: false,
         }),
       });
 
       if (!response.ok) throw new Error('Enhancement failed');
       const data = await response.json();
-      const enhancedText = data.message || data.choices?.[0]?.message?.content || data.content || '';
-      
+      // Fix: Correct response parsing to match /api/chat contract
+      const enhancedText = data.data?.content || data.content || data.message?.content || '';
+
       setEnhanced(enhancedText);
       onResult?.({ original: input, enhanced: enhancedText, mode });
       toast.success('Text enhanced successfully!');

@@ -1,10 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import path from 'path';
 import fs from 'fs/promises';
 import { spawn } from 'child_process';
 
 export const runtime = 'nodejs';
+
+// SECURITY: Allowlist of permitted Git hosts to prevent SSRF
+const ALLOWED_GIT_HOSTS = [
+  'github.com',
+  'gitlab.com',
+  'bitbucket.org',
+];
+
+// Allow additional hosts from environment variable (comma-separated)
+const EXTRA_ALLOWED_HOSTS = process.env.GIT_ALLOWED_HOSTS?.split(',').map(h => h.trim()) || [];
+const FULL_ALLOWED_HOSTS = [...ALLOWED_GIT_HOSTS, ...EXTRA_ALLOWED_HOSTS];
 
 const cloneRequestSchema = z.object({
   repoUrl: z.string().min(1, 'Repository URL is required').max(1000, 'Repository URL is too long'),
@@ -18,11 +30,59 @@ function normalizeRepoUrl(repoUrl: string): string {
     return `https://github.com/${trimmed}.git`;
   }
 
-  if (/^https?:\/\//i.test(trimmed) || /^git@/i.test(trimmed)) {
+  if (/^https?:\/\//i.test(trimmed)) {
     return trimmed;
   }
 
-  throw new Error('Invalid repository URL format. Use owner/repo, https URL, or git@ URL.');
+  // SECURITY: Reject SSH/git@ URLs in production (can bypass host restrictions)
+  if (/^git@/i.test(trimmed)) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('SSH git URLs are not allowed in production. Use HTTPS URLs.');
+    }
+    return trimmed;
+  }
+
+  throw new Error('Invalid repository URL format. Use owner/repo or https URL.');
+}
+
+/**
+ * SECURITY: Validate repository URL against allowlist to prevent SSRF
+ */
+function validateRepoUrl(repoUrl: string): { valid: boolean; error?: string; hostname?: string } {
+  try {
+    // Handle SSH URLs (git@host:repo)
+    if (repoUrl.startsWith('git@')) {
+      const match = repoUrl.match(/^git@([^:]+):(.+)$/);
+      if (!match) {
+        return { valid: false, error: 'Invalid SSH URL format' };
+      }
+      const host = match[1];
+      if (!FULL_ALLOWED_HOSTS.includes(host)) {
+        return { valid: false, error: `Git host "${host}" is not allowed` };
+      }
+      return { valid: true, hostname: host };
+    }
+
+    // Parse HTTPS URLs
+    const url = new URL(repoUrl);
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      return { valid: false, error: 'Only HTTP and HTTPS protocols are allowed' };
+    }
+
+    if (!FULL_ALLOWED_HOSTS.includes(url.hostname)) {
+      return { valid: false, error: `Git host "${url.hostname}" is not allowed. Allowed: ${FULL_ALLOWED_HOSTS.join(', ')}` };
+    }
+
+    // Block private IP ranges to prevent SSRF
+    const ipPattern = /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|169\.254\.)/;
+    if (ipPattern.test(url.hostname)) {
+      return { valid: false, error: 'Private/internal IP addresses are not allowed' };
+    }
+
+    return { valid: true, hostname: url.hostname };
+  } catch {
+    return { valid: false, error: 'Invalid URL format' };
+  }
 }
 
 function extractRepoName(repoUrl: string): string {
@@ -100,6 +160,15 @@ async function runGitClone(repoUrl: string, destinationDir: string): Promise<str
 }
 
 export async function POST(req: NextRequest) {
+  // SECURITY: Require authentication to prevent SSRF abuse
+  const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
+  if (!authResult.success || !authResult.userId) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
+
   try {
     const body = await req.json();
     const validation = cloneRequestSchema.safeParse(body);
@@ -115,6 +184,15 @@ export async function POST(req: NextRequest) {
           })),
         },
         { status: 400 },
+      );
+    }
+
+    // SECURITY: Validate repository URL against allowlist
+    const urlValidation = validateRepoUrl(validation.data.repoUrl);
+    if (!urlValidation.valid) {
+      return NextResponse.json(
+        { error: urlValidation.error, allowedHosts: FULL_ALLOWED_HOSTS },
+        { status: 400 }
       );
     }
 
@@ -160,6 +238,7 @@ export async function POST(req: NextRequest) {
         destinationPath: destinationDir,
         output,
         terminalCommand,
+        validatedHost: urlValidation.hostname,
       },
     });
   } catch (error: unknown) {

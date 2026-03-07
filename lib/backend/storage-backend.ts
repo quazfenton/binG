@@ -10,7 +10,7 @@ import { EventEmitter } from 'events';
 import { createReadStream, createWriteStream, mkdirSync, existsSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { pipeline } from 'stream/promises';
-import * as zlib from 'gzip';
+import * as zlib from 'zlib';
 import { sandboxMetrics } from './metrics';
 
 export interface StorageConfig {

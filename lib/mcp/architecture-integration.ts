@@ -335,6 +335,11 @@ function getArcadeServiceInstance(): ArcadeService | null {
   return cachedArcadeService
 }
 
+// Sanitize tool name: replace dots and invalid chars with underscores
+const sanitizeToolName = (name: string): string => {
+  return name.replace(/[^a-zA-Z0-9_]/g, '_')
+}
+
 // Get Arcade tool definitions for LLM tool calling
 async function getArcadeToolDefinitions(): Promise<Array<{
   type: 'function'
@@ -352,11 +357,11 @@ async function getArcadeToolDefinitions(): Promise<Array<{
   try {
     // Get all available tools from Arcade
     const tools = await arcade.getTools({ limit: 100 })
-    
+
     return tools.map(tool => ({
       type: 'function' as const,
       function: {
-        name: `arcade_${tool.name}`,
+        name: `arcade_${sanitizeToolName(tool.name)}`,
         description: tool.description,
         parameters: tool.inputSchema || {
           type: 'object',
@@ -447,8 +452,18 @@ async function executeBlaxelCodegenTool(
 async function executeArcadeTool(
   toolName: string,
   args: Record<string, any>,
-  userId: string = 'default'
+  userId: string  // Required, no default
 ): Promise<{ success: boolean; output: string; error?: string }> {
+  // Validate userId is a real user ID, not default/fake
+  if (!userId || userId === 'default' || userId.length < 10) {
+    logger.warn(`Invalid userId for Arcade tool: ${userId}`)
+    return {
+      success: false,
+      output: '',
+      error: 'Invalid or missing user authentication',
+    }
+  }
+
   const arcade = getArcadeServiceInstance()
   if (!arcade) {
     return {
@@ -495,12 +510,13 @@ async function executeArcadeTool(
 
 /**
  * Call MCP tool from Architecture 1 (AI SDK)
- * 
+ *
  * Use this when the LLM requests a tool call
  */
 export async function callMCPToolFromAI_SDK(
   toolName: string,
-  args: Record<string, any>
+  args: Record<string, any>,
+  userId: string  // Required for Arcade tools
 ): Promise<{ success: boolean; output: string; error?: string }> {
   try {
     logger.debug(`Calling MCP tool: ${toolName}`, { args })
@@ -512,7 +528,7 @@ export async function callMCPToolFromAI_SDK(
 
     // Check if it's an Arcade tool
     if (toolName.startsWith('arcade_') && process.env.ARCADE_API_KEY) {
-      return executeArcadeTool(toolName, args)
+      return executeArcadeTool(toolName, args, userId)
     }
 
     const nativeResult = await mcpToolRegistry.callTool(toolName, args)

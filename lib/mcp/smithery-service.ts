@@ -133,11 +133,8 @@ export class SmitheryService {
     if (options?.namespace) params.set('namespace', options.namespace);
     if (options?.ownerId) params.set('ownerId', options.ownerId);
 
-    const result = await this.request<{ servers: SmitheryServiceServer[] }>(
-      `/servers?${params.toString()}`
-    );
-
-    return result.servers.map(server => SmitheryServerSchema.parse(server));
+    const result = await this.request<any>(`/servers?${params.toString()}`);
+    return (result.servers || []).map((server: any) => SmitheryServerSchema.parse(server) as SmitheryServiceServer);
   }
 
   /**
@@ -145,8 +142,8 @@ export class SmitheryService {
    * @see https://smithery.ai/docs/api-reference/servers/get-a-server
    */
   async getServer(namespace: string, serverName: string): Promise<SmitheryServiceServer> {
-    const server = await this.request<SmitheryServiceServer>(`/servers/${namespace}/${serverName}`);
-    return SmitheryServerSchema.parse(server);
+    const server = await this.request<any>(`/servers/${namespace}/${serverName}`);
+    return SmitheryServerSchema.parse(server) as SmitheryServiceServer;
   }
 
   /**
@@ -158,8 +155,8 @@ export class SmitheryService {
       ? `/connections?namespace=${encodeURIComponent(namespace)}`
       : '/connections';
 
-    const result = await this.request<{ connections: SmitheryServiceConnection[] }>(endpoint);
-    return result.connections.map(conn => SmitheryConnectionSchema.parse(conn));
+    const result = await this.request<any>(endpoint);
+    return (result.connections || []).map((conn: any) => SmitheryConnectionSchema.parse(conn) as SmitheryServiceConnection);
   }
 
   /**
@@ -167,8 +164,8 @@ export class SmitheryService {
    * @see https://smithery.ai/docs/api-reference/connect/get-connection
    */
   async getConnection(connectionId: string): Promise<SmitheryServiceConnection> {
-    const conn = await this.request<SmitheryServiceConnection>(`/connections/${connectionId}`);
-    return SmitheryConnectionSchema.parse(conn);
+    const conn = await this.request<any>(`/connections/${connectionId}`);
+    return SmitheryConnectionSchema.parse(conn) as SmitheryServiceConnection;
   }
 
   /**
@@ -179,11 +176,11 @@ export class SmitheryService {
     mcpUrl: string,
     metadata?: Record<string, string>
   ): Promise<SmitheryServiceConnection> {
-    const conn = await this.request<SmitheryServiceConnection>('/connections', {
+    const conn = await this.request<any>('/connections', {
       method: 'POST',
       body: JSON.stringify({ mcpUrl, metadata }),
     });
-    return SmitheryConnectionSchema.parse(conn);
+    return SmitheryConnectionSchema.parse(conn) as SmitheryServiceConnection;
   }
 
   /**
@@ -194,11 +191,11 @@ export class SmitheryService {
     connectionId: string,
     mcpUrl?: string
   ): Promise<SmitheryServiceConnection> {
-    const conn = await this.request<SmitheryServiceConnection>(`/connections/${connectionId}`, {
+    const conn = await this.request<any>(`/connections/${connectionId}`, {
       method: 'PUT',
       body: JSON.stringify(mcpUrl ? { mcpUrl } : {}),
     });
-    return SmitheryConnectionSchema.parse(conn);
+    return SmitheryConnectionSchema.parse(conn) as SmitheryServiceConnection;
   }
 
   /**

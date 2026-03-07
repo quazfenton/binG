@@ -37,6 +37,13 @@ export async function GET(request: NextRequest) {
 
     // Get specific server
     if (serverId && action === 'get') {
+      // Validate serverId format to prevent path traversal
+      if (!/^[a-zA-Z0-9_-]+$/.test(serverId)) {
+        return NextResponse.json(
+          { error: 'Invalid server ID format' },
+          { status: 400 }
+        );
+      }
       const server = await service.getServer(serverId);
       return NextResponse.json({ server });
     }

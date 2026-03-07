@@ -104,7 +104,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ✅ SECURITY: Buffer ALL input for security validation
+    // ✅ SECURITY: Verify session ownership BEFORE any buffer operations
+    // Prevents cross-user command injection via buffer pollution
+    const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
+    if (!userSession || userSession.sessionId !== sessionId) {
+      logger.warn('Unauthorized terminal input attempt', {
+        userId: authResult.userId,
+        sessionId,
+      });
+      return NextResponse.json(
+        { error: 'Unauthorized: You do not own this terminal session' },
+        { status: 403 }
+      );
+    }
+
+    // ✅ BUFFER ALL input for security validation
     // We cannot distinguish between "PTY interactive" and "line-based" input reliably
     // Attackers could bypass security by sending dangerous commands without newlines
     const bufferEntry = commandBuffers.get(sessionId) || { buffer: '', lastActivity: Date.now() };
@@ -163,7 +177,8 @@ export async function POST(req: NextRequest) {
       }
 
       // ✅ SECURITY CHECK PASSES - NOW FORWARD TO TERMINAL
-      await terminalManager.sendInput(sessionId, data);
+      // Send the FULL buffered command, not just the last chunk
+      await terminalManager.sendInput(sessionId, bufferEntry.buffer);
 
       // Clear buffer after successful validation and forwarding
       commandBuffers.delete(sessionId);

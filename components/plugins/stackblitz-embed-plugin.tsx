@@ -111,6 +111,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
   };
 
   const handleReload = () => {
+    setIframeError(null);
     setIsReloading(true);
     setIframeKey(prev => prev + 1);
     setTimeout(() => setIsReloading(false), 1000);
@@ -298,10 +299,13 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                     title="StackBlitz"
                     onLoad={() => setIsLoading(false)}
                     onError={() => {
-                      setIframeError('Failed to load StackBlitz.');
+                      setIframeError('Failed to load StackBlitz. Note: StackBlitz requires valid project URLs.');
                       setIsLoading(false);
                     }}
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals"
+                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-top-navigation allow-top-navigation-by-user-activation"
+                    allow="fullscreen; encrypted-media"
+                    referrerPolicy="no-referrer"
+                    allowTransparency={true}
                   />
                 )}
               </div>

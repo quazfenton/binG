@@ -65,6 +65,10 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to read file';
     const status = message.toLowerCase().includes('not found') ? 404 : 400;
-    return NextResponse.json({ success: false, error: message }, { status });
+    // SECURITY: Don't expose raw internal error messages
+    const safeMessage = message.toLowerCase().includes('not found') 
+      ? 'File not found' 
+      : 'Failed to read file';
+    return NextResponse.json({ success: false, error: safeMessage }, { status });
   }
 }
