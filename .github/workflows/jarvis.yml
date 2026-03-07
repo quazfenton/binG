@@ -31,11 +31,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Grabs the last 100 lines of CodeRabbit feedback to give the agent its mission
-	  BOT_PATTERN="coderabbitai|qodo-code-review|cubic-dev-ai|codeant-ai"
-          
-          RAW_FEEDBACK=$(gh pr view ${{ inputs.pr_number }} --comments)
+          # SECURITY: Uses gh api to fetch only verified bot reviews, preventing prompt injection from malicious PR comments
+          BOT_PATTERN="coderabbitai|qodo-code-review|cubic-dev-ai|codeant-ai"
+
+          # Fetch only PR reviews (not comments) from verified bot accounts
+          RAW_FEEDBACK=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews --jq '.[] | select(.user.login | test("'"$BOT_PATTERN"'"; "i")) | .body' | head -100)
           SUGGESTIONS=$(echo "$RAW_FEEDBACK" | grep -Ei -A 100 "$BOT_PATTERN" || echo "Review the suggestion if there is any for optimizations.")
-          
+
           # Sanitize string for bash multiline
           echo "suggestions<<EOF" >> $GITHUB_OUTPUT
           echo "$SUGGESTIONS" >> $GITHUB_OUTPUT
