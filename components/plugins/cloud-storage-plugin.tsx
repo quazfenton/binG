@@ -118,7 +118,7 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     // Generate line-by-line diff
     const oldLines = fileContent.split('\n');
     const newLines = newContent.split('\n');
-    let diffLines: string[] = [];
+    const diffLines: string[] = [];
     
     for (let i = 0; i < Math.max(oldLines.length, newLines.length); i++) {
       if (i >= oldLines.length) {

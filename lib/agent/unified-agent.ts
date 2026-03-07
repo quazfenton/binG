@@ -701,14 +701,21 @@ export class UnifiedAgent {
       await sandboxBridge.writeFile(this.session.sandboxId, tempPath, code);
 
       const command = this.getCodeCommand(language, tempPath);
-      const result = await sandboxBridge.executeCommand(
-        this.session.sandboxId, 
-        command, 
-        undefined
-      )
-
-      // Cleanup
-      await sandboxBridge.executeCommand(this.session.sandboxId, `rm ${tempPath}`);
+      let result: any;
+      try {
+        result = await sandboxBridge.executeCommand(
+          this.session.sandboxId,
+          command,
+          undefined
+        );
+      } finally {
+        // Best-effort cleanup of temporary file
+        try {
+          await sandboxBridge.executeCommand(this.session.sandboxId, `rm ${tempPath}`);
+        } catch {
+          // Ignore cleanup errors
+        }
+      }
 
       return {
         success: result.success,

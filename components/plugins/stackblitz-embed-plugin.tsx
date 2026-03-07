@@ -118,10 +118,10 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
   };
 
   const handleOpenExternal = () => {
-    const url = projectId 
+    const url = projectId
       ? `https://stackblitz.com/edit/${projectId}`
       : 'https://stackblitz.com';
-    window.open(url, '_blank');
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const toggleBookmark = () => {
@@ -406,7 +406,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => window.open(`https://stackblitz.com/edit/${bookmark.projectId}`, '_blank')}
+                            onClick={() => window.open(`https://stackblitz.com/edit/${bookmark.projectId}`, '_blank', 'noopener,noreferrer')}
                             className="hover:bg-violet-800/50"
                           >
                             <ExternalLink className="w-4 h-4" />

@@ -711,7 +711,7 @@ class EnhancedStreamingManager extends EventEmitter {
     windows: ContextWindow[],
     targetTokens: number
   ): Promise<ContextWindow[]> {
-    let currentTokens = this.calculateTotalTokens(windows);
+    const currentTokens = this.calculateTotalTokens(windows);
     const result = [...windows];
     
     if (currentTokens <= targetTokens) {
@@ -770,7 +770,7 @@ class EnhancedStreamingManager extends EventEmitter {
     windows: ContextWindow[],
     targetTokens: number
   ): Promise<ContextWindow[]> {
-    let currentTokens = this.calculateTotalTokens(windows);
+    const currentTokens = this.calculateTotalTokens(windows);
     const result = [...windows];
     
     if (currentTokens <= targetTokens) {

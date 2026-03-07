@@ -150,7 +150,7 @@ const OpenStreetMapEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }
 
   const handleOpenExternal = () => {
     const fullUrl = `https://www.openstreetmap.org/?mlat=${coordinates.lat}&mlon=${coordinates.lon}#map=${coordinates.zoom}/${coordinates.lat}/${coordinates.lon}`;
-    window.open(fullUrl, '_blank');
+    window.open(fullUrl, '_blank', 'noopener,noreferrer');
   };
 
   const toggleBookmark = () => {

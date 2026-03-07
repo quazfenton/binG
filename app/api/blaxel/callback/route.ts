@@ -37,7 +37,12 @@ export async function POST(request: NextRequest) {
   // Validate timestamp drift
   const timestamp = headers['x-blaxel-timestamp'];
   if (timestamp) {
-    const drift = Math.abs(Date.now() / 1000 - parseInt(timestamp, 10));
+    const tsSeconds = Number.parseInt(timestamp, 10);
+    if (!Number.isFinite(tsSeconds)) {
+      console.warn('[Blaxel Callback] Invalid timestamp header:', { timestamp });
+      return NextResponse.json({ error: 'Invalid timestamp header' }, { status: 400 });
+    }
+    const drift = Math.abs(Date.now() / 1000 - tsSeconds);
     if (drift > MAX_TIMESTAMP_DRIFT_S) {
       console.warn('[Blaxel Callback] Rejected timestamp with drift:', {
         driftSeconds: drift,

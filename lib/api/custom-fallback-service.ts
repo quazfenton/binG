@@ -137,7 +137,7 @@ class CustomFallbackService {
     const userContent = lastMessage?.content || '';
     
     // Create a context-aware friendly response
-    let fallbackContent = this.generateContextAwareFallback(userContent);
+    const fallbackContent = this.generateContextAwareFallback(userContent);
     
     return {
       success: true,

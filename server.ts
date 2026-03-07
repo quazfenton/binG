@@ -109,10 +109,14 @@ app.prepare().then(startup).then(() => {
       if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7);
       }
-      
+
       // Priority 2: WebSocket subprotocol (for wscat/browser WS clients)
-      if (!token && req.protocol && req.protocol.startsWith('Bearer ')) {
-        token = req.protocol.substring(7);
+      if (!token) {
+        const protocolHeader = req.headers['sec-websocket-protocol'];
+        const protocol = Array.isArray(protocolHeader) ? protocolHeader[0] : protocolHeader;
+        if (protocol && protocol.startsWith('Bearer ')) {
+          token = protocol.substring(7);
+        }
       }
       
       // Fallback: Query param (deprecated, log warning)

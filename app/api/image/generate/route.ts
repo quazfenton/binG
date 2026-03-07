@@ -4,6 +4,8 @@ import {
   type ImageGenerationParams,
   type AspectRatio,
 } from '@/lib/image-generation'
+import { RateLimiter } from '@/lib/utils/rate-limiter'
+import { authenticateRequest } from '@/lib/security/jwt-auth'
 
 export interface GenerateBody {
   prompt: string
@@ -24,11 +26,61 @@ export interface GenerateBody {
   imageStrength?: number
 }
 
+// Rate limiter for image generation: 10 requests per minute per user
+const imageGenerationRateLimiter = new RateLimiter(
+  10,  // max requests
+  60000,  // 1 minute window
+  300000  // 5 minute block duration
+)
+
+// Allowed models/providers (configurable via environment)
+const ALLOWED_MODELS = process.env.IMAGE_GENERATION_ALLOWED_MODELS?.split(',') || [
+  'mistral',
+  'replicate',
+]
+
 export async function POST(req: NextRequest) {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 180000) // 3 minute timeout
 
   try {
+    // Authentication check
+    const auth = await authenticateRequest(req, { allowAnonymous: false })
+    if (!auth.authenticated) {
+      clearTimeout(timeoutId)
+      return NextResponse.json(
+        { error: auth.error || 'Authentication required' },
+        { status: auth.statusCode || 401 }
+      )
+    }
+
+    // Extract user identifier for rate limiting
+    const userId = auth.payload?.userId || 'unknown'
+    const clientIP = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown'
+    const rateLimitKey = `image-gen:${userId}:${clientIP}`
+
+    // Rate limit check
+    const rateLimitResult = imageGenerationRateLimiter.check(rateLimitKey)
+    if (!rateLimitResult.allowed) {
+      clearTimeout(timeoutId)
+      const retryAfter = rateLimitResult.retryAfter || 60
+      return NextResponse.json(
+        {
+          error: 'Rate limit exceeded. Too many image generation requests.',
+          retryAfter,
+          blockedUntil: rateLimitResult.blockedUntil,
+        },
+        {
+          status: 429,
+          headers: {
+            'X-RateLimit-Limit': String(rateLimitResult.limit || 10),
+            'X-RateLimit-Remaining': '0',
+            'Retry-After': String(retryAfter),
+          },
+        }
+      )
+    }
+
     const body = (await req.json()) as GenerateBody
     const {
       prompt,
@@ -50,7 +102,28 @@ export async function POST(req: NextRequest) {
     } = body
 
     if (!prompt || !prompt.trim()) {
+      clearTimeout(timeoutId)
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 })
+    }
+
+    // Model/provider validation
+    const selectedProvider = preferredProvider || 'mistral'
+    if (!ALLOWED_MODELS.includes(selectedProvider)) {
+      clearTimeout(timeoutId)
+      return NextResponse.json(
+        { error: `Provider '${selectedProvider}' is not allowed. Allowed: ${ALLOWED_MODELS.join(', ')}` },
+        { status: 403 }
+      )
+    }
+
+    // Usage quota check (optional - can be enhanced with per-user quotas)
+    const maxImagesPerRequest = 4
+    if (numImages > maxImagesPerRequest) {
+      clearTimeout(timeoutId)
+      return NextResponse.json(
+        { error: `Maximum ${maxImagesPerRequest} images per request allowed` },
+        { status: 400 }
+      )
     }
 
     // ✅ FIX 1: Early API key validation - check if ANY provider is configured
@@ -185,6 +258,8 @@ export async function OPTIONS() {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'X-RateLimit-Limit': '10',
+      'X-RateLimit-Remaining': '10',
     },
   })
 }

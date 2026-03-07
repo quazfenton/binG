@@ -87,7 +87,7 @@ export const validateInputTool: TamboTool = {
       const { input: data, schema } = input;
 
       let valid = true;
-      let errors: string[] = [];
+      const errors: string[] = [];
 
       if (schema.type === 'object' && typeof data === 'object' && data !== null) {
         if (schema.required) {
