@@ -14,8 +14,7 @@ import { join, resolve, normalize } from 'path';
 import { pipeline } from 'stream/promises';
 import { createReadStream } from 'fs';
 import * as zlib from 'zlib';
-import { createWriteStream as createTarWriteStream } from 'tar-stream';
-import { createReadStream as createTarReadStream } from 'tar-stream';
+import { pack as createTarWriteStream, extract as createTarReadStream } from 'tar-stream';
 import { safeJoin, isValidResourceId, validateRelativePath, commandSchema } from '@/lib/security/security-utils';
 import { sandboxMetrics } from './metrics';
 

@@ -478,8 +478,34 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
-    const normalizedInput = rawPath.replace(/^\/+/, '');
-    const parts = normalizedInput.split('/');
+    // Strip common sandbox/workspace prefixes to prevent path accumulation
+    // This prevents issues like /tmp/workspaces/tmp/workspaces/...
+    // Handle both absolute and relative paths
+    let strippedPath = rawPath
+      .replace(/^\/tmp\/workspaces\//i, '')
+      .replace(/^\/tmp\/workspaces/i, '')
+      .replace(/^tmp\/workspaces\//i, '')
+      .replace(/^tmp\/workspaces/i, '')
+      .replace(/^\/workspace\//i, '')
+      .replace(/^\/workspace/i, '')
+      .replace(/^workspace\//i, '')
+      .replace(/^workspace/i, '')
+      .replace(/^\/home\/[^/]+\/workspace\//i, '')
+      .replace(/^\/home\/[^/]+\/workspace/i, '')
+      .replace(/^home\/[^/]+\/workspace\//i, '')
+      .replace(/^home\/[^/]+\/workspace/i, '')
+      .replace(/^project\//, '')
+      .replace(/^\/project\//, '');
+
+    // Remove any leading slashes after stripping
+    strippedPath = strippedPath.replace(/^\/+/, '');
+
+    // Handle empty path after stripping
+    if (!strippedPath) {
+      return this.workspaceRoot;
+    }
+
+    const parts = strippedPath.split('/');
     const safeParts: string[] = [];
 
     for (const part of parts) {
@@ -500,6 +526,7 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
+    // Always ensure path starts with workspace root
     if (safeParts[0] !== this.workspaceRoot) {
       safeParts.unshift(this.workspaceRoot);
     }
@@ -544,11 +571,36 @@ export class VirtualFilesystemService {
       try {
         const raw = await fs.readFile(storageFilePath, 'utf8');
         const parsed = JSON.parse(raw) as PersistedWorkspace;
+        
+        // Fix any corrupted paths (e.g., paths starting with tmp/, workspace/, etc.)
+        const fixedFiles = (parsed.files || []).map((file) => {
+          // Check if path needs normalization
+          const needsFix = file.path.startsWith('tmp/') || 
+                          file.path.startsWith('workspace/') ||
+                          file.path.startsWith('home/') ||
+                          (file.path.startsWith('/tmp/') && !file.path.startsWith('/tmp/vfs-storage')) ||
+                          (file.path.startsWith('/workspace/')) ||
+                          (!file.path.startsWith('project/') && !file.path.startsWith('/project/'));
+          
+          if (needsFix) {
+            const fixedPath = this.normalizePath(file.path);
+            console.log('[VFS] Fixed corrupted path:', file.path, '->', fixedPath);
+            return { ...file, path: fixedPath };
+          }
+          return file;
+        });
+        
         workspace.files = new Map(
-          (parsed.files || []).map((file) => [file.path, file]),
+          fixedFiles.map((file) => [file.path, file]),
         );
         workspace.version = Number.isFinite(parsed.version) ? parsed.version : workspace.files.size;
         workspace.updatedAt = parsed.updatedAt || new Date().toISOString();
+        
+        // Persist the fixed paths back to storage
+        if (fixedFiles.some((f, i) => f.path !== (parsed.files || [])[i]?.path)) {
+          console.log('[VFS] Persisting fixed paths...');
+          this.persistWorkspace(normalizedOwnerId, workspace).catch(console.error);
+        }
       } catch (error: unknown) {
         const errorCode = (error as NodeJS.ErrnoException)?.code;
         if (errorCode !== 'ENOENT') {
