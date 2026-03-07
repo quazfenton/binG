@@ -326,6 +326,10 @@ let tamboServiceInstance: TamboService | null = null;
 
 /**
  * Get or create Tambo service instance
+ * 
+ * Note: Uses NEXT_PUBLIC_TAMBO_API_KEY because Tambo's SDK requires
+ * client-side API key access. This is intentional per Tambo's design.
+ * @see https://tambo.ai/docs
  */
 export function getTamboService(): TamboService | null {
   if (!tamboServiceInstance) {

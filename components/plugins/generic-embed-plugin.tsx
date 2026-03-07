@@ -185,6 +185,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
   };
 
   const handleReload = () => {
+    setIframeError(null);
     setIsReloading(true);
     setIframeKey(prev => prev + 1);
     setTimeout(() => setIsReloading(false), 1000);
@@ -418,11 +419,13 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                     title="Embed"
                     onLoad={() => setIsLoading(false)}
                     onError={() => {
-                      setIframeError('Failed to load content. This site may block embedding.');
+                      setIframeError('Failed to load content. This site may block embedding. Try opening externally.');
                       setIsLoading(false);
                     }}
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-autoplay"
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-autoplay allow-top-navigation allow-top-navigation-by-user-activation"
                     allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                    referrerPolicy="no-referrer"
+                    allowTransparency={true}
                   />
                 )}
               </div>
@@ -485,7 +488,12 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                             <Button
                               size="sm"
                               variant="ghost"
-                              onClick={() => window.open(bookmark.url, '_blank')}
+                              onClick={() => {
+                                const newWindow = window.open(bookmark.url, '_blank', 'noopener,noreferrer');
+                                if (newWindow) {
+                                  newWindow.opener = null;
+                                }
+                              }}
                               className="hover:bg-slate-800"
                             >
                               <ExternalLink className="w-4 h-4" />

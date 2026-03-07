@@ -1,9 +1,11 @@
 /**
  * MCP HTTP Server for CLI Agent (Architecture 2)
- * 
+ *
  * Provides HTTP endpoint for OpenCode CLI agent to call MCP tools
  * This allows the CLI agent to discover and use MCP tools without
  * needing to manage MCP connections directly
+ *
+ * SECURITY: This server requires authentication and binds to localhost only
  */
 
 import { createServer, Server } from 'http'
@@ -14,18 +16,43 @@ const logger = createLogger('MCP:CLI-Server')
 
 let httpServer: Server | null = null
 
+// SECURITY: Authentication token for MCP CLI server
+// Required for all endpoints to prevent unauthorized tool execution
+const MCP_CLI_AUTH_TOKEN = process.env.MCP_CLI_AUTH_TOKEN;
+
+/**
+ * Validate authentication token from request
+ */
+function validateAuthToken(req: any): boolean {
+  if (!MCP_CLI_AUTH_TOKEN) {
+    // If no token configured, allow localhost only (dev mode)
+    const host = req.headers.host || '';
+    return host.startsWith('localhost') || host.startsWith('127.0.0.1');
+  }
+  
+  const authHeader = req.headers.authorization || '';
+  return authHeader === `Bearer ${MCP_CLI_AUTH_TOKEN}`;
+}
+
 /**
  * Create HTTP server for CLI agent to call MCP tools
+ * 
+ * SECURITY CHANGES:
+ * - Binds to 127.0.0.1 only (not all interfaces)
+ * - Requires Bearer token authentication
+ * - Restricted CORS to localhost only
  */
 export async function createMCPServerForCLI(port: number = 8888): Promise<void> {
   return new Promise((resolve, reject) => {
     try {
       const server = createServer(async (req, res) => {
-        // Set CORS headers
-        res.setHeader('Content-Type', 'application/json')
-        res.setHeader('Access-Control-Allow-Origin', '*')
+        // SECURITY: Restricted CORS - localhost only
+        const host = req.headers.host || '';
+        if (host.startsWith('localhost') || host.startsWith('127.0.0.1')) {
+          res.setHeader('Access-Control-Allow-Origin', `http://localhost:${port}`)
+        }
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 
         // Handle CORS preflight
         if (req.method === 'OPTIONS') {
@@ -34,8 +61,20 @@ export async function createMCPServerForCLI(port: number = 8888): Promise<void> 
           return
         }
 
+        // SECURITY: Require authentication for all endpoints
+        if (!validateAuthToken(req)) {
+          logger.warn('Unauthorized MCP CLI request', { 
+            method: req.method, 
+            path: req.url,
+            host: req.headers.host 
+          });
+          res.writeHead(401)
+          res.end(JSON.stringify({ error: 'Unauthorized - valid Bearer token required' }))
+          return
+        }
+
         // Route handling
-        const url = new URL(req.url || '', `http://localhost:${port}`)
+        const url = new URL(req.url || '', `http://127.0.0.1:${port}`)
 
         try {
           switch (url.pathname) {
@@ -66,8 +105,10 @@ export async function createMCPServerForCLI(port: number = 8888): Promise<void> 
         }
       })
 
-      server.listen(port, () => {
-        logger.info(`MCP CLI server listening on port ${port}`)
+      // SECURITY: Bind to localhost only (not all interfaces)
+      server.listen(port, '127.0.0.1', () => {
+        logger.info(`MCP CLI server listening on 127.0.0.1:${port}`)
+        logger.warn('MCP CLI server requires authentication. Set MCP_CLI_AUTH_TOKEN environment variable.')
         httpServer = server
         resolve()
       })

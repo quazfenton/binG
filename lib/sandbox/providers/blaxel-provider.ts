@@ -43,7 +43,8 @@ const INSTANCE_TTL_MS = 2 * 60 * 60 * 1000 // 2 hours
 // Encryption key for callback secrets
 const ENCRYPTION_KEY_ENV = process.env.BLAXEL_SECRET_ENCRYPTION_KEY;
 if (!ENCRYPTION_KEY_ENV && process.env.NODE_ENV === 'production') {
-  console.warn('[Blaxel] BLAXEL_SECRET_ENCRYPTION_KEY not set in production. Callback secrets will NOT be encrypted.');
+  // SECURITY: Fail closed in production - refuse to store secrets unencrypted
+  throw new Error('BLAXEL_SECRET_ENCRYPTION_KEY is required in production. Callback secrets must be encrypted.');
 }
 
 /**
@@ -889,31 +890,41 @@ export class BlaxelSandboxHandle implements SandboxHandle {
 
   /**
    * Persist callback secret to database WITH ENCRYPTION
-   * 
+   *
    * SECURITY: Uses AES-256-GCM authenticated encryption
    * Format: iv:authTag:encryptedData (all hex encoded)
+   * 
+   * SECURITY: Fails closed in production if encryption key is missing
    */
   private async persistCallbackSecret(key: string, secret: string): Promise<void> {
     try {
       const db = getDatabase();
-      
+
+      // SECURITY: Require encryption in production
+      if (!ENCRYPTION_KEY_ENV && process.env.NODE_ENV === 'production') {
+        throw new Error('BLAXEL_SECRET_ENCRYPTION_KEY required for storing callback secrets');
+      }
+
       // Encrypt the secret before storing
-      const encryptedSecret = ENCRYPTION_KEY_ENV 
+      const encryptedSecret = ENCRYPTION_KEY_ENV
         ? encryptSecret(secret, ENCRYPTION_KEY_ENV)
-        : secret; // Fallback to plaintext if no key (dev only)
-      
+        : secret; // Development only - plaintext acceptable for local dev
+
       const stmt = db.prepare(`
         INSERT OR REPLACE INTO blaxel_callback_secrets
         (sandbox_id, agent, secret_encrypted, created_at)
         VALUES (?, ?, ?, CURRENT_TIMESTAMP)
       `);
       stmt.run(this.id, key, encryptedSecret);
-      
+
       if (ENCRYPTION_KEY_ENV) {
         console.log('[Blaxel] Callback secret encrypted and persisted');
+      } else {
+        console.warn('[Blaxel] Callback secret stored UNENCRYPTED (development mode only)');
       }
-    } catch (error) {
-      console.error('[Blaxel] Failed to persist callback secret:', error);
+    } catch (error: any) {
+      console.error('[Blaxel] Failed to persist callback secret:', error.message);
+      throw error; // Re-throw to fail closed
     }
   }
 

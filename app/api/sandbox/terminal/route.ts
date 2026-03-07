@@ -78,12 +78,12 @@ export async function POST(req: NextRequest) {
         });
       } catch (error: any) {
         // ✅ BETTER ERROR CLASSIFICATION
-        const isNotFound = error?.status === 404 || 
+        const isNotFound = error?.status === 404 ||
                           error?.code === 'NOT_FOUND' ||
                           error?.message?.includes('not found') ||
                           error?.message?.includes('404');
 
-        const isProviderUnavailable = error?.message?.includes('Invalid API key') || 
+        const isProviderUnavailable = error?.message?.includes('Invalid API key') ||
                                      error?.message?.includes('authentication') ||
                                      error?.message?.includes('Cannot read properties') ||
                                      error?.message?.includes('not available');
@@ -104,12 +104,12 @@ export async function POST(req: NextRequest) {
           });
           sandboxBridge.deleteSession(userSession.sessionId);
         } else {
-          // Other error - log but don't delete session
-          logger.warn('Sandbox verification error, keeping session', {
+          // Other error - log but don't delete session (could be transient)
+          logger.warn('Sandbox verification error (transient), keeping session', {
             sandboxId: userSession.sandboxId,
             error: error.message,
-            stack: error.stack,
           });
+          // Don't delete session on transient errors - allow retry
         }
         // Continue to create new session below
       }

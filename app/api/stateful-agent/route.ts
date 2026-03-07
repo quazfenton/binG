@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { streamText, generateText } from 'ai';
 import { createModelWithFallback } from '@/lib/stateful-agent/agents/provider-fallback';
 import { allTools, nangoTools } from '@/lib/stateful-agent/tools';
@@ -21,10 +22,20 @@ const combinedTools = {
 };
 
 export async function POST(request: NextRequest) {
+  // SECURITY: Require authentication for stateful agent execution
+  const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+  if (!authResult.success) {
+    return NextResponse.json(
+      { error: authResult.error || 'Authentication required' },
+      { status: 401 }
+    );
+  }
+
+  const userId = authResult.userId;
   const requestId = generateSecureId('agent');
 
   console.log(
-    `[StatefulAgent API] Request ${requestId} - Mode: ${
+    `[StatefulAgent API] Request ${requestId} - User: ${userId} - Mode: ${
       USE_CREWAI ? 'CrewAI' : USE_STATEFUL_AGENT ? 'StatefulAgent' : 'Legacy Agent'
     }`,
   );

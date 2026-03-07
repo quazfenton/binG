@@ -511,11 +511,18 @@ export default function MessageBubble({
                   const isEmbeddable = href && isEmbeddableUrl(href);
                   const embedInfo = href ? transformToEmbed(href) : null;
                   const suggestedPlugin = embedInfo?.suggestedPluginId;
-                  
+
+                  // SECURITY: Validate URL scheme to prevent XSS via javascript: URLs
+                  const safeHref = typeof href === 'string' && /^(https?:|mailto:|tel:)/i.test(href) 
+                    ? href 
+                    : '#';
+
                   return (
                     <div className="inline-flex flex-col items-start gap-1">
                       <a
-                        href={href}
+                        href={safeHref}
+                        rel="noopener noreferrer"
+                        target="_blank"
                         className={`text-purple-300 hover:text-purple-200 underline inline-flex items-center gap-1 ${
                           layout.isMobile && dynamicStyles.overflowStrategy === 'ellipsis'
                             ? 'truncate inline-block max-w-full'
@@ -525,17 +532,17 @@ export default function MessageBubble({
                       >
                         {children}
                         {isEmbeddable && (
-                          <span 
+                          <span
                             className="use-iframe inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 hover:bg-purple-500/30 transition-colors cursor-pointer"
                             title={`Open in ${suggestedPlugin ? suggestedPlugin.replace('-embed', '') : 'embed'} viewer`}
                             onClick={(e) => {
                               e.preventDefault();
                               // Dispatch custom event to open in embed plugin
                               window.dispatchEvent(new CustomEvent('open-embed-plugin', {
-                                detail: { 
-                                  url: href,
+                                detail: {
+                                  url: safeHref,
                                   suggestedPlugin,
-                                  embedInfo 
+                                  embedInfo
                                 }
                               }));
                             }}

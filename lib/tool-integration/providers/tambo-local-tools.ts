@@ -2,33 +2,67 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 
 const DEFAULT_OWNER = 'anon:public';
 
+/**
+ * SECURITY: Get owner from authenticated context, NOT user input
+ * This prevents IDOR attacks where users specify another user's ownerId
+ * 
+ * @param providedOwnerId - IGNORED for security (kept for API compatibility)
+ * @param authContextUserId - User ID from verified authentication context
+ * @returns The authenticated user's owner identifier
+ */
+function getSecureOwner(providedOwnerId: string | undefined, authContextUserId?: string): string {
+  // SECURITY: Never trust user-provided ownerId - always use authenticated context
+  if (authContextUserId) {
+    return `user:${authContextUserId}`;
+  }
+  
+  // Fallback to anonymous only if no auth context provided
+  // This should only happen in development or for public resources
+  return DEFAULT_OWNER;
+}
+
 export const tamboLocalTools = {
-  readFile: async ({ path, ownerId }: { path: string; ownerId?: string }) => {
-    const owner = ownerId || DEFAULT_OWNER;
+  /**
+   * SECURITY: ownerId parameter is IGNORED - owner derived from auth context
+   */
+  readFile: async ({ path, ownerId }: { path: string; ownerId?: string }, authContextUserId?: string) => {
+    const owner = getSecureOwner(ownerId, authContextUserId);
     const file = await virtualFilesystem.readFile(owner, path);
     return { path: file.path, content: file.content, language: file.language, version: file.version };
   },
 
-  writeFile: async ({ path, content, ownerId }: { path: string; content: string; ownerId?: string }) => {
-    const owner = ownerId || DEFAULT_OWNER;
+  /**
+   * SECURITY: ownerId parameter is IGNORED - owner derived from auth context
+   */
+  writeFile: async ({ path, content, ownerId }: { path: string; content: string; ownerId?: string }, authContextUserId?: string) => {
+    const owner = getSecureOwner(ownerId, authContextUserId);
     const file = await virtualFilesystem.writeFile(owner, path, content);
     return { path: file.path, version: file.version, language: file.language, size: file.size };
   },
 
-  listDirectory: async ({ path, ownerId }: { path?: string; ownerId?: string }) => {
-    const owner = ownerId || DEFAULT_OWNER;
+  /**
+   * SECURITY: ownerId parameter is IGNORED - owner derived from auth context
+   */
+  listDirectory: async ({ path, ownerId }: { path?: string; ownerId?: string }, authContextUserId?: string) => {
+    const owner = getSecureOwner(ownerId, authContextUserId);
     const listing = await virtualFilesystem.listDirectory(owner, path);
     return { path: listing.path, entries: listing.nodes.map(n => ({ name: n.name, type: n.type, path: n.path })) };
   },
 
-  deletePath: async ({ path, ownerId }: { path: string; ownerId?: string }) => {
-    const owner = ownerId || DEFAULT_OWNER;
+  /**
+   * SECURITY: ownerId parameter is IGNORED - owner derived from auth context
+   */
+  deletePath: async ({ path, ownerId }: { path: string; ownerId?: string }, authContextUserId?: string) => {
+    const owner = getSecureOwner(ownerId, authContextUserId);
     const result = await virtualFilesystem.deletePath(owner, path);
     return { deletedCount: result.deletedCount };
   },
 
-  searchFiles: async ({ query, path, ownerId }: { query: string; path?: string; ownerId?: string }) => {
-    const owner = ownerId || DEFAULT_OWNER;
+  /**
+   * SECURITY: ownerId parameter is IGNORED - owner derived from auth context
+   */
+  searchFiles: async ({ query, path, ownerId }: { query: string; path?: string; ownerId?: string }, authContextUserId?: string) => {
+    const owner = getSecureOwner(ownerId, authContextUserId);
     const results = await virtualFilesystem.search(owner, query, { path });
     return { results: results.map(r => ({ path: r.path, name: r.name, language: r.language, snippet: r.snippet })) };
   },

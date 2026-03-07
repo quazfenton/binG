@@ -103,7 +103,7 @@ async function exchangeForTamboToken(
 ): Promise<{ tamboToken: string; expiresAt: number }> {
   const { sign } = await import('jsonwebtoken');
 
-  const TAMBO_SECRET = process.env.NEXT_PUBLIC_TAMBO_API_KEY || process.env.JWT_SECRET;
+  const TAMBO_SECRET = process.env.TAMBO_API_KEY || process.env.JWT_SECRET;
   
   // Require a configured secret in non-development environments
   if (!TAMBO_SECRET && process.env.NODE_ENV !== 'development') {
@@ -192,8 +192,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(response);
   } catch (error: any) {
     console.error('[Tambo OAuth] Token exchange failed:', error);
+    // SECURITY: Don't expose internal error details to clients
     return NextResponse.json(
-      { error: 'Token exchange failed', details: error.message },
+      { error: 'Token exchange failed' },
       { status: 500 }
     );
   }

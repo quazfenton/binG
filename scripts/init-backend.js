@@ -17,7 +17,8 @@ async function main() {
 
   try {
     // Initialize backend services (includes WebSocket terminal server)
-    const wsPort = process.env.WEBSOCKET_PORT || 8080;
+    // Parse WebSocket port as integer to ensure proper TCP port binding
+    const wsPort = parseInt(process.env.WEBSOCKET_PORT || '8080', 10);
     const status = await initializeBackend({ websocketPort: wsPort });
     
     console.log(`✅ Backend services initialized`);

@@ -142,6 +142,7 @@ const OpenStreetMapEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }
   };
 
   const handleReload = () => {
+    setIframeError(null);
     setIsReloading(true);
     setIframeKey(prev => prev + 1);
     setTimeout(() => setIsReloading(false), 1000);
@@ -361,7 +362,9 @@ const OpenStreetMapEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }
                       setIframeError('Failed to load OpenStreetMap.');
                       setIsLoading(false);
                     }}
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
+                    allow="fullscreen"
+                    referrerPolicy="no-referrer"
                   />
                 )}
               </div>

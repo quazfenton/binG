@@ -183,7 +183,10 @@ export default function CodePreviewPanel({
   const [cacheMisses, setCacheMisses] = useState(0);
   const [snapshots, setSnapshots] = useState<Array<{ id: string; date: string; size: string }>>([]);
   const pyodideRef = useRef<any>(null);
-  
+
+  // Track file counts per directory path for polling comparison (avoid comparing directory count to workspace count)
+  const directoryFileCounts = useRef<Map<string, number>>(new Map());
+
   // Context menu state for file operations
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -590,9 +593,9 @@ export default function CodePreviewPanel({
           }
         }
 
-        // Refresh the file listing
+        // Refresh the file listing - use event scope, not prop
         try {
-          await listFilesystemDirectory(filesystemScopePath);
+          await listFilesystemDirectory(savedScopePath || filesystemScopePath);
           console.log("[CodePreviewPanel] Refreshed filesystem");
         } catch (err) {
           console.error("[CodePreviewPanel] Failed to refresh filesystem:", err);
@@ -601,12 +604,12 @@ export default function CodePreviewPanel({
         // Update local state
         setScopedPreviewFiles(updatedFiles);
 
-        // Trigger manual preview refresh if preview tab is active
+        // Trigger manual preview refresh if preview tab is active - use event scope, not prop
         if (selectedTab === 'preview') {
           console.log("[CodePreviewPanel] Auto-refreshing preview after VFS save");
           // Small delay to ensure VFS writes complete
           setTimeout(() => {
-            handleManualPreview(filesystemScopePath);
+            handleManualPreview(savedScopePath || filesystemScopePath);
           }, 500);
         }
 
@@ -630,9 +633,9 @@ export default function CodePreviewPanel({
           }
         }
 
-        // Refresh the file listing
+        // Refresh the file listing - use event scope, not prop
         try {
-          await listFilesystemDirectory(filesystemScopePath);
+          await listFilesystemDirectory(savedScopePath || filesystemScopePath);
         } catch (err) {
           console.error("[CodePreviewPanel] Failed to refresh filesystem:", err);
         }
@@ -640,10 +643,10 @@ export default function CodePreviewPanel({
         // Update local state
         setScopedPreviewFiles(updatedFiles);
 
-        // Trigger manual preview refresh
+        // Trigger manual preview refresh - use event scope, not prop
         if (selectedTab === 'preview') {
           setTimeout(() => {
-            handleManualPreview(filesystemScopePath);
+            handleManualPreview(savedScopePath || filesystemScopePath);
           }, 500);
         }
 
@@ -755,25 +758,26 @@ export default function CodePreviewPanel({
   // Bidirectional sync: Poll VFS for changes from terminal/editor
   useEffect(() => {
     if (!isOpen || selectedTab !== 'files') return;
-    
+
     const pollInterval = setInterval(async () => {
       try {
-        const snapshot = await virtualFilesystem.getSnapshot(filesystemScopePath);
-        const currentFileCount = filesystemNodes.length;
-        const vfsFileCount = snapshot?.files?.length || 0;
-        
-        // Refresh if file count changed
-        if (currentFileCount !== vfsFileCount) {
-          console.log('[CodePreview] VFS changed, refreshing file list...');
-          await listFilesystemDirectory(filesystemCurrentPath);
+        // Get current directory contents
+        const currentFiles = await listFilesystemDirectory(filesystemCurrentPath);
+        const currentCount = currentFiles.length;
+        const previousCount = directoryFileCounts.current.get(filesystemCurrentPath) || 0;
+
+        // Compare same scope: current directory count vs previous count for same directory
+        if (currentCount !== previousCount) {
+          directoryFileCounts.current.set(filesystemCurrentPath, currentCount);
+          console.log('[CodePreview] Directory file count changed, refreshing...');
         }
       } catch (error) {
         console.error('[CodePreview] Poll error:', error);
       }
     }, 2000);
-    
+
     return () => clearInterval(pollInterval);
-  }, [isOpen, selectedTab, filesystemCurrentPath, filesystemNodes.length, listFilesystemDirectory, virtualFilesystem.getSnapshot]);
+  }, [isOpen, selectedTab, filesystemCurrentPath, listFilesystemDirectory]);
 
   // Generate project structure for complex projects
   // Also merge virtual filesystem files for live preview
@@ -1974,35 +1978,31 @@ export default app;`,
             ([path]) => path.startsWith('src/')
           );
           
-          // Simulate Vite build
-          React.useEffect(() => {
-            const runViteBuild = async () => {
-              setIsViteBuilding(true);
-              setViteOutput('');
-              
-              const logs = [
-                '> vite build',
-                `vite v5.0.0 building for production...`,
-                `✓ ${srcFiles.length} modules transformed.`,
-              ];
-              
-              // Simulate build output
-              for (const log of logs) {
-                await new Promise(resolve => setTimeout(resolve, 300));
-                setViteOutput(prev => prev + log + '\n');
-              }
-              
-              // Show built files
-              const distFiles = srcFiles.map(([path]) => path.replace('src/', 'dist/assets/'));
-              await new Promise(resolve => setTimeout(resolve, 500));
-              setViteOutput(prev => prev + `\n✓ built in ${Math.random() * 500 + 200 | 0}ms\n`);
-              setViteOutput(prev => prev + `\n📁 dist/\n` + distFiles.slice(0, 5).map(f => `  ${f}`).join('\n') + '\n');
-              
-              setIsViteBuilding(false);
-            };
+          // Simulate Vite build (no hooks inside render)
+          const runViteBuild = async () => {
+            setIsViteBuilding(true);
+            setViteOutput('');
             
-            runViteBuild();
-          }, [srcFiles]);
+            const logs = [
+              '> vite build',
+              `vite v5.0.0 building for production...`,
+              `✓ ${srcFiles.length} modules transformed.`,
+            ];
+            
+            // Simulate build output
+            for (const log of logs) {
+              await new Promise(resolve => setTimeout(resolve, 300));
+              setViteOutput(prev => prev + log + '\n');
+            }
+            
+            // Show built files
+            const distFiles = srcFiles.map(([path]) => path.replace('src/', 'dist/assets/'));
+            await new Promise(resolve => setTimeout(resolve, 500));
+            setViteOutput(prev => prev + `\n✓ built in ${Math.random() * 500 + 200 | 0}ms\n`);
+            setViteOutput(prev => prev + `\n📁 dist/\n` + distFiles.slice(0, 5).map(f => `  ${f}`).join('\n') + '\n');
+            
+            setIsViteBuilding(false);
+          };
 
           return (
             <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
@@ -2016,9 +2016,7 @@ export default app;`,
                     size="sm"
                     variant="outline"
                     onClick={() => {
-                      setViteOutput('');
-                      setIsViteBuilding(true);
-                      setTimeout(() => setIsViteBuilding(false), 1500);
+                      void runViteBuild();
                     }}
                     className="text-xs bg-green-600 hover:bg-green-700 text-white"
                     disabled={isViteBuilding}

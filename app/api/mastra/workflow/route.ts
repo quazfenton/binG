@@ -3,13 +3,30 @@
  *
  * Streams workflow execution results via SSE.
  * Supports both code-agent and hitl workflows.
+ *
+ * LAZY LOADING: Mastra is loaded on first request to avoid build-time initialization
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { mastra } from '@/lib/mastra/mastra-instance';
 
 // Valid workflow types
 const VALID_WORKFLOWS = ['code-agent', 'hitl-code-review'];
+
+// Lazy load Mastra to avoid build-time initialization
+let _mastra: any = null;
+
+async function getMastra() {
+  if (!_mastra) {
+    try {
+      const { mastra } = await import('@/lib/mastra/mastra-instance');
+      _mastra = mastra;
+    } catch (error) {
+      console.error('[Mastra API] Failed to load Mastra:', error);
+      throw new Error('Mastra not available - check DATABASE_URL and configuration');
+    }
+  }
+  return _mastra;
+}
 
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
@@ -36,6 +53,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Get Mastra instance (lazy loaded)
+    const mastra = await getMastra();
 
     // Get workflow
     const workflow = mastra.getWorkflow(workflowType);

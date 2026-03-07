@@ -7,7 +7,7 @@
  * @see lib/mastra/tools/filesystem-tools.ts
  */
 
-import { getFilesystemTools, type FilesystemTool } from './tools/filesystem-tools';
+import { createFilesystemTools, type FilesystemTool } from './tools/filesystem-tools';
 
 export interface AgentContext {
   userId: string;
@@ -65,7 +65,7 @@ export class AgentLoop {
       conversationHistory: [],
     };
     this.maxIterations = maxIterations;
-    this.tools = getFilesystemTools();
+    this.tools = createFilesystemTools(userId);
   }
 
   /**
@@ -75,13 +75,7 @@ export class AgentLoop {
     const results: AgentIterationResult[] = [];
     let iterations = 0;
 
-    // Add initial system prompt
-    this.context.conversationHistory.push({
-      role: 'system',
-      content: this.buildSystemPrompt(),
-    });
-
-    // Add user task
+    // Add user task (system prompt is added in callLLM)
     this.context.conversationHistory.push({
       role: 'user',
       content: task,

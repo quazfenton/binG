@@ -78,9 +78,12 @@ export async function GET(req: NextRequest) {
       path: '/api/oauth/notion/callback',
       maxAge: 0, // Expire immediately
     });
-    return response;
+
+    // Redirect to frontend settings page instead of returning JSON
+    return NextResponse.redirect(new URL('/settings?notion=connected', req.url));
   } catch (err) {
     console.error('Notion callback error:', err);
-    return NextResponse.json({ error: 'Notion OAuth callback fails' }, { status: 500 });
+    // Redirect to settings with error status instead of returning JSON
+    return NextResponse.redirect(new URL('/settings?notion=error', req.url));
   }
 }

@@ -103,6 +103,7 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
   };
 
   const handleReload = () => {
+    setIframeError(null);
     setIsReloading(true);
     setIframeKey(prev => prev + 1);
     if (autoRefresh) {
@@ -287,10 +288,13 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
                     title="CodeSandbox"
                     onLoad={() => setIsLoading(false)}
                     onError={() => {
-                      setIframeError('Failed to load CodeSandbox.');
+                      setIframeError('Failed to load CodeSandbox. Note: CodeSandbox requires valid sandbox IDs.');
                       setIsLoading(false);
                     }}
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals"
+                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-top-navigation allow-top-navigation-by-user-activation"
+                    allow="fullscreen; encrypted-media"
+                    referrerPolicy="no-referrer"
+                    allowTransparency={true}
                   />
                 )}
               </div>

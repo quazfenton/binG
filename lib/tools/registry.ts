@@ -306,7 +306,7 @@ export class UnifiedToolRegistry {
                 name: tool.name,
                 description: tool.description,
                 provider: providerName,
-                inputSchema: z.object(tool.inputSchema as any),
+                inputSchema: tool.inputSchema || z.object({}),
                 requiresAuth: false,
               });
             }
@@ -320,7 +320,7 @@ export class UnifiedToolRegistry {
                 name: tool.name,
                 description: tool.description,
                 provider: providerName,
-                inputSchema: z.object(tool.inputSchema as any),
+                inputSchema: tool.inputSchema || z.object({}),
                 requiresAuth: tool.requiresAuth,
                 category: tool.toolkit,
               });
