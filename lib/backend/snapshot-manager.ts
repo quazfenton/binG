@@ -13,7 +13,7 @@ import { join, dirname, basename } from 'path';
 import { pipeline } from 'stream/promises';
 import * as zlib from 'zlib';
 import { createGzip, createGunzip } from 'zlib';
-import { pack, unpack } from 'tar-stream';
+import { pack, extract as unpack } from 'tar-stream';
 import { randomBytes } from 'crypto';
 import { sandboxMetrics } from './metrics';
 

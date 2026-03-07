@@ -1,7 +1,7 @@
 # Development Dockerfile for binG Backend
 # Optimized for fast iteration and hot-reload
 
-FROM node:20-alpine
+FROM node:20-alpine AS development
 
 RUN apk add --no-cache \
     libc6-compat \
@@ -15,7 +15,7 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 
 # Install ALL dependencies (including devDependencies)
-RUN npm ci && npm cache clean --force
+RUN npm install --legacy-peer-deps && npm cache clean --force
 
 # Copy source files
 COPY . .

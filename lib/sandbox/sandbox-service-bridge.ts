@@ -223,3 +223,15 @@ export class SandboxServiceBridge {
 }
 
 export const sandboxBridge = new SandboxServiceBridge();
+
+/**
+ * Standalone helper so route handlers can destructure:
+ *   const { executeToolWithIsolation } = await import(...)
+ */
+export async function executeToolWithIsolation(
+  userId: string,
+  toolName: string,
+  args: Record<string, any>,
+) {
+  return sandboxBridge.executeToolWithIsolation(userId, toolName, args);
+}

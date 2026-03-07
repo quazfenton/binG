@@ -210,14 +210,59 @@ export default function CodePreviewPanel({
   }, [filesystemRawNodes]);
 
   const openFilesystemDirectory = useCallback((path: string) => {
-    // Ensure path doesn't get duplicated "project/project/" prefix
-    const cleanPath = path.replace(/^project\/project\//, 'project/');
+    // Ensure path doesn't get duplicated prefixes
+    // Handle various accumulated path patterns and normalize to project/
+    let cleanPath = path;
+    
+    // Remove accumulated sandbox/workspace prefixes
+    cleanPath = cleanPath
+      .replace(/^(\/tmp\/workspaces\/)+/gi, '')
+      .replace(/^(tmp\/workspaces\/)+/gi, '')
+      .replace(/^(\/workspace\/)+/gi, '')
+      .replace(/^(workspace\/)+/gi, '')
+      .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
+      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '');
+    
+    // Ensure path starts with project/
+    if (!cleanPath.startsWith('project/') && cleanPath !== 'project') {
+      cleanPath = cleanPath.replace(/^\/+/, ''); // Remove leading slashes
+      if (cleanPath.startsWith('project/')) {
+        // Already has project/, but might have duplicates
+        cleanPath = cleanPath.replace(/^project\/(project\/)+/, 'project/');
+      } else if (cleanPath) {
+        cleanPath = `project/${cleanPath}`;
+      } else {
+        cleanPath = 'project';
+      }
+    }
+    
     setFilesystemCurrentPath(cleanPath);
     void listFilesystemDirectory(cleanPath);
   }, [listFilesystemDirectory, setFilesystemCurrentPath]);
 
   const openFilesystemParent = useCallback(() => {
-    const current = filesystemCurrentPath.replace(/\/+$/, "");
+    // Clean accumulated path prefixes first
+    let cleanedCurrentPath = filesystemCurrentPath
+      .replace(/^(\/tmp\/workspaces\/)+/gi, '')
+      .replace(/^(tmp\/workspaces\/)+/gi, '')
+      .replace(/^(\/workspace\/)+/gi, '')
+      .replace(/^(workspace\/)+/gi, '')
+      .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
+      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '');
+    
+    // Ensure path starts with project/
+    if (!cleanedCurrentPath.startsWith('project/') && cleanedCurrentPath !== 'project') {
+      cleanedCurrentPath = cleanedCurrentPath.replace(/^\/+/, '');
+      if (cleanedCurrentPath.startsWith('project/')) {
+        cleanedCurrentPath = cleanedCurrentPath.replace(/^project\/(project\/)+/, 'project/');
+      } else if (cleanedCurrentPath) {
+        cleanedCurrentPath = `project/${cleanedCurrentPath}`;
+      } else {
+        cleanedCurrentPath = 'project';
+      }
+    }
+    
+    const current = cleanedCurrentPath.replace(/\/+$/, "");
     const parts = current.split("/").filter(Boolean);
     if (parts.length <= 1 || (parts.length === 1 && parts[0] === 'project')) {
       openFilesystemDirectory("project");
@@ -231,8 +276,27 @@ export default function CodePreviewPanel({
     setIsEditingFile(false);
     setIsFilesystemFileLoading(true);
     try {
-      // Ensure path doesn't get duplicated prefix
-      const cleanPath = path.replace(/^project\/project\//, 'project/');
+      // Ensure path doesn't get duplicated prefixes
+      let cleanPath = path
+        .replace(/^(\/tmp\/workspaces\/)+/gi, '')
+        .replace(/^(tmp\/workspaces\/)+/gi, '')
+        .replace(/^(\/workspace\/)+/gi, '')
+        .replace(/^(workspace\/)+/gi, '')
+        .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
+        .replace(/^(home\/[^/]+\/workspace\/)+/gi, '');
+      
+      // Ensure path starts with project/
+      if (!cleanPath.startsWith('project/') && cleanPath !== 'project') {
+        cleanPath = cleanPath.replace(/^\/+/, '');
+        if (cleanPath.startsWith('project/')) {
+          cleanPath = cleanPath.replace(/^project\/(project\/)+/, 'project/');
+        } else if (cleanPath) {
+          cleanPath = `project/${cleanPath}`;
+        } else {
+          cleanPath = 'project';
+        }
+      }
+      
       const file = await readFilesystemFile(cleanPath);
       setSelectedFilesystemPath(file.path);
       setSelectedFilesystemLanguage(file.language || "text");
@@ -336,7 +400,7 @@ export default function CodePreviewPanel({
     
     // Read old file, write new file, delete old file
     readFilesystemFile(oldPath).then((file: any) => {
-      return writeFilefilesystemFile(newPath, file.content).then(() => {
+      return writeFilesystemFile(newPath, file.content).then(() => {
         return deleteFilesystemPath(oldPath);
       });
     }).then(() => {

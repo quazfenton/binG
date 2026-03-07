@@ -292,7 +292,11 @@ app.prepare().then(startup).then(() => {
             break;
 
           case 'ping':
-            ws.send(JSON.stringify({ type: 'ping' }));
+            ws.send(JSON.stringify({ type: 'pong' }));
+            break;
+
+          case 'pong':
+            // Client responded to our keepalive ping - no action needed
             break;
 
           default:

@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import crypto from 'crypto';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -20,11 +21,10 @@ export function secureRandom(): number {
     crypto.getRandomValues(array);
     return array[0] / 0x100000000;
   }
-  
+
   // Fallback for Node.js environment
   try {
-    const cryptoModule = require('crypto');
-    return cryptoModule.randomBytes(4).readUInt32LE(0) / 0x100000000;
+    return crypto.randomBytes(4).readUInt32LE(0) / 0x100000000;
   } catch {
     throw new Error('No secure random number generator available');
   }
@@ -81,8 +81,7 @@ export function generateUUID(): string {
   } else {
     // Node.js fallback
     try {
-      const cryptoModule = require('crypto');
-      const bytes = cryptoModule.randomBytes(16);
+      const bytes = crypto.randomBytes(16);
       array.set(bytes);
     } catch {
       throw new Error('No secure random number generator available');

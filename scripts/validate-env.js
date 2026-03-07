@@ -1,15 +1,15 @@
 /**
  * Environment Variable Validation Script
- * 
+ *
  * Validates that all required environment variables are set and properly formatted.
  * Run this script before starting the application to catch configuration issues early.
- * 
+ *
  * Usage: node scripts/validate-env.js
  */
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
 
 // Color codes for terminal output
 const colors = {

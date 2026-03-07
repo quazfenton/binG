@@ -352,16 +352,14 @@ export class OpenCodeEngineService {
       return process.env.OPENCODE_BIN;
     }
 
-    // Search PATH
-    const paths = process.env.PATH?.split(':') || [];
-    for (const path of paths) {
-      const candidate = join(path, 'opencode');
-      try {
-        await readFile(candidate);
-        return candidate;
-      } catch {
-        // Not found, continue
-      }
+    // Try `which` / `where` to locate the binary
+    const { execSync } = await import('child_process');
+    try {
+      const cmd = process.platform === 'win32' ? 'where opencode' : 'which opencode';
+      const result = execSync(cmd, { encoding: 'utf-8', timeout: 5000 }).trim();
+      if (result) return result.split('\n')[0].trim();
+    } catch {
+      // Not found in PATH
     }
 
     return null;

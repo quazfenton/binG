@@ -149,8 +149,18 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
       };
 
       wsRef.current.onmessage = (event) => {
-        // Handle binary or text data
         const data = typeof event.data === 'string' ? event.data : event.data.toString();
+        // Handle server ping/pong keepalive messages
+        try {
+          const msg = JSON.parse(data);
+          if (msg.type === 'ping') {
+            wsRef.current?.send(JSON.stringify({ type: 'pong' }));
+            return;
+          }
+          if (msg.type === 'pong') return;
+        } catch {
+          // Not JSON – raw terminal output
+        }
         onOutput?.(data);
       };
 
