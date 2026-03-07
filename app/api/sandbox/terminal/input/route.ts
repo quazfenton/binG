@@ -106,7 +106,6 @@ export async function POST(req: NextRequest) {
 
     // ✅ SECURITY: Verify session ownership BEFORE any buffer operations
     // Prevents cross-user command injection via buffer pollution
-    const userSession = sandboxBridge.getSessionByUserId(authResult.userId);
     if (!userSession || userSession.sessionId !== sessionId) {
       logger.warn('Unauthorized terminal input attempt', {
         userId: authResult.userId,

@@ -98,8 +98,7 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
 
       if (previousValue !== null && operation) {
         const newValue = calculate(previousValue, inputValue, operation);
-        const calculation = `${previousValue} ${operation} ${inputValue} = ${newValue}`;
-        
+
         if (!isFinite(newValue)) {
           throw new Error('Result is not a finite number');
         }

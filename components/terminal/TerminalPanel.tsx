@@ -193,9 +193,29 @@ export default function TerminalPanel({
        const fs: LocalFileSystem = {};
 
        for (const file of files) {
-         // Use the file path as-is from VFS
-         // VFS returns paths like: project/sessions/XXX_chat_YYY/src/App.tsx
-         const fullPath = file.path;
+         // Normalize path: ensure it starts with project/
+         let fullPath = file.path;
+         
+         // Strip any sandbox/workspace prefixes that might have been stored incorrectly
+         fullPath = fullPath
+           .replace(/^(\/tmp\/workspaces\/)+/gi, '')
+           .replace(/^(tmp\/workspaces\/)+/gi, '')
+           .replace(/^(\/workspace\/)+/gi, '')
+           .replace(/^(workspace\/)+/gi, '')
+           .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
+           .replace(/^(home\/[^/]+\/workspace\/)+/gi, '');
+         
+         // Ensure path starts with project/
+         if (!fullPath.startsWith('project/') && fullPath !== 'project') {
+           fullPath = fullPath.replace(/^\/+/, '');
+           if (fullPath.startsWith('project/')) {
+             fullPath = fullPath.replace(/^project\/(project\/)+/, 'project/');
+           } else if (fullPath) {
+             fullPath = `project/${fullPath}`;
+           } else {
+             fullPath = 'project';
+           }
+         }
 
          // Create intermediate directories
          const parts = fullPath.split('/');

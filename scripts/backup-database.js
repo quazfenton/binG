@@ -2,31 +2,31 @@
 
 /**
  * Database Backup Script
- * 
+ *
  * Backs up the SQLite database to remote storage (S3, R2, etc.)
  * Run manually: node scripts/backup-database.js
  * Or schedule with cron: 0 2 * * * cd /path/to/app && node scripts/backup-database.js
- * 
+ *
  * Required environment variables:
  * - DATABASE_PATH: Path to SQLite database (default: ./data/bing.db)
  * - BACKUP_PROVIDER: 's3', 'r2', or 'local' (default: local)
- * 
+ *
  * For S3/R2 backups:
  * - BACKUP_ACCESS_KEY_ID
- * - BACKUP_SECRET_ACCESS_KEY  
+ * - BACKUP_SECRET_ACCESS_KEY
  * - BACKUP_ENDPOINT (for R2, or S3-compatible)
  * - BACKUP_BUCKET
  * - BACKUP_REGION (optional, default: us-east-1)
- * 
+ *
  * Optional:
  * - BACKUP_RETENTION_DAYS: How many days to keep backups (default: 30)
  * - BACKUP_ENCRYPTION_KEY: Key to encrypt backups (recommended!)
  */
 
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { execSync } = require('child_process');
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import { execSync } from 'child_process';
 
 // Configuration
 const CONFIG = {

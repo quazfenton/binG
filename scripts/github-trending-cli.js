@@ -2,7 +2,7 @@
 
 /**
  * GitHub Trending CLI Helper
- * 
+ *
  * A command-line tool to fetch trending GitHub repositories and clone them.
  * Usage:
  *   node scripts/github-trending-cli.js              # Fetch and display trending repos
@@ -11,10 +11,10 @@
  *   node scripts/github-trending-cli.js --help       # Show help
  */
 
-const https = require('https');
-const { execSync } = require('child_process');
-const path = require('path');
-const fs = require('fs');
+import https from 'https';
+import { execSync } from 'child_process';
+import path from 'path';
+import fs from 'fs';
 
 const GITHUB_TRENDING_URL = 'https://github.com/trending?since=daily';
 const CLONE_BASE_PATH = path.join(process.cwd(), 'repos');

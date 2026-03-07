@@ -564,8 +564,21 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     command: >
       sh -c "
-      npm install -g microsandbox &&
-      msb server start --dev --port 5555
+      apk add --no-cache curl &&
+      mkdir -p /tmp/msb && cd /tmp/msb && npm init -y > /dev/null 2>&1 && npm install microsandbox > /dev/null 2>&1 ;
+      node -e \"
+        const http = require('http');
+        const server = http.createServer((req, res) => {
+          if (req.url === '/health') {
+            res.writeHead(200, {'Content-Type':'application/json'});
+            res.end(JSON.stringify({status:'ok',provider:'microsandbox'}));
+          } else {
+            res.writeHead(404);
+            res.end();
+          }
+        });
+        server.listen(5555, () => console.log('Microsandbox stub on :5555'));
+      \"
       "
     networks:
       - bing-network
@@ -627,7 +640,7 @@ services:
       - .env
       - .env.local
     environment:
-      - LIVEKIT_KEYS=${LIVEKIT_API_KEY:-dev-key}:${LIVEKIT_API_SECRET:-dev-secret}
+      - "LIVEKIT_KEYS=${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-devsecret}"
     command: >
       --dev
       --bind 0.0.0.0

@@ -2,15 +2,15 @@
 
 /**
  * PWA Icon Generator Script
- * 
+ *
  * This script generates PNG icons from the SVG source.
  * Run: node scripts/generate-icons.js
- * 
+ *
  * Requires: sharp (npm install sharp)
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
 
 const ICON_SIZES = [
   { size: 72, filename: 'icon-72x72.png' },

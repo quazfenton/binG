@@ -5,11 +5,10 @@
 # Stage 1: Dependencies
 # ===========================================
 
-# Base image - Using debian instead of alpine for better compatibility with native modules
-FROM node:20.20.0-trixie-slim AS base
+# Base image - Alpine for consistency across all stages
+FROM node:20-alpine AS deps
 
-RUN apk add --no-cache libc6-compat
-
+RUN apk add --no-cache libc6-compat python3 make g++
 
 WORKDIR /app
 
@@ -56,7 +55,6 @@ RUN apk add --no-cache \
     libc6-compat \
     libstdc++ \
     curl \
-    firecracker \
     jq
 
 WORKDIR /app

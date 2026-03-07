@@ -202,3 +202,42 @@ export function createAmpService(
 export function getAmpService(sandbox: any, apiKey: string): E2BAmpService {
   return createAmpService(sandbox as Sandbox, apiKey)
 }
+
+/**
+ * Execute an Amp task in a new E2B sandbox
+ * Convenience function that creates a sandbox, runs the task, and cleans up
+ */
+export async function executeAmpTask(config: {
+  prompt: string
+  apiKey?: string
+  template?: string
+  timeout?: number
+}): Promise<{ output: string; exitCode: number }> {
+  const { Sandbox } = await import('@e2b/code-interpreter')
+  const apiKey = config.apiKey || process.env.E2B_API_KEY || ''
+  
+  if (!apiKey) {
+    throw new Error('E2B_API_KEY environment variable is required')
+  }
+
+  const sandbox = await Sandbox.create({
+    template: config.template || 'base',
+    apiKey,
+  })
+
+  try {
+    const ampService = createAmpService(sandbox, apiKey)
+    const result = await ampService.run({
+      prompt: config.prompt,
+      dangerouslyAllowAll: true,
+      timeout: config.timeout,
+    })
+    
+    return {
+      output: result.stdout || '',
+      exitCode: result.exitCode || 0,
+    }
+  } finally {
+    await sandbox.kill()
+  }
+}

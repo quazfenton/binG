@@ -1,5 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import fs from 'fs';
+import path from 'path';
 
 export interface TransactionEntry {
   path: string;
@@ -85,16 +87,15 @@ export class ShadowCommitManager {
     );
     
     if (this.useSupabase) {
-      try {
-        const { createClient } = require('@supabase/supabase-js');
+      import('@supabase/supabase-js').then(({ createClient }) => {
         this.supabase = createClient(
-          process.env.SUPABASE_URL,
-          process.env.SUPABASE_SERVICE_ROLE_KEY
+          process.env.SUPABASE_URL!,
+          process.env.SUPABASE_SERVICE_ROLE_KEY!
         );
-      } catch (error) {
+      }).catch((error) => {
         console.warn('[ShadowCommit] Supabase initialization failed:', error);
         this.useSupabase = false;
-      }
+      });
     }
   }
 
@@ -220,9 +221,6 @@ export class ShadowCommitManager {
     commitId: string,
     timestamp: string
   ): Promise<CommitResult> {
-    const fs = require('fs');
-    const path = require('path');
-    
     const commitDir = path.join(process.cwd(), '.agent-commits', options.sessionId);
     const commitFile = path.join(commitDir, `${commitId}.json`);
 
@@ -288,8 +286,6 @@ export class ShadowCommitManager {
       }));
     }
 
-    const fs = require('fs');
-    const path = require('path');
     const commitDir = path.join(process.cwd(), '.agent-commits', sessionId);
 
     if (!fs.existsSync(commitDir)) {
@@ -344,8 +340,6 @@ export class ShadowCommitManager {
       };
     }
 
-    const fs = require('fs');
-    const path = require('path');
     const commitFile = path.join(process.cwd(), '.agent-commits', sessionId, `${commitId}.json`);
 
     if (!fs.existsSync(commitFile)) {
@@ -381,9 +375,6 @@ export class ShadowCommitManager {
       };
     }
 
-    const fs = require('fs');
-    const path = require('path');
-    
     if (this.useSupabase && this.supabase) {
       // For Supabase, reconstruct VFS from commit
       const vfs: Record<string, string> = {};
@@ -469,8 +460,6 @@ export class ShadowCommitManager {
    * Load current VFS state for a session
    */
   private loadCurrentVFS(sessionId: string): Record<string, string> {
-    const fs = require('fs');
-    const path = require('path');
     const vfsFile = path.join(process.cwd(), '.agent-vfs', sessionId, 'vfs.json');
     
     if (fs.existsSync(vfsFile)) {
@@ -485,12 +474,10 @@ export class ShadowCommitManager {
    * ADDED: View rollback history
    */
   async listRollbackPoints(sessionId: string): Promise<Array<{ 
-    commitId: string; 
-    timestamp: string; 
+    commitId: string;
+    timestamp: string;
     filesCount: number;
   }>> {
-    const fs = require('fs');
-    const path = require('path');
     const commitDir = path.join(process.cwd(), '.agent-commits', sessionId);
 
     if (!fs.existsSync(commitDir)) {
