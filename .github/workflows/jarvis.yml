@@ -10,6 +10,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      workflows: write
 
     steps:
       - name: Checkout Full Repository
@@ -32,11 +33,16 @@ jobs:
         run: |
           # Grabs the last 100 lines of CodeRabbit feedback to give the agent its mission
           # SECURITY: Uses gh api to fetch only verified bot reviews, preventing prompt injection from malicious PR comments
-          BOT_PATTERN="coderabbitai|qodo-code-review|cubic-dev-ai|codeant-ai"
+          # SECURITY: Anchored regex with optional [bot] suffix to prevent substring matches
+          BOT_PATTERN="^(coderabbitai|qodo-code-review|cubic-dev-ai|codeant-ai)(\\[bot\\])?$"
 
-          # Fetch only PR reviews (not comments) from verified bot accounts
-          RAW_FEEDBACK=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews --jq '.[] | select(.user.login | test("'"$BOT_PATTERN"'"; "i")) | .body' | head -100)
-          SUGGESTIONS=$(echo "$RAW_FEEDBACK" | grep -Ei -A 100 "$BOT_PATTERN" || echo "Review the suggestion if there is any for optimizations.")
+          # Fetch only NEW unprocessed reviews from verified bot accounts
+          # Filters out reviews that already contain the agent applied marker
+          # Gets last 10 complete reviews (not line-count limited to avoid truncation)
+          RAW_FEEDBACK=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+            --jq '[.[] | select(.user.login | test("'"$BOT_PATTERN"'"; "i")) | select(.state == "COMMENTED" or .state == "CHANGES_REQUESTED") | select(.body | contains("Agent:") | not)] | .[-10:] | .[].body' \
+            | tac)
+          SUGGESTIONS=${RAW_FEEDBACK:-Review the suggestion if there is any for optimizations.}
 
           # Sanitize string for bash multiline
           echo "suggestions<<EOF" >> $GITHUB_OUTPUT
