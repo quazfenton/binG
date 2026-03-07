@@ -5,11 +5,13 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  workflows: write
 jobs:
   format-code:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      workflows: write
     steps:
       - uses: actions/checkout@v4
         with:
