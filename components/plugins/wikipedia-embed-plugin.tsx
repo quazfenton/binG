@@ -109,7 +109,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   };
 
   const handleOpenExternal = () => {
-    window.open(iframeUrl, '_blank');
+    window.open(iframeUrl, '_blank', 'noopener,noreferrer');
   };
 
   const toggleBookmark = () => {
@@ -362,7 +362,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => window.open(bookmark.url, '_blank')}
+                            onClick={() => window.open(bookmark.url, '_blank', 'noopener,noreferrer')}
                             className="hover:bg-amber-800/50"
                           >
                             <ExternalLink className="w-4 h-4" />

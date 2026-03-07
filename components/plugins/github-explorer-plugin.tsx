@@ -390,7 +390,7 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                   </div>
                 </div>
               </div>
-              <Button variant="outline" onClick={() => window.open(repoData.html_url, '_blank')} className="border-zinc-700 bg-zinc-900 hover:bg-zinc-800">
+              <Button variant="outline" onClick={() => window.open(repoData.html_url, '_blank', 'noopener,noreferrer')} className="border-zinc-700 bg-zinc-900 hover:bg-zinc-800">
                 <ExternalLink className="w-4 h-4 mr-2" />
                 Open on GitHub
               </Button>

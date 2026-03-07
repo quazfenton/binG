@@ -114,10 +114,10 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
   };
 
   const handleOpenExternal = () => {
-    const url = sandboxId 
+    const url = sandboxId
       ? `https://codesandbox.io/s/${sandboxId}`
       : 'https://codesandbox.io';
-    window.open(url, '_blank');
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const toggleBookmark = () => {
@@ -375,7 +375,7 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => window.open(`https://codesandbox.io/s/${bookmark.sandboxId}`, '_blank')}
+                            onClick={() => window.open(`https://codesandbox.io/s/${bookmark.sandboxId}`, '_blank', 'noopener,noreferrer')}
                             className="hover:bg-cyan-800/50"
                           >
                             <ExternalLink className="w-4 h-4" />

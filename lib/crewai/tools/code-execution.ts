@@ -93,7 +93,9 @@ export class DockerCodeExecutor extends EventEmitter {
       timeoutMs: config.timeoutMs || 30000,
       memoryLimitMb: config.memoryLimitMb || 512,
       maxOutputSize: config.maxOutputSize || 1024 * 1024,
-      allowedLanguages: config.allowedLanguages || Object.keys(SUPPORTED_LANGUAGES),
+      allowedLanguages: (config.allowedLanguages || Object.keys(SUPPORTED_LANGUAGES)).filter(
+        (lang) => SUPPORTED_LANGUAGES[lang]
+      ),
       blockedPatterns: config.blockedPatterns || [
         'rm -rf /',
         'format c:',

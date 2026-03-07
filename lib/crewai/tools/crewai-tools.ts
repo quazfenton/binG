@@ -192,7 +192,7 @@ export class DirectorySearchTool implements BaseTool {
       // Read directory
       const entries = await fs.readdir(path, { withFileTypes: true });
       
-      let results: Array<{ name: string; type: string; path: string }> = [];
+      const results: Array<{ name: string; type: string; path: string }> = [];
 
       for (const entry of entries) {
         const fullPath = pathModule.join(path, entry.name);

@@ -318,19 +318,21 @@ Use this tool when you need to:
 export const executeCodeTool = createTool({
   id: 'EXECUTE_CODE',
   name: 'Execute Code',
-  description: `Execute code in a sandboxed environment. Supports Python, TypeScript, and JavaScript.
+  description: `Execute code in a sandboxed environment. Supports Python and JavaScript only.
 Use this tool when you need to:
 - Test code snippets
 - Run scripts
 - Validate code behavior
 
-The code runs in an isolated sandbox for safety.`,
+The code runs in an isolated sandbox for safety.
+
+Note: TypeScript execution is not yet supported.`,
   inputSchema: z.object({
     code: z.string()
       .describe('Code to execute')
       .max(50000, 'Code exceeds 50KB limit'),
-    language: z.enum(['python', 'typescript', 'javascript'])
-      .describe('Programming language'),
+    language: z.enum(['python', 'javascript'])
+      .describe('Programming language (Python or JavaScript only)'),
     ownerId: z.string()
       .describe('Workspace owner ID')
       .uuid('Must be a valid UUID'),
@@ -348,7 +350,7 @@ The code runs in an isolated sandbox for safety.`,
   execute: async ({ context }) => {
     try {
       const { code, language, ownerId } = context;
-      
+
       // SECURITY: Validate code doesn't contain obvious injection attempts
       const dangerousPatterns = [
         /\bexec\s*\(/,
@@ -357,26 +359,35 @@ The code runs in an isolated sandbox for safety.`,
         /\brequire\s*\(/,
         /\bimport\s+.*\s+from\s+['"]child_process['"]/,
       ];
-      
+
       for (const pattern of dangerousPatterns) {
         if (pattern.test(code)) {
           throw new Error(`Code contains potentially dangerous pattern: ${pattern.source}`);
         }
       }
-      
+
       const sandbox = await (await getProvider()).createSandbox({ ownerId });
-       
-       // SECURITY FIXED: Use proper argument passing instead of string interpolation
+
+      // SECURITY FIXED: Use proper argument passing instead of string interpolation
       // This prevents command injection attacks
-      const command = language === 'python' ? 'python3' : 'node';
-      const args = language === 'python' ? ['-c', code] : ['-e', code];
-      
+      let command: string;
+      let args: string[];
+      if (language === 'python') {
+        command = 'python3';
+        args = ['-c', code];
+      } else if (language === 'javascript') {
+        command = 'node';
+        args = ['-e', code];
+      } else {
+        throw new Error('TypeScript execution is not yet supported in this sandbox');
+      }
+
       const startTime = Date.now();
       const result = await sandbox.executeCommand(command, args);
       const executionTime = Date.now() - startTime;
-      
-      return { 
-        output: result.output || '', 
+
+      return {
+        output: result.output || '',
         exitCode: result.exitCode,
         executionTime,
       };
@@ -403,8 +414,8 @@ Use this tool when you need to:
     code: z.string()
       .describe('Code to check')
       .max(50000, 'Code exceeds 50KB limit'),
-    language: z.enum(['python', 'typescript', 'javascript'])
-      .describe('Programming language'),
+    language: z.enum(['python', 'javascript'])
+      .describe('Programming language (Python or JavaScript only)'),
   }),
   outputSchema: z.object({
     valid: z.boolean(),

@@ -2860,7 +2860,7 @@ export default function TerminalPanel({
     data: string,
     term: TerminalInstance
   ) => {
-    let lineBuffer = lineBufferRef.current[terminalId] || '';
+    const lineBuffer = lineBufferRef.current[terminalId] || '';
 
     if (data === '\r' || data === '\n') {
       term.terminal?.write('\r\n');
@@ -3284,7 +3284,7 @@ export default function TerminalPanel({
                   toast.info(`Preview available on port ${msg.data.port}`, {
                     action: {
                       label: 'Open',
-                      onClick: () => window.open(msg.data.url, '_blank'),
+                      onClick: () => window.open(msg.data.url, '_blank', 'noopener,noreferrer'),
                     },
                   });
                   break;
@@ -3563,7 +3563,7 @@ export default function TerminalPanel({
               toast.info(`Preview available on port ${msg.data.port}`, {
                 action: {
                   label: 'Open',
-                  onClick: () => window.open(msg.data.url, '_blank'),
+                  onClick: () => window.open(msg.data.url, '_blank', 'noopener,noreferrer'),
                 },
               });
               break;

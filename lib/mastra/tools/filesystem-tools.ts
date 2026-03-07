@@ -163,7 +163,7 @@ export function createFilesystemTools(userId: string): FilesystemTool[] {
         try {
           const snapshot = await virtualFilesystem.exportWorkspace(userId);
 
-          let results = snapshot.files.filter(f => {
+          const results = snapshot.files.filter(f => {
             // Filter by base path if specified
             if (path && !f.path.startsWith(path)) {
               return false;

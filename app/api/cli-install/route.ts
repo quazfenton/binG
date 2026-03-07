@@ -34,12 +34,16 @@ import { spawn } from "child_process";
 import path from "path";
 import { promises as fs } from "fs";
 import { NextRequest } from "next/server";
+import { resolveRequestAuth } from "@/lib/auth/request-auth";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const SECRET = process.env.VISUAL_EDITOR_SECRET ?? "";
 const PROJECT_ROOT = process.env.PROJECT_ROOT ?? process.cwd();
-const CLI_TIMEOUT = Number(process.env.CLI_TIMEOUT_MS ?? 120_000);
+const rawCliTimeout = process.env.CLI_TIMEOUT_MS;
+const CLI_TIMEOUT = Number.isFinite(Number(rawCliTimeout))
+  ? Number(rawCliTimeout)
+  : 120_000;
 
 /** Only these npx package names may be executed. Add more as needed. */
 const ALLOWED_CMDS = new Set([

@@ -65,6 +65,18 @@ export async function POST(request: NextRequest) {
       // SECURITY: Validate timestamp freshness (prevent replay attacks)
       if (timestamp) {
         const timestampNum = parseInt(timestamp, 10);
+        if (Number.isNaN(timestampNum)) {
+          console.warn(`[ComposioWebhook] Invalid timestamp format (${requestId})`);
+          const response = NextResponse.json({
+            success: false,
+            error: {
+              type: 'invalid_timestamp',
+              message: 'Webhook timestamp invalid',
+            },
+            requestId,
+          }, { status: 401 });
+          return addCORSHeaders(response);
+        }
         const now = Math.floor(Date.now() / 1000);
         const maxAge = 5 * 60; // 5 minutes
         if (Math.abs(now - timestampNum) > maxAge) {

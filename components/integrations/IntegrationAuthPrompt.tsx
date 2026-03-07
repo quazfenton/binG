@@ -201,7 +201,7 @@ export default function IntegrationAuthPrompt({
       setPopupWindow(popup);
     } else {
       // Fallback: open in new tab
-      window.open(authUrl, '_blank');
+      window.open(authUrl, '_blank', 'noopener,noreferrer');
       setIsConnecting(false);
     }
   }, [authUrl]);

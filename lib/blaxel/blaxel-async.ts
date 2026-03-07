@@ -125,8 +125,15 @@ export function verifyWebhookFromRequest(
   const receivedSignature = signature.substring(7);
 
   // Use timing-safe comparison to prevent timing attacks
-  const signatureBuffer = Buffer.from(receivedSignature, 'hex');
-  const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+  let signatureBuffer: Buffer;
+  let expectedBuffer: Buffer;
+  try {
+    signatureBuffer = Buffer.from(receivedSignature, 'hex');
+    expectedBuffer = Buffer.from(expectedSignature, 'hex');
+  } catch {
+    // Invalid hex encoding in signature
+    return false;
+  }
 
   if (signatureBuffer.length !== expectedBuffer.length) {
     return false;

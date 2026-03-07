@@ -366,10 +366,10 @@ export class ErrorRecoveryStrategies {
     } = options
 
     // Simple circuit breaker implementation
-    let failures = 0
-    let successes = 0
-    let state: 'closed' | 'open' | 'half-open' = 'closed'
-    let lastFailureTime = 0
+    const failures = 0
+    const successes = 0
+    const state: 'closed' | 'open' | 'half-open' = 'closed'
+    const lastFailureTime = 0
 
     return operation()
   }

@@ -14,7 +14,7 @@ type SandboxHandle = any;
 
 // Stub for missing modules - tools and security will be disabled if these aren't available
 let SandboxSecurityManager: any;
-let allTools: any = {};
+const allTools: any = {};
 try {
   // SandboxSecurityManager = require('@/lib/sandbox/security-manager');
   // allTools = require('@/lib/stateful-agent/tools/sandbox-tools');

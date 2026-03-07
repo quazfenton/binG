@@ -495,7 +495,7 @@ async function checkPythonSyntax(
 
   // Basic indentation check
   const lines = content.split('\n');
-  let indentStack: number[] = [0];
+  const indentStack: number[] = [0];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
