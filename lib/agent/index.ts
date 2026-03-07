@@ -33,9 +33,4 @@ export {
   type UseAgentReturn,
 } from './use-agent'
 
-// React components (for client components)
-export {
-  AgentTerminal,
-  AgentDesktop,
-  type AgentTerminalProps,
-} from './AgentTerminal'
+

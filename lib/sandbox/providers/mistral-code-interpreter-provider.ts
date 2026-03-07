@@ -171,13 +171,13 @@ class MistralCodeInterpreterSandboxHandle implements SandboxHandle {
           inputs: prompt,
         })
         session.conversationId = response.conversationId
-      await saveMistralSession(this.id, session)
-    } else {
-      response = await this.client.beta.conversations.append({
-        conversationId: session.conversationId,
-        conversationAppendRequest: { inputs: prompt },
-      })
-    }
+        await saveMistralSession(this.id, session)
+      } else {
+        response = await this.client.beta.conversations.append({
+          conversationId: session.conversationId,
+          conversationAppendRequest: { inputs: prompt },
+        })
+      }
 
     session.lastActive = Date.now()
     await saveMistralSession(this.id, session)

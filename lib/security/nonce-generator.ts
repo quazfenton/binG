@@ -272,8 +272,12 @@ export function generateCspHeader(
   // Connect source (for fetch/XHR)
   directives.push("connect-src 'self' https:");
 
-  // Frame ancestors (prevent clickjacking)
-  directives.push("frame-ancestors 'none'");
+  // Frame ancestors - allow same-origin for plugin iframes
+  // This is required for the embed plugins to work
+  directives.push("frame-ancestors 'self'");
+
+  // Frame sources - allow iframes from same origin and trusted HTTPS sources
+  directives.push("frame-src 'self' https:");
 
   // Base URI
   directives.push("base-uri 'self'");

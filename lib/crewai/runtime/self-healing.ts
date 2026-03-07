@@ -18,7 +18,7 @@ export interface RetryConfig {
   maxDelayMs: number;
   exponentialBackoff: boolean;
   retryableErrors: string[];
-  onRetry?: (attempt: number, error: Error) => void;
+  onRetry?: (attempt: number, error: Error) => void | Promise<void>;
 }
 
 export interface AgentRetryState {
@@ -34,7 +34,7 @@ export interface AgentRetryState {
     timestamp: number;
     recovered: boolean;
   }>;
-  onRetry?: (attempt: number, error: Error) => void;
+  onRetry?: (attempt: number, error: Error) => void | Promise<void>;
 }
 
 export interface ConsensusVote {

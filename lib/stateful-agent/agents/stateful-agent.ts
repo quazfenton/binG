@@ -173,14 +173,14 @@ Respond with a list of file paths, one per line. No other text.`;
   public async runPlanningPhase(userMessage: string) {
     if (!this.enforcePlanActVerify) {
       this.steps++;
-      return;
+      return this.currentPlan;
     }
 
     const filesList = Object.keys(this.vfs);
     if (filesList.length === 0) {
       this.currentPlan = { task: userMessage, files: [], execution_order: [] };
       this.steps++;
-      return;
+      return this.currentPlan;
     }
     
     const planningPrompt = `Create a systematic engineering plan for this task:
@@ -216,8 +216,9 @@ Return a JSON object:
       console.error('[StatefulAgent] Planning error:', error);
       this.currentPlan = { task: userMessage, files: [], execution_order: [] };
     }
-    
+
     this.steps++;
+    return this.currentPlan;
   }
 
   /**
@@ -282,6 +283,7 @@ Use 'createFile' for new files.`;
     }
 
     this.steps++;
+    return this.getState();
   }
 
   /**

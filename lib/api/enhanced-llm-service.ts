@@ -565,7 +565,7 @@ export class EnhancedLLMService {
               metadata: { source: 'llm_tool_use' }
             }
           )
-        : await callMCPToolFromAI_SDK(selectedTool, call.arguments);
+        : await callMCPToolFromAI_SDK(selectedTool, call.arguments, userId);
 
       toolResults.push({
         name: selectedTool,

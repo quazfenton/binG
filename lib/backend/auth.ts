@@ -4,7 +4,7 @@
  * Migrated from ephemeral/auth.py
  */
 
-import { jwtVerify, importSPKI, importSecretKey, JWTPayload } from 'jose';
+import { jwtVerify, importSPKI, createSecretKey, JWTPayload } from 'jose';
 
 /**
  * Import a symmetric secret key for JWT verification
@@ -12,10 +12,23 @@ import { jwtVerify, importSPKI, importSecretKey, JWTPayload } from 'jose';
 async function importAsymmetricKey(secret: string, algorithm: string): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const keyData = encoder.encode(secret);
+
+  // Map JOSE algorithm identifiers to Web Crypto HMAC parameters
+  let webCryptoAlgorithm: { name: string; hash: string };
+  if (algorithm === 'HS256') {
+    webCryptoAlgorithm = { name: 'HMAC', hash: 'SHA-256' };
+  } else if (algorithm === 'HS384') {
+    webCryptoAlgorithm = { name: 'HMAC', hash: 'SHA-384' };
+  } else if (algorithm === 'HS512') {
+    webCryptoAlgorithm = { name: 'HMAC', hash: 'SHA-512' };
+  } else {
+    throw new Error(`Unsupported symmetric algorithm: ${algorithm}`);
+  }
+
   return crypto.subtle.importKey(
     'raw',
     keyData,
-    { name: algorithm },
+    webCryptoAlgorithm,
     false,
     ['verify']
   );

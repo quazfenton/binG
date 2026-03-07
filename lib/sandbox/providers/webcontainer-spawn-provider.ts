@@ -367,11 +367,11 @@ class WebContainerSpawnHandle implements SandboxHandle {
       }
     }
 
-    // Check if process has exited
+    // Check if process has exited without blocking indefinitely
     const exitPromise = process.exit
-    const hasExited = await Promise.race([
+    const hasExited = await Promise.race<boolean>([
       exitPromise.then(() => true),
-      new Promise<false>(() => setTimeout(() => false, 0)),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 0)),
     ])
 
     return {
@@ -406,7 +406,8 @@ class WebContainerSpawnHandle implements SandboxHandle {
    * Create a PTY session
    */
   async createPty(options: PtyOptions): Promise<PtyHandle> {
-    const process = await this.instance.spawn('jsh', ['-c', options.cwd || this.workspaceDir], {
+    // Start an interactive shell; rely on the spawn cwd option rather than passing the path as a "-c" command
+    const process = await this.instance.spawn('jsh', [], {
       cwd: options.cwd || this.workspaceDir,
       env: { ...this.defaultEnv, ...options.envs },
       output: true,

@@ -1,9 +1,9 @@
 /**
  * Mistral Conversation Manager
- * 
+ *
  * Manages conversation lifecycle, history, and multi-turn interactions.
  * Additive module that enhances the core provider with advanced conversation features.
- * 
+ *
  * Features:
  * - Start/append/restart conversations
  * - Conversation history retrieval
@@ -40,6 +40,13 @@ export interface ConversationAppendOptions extends ConversationOptions {
   fromEntryId?: string
 }
 
+// Simplified conversation entry for Mistral SDK compatibility
+interface MistralConversationEntry {
+  role?: 'user' | 'assistant' | 'system'
+  content: string
+  type?: 'message.input' | 'message.output'
+}
+
 export class MistralConversationManager {
   private client: Mistral
 
@@ -49,7 +56,7 @@ export class MistralConversationManager {
 
   /**
    * Start a new conversation
-   * 
+   *
    * @param agentId - Agent ID to use for conversation
    * @param inputs - Initial conversation entries
    * @param options - Conversation options
@@ -72,7 +79,7 @@ export class MistralConversationManager {
 
     return {
       conversationId: response.conversationId,
-      outputs: response.outputs,
+      outputs: response.outputs || [],
       usage: response.usage as TokenUsage,
       createdAt: new Date(),
     }
@@ -101,7 +108,7 @@ export class MistralConversationManager {
 
   /**
    * Append message to existing conversation
-   * 
+   *
    * @param conversationId - Conversation ID
    * @param inputs - New message entries
    * @param options - Append options
@@ -116,7 +123,7 @@ export class MistralConversationManager {
 
     const response = await this.client.beta.conversations.append({
       conversationId,
-      conversationAppendRequest: {
+      conversationAppendStreamRequest: {
         inputs: normalizedInputs,
         store: options?.store ?? true,
         completionArgs: options?.completionArgs,
@@ -125,7 +132,7 @@ export class MistralConversationManager {
 
     return {
       conversationId: response.conversationId,
-      outputs: response.outputs,
+      outputs: response.outputs || [],
       usage: response.usage as TokenUsage,
       createdAt: new Date(),
     }
@@ -143,7 +150,7 @@ export class MistralConversationManager {
 
     const stream = await this.client.beta.conversations.appendStream({
       conversationId,
-      conversationAppendRequest: {
+      conversationAppendStreamRequest: {
         inputs: normalizedInputs,
         store: options?.store ?? true,
       },
@@ -156,7 +163,7 @@ export class MistralConversationManager {
 
   /**
    * Restart conversation from a specific entry
-   * 
+   *
    * @param conversationId - Conversation ID
    * @param fromEntryId - Entry ID to restart from
    * @param inputs - New inputs after restart point
@@ -182,7 +189,7 @@ export class MistralConversationManager {
 
     return {
       conversationId: response.conversationId,
-      outputs: response.outputs,
+      outputs: response.outputs || [],
       usage: response.usage as TokenUsage,
       createdAt: new Date(),
     }
@@ -190,7 +197,7 @@ export class MistralConversationManager {
 
   /**
    * Get conversation history
-   * 
+   *
    * @param conversationId - Conversation ID
    * @returns Array of conversation entries
    */
@@ -198,12 +205,12 @@ export class MistralConversationManager {
     const response = await this.client.beta.conversations.getHistory({
       conversationId,
     })
-    return response.entries
+    return response.entries || []
   }
 
   /**
    * Get all messages in conversation
-   * 
+   *
    * @param conversationId - Conversation ID
    * @returns Array of messages
    */
@@ -211,12 +218,12 @@ export class MistralConversationManager {
     const response = await this.client.beta.conversations.getMessages({
       conversationId,
     })
-    return response.messages
+    return response.messages || []
   }
 
   /**
    * List all conversations
-   * 
+   *
    * @param options - Pagination options
    * @returns Array of conversations
    */
@@ -229,10 +236,10 @@ export class MistralConversationManager {
       pageSize: options?.pageSize ?? 100,
     })
 
-    return response.map((conv: any) => ({
+    return (response || []).map((conv: any) => ({
       conversationId: conv.id,
       outputs: [],
-      createdAt: new Date(conv.created_at),
+      createdAt: new Date(conv.createdAt),
       usage: undefined,
     }))
   }

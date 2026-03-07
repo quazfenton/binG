@@ -45,10 +45,18 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
 
       setDisplay(String(newValue));
       setPreviousValue(newValue);
-      
-      // Add to history
+
+      // Add to history - use functional update to avoid stale closure
       const calculation = `${currentValue} ${operation} ${inputValue} = ${newValue}`;
-      updateHistory([calculation, ...history.slice(0, 9)]); // Keep last 10
+      setHistory(h => {
+        const newHistory = [calculation, ...h.slice(0, 9)];
+        try {
+          localStorage.setItem('calculator-history', JSON.stringify(newHistory));
+        } catch {
+          // localStorage unavailable
+        }
+        return newHistory;
+      });
     }
 
     setWaitingForOperand(true);
@@ -95,13 +103,23 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
         if (!isFinite(newValue)) {
           throw new Error('Result is not a finite number');
         }
-        
+
         setDisplay(String(newValue));
         setPreviousValue(null);
         setOperation(null);
         setWaitingForOperand(true);
-        updateHistory([calculation, ...history.slice(0, 9)]);
-        
+        // Use functional update to avoid stale closure
+        const calculation = `${previousValue} ${operation} ${inputValue} = ${newValue}`;
+        setHistory(h => {
+          const newHistory = [calculation, ...h.slice(0, 9)];
+          try {
+            localStorage.setItem('calculator-history', JSON.stringify(newHistory));
+          } catch {
+            // localStorage unavailable
+          }
+          return newHistory;
+        });
+
         onResult?.(newValue);
       }
     } catch (error) {
@@ -155,6 +173,12 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // SECURITY: Ignore keystrokes from editable fields to avoid hijacking user input
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+
       if (e.key >= '0' && e.key <= '9') {
         inputNumber(e.key);
       } else if (e.key === '+') {

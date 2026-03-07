@@ -56,6 +56,17 @@ export interface FilesystemChangeEvent {
   version: number;
 }
 
+/**
+ * Conflict event emitted when potential concurrent modification is detected
+ */
+export interface ConflictEvent {
+  path: string;
+  previousContent: string;
+  newContent: string;
+  previousVersion: number;
+  timestamp: string;
+}
+
 export class VirtualFilesystemService {
   private readonly workspaceRoot: string;
   private readonly storageDir: string;
@@ -82,6 +93,11 @@ export class VirtualFilesystemService {
   onSnapshotChange(listener: (ownerId: string, version: number) => void): () => void {
     this.events.on('snapshotChange', listener);
     return () => { this.events.off('snapshotChange', listener); };
+  }
+
+  onConflict(listener: (event: ConflictEvent) => void): () => void {
+    this.events.on('conflict', listener);
+    return () => { this.events.off('conflict', listener); };
   }
 
   private emitFileChange(ownerId: string, filePath: string, type: FilesystemChangeType, version: number): void {

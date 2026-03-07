@@ -125,13 +125,18 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
   };
 
   const handleReload = () => {
+    setIframeError(null);
+    setIsLoading(true);
     setIsReloading(true);
     setIframeKey(prev => prev + 1);
     setTimeout(() => setIsReloading(false), 1000);
   };
 
   const handleOpenExternal = () => {
-    window.open(iframeUrl, '_blank');
+    const newWindow = window.open(iframeUrl, '_blank', 'noopener,noreferrer');
+    if (newWindow) {
+      newWindow.opener = null;
+    }
   };
 
   const toggleBookmark = () => {
@@ -371,10 +376,12 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                     title="DuckDuckGo"
                     onLoad={() => setIsLoading(false)}
                     onError={() => {
-                      setIframeError('Failed to load DuckDuckGo.');
+                      setIframeError('Failed to load DuckDuckGo. Note: DuckDuckGo limits iframe embedding. Try using the external link button.');
                       setIsLoading(false);
                     }}
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
+                    allow="fullscreen"
+                    referrerPolicy="no-referrer"
                   />
                 )}
               </div>
@@ -433,7 +440,12 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => window.open(bookmark.url, '_blank')}
+                            onClick={() => {
+                              const newWindow = window.open(bookmark.url, '_blank', 'noopener,noreferrer');
+                              if (newWindow) {
+                                newWindow.opener = null;
+                              }
+                            }}
                             className="hover:bg-orange-800/50"
                           >
                             <ExternalLink className="w-4 h-4" />

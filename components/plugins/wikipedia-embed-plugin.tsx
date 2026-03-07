@@ -102,6 +102,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   };
 
   const handleReload = () => {
+    setIframeError(null);
     setIsReloading(true);
     setIframeKey(prev => prev + 1);
     setTimeout(() => setIsReloading(false), 1000);
@@ -297,10 +298,12 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                     title="Wikipedia"
                     onLoad={() => setIsLoading(false)}
                     onError={() => {
-                      setIframeError('Failed to load Wikipedia. The site may not allow embedding.');
+                      setIframeError('Failed to load Wikipedia. Note: Wikipedia restricts embedding in some contexts. Try using the external link button.');
                       setIsLoading(false);
                     }}
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
+                    allow="fullscreen"
+                    referrerPolicy="no-referrer"
                   />
                 )}
               </div>

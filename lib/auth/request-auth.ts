@@ -1,12 +1,8 @@
 import { NextRequest } from 'next/server';
 import { verifyAuth } from './jwt';
 import { authService } from './auth-service';
-import { AuthCache, type ResolvedRequestAuth } from './auth-cache';
+import { authCache, type ResolvedRequestAuth } from './auth-cache';
 
-// Simple LRU cache for auth results (using shared AuthCache from auth-cache.ts)
-const authCache = new AuthCache();
-
-// Export for use in other modules
 export { authCache };
 
 /**

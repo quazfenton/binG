@@ -2,15 +2,41 @@
  * Mastra Workflow Status API
  *
  * Gets the current status of a workflow run.
+ *
+ * LAZY LOADING: Mastra is loaded on first request to avoid build-time initialization
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { mastra } from '@/lib/mastra/mastra-instance';
 
 // Valid workflow types - allowlist for security
 const VALID_WORKFLOWS = ['code-agent', 'hitl-code-review'];
 
+// Lazy load Mastra to avoid build-time initialization
+let _mastra: any = null;
+
+async function getMastra() {
+  if (!_mastra) {
+    try {
+      const { mastra } = await import('@/lib/mastra/mastra-instance');
+      _mastra = mastra;
+    } catch (error) {
+      console.error('[Mastra API] Failed to load Mastra:', error);
+      throw new Error('Mastra not available');
+    }
+  }
+  return _mastra;
+}
+
 export async function GET(request: NextRequest) {
+  // SECURITY: Require authentication to access workflow status
+  const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+  if (!authResult.success || !authResult.userId) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
+
   const { searchParams } = new URL(request.url);
   const runId = searchParams.get('runId');
   const workflowType = searchParams.get('workflowType') || 'code-agent';
@@ -33,6 +59,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    // Get Mastra instance (lazy loaded)
+    const mastra = await getMastra();
+
     // Get workflow
     const workflow = mastra.getWorkflow(workflowType);
 

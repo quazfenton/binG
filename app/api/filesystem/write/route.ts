@@ -28,6 +28,15 @@ const writeRequestSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
+    // SECURITY: Require authentication for write operations
+    const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required for file write operations' },
+        { status: 401 }
+      );
+    }
+
     const body = await req.json();
 
     // Validate request body
@@ -50,8 +59,7 @@ export async function POST(req: NextRequest) {
 
     // SECURITY: Always derive ownerId from authenticated request context
     // Never trust user-supplied ownerId for write operations
-    const authResolution = await resolveFilesystemOwner(req);
-    const ownerId = authResolution.ownerId;
+    const ownerId = `user:${authResult.userId}`;
 
     const file = await virtualFilesystem.writeFile(ownerId, filePath, content, language);
 

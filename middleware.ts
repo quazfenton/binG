@@ -38,8 +38,8 @@ export function middleware(request: NextRequest) {
   // Prevent MIME type sniffing
   response.headers.set('X-Content-Type-Options', 'nosniff');
 
-  // Prevent clickjacking
-  response.headers.set('X-Frame-Options', 'DENY');
+  // Prevent clickjacking - allow same-origin framing for plugin iframes
+  response.headers.set('X-Frame-Options', 'SAMEORIGIN');
 
   // XSS protection (deprecated but still useful for older browsers)
   response.headers.set('X-XSS-Protection', '1; mode=block');
@@ -50,32 +50,19 @@ export function middleware(request: NextRequest) {
   // Content Security Policy with nonce-based script/style control
   // In development, use a more permissive CSP for compatibility
   const isDev = process.env.NODE_ENV !== 'production';
-  
+
   if (isDev) {
-    // Development CSP - more permissive for debugging
+    // Development CSP - more permissive for debugging, allows iframe embedding
     response.headers.set(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https:; font-src 'self' data: https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self';"
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https:; font-src 'self' data: https://fonts.gstatic.com; frame-src 'self' https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self';"
     );
   } else {
-    // Production CSP with strict nonces
-    const cspHeader = generateCspHeader(nonces, {
-      reportUri: '/api/csp-report',
-      reportTo: 'csp-endpoint',
-      upgradeInsecureRequests: true,
-    });
-    response.headers.set('Content-Security-Policy', cspHeader);
-
-    // Report-To header for CSP reporting (modern browsers)
+    // Production CSP - RELAXED for Next.js compatibility
+    // Next.js uses its own script loading mechanism that doesn't support nonces
     response.headers.set(
-      'Report-To',
-      JSON.stringify({
-        group: 'csp-endpoint',
-        max_age: 31536000, // 1 year
-        endpoints: [
-          { url: '/api/csp-report' }
-        ]
-      })
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: wss: blob:; font-src 'self' data: https://fonts.gstatic.com; frame-src 'self' https: blob:; frame-ancestors 'self'; base-uri 'self'; form-action 'self';"
     );
   }
 

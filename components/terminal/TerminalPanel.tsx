@@ -406,19 +406,24 @@ export default function TerminalPanel({
     }
   }, [isOpen]);
 
-  // Save terminal state on unmount/close
+  // Persist terminal state when sandbox connection status changes
+  useEffect(() => {
+    const state = {
+      commandHistory: commandHistoryRef.current,
+      sandboxConnected: sandboxStatus === 'connected',
+      timestamp: Date.now(),
+    };
+    try {
+      localStorage.setItem('terminal-state', JSON.stringify(state));
+    } catch (error) {
+      console.error('[Terminal] Failed to save terminal state:', error);
+    }
+  }, [sandboxStatus]);
+
+  // Save terminal state and dispose on unmount/close
   useEffect(() => {
     return () => {
-      // Save terminal state to localStorage
-      const state = {
-        commandHistory: commandHistoryRef.current,
-        sandboxConnected: sandboxStatus === 'connected',
-        timestamp: Date.now(),
-      };
-      localStorage.setItem('terminal-state', JSON.stringify(state));
-      console.log('[Terminal] Saved state to localStorage');
-      
-      // Also save to database via saveTerminalSession
+      // Close terminals and persist sessions
       terminalsRef.current.forEach(t => {
         t.eventSource?.close();
         t.terminal?.dispose();
@@ -434,7 +439,7 @@ export default function TerminalPanel({
         });
       });
     };
-  }, [sandboxStatus]);
+  }, []);
 
   // Phase 2: Toggle sandbox connection
   const toggleSandboxConnection = useCallback(async () => {
@@ -1303,7 +1308,12 @@ export default function TerminalPanel({
           }
         }
         
-        delete fs[targetPath];
+        // Remove target and all children (for recursive directory removal)
+        for (const path of Object.keys(fs)) {
+          if (path === targetPath || path.startsWith(`${targetPath}/`)) {
+            delete fs[path];
+          }
+        }
         return true;
       }
 
@@ -2479,7 +2489,9 @@ export default function TerminalPanel({
       const fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
       terminal.loadAddon(new WebLinksAddon());
-      terminal.loadAddon(new SearchAddon());
+      if (SearchAddon) {
+        terminal.loadAddon(new SearchAddon());
+      }
 
       terminal.open(containerEl);
       containerEl.addEventListener('click', () => terminal.focus());
@@ -2762,12 +2774,12 @@ export default function TerminalPanel({
         if (data === '\x12') {  // Ctrl+R - History search
           const history = commandHistoryRef.current[terminalId] || [];
           const currentInput = lineBufferRef.current[terminalId] || '';
-          
+
           // Find matching command from history (reverse search)
-          const match = history.reverse().find(cmd => 
+          const match = [...history].reverse().find(cmd =>
             cmd.toLowerCase().includes(currentInput.toLowerCase())
           );
-          
+
           if (match) {
             const prompt = getPrompt(term.mode, localShellCwdRef.current[terminalId] || 'project');
             // Clear line and write match
@@ -3012,25 +3024,21 @@ export default function TerminalPanel({
           clearInterval((currentTerm as any).__spinnerInterval);
           delete (currentTerm as any).__spinnerInterval;
         }
-        // Fall back to command-mode
-        const scopePath = filesystemScopePathRef.current;
-        const sandboxPath = toSandboxScopedPath(scopePath, currentTerm?.sandboxInfo?.sandboxId);
-        const cwd = scopePath || 'project';
-        localShellCwdRef.current[terminalId] = cwd;
+        // Fall back to local shell mode (no valid sandbox session)
         updateTerminalState(terminalId, {
-          sandboxInfo: { status: 'active' },
-          isConnected: true,
-          mode: 'sandbox-cmd',
+          sandboxInfo: { status: 'error' },
+          isConnected: false,
+          mode: 'local',
         });
-        currentTerm.sandboxInfo = { status: 'active' };
-        currentTerm.isConnected = true;
-        currentTerm.mode = 'sandbox-cmd';
+        currentTerm.sandboxInfo = { status: 'error' };
+        currentTerm.isConnected = false;
+        currentTerm.mode = 'local';
         currentTerm.terminal?.writeln('');
-        currentTerm.terminal?.writeln('\x1b[33m⚠ Connection timeout. Using command-mode.\x1b[0m');
-        currentTerm.terminal?.writeln('\x1b[90mCommands execute line-by-line. Type "connect" to retry PTY.\x1b[0m');
+        currentTerm.terminal?.writeln('\x1b[33m⚠ Connection timeout. Using local shell mode.\x1b[0m');
+        currentTerm.terminal?.writeln('\x1b[90mYou can keep using the local shell or type "connect" to retry the sandbox.\x1b[0m');
         currentTerm.terminal?.writeln('');
-        currentTerm.terminal?.writeln(`\x1b[90m→ cd ${sandboxPath}\x1b[0m`);
-        currentTerm.terminal?.write(getPrompt('sandbox-cmd', cwd));
+        const cwd = localShellCwdRef.current[terminalId] || 'project';
+        currentTerm.terminal?.write(getPrompt('local', cwd));
       }
     }, CONNECTION_TIMEOUT_MS);
 
@@ -3142,8 +3150,24 @@ export default function TerminalPanel({
 
               switch (msg.type) {
                 case 'error': {
+                  // Clear spinner interval
+                  const termWithError = terminalsRef.current.find(t => t.id === terminalId);
+                  if (termWithError && (termWithError as any).__spinnerInterval) {
+                    clearInterval((termWithError as any).__spinnerInterval);
+                    delete (termWithError as any).__spinnerInterval;
+                  }
+                  // Clear connection timeout
+                  if (termWithError && (termWithError as any).__connectionTimeout) {
+                    clearTimeout((termWithError as any).__connectionTimeout);
+                    delete (termWithError as any).__connectionTimeout;
+                  }
+
                   // Server rejected WebSocket - no PTY available
-                  logger.warn('WebSocket error from server:', msg.error);
+                  logger.warn('WebSocket error from server:', msg.error || msg.data);
+                  
+                  // Write error to terminal
+                  const errorMsg = msg.error || msg.data || 'Unknown error';
+                  currentTerm.terminal.writeln(`\x1b[31m${errorMsg}\x1b[0m`);
                   
                   // Immediately fall back to command-mode
                   updateTerminalState(terminalId, {
@@ -3263,41 +3287,6 @@ export default function TerminalPanel({
                       onClick: () => window.open(msg.data.url, '_blank'),
                     },
                   });
-                  break;
-
-                case 'error':
-                  // Clear spinner interval
-                  const termWithError = terminalsRef.current.find(t => t.id === terminalId);
-                  if (termWithError && (termWithError as any).__spinnerInterval) {
-                    clearInterval((termWithError as any).__spinnerInterval);
-                    delete (termWithError as any).__spinnerInterval;
-                  }
-                  // Clear connection timeout
-                  if (termWithError && (termWithError as any).__connectionTimeout) {
-                    clearTimeout((termWithError as any).__connectionTimeout);
-                    delete (termWithError as any).__connectionTimeout;
-                  }
-
-                  currentTerm.terminal.writeln(`\x1b[31m${msg.data}\x1b[0m`);
-                  if (!currentTerm.isConnected) {
-                    updateTerminalState(terminalId, {
-                      sandboxInfo: { sessionId, sandboxId, status: 'error' },
-                      isConnected: false,
-                      mode: 'sandbox-cmd',
-                    });
-                    const termMut = terminalsRef.current.find(t => t.id === terminalId);
-                    if (termMut) {
-                      termMut.sandboxInfo = { sessionId, sandboxId, status: 'error' };
-                      termMut.isConnected = false;
-                      termMut.mode = 'sandbox-cmd';
-                    }
-                    ws.close();
-                    reconnectCooldownUntilRef.current[terminalId] = Date.now() + 5000;
-                    currentTerm.terminal.writeln('\x1b[33m⚠ PTY unavailable. Falling back to command-mode.\x1b[0m');
-                    currentTerm.terminal.writeln('\x1b[90mType "connect" to retry PTY.\x1b[0m');
-                    const cwd = localShellCwdRef.current[terminalId] || 'project';
-                    currentTerm.terminal.write(`\x1b[1;32m${cwd.replace(/^project/, '~')}$\x1b[0m `);
-                  }
                   break;
 
                 case 'ping':
@@ -3773,7 +3762,7 @@ export default function TerminalPanel({
     try {
       const text = await navigator.clipboard.readText();
       if (text) {
-        active.terminal.input(text);
+        active.terminal.write(text);
         toast.success('Pasted from clipboard');
       }
     } catch {

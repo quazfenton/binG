@@ -298,33 +298,40 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
       if (LLM_AGENT_TOOLS_ENABLED && authenticatedUserId && requestType === 'tool') {
         try {
           console.log('[LLM Agent Tools] Executing filesystem tools for user:', authenticatedUserId);
-          
+
           const agentLoop = createAgentLoop(
             authenticatedUserId,
             requestedScopePath || 'workspace',
             LLM_AGENT_TOOLS_MAX_ITERATIONS
           );
-          
-          // Set timeout for agent execution
+
+          // Set timeout for agent execution with proper cleanup
+          let agentTimeoutId: NodeJS.Timeout | null = null;
           const agentPromise = agentLoop.executeTask(rawResponseContent);
           const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Agent tools timeout')), LLM_AGENT_TOOLS_TIMEOUT_MS);
+            agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), LLM_AGENT_TOOLS_TIMEOUT_MS);
           });
-          
-          agentToolResults = await Promise.race([agentPromise, timeoutPromise]) as any;
-          
+
+          try {
+            agentToolResults = await Promise.race([agentPromise, timeoutPromise]) as any;
+          } finally {
+            if (agentTimeoutId) clearTimeout(agentTimeoutId);
+          }
+
           console.log('[LLM Agent Tools] Execution completed:', {
             success: agentToolResults.success,
             iterations: agentToolResults.iterations,
             results: agentToolResults.results?.length,
           });
-          
+
           // Append agent tool results to response
           if (agentToolResults.success && agentToolResults.results?.length > 0) {
             const toolSummary = agentToolResults.results
               .map((r: any) => `${r.tool}: ${JSON.stringify(r.result)}`)
               .join('\n');
             unifiedResponse.content = `${rawResponseContent}\n\n[Agent Tools Executed]\n${toolSummary}`;
+            // Sync rawResponseContent so subsequent rendering uses updated content
+            rawResponseContent = unifiedResponse.content;
           }
         } catch (error: any) {
           console.error('[LLM Agent Tools] Execution failed:', error.message);

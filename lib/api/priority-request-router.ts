@@ -317,7 +317,7 @@ class PriorityRequestRouter {
       case 'tool-execution': {
         // Prefer arcade when configured, otherwise fall back to nango
         if (process.env.ARCADE_API_KEY) return 'arcade';
-        if (process.env.NANGO_API_KEY) return 'nango';
+        if (process.env.NANGO_SECRET_KEY) return 'nango';
         return null;
       }
       case 'sandbox-agent': {
@@ -424,7 +424,7 @@ class PriorityRequestRouter {
           try {
             // Check if tool manager and Arcade/Nango are configured
             const toolManager = getToolManager();
-            return !!toolManager && !!(process.env.ARCADE_API_KEY || process.env.NANGO_API_KEY);
+            return !!toolManager && !!(process.env.ARCADE_API_KEY || process.env.NANGO_SECRET_KEY);
           } catch {
             return false;
           }

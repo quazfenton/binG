@@ -1,9 +1,9 @@
 /**
  * Mistral Code Executor
- * 
+ *
  * Advanced code execution with validation, multi-language support, and retry logic.
  * Additive module that enhances the core provider with sophisticated execution capabilities.
- * 
+ *
  * Features:
  * - Multi-language code execution (Python, JavaScript, TypeScript, Bash)
  * - Code safety validation
@@ -14,15 +14,27 @@
  */
 
 import type { Mistral } from '@mistralai/mistralai'
-import type { ToolResult } from '../../types'
 import type {
   CodeExecutionRequest,
-  CodeExecutionResult,
+  CodeExecutionResult as MistralCodeExecutionResult,
   CodeLanguage,
   ExecutionEnvironment,
   MistralProviderConfig,
+  ToolResult,
 } from './mistral-types'
 import { MistralConversationManager } from './mistral-conversation-manager'
+
+// Local CodeExecutionResult type that matches our interface
+export interface CodeExecutionResult {
+  success: boolean
+  output?: string
+  error?: string
+  exitCode?: number
+  executionTime?: number
+  tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number }
+  executedCode?: string
+  language?: string
+}
 
 export interface ExecutionStats {
   totalExecutions: number
@@ -70,11 +82,10 @@ export class MistralCodeExecutor {
           success: false,
           output: `Code safety validation failed: ${validation.reason}`,
           exitCode: 1,
-          validationErrors: validation.errors,
-          metadata: {
-            executedCode: request.code,
-            language: request.language,
-          },
+          error: validation.reason,
+          executionTime: Date.now() - startTime,
+          executedCode: request.code,
+          language: request.language,
         }
       }
 
@@ -109,23 +120,20 @@ export class MistralCodeExecutor {
 
       return {
         ...result,
-        metadata: {
-          executionTime,
-          tokenUsage: response.usage,
-          executedCode: request.code,
-          language: request.language,
-        },
+        executionTime,
+        executedCode: request.code,
+        language: request.language,
       }
     } catch (error: any) {
       this.stats.failedExecutions++
       return {
         success: false,
         output: error.message || 'Code execution failed',
+        error: error.message,
         exitCode: 1,
-        metadata: {
-          executedCode: request.code,
-          language: request.language,
-        },
+        executionTime: Date.now() - startTime,
+        executedCode: request.code,
+        language: request.language,
       }
     }
   }
@@ -149,15 +157,15 @@ export class MistralCodeExecutor {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const result = await this.executeCode(request, options?.conversationId)
-        
+
         if (result.success) {
           return result
         }
 
         lastResult = result
 
-        // Don't retry validation errors
-        if (result.validationErrors?.length > 0) {
+        // Don't retry validation errors (check error message for validation keywords)
+        if (result.error?.includes('validation') || result.error?.includes('safety')) {
           return result
         }
 
@@ -168,7 +176,7 @@ export class MistralCodeExecutor {
 
       } catch (error: any) {
         lastError = error
-        
+
         if (!this.isRetryableError(error)) {
           throw error
         }
@@ -206,8 +214,9 @@ export class MistralCodeExecutor {
       results.push(result)
 
       // Use same conversation for context
-      if (!convId && result.metadata?.conversationId) {
-        convId = result.metadata.conversationId
+      if (!convId && result.executionTime) {
+        // Keep using same conversation ID if available
+        convId = convId || options?.conversationId
       }
 
       // Stop on first failure if requested

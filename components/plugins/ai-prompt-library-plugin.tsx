@@ -129,13 +129,16 @@ export default function AIPromptLibraryPlugin({ onClose }: PluginProps) {
           messages: [
             { role: 'user', content: processedContent }
           ],
-          model: selectedModel
+          provider: 'openai',
+          model: selectedModel,
+          stream: false,
         }),
       });
 
       if (!response.ok) throw new Error('Execution failed');
       const data = await response.json();
-      const generatedResult = data.message || data.choices?.[0]?.message?.content || data.content || '';
+      // Fix: Correct response parsing to match /api/chat contract
+      const generatedResult = data.data?.content || data.content || data.message?.content || '';
       setResult(generatedResult);
       toast.success('Prompt executed');
     } catch (err) {

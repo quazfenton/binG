@@ -88,13 +88,18 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
   };
 
   const handleReload = () => {
+    setIframeError(null);
+    setIsLoading(true);
     setIsReloading(true);
     setIframeKey(prev => prev + 1);
     setTimeout(() => setIsReloading(false), 1000);
   };
 
   const handleOpenExternal = () => {
-    window.open(iframeUrl, '_blank');
+    const newWindow = window.open(iframeUrl, '_blank', 'noopener,noreferrer');
+    if (newWindow) {
+      newWindow.opener = null;
+    }
   };
 
   const toggleBookmark = () => {
@@ -306,7 +311,9 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                       setIframeError('Failed to load Archive.org. The site may not allow embedding.');
                       setIsLoading(false);
                     }}
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
+                    allow="fullscreen"
+                    referrerPolicy="no-referrer"
                   />
                 )}
               </div>
@@ -356,7 +363,9 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                   className="w-full h-full border-0"
                   title="Wayback Machine"
                   onLoad={() => setIsLoading(false)}
-                  sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                  sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
+                  allow="fullscreen"
+                  referrerPolicy="no-referrer"
                 />
               </div>
             </div>
@@ -402,7 +411,12 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => window.open(bookmark.url, '_blank')}
+                            onClick={() => {
+                              const newWindow = window.open(bookmark.url, '_blank', 'noopener,noreferrer');
+                              if (newWindow) {
+                                newWindow.opener = null;
+                              }
+                            }}
                             className="hover:bg-indigo-800/50"
                           >
                             <ExternalLink className="w-4 h-4" />
@@ -472,7 +486,12 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => window.open(entry.url, '_blank')}
+                            onClick={() => {
+                              const newWindow = window.open(entry.url, '_blank', 'noopener,noreferrer');
+                              if (newWindow) {
+                                newWindow.opener = null;
+                              }
+                            }}
                             className="hover:bg-indigo-800/50"
                           >
                             <ExternalLink className="w-4 h-4" />

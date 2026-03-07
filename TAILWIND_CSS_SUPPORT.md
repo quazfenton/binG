@@ -246,16 +246,19 @@ if (tailwindClasses || moduleClass) {
 ### jsxToCraftNodes Changes
 ```typescript
 // Parse className for Tailwind classes
-const classMatch = propsStr.match(/className\s*=\s*["']([^"']*)["']/);
+// Match both quoted strings and template literals
+const classMatch = propsStr.match(/className\s*=\s*(?:"([^"]*)"|'([^']*)'|`\{([^}]*)\}`|\{`([^`]*)`\})/);
 if (classMatch) {
-  const className = classMatch[1];
+  // Extract className from any of the capture groups (group 1, 2, 3, or 4)
+  const className = classMatch[1] || classMatch[2] || classMatch[3] || classMatch[4] || '';
   if (!props.styles) props.styles = {};
   (props.styles as Record<string, string>).className = className;
   (props.styles as Record<string, string>).tailwindClasses = className;
 }
 
 // Parse CSS module classes
-const moduleClassMatch = propsStr.match(/className\s*=\s*\{([^}]+)\}/);
+// Match CSS module patterns like styles.className or styles['className']
+const moduleClassMatch = propsStr.match(/className\s*=\s*\{(styles\.[a-zA-Z0-9_]+|styles\[['"][a-zA-Z0-9_]+['"]\])\}/);
 if (moduleClassMatch) {
   const moduleClass = moduleClassMatch[1].trim();
   if (!props.styles) props.styles = {};
@@ -287,6 +290,10 @@ if (moduleClassMatch) {
 - [ ] Verify module class appears in input
 - [ ] Load combined JSX
 - [ ] Verify both parse correctly
+- [ ] Test `className="flex items-center"` is captured correctly
+- [ ] Test `className={\`flex \${isActive ? 'bg-blue' : ''}\`}` is captured correctly
+- [ ] Test `className={styles.container}` is captured correctly
+- [ ] Test complex template literals don't break the parser
 
 ### Export Quality
 - [ ] Export Tailwind-only component
@@ -378,7 +385,7 @@ export default function Page() {
 
 ## ⚠️ Limitations
 
-1. **Template Literals:** Complex template literals with conditions are not fully parsed
+1. **Template Literals:** Basic template literals are now supported, but deeply nested expressions may still have edge cases
 2. **Multiple Classes:** Very long class strings may be truncated in the UI
 3. **Arbitrary Values:** Tailwind arbitrary values (`w-[350px]`) work but aren't in quick pickers
 4. **Responsive Classes:** Classes like `md:flex` are supported but not in quick pickers
