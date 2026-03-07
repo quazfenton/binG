@@ -269,7 +269,7 @@ const WorldMonitorEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
                       </Button>
                     </div>
                   </div>
-                ) : (
+                ) : iframeUrl ? (
                   <iframe
                     key={iframeKey}
                     src={iframeUrl}
@@ -284,6 +284,10 @@ const WorldMonitorEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
                     allow="fullscreen"
                     referrerPolicy="no-referrer"
                   />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center text-slate-500">
+                    <p>Enter a URL to load content</p>
+                  </div>
                 )}
               </div>
 

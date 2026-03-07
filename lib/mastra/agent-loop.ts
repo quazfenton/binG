@@ -226,21 +226,54 @@ Current workspace: ${this.context.workspacePath}
 Available Tools:
 ${this.tools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
 
+TOOL CALLING FORMAT:
+When you need to create or modify files, use this exact format:
+
+WRITE path/to/file.ext <<<
+file content here
+>>>
+
+To read a file:
+READ path/to/file.ext
+
+Examples:
+WRITE package.json <<<
+{
+  "name": "my-app",
+  "version": "1.0.0"
+}
+>>>
+
+WRITE src/index.js <<<
+console.log('Hello World');
+>>>
+
+READ package.json
+
 Best Practices:
-1. Always check if a file exists before editing (use read_file or list_directory)
+1. Always check if a file exists before editing (use READ or list_directory)
 2. Use relative paths from workspace root (e.g., "toDoApp/src/app.js")
 3. After creating files, suggest running commands
-4. Use tools to directly manipulate files when possible
+4. Use the WRITE/READ format above to directly manipulate files
 
 Response Format:
-- Use tool calls to read/write/list/search/delete files
+- Use WRITE/READ format to create/read files
 - When task is complete, respond with { "done": true, "message": "..." }
 - Provide clear explanations of what you're doing
 
 Example:
 User: "Create a todo app"
-Assistant: [Calls write_file tool to create files]
-Assistant: { "done": true, "message": "Created a todo app with React components" }`;
+Assistant: 
+WRITE package.json <<<
+{
+  "name": "todo-app",
+  "version": "1.0.0"
+}
+>>>
+WRITE src/index.js <<<
+// Todo app code
+>>>
+Assistant: { "done": true, "message": "Created a todo app with package.json and src/index.js" }`;
   }
 
   /**

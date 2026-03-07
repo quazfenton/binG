@@ -6174,7 +6174,7 @@ export function VisualEditorMain({
                         expandRootOnLoad
                         renderLayer={({ layer, children }) => (
                           <div
-                            style={{ paddingLeft: `${(layer.depth - 1) * 12}px` }}
+                            style={{ paddingLeft: `${((layer.depth ?? 1) - 1) * 12}px` }}
                             className={`flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer text-xs transition-colors ${
                               layer.selected
                                 ? "bg-[#1f3249] text-white"
