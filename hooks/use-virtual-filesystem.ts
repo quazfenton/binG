@@ -39,6 +39,7 @@ function getOrCreateAnonymousSessionId(): string {
 export function useVirtualFilesystem(initialPath: string = 'project') {
   const [currentPath, setCurrentPath] = useState(initialPath);
   const currentPathRef = useRef(currentPath);
+  const initialPathRef = useRef(initialPath);
   const [nodes, setNodes] = useState<VirtualFilesystemNode[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<Record<string, AttachedVirtualFile>>({});
   const [isLoading, setIsLoading] = useState(false);
@@ -217,8 +218,13 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
   }, [writeFile]);
 
   useEffect(() => {
-    void listDirectory(initialPath);
-  }, [initialPath, listDirectory]);
+    // Only load directory when initialPath actually changes (not on every render)
+    if (initialPathRef.current !== initialPath) {
+      initialPathRef.current = initialPath;
+      void listDirectory(initialPath);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialPath]);
 
   const attachedFileList = useMemo(
     () => Object.values(attachedFiles).sort((a, b) => a.path.localeCompare(b.path)),

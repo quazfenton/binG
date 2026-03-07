@@ -55,6 +55,7 @@ export const NoteTakerPlugin: React.FC<PluginProps> = ({ onClose, onResult, init
   }, [notes]);
 
   const currentNote = useMemo(() => notes.find(n => n.id === currentNoteId), [notes, currentNoteId]);
+  const [hasInitializedFromInitialData, setHasInitializedFromInitialData] = useState(false);
 
   useEffect(() => {
     if (currentNote) {
@@ -63,7 +64,7 @@ export const NoteTakerPlugin: React.FC<PluginProps> = ({ onClose, onResult, init
       setCategory(currentNote.category);
       setIsEditing(false);
       setViewMode('preview');
-    } else if (initialData?.content) {
+    } else if (initialData?.content && !hasInitializedFromInitialData) {
       setTitle(initialData.title || 'New Note from Chat');
       setContent(initialData.content);
       setCategory('General');
@@ -71,13 +72,14 @@ export const NoteTakerPlugin: React.FC<PluginProps> = ({ onClose, onResult, init
       setCurrentNoteId(newId);
       setIsEditing(true);
       setViewMode('edit');
+      setHasInitializedFromInitialData(true);
     } else {
       setTitle('');
       setContent('');
       setCategory('General');
       setCurrentNoteId(null);
     }
-  }, [currentNote, initialData]);
+  }, [currentNote, initialData, hasInitializedFromInitialData]);
 
   const createNewNote = useCallback(() => {
     setIsEditing(true);

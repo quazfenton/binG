@@ -425,7 +425,6 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                     sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-autoplay allow-top-navigation allow-top-navigation-by-user-activation"
                     allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
                     referrerPolicy="no-referrer"
-                    allowTransparency={true}
                   />
                 )}
               </div>

@@ -834,6 +834,8 @@ export default function CodePreviewPanel({
         if (currentCount !== previousCount) {
           directoryFileCounts.current.set(filesystemCurrentPath, currentCount);
           console.log('[CodePreview] Directory file count changed, refreshing...');
+          // Actually refresh the view
+          await listFilesystemDirectory(filesystemCurrentPath);
         }
       } catch (error) {
         console.error('[CodePreview] Poll error:', error);
@@ -2923,7 +2925,7 @@ export default app;`,
                         </h3>
                         <div className="mb-3 rounded border border-white/10 bg-black/30 p-2">
                           <div className="mb-2 text-[11px] text-gray-400 break-all">
-                            /{filesystemCurrentPath.replace(/^project\/?/, '') || 'project'}
+                            {filesystemCurrentPath || 'project'}
                           </div>
                           <div className="flex items-center gap-2">
                             <Button
