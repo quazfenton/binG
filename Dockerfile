@@ -1,12 +1,15 @@
-# Production Dockerfile for binG Backend
+#Production Dockerfile for binG Backend
 # Multi-stage build for optimal image size
 
 # ===========================================
 # Stage 1: Dependencies
 # ===========================================
-FROM node:20-alpine AS deps
+
+# Base image - Using debian instead of alpine for better compatibility with native modules
+FROM node:20.20.0-trixie-slim AS base
 
 RUN apk add --no-cache libc6-compat
+
 
 WORKDIR /app
 
