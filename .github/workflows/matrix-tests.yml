@@ -10,7 +10,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: ${{ matrix.node-version }}, cache: 'npm' }
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
       - run: npm ci --prefer-offline
       - run: npm test --if-present
   python-matrix:
@@ -22,7 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: ${{ matrix.python-version }}, cache: 'pip' }
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
       - run: |
           pip install pytest coverage
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
