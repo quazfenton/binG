@@ -109,7 +109,8 @@ function getAuthHeaders(): Record<string, string> {
   return headers;
 }
 
-const createMinimalProject = (): LocalFileSystem => ({
+const createMinimalProject = (scopePath: string = 'project'): LocalFileSystem => ({
+  [scopePath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
   'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
 });
 
@@ -182,7 +183,7 @@ export default function TerminalPanel({
 
        if (files.length === 0) {
          // VFS is empty - create minimal project structure (no mock files)
-         localFileSystemRef.current = createMinimalProject();
+         localFileSystemRef.current = createMinimalProject(filesystemScopePath);
          setIsVfsSynced(true);
          setVfsFileCount(0);
          console.log('[TerminalPanel] VFS is empty, using minimal project structure');
@@ -190,12 +191,15 @@ export default function TerminalPanel({
        }
 
        // Use ONLY VFS files with their original paths
-       const fs: LocalFileSystem = {};
+       const fs: LocalFileSystem = {
+         'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+         [filesystemScopePath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
+       };
 
        for (const file of files) {
          // Normalize path: ensure it starts with project/
          let fullPath = file.path;
-         
+
          // Strip any sandbox/workspace prefixes that might have been stored incorrectly
          fullPath = fullPath
            .replace(/^(\/tmp\/workspaces\/)+/gi, '')
@@ -204,7 +208,7 @@ export default function TerminalPanel({
            .replace(/^(workspace\/)+/gi, '')
            .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
            .replace(/^(home\/[^/]+\/workspace\/)+/gi, '');
-         
+
          // Ensure path starts with project/
          if (!fullPath.startsWith('project/') && fullPath !== 'project') {
            fullPath = fullPath.replace(/^\/+/, '');
@@ -318,7 +322,7 @@ export default function TerminalPanel({
               if (files.length === 0) {
                 // VFS is empty - ensure minimal project structure exists
                 if (!localFileSystemRef.current['project']) {
-                  localFileSystemRef.current = createMinimalProject();
+                  localFileSystemRef.current = createMinimalProject(filesystemScopePath);
                 }
                 return;
               }
@@ -327,6 +331,9 @@ export default function TerminalPanel({
 
               if (!fs['project']) {
                 fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+              }
+              if (!fs[filesystemScopePath]) {
+                fs[filesystemScopePath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
               }
 
               for (const file of files) {
@@ -890,6 +897,9 @@ export default function TerminalPanel({
     const raw = (input || '').trim().replace(/\\/g, '/');
     if (!raw) return cwd;
 
+    // Use the filesystem scope path as the base
+    const scopePath = filesystemScopePathRef.current || 'project';
+
     // Handle absolute paths
     if (raw.startsWith('/')) {
       const parts = raw.split('/').filter(Boolean);
@@ -903,27 +913,31 @@ export default function TerminalPanel({
         stack.push(part);
       }
       const result = stack.join('/');
-      // Default to project root if no root specified
-      if (!result.startsWith('project')) {
-        return `project/${result}`.replace(/\/+/g, '/');
+      // Default to scope path if no root specified
+      if (!result.startsWith(scopePath.replace(/^project\//, ''))) {
+        return `${scopePath}/${result}`.replace(/\/+/g, '/');
       }
-      return result;
+      return `${scopePath}/${result}`.replace(/\/+/g, '/');
     }
 
-    // Handle relative paths
+    // Handle relative paths - use scope path as base
     const base = raw.startsWith('project') ? raw : `${cwd}/${raw}`.replace(/\/+/g, '/');
     const parts = base.split('/').filter(Boolean);
     const stack: string[] = [];
     for (const part of parts) {
       if (part === '.') continue;
       if (part === '..') {
-        if (stack.length > 1) stack.pop();
+        // Don't go above the scope path
+        if (stack.length > scopePath.split('/').length) {
+          stack.pop();
+        }
         continue;
       }
       stack.push(part);
     }
-    if (stack.length === 0 || stack[0] !== 'project') {
-      return 'project';
+    // Ensure path starts with scope path
+    if (stack.length === 0 || !stack[0].startsWith('project')) {
+      return scopePath;
     }
     return stack.join('/');
   }, []);
@@ -950,6 +964,17 @@ export default function TerminalPanel({
 
   const syncFileToVFS = useCallback(async (filePath: string, content: string) => {
     try {
+      // Ensure file path is scoped to the current filesystem scope
+      const scopePath = filesystemScopePathRef.current || 'project';
+      let scopedFilePath = filePath;
+      
+      // If filePath doesn't already start with the scope path, prepend it
+      if (!filePath.startsWith(scopePath)) {
+        // Remove 'project/' prefix if present to avoid duplication
+        const cleanPath = filePath.replace(/^project\//, '');
+        scopedFilePath = `${scopePath}/${cleanPath}`.replace(/\/+/g, '/');
+      }
+      
       await fetch('/api/filesystem/write', {
         method: 'POST',
         headers: {
@@ -957,7 +982,7 @@ export default function TerminalPanel({
           ...getAuthHeaders(),
         },
         credentials: 'include',
-        body: JSON.stringify({ path: filePath, content }),
+        body: JSON.stringify({ path: scopedFilePath, content }),
       });
     } catch {
       // Best-effort sync; local filesystem remains authoritative in local mode
@@ -1154,7 +1179,12 @@ export default function TerminalPanel({
         const target = allArgs || 'project';
         const nextPath = resolveLocalPath(cwd, target);
         const fs = localFileSystemRef.current;
-        
+
+        // Ensure project root exists
+        if (!fs['project']) {
+          fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+        }
+
         if (fs[nextPath] && fs[nextPath].type === 'directory') {
           localShellCwdRef.current[terminalId] = nextPath;
         } else if (!fs[nextPath]) {
@@ -1170,6 +1200,11 @@ export default function TerminalPanel({
         const target = showLong ? (arg1.startsWith('-') ? arg2 : arg1) : (arg1 || cwd);
         const targetPath = resolveLocalPath(cwd, target);
         const fs = localFileSystemRef.current;
+
+        // Ensure project root exists
+        if (!fs['project']) {
+          fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+        }
 
         console.log('[Terminal ls] cwd:', cwd, 'target:', target, 'targetPath:', targetPath);
         console.log('[Terminal ls] filesystem keys:', Object.keys(fs).slice(0, 20));
@@ -1239,7 +1274,12 @@ export default function TerminalPanel({
         }
         const filePath = resolveLocalPath(cwd, arg1);
         const fs = localFileSystemRef.current;
-        
+
+        // Ensure project root exists
+        if (!fs['project']) {
+          fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+        }
+
         if (!fs[filePath]) {
           writeError(`cat: ${arg1}: No such file or directory`);
           return true;
@@ -1263,18 +1303,27 @@ export default function TerminalPanel({
         for (const d of dirs) {
           const dirPath = resolveLocalPath(cwd, d);
           const fs = localFileSystemRef.current;
-          
+
+          // Ensure project root exists
+          if (!fs['project']) {
+            fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+          }
+
           if (fs[dirPath]) {
             writeError(`mkdir: cannot create directory '${d}': File exists`);
             continue;
           }
-          
+
           const parent = getParentPath(dirPath);
+          if (!fs[parent] && parent === 'project') {
+            fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+          }
+          
           if (!fs[parent]) {
             writeError(`mkdir: cannot create directory '${d}': No such file or directory`);
             continue;
           }
-          
+
           fs[dirPath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
         }
         return true;
@@ -1426,22 +1475,30 @@ export default function TerminalPanel({
 
       case 'echo': {
         let text = allArgs;
-        if ((text.startsWith('"') && text.endsWith('"')) || 
+        if ((text.startsWith('"') && text.endsWith('"')) ||
             (text.startsWith("'") && text.endsWith("'"))) {
           text = text.slice(1, -1);
         }
-        
-        if (arg1 === '>' && arg2) {
-          const filePath = resolveLocalPath(cwd, arg2);
+
+        // Check for redirect operators
+        const redirectMatch = allArgs.match(/^(.*?)\s*>\s*(.+?)$/);
+        if (redirectMatch) {
+          const [, echoText, fileName] = redirectMatch;
+          const filePath = resolveLocalPath(cwd, fileName.trim());
           const fs = localFileSystemRef.current;
           const parent = getParentPath(filePath);
-          
+
+          // Ensure parent directory exists (create if needed for project root)
+          if (!fs[parent] && parent === 'project') {
+            fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+          }
+
           if (!fs[parent]) {
-            writeError(`echo: cannot write to '${arg2}': No such file or directory`);
+            writeError(`echo: cannot write to '${fileName.trim()}': No such file or directory`);
             return true;
           }
-          
-          const echoContent = text.replace(/\\n/g, '\n');
+
+          const echoContent = echoText.trim().replace(/\\n/g, '\n');
           fs[filePath] = {
             type: 'file',
             content: echoContent,
@@ -1449,6 +1506,26 @@ export default function TerminalPanel({
             modifiedAt: Date.now()
           };
           syncFileToVFS(filePath, echoContent);
+          writeLine(`\x1b[90m> Written to ${filePath}\x1b[0m`);
+        } else if (arg1 === '>>' && arg2) {
+          // Append mode
+          const filePath = resolveLocalPath(cwd, arg2);
+          const fs = localFileSystemRef.current;
+          
+          if (!fs[filePath]) {
+            // Create new file if doesn't exist
+            fs[filePath] = {
+              type: 'file',
+              content: text.replace(/\\n/g, '\n'),
+              createdAt: Date.now(),
+              modifiedAt: Date.now()
+            };
+          } else {
+            // Append to existing file
+            fs[filePath].content = (fs[filePath].content || '') + '\n' + text.replace(/\\n/g, '\n');
+            fs[filePath].modifiedAt = Date.now();
+          }
+          syncFileToVFS(filePath, fs[filePath].content);
         } else {
           writeLine(text.replace(/\\n/g, '\n').replace(/\\t/g, '\t'));
         }

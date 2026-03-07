@@ -5,6 +5,44 @@ export class GrammarToolCallParser {
     const content = String(context.content || '');
     if (!content.trim()) return [];
 
+    const calls: ParsedToolCall[] = [];
+
+    // First, try to parse WRITE commands in format: "WRITE filename <<<\ncontent\n>>>"
+    const writeCommandRegex = /WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    let writeMatch: RegExpExecArray | null;
+    
+    while ((writeMatch = writeCommandRegex.exec(content)) !== null) {
+      const [, filename, fileContent] = writeMatch;
+      if (filename && fileContent) {
+        calls.push({
+          name: 'filesystem.write_file',
+          arguments: {
+            path: filename.trim(),
+            content: fileContent.trim(),
+          },
+          source: 'grammar-write',
+        });
+      }
+    }
+
+    // Also support READ command format: "READ filename"
+    const readCommandRegex = /READ\s+([^\n\r]+)/gi;
+    let readMatch: RegExpExecArray | null;
+    
+    while ((readMatch = readCommandRegex.exec(content)) !== null) {
+      const [, filename] = readMatch;
+      if (filename) {
+        calls.push({
+          name: 'filesystem.read_file',
+          arguments: {
+            path: filename.trim(),
+          },
+          source: 'grammar-read',
+        });
+      }
+    }
+
+    // Try to parse JSON blocks (original behavior)
     const jsonBlocks: string[] = [];
     const fencedRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
     let match: RegExpExecArray | null;
@@ -17,8 +55,6 @@ export class GrammarToolCallParser {
     if (jsonBlocks.length === 0 && fallbackCurly) {
       jsonBlocks.push(fallbackCurly[0]);
     }
-
-    const calls: ParsedToolCall[] = [];
 
     for (const block of jsonBlocks) {
       try {

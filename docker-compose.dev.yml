@@ -564,21 +564,52 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     command: >
       sh -c "
-      apk add --no-cache curl &&
-      mkdir -p /tmp/msb && cd /tmp/msb && npm init -y > /dev/null 2>&1 && npm install microsandbox > /dev/null 2>&1 ;
-      node -e \"
-        const http = require('http');
-        const server = http.createServer((req, res) => {
-          if (req.url === '/health') {
-            res.writeHead(200, {'Content-Type':'application/json'});
-            res.end(JSON.stringify({status:'ok',provider:'microsandbox'}));
-          } else {
-            res.writeHead(404);
-            res.end();
-          }
-        });
-        server.listen(5555, () => console.log('Microsandbox stub on :5555'));
-      \"
+      apk add --no-cache curl git &&
+      npm install -g microsandbox &&
+      echo 'Starting microsandbox daemon...' &&
+      msb server start --dev --port 5555 || {
+        echo 'Microsandbox daemon failed, starting fallback...'
+        node -e \"
+          const http = require('http');
+          const server = http.createServer((req, res) => {
+            if (req.url === '/health') {
+              res.writeHead(200, {'Content-Type':'application/json'});
+              res.end(JSON.stringify({status:'ok',provider:'microsandbox-fallback'}));
+            } else if (req.url === '/sandbox/create' && req.method === 'POST') {
+              let body = '';
+              req.on('data', chunk => body += chunk);
+              req.on('end', () => {
+                res.writeHead(200, {'Content-Type':'application/json'});
+                res.end(JSON.stringify({
+                  success: true,
+                  sandboxId: 'fallback-' + Date.now(),
+                  workspaceDir: '/workspace/fallback',
+                  message: 'Fallback sandbox created'
+                }));
+              });
+            } else if (req.url === '/sandbox/execute' && req.method === 'POST') {
+              let body = '';
+              req.on('data', chunk => body += chunk);
+              req.on('end', () => {
+                const data = JSON.parse(body);
+                const { execSync } = require('child_process');
+                try {
+                  const output = execSync(data.command, { encoding: 'utf8', cwd: '/workspace' });
+                  res.writeHead(200, {'Content-Type':'application/json'});
+                  res.end(JSON.stringify({ success: true, output, exitCode: 0 }));
+                } catch (e) {
+                  res.writeHead(200, {'Content-Type':'application/json'});
+                  res.end(JSON.stringify({ success: false, output: e.message, exitCode: 1 }));
+                }
+              });
+            } else {
+              res.writeHead(404);
+              res.end();
+            }
+          });
+          server.listen(5555, () => console.log('Microsandbox fallback server on :5555'));
+        \"
+      }
       "
     networks:
       - bing-network

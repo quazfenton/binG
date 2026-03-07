@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 export const runtime = 'nodejs';
 

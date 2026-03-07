@@ -498,7 +498,7 @@ export const CodexSchemas = {
             files_affected: { type: 'array', items: { type: 'string' } },
             estimated_complexity: { 
               type: 'string', 
-              enum: ['low', 'medium', 'high'] 
+              enum: ['low', 'medium', 'high']
             },
           },
           required: ['order', 'description'],
@@ -508,4 +508,43 @@ export const CodexSchemas = {
     },
     required: ['steps'],
   },
+}
+
+/**
+ * Execute a Codex task in a new E2B sandbox
+ * Convenience function that creates a sandbox, runs the task, and cleans up
+ */
+export async function executeCodexTask(config: {
+  prompt: string
+  apiKey?: string
+  template?: string
+  timeout?: number
+  outputSchema?: string
+}): Promise<{ output: string; exitCode: number }> {
+  const { Sandbox } = await import('@e2b/code-interpreter')
+  const apiKey = config.apiKey || process.env.OPENAI_API_KEY || ''
+  
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY environment variable is required for Codex')
+  }
+
+  const sandbox = await Sandbox.create({
+    template: config.template || 'base',
+    apiKey,
+  })
+
+  try {
+    const codexService = createCodexService(sandbox, apiKey)
+    const result = await codexService.run({
+      prompt: config.prompt,
+      timeout: config.timeout,
+    })
+    
+    return {
+      output: result.stdout || '',
+      exitCode: result.exitCode || 0,
+    }
+  } finally {
+    await sandbox.kill()
+  }
 }
