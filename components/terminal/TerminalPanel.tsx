@@ -942,6 +942,20 @@ export default function TerminalPanel({
     return stack.join('/');
   }, []);
 
+  const ensureProjectRootExists = useCallback(() => {
+    const fs = localFileSystemRef.current;
+    const scopePath = filesystemScopePathRef.current || 'project';
+    
+    // Always ensure project root exists
+    if (!fs['project']) {
+      fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+    }
+    // Also ensure scope path directory exists
+    if (scopePath !== 'project' && !fs[scopePath]) {
+      fs[scopePath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+    }
+  }, []);
+
   const getSandboxWorkspaceRoot = useCallback((sandboxId?: string): string => {
     if (!sandboxId) return '/workspace';
     if (sandboxId.startsWith('bing-') || sandboxId.startsWith('sprite-')) return '/home/sprite/workspace';
@@ -1180,10 +1194,8 @@ export default function TerminalPanel({
         const nextPath = resolveLocalPath(cwd, target);
         const fs = localFileSystemRef.current;
 
-        // Ensure project root exists
-        if (!fs['project']) {
-          fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
-        }
+        // Ensure project root and scope path exist
+        ensureProjectRootExists();
 
         if (fs[nextPath] && fs[nextPath].type === 'directory') {
           localShellCwdRef.current[terminalId] = nextPath;
@@ -1201,10 +1213,8 @@ export default function TerminalPanel({
         const targetPath = resolveLocalPath(cwd, target);
         const fs = localFileSystemRef.current;
 
-        // Ensure project root exists
-        if (!fs['project']) {
-          fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
-        }
+        // Ensure project root and scope path exist
+        ensureProjectRootExists();
 
         console.log('[Terminal ls] cwd:', cwd, 'target:', target, 'targetPath:', targetPath);
         console.log('[Terminal ls] filesystem keys:', Object.keys(fs).slice(0, 20));
@@ -1212,7 +1222,7 @@ export default function TerminalPanel({
 
         if (!fs[targetPath]) {
           // Check if we have any files at all
-          const fileCount = Object.keys(fs).length;
+          const fileCount = Object.keys(fs).filter(k => k !== 'project' && k !== (filesystemScopePathRef.current || 'project')).length;
           if (fileCount === 0) {
             writeLine('\x1b[33m⚠ Filesystem is empty. Files will appear here when created via code preview or sandbox.\x1b[0m');
             writeLine('\x1b[90mType "connect" to connect to a sandbox, or create files in the code preview panel.\x1b[0m');
@@ -1304,10 +1314,8 @@ export default function TerminalPanel({
           const dirPath = resolveLocalPath(cwd, d);
           const fs = localFileSystemRef.current;
 
-          // Ensure project root exists
-          if (!fs['project']) {
-            fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
-          }
+          // Ensure project root and scope path exist
+          ensureProjectRootExists();
 
           if (fs[dirPath]) {
             writeError(`mkdir: cannot create directory '${d}': File exists`);
@@ -1318,7 +1326,7 @@ export default function TerminalPanel({
           if (!fs[parent] && parent === 'project') {
             fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
           }
-          
+
           if (!fs[parent]) {
             writeError(`mkdir: cannot create directory '${d}': No such file or directory`);
             continue;
@@ -3048,37 +3056,44 @@ export default function TerminalPanel({
   // Spinner animation frames for connecting status
   const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-  // Connection timeout in milliseconds (configurable, default 15 seconds)
+  // Connection timeout in milliseconds (configurable, default 60 seconds for slower connections)
   const CONNECTION_TIMEOUT_MS = parseInt(
-    process.env.NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS || '45000',
+    process.env.NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS || '60000',
     10
-  ) || 45000;
+  ) || 60000;
   const CONNECTION_TIMEOUT_SECONDS = Math.round(CONNECTION_TIMEOUT_MS / 1000);
 
   const connectTerminal = useCallback(async (terminalId: string) => {
     connectTerminalRef.current = connectTerminal;
-    
+
     // Check if we're in a cooldown period from a previous failed connection
     const now = Date.now();
     const lastAttempt = lastConnectionAttemptRef.current[terminalId] || 0;
-    const cooldownPeriod = 10000; // 10 second cooldown between connection attempts
-    
+    const cooldownPeriod = 5000; // Reduced to 5 second cooldown between connection attempts
+
     if (now - lastAttempt < cooldownPeriod) {
       const remaining = Math.ceil((cooldownPeriod - (now - lastAttempt)) / 1000);
       console.log(`[Terminal] Connection attempt throttled. Try again in ${remaining}s`);
+      const term = terminalsRef.current.find(t => t.id === terminalId);
+      if (term?.terminal) {
+        term.terminal.writeln(`\x1b[90mReconnect cooldown: ${remaining}s remaining.\x1b[0m`);
+      }
       return;
     }
-    
+
     // Record this connection attempt
     lastConnectionAttemptRef.current[terminalId] = now;
-    
+
     // Abort any pending connection
     connectAbortRef.current[terminalId]?.abort();
     const ac = new AbortController();
     connectAbortRef.current[terminalId] = ac;
 
     const term = terminalsRef.current.find(t => t.id === terminalId);
-    if (!term || term.sandboxInfo.status === 'creating' || term.isConnected) return;
+    if (!term || term.sandboxInfo.status === 'creating' || term.isConnected) {
+      console.log('[Terminal] Skipping connection - terminal not ready or already connected');
+      return;
+    }
 
     const token = getAuthToken();
     const anonymousSessionId = getAnonymousSessionId();
@@ -3121,6 +3136,8 @@ export default function TerminalPanel({
           clearInterval((currentTerm as any).__spinnerInterval);
           delete (currentTerm as any).__spinnerInterval;
         }
+        // Abort the fetch request
+        ac.abort();
         // Fall back to local shell mode (no valid sandbox session)
         updateTerminalState(terminalId, {
           sandboxInfo: { status: 'error' },
@@ -3743,6 +3760,13 @@ export default function TerminalPanel({
       if (termWithError && (termWithError as any).__connectionTimeout) {
         clearTimeout((termWithError as any).__connectionTimeout);
         delete (termWithError as any).__connectionTimeout;
+      }
+
+      // Handle AbortError (from timeout or user cancellation)
+      if (error instanceof Error && error.name === 'AbortError') {
+        // This is expected when connection times out - don't show as error
+        console.log('[Terminal] Connection aborted (timeout or cancellation)');
+        return; // Timeout handler already updated the terminal state
       }
 
       const errMsg = error instanceof Error ? error.message : 'Unknown error';

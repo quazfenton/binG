@@ -140,7 +140,7 @@ export default function CodePreviewPanel({
     [commandsByFile],
   );
   
-  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath);
+  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || 'project');
   const {
     currentPath: filesystemCurrentPath,
     nodes: filesystemRawNodes,
@@ -159,6 +159,46 @@ export default function CodePreviewPanel({
   const [isEditingFile, setIsEditingFile] = useState(false);
   const [editableContent, setEditableContent] = useState("");
   const [isCreatingFile, setIsCreatingFile] = useState(false);
+
+  // Normalize filesystem path for display (prevent accumulated prefixes)
+  const normalizedFilesystemPath = useMemo(() => {
+    let cleanPath = filesystemCurrentPath || 'project';
+    
+    // Remove accumulated sandbox/workspace prefixes
+    cleanPath = cleanPath
+      .replace(/^(\/tmp\/workspaces\/)+/gi, '')
+      .replace(/^(tmp\/workspaces\/)+/gi, '')
+      .replace(/^(\/workspace\/)+/gi, '')
+      .replace(/^(workspace\/)+/gi, '')
+      .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
+      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '')
+      .replace(/^(\/sessions\/)+/gi, '')
+      .replace(/^(sessions\/)+/gi, '');
+
+    // Ensure path starts with project/
+    if (!cleanPath.startsWith('project/') && cleanPath !== 'project') {
+      cleanPath = cleanPath.replace(/^\/+/, '');
+      if (cleanPath.startsWith('project/')) {
+        cleanPath = cleanPath.replace(/^project\/(project\/)+/, 'project/');
+      } else if (cleanPath) {
+        cleanPath = `project/${cleanPath}`;
+      } else {
+        cleanPath = 'project';
+      }
+    }
+    
+    return cleanPath;
+  }, [filesystemCurrentPath]);
+
+  // Debounce loading state to prevent rapid re-renders
+  const [debouncedIsLoading, setDebouncedIsLoading] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedIsLoading(isFilesystemLoading);
+    }, 300); // 300ms debounce to prevent flickering
+    
+    return () => clearTimeout(timer);
+  }, [isFilesystemLoading]);
   
   // Manual Sandpack preview state
   const [manualPreviewFiles, setManualPreviewFiles] = useState<Record<string, string> | null>(null);
@@ -213,7 +253,7 @@ export default function CodePreviewPanel({
     // Ensure path doesn't get duplicated prefixes
     // Handle various accumulated path patterns and normalize to project/
     let cleanPath = path;
-    
+
     // Remove accumulated sandbox/workspace prefixes
     cleanPath = cleanPath
       .replace(/^(\/tmp\/workspaces\/)+/gi, '')
@@ -221,8 +261,10 @@ export default function CodePreviewPanel({
       .replace(/^(\/workspace\/)+/gi, '')
       .replace(/^(workspace\/)+/gi, '')
       .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '');
-    
+      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '')
+      .replace(/^(\/sessions\/)+/gi, '')
+      .replace(/^(sessions\/)+/gi, '');
+
     // Ensure path starts with project/
     if (!cleanPath.startsWith('project/') && cleanPath !== 'project') {
       cleanPath = cleanPath.replace(/^\/+/, ''); // Remove leading slashes
@@ -235,7 +277,7 @@ export default function CodePreviewPanel({
         cleanPath = 'project';
       }
     }
-    
+
     setFilesystemCurrentPath(cleanPath);
     void listFilesystemDirectory(cleanPath);
   }, [listFilesystemDirectory, setFilesystemCurrentPath]);
@@ -248,8 +290,10 @@ export default function CodePreviewPanel({
       .replace(/^(\/workspace\/)+/gi, '')
       .replace(/^(workspace\/)+/gi, '')
       .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '');
-    
+      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '')
+      .replace(/^(\/sessions\/)+/gi, '')
+      .replace(/^(sessions\/)+/gi, '');
+
     // Ensure path starts with project/
     if (!cleanedCurrentPath.startsWith('project/') && cleanedCurrentPath !== 'project') {
       cleanedCurrentPath = cleanedCurrentPath.replace(/^\/+/, '');
@@ -261,7 +305,7 @@ export default function CodePreviewPanel({
         cleanedCurrentPath = 'project';
       }
     }
-    
+
     const current = cleanedCurrentPath.replace(/\/+$/, "");
     const parts = current.split("/").filter(Boolean);
     if (parts.length <= 1 || (parts.length === 1 && parts[0] === 'project')) {
@@ -283,8 +327,10 @@ export default function CodePreviewPanel({
         .replace(/^(\/workspace\/)+/gi, '')
         .replace(/^(workspace\/)+/gi, '')
         .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
-        .replace(/^(home\/[^/]+\/workspace\/)+/gi, '');
-      
+        .replace(/^(home\/[^/]+\/workspace\/)+/gi, '')
+        .replace(/^(\/sessions\/)+/gi, '')
+        .replace(/^(sessions\/)+/gi, '');
+
       // Ensure path starts with project/
       if (!cleanPath.startsWith('project/') && cleanPath !== 'project') {
         cleanPath = cleanPath.replace(/^\/+/, '');
@@ -296,7 +342,7 @@ export default function CodePreviewPanel({
           cleanPath = 'project';
         }
       }
-      
+
       const file = await readFilesystemFile(cleanPath);
       setSelectedFilesystemPath(file.path);
       setSelectedFilesystemLanguage(file.language || "text");
@@ -2925,7 +2971,7 @@ export default app;`,
                         </h3>
                         <div className="mb-3 rounded border border-white/10 bg-black/30 p-2">
                           <div className="mb-2 text-[11px] text-gray-400 break-all">
-                            {filesystemCurrentPath || 'project'}
+                            {normalizedFilesystemPath}
                           </div>
                           <div className="flex items-center gap-2">
                             <Button
@@ -2941,7 +2987,7 @@ export default app;`,
                               variant="outline"
                               className="h-7 px-2 text-[11px]"
                               onClick={() =>
-                                void listFilesystemDirectory(filesystemCurrentPath)
+                                void listFilesystemDirectory(normalizedFilesystemPath)
                               }
                             >
                               Refresh
@@ -2961,9 +3007,9 @@ export default app;`,
                               onClick={() => {
                                 const name = prompt('New folder name:');
                                 if (name?.trim()) {
-                                  const fullPath = `${filesystemCurrentPath.replace(/\/+$/, '')}/${name.trim()}/.keep`;
+                                  const fullPath = `${normalizedFilesystemPath.replace(/\/+$/, '')}/${name.trim()}/.keep`;
                                   writeFilesystemFile(fullPath, '').then(() => {
-                                    void listFilesystemDirectory(filesystemCurrentPath);
+                                    void listFilesystemDirectory(normalizedFilesystemPath);
                                     toast.success('Folder created');
                                   });
                                 }
@@ -3055,12 +3101,12 @@ export default app;`,
                           )}
                         </div>
                         <div className="space-y-1">
-                          {isFilesystemLoading && (
+                          {debouncedIsLoading && (
                             <div className="text-xs text-gray-400 px-2 py-1">
                               Loading filesystem...
                             </div>
                           )}
-                          {!isFilesystemLoading && filesystemNodes.length === 0 && (
+                          {!debouncedIsLoading && filesystemNodes.length === 0 && (
                             <div className="text-xs text-gray-500 px-2 py-1">
                               No files in current directory.
                             </div>

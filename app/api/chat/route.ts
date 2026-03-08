@@ -291,7 +291,7 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
       
       // Process response through unified handler
       const unifiedResponse = unifiedResponseHandler.processResponse(routerResponse, requestId);
-      const rawResponseContent = unifiedResponse.content || '';
+      let rawResponseContent = unifiedResponse.content || '';
       
       // LLM Agent Tools: Execute filesystem tools if enabled and user is authenticated
       let agentToolResults = null;
@@ -849,7 +849,9 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
 
   while ((blockMatch = blockRegex.exec(content)) !== null) {
     const blockContent = blockMatch[1] || '';
-    const writeRegex = /WRITE\s+([^\n]+)\n<<<\n([\s\S]*?)\n>>>/gi;
+    // FIX: Support both "WRITE path <<<" and "WRITE path\n<<<" formats
+    // Also support optional whitespace before <<<
+    const writeRegex = /WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
@@ -865,7 +867,26 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
 
   while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
     const blockContent = xmlBlockMatch[1] || '';
-    const writeRegex = /WRITE\s+([^\n]+)\n<<<\n([\s\S]*?)\n>>>/gi;
+    // FIX: Support both "WRITE path <<<" and "WRITE path\n<<<" formats
+    const writeRegex = /WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    let writeMatch: RegExpExecArray | null;
+    while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
+      const path = writeMatch[1]?.trim();
+      const fileContent = writeMatch[2] ?? '';
+      if (!path) continue;
+      writes.push({ path, content: fileContent });
+    }
+  }
+
+  // Also extract WRITE commands from regular code blocks (```language ... ```)
+  // This handles cases where LLM writes code without fs-actions wrapper
+  const regularBlockRegex = /```[a-zA-Z]*\s*([\s\S]*?)```/gi;
+  let regularBlockMatch: RegExpExecArray | null;
+
+  while ((regularBlockMatch = regularBlockRegex.exec(content)) !== null) {
+    const blockContent = regularBlockMatch[1] || '';
+    // Only match if it looks like a WRITE command (not actual code that happens to contain WRITE)
+    const writeRegex = /^WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
@@ -921,7 +942,8 @@ function extractFsActionPatches(content: string): Array<{ path: string; diff: st
 
   while ((blockMatch = blockRegex.exec(content)) !== null) {
     const blockContent = blockMatch[1] || '';
-    const patchRegex = /PATCH\s+([^\n]+)\n<<<\n([\s\S]*?)\n>>>/gi;
+    // FIX: Support both "PATCH path <<<" and "PATCH path\n<<<" formats
+    const patchRegex = /PATCH\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let patchMatch: RegExpExecArray | null;
     while ((patchMatch = patchRegex.exec(blockContent)) !== null) {
       const path = patchMatch[1]?.trim();
@@ -937,7 +959,8 @@ function extractFsActionPatches(content: string): Array<{ path: string; diff: st
 
   while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
     const blockContent = xmlBlockMatch[1] || '';
-    const patchRegex = /PATCH\s+([^\n]+)\n<<<\n([\s\S]*?)\n>>>/gi;
+    // FIX: Support both "PATCH path <<<" and "PATCH path\n<<<" formats
+    const patchRegex = /PATCH\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let patchMatch: RegExpExecArray | null;
     while ((patchMatch = patchRegex.exec(blockContent)) !== null) {
       const path = patchMatch[1]?.trim();
