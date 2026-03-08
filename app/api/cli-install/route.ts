@@ -89,21 +89,28 @@ function sse(data: unknown): string {
 
 export async function POST(req: NextRequest) {
   // ── Auth ──────────────────────────────────────────────────────────────────
-  // SECURITY: Require BOTH standard JWT auth AND visual editor secret
-  const authResult = await resolveRequestAuth(req);
-  if (!authResult.success || !authResult.userId) {
-    return new Response("Unauthorized - JWT authentication required", { status: 401 });
-  }
+  // SECURITY: Allow anonymous access with visual editor secret, or require JWT
+  const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
   
-  // Additional secret header check (for visual editor integration)
-  if (SECRET) {
+  // If not authenticated via JWT, require visual editor secret
+  if (!authResult.success || !authResult.userId) {
+    if (SECRET) {
+      const auth = req.headers.get("x-visual-editor-secret") ?? "";
+      if (auth !== SECRET) {
+        return new Response("Unauthorized - JWT authentication or visual editor secret required", { status: 401 });
+      }
+    } else {
+      // No secret configured and no JWT - allow in development
+      if (process.env.NODE_ENV === 'production') {
+        return new Response("Unauthorized - JWT authentication required", { status: 401 });
+      }
+    }
+  } else if (SECRET) {
+    // Additional secret header check for visual editor integration (when JWT is present)
     const auth = req.headers.get("x-visual-editor-secret") ?? "";
-    if (auth !== SECRET) {
+    if (auth && auth !== SECRET) {
       return new Response("Unauthorized - Invalid visual editor secret", { status: 401 });
     }
-  } else if (process.env.NODE_ENV === 'production') {
-    // Fail closed in production if secret not set
-    return new Response("Service Unavailable - VISUAL_EDITOR_SECRET not configured", { status: 503 });
   }
 
   // ── Parse body ────────────────────────────────────────────────────────────

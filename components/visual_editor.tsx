@@ -4818,9 +4818,15 @@ function ComponentInstallerInner({
       setLog((l) => [...l, `\n▶ Running: ${cmdLabel}`, ""]);
 
       try {
+        // Get auth token from localStorage
+        const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+        
         const resp = await fetch("/api/cli-install", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { 
+            "Content-Type": "application/json",
+            ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+          },
           body: JSON.stringify({
             baseCmd: adp.baseCmd,
             subCmd: adp.subCmd,
@@ -6172,21 +6178,28 @@ export function VisualEditorMain({
                     <div className="flex-1 overflow-y-auto p-1">
                       <Layers
                         expandRootOnLoad
-                        renderLayer={({ layer, children }) => (
-                          <div
-                            style={{ paddingLeft: `${((layer.depth ?? 1) - 1) * 12}px` }}
-                            className={`flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer text-xs transition-colors ${
-                              layer.selected
-                                ? "bg-[#1f3249] text-white"
-                                : "text-[#8b949e] hover:bg-[#21262d] hover:text-white"
-                            }`}
-                          >
-                            <span className="truncate">
-                              {layer.data.displayName ?? layer.data.type?.resolvedName ?? "Node"}
-                            </span>
-                            {children}
-                          </div>
-                        )}
+                        renderLayer={({ layer, children }) => {
+                          // Guard against undefined layer
+                          if (!layer) {
+                            return null;
+                          }
+                          const depth = layer.depth ?? 1;
+                          return (
+                            <div
+                              style={{ paddingLeft: `${(depth - 1) * 12}px` }}
+                              className={`flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer text-xs transition-colors ${
+                                layer.selected
+                                  ? "bg-[#1f3249] text-white"
+                                  : "text-[#8b949e] hover:bg-[#21262d] hover:text-white"
+                              }`}
+                            >
+                              <span className="truncate">
+                                {layer.data?.displayName ?? layer.data?.type?.resolvedName ?? "Node"}
+                              </span>
+                              {children}
+                            </div>
+                          );
+                        }}
                       />
                     </div>
                   </div>
