@@ -4,6 +4,9 @@ export const UserSettingsForm: React.FC<{ selectedModelId?: string; onClose?: ()
   const [userInfo, setUserInfo] = useState<any>(null)
   const [authing, setAuthing] = useState(false)
 
+  // COMMENTED OUT: Deprecated Puter authentication
+  // Keeping for reference if needed in future
+  /*
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
@@ -37,19 +40,33 @@ export const UserSettingsForm: React.FC<{ selectedModelId?: string; onClose?: ()
       onClose?.()
     }
   }
+  */
 
   return (
     <div>
       <h3>User settings</h3>
-      <p>
+      <p className="text-gray-500 italic">
+        User settings are now managed through the main authentication system.
+        {/* 
         If you choose a Puter model, Puter manages authentication and storage for you — there is no API key to paste. Click Authenticate to sign in with Puter.
+        */}
       </p>
+      
+      {/* COMMENTED OUT: Deprecated Puter auth button
       <div>
         <button onClick={handleAuthenticate} disabled={authing}>
           {authing ? 'Authenticating…' : 'Authenticate with Puter'}
         </button>
       </div>
-      {userInfo ? <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(userInfo, null, 2)}</pre> : <div>Not signed in</div>}
+      */}
+      
+      {userInfo ? (
+        <pre style={{ whiteSpace: 'pre-wrap' }}>
+          {JSON.stringify(userInfo, null, 2)}
+        </pre>
+      ) : (
+        <div className="text-gray-500">Not signed in</div>
+      )}
     </div>
   )
 }

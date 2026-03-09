@@ -148,7 +148,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create or update conversation
-    const existingConversation = dbOps.getConversation(id);
+    const existingConversation = dbOps.getConversation(id) as any;
 
     if (!existingConversation) {
       // Create new conversation

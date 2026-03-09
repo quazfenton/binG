@@ -7,14 +7,20 @@ import { randomUUID } from 'crypto'
 import { quotaManager } from '../services/quota-manager'
 
 export class SandboxService {
-  private provider: SandboxProvider
-  private primaryProviderType: SandboxProviderType
-  private sandboxProviderById = new Map<string, SandboxProvider>()
+   private _provider: SandboxProvider | null = null
+   private primaryProviderType: SandboxProviderType
+   private sandboxProviderById = new Map<string, SandboxProvider>()
 
-  constructor() {
-    this.primaryProviderType = (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona'
-    this.provider = getSandboxProvider(this.primaryProviderType)
-  }
+   constructor() {
+     this.primaryProviderType = (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona'
+   }
+
+   private async getProvider(): Promise<SandboxProvider> {
+     if (!this._provider) {
+       this._provider = await getSandboxProvider(this.primaryProviderType)
+     }
+     return this._provider
+   }
 
   private getDefaultResources(): { cpu: number; memory: number } {
     const parseOrDefault = (raw: string | undefined, fallback: number) => {
@@ -27,15 +33,31 @@ export class SandboxService {
     }
   }
 
-  private getCandidateProviderTypes(primary: SandboxProviderType): SandboxProviderType[] {
+  private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
+    if (sandboxId.startsWith('mistral-')) return 'mistral'
+    // Check specific blaxel-mcp prefix BEFORE the general blaxel- prefix
+    if (sandboxId.startsWith('blaxel-mcp-')) return 'blaxel-mcp'
+    if (sandboxId.startsWith('blaxel-')) return 'blaxel'
+    if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites'
+    if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox'
+    if (sandboxId.startsWith('webcontainer-')) return 'webcontainer'
+    if (sandboxId.startsWith('wc-fs-')) return 'webcontainer-filesystem'
+    if (sandboxId.startsWith('wc-spawn-')) return 'webcontainer-spawn'
+    if (sandboxId.startsWith('osb-ci-')) return 'opensandbox-code-interpreter'
+    if (sandboxId.startsWith('osb-agent-')) return 'opensandbox-agent'
+    if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) return 'opensandbox'
+    return null
+  }
+
+  private async getCandidateProviderTypes(primary: SandboxProviderType): Promise<SandboxProviderType[]> {
     const quotaChain = quotaManager.getSandboxProviderChain(primary) as SandboxProviderType[];
     const preferred = Array.from(new Set(quotaChain.length ? quotaChain : [primary]));
     const supported: SandboxProviderType[] = [];
 
     for (const providerType of preferred) {
       try {
-        getSandboxProvider(providerType);
-        supported.push(providerType);
+        await getSandboxProvider(providerType);
+         supported.push(providerType);
       } catch {
         // Provider not integrated in this build, skip.
       }
@@ -49,8 +71,8 @@ export class SandboxService {
     userId: string,
     config?: SandboxConfig
   ): Promise<SandboxHandle> {
-    const provider = getSandboxProvider(providerType)
-    const handle = await provider.createSandbox({
+    const provider = await getSandboxProvider(providerType)
+     const handle = await provider.createSandbox({
       language: config?.language ?? 'typescript',
       autoStopInterval: config?.autoStopInterval ?? 60,
       resources: config?.resources ?? this.getDefaultResources(),
@@ -86,24 +108,53 @@ export class SandboxService {
     const cached = this.sandboxProviderById.get(sandboxId)
     if (cached) return cached
 
+    const inferredProvider = this.inferProviderFromSandboxId(sandboxId)
+    if (inferredProvider) {
+      try {
+        const inferred = await getSandboxProvider(inferredProvider)
+        await inferred.getSandbox(sandboxId)
+        this.sandboxProviderById.set(sandboxId, inferred)
+        return inferred
+      } catch {
+        // Continue with generic probing below.
+      }
+    }
+
     // Probe primary first.
-    try {
-      await this.provider.getSandbox(sandboxId)
-      this.sandboxProviderById.set(sandboxId, this.provider)
-      return this.provider
-    } catch {
+     const primaryProvider = await this.getProvider()
+     try {
+       await primaryProvider.getSandbox(sandboxId)
+       this.sandboxProviderById.set(sandboxId, primaryProvider)
+       return primaryProvider
+     } catch {
       // continue
     }
 
     // For resolving existing sandboxes, try ALL configured providers (not just quota-available ones)
     // Sandboxes created before quota was hit should remain accessible even if provider is now over quota
-    const allProviderTypes: SandboxProviderType[] = ['daytona', 'runloop', 'microsandbox', 'e2b']
+    const allProviderTypes: SandboxProviderType[] = [
+      'daytona',
+      'runloop',
+      'blaxel',
+      'blaxel-mcp',
+      'sprites',
+      'codesandbox',
+      'webcontainer',
+      'webcontainer-filesystem',
+      'webcontainer-spawn',
+      'opensandbox',
+      'opensandbox-code-interpreter',
+      'opensandbox-agent',
+      'microsandbox',
+      'e2b',
+      'mistral'
+    ]
     const configuredProviders: SandboxProviderType[] = []
     
     for (const providerType of allProviderTypes) {
       try {
-        getSandboxProvider(providerType)
-        configuredProviders.push(providerType)
+        await getSandboxProvider(providerType)
+         configuredProviders.push(providerType)
       } catch {
         // Provider not configured in this build, skip
       }
@@ -112,7 +163,7 @@ export class SandboxService {
     // Try all configured providers (excluding primary which we already tried)
     for (const fallbackType of configuredProviders.filter(t => t !== this.primaryProviderType)) {
       try {
-        const fallback = getSandboxProvider(fallbackType)
+        const fallback = await getSandboxProvider(fallbackType)
         await fallback.getSandbox(sandboxId)
         this.sandboxProviderById.set(sandboxId, fallback)
         return fallback
@@ -133,14 +184,14 @@ export class SandboxService {
     let handle: SandboxHandle | null = null
     const preferredType = (quotaManager.pickAvailableSandboxProvider(this.primaryProviderType) as SandboxProviderType | null)
       || this.primaryProviderType
-    const candidateTypes = this.getCandidateProviderTypes(preferredType)
+    const candidateTypes = await this.getCandidateProviderTypes(preferredType)
 
     // Only use warm pool when no custom config is specified
     // Custom configs (language, resources, env vars) require fresh sandbox
     if (process.env.SANDBOX_WARM_POOL === 'true' && !config && preferredType === this.primaryProviderType) {
       try {
         handle = await warmPool.acquire(userId)
-        this.sandboxProviderById.set(handle.id, this.provider)
+        this.sandboxProviderById.set(handle.id, await this.getProvider())
       } catch (error) {
         console.warn('[sandbox-service] Warm pool unavailable; falling back to provider chain')
         let lastError: unknown = error

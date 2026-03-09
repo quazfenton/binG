@@ -26,17 +26,38 @@ binG is not just another chat interface—it's a **full-stack agentic workspace*
 
 ### 🤖 Agentic Capabilities
 - **Multi-Agent Orchestration**: Coordinate multiple AI agents for complex tasks
-- **Tool Integration**: 800+ tools via Composio (GitHub, Slack, Gmail, etc.)
+- **Vercel AI SDK Integration**: Native tool calling with streaming support
+- **Self-Healing Agents**: Automatic error recovery with intelligent retry logic
+- **Tool Integration**: 800+ tools via Composio + Nango (GitHub, Slack, Notion, etc.)
 - **Code Execution**: Run generated code in isolated sandboxes
 - **Terminal Access**: Full xterm.js terminal with fish-like autocomplete
 - **Persistent Sessions**: Sandboxes persist across page reloads
+- **Plan-Act-Verify Workflow**: Structured agent execution with validation
+- **Multi-Provider Fallback**: Automatic failover (OpenAI → Anthropic → Google)
+
+### 🧠 Advanced AI Agent (NEW - Vercel AI SDK Integration)
+- **Plan-Act-Verify Workflow**: Discovery → Planning → Editing → Verification phases
+- **Self-Healing**: Automatic retry on errors (syntax, logic, transient failures)
+- **Syntax Verification**: Real-time validation for TypeScript, JSON, YAML, Python, Shell
+- **Streaming Responses**: Real-time token streaming with tool call visibility
+- **Human-in-the-Loop**: Approval workflow for sensitive operations
+- **Checkpointing**: Save/restore agent state (Redis or in-memory)
+- **Tool Executor**: Centralized tool execution with metrics and logging
+- **Nango Integrations**: GitHub, Slack, Notion tools with rate limiting
+- **Multi-Provider Fallback**: OpenAI → Anthropic → Google (automatic failover)
+- **Human-in-the-Loop (HITL)**: Approval required for sensitive operations
+- **Checkpoint/Resume**: Pause and resume long-running tasks
+- **Type-Safe Tools**: Zod-validated AI SDK tools with surgical ApplyDiff
 
 ### 💻 Development Environment
 - **Isolated Sandboxes**: Each user gets a dedicated Linux environment
+- **Multiple Sandbox Providers**: Daytona, Runloop, **Blaxel** (ultra-fast), **Fly.io Sprites** (persistent VMs)
 - **Pre-installed Packages**: Node.js, Python, Git, build tools ready to use
 - **Persistent Cache**: Shared package cache (2-3x faster sandbox creation)
 - **Split Terminal View**: Multiple terminals side-by-side
 - **Command History**: Intelligent autocomplete and history navigation
+- **Tar-Pipe Sync**: 10x faster file sync for large projects (Sprites)
+- **SSHFS Mount**: Mount remote sandbox filesystem locally (Sprites)
 
 ### 🎙️ Voice & Audio
 - **Neural TTS**: ElevenLabs & Cartesia integration (human-quality voices)
@@ -50,7 +71,9 @@ binG is not just another chat interface—it's a **full-stack agentic workspace*
 - **Ephemeral Environments**: Sandboxes auto-destroy after inactivity
 - **No Host Access**: Sandboxes cannot access host filesystem
 - **Resource Limits**: CPU/memory quotas prevent abuse
+- **Rate Limiting**: Configurable rate limits prevent abuse
 - **Audit Logging**: All commands logged for compliance
+- **Checkpoint System**: Save/restore sandbox state (Sprites)
 
 ### 🎨 User Experience
 - **Instant Terminal UI**: Terminal opens instantly, sandbox connects lazily
@@ -58,6 +81,21 @@ binG is not just another chat interface—it's a **full-stack agentic workspace*
 - **Smart Fallbacks**: Graceful degradation when services unavailable
 - **Responsive Design**: Works on desktop, tablet, and mobile
 - **Dark Theme**: Easy on the eyes for extended sessions
+
+### 🖼️ Image Generation (NEW)
+- **Multi-Provider Support**: Mistral AI (FLUX1.1 Ultra), Replicate (SDXL, Flux)
+- **ComfyUI-Style Controls**: Aspect ratio, quality presets, style selection
+- **Virtual Filesystem**: Save/generated images to workspace
+- **Fallback Chain**: Automatic provider failover (Mistral → Replicate)
+- **Quota Management**: Monthly usage tracking and limits
+
+### 🧪 Comprehensive Testing (NEW)
+- **E2E Tests**: 80+ Playwright tests for all major workflows
+- **Component Tests**: 20+ React component tests
+- **Contract Tests**: 27+ API schema validation tests
+- **Visual Regression**: 15+ screenshot baseline tests
+- **Performance Tests**: 25+ benchmark tests with optimization recommendations
+- **Total Coverage**: 349+ tests across 43+ test files
 
 ---
 
@@ -105,13 +143,29 @@ cd binG
 pnpm install
 
 # Copy environment template
-cp .env.example .env
+cp env.example .env.local
 
-# Edit .env with your API keys (see Configuration section)
-nano .env
+# Edit .env.local with your API keys (see Configuration section)
+nano .env.local
+
+# Optional: Install advanced sandbox providers
+pnpm add -O @blaxel/sdk @blaxel/core @fly/sprites @modelcontextprotocol/sdk
+
+# Optional: Install image generation providers
+pnpm add -O @mistralai/mistralai replicate
+
+# Optional: Install SSHFS for local filesystem mount (macOS)
+brew install macfuse sshfs
+
+# Optional: Install Playwright for E2E testing
+pnpm add -D @playwright/test @axe-core/playwright
+npx playwright install
 
 # Start development server
 pnpm dev
+
+# Run tests (recommended before committing)
+pnpm test
 
 # Open browser
 open http://localhost:3000
@@ -150,9 +204,16 @@ MISTRAL_API_KEY=...                  # Mistral AI
 GITHUB_MODELS_API_KEY=...            # GitHub Models (via Azure)
 
 # Sandbox Provider (for code execution)
-SANDBOX_PROVIDER=daytona             # or 'runloop'
+SANDBOX_PROVIDER=daytona             # or 'runloop', 'blaxel', 'sprites'
 DAYTONA_API_KEY=...                  # Get from https://daytona.io
 # RUNLOOP_API_KEY=...               # Alternative to Daytona
+
+# Blaxel Sandbox (Optional - Ultra-fast resume <25ms)
+BLAXEL_API_KEY=...                   # Get from https://console.blaxel.ai
+BLAXEL_WORKSPACE=...
+
+# Fly.io Sprites (Optional - Persistent VMs with checkpoints)
+SPRITES_TOKEN=...                    # Get from https://sprites.dev/account
 
 # Voice Features (Optional)
 LIVEKIT_API_KEY=...
@@ -178,6 +239,19 @@ SANDBOX_CACHE_SIZE=2GB
 # Warm Pool (instant sandbox availability)
 SANDBOX_WARM_POOL=true
 SANDBOX_WARM_POOL_SIZE=2
+
+# Rate Limiting (prevent abuse)
+SANDBOX_RATE_LIMITING_ENABLED=true
+SANDBOX_RATE_LIMIT_COMMANDS_MAX=100
+SANDBOX_RATE_LIMIT_FILE_OPS_MAX=50
+
+# Sprites Advanced Features
+SPRITES_ENABLE_TAR_PIPE_SYNC=true     # 10x faster file sync
+SPRITES_ENABLE_SSHFS=true             # Mount filesystem locally
+SPRITES_CHECKPOINT_AUTO_CREATE=true   # Auto-save before dangerous ops
+
+# Blaxel MCP Server (for AI assistants)
+BLAXEL_MCP_ENABLED=true
 
 # Logging
 LOG_LEVEL=info                       # silent | error | warn | info | debug
@@ -395,13 +469,81 @@ CARTESIA_MODEL=sonic-english
 
 ---
 
+## 🆕 New Features (Latest Release)
+
+### Sandbox Providers
+
+**Blaxel** - Ultra-fast cloud sandboxes
+- Resume time: <25ms from standby
+- Auto scale-to-zero (free when idle)
+- Persistent volumes support
+- VPC networking for enterprise
+- **Best for**: Fast iteration, stateless batch processing
+
+**Fly.io Sprites** - Persistent VMs with full Linux environment
+- True persistence (ext4 filesystem)
+- Hardware isolation (dedicated microVM)
+- Checkpoint system (save/restore state)
+- Auto-hibernation (<500ms wake)
+- SSHFS mount (local filesystem access)
+- **Best for**: Long-lived dev environments, CI/CD runners
+
+### Advanced Features
+
+**Tar-Pipe Sync** - 10x faster file synchronization
+- Compressed tar stream to sandbox
+- Ideal for large projects (10+ files)
+- Reduces data transfer by 60%
+- Available for Sprites provider
+
+**SSHFS Mount** - Mount sandbox filesystem locally
+- Real-time sync between local and remote
+- Edit with your favorite local IDE
+- Available for Sprites provider
+- Requires: `brew install macfuse sshfs` (macOS) or `apt-get install sshfs` (Linux)
+
+**Checkpoint System** - Save and restore sandbox state
+- Auto-create before dangerous operations
+- Manual checkpoints on demand
+- Retention policies (max count, max age)
+- Available for Sprites provider
+
+**MCP Server** - Expose sandbox to AI assistants
+- Model Context Protocol integration
+- Works with Cursor, Claude Desktop, etc.
+- Tools: execute_command, write_file, read_file, list_directory
+- Available for Blaxel provider
+
+**Rate Limiting** - Prevent abuse and manage resources
+- Per-user or per-IP limits
+- Configurable per operation type
+- Automatic cleanup of expired entries
+- Express middleware integration
+
+---
+
 ## 📚 Documentation
 
+### AI Agent & Vercel AI SDK
+- **[Vercel AI SDK Features](docs/VERCEL_AI_SDK_FEATURES.md)** - Complete guide to AI agent, self-healing, and tool integration
+- **[Implementation Review](VERCEL_AI_SDK_INTEGRATION_REVIEW.md)** - Detailed code review and architecture
+- **[Test Report](TEST_REPORT.md)** - Test coverage documentation (209 tests)
+
+### Core Features
 - **[Sandbox Caching Guide](docs/SANDBOX_CACHING_GUIDE.md)** - Optimize sandbox creation speed
 - **[Hiding Creation Time](docs/HIDING_SANDBOX_CREATION_TIME.md)** - UX improvements for perceived performance
 - **[Voice Service Improvements](docs/VOICE_SERVICE_IMPROVEMENTS.md)** - Neural TTS integration guide
 - **[Database Migrations](docs/DATABASE_MIGRATIONS.md)** - Schema management and migrations
 - **[Technical Improvements](docs/TECHNICAL_IMPROVEMENTS_SUMMARY.md)** - Recent enhancements summary
+
+### Advanced Features
+- **[Advanced Features Guide](docs/ADVANCED_FEATURES_IMPLEMENTATION.md)** - SSHFS, MCP Server, Rate Limiting
+- **[Sprites Integration](docs/sdk/BLAXEL_SPRITES_USAGE_GUIDE.md)** - Blaxel & Sprites usage guide
+- **[Environment Variables Audit](docs/ENV_VARIABLES_AUDIT_COMPLETE.md)** - Complete env vars reference
+- **[Missing Packages Report](MISSING_PACKAGES_REPORT.md)** - Package dependencies guide
+- **[API Endpoints](docs/API_ENDPOINTS_COMPLETE.md)** - All 95+ API endpoints
+- **[Implementation Status](docs/sdk/IMPLEMENTATION_STATUS_AUDIT.md)** - Current implementation status
+- **[Test Summary](docs/sdk/TEST_IMPLEMENTATION_SUMMARY.md)** - Test coverage report (124 tests)
 
 ---
 
@@ -432,6 +574,58 @@ git push origin feature/your-feature
 ```
 
 For major changes, please open an issue first to discuss what you would like to change.
+
+---
+
+## 🧪 Testing
+
+### Run Tests
+
+```bash
+# Run all tests
+pnpm test
+
+# Run E2E tests (Playwright)
+npx playwright test
+
+# Run unit tests (Vitest)
+npx vitest run
+
+# Run component tests
+npx vitest run __tests__/components/
+
+# Run visual regression tests
+npx playwright test tests/e2e/visual-regression.test.ts
+
+# Run performance tests with recommendations
+npx playwright test tests/e2e/performance-advanced.test.ts
+
+# View HTML report
+npx playwright show-report
+```
+
+### Test Coverage
+
+- **E2E Tests**: 80+ tests for all major workflows
+- **Component Tests**: 20+ React component tests
+- **Contract Tests**: 27+ API schema validation tests
+- **Visual Regression**: 15+ screenshot baseline tests
+- **Performance Tests**: 25+ benchmark tests
+- **Total**: 349+ tests across 43+ test files
+
+See [Test Coverage Report](tests/COMPREHENSIVE_TEST_REPORT.md) for details.
+
+---
+
+## 📚 Documentation
+
+- **[API Endpoints](docs/API_ENDPOINTS_COMPLETE.md)** - Complete API reference (100+ endpoints)
+- **[New API Features](docs/API_NEW_FEATURES.md)** - Latest API additions from this session
+- **[E2E Testing Guide](tests/e2e/README.md)** - Playwright test setup and usage
+- **[Implementation Plans](docs/sdk/IMPLEMENTATION_PLANS_INDEX.md)** - Technical implementation details
+- **[Mistral Agent Guide](docs/sdk/MISTRAL_AGENT_SANDBOX_IMPLEMENTATION_PLAN.md)** - Mistral integration
+- **[Sprites Enhancement](docs/sdk/SPRITES_ENHANCEMENT_PLAN.md)** - Sprites provider features
+- **[Images Tab Guide](docs/sdk/IMAGE_GENERATION_GUIDE.md)** - Image generation setup
 
 ---
 

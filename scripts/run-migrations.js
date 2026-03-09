@@ -1,19 +1,19 @@
 /**
  * Database Migration Runner
- * 
+ *
  * Usage:
  *   pnpm migrate
  *   # or
  *   npm run migrate
  *   # or
  *   yarn migrate
- * 
+ *
  * This script runs all pending database migrations automatically.
  * Migrations are tracked in the `schema_migrations` table.
  */
 
-const { execSync } = require('child_process');
-const path = require('path');
+import { execSync } from 'child_process';
+import path from 'path';
 
 // Change to project root directory
 const projectRoot = path.join(__dirname, '..');

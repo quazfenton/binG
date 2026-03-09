@@ -21,7 +21,7 @@ export const NotionConnector: React.FC<{ onClose?: () => void }> = ({ onClose })
         setConnected(true)
       } else {
         // fallback: open backend OAuth start endpoint
-        const w = window.open('/api/oauth/notion/start', '_blank')
+        const w = window.open('/api/oauth/notion/start', '_blank', 'noopener,noreferrer')
         if (!w) throw new Error('Could not open OAuth window')
       }
     } catch (e) {

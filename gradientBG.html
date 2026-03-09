@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Glider Ambient Background</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body, html {
+            height: 100%;
+            width: 100%;
+            background-color: #050505; /* Solid black base */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        /* 1. THE MEDIA LAYER (GIF or Image) */
+        .bg-media {
+            position: fixed;
+            inset: -10%; /* Extra space for the blur and movement */
+            z-index: 1;
+            width: 120%;
+            height: 120%;
+            object-fit: cover;
+            
+            /* ADJUST THESE: 
+               blur(100px) creates the "cloud" effect. 
+               brightness(0.3) keeps it dark enough for white text. */
+            filter: blur(100px) brightness(0.35) saturate(1.2);
+            
+            pointer-events: none;
+            
+            /* Slow, organic movement so the background isn't static */
+            animation: ambient-drift 40s infinite alternate ease-in-out;
+        }
+
+        @keyframes ambient-drift {
+            0% { transform: translate(0, 0) scale(1); }
+            100% { transform: translate(-2%, -2%) scale(1.05); }
+        }
+
+        /* 2. THE GLOW OVERLAY (Static Gradient) */
+        .bg-glow {
+            position: fixed;
+            inset: 0;
+            z-index: 2;
+            /* Creates the "spotlight" centered behind the input */
+            background: radial-gradient(
+                circle at 50% 45%, 
+                rgba(30, 30, 40, 0.4) 0%, 
+                rgba(5, 5, 5, 1) 80%
+            );
+            pointer-events: none;
+        }
+
+        /* 3. THE NOISE LAYER (Texture) */
+        .bg-noise {
+            position: fixed;
+            inset: 0;
+            z-index: 3;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 250 250' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+            opacity: 0.1; 
+            mix-blend-mode: overlay;
+            pointer-events: none;
+        }
+
+        /* UI CONTENT */
+        .content {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 600px;
+            padding: 20px;
+        }
+
+        .search-input {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.03); /* Translucent glass */
+            backdrop-filter: blur(15px); /* Blurs the background media even more */
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 20px 24px;
+            font-size: 19px;
+            color: #fff;
+            outline: none;
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.6);
+            transition: all 0.3s ease;
+        }
+
+        .search-input::placeholder {
+            color: #444;
+        }
+
+        .search-input:focus {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+    </style>
+</head>
+<body>
+
+    <img class="bg-media" src="https://media.tenor.com/CWaT-F5vNb8AAAAM/sky-gif.gif" alt="">
+    
+    <div class="bg-glow"></div>
+    <div class="bg-noise"></div>
+
+    <div class="content">
+ 
+    </div>
+
+</body>
+</html>

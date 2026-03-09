@@ -143,7 +143,8 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
   const [audioGenerating, setAudioGenerating] = useState(false);
 
   // Workflow State
-  const [workflow, setWorkflow] = useState<Array<{id: string, type: string, params: any}>>([]);
+  const [workflowSteps, setWorkflowSteps] = useState<Array<{id: string; type: string; input: string; output: string}>>([]);
+  const [workflowRunning, setWorkflowRunning] = useState(false);
 
   const searchModels = async () => {
     setLoadingModels(true);
@@ -192,22 +193,24 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: imageParams.prompt,
-          negative_prompt: imageParams.negativePrompt,
+          negativePrompt: imageParams.negativePrompt,
           model: imageParams.model,
           width: imageParams.width,
           height: imageParams.height,
-          num_inference_steps: imageParams.steps,
-          guidance_scale: imageParams.guidance,
+          steps: imageParams.steps,
+          guidance: imageParams.guidance,
           seed: imageParams.seed === '' ? -1 : Number.parseInt(imageParams.seed as string),
           sampler: imageParams.sampler,
-          num_images: imageParams.numImages
+          numImages: imageParams.numImages,
         })
       });
 
       if (!res.ok) throw new Error('Generation failed');
-      
+
       const data = await res.json();
-      setGeneratedImages(prev => [...prev, ...data.images]);
+      const images = Array.isArray(data?.data?.images) ? data.data.images : [];
+      if (images.length === 0) throw new Error('No images generated');
+      setGeneratedImages(prev => [...prev, ...images]);
       toast.success('Images generated successfully');
     } catch (err: any) {
       toast.error(err.message);
@@ -400,7 +403,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
               </div>
 
               <Button onClick={generateImage} disabled={!imageParams.prompt || generating} className="w-full">
-                {generating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />}
+                {generating ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Wand2 className="w-4 h-4 mr-2" />}
                 Generate Images
               </Button>
             </div>
@@ -472,7 +475,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
             </div>
 
             <Button onClick={generateLLM} disabled={!llmParams.prompt || llmGenerating} className="w-full">
-              {llmGenerating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Brain className="w-4 h-4 mr-2" />}
+              {llmGenerating ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Brain className="w-4 h-4 mr-2" />}
               Generate Response
             </Button>
 
@@ -535,7 +538,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
             </div>
 
             <Button onClick={generateAudio} disabled={!audioParams.text || audioGenerating} className="w-full">
-              {audioGenerating ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Music className="w-4 h-4 mr-2" />}
+              {audioGenerating ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Music className="w-4 h-4 mr-2" />}
               Generate Audio
             </Button>
 
@@ -568,7 +571,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                 </SelectContent>
               </Select>
               <Button onClick={searchModels} disabled={loadingModels}>
-                {loadingModels ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                {loadingModels ? <Loader2 className="w-4 h-4 thinking-spinner" /> : <Search className="w-4 h-4" />}
               </Button>
             </div>
 
@@ -614,7 +617,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                 className="flex-1"
               />
               <Button onClick={searchSpaces} disabled={loadingModels}>
-                {loadingModels ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                {loadingModels ? <Loader2 className="w-4 h-4 thinking-spinner" /> : <Search className="w-4 h-4" />}
               </Button>
             </div>
 
@@ -643,12 +646,129 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
           </TabsContent>
 
           {/* Workflow */}
-          <TabsContent value="workflow" className="pt-4">
-            <div className="text-center text-gray-400 py-8">
-              <Layers className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>Multi-model workflow builder coming soon</p>
-              <p className="text-sm mt-2">Chain models: text → image → upscale → style transfer</p>
+          <TabsContent value="workflow" className="pt-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-medium flex items-center gap-2">
+                <Layers className="w-4 h-4" /> Workflow Chain
+              </h3>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setWorkflowSteps(prev => [
+                      ...prev,
+                      { id: `step-${Date.now()}`, type: 'text-generation', input: '', output: '' }
+                    ])
+                  }
+                >
+                  Add Step
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={workflowSteps.length === 0 || workflowRunning}
+                  onClick={async () => {
+                    setWorkflowRunning(true);
+                    let currentInput = workflowSteps[0]?.input || '';
+                    const updated = [...workflowSteps];
+                    for (let i = 0; i < updated.length; i++) {
+                      if (i > 0) updated[i].input = currentInput;
+                      try {
+                        const res = await fetch('/api/huggingface/inference', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            model: updated[i].type === 'text-generation'
+                              ? LLM_MODELS[0].id
+                              : updated[i].type === 'image-generation'
+                              ? IMAGE_MODELS[0].id
+                              : LLM_MODELS[0].id,
+                            inputs: currentInput,
+                            parameters: { max_new_tokens: 256 }
+                          })
+                        });
+                        if (!res.ok) throw new Error('Step failed');
+                        const data = await res.json();
+                        const output = data.generated_text || data[0]?.generated_text || JSON.stringify(data);
+                        updated[i].output = output;
+                        currentInput = output;
+                      } catch (err: any) {
+                        updated[i].output = `Error: ${err.message}`;
+                        break;
+                      }
+                    }
+                    setWorkflowSteps(updated);
+                    setWorkflowRunning(false);
+                    toast.success('Workflow completed');
+                  }}
+                >
+                  {workflowRunning ? <Loader2 className="w-4 h-4 mr-1 thinking-spinner" /> : <Play className="w-4 h-4 mr-1" />}
+                  Run
+                </Button>
+              </div>
             </div>
+
+            {workflowSteps.length === 0 && (
+              <div className="text-center text-gray-400 py-8">
+                <Layers className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                <p>Add steps to build a workflow chain</p>
+                <p className="text-sm mt-2">Each step&apos;s output becomes the next step&apos;s input</p>
+              </div>
+            )}
+
+            {workflowSteps.map((step, idx) => (
+              <Card key={step.id} className="bg-white/5">
+                <CardContent className="p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium">Step {idx + 1}</span>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={step.type}
+                        onValueChange={(v) => {
+                          const updated = [...workflowSteps];
+                          updated[idx].type = v;
+                          setWorkflowSteps(updated);
+                        }}
+                      >
+                        <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="text-generation">Text Generation</SelectItem>
+                          <SelectItem value="summarization">Summarization</SelectItem>
+                          <SelectItem value="image-generation">Image Prompt</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setWorkflowSteps(prev => prev.filter((_, i) => i !== idx))}
+                      >
+                        <XCircle className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  <Textarea
+                    value={step.input}
+                    onChange={(e) => {
+                      const updated = [...workflowSteps];
+                      updated[idx].input = e.target.value;
+                      setWorkflowSteps(updated);
+                    }}
+                    placeholder={idx === 0 ? 'Enter initial input...' : 'Auto-filled from previous step output'}
+                    rows={2}
+                  />
+                  {step.output && (
+                    <div className="bg-black/20 rounded p-2 text-xs max-h-32 overflow-y-auto">
+                      <pre className="whitespace-pre-wrap">{step.output}</pre>
+                    </div>
+                  )}
+                  {idx < workflowSteps.length - 1 && (
+                    <div className="flex justify-center text-gray-500">
+                      <ChevronRight className="w-4 h-4 rotate-90" />
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
           </TabsContent>
         </Tabs>
       </CardContent>

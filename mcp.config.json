@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json.schemastore.org/mcp.settings.json",
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "enabled": true,
+      "description": "Live documentation + framework context injection"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+      "enabled": true,
+      "description": "Read/write local files with project root access"
+    },
+    "git": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-git", "."],
+      "enabled": true,
+      "description": "Git repository analysis and operations"
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fetch"],
+      "enabled": true,
+      "description": "HTTP requests and API fetching"
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "enabled": true,
+      "description": "Persistent memory storage across sessions"
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "enabled": true,
+      "description": "Structured reasoning chains for complex tasks"
+    },
+    "sqlite": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sqlite", "./data/app.db"],
+      "enabled": false,
+      "description": "Local SQLite database querying (optional)"
+    },
+    "puppeteer": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "enabled": false,
+      "description": "Headless browser automation (optional)"
+    },
+    "bash": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-bash"],
+      "enabled": false,
+      "description": "Run shell commands with safety controls (use with caution)"
+    }
+  },
+  "mcpSettings": {
+    "autoConnect": true,
+    "connectionTimeout": 30000,
+    "toolCallTimeout": 60000,
+    "logging": {
+      "level": "info",
+      "file": "./logs/mcp.log"
+    },
+    "security": {
+      "allowFileSystemAccess": true,
+      "allowedPaths": ["./", "./app/", "./lib/", "./components/"],
+      "blockedCommands": ["rm -rf", "mkfs", "dd", "chmod -R"],
+      "requireApprovalFor": ["bash", "puppeteer"]
+    }
+  }
+}

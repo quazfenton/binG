@@ -1,13 +1,12 @@
 "use client";
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { streamingErrorHandler } from '@/lib/streaming/streaming-error-handler';
-import { createInputContext, processSafeContent } from '@/lib/input-response-separator';
 import type { Message } from '@/types';
 
 export interface UseChatOptions {
   api: string;
-  body?: Record<string, any>;
+  body?: Record<string, any> | (() => Record<string, any>);
   onResponse?: (response: Response) => void | Promise<void>;
   onError?: (error: Error) => void;
   onFinish?: (message: Message) => void;
@@ -36,6 +35,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentMessageRef = useRef<Message | null>(null);
+  const messagesRef = useRef<Message[]>([]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setInput(e.target.value);
@@ -47,6 +51,28 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       abortControllerRef.current = null;
       setIsLoading(false);
     }
+  }, []);
+
+  const buildRequestHeaders = useCallback((): HeadersInit => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('token');
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      let anonymousSessionId = localStorage.getItem('anonymous_session_id');
+      if (!anonymousSessionId) {
+        anonymousSessionId = `anon_${Date.now()}`;
+        localStorage.setItem('anonymous_session_id', anonymousSessionId);
+      }
+      headers['x-anonymous-session-id'] = anonymousSessionId;
+    }
+
+    return headers;
   }, []);
 
   const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
@@ -85,23 +111,24 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     abortControllerRef.current = abortController;
 
     try {
+      const resolvedBody = typeof options.body === 'function'
+        ? options.body()
+        : (options.body || {});
       const requestBody = {
-        messages: [...messages, userMessage],
-        ...options.body,
+        messages: [...messagesRef.current, userMessage],
+        ...resolvedBody,
       };
       
       console.log('[DEBUG] useEnhancedChat: Sending request to', options.api, {
         messageCount: requestBody.messages.length,
-        provider: options.body?.provider,
-        model: options.body?.model,
-        stream: options.body?.stream
+        provider: resolvedBody.provider,
+        model: resolvedBody.model,
+        stream: resolvedBody.stream
       });
 
       const response = await fetch(options.api, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: buildRequestHeaders(),
         body: JSON.stringify(requestBody),
         signal: abortController.signal,
       });
@@ -113,8 +140,49 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'Unable to read error');
+        let payload: any = null;
+        try {
+          payload = JSON.parse(errorText);
+        } catch {
+          payload = null;
+        }
+
+        const authRequired =
+          response.status === 401 &&
+          (payload?.status === 'auth_required' ||
+            payload?.error?.type === 'auth_required' ||
+            payload?.data?.requiresAuth === true);
+
+        if (authRequired) {
+          const content =
+            payload?.error?.message ||
+            payload?.message ||
+            `Authentication is required to continue.`;
+          const messageMetadata = {
+            requiresAuth: true,
+            authUrl: payload?.authUrl || payload?.data?.authUrl,
+            toolName: payload?.toolName || payload?.data?.toolName,
+            provider: payload?.provider || payload?.data?.provider
+          };
+
+          setMessages(prev => prev.map(msg =>
+            msg.id === assistantMessage.id
+              ? { ...msg, content, metadata: { ...(msg.metadata || {}), ...messageMetadata } }
+              : msg
+          ));
+          setIsLoading(false);
+          if (options.onFinish && currentMessageRef.current) {
+            options.onFinish({
+              ...currentMessageRef.current,
+              content,
+              metadata: messageMetadata
+            });
+          }
+          return;
+        }
+
         console.error('[DEBUG] useEnhancedChat: HTTP error', response.status, errorText);
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}${payload?.error?.message ? ` - ${payload.error.message}` : ''}`);
       }
 
       // Some auth-required responses are returned as JSON, not SSE.
@@ -174,14 +242,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       }
 
       const error = err instanceof Error ? err : new Error('Unknown error');
-      
+
       // Process error through error handler
       const streamingError = streamingErrorHandler.processError(error);
-      
+
       // Check if we have accumulated any content before showing error
-      const currentMessage = messages.find(msg => msg.id === assistantMessage.id);
+      // Use messagesRef.current to avoid stale closure bug
+      const currentMessage = messagesRef.current.find(msg => msg.id === assistantMessage.id);
       const hasContent = currentMessage && currentMessage.content && currentMessage.content.trim().length > 0;
-      
+
       // Only show error to user if it should be shown and we don't have content
       if (streamingErrorHandler.shouldShowToUser(streamingError) && !hasContent) {
         const userMessage = streamingErrorHandler.getUserMessage(streamingError);
@@ -192,19 +261,19 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       } else {
         // Log error for debugging but don't show to user
         console.warn('Chat error (handled silently):', error);
-        
+
         // If we have content, consider the request successful
         if (hasContent && options.onFinish && currentMessageRef.current) {
           options.onFinish({
             ...currentMessageRef.current,
-            content: currentMessage.content
+            content: currentMessage?.content || ''
           });
         }
       }
 
       setIsLoading(false);
     }
-  }, [input, isLoading, messages, options]);
+  }, [buildRequestHeaders, input, isLoading, options]);
 
   const handleStreamingResponse = async (
     body: ReadableStream<Uint8Array>,
@@ -216,7 +285,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     let buffer = '';
     let accumulatedContent = '';
     let currentEventType = '';
-    let lastUpdateTime = Date.now();
 
     // Set up a timeout to ensure we don't get stuck
     const timeoutId = setTimeout(() => {
@@ -294,7 +362,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     
                     if (contentMatch && contentMatch[1]) {
                       accumulatedContent += contentMatch[1];
-                      lastUpdateTime = Date.now();
                       setMessages(prev => prev.map(msg => 
                         msg.id === assistantMessage.id 
                           ? { ...msg, content: accumulatedContent }
@@ -304,7 +371,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   } else {
                     // Treat as plain text content for backward compatibility
                     accumulatedContent += dataString;
-                    lastUpdateTime = Date.now();
                     setMessages(prev => prev.map(msg => 
                       msg.id === assistantMessage.id 
                         ? { ...msg, content: accumulatedContent }
@@ -329,7 +395,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 case 'data':
                   if (eventData.content) {
                     accumulatedContent += eventData.content;
-                    lastUpdateTime = Date.now();
                     
                     // Update the assistant message in real-time
                     setMessages(prev => prev.map(msg => 
@@ -364,11 +429,67 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 case 'error':
                   throw new Error(eventData.message || 'Streaming error');
 
+                case 'filesystem':
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === assistantMessage.id
+                      ? {
+                          ...msg,
+                          metadata: {
+                            ...(msg.metadata || {}),
+                            filesystem: eventData,
+                          },
+                        }
+                      : msg
+                  ));
+                  break;
+
+                case 'reasoning':
+                  if (eventData.reasoning) {
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
+                        ? {
+                            ...msg,
+                            metadata: {
+                              ...(msg.metadata || {}),
+                              reasoning: eventData.reasoning,
+                            },
+                          }
+                        : msg
+                    ));
+                  }
+                  break;
+
+                case 'tool_invocation':
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id !== assistantMessage.id) return msg;
+                    const existing = Array.isArray((msg.metadata as any)?.toolInvocations)
+                      ? ([...(msg.metadata as any).toolInvocations] as any[])
+                      : [];
+                    const idx = existing.findIndex((inv) => inv.toolCallId === eventData.toolCallId && inv.state === eventData.state);
+                    if (idx === -1) {
+                      existing.push({
+                        toolCallId: eventData.toolCallId,
+                        toolName: eventData.toolName,
+                        state: eventData.state,
+                        args: eventData.args || {},
+                        result: eventData.result,
+                      });
+                    }
+                    return {
+                      ...msg,
+                      metadata: {
+                        ...(msg.metadata || {}),
+                        toolInvocations: existing,
+                      },
+                    };
+                  }));
+                  break;
+
+                // Non-content events - just log for debugging in development
                 case 'heartbeat':
                 case 'metrics':
                 case 'commands':
                 case 'softTimeout':
-                  // Non-content events - just log for debugging in development
                   if (process.env.NODE_ENV === 'development') {
                     console.log(`Chat stream event (${eventType}):`, eventData);
                   }
@@ -441,4 +562,3 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     setInput,
   };
 }
-

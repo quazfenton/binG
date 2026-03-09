@@ -1,6 +1,6 @@
 /**
  * E2B Sandbox Provider
- * 
+ *
  * Provides secure cloud sandbox environments via E2B's API
  * Features:
  * - Code execution (Python, Node.js, and more) via Jupyter
@@ -9,17 +9,35 @@
  * - PTY/Terminal support (interactive bash shell)
  * - Custom templates
  * - Automatic quota tracking
- * 
+ * - Desktop support for computer use agents
+ *
  * @see https://e2b.dev/docs
  * @see https://github.com/e2b-dev/e2b-cookbook
- * 
+ * @see https://e2b.dev/docs/desktop Desktop documentation
+ *
  * Note: Uses dynamic imports for @e2b/code-interpreter to avoid
  * app failures when the package is not installed.
  */
 
 import { resolve, relative, join, dirname } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import { quotaManager } from '@/lib/services/quota-manager'
+import { quotaManager } from '../../services/quota-manager'
+import { SandboxSecurityManager } from '../security-manager'
+import { E2BDesktopProvider, type DesktopSandboxHandle as DesktopHandle } from './e2b-desktop-provider-enhanced'
+import {
+  createAmpService,
+  type E2BAmpService,
+  type AmpExecutionConfig,
+  type AmpExecutionResult,
+  type AmpEvent,
+} from './e2b-amp-service'
+import {
+  createCodexService,
+  type E2BCodexService,
+  type CodexExecutionConfig,
+  type CodexExecutionResult,
+  type CodexEvent,
+} from './e2b-codex-service'
 import type { ToolResult, PreviewInfo } from '../types'
 import type {
   SandboxProvider,
@@ -33,6 +51,22 @@ import type {
 // Dynamic import type for E2B Sandbox
 type E2BSandboxType = any
 type E2BSandboxOpts = any
+
+// Local type definitions to fix missing imports
+interface FilesystemEvent {
+  type: string
+  path: string
+  name?: string
+}
+
+interface WatchHandle {
+  close(): Promise<void>
+}
+
+interface CommandHandle {
+  wait(): Promise<{ exitCode: number; stdout: string; stderr: string }>
+  kill(): Promise<void>
+}
 
 // E2B-specific configuration
 const E2B_DEFAULT_TIMEOUT = 300000 // 5 minutes
@@ -68,6 +102,24 @@ export class E2BProvider implements SandboxProvider {
 
     if (!this.apiKey) {
       console.warn('[E2BProvider] E2B_API_KEY not set. E2B sandboxes will not be available.')
+    }
+  }
+
+  /**
+   * Health check - verifies API connectivity by listing active sandboxes
+   */
+  async healthCheck(): Promise<{ healthy: boolean; latency?: number; details?: any }> {
+    const startTime = Date.now()
+    try {
+      await this.ensureE2BModule()
+      const Sandbox = this.e2bModule.Sandbox
+      const sandboxes = await Sandbox.list()
+      const latency = Date.now() - startTime
+      return { healthy: true, latency, details: { activeSandboxes: sandboxes.length } }
+    } catch (error: any) {
+      const latency = Date.now() - startTime
+      console.error('[E2BProvider] Health check failed:', error.message)
+      return { healthy: false, latency, details: { error: error.message } }
     }
   }
 
@@ -237,6 +289,8 @@ class E2BSandboxHandle implements SandboxHandle {
   private config: SandboxCreateConfig
   private e2bModule: any
   private ptySessions: Map<string, { pid: number; handle: any }> = new Map()
+  private ampService?: E2BAmpService
+  private codexService?: E2BCodexService
 
   constructor(sandbox: E2BSandboxType, config: SandboxCreateConfig, e2bModule: any) {
     this.sandbox = sandbox
@@ -246,15 +300,150 @@ class E2BSandboxHandle implements SandboxHandle {
   }
 
   /**
+   * Get Amp Service for coding agent tasks
+   * Requires AMP_API_KEY environment variable
+   *
+   * @see https://e2b.dev/docs/agents/amp
+   */
+  getAmpService(): E2BAmpService | null {
+    const apiKey = process.env.AMP_API_KEY
+    if (!apiKey) {
+      console.warn('[E2B] AMP_API_KEY not set, Amp service unavailable')
+      return null
+    }
+
+    if (!this.ampService) {
+      this.ampService = createAmpService(this.sandbox, apiKey)
+    }
+
+    return this.ampService
+  }
+
+  /**
+   * Get Codex Service for OpenAI coding agent tasks
+   * Requires CODEX_API_KEY (or OPENAI_API_KEY) environment variable
+   *
+   * @see https://e2b.dev/docs/agents/codex
+   * @see https://github.com/openai/codex
+   */
+  getCodexService(): E2BCodexService | null {
+    const apiKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY
+    if (!apiKey) {
+      console.warn('[E2B] CODEX_API_KEY not set, Codex service unavailable')
+      return null
+    }
+
+    if (!this.codexService) {
+      this.codexService = createCodexService(this.sandbox, apiKey)
+    }
+
+    return this.codexService
+  }
+
+  /**
+   * Execute Amp coding agent task
+   *
+   * @example
+   * ```typescript
+   * const result = await handle.executeAmp({
+   *   prompt: 'Fix all TODO comments in the codebase',
+   *   streamJson: true,
+   *   onStdout: (data) => console.log(data)
+   * });
+   * ```
+   */
+  async executeAmp(config: AmpExecutionConfig): Promise<AmpExecutionResult> {
+    const ampService = this.getAmpService()
+    if (!ampService) {
+      throw new Error('AMP_API_KEY not configured')
+    }
+
+    return ampService.run(config)
+  }
+
+  /**
+   * Execute Codex coding agent task
+   *
+   * @example
+   * ```typescript
+   * const result = await handle.executeCodex({
+   *   prompt: 'Review this codebase for security issues',
+   *   fullAuto: true,
+   *   outputSchemaPath: '/home/user/schema.json',
+   *   workingDir: '/home/user/repo'
+   * });
+   * ```
+   */
+  async executeCodex(config: CodexExecutionConfig): Promise<CodexExecutionResult> {
+    const codexService = this.getCodexService()
+    if (!codexService) {
+      throw new Error('CODEX_API_KEY not configured')
+    }
+
+    return codexService.run(config)
+  }
+
+  /**
+   * Stream Amp events
+   *
+   * @example
+   * ```typescript
+   * for await (const event of handle.streamAmpEvents({
+   *   prompt: 'Refactor the utils module',
+   *   workingDir: '/home/user/repo'
+   * })) {
+   *   if (event.type === 'assistant') {
+   *     console.log(`Tokens: ${event.message.usage?.output_tokens}`)
+   *   }
+   * }
+   * ```
+   */
+  async *streamAmpEvents(config: AmpExecutionConfig): AsyncIterable<AmpEvent> {
+    const ampService = this.getAmpService()
+    if (!ampService) {
+      throw new Error('AMP_API_KEY not configured')
+    }
+
+    yield* ampService.streamJson(config)
+  }
+
+  /**
+   * Stream Codex events
+   *
+   * @example
+   * ```typescript
+   * for await (const event of handle.streamCodexEvents({
+   *   prompt: 'Refactor the utils module',
+   *   workingDir: '/home/user/repo'
+   * })) {
+   *   if (event.type === 'tool_call') {
+   *     console.log(`Tool: ${event.data.tool_name}`)
+   *   }
+   * }
+   * ```
+   */
+  async *streamCodexEvents(config: CodexExecutionConfig): AsyncIterable<CodexEvent> {
+    const codexService = this.getCodexService()
+    if (!codexService) {
+      throw new Error('CODEX_API_KEY not configured')
+    }
+
+    yield* codexService.streamEvents(config)
+  }
+
+  /**
    * Execute a command in the sandbox
    */
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
     try {
+      // ✅ ENHANCED: Use centralized security validation
+      const sanitized = SandboxSecurityManager.validateAndSanitizeCommand(command)
+      
       const workingDir = cwd || this.workspaceDir
       const cmdTimeout = Math.min(timeout || E2B_MAX_COMMAND_TIMEOUT, E2B_MAX_COMMAND_TIMEOUT)
 
       // Run command via sandbox.commands
-      const result = await this.sandbox.commands.run(command, {
+      const result = await this.sandbox.commands.run(sanitized, {
         cwd: workingDir,
         timeout: cmdTimeout,
       })
@@ -265,6 +454,16 @@ class E2BSandboxHandle implements SandboxHandle {
         exitCode: result.exitCode,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+          exitCode: -1,
+        }
+      }
+      
       console.error('[E2B] Command execution error:', error)
       return {
         success: false,
@@ -304,10 +503,15 @@ class E2BSandboxHandle implements SandboxHandle {
    */
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(filePath)
+      // ✅ ENHANCED: Use centralized security validation
+      const { resolvedPath, validatedContent } = SandboxSecurityManager.validateWriteFile(
+        filePath,
+        content,
+        this.workspaceDir
+      )
 
       // Ensure directory exists
-      const dir = dirname(resolved)
+      const dir = dirname(resolvedPath)
       if (dir !== '/') {
         // Shell-escape the directory path to prevent command injection
         const escapedDir = dir.replace(/'/g, "'\\''")
@@ -315,13 +519,22 @@ class E2BSandboxHandle implements SandboxHandle {
       }
 
       // Write file using sandbox filesystem
-      await this.sandbox.files.write(resolved, content)
+      await this.sandbox.files.write(resolvedPath, validatedContent)
 
       return {
         success: true,
-        output: `File written: ${resolved}`,
+        output: `File written: ${resolvedPath}`,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       console.error('[E2B] Write file error:', error)
       return {
         success: false,
@@ -335,7 +548,8 @@ class E2BSandboxHandle implements SandboxHandle {
    */
   async readFile(filePath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(filePath)
+      // ✅ ENHANCED: Validate path before reading
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, filePath)
       const content = await this.sandbox.files.read(resolved)
 
       return {
@@ -343,6 +557,15 @@ class E2BSandboxHandle implements SandboxHandle {
         output: content,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       console.error('[E2B] Read file error:', error)
       return {
         success: false,
@@ -356,12 +579,13 @@ class E2BSandboxHandle implements SandboxHandle {
    */
   async listDirectory(dirPath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(dirPath)
+      // ✅ ENHANCED: Validate path before listing
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath)
 
       // Use ls command for directory listing with shell-escaped path
       const escapedPath = resolved.replace(/'/g, "'\\''")
       const result = await this.sandbox.commands.run(`ls -la '${escapedPath}'`)
-      
+
       if (result.exitCode !== 0) {
         return {
           success: false,
@@ -374,6 +598,15 @@ class E2BSandboxHandle implements SandboxHandle {
         output: result.stdout || '(empty directory)',
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       console.error('[E2B] List directory error:', error)
       return {
         success: false,
@@ -387,7 +620,8 @@ class E2BSandboxHandle implements SandboxHandle {
    */
   async uploadFile(localPath: string, sandboxPath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(sandboxPath)
+      // ✅ ENHANCED: Use centralized security validation
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, sandboxPath)
 
       // Read file content as Buffer to support both text and binary files
       const content = await readFile(localPath)
@@ -400,6 +634,15 @@ class E2BSandboxHandle implements SandboxHandle {
         output: `File uploaded: ${resolved}`,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       console.error('[E2B] Upload file error:', error)
       return {
         success: false,
@@ -413,14 +656,24 @@ class E2BSandboxHandle implements SandboxHandle {
    */
   async downloadFile(sandboxPath: string): Promise<ToolResult> {
     try {
-      const resolved = this.resolvePath(sandboxPath)
+      // ✅ ENHANCED: Validate path before reading
+      const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, sandboxPath)
       const content = await this.sandbox.files.read(resolved)
-      
+
       return {
         success: true,
         output: content,
       }
     } catch (error: any) {
+      // Security exceptions should be logged but not expose details
+      if (error.message?.includes('Security Exception')) {
+        console.warn('[E2B] Security validation failed:', error.message)
+        return {
+          success: false,
+          output: 'Security validation failed',
+        }
+      }
+      
       console.error('[E2B] Download file error:', error)
       return {
         success: false,
@@ -429,17 +682,133 @@ class E2BSandboxHandle implements SandboxHandle {
     }
   }
 
+  // ==================== Git Integration ====================
+
+  /**
+   * Clone a git repository
+   * 
+   * @example
+   * ```typescript
+   * await handle.gitClone('https://github.com/org/repo.git', {
+   *   path: '/home/user/repo',
+   *   username: 'x-access-token',
+   *   password: process.env.GITHUB_TOKEN,
+   *   depth: 1
+   * });
+   * ```
+   */
+  async gitClone(
+    url: string,
+    options?: {
+      path?: string;
+      username?: string;
+      password?: string;
+      depth?: number;
+    }
+  ): Promise<{ success: boolean; output: string; error?: string }> {
+    try {
+      const path = options?.path || this.workspaceDir;
+      const depth = options?.depth || 1;
+
+      let cmd = `git clone --depth ${depth}`;
+
+      if (options?.username && options?.password) {
+        // Inject credentials into URL for private repos
+        const urlWithAuth = url.replace('https://', `https://${options.username}:${options.password}@`);
+        cmd += ` ${urlWithAuth} ${path}`;
+      } else {
+        cmd += ` ${url} ${path}`;
+      }
+
+      const result = await this.sandbox.commands.run(cmd);
+
+      return {
+        success: result.exitCode === 0,
+        output: result.stdout || 'Repository cloned successfully',
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        output: '',
+        error: error.message || 'Failed to clone repository',
+      };
+    }
+  }
+
+  /**
+   * Pull latest changes
+   */
+  async gitPull(path?: string): Promise<{ success: boolean; output: string; error?: string }> {
+    try {
+      const cwd = path || this.workspaceDir;
+      const result = await this.sandbox.commands.run('git pull', { cwd });
+
+      return {
+        success: result.exitCode === 0,
+        output: result.stdout || 'Already up to date',
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        output: '',
+        error: error.message || 'Failed to pull changes',
+      };
+    }
+  }
+
+  /**
+   * Get git status
+   */
+  async gitStatus(path?: string): Promise<{ success: boolean; status: any; error?: string }> {
+    try {
+      const cwd = path || this.workspaceDir;
+      const result = await this.sandbox.commands.run('git status --json', { cwd });
+
+      return {
+        success: result.exitCode === 0,
+        status: JSON.parse(result.stdout),
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        status: null,
+        error: error.message || 'Failed to get git status',
+      };
+    }
+  }
+
+  /**
+   * Get git diff
+   */
+  async gitDiff(path?: string): Promise<{ success: boolean; diff: string; error?: string }> {
+    try {
+      const cwd = path || this.workspaceDir;
+      const result = await this.sandbox.commands.run('git diff', { cwd });
+
+      return {
+        success: result.exitCode === 0,
+        diff: result.stdout,
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        diff: '',
+        error: error.message || 'Failed to get git diff',
+      };
+    }
+  }
+
   /**
    * Watch a directory for file changes
-   */
+    */
   async watchDirectory(
     dirPath: string,
     callback: (event: FilesystemEvent) => void
   ): Promise<WatchHandle> {
-    const resolved = this.resolvePath(dirPath)
-    
+    const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath)
+
     const watchHandle = await this.sandbox.files.watch(resolved, {
-      callback: (event) => {
+      callback: (event: any) => {
         callback({
           type: event.type,
           path: event.path,
@@ -607,23 +976,6 @@ class E2BSandboxHandle implements SandboxHandle {
   }
 
   /**
-   * Resolve and validate file path (prevent path traversal)
-   */
-  private resolvePath(filePath: string): string {
-    const resolved = filePath.startsWith('/')
-      ? resolve(filePath)
-      : resolve(this.workspaceDir, filePath)
-
-    // Ensure path stays within workspace
-    const rel = relative(this.workspaceDir, resolved)
-    if (rel.startsWith('..') || resolved === '..' || resolve(this.workspaceDir, rel) !== resolved) {
-      throw new Error(`Path traversal rejected: ${filePath}`)
-    }
-
-    return resolved
-  }
-
-  /**
    * Get sandbox info
    */
   async getInfo(): Promise<{
@@ -765,6 +1117,112 @@ class E2BPtyHandle implements PtyHandle {
   getPid(): number {
     return this.pid
   }
+}
+
+/**
+ * E2B Git Integration Extensions
+ * Based on documentation: https://e2b.mintlify.app/docs/sandbox/git-integration
+ */
+export class E2BGitIntegration {
+  private sandbox: E2BSandboxType
+
+  constructor(sandbox: E2BSandboxType) {
+    this.sandbox = sandbox
+  }
+
+  /**
+   * Clone a git repository
+   */
+  async clone(url: string, options?: {
+    path?: string
+    username?: string
+    password?: string
+    depth?: number
+  }): Promise<ToolResult> {
+    try {
+      const args: string[] = ['clone']
+      if (options?.depth) {
+        args.push(`--depth ${options.depth}`)
+      }
+      
+      let repoUrl = url
+      if (options?.username && options?.password) {
+        // Insert credentials into URL
+        const urlObj = new URL(url)
+        repoUrl = `https://${options.username}:${options.password}@${urlObj.hostname}${urlObj.pathname}`
+      }
+      
+      args.push(repoUrl)
+      
+      if (options?.path) {
+        args.push(options.path)
+      }
+
+      const result = await this.sandbox.git.run(args.join(' '))
+      
+      return {
+        success: result.exitCode === 0,
+        output: result.stdout || result.stderr || '',
+        exitCode: result.exitCode,
+      }
+    } catch (error: any) {
+      return {
+        success: false,
+        output: error.message || 'Git clone failed',
+        exitCode: -1,
+      }
+    }
+  }
+
+  /**
+   * Run a git command
+   */
+  async run(command: string): Promise<ToolResult> {
+    try {
+      const result = await this.sandbox.commands.run(`git ${command}`)
+      return {
+        success: result.exitCode === 0,
+        output: result.stdout || result.stderr || '',
+        exitCode: result.exitCode,
+      }
+    } catch (error: any) {
+      return {
+        success: false,
+        output: error.message || 'Git command failed',
+        exitCode: -1,
+      }
+    }
+  }
+
+  /**
+   * Get git status
+   */
+  async status(): Promise<{ success: boolean; status: any; error?: string }> {
+    try {
+      const result = await this.run('status --json')
+      return {
+        success: result.success,
+        status: result.output ? JSON.parse(result.output) : {},
+      }
+    } catch (error: any) {
+      return { success: false, status: null, error: error.message }
+    }
+  }
+
+  /**
+   * Get git diff
+   */
+  async diff(): Promise<string> {
+    const result = await this.run('diff')
+    return result.output || ''
+  }
+}
+
+/**
+ * Create E2B Git integration from sandbox
+ */
+export function createE2BGitIntegration(sandbox: E2BSandboxType): E2BGitIntegration {
+  return new E2BGitIntegration(sandbox)
 }
 
 // Export singleton instance

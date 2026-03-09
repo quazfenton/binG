@@ -9,17 +9,25 @@ const DB_PATH = process.env.DATABASE_PATH || join(process.cwd(), 'data', 'binG.d
 // Encryption key - MUST be set via environment variable in production
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 
-// Ensure the encryption key is 32 bytes (pad or truncate as needed)
+// CRITICAL: Validate and derive encryption key with proper security checks
 const encryptionKey = (() => {
   if (!ENCRYPTION_KEY) {
     if (process.env.NODE_ENV === 'production') {
-      throw new Error('ENCRYPTION_KEY must be set in production');
+      throw new Error('ENCRYPTION_KEY must be set in production for data security');
     }
-    console.warn('⚠️  WARNING: ENCRYPTION_KEY not set! Using insecure fallback for development only.');
+    // In development, generate random key per session (not persistent)
+    console.warn('⚠️  WARNING: ENCRYPTION_KEY not set! Using random dev key.');
+    console.warn('API keys will NOT persist across restarts in development.');
     console.warn('Set ENCRYPTION_KEY environment variable to a secure 32+ character random string.');
-    console.warn('Example: ENCRYPTION_KEY=$(openssl rand -hex 32)');
-    return Buffer.from('default-insecure-key-change-me!!'); // exactly 32 bytes
+    return crypto.randomBytes(32);
   }
+  
+  // Validate key strength
+  if (ENCRYPTION_KEY.length < 16) {
+    throw new Error('ENCRYPTION_KEY must be at least 16 characters for secure encryption');
+  }
+  
+  // Pad or truncate to exactly 32 bytes for AES-256
   return Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
 })();
 
@@ -86,6 +94,10 @@ export function getDatabase(): Database.Database {
       db.pragma('synchronous = NORMAL');
       db.pragma('cache_size = 1000');
       db.pragma('temp_store = memory');
+      
+      // SECURITY: Enable foreign key enforcement
+      // Without this, ON DELETE CASCADE and foreign key constraints are silently ignored
+      db.pragma('foreign_keys = ON');
 
       // Initialize schema synchronously first time
       if (!dbInitialized) {
@@ -95,14 +107,19 @@ export function getDatabase(): Database.Database {
         // Without this, requests can execute before migrations complete, causing
         // "no such column" errors for migration-added columns like email_verification_token
         try {
-          // Require here to avoid circular import at module load time
-          const { migrationRunner } = require('./migration-runner');
-          if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
-            // Use synchronous migration runner
-            migrationRunner.runMigrationsSync();
-            console.log('[database] Migrations completed successfully');
+          // Respect AUTO_RUN_MIGRATIONS environment variable
+          if (process.env.AUTO_RUN_MIGRATIONS !== 'false') {
+            // Require here to avoid circular import at module load time
+            const { migrationRunner } = require('./migration-runner');
+            if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
+              // Use synchronous migration runner
+              migrationRunner.runMigrationsSync();
+              console.log('[database] Migrations completed successfully');
+            } else {
+              console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
+            }
           } else {
-            console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
+            console.log('[database] Auto-run migrations disabled via environment variable');
           }
         } catch (error) {
           console.warn('[database] Migrations failed (continuing with base schema):', error);
@@ -194,45 +211,33 @@ export function encryptApiKey(apiKey: string): { encrypted: string; hash: string
 }
 
 export function decryptApiKey(encryptedData: string): string {
-  const [ivHex, encrypted] = encryptedData.split(':');
-
-  // Try new format first (createCipheriv with proper IV usage)
-  try {
-    const iv = Buffer.from(ivHex, 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
-  } catch (newFormatError) {
-    // New format failed - try legacy format (createCipher with EVP_BytesToKey)
-    // Legacy data also has IV:encrypted format, but the IV was randomly generated and unused
-    // createCipher derived both key and IV from the password using MD5
+  const parts = encryptedData.split(':');
+  
+  // Check if it's new format (iv:encrypted) or legacy format (just encrypted)
+  if (parts.length === 2) {
+    // New format with IV
+    const [ivHex, encrypted] = parts;
     try {
-      const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
+      const iv = Buffer.from(ivHex, 'hex');
+      const decipher = crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
       let decrypted = decipher.update(encrypted, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
-
-      // SECURITY WARNING: Legacy format detected
-      // This data was encrypted with deprecated createDecipher using MD5 key derivation
-      // which is vulnerable to known-plaintext attacks.
-      // 
-      // ACTION REQUIRED: Re-encrypt this API key using the secure format by calling
-      // encryptApiKey() with the decrypted value and updating the database record.
-      // 
-      // The legacy fallback will be removed in a future version.
-      console.warn(
-        '[decryptApiKey] ⚠️  SECURITY WARNING: Legacy encryption format detected!',
-        'Data encrypted with deprecated createDecipher (MD5 key derivation) is vulnerable.',
-        'Please migrate this API key by re-encrypting with encryptApiKey() and updating the database.',
-        'Legacy support will be removed in a future release.'
-      );
-
       return decrypted;
-    } catch (legacyError) {
-      // Both formats failed - this is truly corrupted data
-      console.error('[decryptApiKey] Failed to decrypt: both new and legacy formats failed');
-      throw new Error('Failed to decrypt API key: data may be corrupted');
+    } catch (error) {
+      console.error('[decryptApiKey] New format decryption failed:', error);
     }
+  }
+  
+  // Try legacy format (no IV, uses deprecated createDecipher)
+  try {
+    // Legacy format used createDecipher which derived IV from password
+    const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
+    let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (legacyError) {
+    console.error('[decryptApiKey] Legacy format decryption failed:', legacyError);
+    throw new Error('Failed to decrypt API key: data may be corrupted');
   }
 }
 

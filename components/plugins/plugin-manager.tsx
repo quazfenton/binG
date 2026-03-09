@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { secureRandom } from '@/lib/utils';
 import { Button } from '../ui/button';
@@ -85,6 +86,8 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
   const [openWindows, setOpenWindows] = useState<PluginWindow[]>([]);
   const [nextZIndex, setNextZIndex] = useState(1000);
   const [pluginErrors, setPluginErrors] = useState<Map<string, PluginError[]>>(new Map());
+  const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
   const [dragState, setDragState] = useState<{
     windowId: string | null;
     isDragging: boolean;
@@ -141,18 +144,34 @@ export const PluginManager: React.FC<PluginManagerProps> = ({
     }
   }, [openPluginId]);
 
+  useEffect(() => {
+    setPortalRoot(document.body);
+  }, []);
+
+  useEffect(() => {
+    const updateMobile = () => setIsMobile(window.innerWidth <= 768);
+    updateMobile();
+    window.addEventListener('resize', updateMobile);
+    return () => window.removeEventListener('resize', updateMobile);
+  }, []);
+
   const openPlugin = (plugin: Plugin, initialData?: any) => {
     const windowId = `${plugin.id}-${Date.now()}`;
+    const mobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+    const mobileWidth = typeof window !== 'undefined' ? Math.max(320, window.innerWidth - 16) : plugin.defaultSize.width;
+    const mobileHeight = typeof window !== 'undefined' ? Math.max(320, window.innerHeight - 16) : plugin.defaultSize.height;
     const newWindow: PluginWindow = {
       id: windowId,
       plugin,
       position: {
-x: secureRandom() * 200 + 100,
-        y: secureRandom() * 100 + 100
+        x: mobile ? 8 : secureRandom() * 200 + 100,
+        y: mobile ? 8 : secureRandom() * 100 + 100
       },
-      size: plugin.defaultSize,
+      size: mobile
+        ? { width: mobileWidth, height: mobileHeight }
+        : plugin.defaultSize,
       isMinimized: false,
-      isMaximized: false,
+      isMaximized: mobile,
       zIndex: nextZIndex,
       data: initialData,
       status: 'running',
@@ -161,6 +180,25 @@ x: secureRandom() * 200 + 100,
 
     setOpenWindows(prev => [...prev, newWindow]);
     setNextZIndex(prev => prev + 1);
+  };
+
+  const startPointerAction = (
+    windowId: string,
+    action: 'drag' | 'resize',
+    clientX: number,
+    clientY: number
+  ) => {
+    const windowObj = openWindows.find(w => w.id === windowId);
+    if (!windowObj) return;
+    bringToFront(windowId);
+    setDragState({
+      windowId,
+      isDragging: action === 'drag',
+      isResizing: action === 'resize',
+      startPos: { x: clientX, y: clientY },
+      startSize: windowObj.size,
+      startWindowPos: windowObj.position
+    });
   };
 
   const handlePluginError = (windowId: string, error: PluginError) => {
@@ -226,19 +264,8 @@ x: secureRandom() * 200 + 100,
 
   const handleMouseDown = (e: React.MouseEvent, windowId: string, action: 'drag' | 'resize') => {
     e.preventDefault();
-    const window = openWindows.find(w => w.id === windowId);
-    if (!window) return;
-
-    bringToFront(windowId);
-
-    setDragState({
-      windowId,
-      isDragging: action === 'drag',
-      isResizing: action === 'resize',
-      startPos: { x: e.clientX, y: e.clientY },
-      startSize: window.size,
-      startWindowPos: window.position
-    });
+    if (isMobile) return;
+    startPointerAction(windowId, action, e.clientX, e.clientY);
   };
 
   useEffect(() => {
@@ -289,46 +316,67 @@ x: secureRandom() * 200 + 100,
       });
     };
 
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!dragState.windowId || (!dragState.isDragging && !dragState.isResizing)) return;
+      if (isMobile) return;
+      if (!e.touches[0]) return;
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - dragState.startPos.x;
+      const deltaY = touch.clientY - dragState.startPos.y;
+      setOpenWindows(prev => prev.map(w => {
+        if (w.id !== dragState.windowId) return w;
+        if (dragState.isDragging) {
+          return {
+            ...w,
+            position: {
+              x: Math.max(0, dragState.startWindowPos.x + deltaX),
+              y: Math.max(0, dragState.startWindowPos.y + deltaY)
+            }
+          };
+        }
+        if (dragState.isResizing) {
+          const newWidth = Math.max(w.plugin.minSize.width, dragState.startSize.width + deltaX);
+          const newHeight = Math.max(w.plugin.minSize.height, dragState.startSize.height + deltaY);
+          return {
+            ...w,
+            size: {
+              width: w.plugin.maxSize ? Math.min(w.plugin.maxSize.width, newWidth) : newWidth,
+              height: w.plugin.maxSize ? Math.min(w.plugin.maxSize.height, newHeight) : newHeight
+            }
+          };
+        }
+        return w;
+      }));
+    };
+
+    const handleTouchEnd = () => {
+      setDragState({
+        windowId: null,
+        isDragging: false,
+        isResizing: false,
+        startPos: { x: 0, y: 0 },
+        startSize: { width: 0, height: 0 },
+        startWindowPos: { x: 0, y: 0 }
+      });
+    };
+
     if (dragState.isDragging || dragState.isResizing) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
+      document.addEventListener('touchmove', handleTouchMove);
+      document.addEventListener('touchend', handleTouchEnd);
     }
 
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleTouchEnd);
     };
-  }, [dragState]);
+  }, [dragState, isMobile]);
 
-  return (
+  const pluginWindowsLayer = (
     <>
-      {/* Plugin Launcher */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {availablePlugins.map(plugin => {
-          const IconComponent = plugin.icon;
-          const isEnhanced = enableEnhancedMode && plugin.enhanced;
-          
-          return (
-            <Button
-              key={plugin.id}
-              variant="secondary"
-              size="sm"
-              className={`flex items-center gap-2 bg-black/20 hover:bg-black/40 border border-white/10 ${
-                isEnhanced ? 'ring-1 ring-green-500/30' : ''
-              }`}
-              onClick={() => openPlugin(plugin)}
-            >
-              <IconComponent className="w-4 h-4" />
-              <span className="hidden sm:inline">{plugin.name}</span>
-              {isEnhanced && (
-                <Shield className="w-3 h-3 text-green-400" title="Enhanced Mode" />
-              )}
-            </Button>
-          );
-        })}
-      </div>
-
-      {/* Plugin Windows */}
       <AnimatePresence>
         {openWindows.map(window => {
           const PluginComponent = window.plugin.component;
@@ -345,18 +393,23 @@ x: secureRandom() * 200 + 100,
               exit={{ opacity: 0, scale: 0.9 }}
               className="fixed bg-black/90 backdrop-blur-xl border border-white/20 rounded-lg shadow-2xl overflow-hidden"
               style={{
-                left: window.position.x,
-                top: window.position.y,
-                width: window.size.width,
-                height: window.isMinimized ? 40 : window.size.height,
+                left: isMobile ? 8 : window.position.x,
+                top: isMobile ? 8 : window.position.y,
+                width: isMobile ? 'calc(100vw - 16px)' : window.size.width,
+                height: isMobile ? 'calc(100dvh - 16px)' : (window.isMinimized ? 40 : window.size.height),
                 zIndex: window.zIndex
               }}
               onMouseDown={() => bringToFront(window.id)}
             >
-              {/* Window Header */}
               <div
-                className="h-10 bg-black/60 border-b border-white/10 flex items-center justify-between px-3 cursor-move select-none"
+                className={`h-10 bg-black/60 border-b border-white/10 flex items-center justify-between px-3 ${isMobile ? 'cursor-default' : 'cursor-move'} select-none`}
                 onMouseDown={(e) => handleMouseDown(e, window.id, 'drag')}
+                onTouchStart={(e) => {
+                  if (isMobile) return;
+                  const t = e.touches[0];
+                  if (!t) return;
+                  startPointerAction(window.id, 'drag', t.clientX, t.clientY);
+                }}
               >
                 <div className="flex items-center gap-2">
                   <window.plugin.icon className="w-4 h-4" />
@@ -364,7 +417,6 @@ x: secureRandom() * 200 + 100,
                     {window.plugin.name}
                   </span>
                   
-                  {/* Status indicators */}
                   {useEnhanced && (
                     <div className="flex items-center gap-1">
                       <Shield className="w-3 h-3 text-green-400" title="Enhanced Mode" />
@@ -408,7 +460,6 @@ x: secureRandom() * 200 + 100,
                 </div>
               </div>
 
-              {/* Window Content */}
               {!window.isMinimized && (
                 <div className="h-full overflow-hidden">
                   {useEnhanced ? (
@@ -431,11 +482,15 @@ x: secureRandom() * 200 + 100,
                 </div>
               )}
 
-              {/* Resize Handle */}
-              {!window.isMinimized && !window.isMaximized && (
+              {!isMobile && !window.isMinimized && !window.isMaximized && (
                 <div
                   className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize bg-white/10 hover:bg-white/20"
                   onMouseDown={(e) => handleMouseDown(e, window.id, 'resize')}
+                  onTouchStart={(e) => {
+                    const t = e.touches[0];
+                    if (!t) return;
+                    startPointerAction(window.id, 'resize', t.clientX, t.clientY);
+                  }}
                 >
                   <div className="absolute bottom-1 right-1 w-2 h-2 border-r border-b border-white/40" />
                 </div>
@@ -445,7 +500,6 @@ x: secureRandom() * 200 + 100,
         })}
       </AnimatePresence>
 
-      {/* Minimized Windows Taskbar */}
       {openWindows.some(w => w.isMinimized) && (
         <div className="fixed bottom-4 left-4 flex gap-2 z-50">
           {openWindows.filter(w => w.isMinimized).map(window => (
@@ -462,6 +516,37 @@ x: secureRandom() * 200 + 100,
           ))}
         </div>
       )}
+    </>
+  );
+
+  return (
+    <>
+      <div className="flex flex-wrap gap-2 mb-4">
+        {availablePlugins.map(plugin => {
+          const IconComponent = plugin.icon;
+          const isEnhanced = enableEnhancedMode && plugin.enhanced;
+          
+          return (
+            <Button
+              key={plugin.id}
+              variant="secondary"
+              size="sm"
+              className={`flex items-center gap-2 bg-black/20 hover:bg-black/40 border border-white/10 ${
+                isEnhanced ? 'ring-1 ring-green-500/30' : ''
+              }`}
+              onClick={() => openPlugin(plugin)}
+            >
+              <IconComponent className="w-4 h-4" />
+              <span className="hidden sm:inline">{plugin.name}</span>
+              {isEnhanced && (
+                <Shield className="w-3 h-3 text-green-400" title="Enhanced Mode" />
+              )}
+            </Button>
+          );
+        })}
+      </div>
+
+      {portalRoot ? createPortal(pluginWindowsLayer, portalRoot) : pluginWindowsLayer}
     </>
   );
 };

@@ -26,7 +26,6 @@ temp/
 tmp/
 
 # Docker-specific files
-Dockerfile
 .dockerignore
 
 # IDE and editor files

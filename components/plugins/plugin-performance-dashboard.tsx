@@ -39,6 +39,7 @@ export const PluginPerformanceDashboard: React.FC<PerformanceDashboardProps> = (
   const [cacheStats, setCacheStats] = useState<any>(null);
   const [selectedPlugin, setSelectedPlugin] = useState<string>('');
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [isDemo, setIsDemo] = useState(false);
 
   useEffect(() => {
     updateDashboard();
@@ -50,21 +51,43 @@ export const PluginPerformanceDashboard: React.FC<PerformanceDashboardProps> = (
   }, [autoRefresh]);
 
   const updateDashboard = () => {
-    // Get all plugin metrics
-    const plugins = enhancedPluginManager.getAllPlugins();
-    const metricsMap = new Map<string, PluginPerformanceMetrics>();
-    
-    plugins.forEach(plugin => {
-      const pluginMetrics = pluginPerformanceManager.getMetrics(plugin.id);
-      if (pluginMetrics) {
-        metricsMap.set(plugin.id, pluginMetrics);
+    try {
+      const plugins = enhancedPluginManager.getAllPlugins();
+      const metricsMap = new Map<string, PluginPerformanceMetrics>();
+
+      plugins.forEach(plugin => {
+        const pluginMetrics = pluginPerformanceManager.getMetrics(plugin.id);
+        if (pluginMetrics) {
+          metricsMap.set(plugin.id, pluginMetrics);
+        }
+      });
+
+      const pools = pluginPerformanceManager.getResourcePoolStatus();
+      const tasks = pluginPerformanceManager.getBackgroundTasks();
+      const cache = pluginPerformanceManager.getCacheStats();
+
+      if (metricsMap.size === 0 && pools.length === 0) {
+        throw new Error('No data');
       }
-    });
-    
-    setMetrics(metricsMap);
-    setResourcePools(pluginPerformanceManager.getResourcePoolStatus());
-    setBackgroundTasks(pluginPerformanceManager.getBackgroundTasks());
-    setCacheStats(pluginPerformanceManager.getCacheStats());
+
+      setMetrics(metricsMap);
+      setResourcePools(pools);
+      setBackgroundTasks(tasks);
+      setCacheStats(cache);
+      setIsDemo(false);
+    } catch {
+      const demoMetrics = new Map<string, PluginPerformanceMetrics>();
+      demoMetrics.set('calculator', { loadTime: 45, renderTime: 12, memoryUsage: 8.2, networkRequests: 0, errorRate: 0, cacheHitRate: 0.92 } as PluginPerformanceMetrics);
+      demoMetrics.set('json-validator', { loadTime: 62, renderTime: 18, memoryUsage: 12.1, networkRequests: 3, errorRate: 0.02, cacheHitRate: 0.85 } as PluginPerformanceMetrics);
+      setMetrics(demoMetrics);
+      setResourcePools([
+        { id: 'memory', type: 'memory', capacity: 512, used: 128, reserved: 64, available: 320, waitingQueue: [] } as ResourcePool,
+        { id: 'cpu', type: 'cpu', capacity: 100, used: 35, reserved: 10, available: 55, waitingQueue: [] } as ResourcePool,
+      ]);
+      setBackgroundTasks([]);
+      setCacheStats({ totalEntries: 24, totalSize: 51200, hitRate: 0.88, oldestEntry: Date.now() - 300000, newestEntry: Date.now() - 5000 });
+      setIsDemo(true);
+    }
   };
 
   const handleOptimizePlugin = (pluginId: string) => {
@@ -124,6 +147,7 @@ export const PluginPerformanceDashboard: React.FC<PerformanceDashboardProps> = (
           <div className="flex items-center gap-2">
             <BarChart3 className="w-6 h-6 text-purple-400" />
             <h2 className="text-xl font-semibold">Plugin Performance Dashboard</h2>
+            {isDemo && <Badge className="text-xs bg-yellow-500/20 text-yellow-300 border-yellow-500/30">Demo Data</Badge>}
           </div>
           
           <div className="flex items-center gap-2">

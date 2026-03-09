@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Calculator, Copy, Check, History } from 'lucide-react';
@@ -15,7 +15,14 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
   const [previousValue, setPreviousValue] = useState<number | null>(null);
   const [operation, setOperation] = useState<string | null>(null);
   const [waitingForOperand, setWaitingForOperand] = useState(false);
-  const [history, setHistory] = useState<string[]>([]);
+  const [history, setHistory] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('calculator-history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [copied, setCopied] = useState(false);
 
   const inputNumber = (num: string) => {
@@ -38,10 +45,18 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
 
       setDisplay(String(newValue));
       setPreviousValue(newValue);
-      
-      // Add to history
+
+      // Add to history - use functional update to avoid stale closure
       const calculation = `${currentValue} ${operation} ${inputValue} = ${newValue}`;
-      setHistory(prev => [calculation, ...prev.slice(0, 9)]); // Keep last 10
+      setHistory(h => {
+        const newHistory = [calculation, ...h.slice(0, 9)];
+        try {
+          localStorage.setItem('calculator-history', JSON.stringify(newHistory));
+        } catch {
+          // localStorage unavailable
+        }
+        return newHistory;
+      });
     }
 
     setWaitingForOperand(true);
@@ -69,7 +84,7 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
       }
     } catch (error) {
       console.error('Calculator error:', error);
-      throw error;
+      return NaN;
     }
   };
 
@@ -83,18 +98,27 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
 
       if (previousValue !== null && operation) {
         const newValue = calculate(previousValue, inputValue, operation);
-        const calculation = `${previousValue} ${operation} ${inputValue} = ${newValue}`;
-        
+
         if (!isFinite(newValue)) {
           throw new Error('Result is not a finite number');
         }
-        
+
         setDisplay(String(newValue));
         setPreviousValue(null);
         setOperation(null);
         setWaitingForOperand(true);
-        setHistory(prev => [calculation, ...prev.slice(0, 9)]);
-        
+        // Use functional update to avoid stale closure
+        const calculation = `${previousValue} ${operation} ${inputValue} = ${newValue}`;
+        setHistory(h => {
+          const newHistory = [calculation, ...h.slice(0, 9)];
+          try {
+            localStorage.setItem('calculator-history', JSON.stringify(newHistory));
+          } catch {
+            // localStorage unavailable
+          }
+          return newHistory;
+        });
+
         onResult?.(newValue);
       }
     } catch (error) {
@@ -104,8 +128,6 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
       setOperation(null);
       setWaitingForOperand(true);
       
-      // In enhanced mode, this error will be caught by the isolation system
-      throw error;
     }
   };
 
@@ -138,6 +160,47 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
       console.error('Failed to copy:', error);
     }
   };
+
+  const updateHistory = useCallback((newHistory: string[]) => {
+    setHistory(newHistory);
+    try {
+      localStorage.setItem('calculator-history', JSON.stringify(newHistory));
+    } catch {
+      // localStorage unavailable
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // SECURITY: Ignore keystrokes from editable fields to avoid hijacking user input
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+
+      if (e.key >= '0' && e.key <= '9') {
+        inputNumber(e.key);
+      } else if (e.key === '+') {
+        inputOperation('+');
+      } else if (e.key === '-') {
+        inputOperation('-');
+      } else if (e.key === '*') {
+        inputOperation('×');
+      } else if (e.key === '/') {
+        e.preventDefault();
+        inputOperation('÷');
+      } else if (e.key === 'Enter' || e.key === '=') {
+        performCalculation();
+      } else if (e.key === 'Escape') {
+        clear();
+      } else if (e.key === '.') {
+        inputDecimal();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  });
 
   const buttonClass = "h-12 text-lg font-semibold transition-all duration-150 active:scale-95";
   const numberButtonClass = `${buttonClass} bg-gray-700 hover:bg-gray-600 text-white`;
@@ -230,7 +293,7 @@ export const CalculatorPlugin: React.FC<PluginProps> = ({
         </Button>
         <Button 
           onClick={performCalculation} 
-          className={`${operatorButtonClass} row-span-2`}
+          className={operatorButtonClass}
         >
           =
         </Button>

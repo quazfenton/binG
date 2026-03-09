@@ -39,41 +39,25 @@ export const AIEnhancerPlugin: React.FC<PluginProps> = ({
     toast.info(`Enhancing text in ${mode} mode...`);
 
     try {
-      // Simulate AI enhancement with a delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            { role: 'system', content: `You are a text enhancement assistant. Rewrite the user's text in a ${mode} tone. Only output the enhanced text, nothing else.` },
+            { role: 'user', content: input }
+          ],
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          stream: false,
+        }),
+      });
 
-      // In a real implementation, this would be an API call
-      // const response = await fetch('/api/enhance-text', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ text: input, mode }),
-      // });
-      // if (!response.ok) throw new Error('API request failed');
-      // const data = await response.json();
-      
-      const enhancementPrompts = {
-        professional: `Rewrite the following text in a professional tone, ensuring clarity, precision, and a formal structure.`,
-        casual: `Make the following text sound more casual, friendly, and approachable. Use conversational language.`,
-        technical: `Convert the following text into a more technical format. Use precise terminology, and structure it for a knowledgeable audience.`,
-        creative: `Reimagine the following text with a creative flair. Use vivid imagery and engaging language to make it more compelling.`,
-        concise: `Summarize the following text, making it as concise as possible while retaining the core message.`
-      };
+      if (!response.ok) throw new Error('Enhancement failed');
+      const data = await response.json();
+      // Fix: Correct response parsing to match /api/chat contract
+      const enhancedText = data.data?.content || data.content || data.message?.content || '';
 
-      const enhancedText = `
-        **Enhancement Mode: ${mode.charAt(0).toUpperCase() + mode.slice(1)}**
-        *${enhancementPrompts[mode]}*
-
-        ---
-
-        **Original:**
-        "${input}"
-
-        ---
-
-        **Enhanced Version:**
-        This is the AI-enhanced version of your text. It has been carefully crafted to fit the "${mode}" style. The structure is improved, the language is more appropriate for the selected tone, and the overall message is delivered more effectively. For example, key points are now highlighted, and the flow is more logical.
-      `;
-      
       setEnhanced(enhancedText);
       onResult?.({ original: input, enhanced: enhancedText, mode });
       toast.success('Text enhanced successfully!');
@@ -185,7 +169,7 @@ export const AIEnhancerPlugin: React.FC<PluginProps> = ({
               className="w-full bg-purple-600 hover:bg-purple-700"
             >
               {isProcessing ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 mr-2 thinking-spinner" />
               ) : (
                 <Sparkles className="w-4 h-4 mr-2" />
               )}
@@ -221,7 +205,7 @@ export const AIEnhancerPlugin: React.FC<PluginProps> = ({
           <div className="flex-1 bg-black/30 border border-gray-700 rounded-lg p-3 text-sm overflow-y-auto">
             {isProcessing && !enhanced ? (
               <div className="flex items-center justify-center h-full text-white/50">
-                <Loader2 className="w-6 h-6 animate-spin" />
+                <Loader2 className="w-6 h-6 thinking-spinner" />
               </div>
             ) : enhanced ? (
               <pre className="whitespace-pre-wrap font-mono text-xs">{enhanced}</pre>

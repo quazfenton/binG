@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 
 export interface ResponsiveBreakpoints {
   xs: number    // 320px - iPhone SE, small Android
-  sm: number    // 360px - Most Android phones  
+  sm: number    // 360px - Most Android phones
   md: number    // 390px - iPhone 12/13/14
   lg: number    // 414px - iPhone Pro Max
   xl: number    // 768px - Tablets
@@ -94,6 +94,18 @@ const defaultConfig: ResponsiveConfig = {
 
 export type BreakpointKey = keyof ResponsiveBreakpoints
 
+export interface KeyboardInfo {
+  isVisible: boolean
+  height: number
+}
+
+export interface SafeAreaInsets {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
 export interface ResponsiveState {
   currentBreakpoint: BreakpointKey
   screenWidth: number
@@ -102,6 +114,11 @@ export interface ResponsiveState {
   isMobile: boolean
   isTablet: boolean
   isDesktop: boolean
+  isReducedMotion: boolean
+  isHighContrast: boolean
+  isDarkMode: boolean
+  keyboard: KeyboardInfo
+  safeArea: SafeAreaInsets
   messageBubbleConfig: {
     maxWidthPercentage: number
     padding: string
@@ -121,6 +138,11 @@ export function useResponsiveLayout(config: ResponsiveConfig = defaultConfig): R
       isMobile: true,
       isTablet: false,
       isDesktop: false,
+      isReducedMotion: false,
+      isHighContrast: false,
+      isDarkMode: false,
+      keyboard: { isVisible: false, height: 0 },
+      safeArea: getInitialSafeArea(),
       messageBubbleConfig: {
         maxWidthPercentage: config.messageBubble.maxWidthPercentage.md,
         padding: config.messageBubble.padding.md,
@@ -129,6 +151,37 @@ export function useResponsiveLayout(config: ResponsiveConfig = defaultConfig): R
       }
     }
   })
+
+  const updateKeyboardInfo = useCallback(() => {
+    if (typeof window === 'undefined') return
+
+    const visualViewport = (window as any).visualViewport
+    if (!visualViewport) return
+
+    const keyboardHeight = window.innerHeight - visualViewport.height
+    const isVisible = keyboardHeight > 50
+
+    setState(prev => ({
+      ...prev,
+      keyboard: {
+        isVisible,
+        height: Math.max(0, keyboardHeight)
+      }
+    }))
+  }, [])
+
+  const updateSafeArea = useCallback(() => {
+    if (typeof window === 'undefined') return
+
+    const safeArea: SafeAreaInsets = {
+      top: getCSSCustomProperty('safe-area-inset-top') || 0,
+      right: getCSSCustomProperty('safe-area-inset-right') || 0,
+      bottom: getCSSCustomProperty('safe-area-inset-bottom') || 0,
+      left: getCSSCustomProperty('safe-area-inset-left') || 0
+    }
+
+    setState(prev => ({ ...prev, safeArea }))
+  }, [])
 
   useEffect(() => {
     const updateLayout = () => {
@@ -163,6 +216,11 @@ export function useResponsiveLayout(config: ResponsiveConfig = defaultConfig): R
         isMobile,
         isTablet,
         isDesktop,
+        isReducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+        isHighContrast: window.matchMedia('(prefers-contrast: high)').matches,
+        isDarkMode: window.matchMedia('(prefers-color-scheme: dark)').matches,
+        keyboard: { isVisible: false, height: 0 },
+        safeArea: getInitialSafeArea(),
         messageBubbleConfig: {
           maxWidthPercentage: config.messageBubble.maxWidthPercentage[currentBreakpoint],
           padding: config.messageBubble.padding[currentBreakpoint],
@@ -179,13 +237,93 @@ export function useResponsiveLayout(config: ResponsiveConfig = defaultConfig): R
     window.addEventListener('resize', updateLayout)
     window.addEventListener('orientationchange', updateLayout)
 
+    // Media query listeners for accessibility
+    const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const highContrastQuery = window.matchMedia('(prefers-contrast: high)')
+    const darkModeQuery = window.matchMedia('(prefers-color-scheme: dark)')
+
+    reducedMotionQuery.addEventListener('change', updateLayout)
+    highContrastQuery.addEventListener('change', updateLayout)
+    darkModeQuery.addEventListener('change', updateLayout)
+
+    // Visual viewport (keyboard handling)
+    const visualViewport = (window as any).visualViewport
+    if (visualViewport) {
+      visualViewport.addEventListener('resize', updateKeyboardInfo)
+    }
+
     return () => {
       window.removeEventListener('resize', updateLayout)
       window.removeEventListener('orientationchange', updateLayout)
+      reducedMotionQuery.removeEventListener('change', updateLayout)
+      highContrastQuery.removeEventListener('change', updateLayout)
+      darkModeQuery.removeEventListener('change', updateLayout)
+
+      if (visualViewport) {
+        visualViewport.removeEventListener('resize', updateKeyboardInfo)
+      }
     }
-  }, [config])
+  }, [config, updateKeyboardInfo])
 
   return state
+}
+
+/**
+ * Locks scroll position by fixing the body and preserving scroll offset.
+ * Useful for mobile modals and overlays.
+ */
+export function lockScroll(): void {
+  if (typeof document === 'undefined') return
+
+  document.body.style.overflow = 'hidden'
+  document.body.style.position = 'fixed'
+  document.body.style.top = `-${window.scrollY}px`
+  document.body.style.width = '100%'
+}
+
+/**
+ * Unlocks scroll and restores the previous scroll position.
+ */
+export function unlockScroll(): void {
+  if (typeof document === 'undefined') return
+
+  const scrollY = document.body.style.top
+  document.body.style.overflow = ''
+  document.body.style.position = ''
+  document.body.style.top = ''
+  document.body.style.width = ''
+
+  if (scrollY) {
+    window.scrollTo(0, Number.parseInt(scrollY) * -1)
+  }
+}
+
+/**
+ * Scrolls to an element with keyboard-aware offset adjustment.
+ */
+export function scrollToElement(
+  element: HTMLElement,
+  options: {
+    behavior?: 'smooth' | 'instant'
+    block?: 'start' | 'center' | 'end' | 'nearest'
+    inline?: 'start' | 'center' | 'end' | 'nearest'
+    offset?: number
+  } = {}
+): void {
+  const { behavior = 'smooth', block = 'nearest', inline = 'nearest', offset = 0 } = options
+
+  if (offset !== 0) {
+    // When offset is provided, use manual scroll calculation instead of scrollIntoView
+    const elementPosition = element.getBoundingClientRect().top + window.scrollY
+    const offsetPosition = elementPosition - offset
+
+    window.scrollTo({
+      top: offsetPosition,
+      behavior
+    })
+  } else {
+    element.scrollIntoView({ behavior, block, inline })
+  }
 }
 
 export function calculateDynamicWidth(
@@ -221,4 +359,23 @@ export function getOverflowStrategy(
 
   // Default to wrapping for better readability
   return 'wrap'
+}
+
+function getInitialSafeArea(): SafeAreaInsets {
+  return {
+    top: getCSSCustomProperty('safe-area-inset-top') || 0,
+    right: getCSSCustomProperty('safe-area-inset-right') || 0,
+    bottom: getCSSCustomProperty('safe-area-inset-bottom') || 0,
+    left: getCSSCustomProperty('safe-area-inset-left') || 0
+  }
+}
+
+function getCSSCustomProperty(property: string): number {
+  if (typeof window === 'undefined') return 0
+
+  const value =
+    getComputedStyle(document.documentElement).getPropertyValue(`--${property}`) ||
+    getComputedStyle(document.documentElement).getPropertyValue(`env(${property})`)
+
+  return parseFloat(value) || 0
 }

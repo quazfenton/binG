@@ -131,9 +131,9 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'openrouter',
     name: 'OpenRouter',
     models: [
-      'openai/gpt-oss-120b:free',
       'deepseek/deepseek-r1-0528:free',
       'qwen/qwen3-coder:free',
+      'openai/gpt-oss-120b:free',
       'z-ai/glm-4.5-air:free',
       'nvidia/nemotron-3-nano-30b-a3b:free',
       'nvidia/nemotron-nano-12b-v2-vl:free',
@@ -263,6 +263,22 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     maxTokens: 128000,
     description: 'Mistral AI models including Mistral Large, Small, and Codestral'
   },
+  azure: {
+    id: 'azure',
+    name: 'Azure OpenAI',
+    models: ['gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Enterprise OpenAI models on Azure'
+  },
+  vertex: {
+    id: 'vertex',
+    name: 'Google Vertex AI',
+    models: ['gemini-1.5-pro', 'gemini-1.5-flash'],
+    supportsStreaming: true,
+    maxTokens: 2000000,
+    description: 'Enterprise Google Gemini models on Vertex AI'
+  },
   github: {
     id: 'github',
     name: 'GitHub Models',
@@ -365,7 +381,7 @@ class LLMService {
 
     if (config.together?.apiKey) {
       this.together = new Together({
-        apiKey: config.together.apiKey
+        auth: config.together.apiKey
       })
     }
 
@@ -602,7 +618,7 @@ class LLMService {
 
     const response = await this.anthropic.messages.create({
       model,
-      messages: anthropicMessages,
+      messages: anthropicMessages as any,
       system,
       temperature,
       max_tokens: maxTokens,
@@ -610,7 +626,7 @@ class LLMService {
     const toolCalls = this.extractAnthropicToolCalls(response.content as any[])
 
     return {
-      content: response.content[0]?.text || '',
+      content: (response.content[0] as any)?.text || '',
       tokensUsed: response.usage?.input_tokens + response.usage?.output_tokens || 0,
       finishReason: response.stop_reason || 'stop',
       timestamp: new Date(),
@@ -686,7 +702,7 @@ class LLMService {
     const response = await this.cohere.chat({
       model,
       message,
-      chatHistory,
+      chatHistory: chatHistory as any,
       temperature,
       maxTokens
     })
@@ -712,7 +728,7 @@ class LLMService {
   ): Promise<LLMResponse> {
     if (!this.together) throw new Error('Together AI not initialized');
 
-    const response = await this.together.chat.completions.create({
+    const response = await (this.together as any).chat.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -743,7 +759,7 @@ class LLMService {
       `${msg.role === 'user' ? 'User' : 'Assistant'}: ${typeof msg.content === 'string' ? msg.content : msg.content.map(c => c.text || '').join('')}`
     ).join('\n\n')
 
-    const output = await this.replicate.run(model, {
+    const output = await this.replicate.run(model as any, {
       input: { prompt, max_length: maxTokens, temperature }
     })
 
@@ -829,7 +845,7 @@ class LLMService {
       temperature,
       max_tokens: maxTokens,
     })
-    const toolCalls = this.normalizeOpenAIToolCalls(response.choices[0]?.message?.tool_calls as any[])
+    const toolCalls = this.normalizeOpenAIToolCalls((response.choices[0]?.message as any)?.tool_calls as any[])
 
     return {
       content: response.choices[0]?.message?.content || '',
@@ -837,7 +853,7 @@ class LLMService {
       finishReason: response.choices[0]?.finish_reason || 'stop',
       timestamp: new Date(),
       metadata: toolCalls.length ? { toolCalls } : undefined,
-      usage: response.usage
+      usage: response.usage as any
     }
   }
 
@@ -855,19 +871,20 @@ class LLMService {
       temperature,
       maxTokens,
     })
-    const rawToolCalls = (response as any)?.choices?.[0]?.message?.toolCalls || (response as any)?.choices?.[0]?.message?.tool_calls
+    const message = (response as any)?.choices?.[0]?.message
+    const rawToolCalls = message?.toolCalls || message?.tool_calls
     const toolCalls = this.normalizeOpenAIToolCalls(rawToolCalls as any[])
 
     return {
-      content: response.choices?.[0]?.message?.content || '',
+      content: typeof response.choices?.[0]?.message?.content === 'string' ? response.choices[0].message.content : '',
       tokensUsed: response.usage?.totalTokens || 0,
       finishReason: response.choices?.[0]?.finishReason || 'stop',
       timestamp: new Date(),
       metadata: toolCalls.length ? { toolCalls } : undefined,
       usage: response.usage ? {
-        prompt_tokens: response.usage.promptTokens || 0,
-        completion_tokens: response.usage.completionTokens || 0,
-        total_tokens: response.usage.totalTokens || 0
+        prompt_tokens: (response.usage as any).promptTokens || (response.usage as any).prompt_tokens || 0,
+        completion_tokens: (response.usage as any).completionTokens || (response.usage as any).completion_tokens || 0,
+        total_tokens: (response.usage as any).totalTokens || (response.usage as any).total_tokens || 0
       } : undefined
     }
   }
@@ -1002,9 +1019,10 @@ class LLMService {
     })
 
     for await (const chunk of stream) {
-      const delta = chunk.data?.choices?.[0]?.delta?.content || ''
-      if (delta) {
-        yield { content: delta, isComplete: false }
+      const delta = (chunk as any).data?.choices?.[0]?.delta?.content || (chunk as any).choices?.[0]?.delta?.content || ''
+      const content = typeof delta === 'string' ? delta : ''
+      if (content) {
+        yield { content, isComplete: false }
       }
     }
     yield { content: '', isComplete: true }
@@ -1110,7 +1128,7 @@ class LLMService {
 
     const stream = await this.anthropic.messages.stream({
       model,
-      messages: anthropicMessages,
+      messages: anthropicMessages as any,
       system,
       temperature,
       max_tokens: maxTokens,
@@ -1179,7 +1197,7 @@ class LLMService {
     const stream = await this.cohere.chatStream({
       model,
       message,
-      chatHistory,
+      chatHistory: chatHistory as any,
       temperature,
       maxTokens
     })
@@ -1200,7 +1218,7 @@ class LLMService {
   ): AsyncGenerator<StreamingResponse> {
     if (!this.together) throw new Error('Together AI not initialized');
 
-    const stream = await this.together.chat.completions.create({
+    const stream = await (this.together as any).chat.completions.create({
       model,
       messages: messages as any,
       temperature,

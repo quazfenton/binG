@@ -26,16 +26,19 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const fetchFiles = async () => {
     try {
       const token = localStorage.getItem('token');
-      if (!token) throw new Error('No authentication token');
-      
-      const response = await fetch('/api/storage/list?prefix=users/' + encodeURIComponent(user?.email || ''), {
+      if (!token || !user?.email) {
+        setFiles([]);
+        return;
+      }
+
+      const response = await fetch('/api/storage/list?prefix=users/' + encodeURIComponent(user.email), {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
-      
+
       if (!response.ok) throw new Error('Failed to fetch files');
-      
+
       const data = await response.json();
       setFiles(data.data.files || []);
     } catch (error) {
@@ -47,16 +50,19 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const fetchUsage = async () => {
     try {
       const token = localStorage.getItem('token');
-      if (!token) throw new Error('No authentication token');
-      
+      if (!token) {
+        setQuotaUsedBytes(0);
+        return;
+      }
+
       const response = await fetch('/api/storage/usage', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
-      
+
       if (!response.ok) throw new Error('Failed to fetch usage');
-      
+
       const data = await response.json();
       setQuotaUsedBytes(data.data.used || 0);
     } catch (error) {
@@ -71,16 +77,21 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     setSelectedFile(file);
     try {
       const token = localStorage.getItem('token');
-      if (!token) throw new Error('No authentication token');
-      
-      const response = await fetch(`/api/storage/download?path=users/${encodeURIComponent(user?.email || '')}/${file}`, {
+      if (!token || !user?.email) {
+        toast.error('Authentication required');
+        setFileContent(`Content of ${file}\n\nThis is a sample file content.`);
+        setDiffContent('');
+        return;
+      }
+
+      const response = await fetch(`/api/storage/download?path=users/${encodeURIComponent(user.email)}/${file}`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
-      
+
       if (!response.ok) throw new Error('Failed to download file');
-      
+
       const content = await response.text();
       setFileContent(content);
       setDiffContent('');
@@ -107,7 +118,7 @@ const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     // Generate line-by-line diff
     const oldLines = fileContent.split('\n');
     const newLines = newContent.split('\n');
-    let diffLines: string[] = [];
+    const diffLines: string[] = [];
     
     for (let i = 0; i < Math.max(oldLines.length, newLines.length); i++) {
       if (i >= oldLines.length) {

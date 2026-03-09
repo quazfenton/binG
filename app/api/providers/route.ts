@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { llmService, PROVIDERS } from "@/lib/api/llm-providers";
+import { resolveRequestAuth } from "@/lib/auth/request-auth";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    // Allow anonymous access - provider list is not sensitive (only shows which providers have keys configured)
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
+    
     // Get providers that have API keys configured
     const availableProviders = llmService.getAvailableProviders();
     const availableProviderIds = availableProviders.map(p => p.id);
@@ -36,7 +40,8 @@ export async function GET() {
       data: {
         providers: sortedProviders,
         defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "openrouter",
-        defaultModel: process.env.DEFAULT_MODEL || "deepseek/deepseek-r1-0528:free",
+        // Use a valid default model that works with OpenRouter
+        defaultModel: process.env.DEFAULT_MODEL || "google/gemma-3-1b-it:free",
       },
     });
   } catch (error) {

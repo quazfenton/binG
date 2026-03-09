@@ -1,0 +1,33 @@
+# Development Dockerfile for binG Backend
+# Optimized for fast iteration and hot-reload
+
+FROM node:20-alpine AS development
+
+RUN apk add --no-cache \
+    libc6-compat \
+    libstdc++ \
+    curl \
+    git
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json package-lock.json* ./
+
+# Install ALL dependencies (including devDependencies)
+RUN npm install --legacy-peer-deps && npm cache clean --force
+
+# Copy source files
+COPY . .
+
+# Expose ports
+EXPOSE 3000 8080
+
+# Set development environment
+ENV NODE_ENV=development
+ENV PORT=3000
+ENV WEBSOCKET_PORT=8080
+ENV WATCHPACK_POLLING=true
+
+# Start development server
+CMD ["npm", "run", "dev"]

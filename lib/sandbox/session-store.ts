@@ -197,6 +197,21 @@ export function deleteSession(sessionId: string): void {
   }
 }
 
+/**
+ * Delete all sessions for a user (e.g., on logout)
+ */
+export function deleteSessionsByUserId(userId: string): void {
+  if (useSqlite && db) {
+    db.prepare('DELETE FROM sandbox_sessions WHERE userId = ?').run(userId)
+  } else {
+    for (const [id, session] of memSessions.entries()) {
+      if (session.userId === userId) {
+        memSessions.delete(id)
+      }
+    }
+  }
+}
+
 export function getAllActiveSessions(): WorkspaceSession[] {
   if (useSqlite && stmtAllActive) {
     return stmtAllActive.all() as WorkspaceSession[]

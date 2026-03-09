@@ -963,7 +963,7 @@ class AdvancedFileManager extends EventEmitter {
 
       // Basic Python validation
       const lines = content.split('\n');
-      let indentLevel = 0;
+      const indentLevel = 0;
       const indentStack: number[] = [0];
 
       for (const line of lines) {
@@ -1064,7 +1064,7 @@ class AdvancedFileManager extends EventEmitter {
     try {
       // Basic YAML validation - check for proper indentation and structure
       const lines = content.split('\n');
-      let lastIndent = 0;
+      const lastIndent = 0;
 
       for (const line of lines) {
         const trimmed = line.trim();
