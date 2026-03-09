@@ -1,13 +1,16 @@
 /**
  * Agent Loop for Multi-Step Filesystem Operations
- * 
+ *
  * Implements an iterative agent that can read, edit, and save files
  * with context awareness and tool-based LLM interaction.
- * 
+ *
  * @see lib/mastra/tools/filesystem-tools.ts
  */
 
 import { createFilesystemTools, type FilesystemTool } from './tools/filesystem-tools';
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('MastraAgent')
 
 export interface AgentContext {
   userId: string;
@@ -74,6 +77,7 @@ export class AgentLoop {
   async executeTask(task: string): Promise<AgentResult> {
     const results: AgentIterationResult[] = [];
     let iterations = 0;
+    log.info(`Executing task: ${task.substring(0, 100)}${task.length > 100 ? '...' : ''}`)
 
     // Add user task (system prompt is added in callLLM)
     this.context.conversationHistory.push({
@@ -83,6 +87,7 @@ export class AgentLoop {
 
     while (iterations < this.maxIterations) {
       iterations++;
+      log.debug(`Agent iteration ${iterations}/${this.maxIterations}`)
 
       try {
         // Call LLM with current context and available tools
@@ -90,6 +95,7 @@ export class AgentLoop {
 
         if (llmResponse.done) {
           // LLM indicates task is complete
+          log.info(`Task completed in ${iterations} iterations`)
           return {
             success: true,
             results,
@@ -101,6 +107,7 @@ export class AgentLoop {
         // Execute tool calls
         if (llmResponse.toolCalls) {
           for (const toolCall of llmResponse.toolCalls) {
+            log.debug(`Executing tool: ${toolCall.name}`)
             const tool = this.tools.find(t => t.name === toolCall.name);
             if (tool) {
               const result = await tool.execute(toolCall.arguments);

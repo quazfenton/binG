@@ -1,6 +1,6 @@
 "use client";
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { generateSecureId } from '@/lib/utils';
 import { streamingErrorHandler } from './streaming-error-handler';
 

@@ -14,7 +14,7 @@
  * ```
  */
 
-import { EventEmitter } from 'events'
+import { EventEmitter } from 'node:events'
 import type { SandboxProviderType } from './index'
 import { getSandboxProvider } from './index'
 import { sandboxMetrics } from '@/lib/backend/metrics'

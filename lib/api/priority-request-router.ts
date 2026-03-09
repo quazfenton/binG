@@ -610,7 +610,7 @@ class PriorityRequestRouter {
 
     // All endpoints failed - this should be extremely rare with proper fallback configuration
     const duration = Date.now() - startTime;
-    
+
     // Only log full error details if there were actual errors (not just "not configured")
     const actualErrors = errors.filter(e => !e.error.message.includes('not configured'));
     if (actualErrors.length > 0) {
@@ -618,7 +618,7 @@ class PriorityRequestRouter {
     } else {
       console.log('[Router] No configured providers available');
     }
-    
+
     // Return a final emergency response
     return {
       success: false,

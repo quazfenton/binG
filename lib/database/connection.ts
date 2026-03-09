@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
 import * as crypto from 'crypto';
 
 // Database configuration
@@ -83,8 +83,7 @@ export function getDatabase(): Database.Database {
 
     try {
       // Create data directory if it doesn't exist
-      const { mkdirSync } = require('fs');
-      const { dirname } = require('path');
+      // Using pre-imported functions from top-level imports
       mkdirSync(dirname(DB_PATH), { recursive: true });
 
       db = new Database(DB_PATH);
@@ -106,24 +105,26 @@ export function getDatabase(): Database.Database {
         // SECURITY: Run migrations SYNCHRONOUSLY to prevent race conditions
         // Without this, requests can execute before migrations complete, causing
         // "no such column" errors for migration-added columns like email_verification_token
-        try {
-          // Respect AUTO_RUN_MIGRATIONS environment variable
-          if (process.env.AUTO_RUN_MIGRATIONS !== 'false') {
-            // Require here to avoid circular import at module load time
-            const { migrationRunner } = require('./migration-runner');
-            if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
-              // Use synchronous migration runner
-              migrationRunner.runMigrationsSync();
-              console.log('[database] Migrations completed successfully');
+        (async () => {
+          try {
+            // Respect AUTO_RUN_MIGRATIONS environment variable
+            if (process.env.AUTO_RUN_MIGRATIONS !== 'false') {
+              // Dynamic import to avoid circular import at module load time
+              const { migrationRunner } = await import('./migration-runner.js');
+              if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
+                // Use synchronous migration runner
+                migrationRunner.runMigrationsSync();
+                console.log('[database] Migrations completed successfully');
+              } else {
+                console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
+              }
             } else {
-              console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
+              console.log('[database] Auto-run migrations disabled via environment variable');
             }
-          } else {
-            console.log('[database] Auto-run migrations disabled via environment variable');
+          } catch (error) {
+            console.warn('[database] Migrations failed (continuing with base schema):', error);
           }
-        } catch (error) {
-          console.warn('[database] Migrations failed (continuing with base schema):', error);
-        }
+        })();
 
         dbInitialized = true;
       }

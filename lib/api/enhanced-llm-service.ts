@@ -19,6 +19,7 @@ import { sandboxBridge } from '../sandbox';
 import { getProviderForTask, getModelForTask } from '../config/task-providers';
 import { advancedToolCallDispatcher } from '../tool-integration/parsers/dispatcher';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
+import { chatLogger } from './chat-logger';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -34,6 +35,7 @@ export interface EnhancedLLMRequest extends LLMRequest {
   isSandboxCommand?: boolean; // Explicit flag for sandbox/command requests
   userId?: string;
   conversationId?: string;
+  requestId?: string;
   task?: 'chat' | 'code' | 'embedding' | 'image' | 'tool' | 'agent' | 'ocr'; // Task-specific provider selection
 }
 
@@ -139,11 +141,19 @@ export class EnhancedLLMService {
   }
 
   async generateResponse(request: EnhancedLLMRequest): Promise<LLMResponse> {
-    const { enableTools, enableSandbox, userId, conversationId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, ...llmRequest } = request;
+    const { enableTools, enableSandbox, userId, conversationId, requestId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, ...llmRequest } = request;
+    const requestStartTime = Date.now();
 
     // Use task-specific provider if specified
     const actualProvider = task ? getProviderForTask(task) : (provider || getProviderForTask('chat'));
     const actualModel = task ? getModelForTask(task, llmRequest.model) : llmRequest.model;
+
+    chatLogger.debug('Enhanced LLM service processing request', { requestId, provider: actualProvider, model: actualModel, userId }, {
+      task,
+      enableTools,
+      enableSandbox,
+      fallbackProviders: fallbackProviders?.length,
+    });
 
     // If tools are enabled and user ID is provided, process tools
     if (enableTools && userId && conversationId) {
@@ -154,6 +164,9 @@ export class EnhancedLLMService {
       );
 
       if (toolResult.requiresAuth && toolResult.authUrl) {
+        chatLogger.info('Tool auth required', { requestId, userId }, {
+          toolName: toolResult.toolName,
+        });
         return {
           content: `I need authorization to use ${toolResult.toolName}. Please connect your account to proceed.`,
           tokensUsed: 0,
@@ -179,7 +192,7 @@ export class EnhancedLLMService {
           toolResults: toolResult.toolResults
         };
 
-        return await this.callProviderWithEnhancedClient(actualProvider, updatedRequest, retryOptions, enableCircuitBreaker);
+        return await this.callProviderWithEnhancedClient(actualProvider, updatedRequest, retryOptions, enableCircuitBreaker, requestId);
       }
     }
 
@@ -200,10 +213,20 @@ export class EnhancedLLMService {
     // Try primary provider first
     try {
       const fullRequest = { ...llmRequest, provider: actualProvider, model: actualModel };
-      const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker);
+      const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId);
+      const latency = Date.now() - requestStartTime;
+      chatLogger.info('Provider request completed', { requestId, provider: actualProvider, model: actualModel }, {
+        latencyMs: latency,
+        tokensUsed: response.tokensUsed,
+        finishReason: response.finishReason,
+      });
       return await postProcessToolCalls(response);
     } catch (primaryError) {
-      console.warn(`Primary provider ${actualProvider} failed:`, primaryError);
+      const primaryLatency = Date.now() - requestStartTime;
+      chatLogger.warn('Primary provider failed', { requestId, provider: actualProvider, model: actualModel }, {
+        latencyMs: primaryLatency,
+        error: primaryError instanceof Error ? primaryError.message : String(primaryError),
+      });
 
       const fallbacks = fallbackProviders || this.fallbackChains.get(actualProvider) || [];
       const availableFallbacks = fallbacks.filter(fallbackProvider =>
@@ -212,6 +235,9 @@ export class EnhancedLLMService {
       );
 
       if (availableFallbacks.length === 0) {
+        chatLogger.error('No healthy fallback providers available', { requestId, provider: actualProvider }, {
+          attemptedFallbacks: fallbacks.length,
+        });
         throw this.createEnhancedError(
           `No healthy fallback providers available for ${actualProvider}`,
           'NO_FALLBACKS_AVAILABLE',
@@ -219,15 +245,21 @@ export class EnhancedLLMService {
         );
       }
 
-      for (const fallbackProvider of availableFallbacks) {
+      for (let attemptIndex = 0; attemptIndex < availableFallbacks.length; attemptIndex++) {
+        const fallbackProvider = availableFallbacks[attemptIndex];
+        const fallbackStartTime = Date.now();
+        
         try {
-          console.log(`Trying fallback provider: ${fallbackProvider}`);
+          chatLogger.info('Trying fallback provider', { requestId, provider: fallbackProvider, model: actualModel }, {
+            attempt: attemptIndex + 1,
+            totalFallbacks: availableFallbacks.length,
+          });
 
           const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
           const supportedModel = this.findCompatibleModel(actualModel, fallbackConfig.models);
 
           if (!supportedModel) {
-            console.warn(`Model ${actualModel} not supported by ${fallbackProvider}, skipping`);
+            chatLogger.warn('Model not supported by fallback provider', { requestId, provider: fallbackProvider, model: actualModel });
             continue;
           }
 
@@ -241,17 +273,30 @@ export class EnhancedLLMService {
             fallbackProvider,
             fallbackRequest,
             retryOptions,
-            enableCircuitBreaker
+            enableCircuitBreaker,
+            requestId
           );
+
+          const fallbackLatency = Date.now() - fallbackStartTime;
+          chatLogger.info('Fallback provider succeeded', { requestId, provider: fallbackProvider, model: supportedModel }, {
+            latencyMs: fallbackLatency,
+            attempt: attemptIndex + 1,
+            tokensUsed: response.tokensUsed,
+          });
 
           const fallbackResponse = {
             ...response,
-            provider: `${provider} -> ${fallbackProvider}`,
+            provider: `${actualProvider} -> ${fallbackProvider}`,
             model: supportedModel  // Include the actual fallback model used
           };
           return await postProcessToolCalls(fallbackResponse);
         } catch (fallbackError) {
-          console.warn(`Fallback provider ${fallbackProvider} failed:`, fallbackError);
+          const fallbackLatency = Date.now() - fallbackStartTime;
+          chatLogger.warn('Fallback provider failed', { requestId, provider: fallbackProvider, model: actualModel }, {
+            latencyMs: fallbackLatency,
+            attempt: attemptIndex + 1,
+            error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+          });
           continue;
         }
       }
@@ -265,14 +310,25 @@ export class EnhancedLLMService {
   }
 
   async *generateStreamingResponse(request: EnhancedLLMRequest): AsyncGenerator<StreamingResponse> {
-    const { provider, fallbackProviders, ...llmRequest } = request;
+    const { provider, fallbackProviders, requestId, ...llmRequest } = request;
     const primaryProvider = provider || getProviderForTask('chat');
+    const streamStartTime = Date.now();
+
+    chatLogger.debug('Starting streaming request', { requestId, provider: primaryProvider, model: llmRequest.model });
 
     try {
       const fullRequest = { ...llmRequest, provider: primaryProvider };
       yield* llmService.generateStreamingResponse(fullRequest);
+      const streamLatency = Date.now() - streamStartTime;
+      chatLogger.info('Streaming completed successfully', { requestId, provider: primaryProvider, model: llmRequest.model }, {
+        latencyMs: streamLatency,
+      });
     } catch (error) {
-      console.warn(`Streaming failed for ${primaryProvider}:`, error);
+      const streamLatency = Date.now() - streamStartTime;
+      chatLogger.warn('Streaming failed for primary provider', { requestId, provider: primaryProvider, model: llmRequest.model }, {
+        latencyMs: streamLatency,
+        error: error instanceof Error ? error.message : String(error),
+      });
       
       const fallbacks = fallbackProviders || this.fallbackChains.get(primaryProvider) || [];
       const availableFallbacks = fallbacks.filter(fallbackProvider => 
@@ -294,7 +350,7 @@ export class EnhancedLLMService {
       const supportedModel = this.findCompatibleModel(llmRequest.model, fallbackConfig.models);
 
       if (supportedModel) {
-        console.log(`Falling back to streaming provider: ${fallbackProvider}`);
+        chatLogger.info('Falling back to streaming provider', { requestId, provider: fallbackProvider, model: supportedModel });
         const fallbackRequest = {
           ...llmRequest,
           model: supportedModel,
@@ -302,6 +358,10 @@ export class EnhancedLLMService {
         };
 
         yield* llmService.generateStreamingResponse(fallbackRequest);
+        const fallbackLatency = Date.now() - streamStartTime;
+        chatLogger.info('Streaming fallback completed', { requestId, provider: fallbackProvider, model: supportedModel }, {
+          latencyMs: fallbackLatency,
+        });
       } else {
         throw this.createEnhancedError(
           `No compatible model found for streaming fallback`,
@@ -316,12 +376,15 @@ export class EnhancedLLMService {
     provider: string,
     request: LLMRequest & { toolCalls?: any[]; toolResults?: any[] },
     retryOptions?: any,
-    enableCircuitBreaker: boolean = true
+    enableCircuitBreaker: boolean = true,
+    requestId?: string
   ): Promise<LLMResponse> {
     const config = this.endpointConfigs.get(provider);
     if (!config) {
       throw new Error(`Provider ${provider} not configured`);
     }
+
+    const callStartTime = Date.now();
 
     // Filter messages for provider compatibility
     // OpenAI supports 'tool' role, but Anthropic and Google do not
@@ -332,9 +395,27 @@ export class EnhancedLLMService {
       messages: filteredMessages
     };
 
+    chatLogger.debug('Calling provider', { requestId, provider, model: request.model }, {
+      messageCount: filteredMessages.length,
+      temperature: request.temperature,
+      maxTokens: request.maxTokens,
+    });
+
     try {
-      return await llmService.generateResponse(providerRequest);
+      const response = await llmService.generateResponse(providerRequest);
+      const callLatency = Date.now() - callStartTime;
+      chatLogger.debug('Provider call completed', { requestId, provider, model: request.model }, {
+        latencyMs: callLatency,
+        tokensUsed: response.tokensUsed,
+        finishReason: response.finishReason,
+      });
+      return response;
     } catch (error) {
+      const callLatency = Date.now() - callStartTime;
+      chatLogger.debug('Provider call failed', { requestId, provider, model: request.model }, {
+        latencyMs: callLatency,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw this.enhanceError(error as Error, provider);
     }
   }
@@ -419,17 +500,21 @@ export class EnhancedLLMService {
 
   private enhanceError(error: Error, provider: string): Error {
     const enhancedError = new Error(error.message);
-    
-    if (error.message.includes('API key')) {
+    const errorMessage = error.message.toLowerCase();
+
+    // Check for HTTP status codes first (more specific than text patterns)
+    if (error.message.includes('401') || error.message.includes('403')) {
       enhancedError.message = `Authentication failed for ${provider}. Please check your API key configuration.`;
-    } else if (error.message.includes('rate limit')) {
+    } else if (error.message.includes('429') || error.message.includes('rate limit')) {
       enhancedError.message = `Rate limit exceeded for ${provider}. The system will automatically try alternative providers.`;
-    } else if (error.message.includes('quota')) {
+    } else if (error.message.includes('402') || error.message.includes('quota') || error.message.includes('billing')) {
       enhancedError.message = `API quota exceeded for ${provider}. Switching to alternative provider.`;
-    } else if (error.message.includes('timeout')) {
+    } else if (error.message.includes('408') || error.message.includes('504') || error.message.includes('timeout')) {
       enhancedError.message = `Request timeout for ${provider}. The system will retry with exponential backoff.`;
-    } else if (error.message.includes('network') || error.message.includes('fetch')) {
+    } else if (error.message.includes('network') || error.message.includes('fetch') || error.message.includes('connection')) {
       enhancedError.message = `Network error connecting to ${provider}. Checking alternative providers.`;
+    } else if (error.message.includes('500') || error.message.includes('502') || error.message.includes('503')) {
+      enhancedError.message = `Service error from ${provider}: ${error.message}`;
     } else {
       enhancedError.message = `Service error from ${provider}: ${error.message}`;
     }

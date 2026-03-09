@@ -59,10 +59,11 @@ export async function POST(req: NextRequest) {
 
     // If session exists, verify the sandbox is still valid
     if (userSession) {
+      const provider = sandboxBridge.inferProviderFromSandboxId(userSession.sandboxId)
+        || (process.env.SANDBOX_PROVIDER as any) || 'daytona';
+
       try {
         // Try to get the sandbox - this will fail if it was destroyed
-        const provider = sandboxBridge.inferProviderFromSandboxId(userSession.sandboxId)
-          || (process.env.SANDBOX_PROVIDER as any) || 'daytona';
         const sandboxProvider = await sandboxBridge.getProvider(provider);
         await sandboxProvider.getSandbox(userSession.sandboxId);
 

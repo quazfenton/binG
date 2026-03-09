@@ -33,7 +33,7 @@ export default function GlobalError({
             </p>
           )}
           <button
-            onClick={() => reset()}
+            onClick={() => typeof reset === 'function' && reset()}
             style={{
               padding: '12px 24px',
               background: '#3B82F6',

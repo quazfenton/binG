@@ -14,7 +14,7 @@
  * @see lib/sandbox/providers/ - Provider implementations
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { getSandboxProvider } from './providers';
 import type { SandboxProviderType } from './providers';
 

@@ -26,8 +26,14 @@ export class DaytonaProvider implements SandboxProvider {
   private client: Daytona
 
   constructor() {
+    const rawApiKey = process.env.DAYTONA_API_KEY || process.env.DAYTONA_API_TOKEN || ''
+    const apiKey = rawApiKey.trim().replace(/^['"]+|['"]+$/g, '')
+    if (apiKey) {
+      process.env.DAYTONA_API_KEY = apiKey
+    }
+
     this.client = new Daytona({
-      apiKey: process.env.DAYTONA_API_KEY!,
+      apiKey,
     })
   }
 
