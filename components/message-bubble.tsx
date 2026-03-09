@@ -1,17 +1,22 @@
 "use client"
 
-import React, { useState, useEffect, useRef, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Button } from "@/components/ui/button"
-import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play } from "lucide-react"
+import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal, ExternalLink } from "lucide-react"
 import type { Message } from "@/types"
 import { useEnhancedStreamingDisplay } from "@/hooks/use-enhanced-streaming-display"
 import { useResponsiveLayout, calculateDynamicWidth, getOverflowStrategy } from "@/hooks/use-responsive-layout"
 import { analyzeMessageContent, getContentBasedStyling, shouldUseCompactLayout } from "@/lib/message-content-analyzer"
 import { useTouchHandler, useKeyboardHandler } from "@/hooks/use-touch-handler"
 import IntegrationAuthPrompt from "@/components/integrations/IntegrationAuthPrompt"
+import { isEmbeddableUrl, transformToEmbed, getSuggestedPlugin } from "@/lib/utils/iframe-helper"
+import { ReasoningDisplay, ReasoningSummary } from "@/components/reasoning-display"
+import { ToolInvocationsList } from "@/components/tool-invocation-card"
+import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 
 interface MessageBubbleProps {
   message: Message
@@ -73,23 +78,128 @@ const getAuthUrlForProvider = (provider: string): string => {
   return `${baseUrl}/api/auth/oauth/initiate?provider=${encodeURIComponent(provider)}`;
 };
 
-export default function MessageBubble({ 
-  message, 
-  isStreaming = false, 
+export default function MessageBubble({
+  message,
+  isStreaming = false,
   streamingContent,
   onStreamingComplete,
   maxWidth,
   responsive = true,
   overflow,
   onAuthPromptDismiss,
-  userId
+  userId: _userId
 }: MessageBubbleProps) {
   const [copied, setCopied] = useState(false)
   const [showReasoning, setShowReasoning] = useState(false)
   const [showStreamingControls, setShowStreamingControls] = useState(false)
   const [authDismissed, setAuthDismissed] = useState(false)
+  const [isApplyingEditAction, setIsApplyingEditAction] = useState(false)
+  const [fileEditDecision, setFileEditDecision] = useState<"auto_applied" | "accepted" | "denied" | "reverted_with_conflicts" | null>(null)
 
   const isUser = message.role === "user"
+
+  // Initialize reasoning stream hook
+  const reasoningStream = useReasoningStream({
+    sandboxId: message.metadata?.sandboxId,
+    messageId: message.id,
+    autoExpand: isStreaming,
+  });
+
+  // Sync metadata reasoning chunks with hook
+  useEffect(() => {
+    if (message.metadata?.reasoningChunks && message.metadata.reasoningChunks.length > 0) {
+      // Chunks are provided via metadata, use them directly
+    }
+  }, [message.metadata?.reasoningChunks]);
+
+  const fileEditInfo = useMemo(() => {
+    const metadataFilesystem = (message.metadata as any)?.filesystem;
+    if (!metadataFilesystem || typeof metadataFilesystem !== "object") return null;
+    const txId = typeof metadataFilesystem.transactionId === "string" ? metadataFilesystem.transactionId : "";
+    if (!txId) return null;
+    return {
+      transactionId: txId,
+      applied: Array.isArray(metadataFilesystem.applied) ? metadataFilesystem.applied : [],
+      errors: Array.isArray(metadataFilesystem.errors) ? metadataFilesystem.errors : [],
+      status: typeof metadataFilesystem.status === "string" ? metadataFilesystem.status : "auto_applied",
+    };
+  }, [message.metadata]);
+
+  useEffect(() => {
+    if (fileEditInfo?.status) {
+      setFileEditDecision(fileEditInfo.status);
+    }
+  }, [fileEditInfo?.status]);
+
+  const buildRequestHeaders = useCallback((): HeadersInit => {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    if (typeof window !== "undefined") {
+      const token = localStorage.getItem("token");
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const anonymousSessionId = localStorage.getItem("anonymous_session_id");
+      if (anonymousSessionId) {
+        headers["x-anonymous-session-id"] = anonymousSessionId;
+      }
+    }
+
+    return headers;
+  }, []);
+
+  const handleAcceptEdits = useCallback(async () => {
+    if (!fileEditInfo?.transactionId || isApplyingEditAction) return;
+    setIsApplyingEditAction(true);
+    try {
+      const response = await fetch("/api/filesystem/edits/accept", {
+        method: "POST",
+        headers: buildRequestHeaders(),
+        body: JSON.stringify({ transactionId: fileEditInfo.transactionId }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.error || `Failed to accept edits (${response.status})`);
+      }
+      setFileEditDecision("accepted");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to accept edits";
+      console.error(message);
+    } finally {
+      setIsApplyingEditAction(false);
+    }
+  }, [buildRequestHeaders, fileEditInfo?.transactionId, isApplyingEditAction]);
+
+  const handleDenyEdits = useCallback(async () => {
+    if (!fileEditInfo?.transactionId || isApplyingEditAction) return;
+    setIsApplyingEditAction(true);
+    try {
+      const response = await fetch("/api/filesystem/edits/deny", {
+        method: "POST",
+        headers: buildRequestHeaders(),
+        body: JSON.stringify({
+          transactionId: fileEditInfo.transactionId,
+          reason: "User denied AI file edits from chat UI",
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.error || `Failed to deny edits (${response.status})`);
+      }
+      const txStatus = payload?.data?.transaction?.status;
+      setFileEditDecision(
+        txStatus === "reverted_with_conflicts" ? "reverted_with_conflicts" : "denied",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to deny edits";
+      console.error(message);
+    } finally {
+      setIsApplyingEditAction(false);
+    }
+  }, [buildRequestHeaders, fileEditInfo?.transactionId, isApplyingEditAction]);
   
   const layout = useResponsiveLayout()
   
@@ -221,6 +331,19 @@ export default function MessageBubble({
   }
 
   const { reasoning, mainContent } = parseReasoningContent(getContentToDisplay())
+  const metadataReasoning = typeof (message as any).metadata?.reasoning === 'string'
+    ? (message as any).metadata.reasoning
+    : ''
+  const combinedReasoning = [reasoning, metadataReasoning].filter(Boolean).join('\n\n')
+  const toolInvocations = Array.isArray((message as any).metadata?.toolInvocations)
+    ? (message as any).metadata.toolInvocations
+    : []
+
+  // Use reasoning from hook if available, otherwise fall back to metadata
+  const activeReasoningChunks = reasoningStream.reasoningChunks.length > 0
+    ? reasoningStream.reasoningChunks
+    : (message.metadata?.reasoningChunks || []);
+  const activeFullReasoning = reasoningStream.fullReasoning || combinedReasoning;
 
   const handleAuthDismiss = () => {
     setAuthDismissed(true)
@@ -244,11 +367,11 @@ export default function MessageBubble({
   }
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} ${useCompactLayout ? 'mb-3' : 'mb-6'} group w-full`}>
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"} ${useCompactLayout ? 'mb-3' : 'mb-6'} group w-full px-1`}>
       <div
         className={`
           message-bubble-responsive relative transition-all duration-200
-          ${isUser ? "bg-purple-600 text-white" : "bg-black border border-white/20 text-white"}
+          ${isUser ? "text-white" : "border"}
           ${streamingDisplay.isStreaming ? "border-purple-500/50 shadow-lg shadow-purple-500/20" : ""}
           ${streamingDisplay.isAnimating ? "animate-pulse-subtle" : ""}
           ${layout.isMobile ? 'rounded-xl touch-friendly' : 'rounded-2xl'}
@@ -258,17 +381,24 @@ export default function MessageBubble({
           ${layout.isPortrait ? 'portrait-layout' : 'landscape-layout'}
         `}
         style={{
-          maxWidth: dynamicStyles.maxWidth,
+          maxWidth: layout.isMobile ? 'calc(100vw - 2.25rem)' : dynamicStyles.maxWidth,
           padding: dynamicStyles.padding,
           fontSize: dynamicStyles.fontSize,
+          backgroundColor: isUser ? 'var(--user-bubble-bg)' : 'var(--assistant-bubble-bg)',
+          color: isUser ? 'var(--user-bubble-text)' : 'var(--assistant-bubble-text)',
+          borderColor: isUser ? 'transparent' : 'var(--assistant-bubble-border)',
           wordBreak: dynamicStyles.overflowStrategy === 'wrap' ? 'break-word' : 'normal',
           overflowWrap: dynamicStyles.overflowStrategy === 'wrap' ? 'break-word' : 'normal',
           whiteSpace: contentAnalysis.hasCodeBlocks && layout.isMobile ? 'pre' : 'pre-wrap'
         }}
         onMouseEnter={() => !layout.isMobile && setShowStreamingControls(true)}
-        onMouseLeave={() => !layout.isMobile && setShowStreamingControls(false)}
-        {...touchHandlers}
-        onKeyDown={(e) => handleKeyDown(e, handleCopy)}
+        onMouseLeave={() => {
+          if (!layout.isMobile) {
+            setShowStreamingControls(false)
+          }
+        }}
+        {...(touchHandlers as any)}
+        onKeyDown={(e) => handleKeyDown(e.nativeEvent as KeyboardEvent, handleCopy)}
         tabIndex={0}
         role="article"
         aria-label={`${isUser ? 'User' : 'Assistant'} message`}
@@ -276,8 +406,8 @@ export default function MessageBubble({
         {/* Thinking indicator - shown at start of streaming */}
         {isStreaming && streamingDisplay.showLoadingIndicator && (
           <div className="flex items-center gap-2 text-white/60 mb-2">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span className="text-sm animate-pulse">Thinking...</span>
+            <Loader2 className="w-4 h-4 thinking-spinner" />
+            <span className="text-sm thinking-pulse">Thinking...</span>
           </div>
         )}
 
@@ -288,14 +418,34 @@ export default function MessageBubble({
 
         {/* Main content */}
         <ReactMarkdown
-              className={`prose prose-invert transition-opacity duration-200 ${
-                useCompactLayout ? 'prose-sm' : 'prose-base'
-              } ${layout.isMobile ? 'prose-sm' : 'prose-base'}`}
-              components={{
-                code({ node, className, children, ...props }) {
+          remarkPlugins={[remarkGfm]}
+          className={`prose prose-invert transition-opacity duration-200 ${
+            useCompactLayout ? 'prose-sm' : 'prose-base'
+          } ${layout.isMobile ? 'prose-sm' : 'prose-base'}`}
+          components={{
+                code({ className, children, ...props }) {
                   const match = /language-(\w+)/.exec(className || "");
-                  return node && !node.properties.inline && match ? (
-                    <div className={`${layout.isMobile ? 'text-xs' : 'text-sm'} ${contentAnalysis.hasCodeBlocks && layout.isMobile ? 'overflow-x-auto' : ''}`}>
+                  const isInline = Boolean((props as any).inline);
+                  const codeStr = String(children).replace(/\n$/, "");
+                  const isShellLang = match && ['bash', 'sh', 'shell', 'zsh', 'console', 'terminal'].includes(match[1]);
+                  return !isInline && match ? (
+                    <div className={`${layout.isMobile ? 'text-xs' : 'text-sm'} ${contentAnalysis.hasCodeBlocks && layout.isMobile ? 'overflow-x-auto' : ''} relative group/code`}>
+                      {isShellLang && (
+                        <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/code:opacity-100 transition-opacity">
+                          <button
+                            className="flex items-center gap-1 bg-green-600/80 hover:bg-green-500 text-white text-[10px] px-2 py-1 rounded"
+                            title="Run in Terminal"
+                            onClick={() => {
+                              window.dispatchEvent(new CustomEvent('terminal-run-command', {
+                                detail: { command: codeStr }
+                              }));
+                            }}
+                          >
+                            <Terminal className="w-3 h-3" />
+                            Run
+                          </button>
+                        </div>
+                      )}
                       <SyntaxHighlighter
                         style={vscDarkPlus as any}
                         language={match[1]}
@@ -309,7 +459,7 @@ export default function MessageBubble({
                           overflowX: layout.isMobile ? 'auto' : 'visible'
                         }}
                       >
-                        {String(children).replace(/\n$/, "")}
+                        {codeStr}
                       </SyntaxHighlighter>
                     </div>
                   ) : (
@@ -357,23 +507,193 @@ export default function MessageBubble({
                     {children}
                   </blockquote>
                 ),
-                a: ({ children, href, ...props }) => (
-                  <a 
-                    href={href} 
-                    className={`text-purple-300 hover:text-purple-200 underline ${
-                      layout.isMobile && dynamicStyles.overflowStrategy === 'ellipsis' 
-                        ? 'truncate inline-block max-w-full' 
-                        : 'break-all'
-                    }`}
-                    {...props}
-                  >
+                a: ({ children, href, ...props }) => {
+                  const isEmbeddable = href && isEmbeddableUrl(href);
+                  const embedInfo = href ? transformToEmbed(href) : null;
+                  const suggestedPlugin = embedInfo?.suggestedPluginId;
+
+                  // SECURITY: Validate URL scheme to prevent XSS via javascript: URLs
+                  const safeHref = typeof href === 'string' && /^(https?:|mailto:|tel:)/i.test(href) 
+                    ? href 
+                    : '#';
+
+                  return (
+                    <div className="inline-flex flex-col items-start gap-1">
+                      <a
+                        href={safeHref}
+                        rel="noopener noreferrer"
+                        target="_blank"
+                        className={`text-purple-300 hover:text-purple-200 underline inline-flex items-center gap-1 ${
+                          layout.isMobile && dynamicStyles.overflowStrategy === 'ellipsis'
+                            ? 'truncate inline-block max-w-full'
+                            : 'break-all'
+                        }`}
+                        {...props}
+                      >
+                        {children}
+                        {isEmbeddable && (
+                          <span
+                            className="use-iframe inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 hover:bg-purple-500/30 transition-colors cursor-pointer"
+                            title={`Open in ${suggestedPlugin ? suggestedPlugin.replace('-embed', '') : 'embed'} viewer`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              // Dispatch custom event to open in embed plugin
+                              window.dispatchEvent(new CustomEvent('open-embed-plugin', {
+                                detail: {
+                                  url: safeHref,
+                                  suggestedPlugin,
+                                  embedInfo
+                                }
+                              }));
+                            }}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            Embed
+                          </span>
+                        )}
+                      </a>
+                    </div>
+                  );
+                },
+                table: ({ children }) => (
+                  <div className="table-wrapper">
+                    <table className="w-full border-collapse">
+                      {children}
+                    </table>
+                  </div>
+                ),
+                thead: ({ children }) => (
+                  <thead>
                     {children}
-                  </a>
+                  </thead>
+                ),
+                tbody: ({ children }) => (
+                  <tbody>
+                    {children}
+                  </tbody>
+                ),
+                tr: ({ children }) => (
+                  <tr>
+                    {children}
+                  </tr>
+                ),
+                th: ({ children }) => (
+                  <th>
+                    {children}
+                  </th>
+                ),
+                td: ({ children }) => (
+                  <td>
+                    {children}
+                  </td>
+                ),
+                h1: ({ children }) => (
+                  <h1 className="text-2xl font-bold mb-4 pb-2 border-b border-purple-500/30">
+                    {children}
+                  </h1>
+                ),
+                h2: ({ children }) => (
+                  <h2 className="text-xl font-semibold mb-3 pb-1 border-b border-purple-500/20">
+                    {children}
+                  </h2>
+                ),
+                h3: ({ children }) => (
+                  <h3 className="text-lg font-semibold mb-2">
+                    {children}
+                  </h3>
+                ),
+                h4: ({ children }) => (
+                  <h4 className="text-base font-semibold mb-2">
+                    {children}
+                  </h4>
                 ),
               }}
             >
               {isUser ? message.content : mainContent}
-            </ReactMarkdown>
+        </ReactMarkdown>
+
+        {/* Reasoning Display - Shows before main content when agent is thinking */}
+        {!isUser && activeReasoningChunks.length > 0 && (
+          reasoningStream.isExpanded || activeReasoningChunks.length === 1 ? (
+            <ReasoningDisplay
+              reasoningChunks={activeReasoningChunks}
+              isStreaming={reasoningStream.isStreaming}
+              isExpanded={reasoningStream.isExpanded}
+              onToggle={() => reasoningStream.setIsExpanded(!reasoningStream.isExpanded)}
+              fullReasoning={activeFullReasoning}
+            />
+          ) : (
+            <ReasoningSummary
+              fullReasoning={activeFullReasoning}
+              isStreaming={reasoningStream.isStreaming}
+              onExpand={() => reasoningStream.setIsExpanded(true)}
+            />
+          )
+        )}
+
+        {/* Tool Invocations Display - Enhanced with new component */}
+        {!isUser && toolInvocations.length > 0 && (
+          <ToolInvocationsList toolInvocations={toolInvocations} />
+        )}
+
+        {!isUser && fileEditInfo && (
+          <div className="mt-3 rounded-lg border border-white/15 bg-black/25 p-2 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-white/80">
+                File edits: {fileEditInfo.applied.length} applied
+              </span>
+              <span className="text-white/60">
+                {fileEditDecision === "reverted_with_conflicts"
+                  ? "Reverted with conflicts"
+                  : fileEditDecision === "denied"
+                    ? "Denied and reverted"
+                    : fileEditDecision === "accepted" || fileEditDecision === "auto_applied"
+                      ? "Auto accepted"
+                      : "Pending"}
+              </span>
+            </div>
+            {fileEditInfo.applied.length > 0 && (
+              <div className="mt-1 text-white/55">
+                {fileEditInfo.applied.slice(0, 4).map((edit: any) => (
+                  <div key={`${edit.path}-${edit.version}`} className="truncate">
+                    {edit.path}
+                  </div>
+                ))}
+                {fileEditInfo.applied.length > 4 && (
+                  <div>+{fileEditInfo.applied.length - 4} more</div>
+                )}
+              </div>
+            )}
+            <div className="mt-2 flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-[11px]"
+                onClick={handleAcceptEdits}
+                disabled={
+                  isApplyingEditAction ||
+                  fileEditDecision === "accepted" ||
+                  fileEditDecision === "auto_applied"
+                }
+              >
+                Accept
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                className="h-7 px-2 text-[11px]"
+                onClick={handleDenyEdits}
+                disabled={
+                  isApplyingEditAction ||
+                  fileEditDecision === "denied" ||
+                  fileEditDecision === "reverted_with_conflicts"
+                }
+              >
+                Deny + Revert
+              </Button>
+            </div>
+          </div>
+        )}
 
             {streamingDisplay.isStreaming && streamingDisplay.progress > 0 && (
               <div className="absolute -bottom-1 left-0 right-0 h-0.5 bg-white/10 rounded-full overflow-hidden">
@@ -439,7 +759,7 @@ export default function MessageBubble({
               </div>
             )}
 
-            {!isUser && reasoning && (
+            {!isUser && combinedReasoning && (
               <div className={`${useCompactLayout ? 'mt-2' : 'mt-4'} border-t border-white/10 ${useCompactLayout ? 'pt-2' : 'pt-3'}`}>
                 <Button
                   variant="ghost"
@@ -466,13 +786,15 @@ export default function MessageBubble({
                     layout.isMobile ? 'p-2' : 'p-3'
                   }`}>
                     <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
                       className={`text-white/70 prose prose-invert max-w-none ${
                         layout.isMobile ? 'prose-xs text-xs' : 'prose-sm text-sm'
                       }`}
                       components={{
-                        code: ({ node, inline, className, children, ...props }) => {
+                        code: ({ className, children, ...props }) => {
                           const match = /language-(\w+)/.exec(className || "");
-                          return node && !node.properties.inline && match ? (
+                          const isInline = Boolean((props as any).inline);
+                          return !isInline && match ? (
                             <SyntaxHighlighter
                               style={vscDarkPlus as any}
                               language={match[1]}
@@ -497,9 +819,71 @@ export default function MessageBubble({
                             {children}
                           </p>
                         ),
+                        table: ({ children }) => (
+                          <div className="table-wrapper">
+                            <table className="w-full border-collapse text-xs">
+                              {children}
+                            </table>
+                          </div>
+                        ),
+                        thead: ({ children }) => (
+                          <thead>
+                            {children}
+                          </thead>
+                        ),
+                        tbody: ({ children }) => (
+                          <tbody>
+                            {children}
+                          </tbody>
+                        ),
+                        tr: ({ children }) => (
+                          <tr>
+                            {children}
+                          </tr>
+                        ),
+                        th: ({ children }) => (
+                          <th className="text-left font-semibold py-1 px-2 border-b border-white/20">
+                            {children}
+                          </th>
+                        ),
+                        td: ({ children }) => (
+                          <td className="py-1 px-2 border-b border-white/10">
+                            {children}
+                          </td>
+                        ),
+                        h1: ({ children }) => (
+                          <h1 className="text-sm font-bold mb-2 pb-1 border-b border-white/20">
+                            {children}
+                          </h1>
+                        ),
+                        h2: ({ children }) => (
+                          <h2 className="text-xs font-semibold mb-1">
+                            {children}
+                          </h2>
+                        ),
+                        h3: ({ children }) => (
+                          <h3 className="text-xs font-semibold mb-1">
+                            {children}
+                          </h3>
+                        ),
+                        ul: ({ children }) => (
+                          <ul className="list-disc list-inside mb-2 pl-2 text-xs">
+                            {children}
+                          </ul>
+                        ),
+                        ol: ({ children }) => (
+                          <ol className="list-decimal list-inside mb-2 pl-2 text-xs">
+                            {children}
+                          </ol>
+                        ),
+                        li: ({ children }) => (
+                          <li className="mb-0.5">
+                            {children}
+                          </li>
+                        ),
                       }}
                     >
-                      {reasoning}
+                      {combinedReasoning}
                     </ReactMarkdown>
                   </div>
                 )}
@@ -510,7 +894,7 @@ export default function MessageBubble({
           variant="ghost"
           size="icon"
           className={`
-            button-responsive absolute -right-2 top-1/2 transform -translate-y-1/2
+            button-responsive absolute ${layout.isMobile ? 'right-1 top-1' : '-right-2 top-1/2 -translate-y-1/2'}
             ${layout.isMobile ? 'opacity-70' : 'opacity-0 group-hover:opacity-100'} 
             transition-all duration-200 bg-black/80 hover:bg-black/90 border border-white/20
             ${layout.isMobile ? 'h-10 w-10' : 'h-6 w-6'}
@@ -521,7 +905,7 @@ export default function MessageBubble({
             minWidth: layout.isMobile ? dynamicStyles.touchTargetSize : 'auto'
           }}
           onClick={handleCopy}
-          onKeyDown={(e) => handleKeyDown(e, handleCopy)}
+                      onKeyDown={(e) => handleKeyDown(e.nativeEvent as KeyboardEvent, handleCopy)}
           aria-label="Copy message content"
           title="Copy message"
         >

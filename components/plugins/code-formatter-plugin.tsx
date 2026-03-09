@@ -6,6 +6,7 @@ import { Textarea } from '../ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Code, Copy, Check, Download, Loader2 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
+import { toast } from 'sonner';
 
 const LANGUAGES = [
   { value: 'javascript', label: 'JavaScript' },
@@ -36,29 +37,107 @@ export const CodeFormatterPlugin: React.FC<PluginProps> = ({
     
     setIsFormatting(true);
     try {
-      // Simulate code formatting
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Basic formatting simulation
       let formattedCode = code;
       
-      if (language === 'javascript' || language === 'typescript') {
-        formattedCode = code
-          .replace(/;/g, ';\n')
-          .replace(/{/g, ' {\n  ')
-          .replace(/}/g, '\n}')
-          .replace(/,/g, ',\n  ')
-          .split('\n')
-          .map(line => line.trim())
-          .filter(line => line.length > 0)
-          .join('\n');
-      } else if (language === 'json') {
+      if (language === 'json') {
         try {
           const parsed = JSON.parse(code);
           formattedCode = JSON.stringify(parsed, null, 2);
         } catch {
           formattedCode = code;
         }
+      } else if (language === 'html' || language === 'xml') {
+        // Simple tag-aware indentation formatter
+        const lines: string[] = [];
+        let depth = 0;
+        const indent = (d: number) => '  '.repeat(d);
+        // Split on tag boundaries while keeping tags and text
+        const tokens = code.replace(/>\s*</g, '>\n<').split('\n');
+        for (const raw of tokens) {
+          const token = raw.trim();
+          if (!token) continue;
+          // Closing tag
+          if (/^<\//.test(token)) {
+            depth = Math.max(0, depth - 1);
+            lines.push(indent(depth) + token);
+          // Self-closing or void tag
+          } else if (/\/>$/.test(token) || /^<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\b/i.test(token)) {
+            lines.push(indent(depth) + token);
+          // Opening tag
+          } else if (/^<[a-zA-Z]/.test(token)) {
+            lines.push(indent(depth) + token);
+            depth++;
+          } else {
+            lines.push(indent(depth) + token);
+          }
+        }
+        formattedCode = lines.join('\n');
+      } else if (language === 'css') {
+        formattedCode = code
+          .replace(/\s*\{\s*/g, ' {\n')
+          .replace(/\s*\}\s*/g, '\n}\n')
+          .replace(/;\s*/g, ';\n')
+          .split('\n')
+          .map(line => line.trim())
+          .filter(line => line.length > 0)
+          .map(line => {
+            if (line === '}') return '}';
+            if (line.endsWith('{')) return line;
+            if (line.startsWith('}')) return line;
+            return '  ' + line;
+          })
+          .join('\n');
+      } else if (language === 'javascript' || language === 'typescript') {
+        // Try JSON first
+        try {
+          const parsed = JSON.parse(code);
+          formattedCode = JSON.stringify(parsed, null, 2);
+        } catch {
+          // Basic brace-depth formatting
+          const result: string[] = [];
+          let depth = 0;
+          const indent = (d: number) => '  '.repeat(d);
+          // Normalize and split on meaningful boundaries
+          const normalized = code
+            .replace(/\r\n/g, '\n')
+            .replace(/\{/g, '{\n')
+            .replace(/\}/g, '\n}\n')
+            .replace(/;/g, ';\n');
+          const lines = normalized.split('\n');
+          for (const raw of lines) {
+            const line = raw.trim();
+            if (!line) continue;
+            if (line === '}' || line.startsWith('}')) {
+              depth = Math.max(0, depth - 1);
+              result.push(indent(depth) + line);
+            } else {
+              result.push(indent(depth) + line);
+            }
+            // Count braces to adjust depth for next line
+            for (const ch of line) {
+              if (ch === '{') depth++;
+              else if (ch === '}') depth = Math.max(0, depth - 1);
+            }
+          }
+          formattedCode = result.join('\n');
+        }
+      } else if (language === 'sql') {
+        const keywords = ['SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'ORDER BY', 'GROUP BY', 'HAVING', 'INSERT', 'UPDATE', 'DELETE', 'SET', 'VALUES', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'OUTER JOIN', 'ON', 'INTO', 'CREATE', 'ALTER', 'DROP', 'TABLE', 'INDEX', 'LIMIT', 'OFFSET', 'UNION', 'AS', 'IN', 'NOT', 'NULL', 'IS', 'LIKE', 'BETWEEN', 'EXISTS', 'DISTINCT', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'ASC', 'DESC'];
+        // Uppercase keywords
+        formattedCode = code;
+        for (const kw of keywords) {
+          formattedCode = formattedCode.replace(new RegExp(`\\b${kw}\\b`, 'gi'), kw);
+        }
+        // Add newlines before major clauses
+        const majorClauses = ['SELECT', 'FROM', 'WHERE', 'ORDER BY', 'GROUP BY', 'HAVING', 'LIMIT', 'UNION', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'OUTER JOIN', 'INSERT', 'UPDATE', 'DELETE', 'SET', 'VALUES'];
+        for (const clause of majorClauses) {
+          formattedCode = formattedCode.replace(new RegExp(`\\s+${clause}\\b`, 'g'), `\n${clause}`);
+        }
+        formattedCode = formattedCode.trim();
+      } else {
+        // Python, Java, C++, and other languages
+        formattedCode = code;
+        toast.info('Formatting for this language uses basic whitespace normalization');
       }
       
       setFormatted(formattedCode);
@@ -136,7 +215,7 @@ export const CodeFormatterPlugin: React.FC<PluginProps> = ({
           >
             {isFormatting ? (
               <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 mr-2 thinking-spinner" />
                 Formatting...
               </>
             ) : (

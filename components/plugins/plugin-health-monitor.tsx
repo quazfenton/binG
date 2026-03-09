@@ -27,29 +27,42 @@ interface PluginHealthData {
   resourceUsage: any[];
 }
 
+const DEMO_HEALTH_DATA: PluginHealthData[] = [
+  { pluginId: 'calculator', pluginName: 'Calculator', status: 'healthy', instances: 1, errors: 0, restarts: 0, resourceUsage: [{ memoryMB: 12.4 }] },
+  { pluginId: 'json-validator', pluginName: 'JSON Validator', status: 'healthy', instances: 1, errors: 2, restarts: 0, resourceUsage: [{ memoryMB: 8.7 }] },
+  { pluginId: 'url-utilities', pluginName: 'URL Utilities', status: 'degraded', instances: 1, errors: 5, restarts: 1, resourceUsage: [{ memoryMB: 15.2 }] },
+];
+
 export const PluginHealthMonitor: React.FC = () => {
   const [healthData, setHealthData] = useState<PluginHealthData[]>([]);
   const [isVisible, setIsVisible] = useState(false);
+  const [isDemo, setIsDemo] = useState(false);
 
   useEffect(() => {
     if (!isVisible) return;
 
     const updateHealthData = () => {
-      const plugins = enhancedPluginManager.getAllPlugins();
-      const data: PluginHealthData[] = plugins.map(plugin => {
-        const health = enhancedPluginManager.getPluginHealth(plugin.id);
-        return {
-          pluginId: plugin.id,
-          pluginName: plugin.name,
-          status: health.status,
-          instances: health.instances,
-          errors: health.errors,
-          restarts: health.restarts,
-          resourceUsage: health.resourceUsage
-        };
-      });
-      
-      setHealthData(data);
+      try {
+        const plugins = enhancedPluginManager.getAllPlugins();
+        if (plugins.length === 0) throw new Error('No plugins');
+        const data: PluginHealthData[] = plugins.map(plugin => {
+          const health = enhancedPluginManager.getPluginHealth(plugin.id);
+          return {
+            pluginId: plugin.id,
+            pluginName: plugin.name,
+            status: health.status,
+            instances: health.instances,
+            errors: health.errors,
+            restarts: health.restarts,
+            resourceUsage: health.resourceUsage
+          };
+        });
+        setHealthData(data);
+        setIsDemo(false);
+      } catch {
+        setHealthData(DEMO_HEALTH_DATA);
+        setIsDemo(true);
+      }
     };
 
     // Initial update
@@ -144,6 +157,7 @@ export const PluginHealthMonitor: React.FC = () => {
           <CardTitle className="text-lg flex items-center gap-2">
             <Activity className="w-5 h-5 text-blue-400" />
             Plugin Health Monitor
+            {isDemo && <Badge className="ml-2 text-xs bg-yellow-500/20 text-yellow-300 border-yellow-500/30">Demo Data</Badge>}
           </CardTitle>
           <Button
             size="sm"

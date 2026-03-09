@@ -1,0 +1,28 @@
+name: 3. Auto-Format & Fix
+on:
+  push:
+    branches-ignore: [main] # Don't auto-commit directly to main
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  format-code:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: actions/setup-node@v4
+      - run: npx prettier --write . || echo "Prettier failed or not configured"
+      - run: npx eslint --fix . || echo "ESLint failed or not configured"
+      - uses: actions/setup-python@v5
+      - run: pip install ruff
+      - run: ruff format .
+      - run: ruff check --fix .
+      - name: Commit changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: auto-format and fix linting errors"
+          file_pattern: "!**.github/workflows/**"

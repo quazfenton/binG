@@ -68,6 +68,7 @@ export default function DevOpsCommandCenterPlugin({ onClose }: PluginProps) {
   const [command, setCommand] = useState('');
   const [commandOutput, setCommandOutput] = useState('');
   const [streamingLogs, setStreamingLogs] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -99,6 +100,7 @@ export default function DevOpsCommandCenterPlugin({ onClose }: PluginProps) {
       }
     } catch (err) {
       // Mock data for demo
+      setDemoMode(true);
       setContainers([
         { id: '1', name: 'nginx-proxy', image: 'nginx:latest', status: 'running', state: 'Up 2 hours', ports: ['80:80', '443:443'], created: '2 hours ago' },
         { id: '2', name: 'postgres-db', image: 'postgres:14', status: 'running', state: 'Up 1 day', ports: ['5432:5432'], created: '1 day ago' },
@@ -167,11 +169,25 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const startContainer = async (id: string) => {
     setLoading(true);
     try {
-      await fetch(`/api/docker/start/${id}`, { method: 'POST' });
+      const res = await fetch(`/api/docker/start/${id}`, { method: 'POST' });
+      if (!res.ok) {
+        let errorMsg = 'Start failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {}
+        throw new Error(errorMsg);
+      }
       toast.success('Container started');
       loadContainers();
     } catch (err) {
-      toast.error('Failed to start container');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        setContainers(prev => prev.map(c => c.id === id ? { ...c, status: 'running', state: 'Up just now' } : c));
+        toast.success('Container started (demo)');
+      } else {
+        toast.error(`Failed to start container: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -180,11 +196,25 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const stopContainer = async (id: string) => {
     setLoading(true);
     try {
-      await fetch(`/api/docker/stop/${id}`, { method: 'POST' });
+      const res = await fetch(`/api/docker/stop/${id}`, { method: 'POST' });
+      if (!res.ok) {
+        let errorMsg = 'Stop failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {}
+        throw new Error(errorMsg);
+      }
       toast.success('Container stopped');
       loadContainers();
     } catch (err) {
-      toast.error('Failed to stop container');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        setContainers(prev => prev.map(c => c.id === id ? { ...c, status: 'exited', state: 'Exited (0) just now' } : c));
+        toast.success('Container stopped (demo)');
+      } else {
+        toast.error(`Failed to stop container: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -194,11 +224,25 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
     if (!confirm('Are you sure you want to remove this container?')) return;
     setLoading(true);
     try {
-      await fetch(`/api/docker/remove/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/docker/remove/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        let errorMsg = 'Remove failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {}
+        throw new Error(errorMsg);
+      }
       toast.success('Container removed');
       loadContainers();
     } catch (err) {
-      toast.error('Failed to remove container');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        setContainers(prev => prev.filter(c => c.id !== id));
+        toast.success('Container removed (demo)');
+      } else {
+        toast.error(`Failed to remove container: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -213,12 +257,26 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ containerId: selectedContainer, command })
       });
+      if (!res.ok) {
+        let errorMsg = 'Execution failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {}
+        throw new Error(errorMsg);
+      }
       const data = await res.json();
       setCommandOutput(data.output);
       toast.success('Command executed');
     } catch (err) {
-      setCommandOutput('Error executing command');
-      toast.error('Command failed');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        setCommandOutput(`$ ${command}\n[demo mode] Command simulation not available. Connect Docker API for real execution.`);
+        toast.success('Command simulated (demo)');
+      } else {
+        toast.error(`Command execution failed: ${errorMessage}`);
+        setCommandOutput(`$ ${command}\nError: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -227,15 +285,36 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const deployCompose = async () => {
     setLoading(true);
     try {
-      await fetch('/api/docker/compose', {
+      const res = await fetch('/api/docker/compose', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ compose: composeFile })
       });
-      toast.success('Compose deployed');
+      
+      if (!res.ok) {
+        // Real backend error - parse and show actual error message
+        let errorMsg = 'Compose deploy failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {
+          // Response might not be JSON
+        }
+        throw new Error(errorMsg);
+      }
+      
+      toast.success('Compose deployed successfully');
       loadContainers();
     } catch (err) {
-      toast.error('Deploy failed');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      
+      // Only show demo mode message if we're actually in demo mode
+      // Otherwise, show the real error to avoid misleading the user
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        toast.success('Compose validated (demo mode — connect Docker API to deploy)');
+      } else {
+        toast.error(`Deploy failed: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -244,11 +323,25 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
   const restartPipeline = async (id: string) => {
     setLoading(true);
     try {
-      await fetch(`/api/cicd/restart/${id}`, { method: 'POST' });
+      const res = await fetch(`/api/cicd/restart/${id}`, { method: 'POST' });
+      if (!res.ok) {
+        let errorMsg = 'Restart failed';
+        try {
+          const errorData = await res.json();
+          errorMsg = errorData.error || errorData.message || errorMsg;
+        } catch {}
+        throw new Error(errorMsg);
+      }
       toast.success('Pipeline restarted');
       loadPipelines();
     } catch (err) {
-      toast.error('Failed to restart pipeline');
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+      if (demoMode && errorMessage.includes('Failed to fetch')) {
+        setPipelines(prev => prev.map(p => p.id === id ? { ...p, status: 'running', started: 'Just now' } : p));
+        toast.success('Pipeline restarted (demo)');
+      } else {
+        toast.error(`Failed to restart pipeline: ${errorMessage}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -267,7 +360,7 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
       case 'stopped':
         return <Square className="w-4 h-4 text-gray-400" />;
       default:
-        return <Loader2 className="w-4 h-4 text-yellow-400 animate-spin" />;
+        return <Loader2 className="w-4 h-4 text-yellow-400 thinking-spinner" />;
     }
   };
 
@@ -288,6 +381,17 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
       </CardHeader>
 
       <CardContent className="flex-1 overflow-auto p-4">
+        {demoMode && (
+          <div className="mb-3 flex items-center gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>Running in demo mode. Connect Docker API for real container management.</span>
+          </div>
+        )}
+        <div className="mb-3 flex items-center gap-2">
+          <Badge variant={demoMode ? 'secondary' : 'default'} className={`text-xs ${demoMode ? 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30' : 'bg-green-500/20 text-green-300 border-green-500/30'}`}>
+            {demoMode ? '● Demo Mode' : '● Connected'}
+          </Badge>
+        </div>
         <Tabs defaultValue="containers" className="w-full">
           <TabsList className="grid grid-cols-5 w-full">
             <TabsTrigger value="containers"><Container className="w-4 h-4 mr-1" /> Containers</TabsTrigger>
@@ -531,7 +635,7 @@ level: ['INFO', 'WARN', 'ERROR', 'DEBUG'][secureRandomInt(0, 3)],
 
             <div className="flex gap-2">
               <Button onClick={deployCompose} disabled={!composeFile || loading}>
-                {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+                {loading ? <Loader2 className="w-4 h-4 mr-2 thinking-spinner" /> : <Upload className="w-4 h-4 mr-2" />}
                 Deploy Compose
               </Button>
               <Button variant="outline" onClick={() => setComposeFile('')}>

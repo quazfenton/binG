@@ -1,84 +1,151 @@
 /**
- * Adapter wiring LLM prompts/outputs to Composio parsing and tool invocation.
- * - parsePromptForTools(prompt) => normalized toolcall array
- * - executeToolCall(call) => invokes registered tool handler (Composio or fallback)
+ * Composio Adapter - Updated for Session-Based Architecture
+ * 
+ * Adapts LLM prompts/outputs to Composio session-based tool execution.
+ * 
+ * SECURITY: All tool calls now require userId for proper isolation.
  */
 
-import { initComposio, parseToolsFromPrompt, registerComposioTool } from './composio-client'
+import { composioSessionManager, executeToolCall } from './composio-client';
 
-export async function parsePromptForTools(prompt: string) {
-  try {
-    const parsed = await parseToolsFromPrompt(prompt)
-    // Normalization helper: many parsers return different shapes; normalize to { tool, args }
-    if (!parsed) return []
-    if (Array.isArray(parsed)) {
-      return parsed.map((p: any) =>
-        typeof p === 'string' ? { tool: p, args: {} } : p.tool ? { tool: p.tool, args: p.args ?? {} } : { tool: p.name ?? p.id, args: p.args ?? {} }
-      )
+export interface ToolCall {
+  tool: string;
+  args?: Record<string, any>;
+}
+
+export interface ToolCallResult {
+  success: boolean;
+  data?: any;
+  error?: string;
+}
+
+/**
+ * Parse prompt for tool calls
+ * 
+ * @deprecated Tool discovery should use composioSessionManager.searchTools()
+ */
+export async function parsePromptForTools(prompt: string): Promise<ToolCall[]> {
+  console.warn(
+    '[composio-adapter] parsePromptForTools is deprecated. ' +
+    'Use composioSessionManager.searchTools() for tool discovery.'
+  );
+  
+  // Simple regex-based extraction as fallback
+  // In production, use proper LLM-based tool extraction
+  const toolPattern = /<tool\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/tool>/g;
+  const calls: ToolCall[] = [];
+  
+  let match: RegExpExecArray | null;
+  while ((match = toolPattern.exec(prompt)) !== null) {
+    try {
+      const args = JSON.parse(match[2] || '{}');
+      calls.push({ tool: match[1], args });
+    } catch {
+      // Invalid JSON, skip
     }
-    if (parsed.tool) return [{ tool: parsed.tool, args: parsed.args ?? {} }]
-    return []
-  } catch (e) {
-    console.warn('[composio-adapter] parse error', e)
-    return []
+  }
+  
+  return calls;
+}
+
+/**
+ * Execute tool call with user session
+ * 
+ * SECURITY: userId is now REQUIRED
+ */
+export async function executeToolCallWithSession(
+  userId: string,
+  toolCall: ToolCall
+): Promise<ToolCallResult> {
+  if (!userId) {
+    return {
+      success: false,
+      error: 'userId is required for tool execution (security requirement)',
+    };
+  }
+  
+  try {
+    const result = await executeToolCall(userId, toolCall.tool, toolCall.args || {});
+    return {
+      success: true,
+      data: result,
+    };
+  } catch (error: any) {
+    console.error('[composio-adapter] executeToolCallWithSession failed', error);
+    return {
+      success: false,
+      error: error.message || String(error),
+    };
   }
 }
 
-export async function executeToolCall(toolCall: { tool: string; args?: any }) {
-  try {
-    const c = await initComposio().catch(() => null)
-    if (c && typeof c.invoke === 'function') {
-      return await c.invoke(toolCall.tool, toolCall.args ?? {})
-    }
-    // Fallback to registry on window
-    const handler = (window as any).__COMPOSIO_TOOL_REG__?.[toolCall.tool]
-    if (!handler) throw new Error(`Tool handler not found: ${toolCall.tool}`)
-    return await handler(toolCall.args ?? {})
-  } catch (e) {
-    console.error('[composio-adapter] executeToolCall failed', e)
-    throw e
+/**
+ * Execute multiple tool calls for user
+ */
+export async function executeToolCalls(
+  userId: string,
+  toolCalls: ToolCall[]
+): Promise<ToolCallResult[]> {
+  const results: ToolCallResult[] = [];
+  
+  for (const call of toolCalls) {
+    const result = await executeToolCallWithSession(userId, call);
+    results.push(result);
   }
+  
+  return results;
 }
 
+/**
+ * Register default tools (backward compatibility)
+ * 
+ * @deprecated Use composioSessionManager for proper tool management
+ */
 export async function registerDefaultTools() {
-  // CPU-light default tools — more can be added by plugins
-  await registerComposioTool(
-    'puter.fs.write',
-    { description: 'Write file to Puter FS', args: { path: 'string', content: 'string' } },
-    async ({ path, content }: { path: string; content: string }) => {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      const puter = typeof window !== 'undefined' ? (window as any).puter : undefined
-      if (puter?.fs?.write) return puter.fs.write(path, content)
-      if (typeof (window as any).__COMPOSIO_CALL__ === 'function') return (window as any).__COMPOSIO_CALL__('cloud.fs.write', { path, content })
-      throw new Error('No Puter FS or cloud plugin available')
-    }
-  )
+  console.warn(
+    '[composio-adapter] registerDefaultTools is deprecated. ' +
+    'Tools are now managed per-user via composioSessionManager.'
+  );
+  
+  // Tools are now automatically available via Composio's 1000+ integrations
+  // Users connect accounts via composioSessionManager.connectAccount()
+}
 
-  await registerComposioTool(
-    'puter.fs.read',
-    { description: 'Read file from Puter FS', args: { path: 'string' } },
-    async ({ path }: { path: string }) => {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      const puter = typeof window !== 'undefined' ? (window as any).puter : undefined
-      if (puter?.fs?.read) return puter.fs.read(path)
-      if (typeof (window as any).__COMPOSIO_CALL__ === 'function') return (window as any).__COMPOSIO_CALL__('cloud.fs.read', { path })
-      throw new Error('No Puter FS or cloud plugin available')
-    }
-  )
+/**
+ * Get available tools for user
+ */
+export async function getAvailableTools(
+  userId: string,
+  options?: { toolkit?: string; limit?: number }
+) {
+  return composioSessionManager.getUserTools(userId, options);
+}
 
-  await registerComposioTool(
-    'puter.ai.txt2img',
-    { description: 'Generate an image using Puter', args: { prompt: 'string', testMode: 'boolean' } },
-    async ({ prompt, testMode }: { prompt: string; testMode?: boolean }) => {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      const puter = typeof window !== 'undefined' ? (window as any).puter : undefined
-      if (puter?.ai?.txt2img) return puter.ai.txt2img(prompt, testMode ?? true)
-      // fallback: call window __COMPOSIO_CALL__ or throw
-      if (typeof (window as any).__COMPOSIO_CALL__ === 'function') return (window as any).__COMPOSIO_CALL__('cloud.img.txt2img', { prompt, testMode })
-      throw new Error('No Puter image generation available')
-    }
-  )
+/**
+ * Search tools for user
+ */
+export async function searchTools(
+  userId: string,
+  query: string,
+  options?: { toolkit?: string; limit?: number }
+) {
+  return composioSessionManager.searchTools(userId, query, options);
+}
+
+/**
+ * Connect new account for user
+ */
+export async function connectToolAccount(
+  userId: string,
+  toolkit: string,
+  authMode: 'OAUTH2' | 'API_KEY' | 'BASIC' = 'OAUTH2'
+) {
+  return composioSessionManager.connectAccount(userId, toolkit, authMode);
+}
+
+/**
+ * Get user's connected accounts
+ */
+export async function getUserConnectedAccounts(userId: string) {
+  return composioSessionManager.getConnectedAccounts(userId);
 }

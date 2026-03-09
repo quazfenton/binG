@@ -15,8 +15,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Normalize email for rate limiting (prevent bypass via whitespace/casing)
-    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : undefined;
+    // Normalize email for rate limiting (prevent bypass via whitespace/casing/Unicode)
+    // CRITICAL FIX: Add Unicode normalization to prevent homograph attacks
+    const normalizedEmail = typeof email === 'string' 
+      ? email.trim().toLowerCase().normalize('NFKC') 
+      : undefined;
 
     // Rate limiting: Check before processing (strict limits to prevent brute-force)
     const rateLimitResult = rateLimitMiddleware(request, 'login', normalizedEmail);

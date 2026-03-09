@@ -1,4 +1,4 @@
-import { getToolManager } from '@/lib/tools';
+import { getToolManager, getToolErrorHandler } from '@/lib/tools';
 import { toolAuthManager as toolAuthorizationManager } from '@/lib/services/tool-authorization-manager';
 import type { LLMMessage } from '@/lib/api/llm-providers';
 import type { ToolExecutionContext } from '@/lib/tools';
@@ -10,7 +10,7 @@ export interface ToolDetectionResult {
   requiresAuth: boolean;
   authUrl?: string;
   toolName?: string;
-  error?: string;  // Error message for missing parameters
+  error?: string;
 }
 
 export interface ToolProcessingResult {
@@ -20,9 +20,17 @@ export interface ToolProcessingResult {
   toolCalls: any[];
   toolResults: any[];
   content: string;
+  error?: {
+    type: 'validation' | 'auth' | 'execution' | 'not_found';
+    message: string;
+    details?: any;
+    parameters?: any;
+  };
 }
 
 export class ToolContextManager {
+  private errorHandler = getToolErrorHandler();
+
   private async resolveUserEmail(userId: string): Promise<string | undefined> {
     const numericUserId = Number(userId);
     if (Number.isNaN(numericUserId)) return undefined;
@@ -35,7 +43,7 @@ export class ToolContextManager {
   }
 
   /**
-   * Process a tool request with proper authorization checking
+   * Process a tool request with proper authorization checking and error propagation
    */
   async processToolRequest(
     messages: LLMMessage[],
@@ -45,13 +53,20 @@ export class ToolContextManager {
     // Detect tool intent from messages
     const detectionResult = this.detectToolIntent(messages);
 
-    // If detection returned an error (missing parameters), propagate it first
+    // If detection returned an error (missing parameters), propagate it with full details
     if (detectionResult.error) {
+      const toolError = this.errorHandler.createValidationError(detectionResult.error, detectionResult.toolInput);
       return {
         requiresAuth: false,
         toolCalls: [],
         toolResults: [],
-        content: `Invalid request: ${detectionResult.error}`
+        content: `Invalid request: ${toolError.message}\n\nHints:\n${toolError.hints?.join('\n') || 'Check required parameters'}`,
+        error: {
+          type: 'validation',
+          message: toolError.message,
+          details: { category: toolError.category, retryable: toolError.retryable },
+          parameters: detectionResult.toolInput,
+        }
       };
     }
 
@@ -71,13 +86,19 @@ export class ToolContextManager {
       const provider = toolAuthorizationManager.getRequiredProvider(detectionResult.detectedTool);
       if (provider) {
         const authUrl = toolAuthorizationManager.getAuthorizationUrl(provider);
+        const toolError = this.errorHandler.createAuthError(`Authorization required for ${detectionResult.detectedTool}`, authUrl);
         return {
           requiresAuth: true,
           authUrl,
           toolName: detectionResult.detectedTool,
           toolCalls: [],
           toolResults: [],
-          content: `AUTH_REQUIRED:${authUrl}:${detectionResult.detectedTool}`
+          content: `AUTH_REQUIRED:${authUrl}:${detectionResult.detectedTool}`,
+          error: {
+            type: 'auth',
+            message: toolError.message,
+            details: { provider, authUrl },
+          }
         };
       }
     }
@@ -88,33 +109,64 @@ export class ToolContextManager {
     const strategy = (process.env.ARCADE_USER_ID_STRATEGY || 'email').toLowerCase();
     const arcadeUserId = strategy === 'email' && userEmail ? userEmail : userId;
 
-    const toolResult = await toolManager.executeTool(
-      detectionResult.detectedTool!,
-      detectionResult.toolInput,
-      {
-        userId,
-        conversationId,
-        metadata: {
-          sessionId: `session_${conversationId}`, // Store session ID in metadata
-          userEmail,
-          arcadeUserId,
+    try {
+      const toolResult = await toolManager.executeTool(
+        detectionResult.detectedTool!,
+        detectionResult.toolInput,
+        {
+          userId,
+          conversationId,
+          metadata: {
+            sessionId: `session_${conversationId}`,
+            userEmail,
+            arcadeUserId,
+          }
         }
-      }
-    );
+      );
 
-    if (toolResult.success) {
+      if (toolResult.success) {
+        return {
+          requiresAuth: false,
+          toolCalls: [{ name: detectionResult.detectedTool!, arguments: detectionResult.toolInput }],
+          toolResults: [{ name: detectionResult.detectedTool!, result: toolResult.output }],
+          content: toolResult.output ? JSON.stringify(toolResult.output) : `Tool ${detectionResult.detectedTool!} executed successfully`
+        };
+      } else {
+        // Handle execution error with unified error handler
+        const toolError = this.errorHandler.handleError(
+          new Error(toolResult.error || 'Unknown execution error'),
+          detectionResult.detectedTool!,
+          detectionResult.toolInput
+        );
+
+        return {
+          requiresAuth: false,
+          toolCalls: [{ name: detectionResult.detectedTool!, arguments: detectionResult.toolInput }],
+          toolResults: [],
+          content: `Tool execution failed: ${toolError.message}\n\nHints:\n${toolError.hints?.join('\n') || 'Please try again'}`,
+          error: {
+            type: 'execution',
+            message: toolError.message,
+            details: { category: toolError.category, retryable: toolError.retryable, ...toolResult },
+            parameters: detectionResult.toolInput,
+          }
+        };
+      }
+    } catch (executionError: any) {
+      // Handle unexpected execution error with unified error handler
+      const toolError = this.errorHandler.handleError(executionError, detectionResult.detectedTool!, detectionResult.toolInput);
+
       return {
         requiresAuth: false,
         toolCalls: [{ name: detectionResult.detectedTool!, arguments: detectionResult.toolInput }],
-        toolResults: [{ name: detectionResult.detectedTool!, result: toolResult.output }],
-        content: toolResult.output ? JSON.stringify(toolResult.output) : `Tool ${detectionResult.detectedTool!} executed successfully`
-      };
-    } else {
-      return {
-        requiresAuth: false,
-        toolCalls: [],
         toolResults: [],
-        content: `Tool execution failed: ${toolResult.error}`
+        content: `Tool execution failed: ${toolError.message}\n\nHints:\n${toolError.hints?.join('\n') || 'Please try again'}`,
+        error: {
+          type: 'execution',
+          message: toolError.message,
+          details: { category: toolError.category, retryable: toolError.retryable, stack: executionError.stack },
+          parameters: detectionResult.toolInput,
+        }
       };
     }
   }

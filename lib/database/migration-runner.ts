@@ -73,11 +73,21 @@ export class MigrationRunner {
 
         // Execute migration in a transaction
         this.db.transaction(() => {
+          // Double-check if migration was already executed (e.g. by another process)
+          const alreadyExecuted = this.db.prepare(
+            'SELECT 1 FROM schema_migrations WHERE version = ?'
+          ).get(migration.version);
+
+          if (alreadyExecuted) {
+            console.log(`Migration ${migration.version} already executed, skipping`);
+            return;
+          }
+
           this.db.exec(migration.sql);
 
           // Record migration as executed
           const stmt = this.db.prepare(`
-            INSERT INTO schema_migrations (version, filename)
+            INSERT OR IGNORE INTO schema_migrations (version, filename)
             VALUES (?, ?)
           `);
           stmt.run(migration.version, migration.filename);
@@ -122,8 +132,3 @@ export class MigrationRunner {
 
 // Export singleton instance
 export const migrationRunner = new MigrationRunner();
-
-// Auto-run migrations on import (can be disabled with env var)
-if (process.env.AUTO_RUN_MIGRATIONS !== 'false') {
-  migrationRunner.runMigrations().catch(console.error);
-}

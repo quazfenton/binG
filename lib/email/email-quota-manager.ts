@@ -150,7 +150,18 @@ class EmailQuotaManager {
         existing.resetDate = new Date(fromFile.resetDate) > new Date(existing.resetDate)
           ? fromFile.resetDate
           : existing.resetDate;
-        existing.isDisabled = existing.currentUsage >= existing.monthlyLimit || !!fromFile.isDisabled;
+        // Only preserve isDisabled if actually over quota or explicitly disabled for non-quota reasons
+        // Re-enable if usage is below limit and reset date has passed
+        const now = new Date();
+        const resetDate = new Date(existing.resetDate);
+        const shouldReset = now >= resetDate;
+        if (shouldReset) {
+          existing.currentUsage = 0;
+          existing.resetDate = this.getNextResetDate();
+          existing.isDisabled = false;
+        } else {
+          existing.isDisabled = existing.currentUsage >= existing.monthlyLimit;
+        }
         existing.priority = fromFile.priority || existing.priority;
       }
     } catch (error) {
@@ -198,14 +209,32 @@ class EmailQuotaManager {
       const rows = stmt.all() as any[];
 
       for (const row of rows) {
-        this.quotas.set(row.provider, {
+        const quota: EmailProviderQuota = {
           provider: row.provider,
           monthlyLimit: row.monthly_limit,
           currentUsage: row.current_usage,
           resetDate: row.reset_date,
           isDisabled: !!row.is_disabled,
           priority: row.priority || DEFAULT_EMAIL_QUOTAS[row.provider]?.priority || 99,
-        });
+        };
+
+        // Check if reset date has passed - if so, reset usage and re-enable
+        const now = new Date();
+        const resetDate = new Date(quota.resetDate);
+        if (now >= resetDate) {
+          quota.currentUsage = 0;
+          quota.resetDate = this.getNextResetDate();
+          quota.isDisabled = false;
+          console.log(`[EmailQuotaManager] Reset ${row.provider} quota (reset date passed). New reset: ${quota.resetDate}`);
+        } else if (quota.currentUsage >= quota.monthlyLimit) {
+          // Only keep disabled if actually over quota
+          quota.isDisabled = true;
+        } else {
+          // Re-enable if under quota and reset date hasn't passed
+          quota.isDisabled = false;
+        }
+
+        this.quotas.set(row.provider, quota);
       }
 
       // Add any providers not in DB yet

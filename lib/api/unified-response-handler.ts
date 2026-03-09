@@ -18,7 +18,9 @@ export interface UnifiedResponse {
     model?: string;
     provider?: string;
     toolCalls?: any[];
+    toolInvocations?: any[];
     files?: any[];
+    reasoning?: string;
     chainedAgents?: string[];
     qualityScore?: number;
     processingSteps?: any[];
@@ -33,6 +35,10 @@ export interface UnifiedResponse {
     authUrl?: string;
     toolName?: string;
     authProvider?: string;
+    composioMcp?: {
+      url?: string;
+      headers?: Record<string, string>;
+    };
     messageMetadata?: Record<string, any>;
   };
   commands?: {
@@ -44,6 +50,9 @@ export interface UnifiedResponse {
     routedThrough?: string;
     fallbackChain?: string[];
     triedEndpoints?: number;
+    actualProvider?: string;
+    actualModel?: string;
+    messageMetadata?: Record<string, any>;
     timestamp: string;
   };
 }
@@ -81,6 +90,7 @@ export class UnifiedResponseHandler {
         model: response.metadata?.actualModel || response.data?.model || response.model,
         provider: response.metadata?.actualProvider || response.data?.provider || response.provider,
         toolCalls: response.data?.toolCalls,
+        toolInvocations: response.data?.toolInvocations || response.metadata?.toolInvocations,
         files: response.data?.files,
         chainedAgents: response.data?.chainedAgents,
         qualityScore: response.data?.qualityScore,
@@ -96,7 +106,9 @@ export class UnifiedResponseHandler {
         authUrl: response.data?.authUrl,
         toolName,
         authProvider,
+        composioMcp: response.data?.composioMcp || response.metadata?.composioMcp,
         messageMetadata,
+        reasoning: this.extractReasoning(response),
       },
       commands,
       metadata: {
@@ -110,6 +122,31 @@ export class UnifiedResponseHandler {
         messageMetadata,
       }
     };
+  }
+
+  private extractReasoning(response: any): string | undefined {
+    const explicitReasoning =
+      response.data?.reasoning ||
+      response.data?.reasoningTrace ||
+      response.metadata?.reasoning ||
+      response.metadata?.reasoningTrace;
+
+    if (Array.isArray(explicitReasoning)) {
+      const joined = explicitReasoning.filter(Boolean).join('\n');
+      return joined || undefined;
+    }
+    if (typeof explicitReasoning === 'string' && explicitReasoning.trim()) {
+      return explicitReasoning.trim();
+    }
+
+    const content = this.extractContent(response);
+    const thinkRegex = /<think>([\s\S]*?)<\/think>/gi;
+    const captures: string[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = thinkRegex.exec(content)) !== null) {
+      if (match[1]?.trim()) captures.push(match[1].trim());
+    }
+    return captures.length > 0 ? captures.join('\n') : undefined;
   }
 
   private inferProviderFromToolName(toolName?: string): string | undefined {
@@ -241,6 +278,32 @@ export class UnifiedResponseHandler {
       });
     }
 
+    // Tool invocation lifecycle for agentic UI
+    if (response.data.toolInvocations?.length) {
+      response.data.toolInvocations.forEach((invocation: any) => {
+        events.push(this.createEvent('tool_invocation', {
+          requestId,
+          ...invocation,
+        }));
+      });
+    }
+
+    // Reasoning trace for explainability UX
+    if (response.data.reasoning) {
+      events.push(this.createEvent('reasoning', {
+        requestId,
+        reasoning: response.data.reasoning,
+      }));
+    }
+
+    // Tool calls if available
+    if (response.data.toolCalls?.length) {
+      events.push(this.createEvent('tools', {
+        requestId,
+        toolCalls: response.data.toolCalls
+      }));
+    }
+
     // Content tokens (chunked)
     const content = response.content;
     const chunks = this.chunkContent(content, 30);
@@ -253,14 +316,6 @@ export class UnifiedResponseHandler {
         offset: index * 30
       }));
     });
-
-    // Tool calls if available
-    if (response.data.toolCalls?.length) {
-      events.push(this.createEvent('tools', {
-        requestId,
-        toolCalls: response.data.toolCalls
-      }));
-    }
 
     // Files if available
     if (response.data.files?.length) {

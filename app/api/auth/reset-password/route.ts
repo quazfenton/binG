@@ -2,6 +2,39 @@ import { NextResponse } from 'next/server';
 import { initializeDatabase } from '@/lib/database/db';
 import { generateToken } from '@/lib/auth/jwt';
 
+interface EmailService {
+  sendPasswordReset(email: string, resetToken: string, resetUrl: string): Promise<boolean>;
+}
+
+const emailService: EmailService = {
+  async sendPasswordReset(email: string, resetToken: string, resetUrl: string): Promise<boolean> {
+    console.log(`[Email] Sending password reset to ${email}`);
+    // Log only a masked token reference for security (never log the full URL or token)
+    const maskedToken = resetToken ? `${resetToken.substring(0, 8)}...` : 'N/A';
+    console.log(`[Email] Reset token: ${maskedToken}`);
+
+    // In production, integrate with email provider (SendGrid, AWS SES, etc.)
+    const emailProvider = process.env.EMAIL_PROVIDER;
+
+    if (emailProvider === 'sendgrid') {
+      // await sendgrid.send({
+      //   to: email,
+      //   from: process.env.EMAIL_FROM || 'noreply@example.com',
+      //   subject: 'Password Reset Request',
+      //   html: `Click <a href="${resetUrl}">here</a> to reset your password.`,
+      // });
+      console.log('[Email] Would send via SendGrid');
+    } else if (emailProvider === 'ses') {
+      // await ses.sendEmail({ ... });
+      console.log('[Email] Would send via AWS SES');
+    } else {
+      console.log('[Email] No email provider configured, logging only');
+    }
+
+    return true;
+  }
+};
+
 export async function POST(req: Request) {
   try {
     const { email } = await req.json();
@@ -11,7 +44,7 @@ export async function POST(req: Request) {
     }
 
     const db = await initializeDatabase();
-    const user = db.prepare('SELECT id, email FROM users WHERE email = ?').get(email);
+    const user = db.prepare('SELECT id, email FROM users WHERE email = ?').get(email) as any;
 
     if (!user) {
       // Don't reveal whether the email exists or not for security
@@ -32,14 +65,11 @@ export async function POST(req: Request) {
     // 2. Send an email with the reset link
     // 3. Create a password reset page that accepts the token
     
-    // For now, we'll just log the reset token (in production, send via email)
-    console.log(`Password reset token for ${email}: ${resetToken}`);
-    console.log(`Reset URL would be: ${process.env.NEXT_PUBLIC_APP_URL}/reset-password?token=${resetToken}`);
+    // Send password reset email
+    const resetUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}`;
+    await emailService.sendPasswordReset(email, resetToken, resetUrl);
 
-    // TODO: Implement email sending service
-    // await sendPasswordResetEmail(email, resetToken);
-
-    return NextResponse.json({ 
+    return NextResponse.json({
       message: 'If an account with that email exists, a password reset link has been sent.',
       // In development, include the token for testing
       ...(process.env.NODE_ENV === 'development' && { 

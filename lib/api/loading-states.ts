@@ -150,7 +150,7 @@ class LoadingStateManager {
    * Get contextual messages based on phase and context
    */
   private getContextualMessages(phase: keyof typeof this.messagePool, context?: Record<string, any>): string[] {
-    let messages = [...this.messagePool[phase]];
+    const messages = [...this.messagePool[phase]];
 
     if (!this.config.contextualMessages || !context) {
       return messages;

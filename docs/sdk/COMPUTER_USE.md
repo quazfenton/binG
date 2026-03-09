@@ -15,7 +15,7 @@ npm install @e2b/desktop
 ### Basic Desktop Sandbox
 
 ```typescript
-import { e2bDesktopProvider } from '@/lib/sandbox/providers/e2b-desktop-provider'
+import { e2bDesktopProvider } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
 
 // Create desktop sandbox with VNC streaming
 const desktop = await e2bDesktopProvider.createDesktop({
@@ -47,8 +47,8 @@ await desktop.kill()
 ### Computer Use Agent Loop
 
 ```typescript
-import { e2bDesktopProvider } from '@/lib/sandbox/providers/e2b-desktop-provider'
-import { getComputerUseSystemPrompt } from '@/lib/sandbox/providers/computer-use-tools'
+import { e2bDesktopProvider } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
+import { getComputerUseSystemPrompt } from '@/lib/sandbox/providers/computer-use-tools-enhanced'
 import OpenAI from 'openai'
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -113,7 +113,7 @@ console.log('Agent completed:', result)
 
 ```typescript
 import { streamText } from 'ai'
-import { computerUseTools, toolCallToAction } from '@/lib/sandbox/providers/computer-use-tools'
+import { computerUseTools, toolCallToAction } from '@/lib/sandbox/providers/computer-use-tools-enhanced'
 
 const result = streamText({
   model: openai('gpt-4o'),
@@ -125,7 +125,7 @@ const result = streamText({
     for (let i = 0; i < toolCalls.length; i++) {
       const toolCall = toolCalls[i]
       const action = toolCallToAction(toolCall.toolName, toolCall.args)
-      
+
       if (action) {
         const toolResult = await desktop.executeAction(action)
         console.log('Tool result:', toolResult)
@@ -138,7 +138,7 @@ const result = streamText({
 ### Using OpenAI Directly
 
 ```typescript
-import { computerUseTools } from '@/lib/sandbox/providers/computer-use-tools'
+import { computerUseTools } from '@/lib/sandbox/providers/computer-use-tools-enhanced'
 
 const response = await openai.chat.completions.create({
   model: 'gpt-4o',

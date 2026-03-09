@@ -111,6 +111,16 @@ class EmailService {
     const html = this.buildVerificationEmailHtml(verificationUrl);
     const text = this.buildVerificationEmailText(verificationUrl);
 
+    // DEV LOGGING: Log verification link for development/testing
+    if (process.env.NODE_ENV === 'development') {
+      console.log('\n🔐 EMAIL VERIFICATION LINK (Development):');
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log(`📧 To: ${email}`);
+      console.log(`🔗 URL: ${verificationUrl}`);
+      console.log(`⏰ Expires: ${verificationData.expiresAt.toLocaleString()}`);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    }
+
     return this.sendEmail({
       to: email,
       subject,
@@ -126,6 +136,15 @@ class EmailService {
     const subject = `Reset your password - ${this.appName}`;
     const html = this.buildPasswordResetEmailHtml(resetUrl);
     const text = this.buildPasswordResetEmailText(resetUrl);
+
+    // DEV LOGGING: Log reset link for development/testing
+    if (process.env.NODE_ENV === 'development') {
+      console.log('\n🔑 PASSWORD RESET LINK (Development):');
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log(`📧 To: ${email}`);
+      console.log(`🔗 URL: ${resetUrl}`);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    }
 
     return this.sendEmail({
       to: email,

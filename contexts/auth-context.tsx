@@ -78,6 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           };
         }
       }
+      console.log('[AuthContext] Session validation failed:', response.status);
       return null;
     } catch (error) {
       console.error('Session validation failed:', error);
@@ -106,8 +107,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (validatedUser) {
         setUser(validatedUser);
       } else {
-        // Session is invalid, clean up any stored tokens
+        // Session is invalid, clean up any stored tokens AND clear user state
         removeStoredToken();
+        setUser(null); // CRITICAL: Clear user state when validation fails
       }
       setIsLoading(false);
     };
@@ -191,6 +193,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Clean up local state
     removeStoredToken();
     setUser(null);
+    
+    // Clean up sandbox-related localStorage
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('anonymous_session_id');
+      // Clear any cached sandbox state
+      try {
+        const keys = Object.keys(localStorage).filter(k => k.startsWith('sandbox_') || k.startsWith('terminal_'));
+        keys.forEach(k => localStorage.removeItem(k));
+      } catch {}
+    }
   };
 
   const register = async (email: string, password: string, username?: string) => {

@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
 
     // Rate limiting: Check before processing
     const rateLimitResult = rateLimitMiddleware(request, 'sendVerification', email);
-    if (!rateLimitResult.success && rateLimitResult.response) {
+    if (!rateLimitResult.success) {
       return rateLimitResult.response;
     }
 
@@ -32,9 +32,11 @@ export async function POST(request: NextRequest) {
         message: 'If the email exists, a verification link has been sent',
       });
       // Propagate rate limit headers so clients can see remaining attempts
-      Object.entries(rateLimitResult.headers).forEach(([key, value]) => {
-        response.headers.set(key, value);
-      });
+      if (rateLimitResult.success && rateLimitResult.headers) {
+        Object.entries(rateLimitResult.headers).forEach(([key, value]) => {
+          response.headers.set(key, String(value));
+        });
+      }
       return response;
     };
 
@@ -68,15 +70,26 @@ export async function POST(request: NextRequest) {
 
     await emailService.sendVerificationEmail(email, { token, expiresAt, verificationUrl });
 
+    // DEV LOGGING: Log verification sent (without exposing sensitive data)
+    if (process.env.NODE_ENV === 'development') {
+      console.log('\n🔐 VERIFICATION EMAIL SENT (Development):');
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log(`📧 To: ${email.substring(0, 2)}***@${email.split('@')[1]}`);
+      console.log(`⏰ Token expires: ${expiresAt.toLocaleString()}`);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    }
+
     const response = NextResponse.json({
       success: true,
       message: 'If the email exists, a verification link has been sent',
     });
 
     // Add accurate rate limit headers from the middleware result
-    Object.entries(rateLimitResult.headers).forEach(([key, value]) => {
-      response.headers.set(key, value);
-    });
+    if (rateLimitResult.success && rateLimitResult.headers) {
+      Object.entries(rateLimitResult.headers).forEach(([key, value]) => {
+        response.headers.set(key, String(value));
+      });
+    }
 
     return response;
 
