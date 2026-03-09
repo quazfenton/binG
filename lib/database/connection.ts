@@ -110,7 +110,7 @@ export function getDatabase(): Database.Database {
             // Respect AUTO_RUN_MIGRATIONS environment variable
             if (process.env.AUTO_RUN_MIGRATIONS !== 'false') {
               // Dynamic import to avoid circular import at module load time
-              const { migrationRunner } = await import('./migration-runner.js');
+              const { migrationRunner } = await import('./migration-runner');
               if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
                 // Use synchronous migration runner
                 migrationRunner.runMigrationsSync();

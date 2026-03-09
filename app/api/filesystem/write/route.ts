@@ -60,7 +60,8 @@ export async function POST(req: NextRequest) {
 
     // SECURITY: Always derive ownerId from authenticated request context
     // Never trust user-supplied ownerId for write operations
-    const ownerId = `user:${authResult.userId}`;
+    // Use authResult.userId directly (already formatted correctly by resolveRequestAuth)
+    const ownerId = authResult.userId;
 
     const file = await virtualFilesystem.writeFile(ownerId, filePath, content, language);
 

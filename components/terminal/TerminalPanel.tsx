@@ -178,7 +178,8 @@ export default function TerminalPanel({
   filesystemScopePathRef.current = filesystemScopePath;
 
   // Use virtual filesystem to get real files instead of mock
-  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || 'project');
+  // autoLoad: false since TerminalPanel manages its own VFS sync lifecycle
+  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || 'project', { autoLoad: false });
   const {
     listDirectory: listVfsDirectory,
     readFile: readVfsFile,

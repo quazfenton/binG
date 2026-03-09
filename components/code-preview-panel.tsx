@@ -159,6 +159,7 @@ export default function CodePreviewPanel({
     writeFile: writeFilesystemFile,
     deletePath: deleteFilesystemPath,
     isLoading: isFilesystemLoading,
+    getSnapshot: getFilesystemSnapshot,
   } = virtualFilesystem;
   const [selectedFilesystemPath, setSelectedFilesystemPath] = useState<string>("");
   const [selectedFilesystemLanguage, setSelectedFilesystemLanguage] = useState<string>("text");
@@ -591,7 +592,17 @@ export default function CodePreviewPanel({
   }, []);
 
   // Manual preview handler
+  // FIXED: Add ref guard to prevent multiple concurrent calls
+  const handleManualPreviewRef = useRef(false);
+  
   const handleManualPreview = useCallback(async (directoryPath?: string, mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'local' | 'cloud') => {
+    // Prevent multiple concurrent calls
+    if (handleManualPreviewRef.current) {
+      log('[handleManualPreview] already running, skipping duplicate call');
+      return;
+    }
+    handleManualPreviewRef.current = true;
+    
     try {
       const targetPath = directoryPath || filesystemCurrentPath;
       console.log('[Manual Preview] Loading files from:', targetPath);
@@ -783,6 +794,9 @@ export default function CodePreviewPanel({
       logError(`[handleManualPreview] failed`, error);
       console.error('[Manual Preview] Error:', error);
       toast.error('Failed to load preview: ' + error.message);
+    } finally {
+      // Reset the guard to allow future calls
+      handleManualPreviewRef.current = false;
     }
   }, [filesystemCurrentPath, listFilesystemDirectory, readFilesystemFile]);
 
@@ -914,17 +928,27 @@ export default function CodePreviewPanel({
   }, [codeBlocks.length, selectedFileIndex]);
 
   // Auto-load preview when panel opens
+  // FIXED: Use refs to avoid dependency loop with handleManualPreview
+  const autoLoadPreviewRef = useRef(false);
+  
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      autoLoadPreviewRef.current = false;
+      return;
+    }
     
+    // Only run once when panel opens
+    if (autoLoadPreviewRef.current) return;
+    autoLoadPreviewRef.current = true;
+
     const autoLoadPreview = async () => {
       log('[autoLoadPreview] panel opened, checking if preview should load');
-      
+
       // Check if there are files in the filesystem
       try {
         const nodes = await listFilesystemDirectory(filesystemCurrentPath || filesystemScopePath || 'project');
         const hasFiles = nodes.some(n => n.type === 'file');
-        
+
         if (hasFiles && !isManualPreviewActive) {
           log('[autoLoadPreview] files detected, loading preview automatically');
           // Small delay to ensure panel is fully rendered
@@ -936,17 +960,22 @@ export default function CodePreviewPanel({
         logError('[autoLoadPreview] failed to check for files', err);
       }
     };
-    
+
     autoLoadPreview();
-  }, [isOpen, filesystemCurrentPath, filesystemScopePath, listFilesystemDirectory, handleManualPreview, isManualPreviewActive]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]); // Only depend on isOpen - run once when panel opens
 
   useEffect(() => {
     if (!isOpen || selectedTab !== "files") {
       return;
     }
     let cancelled = false;
+    let isInitialized = false;
     
     const initializeExplorer = async () => {
+      if (isInitialized) return;
+      isInitialized = true;
+      
       setSelectedFilesystemPath("");
       setSelectedFilesystemContent("");
       setSelectedFilesystemLanguage("text");
@@ -986,16 +1015,21 @@ export default function CodePreviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [filesystemScopePath, isOpen, selectedTab]);
+  }, [filesystemScopePath, isOpen, selectedTab, listFilesystemDirectory]);
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
     let cancelled = false;
+    let isRunning = false;
+    
     const loadScopedFiles = async () => {
+      if (isRunning) return;
+      isRunning = true;
+      
       try {
-        const snapshot = await virtualFilesystem.getSnapshot(filesystemScopePath);
+        const snapshot = await getFilesystemSnapshot(filesystemScopePath);
         if (cancelled) return;
         const files = (snapshot?.files || []).reduce(
           (acc, file) => {
@@ -1011,38 +1045,57 @@ export default function CodePreviewPanel({
         if (!cancelled) {
           setScopedPreviewFiles({});
         }
+      } finally {
+        isRunning = false;
       }
     };
 
     void loadScopedFiles();
     return () => { cancelled = true; };
-  }, [filesystemScopePath, isOpen, virtualFilesystem.getSnapshot]);
+  }, [filesystemScopePath, isOpen, getFilesystemSnapshot]);
 
   // Bidirectional sync: Event-driven refresh from terminal/editor updates
+  // FIXED: Use refs to avoid re-creating listener on every dependency change
+  const filesystemCurrentPathRef = useRef(filesystemCurrentPath);
+  const filesystemScopePathRef = useRef(filesystemScopePath);
+  
+  useEffect(() => {
+    filesystemCurrentPathRef.current = filesystemCurrentPath;
+  }, [filesystemCurrentPath]);
+  
+  useEffect(() => {
+    filesystemScopePathRef.current = filesystemScopePath;
+  }, [filesystemScopePath]);
+
   useEffect(() => {
     if (!isOpen) return;
 
     const handleFilesystemUpdated = async (event?: CustomEvent) => {
       const detail = event?.detail;
       log(`[filesystem-updated event] received`, detail);
-      
+
       try {
-        const normalizedScopePath = normalizeProjectPath(filesystemCurrentPath || filesystemScopePath || 'project');
+        // Use refs to avoid re-creating listener
+        const currentPath = filesystemCurrentPathRef.current || filesystemScopePathRef.current || 'project';
+        const normalizedScopePath = normalizeProjectPath(currentPath);
         log(`[filesystem-updated] refreshing directory: "${normalizedScopePath}"`);
         await listFilesystemDirectory(normalizedScopePath);
-        log(`[filesystem-updated] directory refreshed, nodesCount=${filesystemNodes.length}`);
-        
-        // Also refresh scoped preview files
-        const snapshot = await virtualFilesystem.getSnapshot(filesystemScopePath);
-        const files = (snapshot?.files || []).reduce(
-          (acc, file) => {
-            acc[file.path] = file.content;
-            return acc;
-          },
-          {} as Record<string, string>,
-        );
-        setScopedPreviewFiles(files);
-        log(`[filesystem-updated] refreshed scopedPreviewFiles (${Object.keys(files).length} files)`);
+        log(`[filesystem-updated] directory refreshed`);
+
+        // Also refresh scoped preview files using ref
+        const scopePath = filesystemScopePathRef.current;
+        if (scopePath) {
+          const snapshot = await getFilesystemSnapshot(scopePath);
+          const files = (snapshot?.files || []).reduce(
+            (acc, file) => {
+              acc[file.path] = file.content;
+              return acc;
+            },
+            {} as Record<string, string>,
+          );
+          setScopedPreviewFiles(files);
+          log(`[filesystem-updated] refreshed scopedPreviewFiles (${Object.keys(files).length} files)`);
+        }
       } catch (error) {
         logError(`[filesystem-updated] refresh failed`, error);
         console.error('[CodePreview] Event refresh error:', error);
@@ -1055,7 +1108,8 @@ export default function CodePreviewPanel({
       window.removeEventListener('filesystem-updated', handleFilesystemUpdated as EventListener);
       log('[CodePreviewPanel] removed filesystem-updated event listener');
     };
-  }, [isOpen, filesystemCurrentPath, filesystemScopePath, listFilesystemDirectory, normalizeProjectPath, virtualFilesystem]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]); // Only depend on isOpen - listener stays stable
 
   // Generate project structure for complex projects
   // Also merge virtual filesystem files for live preview
@@ -1443,7 +1497,7 @@ export default function CodePreviewPanel({
 
     // Try to get files from VFS first (most up-to-date)
     try {
-      const snapshot = await virtualFilesystem.getSnapshot(filesystemScopePath);
+      const snapshot = await getFilesystemSnapshot(filesystemScopePath);
       const vfsFiles = snapshot?.files || [];
       
       if (vfsFiles.length > 0) {
@@ -1466,7 +1520,7 @@ export default function CodePreviewPanel({
     if (zip.files['README.md'] === undefined && structureToUse && Object.keys(structureToUse.files).length > 0) {
       // Add all files from project structure
       Object.entries(structureToUse.files).forEach(([filename, fileData]) => {
-        const content = typeof fileData === 'string' ? fileData : (fileData.content || '');
+        const content = fileData;
         if (!zip.files[filename]) {
           zip.file(filename, content);
         }
