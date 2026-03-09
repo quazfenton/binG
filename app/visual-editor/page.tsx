@@ -30,6 +30,8 @@ export interface VFSProject {
   scripts?: Record<string, string>;
   bundler?: string;
   packageManager?: string;
+  entryFile?: string | null;
+  previewModeHint?: string;
 }
 
 // ── BroadcastChannel key used by CodePreviewPanel to listen for saves ────────
@@ -63,7 +65,6 @@ export default function VisualEditorPage() {
     }
   }, []);
 
-  // ── Save handler: write changes back via BroadcastChannel + opener ────────
   const handleSave = useCallback(
     async (updatedFiles: Record<string, string>) => {
       if (!project) return;
@@ -72,37 +73,38 @@ export default function VisualEditorPage() {
       setSaveStatus("idle");
 
       try {
+        const scopePath = project.filesystemScopePath ?? "project";
         const payload = {
           type: "VFS_SAVE",
-          filesystemScopePath: project.filesystemScopePath ?? "project",
+          filesystemScopePath: scopePath,
           files: updatedFiles,
           timestamp: Date.now(),
         };
 
-        // 1. BroadcastChannel — lets any same-origin tab pick this up
         try {
           const bc = new BroadcastChannel(VFS_SAVE_CHANNEL);
           bc.postMessage(payload);
           bc.close();
-        } catch (_) {
-          // BroadcastChannel not available in all envs — fall through
-        }
+        } catch (_) {}
 
-        // 2. window.opener.postMessage — direct bridge if opened as popup/tab
         try {
           if (window.opener && !window.opener.closed) {
             window.opener.postMessage(payload, window.location.origin);
           }
         } catch (_) {}
 
-        // 3. Persist updated project in localStorage so next open is fresh
+        const pendingSaveKey = "visualEditorPendingSave";
+        localStorage.setItem(pendingSaveKey, JSON.stringify({
+          ...payload,
+          savedAt: Date.now()
+        }));
+        
         const updatedProject: VFSProject = { ...project, files: updatedFiles };
         localStorage.setItem("visualEditorProject", JSON.stringify(updatedProject));
 
         setProject(updatedProject);
         setSaveStatus("saved");
 
-        // Reset status badge after 3s
         setTimeout(() => setSaveStatus("idle"), 3000);
       } catch (err) {
         console.error("Save failed", err);

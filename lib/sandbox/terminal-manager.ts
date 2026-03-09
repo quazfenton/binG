@@ -1,12 +1,12 @@
 /**
  * Terminal Manager
- * 
+ *
  * Manages terminal sessions across all sandbox providers
  * Enhanced with:
  * - Enhanced port detection (10+ patterns)
  * - Terminal session persistence
  * - Enhanced event emission
- * 
+ *
  * @see lib/sandbox/enhanced-port-detector.ts
  * @see lib/sandbox/terminal-session-store.ts
  * @see lib/sandbox/sandbox-events-enhanced.ts
@@ -24,6 +24,9 @@ import {
   type TerminalSessionState,
 } from './terminal-session-store'
 import { emitEvent } from './sandbox-events'
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('TerminalManager')
 
 interface PtyConnection {
   ptyHandle: ProviderPtyHandle
@@ -177,7 +180,10 @@ export class TerminalManager {
     options?: { cols?: number; rows?: number },
     userId?: string,
   ): Promise<string> {
+    log.info(`Creating terminal session: sessionId=${sessionId}, sandboxId=${sandboxId}`)
+    
     const { handle, providerType } = await this.resolveHandleForSandbox(sandboxId)
+    log.debug(`Resolved sandbox handle from provider: ${providerType}, workspace: ${handle.workspaceDir}`)
     const provider = await getSandboxProvider(providerType)
     const ptyId = `pty-${sessionId}-${Date.now()}`
 
@@ -192,6 +198,7 @@ export class TerminalManager {
     }, { userId })
 
     if (!handle.createPty) {
+      log.debug(`PTY not available for ${sandboxId}, using command-mode`)
       // Fallback providers (e.g. microsandbox) can still support command execution mode.
       commandModeConnections.set(sessionId, {
         sandboxId,
@@ -205,13 +212,13 @@ export class TerminalManager {
         execQueue: Promise.resolve(),
         providerType,
       })
-      
+
       const modeMessage = '\r\n\x1b[33m[command-mode] PTY unavailable, using line-based execution.\x1b[0m\r\n'
       onData(modeMessage)
       onData(`${handle.workspaceDir || '/workspace'} $ `)
-      
+
       updateSession(sessionId, { ptySessionId: 'command-mode' })
-      
+
       // Save terminal session for persistence
       saveTerminalSession({
         sessionId,
@@ -225,9 +232,12 @@ export class TerminalManager {
         lastActive: Date.now(),
         history: [],
       })
-      
+      log.info(`Terminal session created in command-mode for ${sessionId}`)
+
       return 'command-mode'
     }
+
+    log.debug(`Creating PTY session with dimensions: ${options?.cols ?? 120}x${options?.rows ?? 30}`)
 
     const ptyHandle = await handle.createPty({
       id: ptyId,
@@ -246,6 +256,7 @@ export class TerminalManager {
           for (const { port, protocol, url } of detectedPorts) {
             if (handle.getPreviewLink && !connection?.detectedPorts.has(port)) {
               handle.getPreviewLink(port).then(preview => {
+                log.info(`Port detected: ${port} (${protocol}) -> ${url || preview.url}`)
                 onPortDetected!(preview)
                 connection?.detectedPorts.add(port)
                 
@@ -427,11 +438,14 @@ export class TerminalManager {
    * - Event emission
    */
   async disconnectTerminal(sessionId: string): Promise<void> {
+    log.debug(`Disconnecting terminal session: ${sessionId}`)
+    
     const conn = activePtyConnections.get(sessionId)
     if (conn) {
       try {
+        log.debug(`Disconnecting PTY handle for ${sessionId}`)
         await conn.ptyHandle.disconnect()
-        
+
         // Emit disconnect event
         emitEvent(conn.sandboxId, 'disconnected', {
           sessionId,
@@ -439,10 +453,12 @@ export class TerminalManager {
         })
       } finally {
         activePtyConnections.delete(sessionId)
+        log.debug(`PTY connection removed for ${sessionId}`)
       }
-      
+
       // Update session status
       deleteTerminalSession(sessionId)
+      log.info(`Terminal session disconnected: ${sessionId}`)
     }
 
     const cmdConn = commandModeConnections.get(sessionId)
@@ -452,9 +468,10 @@ export class TerminalManager {
         sessionId,
         reason: 'user_requested',
       })
-      
+
       commandModeConnections.delete(sessionId)
       deleteTerminalSession(sessionId)
+      log.info(`Command-mode session disconnected: ${sessionId}`)
     }
   }
 

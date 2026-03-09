@@ -1,13 +1,13 @@
 /**
  * Enhanced Sandbox Event System
- * 
+ *
  * Provides event persistence, replay capability, and advanced filtering
  * Extends the basic sandbox-events.ts with additional features
- * 
+ *
  * @see lib/sandbox/sandbox-events.ts - Basic event system
  */
 
-import { EventEmitter } from 'events'
+import { EventEmitter } from 'node:events'
 
 export type EnhancedSandboxEventType =
   | 'agent:tool_start'
@@ -212,28 +212,28 @@ export class EnhancedSandboxEventEmitter extends EventEmitter {
     const store = eventStores.get(sandboxId)
     if (!store) return []
 
-    let events = [...store.events]
+    let eventList = [...store.events]
 
     // Filter by timestamp range
     if (options?.fromTimestamp) {
-      events = events.filter(e => e.timestamp >= options.fromTimestamp)
+      eventList = eventList.filter(e => e.timestamp >= options.fromTimestamp)
     }
 
     if (options?.toTimestamp) {
-      events = events.filter(e => e.timestamp <= options.toTimestamp)
+      eventList = eventList.filter(e => e.timestamp <= options.toTimestamp)
     }
 
     // Filter by event types
     if (options?.types) {
-      events = events.filter(e => options.types!.includes(e.type))
+      eventList = eventList.filter(e => options.types!.includes(e.type))
     }
 
     // Limit results
     if (options?.limit) {
-      events = events.slice(-options.limit)
+      eventList = eventList.slice(-options.limit)
     }
 
-    return events
+    return eventList
   }
 
   /**

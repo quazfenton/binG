@@ -4,9 +4,12 @@
  * Supports sequential/hierarchical execution and an experimental consensual mode.
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import type { RoleAgent } from '../agents/role-agent';
 import type { Task, TaskOutput } from '../tasks/task';
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('CrewAI')
 
 export type ProcessType = 'sequential' | 'hierarchical' | 'consensual';
 
@@ -214,6 +217,12 @@ export class Crew {
   async kickoff(options: KickoffOptions = {}): Promise<CrewOutput> {
     const startedAt = Date.now();
     let inputs = options.inputs;
+    
+    log.info(`Starting crew kickoff with process: ${this.process}`)
+    if (inputs) {
+      log.debug(`Kickoff inputs: ${JSON.stringify(inputs).substring(0, 200)}`)
+    }
+    
     if (this.before_kickoff) {
       const maybeInputs = await this.before_kickoff(inputs);
       if (maybeInputs) inputs = maybeInputs;
@@ -224,10 +233,13 @@ export class Crew {
     this.log(`Starting crew execution (${this.process})`, 'header');
 
     if (this.process === 'sequential') {
+      log.debug('Executing in sequential mode')
       await this.executeSequential(inputs, tasksOutput);
     } else if (this.process === 'hierarchical') {
+      log.debug('Executing in hierarchical mode')
       await this.executeHierarchical(inputs, tasksOutput);
     } else {
+      log.debug('Executing in consensual mode')
       await this.executeConsensual(inputs, tasksOutput);
     }
 
@@ -252,6 +264,7 @@ export class Crew {
     const maybeFinal = this.after_kickoff ? await this.after_kickoff(output) : undefined;
     this.output = maybeFinal || output;
     await this.emitEvent('crew:complete', this.output);
+    log.info(`Crew execution completed in ${this.output.metadata?.durationMs || 0}ms`)
     this.log(`Crew execution completed in ${this.output.metadata?.durationMs || 0}ms`, 'success');
     void this.logToFile(`completed:${this.output.metadata?.durationMs || 0}`);
 
@@ -415,9 +428,12 @@ export class Crew {
     inputs: Record<string, string | number | boolean> | undefined,
     outputs: TaskOutput[],
   ): Promise<void> {
+    log.debug(`Executing ${this.tasks.length} tasks sequentially`)
     for (const task of this.tasks) {
       const startedAt = Date.now();
+      log.debug(`Executing task: ${task.description.substring(0, 80)}...`)
       const output = await task.execute({ inputs });
+      log.debug(`Task completed by ${output.agent} in ${Date.now() - startedAt}ms`)
       outputs.push(output);
       await this.afterTask(task, output, startedAt);
     }

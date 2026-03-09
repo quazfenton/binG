@@ -143,6 +143,7 @@ export class SandboxServiceBridge {
   inferProviderFromSandboxId(sandboxId: string): string | null {
     if (sandboxId.startsWith('blaxel-')) return 'blaxel';
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites';
+    if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent';
     if (sandboxId.startsWith('mistral-')) return 'mistral';
     if (sandboxId.startsWith('e2b-')) return 'e2b';
     if (sandboxId.startsWith('daytona-')) return 'daytona';

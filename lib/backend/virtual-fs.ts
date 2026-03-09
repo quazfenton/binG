@@ -4,7 +4,7 @@
  * Migrated from ephemeral/serverless_workers_sdk/virtual_fs.py
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync } from 'fs';
 import { join, resolve, normalize } from 'path';
 

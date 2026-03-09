@@ -9,7 +9,7 @@
  * @see lib/sandbox/sandbox-events-enhanced.ts - Enhanced event system with persistence
  */
 
-import { EventEmitter } from 'events'
+import { EventEmitter } from 'node:events'
 
 // Re-export enhanced events for backward compatibility
 export {

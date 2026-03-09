@@ -7,6 +7,7 @@ export interface VirtualFile {
   lastModified: string;
   version: number;
   size: number;
+  isDirectoryMarker?: boolean; // True for .directory marker files
 }
 
 export interface VirtualFilesystemNode {
@@ -16,6 +17,7 @@ export interface VirtualFilesystemNode {
   language?: string;
   lastModified?: string;
   size?: number;
+  isExplicit?: boolean; // True for explicitly created directories (vs implicit from file paths)
 }
 
 export interface VirtualFilesystemDirectoryListing {

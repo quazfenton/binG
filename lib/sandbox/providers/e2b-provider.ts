@@ -96,7 +96,16 @@ export class E2BProvider implements SandboxProvider {
   private moduleLoadError?: string
 
   constructor() {
-    this.apiKey = process.env.E2B_API_KEY
+    const rawApiKey = process.env.E2B_API_KEY
+      || process.env.E2B_API_TOKEN
+      || process.env.NEXT_PUBLIC_E2B_API_KEY
+      || ''
+    const normalizedApiKey = rawApiKey.trim().replace(/^['"]+|['"]+$/g, '')
+    this.apiKey = normalizedApiKey || undefined
+    if (this.apiKey) {
+      process.env.E2B_API_KEY = this.apiKey
+    }
+
     this.defaultTemplate = process.env.E2B_DEFAULT_TEMPLATE || 'base'
     this.defaultTimeout = parseInt(process.env.E2B_DEFAULT_TIMEOUT || E2B_DEFAULT_TIMEOUT.toString())
 

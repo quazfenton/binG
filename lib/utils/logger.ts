@@ -1,14 +1,15 @@
 /**
  * Structured Logging Utility
- * 
+ *
  * Provides consistent logging across the application with:
  * - Log levels (debug, info, warn, error)
  * - Environment-aware filtering
  * - Structured output for log aggregation
  * - Source identification
+ * - Optional file export (server-side only)
  */
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
 export interface LogEntry {
   timestamp: string;
@@ -24,6 +25,10 @@ export interface LoggerConfig {
   showTimestamp: boolean;
   showSource: boolean;
   includeStack: boolean;
+  logToFile?: boolean;
+  logFilePath?: string;
+  maxFileSize?: number; // in MB
+  maxFiles?: number;
 }
 
 const LOG_LEVELS: Record<LogLevel, number> = {
@@ -38,7 +43,62 @@ const DEFAULT_CONFIG: LoggerConfig = {
   showTimestamp: true,
   showSource: true,
   includeStack: false,
+  logToFile: typeof window === 'undefined' && process.env.LOG_TO_FILE === 'true',
+  logFilePath: '/tmp/app.log', // Will be set in initializeFileLogging
+  maxFileSize: 10, // 10 MB - will be set properly in initializeFileLogging
+  maxFiles: 5, // 5 files - will be set properly in initializeFileLogging
 };
+
+// Override with env vars on server-side only
+if (typeof window === 'undefined' && typeof process !== 'undefined') {
+  DEFAULT_CONFIG.logFilePath = process.env.LOG_FILE_PATH || require('path').join(process.cwd(), 'logs', 'app.log');
+  DEFAULT_CONFIG.maxFileSize = parseInt(process.env.LOG_MAX_FILE_SIZE || '10', 10);
+  DEFAULT_CONFIG.maxFiles = parseInt(process.env.LOG_MAX_FILES || '5', 10);
+}
+
+// Server-side file stream (only initialized on server)
+let writeStream: any = null;
+let fsModule: any = null;
+let pathModule: any = null;
+
+// Initialize file logging on server-side only
+function initializeFileLogging() {
+  if (typeof window !== 'undefined' || !DEFAULT_CONFIG.logToFile) return;
+
+  try {
+    fsModule = require('fs');
+    pathModule = require('path');
+
+    const logDir = pathModule.dirname(DEFAULT_CONFIG.logFilePath);
+    if (!fsModule.existsSync(logDir)) {
+      fsModule.mkdirSync(logDir, { recursive: true });
+      console.log('[Logger] Created logs directory:', logDir);
+    }
+
+    writeStream = fsModule.createWriteStream(DEFAULT_CONFIG.logFilePath, {
+      flags: 'a',
+      encoding: 'utf8',
+      autoClose: true,
+    });
+
+    writeStream.on('error', (err: Error) => {
+      console.error('[Logger] File write error:', err.message);
+    });
+
+    writeStream.on('open', () => {
+      console.log('[Logger] File logging enabled:', DEFAULT_CONFIG.logFilePath);
+    });
+
+    // Log file is auto-flushed on write, no manual flush needed
+  } catch (error: any) {
+    console.error('[Logger] Failed to initialize file logging:', error.message);
+  }
+}
+
+// Initialize on module load (server-side only)
+if (typeof window === 'undefined') {
+  initializeFileLogging();
+}
 
 class Logger {
   private config: LoggerConfig;
@@ -81,14 +141,23 @@ class Logger {
 
     parts.push(entry.message);
 
-    const logFn = level === 'error' ? console.error : 
-                  level === 'warn' ? console.warn : 
+    const logLine = parts.join(' ');
+
+    // Write to file if enabled (server-side only)
+    if (writeStream) {
+      const jsonLine = JSON.stringify(entry);
+      writeStream.write(jsonLine + '\n');
+    }
+
+    // Also output to console
+    const logFn = level === 'error' ? console.error :
+                  level === 'warn' ? console.warn :
                   console.log;
 
     if (entry.data !== undefined) {
-      logFn(parts.join(' '), entry.data);
+      logFn(logLine, entry.data);
     } else {
-      logFn(parts.join(' '));
+      logFn(logLine);
     }
 
     if (entry.error && this.config.includeStack) {
@@ -142,6 +211,15 @@ class Logger {
   configure(config: Partial<LoggerConfig>) {
     this.config = { ...this.config, ...config };
   }
+
+  /**
+   * Flush and close file streams (call before process exit)
+   */
+  destroy() {
+    if (writeStream) {
+      writeStream.end();
+    }
+  }
 }
 
 /**
@@ -156,6 +234,52 @@ export function createLogger(source: string, config?: Partial<LoggerConfig>): Lo
  */
 export function configureLogger(config: Partial<LoggerConfig>) {
   Object.assign(DEFAULT_CONFIG, config);
+}
+
+/**
+ * Flush all log streams and cleanup (call before process exit)
+ */
+export function flushLogs(): Promise<void> {
+  return new Promise((resolve) => {
+    // Give streams time to flush
+    setTimeout(() => {
+      if (writeStream) {
+        writeStream.end();
+      }
+      resolve();
+    }, 100);
+  });
+}
+
+// Register cleanup handlers (server-side only)
+if (typeof process !== 'undefined' && typeof window === 'undefined') {
+  process.on('exit', () => {
+    if (writeStream) {
+      writeStream.end();
+    }
+  });
+
+  process.on('SIGINT', async () => {
+    await flushLogs();
+    process.exit(0);
+  });
+
+  process.on('SIGTERM', async () => {
+    await flushLogs();
+    process.exit(0);
+  });
+
+  process.on('uncaughtException', async (err) => {
+    console.error('Uncaught Exception:', err);
+    await flushLogs();
+    process.exit(1);
+  });
+
+  process.on('unhandledRejection', async (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    await flushLogs();
+    process.exit(1);
+  });
 }
 
 // Pre-configured loggers for common modules

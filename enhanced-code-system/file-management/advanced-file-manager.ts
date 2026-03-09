@@ -10,7 +10,7 @@
  * - Real-time collaboration support
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { diff_match_patch, patch_obj } from 'diff-match-patch';
 import { z } from 'zod';
 import {

@@ -1,14 +1,14 @@
 /**
  * WebSocket Terminal Server
  * Provides xterm.js-compatible WebSocket terminal access
- * 
+ *
  * SECURITY ENHANCED: JWT authentication required for all connections
  * Migrated from ephemeral/sandbox_api.py WebSocket endpoint
  */
 
 import WebSocket, { WebSocketServer } from 'ws';
 import { spawn, ChildProcess } from 'child_process';
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { join } from 'path';
 import { createLogger } from '@/lib/utils/logger';
 import { verifyToken } from '@/lib/security/jwt-auth';
@@ -98,7 +98,10 @@ export class WebSocketTerminalServer extends EventEmitter {
     const pathParts = url.pathname.split('/');
     const sandboxId = pathParts[pathParts.indexOf('sandboxes') + 1];
 
+    logger.debug(`WebSocket connection request for sandbox: ${sandboxId || 'unknown'}`)
+
     if (!sandboxId) {
+      logger.warn('WebSocket connection rejected: Sandbox ID required')
       ws.close(4000, 'Sandbox ID required');
       return
     }
@@ -114,17 +117,20 @@ export class WebSocketTerminalServer extends EventEmitter {
     const queryToken = url.searchParams.get('token');
     if (queryToken) {
       token = queryToken;
+      logger.debug('Token received via query param (less secure)')
     }
-    
+
     // Try Authorization header
     const authHeader = req.headers['authorization'];
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7);
+      logger.debug('Token received via Authorization header')
     }
-    
+
     // Try subprotocol
     if (!token && req.protocol && req.protocol.startsWith('Bearer ')) {
       token = req.protocol.substring(7);
+      logger.debug('Token received via WebSocket subprotocol')
     }
 
     if (!token) {
@@ -142,12 +148,13 @@ export class WebSocketTerminalServer extends EventEmitter {
       // In production, add sandbox ownership verification
       const userId = (payload as any).userId || (payload as any).sub;
       if (!userId) {
+        logger.warn('WebSocket authentication failed: missing user ID')
         ws.close(4002, 'Invalid token: missing user ID');
         return;
       }
 
-      logger.info(`WebSocket authenticated for user ${userId}, sandbox ${sandboxId}`);
-      
+      logger.info(`WebSocket connection authenticated: user=${userId}, sandbox=${sandboxId}`);
+
     } catch (error: any) {
       logger.warn(`WebSocket authentication failed: ${error.message}`);
       ws.close(4003, `Authentication failed: ${error.message}`);
@@ -156,16 +163,19 @@ export class WebSocketTerminalServer extends EventEmitter {
 
     // Check session limit
     if (this.sessions.size >= this.maxSessions) {
+      logger.warn(`WebSocket connection rejected: Too many active sessions (${this.sessions.size}/${this.maxSessions})`)
       ws.close(4004, 'Too many active sessions');
       return;
     }
 
+    logger.debug(`Creating terminal session for sandbox ${sandboxId}`)
     this.createTerminalSession(ws, sandboxId);
   }
 
   private async createTerminalSession(ws: WebSocket, sandboxId: string): Promise<void> {
     const sessionId = `term_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     const workspace = join('/tmp/workspaces', sandboxId);
+    logger.debug(`Creating terminal session ${sessionId} in workspace ${workspace}`)
 
     try {
       // Spawn bash process in sandbox workspace
@@ -192,6 +202,7 @@ export class WebSocketTerminalServer extends EventEmitter {
 
       this.sessions.set(sessionId, session);
       this.emit('session_created', session);
+      logger.info(`Terminal session ${sessionId} established`)
 
       // Handle process stdout
       proc.stdout?.on('data', (data: Buffer) => {
@@ -211,23 +222,27 @@ export class WebSocketTerminalServer extends EventEmitter {
 
       // Handle process exit
       proc.on('exit', (code, signal) => {
+        logger.debug(`Terminal session ${sessionId} process exit: code=${code}, signal=${signal}`)
         this.emit('session_exit', { sessionId, code, signal });
         this.closeSession(sessionId);
       });
 
       // Handle WebSocket messages
       ws.on('message', (data: Buffer) => {
+        logger.debug(`WebSocket message received for session ${sessionId}: ${data.length} bytes`)
         this.handleMessage(session, data);
       });
 
       // Handle WebSocket close
       ws.on('close', (code, reason) => {
+        logger.info(`WebSocket connection closed for session ${sessionId}: code=${code}`)
         this.emit('session_closed', { sessionId, code, reason });
         this.closeSession(sessionId);
       });
 
       // Handle WebSocket errors
       ws.on('error', (error) => {
+        logger.error(`WebSocket error for session ${sessionId}: ${error.message}`)
         this.emit('session_error', { sessionId, error });
         this.closeSession(sessionId);
       });
@@ -311,35 +326,51 @@ export class WebSocketTerminalServer extends EventEmitter {
 
   private closeSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
+    if (!session) {
+      logger.debug(`Session ${sessionId} not found for cleanup`)
+      return;
+    }
+
+    logger.info(`Closing terminal session ${sessionId}`)
 
     // Terminate process
     if (session.process.pid) {
       try {
         process.kill(-session.process.pid, 'SIGTERM');
-      } catch (error) {
+        logger.debug(`Process ${session.process.pid} terminated for session ${sessionId}`)
+      } catch (error: any) {
+        logger.debug(`Process already terminated for session ${sessionId}: ${error.message}`)
         // Process already dead
       }
     }
 
     this.sessions.delete(sessionId);
+    logger.info(`Terminal session ${sessionId} closed. Active sessions: ${this.sessions.size}`)
     this.emit('session_terminated', session);
   }
 
   private startIdleCleanup(): void {
     setInterval(() => {
       const now = Date.now();
+      let closedCount = 0;
       for (const [sessionId, session] of this.sessions.entries()) {
         const idleTime = now - session.lastActive.getTime();
         if (idleTime > this.idleTimeout) {
+          logger.info(`Session ${sessionId} idle timeout (${Math.round(idleTime/1000)}s > ${this.idleTimeout/1000}s)`)
           this.emit('session_idle_timeout', session);
           this.closeSession(sessionId);
+          closedCount++;
         }
+      }
+      if (closedCount > 0) {
+        logger.info(`Idle cleanup: closed ${closedCount} session(s)`)
       }
     }, 60 * 1000); // Check every minute
   }
 
   async stop(): Promise<void> {
+    logger.info(`Stopping WebSocket terminal server, closing ${this.sessions.size} active session(s)`)
+    
     // Close all sessions
     for (const sessionId of this.sessions.keys()) {
       this.closeSession(sessionId);
@@ -350,8 +381,10 @@ export class WebSocketTerminalServer extends EventEmitter {
       if (this.wss) {
         this.wss.close((error) => {
           if (error) {
+            logger.error(`WebSocket server stop failed: ${error.message}`)
             reject(error);
           } else {
+            logger.info('WebSocket server stopped')
             this.emit('stopped');
             resolve();
           }

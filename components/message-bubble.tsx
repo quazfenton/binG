@@ -254,9 +254,29 @@ export default function MessageBubble({
 
   const handleCopy = async () => {
     const contentToCopy = isUser ? message.content : streamingDisplay.displayContent
-    await navigator.clipboard.writeText(contentToCopy)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    try {
+      await navigator.clipboard.writeText(contentToCopy)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (error) {
+      // Fallback for when document is not focused or clipboard API is unavailable
+      // This commonly happens when the tab is in the background or focus is elsewhere
+      console.warn('Clipboard copy failed, using fallback:', error)
+      const textArea = document.createElement('textarea')
+      textArea.value = contentToCopy
+      textArea.style.position = 'fixed'
+      textArea.style.left = '-999999px'
+      document.body.appendChild(textArea)
+      textArea.select()
+      try {
+        document.execCommand('copy')
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      } catch (fallbackError) {
+        console.error('Fallback copy also failed:', fallbackError)
+      }
+      document.body.removeChild(textArea)
+    }
   }
 
   const { touchHandlers } = useTouchHandler({

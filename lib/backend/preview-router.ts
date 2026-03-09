@@ -5,7 +5,7 @@
  */
 
 import http from 'http';
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 export interface PreviewTarget {
   sandboxId: string;

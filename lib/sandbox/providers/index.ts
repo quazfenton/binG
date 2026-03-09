@@ -16,6 +16,9 @@ import { RunloopProvider } from './runloop-provider'
 import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from './e2b-desktop-provider-enhanced'
 import { CircuitBreaker, providerCircuitBreakers, createCircuitBreakerWithMetrics } from '@/lib/utils/circuit-breaker'
 import { sandboxMetrics } from '@/lib/backend/metrics'
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('SandboxProviders')
 
 /**
  * Union type for all supported sandbox providers.
@@ -41,7 +44,7 @@ export type SandboxProviderType =
 
 // Provider registry
 interface ProviderEntry {
-  provider: SandboxProvider
+  provider: SandboxProvider | null
   priority: number
   enabled: boolean
   available: boolean
@@ -319,9 +322,12 @@ function delay(ms: number): Promise<void> {
  */
 export async function getSandboxProvider(type?: SandboxProviderType): Promise<SandboxProvider> {
   const providerType = type || (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona';
+  log.debug(`getSandboxProvider called with type: ${providerType}`)
+  
   const entry = providerRegistry.get(providerType);
 
   if (!entry) {
+    log.error(`Unknown sandbox provider type: ${providerType}`)
     throw new Error(
       `Unknown sandbox provider type: ${providerType}. ` +
       `Available providers: ${Array.from(providerRegistry.keys()).join(', ')}`
@@ -329,10 +335,12 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
   }
 
   if (!entry.enabled) {
+    log.error(`Provider ${providerType} is disabled`)
     throw new Error(`Provider ${providerType} is disabled`)
   }
 
   if (!entry.provider && !entry.factory) {
+    log.error(`Provider ${providerType} has no initialization factory`)
     throw new Error(`Provider ${providerType} has no initialization factory`)
   }
 
@@ -345,6 +353,7 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
   // Check circuit breaker before attempting initialization
   if (!circuitBreaker.canExecute()) {
     const stats = circuitBreaker.getStats();
+    log.warn(`Provider ${providerType} circuit breaker ${stats.state}`)
     sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'circuit_open' });
     throw new Error(
       `Provider ${providerType} is unavailable (circuit breaker ${stats.state}). ` +
@@ -354,22 +363,26 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
 
   // Already initialized and healthy — return immediately
   if (entry.provider && entry.healthy) {
+    log.debug(`Provider ${providerType} already initialized and healthy`)
     return entry.provider
   }
 
   // Race condition prevention: if already initializing, wait for the existing attempt
   if (entry.initializing && entry.initPromise) {
+    log.debug(`Provider ${providerType} initialization in progress, waiting...`)
     return entry.initPromise
   }
 
   // Start initialization with retry logic
   entry.initializing = true
   const initStartTime = Date.now();
+  log.debug(`Starting initialization for provider ${providerType}`)
 
   entry.initPromise = (async () => {
     let lastError: Error | undefined
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
+        log.debug(`Provider ${providerType} initialization attempt ${attempt}/${MAX_RETRIES}`)
         if (entry.factory) {
           entry.provider = entry.factory()
         }
@@ -383,14 +396,17 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
 
         // Record successful initialization metrics
         const initDuration = (Date.now() - initStartTime) / 1000;
+        log.info(`Provider ${providerType} initialized successfully in ${initDuration}s`)
         sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'success' });
         sandboxMetrics.providerInitDuration.observe({ provider: providerType }, initDuration);
-        circuitBreaker.getState(); // Record success in circuit breaker
+        // Circuit breaker success is recorded via the execute() wrapper, not here
 
         return entry.provider
       } catch (error: any) {
         lastError = error
         entry.failureCount++
+
+        log.error(`Provider ${providerType} initialization failed (attempt ${attempt}/${MAX_RETRIES}): ${error.message}`)
 
         // Record failed initialization metrics
         const initDuration = (Date.now() - initStartTime) / 1000;
@@ -407,6 +423,7 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
     entry.healthy = false
     entry.initializing = false
     entry.initPromise = null
+    log.error(`Provider ${providerType} failed after ${MAX_RETRIES} attempts: ${lastError?.message}`)
     throw new Error(
       `Failed to initialize provider ${providerType} after ${MAX_RETRIES} attempts: ${lastError?.message}. ` +
       `Check that required environment variables are set.`

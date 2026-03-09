@@ -4,7 +4,7 @@
  * Migrated from ephemeral/serverless_workers_sdk/background.py
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { randomUUID } from 'crypto';
 
 export interface BackgroundJobConfig {

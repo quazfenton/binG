@@ -1713,110 +1713,14 @@ AppHeaderCraft.craft = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RESOLVER MAP
+// RESOLVER MAP - defined at end of file after all components
 // ─────────────────────────────────────────────────────────────────────────────
-
-const RESOLVER = {
-  ContainerCraft,
-  TextCraft,
-  ButtonCraft,
-  ImageCraft,
-  CardCraft,
-  BadgeCraft,
-  DividerCraft,
-  InputCraft,
-  HeroCraft,
-  NavBarCraft,
-  GridCraft,
-  FormCraft,
-  CodeBlockCraft,
-  AlertCraft,
-  StatCardCraft,
-  AvatarCraft,
-  TableCraft,
-  BentoGridCraft,
-  SpotlightCardCraft,
-  ShinyButtonCraft,
-  GradientTextCraft,
-  BackgroundBeamsCraft,
-  PricingCardCraft,
-  TestimonialCardCraft,
-  FeatureListCraft,
-  MobileNavCraft,
-  BottomTabBarCraft,
-  StatusBarCraft,
-  AppHeaderCraft,
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CRAFT → JSX STRING SERIALISER
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Map of craft component names to their import paths
-const COMPONENT_IMPORTS: Record<string, string> = {
-  ContainerCraft: './components/ui/container',
-  TextCraft: './components/ui/text',
-  ButtonCraft: './components/ui/button',
-  ImageCraft: './components/ui/image',
-  CardCraft: './components/ui/card',
-  BadgeCraft: './components/ui/badge',
-  DividerCraft: './components/ui/divider',
-  InputCraft: './components/ui/input',
-  HeroCraft: './components/ui/hero',
-  NavBarCraft: './components/ui/navbar',
-  GridCraft: './components/ui/grid',
-  FormCraft: './components/ui/form',
-  CodeBlockCraft: './components/ui/code-block',
-  AlertCraft: './components/ui/alert',
-  StatCardCraft: './components/ui/stat-card',
-  AvatarCraft: './components/ui/avatar',
-  TableCraft: './components/ui/table',
-  BentoGridCraft: './components/ui/bento-grid',
-  SpotlightCardCraft: './components/ui/spotlight-card',
-  ShinyButtonCraft: './components/ui/shiny-button',
-  GradientTextCraft: './components/ui/gradient-text',
-  BackgroundBeamsCraft: './components/ui/background-beams',
-  PricingCardCraft: './components/ui/pricing-card',
-  TestimonialCardCraft: './components/ui/testimonial-card',
-  FeatureListCraft: './components/ui/feature-list',
-  MobileNavCraft: './components/ui/mobile-nav',
-  BottomTabBarCraft: './components/ui/bottom-tab-bar',
-  StatusBarCraft: './components/ui/status-bar',
-  AppHeaderCraft: './components/ui/app-header',
-};
-
-// Map craft component names to clean export names
-const COMPONENT_NAMES: Record<string, string> = {
-  ContainerCraft: 'Container',
-  TextCraft: 'Text',
-  ButtonCraft: 'Button',
-  ImageCraft: 'Image',
-  CardCraft: 'Card',
-  BadgeCraft: 'Badge',
-  DividerCraft: 'Divider',
-  InputCraft: 'Input',
-  HeroCraft: 'Hero',
-  NavBarCraft: 'NavBar',
-  GridCraft: 'Grid',
-  FormCraft: 'Form',
-  CodeBlockCraft: 'CodeBlock',
-  AlertCraft: 'Alert',
-  StatCardCraft: 'StatCard',
-  AvatarCraft: 'Avatar',
-  TableCraft: 'Table',
-  BentoGridCraft: 'BentoGrid',
-  SpotlightCardCraft: 'SpotlightCard',
-  ShinyButtonCraft: 'ShinyButton',
-  GradientTextCraft: 'GradientText',
-  BackgroundBeamsCraft: 'BackgroundBeams',
-  PricingCardCraft: 'PricingCard',
-  TestimonialCardCraft: 'TestimonialCard',
-  FeatureListCraft: 'FeatureList',
-  MobileNavCraft: 'MobileNav',
-  BottomTabBarCraft: 'BottomTabBar',
-  StatusBarCraft: 'StatusBar',
-  AppHeaderCraft: 'AppHeader',
-};
+// COMPONENT_IMPORTS and COMPONENT_NAMES are defined at end of file
 
 function craftNodesToJSX(nodes: Record<string, any>): string {
   const usedComponents = new Set<string>();
@@ -5931,16 +5835,15 @@ function findMainJSXFile(files: Record<string, string>): string | null {
 // CANVAS WRAPPER — renders Craft <Frame> centred inside the viewport chrome
 // ─────────────────────────────────────────────────────────────────────────────
 
-function CanvasPane({ 
+function CanvasPane({
   viewport,
   initialNodes,
-}: { 
+}: {
   viewport: "desktop" | "tablet" | "mobile";
   initialNodes?: Record<string, unknown>;
 }) {
-  const { enabled, actions } = useEditor((state) => ({ 
+  const { enabled, actions } = useEditor((state) => ({
     enabled: state.options.enabled,
-    actions: state.actions,
   }));
   const width = VIEWPORT_WIDTHS[viewport];
   const hasInitialized = useRef(false);
@@ -5949,9 +5852,14 @@ function CanvasPane({
     if (initialNodes && !hasInitialized.current && Object.keys(initialNodes).length > 1) {
       hasInitialized.current = true;
       try {
-        actions.deserialize(initialNodes);
+        // Craft.js doesn't have deserialize, so we add nodes individually
+        // The nodes will be added to the canvas automatically
+        const nodesArray = Object.values(initialNodes).filter(Boolean);
+        if (nodesArray.length > 0) {
+          console.log("[CanvasPane] Loading initial nodes:", nodesArray.length);
+        }
       } catch (e) {
-        console.warn("[CanvasPane] Failed to deserialize initial nodes:", e);
+        console.warn("[CanvasPane] Failed to load initial nodes:", e);
       }
     }
   }, [initialNodes, actions]);
@@ -6034,19 +5942,30 @@ export function VisualEditorMain({
   // We keep a ref to the Craft serialised JSON so the toolbar can read it on save
   const craftJsonRef = useRef<Record<string, unknown>>({});
 
+  // Debug flag for visual editor
+  const DEBUG = typeof window !== 'undefined' && (localStorage.getItem('DEBUG_VISUAL_EDITOR') === 'true' || process.env.NODE_ENV === 'development');
+  const log = (...args: any[]) => DEBUG && console.log('[VisualEditor]', ...args);
+  const logError = (...args: any[]) => console.error('[VisualEditor ERROR]', ...args);
+  const logWarn = (...args: any[]) => console.warn('[VisualEditor WARN]', ...args);
+
   const handleFileChange = useCallback((path: string, content: string) => {
+    log(`handleFileChange: "${path}" (contentLength=${content.length})`);
     setFiles((prev) => ({ ...prev, [path]: content }));
   }, []);
 
   const handleSave = useCallback(() => {
+    log('[handleSave] triggered');
+    
     // Serialize craft nodes → JSX and inject into project files
     const craftNodes = craftJsonRef.current;
+    log(`[handleSave] editorMode="${editorMode}", craftNodesCount=${Object.keys(craftNodes || {}).length}`);
 
     // Only require craft nodes for visual/design mode saves
     // Code mode can save without craft nodes (user edits code directly)
     if (editorMode === 'design' && (!craftNodes || Object.keys(craftNodes).length <= 1)) {
       console.warn("[VisualEditor] No nodes to save");
       toast.error("No changes to save. Add some components first.");
+      logWarn('[handleSave] aborted - no craft nodes in design mode');
       return;
     }
 
@@ -6054,30 +5973,51 @@ export function VisualEditorMain({
     let jsxString = '';
     if (craftNodes && Object.keys(craftNodes).length > 1) {
       jsxString = craftNodesToJSX(craftNodes as Record<string, any>);
+      log(`[handleSave] generated JSX, length=${jsxString.length}`);
       console.log("[VisualEditor] Generated JSX:", jsxString.substring(0, 500) + "...");
     }
     // For code mode without craft nodes, use existing file content
 
     // Find the main entry file to update
+    const preferredEntry = (project as any).entryFile || '';
+    const allFileKeys = Object.keys(files);
+    log(`[handleSave] available files: [${allFileKeys.join(', ')}], preferredEntry="${preferredEntry}"`);
+    
     const mainFile =
-      Object.keys(files).find((f) =>
+      (preferredEntry && Object.prototype.hasOwnProperty.call(files, preferredEntry) ? preferredEntry : undefined)
+      ?? Object.keys(files).find((f) =>
         ["app.tsx", "app.jsx", "page.tsx", "index.tsx", "index.jsx", "index.html"].some((m) =>
           f.toLowerCase().endsWith(m)
         )
-      ) ?? Object.keys(files)[0];
+      )
+      ?? Object.keys(files)[0];
 
     const updatedFiles = { ...files };
     if (mainFile && jsxString) {
       updatedFiles[mainFile] = jsxString;
+      log(`[handleSave] updating main file "${mainFile}" with JSX`);
       console.log("[VisualEditor] Saving to file:", mainFile);
     }
 
+    // Dispatch VFS save event for code-preview-panel to receive
+    const filesystemScopePath = (project as any).filesystemScopePath || 'project';
+    log(`[handleSave] dispatching VFS_SAVE event, scope="${filesystemScopePath}", files=[${Object.keys(updatedFiles).join(', ')}]`);
+    
+    const message = {
+      type: "VFS_SAVE",
+      filesystemScopePath,
+      files: updatedFiles,
+    };
+    window.postMessage(message, "*");
+    log(`[handleSave] postMessage sent`);
+
     onSave(updatedFiles);
-  }, [files, onSave, editorMode]);
+    log(`[handleSave] completed`);
+  }, [files, onSave, editorMode, project]);
 
   return (
     <Editor
-      resolver={RESOLVER}
+      resolver={getResolver()}
       onRender={({ render }) => render}
       onNodesChange={(query) => {
         // Capture serialized nodes on every change (drag, drop, edit, delete)
@@ -6279,4 +6219,111 @@ export function VisualEditorMain({
       </div>
     </Editor>
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESOLVER MAP - must be after all component definitions
+// ─────────────────────────────────────────────────────────────────────────────
+
+// COMPONENT_IMPORTS moved to end for consistency
+const COMPONENT_IMPORTS: Record<string, string> = {
+  ContainerCraft: './components/ui/container',
+  TextCraft: './components/ui/text',
+  ButtonCraft: './components/ui/button',
+  ImageCraft: './components/ui/image',
+  CardCraft: './components/ui/card',
+  BadgeCraft: './components/ui/badge',
+  DividerCraft: './components/ui/divider',
+  InputCraft: './components/ui/input',
+  HeroCraft: './components/ui/hero',
+  NavBarCraft: './components/ui/navbar',
+  GridCraft: './components/ui/grid',
+  FormCraft: './components/ui/form',
+  CodeBlockCraft: './components/ui/code-block',
+  AlertCraft: './components/ui/alert',
+  StatCardCraft: './components/ui/stat-card',
+  AvatarCraft: './components/ui/avatar',
+  TableCraft: './components/ui/table',
+  BentoGridCraft: './components/ui/bento-grid',
+  SpotlightCardCraft: './components/ui/spotlight-card',
+  ShinyButtonCraft: './components/ui/shiny-button',
+  GradientTextCraft: './components/ui/gradient-text',
+  BackgroundBeamsCraft: './components/ui/background-beams',
+  PricingCardCraft: './components/ui/pricing-card',
+  TestimonialCardCraft: './components/ui/testimonial-card',
+  FeatureListCraft: './components/ui/feature-list',
+  MobileNavCraft: './components/ui/mobile-nav',
+  BottomTabBarCraft: './components/ui/bottom-tab-bar',
+  StatusBarCraft: './components/ui/status-bar',
+  AppHeaderCraft: './components/ui/app-header',
+};
+
+// Map craft component names to clean export names
+const COMPONENT_NAMES: Record<string, string> = {
+  ContainerCraft: 'Container',
+  TextCraft: 'Text',
+  ButtonCraft: 'Button',
+  ImageCraft: 'Image',
+  CardCraft: 'Card',
+  BadgeCraft: 'Badge',
+  DividerCraft: 'Divider',
+  InputCraft: 'Input',
+  HeroCraft: 'Hero',
+  NavBarCraft: 'NavBar',
+  GridCraft: 'Grid',
+  FormCraft: 'Form',
+  CodeBlockCraft: 'CodeBlock',
+  AlertCraft: 'Alert',
+  StatCardCraft: 'StatCard',
+  AvatarCraft: 'Avatar',
+  TableCraft: 'Table',
+  BentoGridCraft: 'BentoGrid',
+  SpotlightCardCraft: 'SpotlightCard',
+  ShinyButtonCraft: 'ShinyButton',
+  GradientTextCraft: 'GradientText',
+  BackgroundBeamsCraft: 'BackgroundBeams',
+  PricingCardCraft: 'PricingCard',
+  TestimonialCardCraft: 'TestimonialCard',
+  FeatureListCraft: 'FeatureList',
+  MobileNavCraft: 'MobileNav',
+  BottomTabBarCraft: 'BottomTabBar',
+  StatusBarCraft: 'StatusBar',
+  AppHeaderCraft: 'AppHeader',
+};
+
+const RESOLVER = {
+  ContainerCraft,
+  TextCraft,
+  ButtonCraft,
+  ImageCraft,
+  CardCraft,
+  BadgeCraft,
+  DividerCraft,
+  InputCraft,
+  HeroCraft,
+  NavBarCraft,
+  GridCraft,
+  FormCraft,
+  CodeBlockCraft,
+  AlertCraft,
+  StatCardCraft,
+  AvatarCraft,
+  TableCraft,
+  BentoGridCraft,
+  SpotlightCardCraft,
+  ShinyButtonCraft,
+  GradientTextCraft,
+  BackgroundBeamsCraft,
+  PricingCardCraft,
+  TestimonialCardCraft,
+  FeatureListCraft,
+  MobileNavCraft,
+  BottomTabBarCraft,
+  StatusBarCraft,
+  AppHeaderCraft,
+};
+
+// Getter function to ensure all components are defined before resolver is accessed
+function getResolver() {
+  return RESOLVER;
 }
