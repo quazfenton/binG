@@ -28,7 +28,7 @@ export const LLMSelector: React.FC<{
   useEffect(() => {
     const fetchProviders = async () => {
       try {
-        const response = await fetch('/api/providers');
+        const response = await fetch('/api/providers', { credentials: 'include' });
         if (response.ok) {
           const data = await response.json();
           if (data.success) {

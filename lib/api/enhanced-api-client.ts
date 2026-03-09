@@ -363,16 +363,28 @@ export class EnhancedAPIClient {
       }
 
       if (error instanceof Error) {
-        if (error.name === 'AbortError') {
-          throw this.createAPIError(
-            'Request timeout',
-            'TIMEOUT',
-            408,
-            config,
-            true,
-            'Request timed out. Please check your connection and try again.'
-          );
-        }
+      if (error.name === 'AbortError') {
+        throw this.createAPIError(
+          'Request timeout',
+          'TIMEOUT',
+          408,
+          config,
+          true,
+          'The request took too long. Please try again.'
+        );
+      }
+
+      const errorMessage = error.message || '';
+      if (errorMessage.includes('fetch') || errorMessage.includes('Network') || errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ENOTFOUND')) {
+        throw this.createAPIError(
+          'Network error',
+          'NETWORK_ERROR',
+          0,
+          config,
+          true,
+          'Unable to connect to the service. Please check your internet connection.'
+        );
+      }
 
         if (error.message.includes('fetch')) {
           throw this.createAPIError(

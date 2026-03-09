@@ -6,15 +6,15 @@ export async function POST(request: NextRequest) {
   try {
     // Try session-based refresh first
     const sessionId = request.cookies.get('session_id')?.value;
-    
+
     if (sessionId) {
       const sessionResult = await authService.validateSession(sessionId);
-      
-      if (sessionResult.success) {
+
+      if (sessionResult.success && sessionResult.user) {
         // Session is valid, generate new token
         const newToken = generateToken({
-          userId: sessionResult.user!.id.toString(),
-          email: sessionResult.user!.email
+          userId: sessionResult.user.id.toString(),
+          email: sessionResult.user.email
         });
 
         return NextResponse.json({
@@ -27,18 +27,18 @@ export async function POST(request: NextRequest) {
 
     // Fallback to JWT-based refresh
     const authResult = await verifyAuth(request);
-    
-    if (!authResult.success) {
+
+    if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Invalid or expired token' },
         { status: 401 }
       );
     }
 
-    // Generate new token
+    // Generate new token (email is optional)
     const newToken = generateToken({
-      userId: authResult.userId!,
-      email: authResult.email!
+      userId: authResult.userId,
+      email: authResult.email
     });
 
     // Get user details

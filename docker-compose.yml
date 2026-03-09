@@ -1,20 +1,341 @@
-version: '3.8'
+# Production Docker Compose Configuration
+# Orchestrates all binG backend services
+# Note: 'version' key removed - obsolete in Compose v2+
 
 services:
-  frontend:
+  # ===========================================
+  # Next.js Application
+  # ===========================================
+  app:
     build:
       context: .
       dockerfile: Dockerfile
+      target: runner
+    container_name: bing-app
+    restart: unless-stopped
     ports:
       - "3000:3000"
+      - "8080:8080"
     environment:
       - NODE_ENV=production
-      - NEXT_TELEMETRY_DISABLED=1
+      - PORT=3000
+      - WEBSOCKET_PORT=8080
+      - STORAGE_TYPE=${STORAGE_TYPE:-local}
+      - LOCAL_SNAPSHOT_DIR=/tmp/snapshots
+      - WORKSPACE_DIR=/tmp/workspaces
+      - RUNTIME_TYPE=${RUNTIME_TYPE:-process}
+
+      # Authentication - MUST be overridden in production
+      # Generate secure secrets with: openssl rand -hex 32
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET environment variable is required. Generate with: openssl rand -hex 32}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
+
+      # Encryption keys - MUST be overridden in production
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY environment variable is required. Generate with: openssl rand -hex 32}
+      - BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY:?BLAXEL_SECRET_ENCRYPTION_KEY environment variable is required. Generate with: openssl rand -hex 32}
+
+      # Nango integration
+      - NANGO_SECRET_KEY=${NANGO_SECRET_KEY:-}
+
+      # Database (PostgreSQL for Mastra + App)
+      - DATABASE_URL=${DATABASE_URL:-postgresql://bing:bing_secure_password_change_me@postgres:5432/bing}
+      
+      # Mastra configuration
+      - MASTRA_TELEMETRY_ENABLED=${MASTRA_TELEMETRY_ENABLED:-false}
+      - MASTRA_SCHEMA=${MASTRA_SCHEMA:-mastra}
+
+      # LLM Provider API Keys (loaded from .env)
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENCODE_API_KEY=${OPENCODE_API_KEY}
+
+      # Sandbox Provider API Keys (loaded from .env)
+      - DAYTONA_API_KEY=${DAYTONA_API_KEY}
+      - E2B_API_KEY=${E2B_API_KEY}
+      - BLAXEL_API_KEY=${BLAXEL_API_KEY}
+      - CSB_API_KEY=${CSB_API_KEY}
+      - SANDBOX_PROVIDER=${SANDBOX_PROVIDER:-daytona}
+
+      # Other Integration API Keys (loaded from .env)
+      - BREVO_API_KEY=${BREVO_API_KEY}
+      - MAILERSEND_API_KEY=${MAILERSEND_API_KEY}
+      - ARCADE_API_KEY=${ARCADE_API_KEY}
+      - SMITHERY_API_KEY=${SMITHERY_API_KEY}
+      - NEXT_PUBLIC_TAMBO_API_KEY=${NEXT_PUBLIC_TAMBO_API_KEY}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+      - MODAL_API_TOKEN=${MODAL_API_TOKEN}
+      - COMPOSIO_API_KEY=${COMPOSIO_API_KEY}
+
+      # S3 Storage (optional)
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_BUCKET=${S3_BUCKET:-ephemeral-snapshots}
+      - S3_REGION=${S3_REGION:-us-east-1}
+
+      # Quotas
+      - MAX_EXECUTIONS_PER_HOUR=${MAX_EXECUTIONS_PER_HOUR:-1000}
+      - MAX_CONCURRENT_SANDBOXES=${MAX_CONCURRENT_SANDBOXES:-10}
+      - MAX_MEMORY_MB=${MAX_MEMORY_MB:-2048}
+      - MAX_STORAGE_MB=${MAX_STORAGE_MB:-10240}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
     volumes:
-      - ./data:/app/data  # Persist database data
-    restart: unless-stopped
+      - app-workspaces:/tmp/workspaces
+      - app-snapshots:/tmp/snapshots
+      - app-firecracker:/tmp/firecracker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+    networks:
+      - bing-network
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/backend/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '2'
+          memory: 2G
+
+  # ===========================================
+  # PostgreSQL Database (for Mastra & App)
+  # ===========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: bing-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-bing}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-bing_secure_password_change_me}
+      - POSTGRES_DB=${POSTGRES_DB:-bing}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bing}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  # ===========================================
+  # MinIO (S3-Compatible Storage)
+  # ===========================================
+  minio:
+    image: minio/minio:latest
+    container_name: bing-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+  # ===========================================
+  # Prometheus (Metrics Collection)
+  # ===========================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: bing-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  # ===========================================
+  # Grafana (Metrics Visualization)
+  # ===========================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: bing-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  # ===========================================
+  # Node Exporter (System Metrics)
+  # ===========================================
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: bing-node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.ignored-mount-points="^/(sys|proc|dev|host|etc)($$|/)"'
+    networks:
+      - bing-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # ===========================================
+  # Microsandbox (Local Sandbox Provider)
+  # ===========================================
+  microsandbox:
+    image: node:20-alpine
+    container_name: bing-microsandbox
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+    environment:
+      - NODE_ENV=production
+      - MSB_PORT=5555
+      - MSB_MAX_INSTANCES=100
+      - MSB_INSTANCE_TTL_HOURS=2
+      - WORKSPACE_DIR=/workspace
+    volumes:
+      - microsandbox-workspaces:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: >
+      sh -c "
+      npm install -g microsandbox &&
+      msb server start --prod --port 5555
+      "
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5555/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    depends_on:
+      - app
+
+# ===========================================
+# Networks
+# ===========================================
+# Note: Using default network driver for Windows compatibility
+# If you encounter "protocol not available" errors, run:
+#   1) docker network prune -f
+#   2) Restart Docker Desktop
+#   3) Try: docker compose --compatibility up -d
+networks:
+  bing-network:
+    name: bing-network
+
+# ===========================================
+# Volumes
+# ===========================================
+volumes:
+  app-workspaces:
+    driver: local
+  app-snapshots:
+    driver: local
+  app-firecracker:
+    driver: local
+  minio-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  microsandbox-workspaces:
+    driver: local
+  postgres-data:
+    driver: local

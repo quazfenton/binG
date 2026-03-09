@@ -1,9 +1,13 @@
 /**
  * MCP Configuration and Provider System
- * 
+ *
  * Manages MCP server configurations and provides
  * easy integration with the application
- * 
+ *
+ * Supports two configuration methods:
+ * 1. JSON config file (mcp.config.json) - Recommended
+ * 2. Environment variables (MCP_SERVERS, MCP_*_COMMAND)
+ *
  * Note: This module automatically loads .env.mcp if MCP_ENABLED=true
  * Uses Next.js built-in env loading - just ensure .env.mcp exists
  */
@@ -16,13 +20,91 @@ import type {
   MCPTool,
   MCPToolResult,
 } from './types'
+import { readFileSync, existsSync } from 'fs'
+import { join } from 'path'
+
+/**
+ * Load MCP configuration from JSON file
+ */
+export function loadMCPConfigFromJSON(configPath?: string): {
+  servers: MCPServerConfig[]
+  settings: MCPSettings
+} | null {
+  const path = configPath || join(process.cwd(), 'mcp.config.json')
+  
+  if (!existsSync(path)) {
+    console.log('[MCP Config] No config file found at', path)
+    return null
+  }
+
+  try {
+    const content = readFileSync(path, 'utf-8')
+    const config = JSON.parse(content)
+
+    const servers: MCPServerConfig[] = Object.entries(config.mcpServers || {})
+      .map(([id, server]: [string, any]) => ({
+        id,
+        name: server.description || id,
+        enabled: server.enabled !== false,
+        timeout: server.timeout || 30000,
+        transport: {
+          type: 'stdio',
+          command: server.command,
+          args: server.args || [],
+          env: server.env,
+        } as MCPTransportConfig,
+      }))
+
+    return {
+      servers,
+      settings: config.mcpSettings || {},
+    }
+  } catch (error) {
+    console.error('[MCP Config] Failed to load config file:', error)
+    return null
+  }
+}
+
+export interface MCPSettings {
+  autoConnect?: boolean
+  connectionTimeout?: number
+  toolCallTimeout?: number
+  logging?: {
+    level?: string
+    file?: string
+  }
+  security?: {
+    allowFileSystemAccess?: boolean
+    allowedPaths?: string[]
+    blockedCommands?: string[]
+    requireApprovalFor?: string[]
+  }
+}
+
+// Global settings
+let globalSettings: MCPSettings = {}
+
+/**
+ * Get MCP settings
+ */
+export function getMCPSettings(): MCPSettings {
+  return globalSettings
+}
 
 /**
  * Parse MCP server configurations from environment variables
  */
 export function parseMCPServerConfigs(): MCPServerConfig[] {
   const configs: MCPServerConfig[] = []
-  
+
+  // First, try to load from JSON config
+  const jsonConfig = loadMCPConfigFromJSON()
+  if (jsonConfig) {
+    globalSettings = jsonConfig.settings
+    configs.push(...jsonConfig.servers)
+    console.log(`[MCP Config] Loaded ${configs.length} server(s) from mcp.config.json`)
+  }
+
   // Parse MCP_SERVERS environment variable (JSON array)
   const serversEnv = process.env.MCP_SERVERS
   if (serversEnv) {
@@ -40,7 +122,7 @@ export function parseMCPServerConfigs(): MCPServerConfig[] {
   // Format: MCP_<NAME>_COMMAND, MCP_<NAME>_ARGS, MCP_<NAME>_ENABLED
   const mcpPrefix = 'MCP_'
   const commandSuffix = '_COMMAND'
-  
+
   for (const [key, value] of Object.entries(process.env)) {
     if (key.startsWith(mcpPrefix) && key.endsWith(commandSuffix)) {
       const serverId = key
@@ -146,6 +228,48 @@ export function createWebSocketTransport(wsUrl: string): MCPTransportConfig {
 /**
  * Common MCP server presets
  */
+/**
+ * Default MCP server configurations
+ * Added: Blaxel MCP server per docs/sdk/blaxel-llms.txt
+ */
+export const defaultMcpServers: Record<string, MCPServerConfig> = {
+  'e2b-mcp': {
+    id: 'e2b-mcp',
+    name: 'E2B MCP Server',
+    transport: {
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', '@e2b-dev/mcp-server'],
+      env: {
+        E2B_API_KEY: process.env.E2B_API_KEY || '',
+      },
+    },
+    enabled: true,
+  },
+  'blaxel-mcp-server': {
+    id: 'blaxel-mcp-server',
+    name: 'Blaxel MCP Server',
+    transport: {
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', 'blaxel-mcp-server'],
+      env: {
+        BLAXEL_API_KEY: process.env.BLAXEL_API_KEY || '',
+      },
+    },
+    enabled: true,
+  },
+  'arcade-mcp': {
+    id: 'arcade-mcp',
+    name: 'Arcade MCP Gateway',
+    transport: {
+      type: 'sse',
+      url: process.env.ARCADE_MCP_URL || 'https://mcp.arcade.dev',
+    },
+    enabled: !!process.env.ARCADE_API_KEY,
+  },
+}
+
 export const MCPServerPresets = {
   /**
    * Filesystem server for local file access

@@ -1,0 +1,24 @@
+---
+title: Update Sandbox
+description: Learn how to keep Sandboxes up to date with the CodeSandbox SDK.
+---
+
+import { Callout } from 'nextra-theme-docs'
+
+# Update Sandbox
+
+You can update certain properties of your Sandbox after creation.
+
+```ts
+import { VMTier } from '@codesandbox/sdk'
+
+const sandbox = await sdk.sandboxes.resume('sandbox-id')
+
+// You can hot swap the VM tier
+await sandbox.updateTier(VMTier.Micro)
+await sandbox.updateHibernationTimeout(60)
+```
+
+<Callout>
+You can not update the `ipcountry` of a created Sandbox. This is because the IP country is set when the Sandbox is created and is used to determine the region the Sandbox is running in.
+</Callout>

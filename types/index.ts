@@ -11,6 +11,22 @@ export interface Message {
     authUrl?: string;
     toolName?: string;
     provider?: string;
+    reasoning?: string;
+    reasoningChunks?: Array<{
+      id: string;
+      content: string;
+      timestamp: number;
+      isComplete: boolean;
+      type: 'thought' | 'reasoning' | 'plan' | 'reflection';
+    }>;
+    toolInvocations?: Array<{
+      toolCallId: string;
+      toolName: string;
+      state: 'partial-call' | 'call' | 'result';
+      args?: Record<string, any>;
+      result?: any;
+    }>;
+    sandboxId?: string;
     [key: string]: any;
   };
 }

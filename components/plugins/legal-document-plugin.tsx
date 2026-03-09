@@ -67,36 +67,22 @@ const LegalDocumentPlugin: React.FC<LegalDocumentPluginProps> = ({ onClose, onRe
     setAnalysisResult('');
     toast.info('Starting document analysis...');
     try {
-      // Simulated AI analysis with a delay
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // In a real implementation, this would be an API call to a backend service
-      // const response = await fetch('/api/analyze-legal-document', {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ document: generatedDocument }),
-      // });
-      // if (!response.ok) throw new Error('Analysis failed');
-      // const data = await response.json();
-      
-      const simulatedData = {
-        summary: "This is a standard contract agreement. It outlines the basic terms and conditions between two parties.",
-        keyClauses: ["Term and Termination", "Payment Terms", "Confidentiality"],
-        potentialRisks: ["The termination clause is vague and could lead to disputes.", "Liability is not clearly limited."],
-        compliance: {
-          "GDPR": "Likely compliant",
-          "CCPA": "Needs review for specific California consumer rights."
-        }
-      };
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            { role: 'system', content: 'You are a legal document analysis AI. Analyze the following document and provide: 1) A brief summary, 2) Key clauses identified, 3) Potential risks or issues, 4) Compliance considerations. Format your response clearly with headers.' },
+            { role: 'user', content: generatedDocument }
+          ]
+        }),
+      });
+      if (!response.ok) throw new Error('Analysis failed');
+      const data = await response.json();
+      const analysisText = data.message || data.choices?.[0]?.message?.content || data.content || 'Analysis unavailable';
 
-      const formattedResult = `
-        **Analysis Summary:**\n${simulatedData.summary}\n\n
-        **Key Clauses Identified:**\n- ${simulatedData.keyClauses.join('\n- ')}\n\n
-        **Potential Risks:**\n- ${simulatedData.potentialRisks.join('\n- ')}\n\n
-        **Compliance Status:**\n- GDPR: ${simulatedData.compliance.GDPR}\n- CCPA: ${simulatedData.compliance.CCPA}
-      `;
-      setAnalysisResult(formattedResult);
-      onResult?.(formattedResult);
+      setAnalysisResult(analysisText);
+      onResult?.(analysisText);
       toast.success('Analysis complete!');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.';
