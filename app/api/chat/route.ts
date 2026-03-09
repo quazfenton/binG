@@ -8,6 +8,7 @@ import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
 import { generateSecureId } from '@/lib/utils';
 import { chatRequestLogger } from '@/lib/api/chat-request-logger';
+import { chatLogger } from '@/lib/api/chat-logger';
 import { parsePatch, applyPatch } from 'diff';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
@@ -57,16 +58,14 @@ export async function POST(request: NextRequest) {
   const requestStartTime = Date.now();
   const requestId = generateSecureId('chat');
 
-  console.log('[DEBUG] Chat API: Incoming request', { requestId });
-
   // Extract user authentication (JWT or session cookie).
   // Anonymous chat is allowed, but tools/sandbox require authenticated userId.
   const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
   const userId = authResult.userId || 'anonymous';
 
-  if (!authResult.success || !authResult.userId) {
-    console.log('[DEBUG] Chat API: Anonymous request (no auth token/session)');
-  }
+  chatLogger.debug('Anonymous request (no auth token/session)', { requestId, userId }, {
+    authSuccess: authResult.success,
+  });
 
   // RATE LIMITING: Use tighter limits for anonymous users
   const isAuthenticated = authResult.success && authResult.userId && !authResult.userId.startsWith('anon:');
@@ -111,7 +110,10 @@ export async function POST(request: NextRequest) {
     const parseResult = chatRequestSchema.safeParse(rawBody);
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];
-      console.error('[DEBUG] Chat API: Schema validation failed:', firstError);
+      chatLogger.error('Schema validation failed', { requestId }, {
+        error: firstError.message,
+        fieldErrors: parseResult.error.flatten().fieldErrors,
+      });
       return NextResponse.json(
         { error: firstError.message, details: parseResult.error.flatten().fieldErrors },
         { status: 400 },
@@ -119,7 +121,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = parseResult.data;
-    console.log('[DEBUG] Chat API: Request body validated:', {
+    chatLogger.debug('Request body validated', { requestId }, {
       messageCount: body.messages.length,
       provider: body.provider,
       model: body.model,
@@ -165,7 +167,9 @@ export async function POST(request: NextRequest) {
 
     // Check if provider is valid (exists in our PROVIDERS constant)
     if (!(provider in PROVIDERS)) {
-      console.error('[DEBUG] Chat API: Invalid provider:', provider);
+      chatLogger.error('Invalid provider', { requestId, provider }, {
+        availableProviders: Object.keys(PROVIDERS),
+      });
       return NextResponse.json(
         {
           error: `Provider ${provider} is not supported.`,
@@ -177,7 +181,9 @@ export async function POST(request: NextRequest) {
 
     // Get provider info from PROVIDERS constant
     const selectedProvider = PROVIDERS[provider as keyof typeof PROVIDERS];
-    console.log('[DEBUG] Chat API: Selected provider:', provider, 'supports streaming:', selectedProvider.supportsStreaming);
+    chatLogger.debug('Selected provider', { requestId, provider, model }, {
+      supportsStreaming: selectedProvider.supportsStreaming,
+    });
 
     // Check if model is supported by the provider (allow partial matches for models like "z-ai/glm-4.5-air" vs "z-ai/glm-4.5-air:free")
     const isModelSupported = selectedProvider.models.some(
@@ -185,7 +191,9 @@ export async function POST(request: NextRequest) {
     );
     
     if (!isModelSupported) {
-      console.error('[DEBUG] Chat API: Model not supported:', model, 'Available:', selectedProvider.models);
+      chatLogger.error('Model not supported', { requestId, provider, model }, {
+        availableModels: selectedProvider.models,
+      });
       return NextResponse.json(
         {
           error: `Model ${model} is not supported by ${provider}`,
@@ -230,7 +238,7 @@ export async function POST(request: NextRequest) {
       workspaceSessionContext,
     );
 
-    console.log('[DEBUG] Chat API: Validation passed, routing through priority chain');
+    chatLogger.debug('Validation passed, routing through priority chain', { requestId, provider, model });
 
     // NEW: Add tool/sandbox detection
     const requestType = detectRequestType(messages);
@@ -267,7 +275,12 @@ export async function POST(request: NextRequest) {
       enableComposio: requestType === 'tool' ? !!authenticatedUserId : undefined,
     };
 
-    console.log('[DEBUG] Chat API: Routing request through priority chain');
+    chatLogger.debug('Routing request through priority chain', { requestId, provider, model }, {
+      requestType,
+      enableTools: routerRequest.enableTools,
+      enableSandbox: routerRequest.enableSandbox,
+      enableComposio: routerRequest.enableComposio,
+    });
 
     // Route through priority chain (Fast-Agent → n8n → Custom Fallback → Original System)
     try {
@@ -275,8 +288,12 @@ export async function POST(request: NextRequest) {
 
       const actualProvider = routerResponse.metadata?.actualProvider || routerResponse.source;
       const actualModel = routerResponse.metadata?.actualModel || routerRequest.model;
-      
-      console.log(`[DEBUG] Chat API: Request handled by ${routerResponse.source} (priority ${routerResponse.priority}) - Actual: ${actualProvider}/${actualModel}`);
+
+      chatLogger.info('Request handled by priority router', { requestId, provider: actualProvider, model: actualModel }, {
+        source: routerResponse.source,
+        priority: routerResponse.priority,
+        fallbackChain: routerResponse.fallbackChain,
+      });
       
 // Check for auth_required in response
 if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
@@ -297,7 +314,10 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
       let agentToolResults = null;
       if (LLM_AGENT_TOOLS_ENABLED && authenticatedUserId && requestType === 'tool') {
         try {
-          console.log('[LLM Agent Tools] Executing filesystem tools for user:', authenticatedUserId);
+          chatLogger.info('Executing filesystem tools', { requestId, userId: authenticatedUserId }, {
+            scopePath: requestedScopePath,
+            maxIterations: LLM_AGENT_TOOLS_MAX_ITERATIONS,
+          });
 
           const agentLoop = createAgentLoop(
             authenticatedUserId,
@@ -318,10 +338,10 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
             if (agentTimeoutId) clearTimeout(agentTimeoutId);
           }
 
-          console.log('[LLM Agent Tools] Execution completed:', {
+          chatLogger.info('Agent tools execution completed', { requestId }, {
             success: agentToolResults.success,
             iterations: agentToolResults.iterations,
-            results: agentToolResults.results?.length,
+            resultsCount: agentToolResults.results?.length,
           });
 
           // Append agent tool results to response
@@ -334,7 +354,9 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
             rawResponseContent = unifiedResponse.content;
           }
         } catch (error: any) {
-          console.error('[LLM Agent Tools] Execution failed:', error.message);
+          chatLogger.error('Agent tools execution failed', { requestId }, {
+            error: error.message,
+          });
           // Continue with normal response even if agent tools fail
         }
       }
@@ -374,7 +396,9 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
       // Handle streaming response
       if (stream && selectedProvider.supportsStreaming) {
         const streamRequestId = requestId || generateSecureId('stream');
-        
+        const streamStartTime = Date.now();
+        let chunkCount = 0;
+
         // Create streaming events from unified response
         const events = unifiedResponseHandler.createStreamingEvents(clientResponse, streamRequestId);
         const supplementalAgenticEvents = buildSupplementalAgenticEvents(clientResponse, streamRequestId, events);
@@ -397,10 +421,15 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
           })}\n\n`;
           events.splice(Math.max(0, events.length - 1), 0, filesystemEvent);
         }
-        
+
+        chatLogger.info('Starting streaming response', { requestId: streamRequestId, provider, model }, {
+          eventsCount: events.length,
+          hasFilesystemEdits: !!filesystemEdits,
+        });
+
         const encoder = new TextEncoder();
         let encoderRef = encoder;  // Reference for cleanup
-        
+
         const readableStream = new ReadableStream({
           async start(controller) {
             // Cleanup function for resource management
@@ -412,7 +441,11 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
             if (request.signal) {
               request.signal.addEventListener('abort', () => {
                 cleanup();
-                console.log(`[DEBUG] Chat API: Stream cancelled by client: ${streamRequestId}`);
+                const streamDuration = Date.now() - streamStartTime;
+                chatLogger.warn('Stream cancelled by client', { requestId: streamRequestId, provider, model }, {
+                  chunkCount,
+                  latencyMs: streamDuration,
+                });
               });
             }
 
@@ -424,9 +457,10 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
                   cleanup();
                   return;
                 }
-                
+
                 const event = events[i];
                 controller.enqueue(encoderRef.encode(event));
+                chunkCount++;
 
                 // Add small delays between events for smooth streaming
                 if (i < events.length - 1) {
@@ -434,10 +468,22 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
                 }
               }
 
+              const streamDuration = Date.now() - streamStartTime;
+              chatLogger.info('Stream completed successfully', { requestId: streamRequestId, provider, model }, {
+                chunkCount,
+                latencyMs: streamDuration,
+                eventsCount: events.length,
+              });
+
               controller.close();
             } catch (error) {
-              console.error('[DEBUG] Chat API: Streaming error:', error);
-              
+              const streamDuration = Date.now() - streamStartTime;
+              chatLogger.error('Streaming error', { requestId: streamRequestId, provider, model }, {
+                error: error instanceof Error ? error.message : String(error),
+                chunkCount,
+                latencyMs: streamDuration,
+              });
+
               // Only send error event if client hasn't disconnected
               if (!request.signal?.aborted) {
                 const errorEvent = `event: error\ndata: ${JSON.stringify({
@@ -453,7 +499,11 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
             }
           },
           cancel() {
-            console.log(`[DEBUG] Chat API: Stream cancelled by client: ${streamRequestId}`);
+            const streamDuration = Date.now() - streamStartTime;
+            chatLogger.warn('Stream cancelled (cancel callback)', { requestId: streamRequestId, provider, model }, {
+              chunkCount,
+              latencyMs: streamDuration,
+            });
           }
         });
 
@@ -474,6 +524,13 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
       }
 
       // Handle non-streaming response
+      const responseLatency = Date.now() - requestStartTime;
+      chatLogger.info('Non-streaming response completed', { requestId, provider, model }, {
+        latencyMs: responseLatency,
+        contentLength: clientResponse.content?.length || 0,
+        success: clientResponse.success,
+      });
+
       const responseStatus = clientResponse.success ? 200 : 500;
       return NextResponse.json(
         {
@@ -488,14 +545,18 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
       );
     } catch (routerError) {
       const routerErrorObj = routerError as Error;
-      // Log which providers were tried from the fallback chain
-      const errorMessage = routerErrorObj.message;
-      const isNotConfigured = errorMessage.includes('not configured');
+      const routerLatency = Date.now() - requestStartTime;
+      const isNotConfigured = routerErrorObj.message.includes('not configured');
 
       if (!isNotConfigured) {
-        console.error('[DEBUG] Chat API: Router error:', errorMessage);
+        chatLogger.error('Router error', { requestId, provider, model }, {
+          error: routerErrorObj.message,
+          latencyMs: routerLatency,
+        });
       } else {
-        console.log(`[DEBUG] Chat API: No providers configured for request (tried: ${provider}/${model})`);
+        chatLogger.warn('No providers configured', { requestId, provider, model }, {
+          latencyMs: routerLatency,
+        });
       }
 
       // Emergency fallback - return friendly error with proper status
@@ -517,15 +578,21 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
     }
   }
   catch (error) {
-    // Skip verbose logging for expected "not configured" errors
+    const errorLatency = Date.now() - requestStartTime;
     const errorMessage = error instanceof Error ? error.message : String(error);
     const isNotConfiguredError = errorMessage.includes('not configured');
 
     if (!isNotConfiguredError) {
-      console.error("Chat API error:", errorMessage);
-      console.error('[CRITICAL] Chat API: All fallback mechanisms failed');
+      chatLogger.error('Critical chat API error', { requestId, provider, model }, {
+        error: errorMessage,
+        latencyMs: errorLatency,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
     } else {
-      console.log(`[Chat API] Provider not available: ${errorMessage}`);
+      chatLogger.warn('Provider not available', { requestId, provider, model }, {
+        error: errorMessage,
+        latencyMs: errorLatency,
+      });
     }
 
     // Process error with enhanced error handler for logging

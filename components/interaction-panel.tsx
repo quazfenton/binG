@@ -55,6 +55,7 @@ import Zap from "lucide-react/dist/esm/icons/zap";
 import Film from "lucide-react/dist/esm/icons/film";
 import Camera from "lucide-react/dist/esm/icons/camera";
 import MapIcon from "lucide-react/dist/esm/icons/map";
+import BarChart2 from "lucide-react/dist/esm/icons/bar-chart-2";
 import Gamepad2 from "lucide-react/dist/esm/icons/gamepad-2";
 import Shield from "lucide-react/dist/esm/icons/shield";
 import Database from "lucide-react/dist/esm/icons/database";
@@ -98,6 +99,8 @@ import DuckDuckGoEmbedPlugin from "./plugins/duckduckgo-embed-plugin";
 import CodeSandboxEmbedPlugin from "./plugins/codesandbox-embed-plugin";
 import StackBlitzEmbedPlugin from "./plugins/stackblitz-embed-plugin";
 import GenericEmbedPlugin from "./plugins/generic-embed-plugin";
+import GlitchEmbedPlugin from "./plugins/glitch-embed-plugin";
+import ObservableEmbedPlugin from "./plugins/observable-embed-plugin";
 import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
@@ -121,6 +124,46 @@ import ImageGenerationTab from "./image-generation-tab";
 
 // Pop-out plugin windows for Plugins tab
 const popOutPlugins: Plugin[] = [
+  {
+    id: "codesandbox-embed",
+    name: "CodeSandbox Embed",
+    description: "Embed CodeSandbox projects for live code editing",
+    icon: Code,
+    component: CodeSandboxEmbedPlugin,
+    category: "code",
+    defaultSize: { width: 1000, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "stackblitz-embed",
+    name: "StackBlitz Embed",
+    description: "Embed StackBlitz projects for web development",
+    icon: Code,
+    component: StackBlitzEmbedPlugin,
+    category: "code",
+    defaultSize: { width: 1000, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "glitch-embed",
+    name: "Glitch Projects",
+    description: "Embed Glitch projects for live code editing and preview",
+    icon: Code,
+    component: GlitchEmbedPlugin,
+    category: "code",
+    defaultSize: { width: 1100, height: 800 },
+    minSize: { width: 800, height: 600 },
+  },
+  {
+    id: "observable-embed",
+    name: "Observable Notebooks",
+    description: "Embed Observable notebooks for interactive data visualization",
+    icon: BarChart2,
+    component: ObservableEmbedPlugin,
+    category: "data",
+    defaultSize: { width: 1100, height: 800 },
+    minSize: { width: 800, height: 600 },
+  },
   {
     id: "huggingface-spaces",
     name: "Hugging Face Spaces",

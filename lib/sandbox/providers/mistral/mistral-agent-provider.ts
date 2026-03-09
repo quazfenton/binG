@@ -19,7 +19,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { Mistral } from '@mistralai/mistralai'
-import type { ToolResult } from '../types'
+import type { ToolResult } from '../../types'
 import type {
   SandboxProvider,
   SandboxHandle,
@@ -33,6 +33,7 @@ import type {
   AgentConfig,
   AgentUpdate,
   ConversationEntry,
+  WorkspaceState,
 } from './mistral-types'
 
 // Session store
@@ -92,10 +93,12 @@ export class MistralAgentProvider implements SandboxProvider {
   private workspacePersistence: Map<string, WorkspaceState> = new Map()
 
   constructor(config?: Partial<MistralProviderConfig>) {
-    const apiKey = process.env.MISTRAL_API_KEY
+    const rawApiKey = process.env.MISTRAL_API_KEY || process.env.MISTRAL_KEY || ''
+    const apiKey = rawApiKey.trim().replace(/^['"]+|['"]+$/g, '')
     if (!apiKey) {
       throw new Error('MISTRAL_API_KEY environment variable is required for mistral-agent provider')
     }
+    process.env.MISTRAL_API_KEY = apiKey
 
     this.config = {
       apiKey,
@@ -184,7 +187,7 @@ export class MistralAgentProvider implements SandboxProvider {
       )
     }
 
-    return new MistralAgentSandboxHandle(sandboxId, this.client, this.config, session, this.workspacePersistence)
+    return new MistralAgentSandboxHandle(sandboxId, this.client, this.config, session)
   }
 
   /**

@@ -109,8 +109,25 @@ function getAuthHeaders(): Record<string, string> {
   return headers;
 }
 
+const normalizeProjectScopePath = (scopePath?: string): string => {
+  const rawPath = (scopePath || 'project')
+    .replace(/\\/g, '/')
+    .trim()
+    .replace(/^\/+/, '');
+
+  if (!rawPath || rawPath === 'project') {
+    return 'project';
+  }
+
+  if (rawPath.startsWith('project/')) {
+    return rawPath.replace(/^(project\/)+/i, 'project/');
+  }
+
+  return `project/${rawPath.replace(/^project\/?/i, '')}`;
+};
+
 const createMinimalProject = (scopePath: string = 'project'): LocalFileSystem => ({
-  [scopePath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+  [normalizeProjectScopePath(scopePath)]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
   'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
 });
 
@@ -128,6 +145,11 @@ export default function TerminalPanel({
   const [isSplitView, setIsSplitView] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState<number>(450); // Default height in pixels
   const [isResizing, setIsResizing] = useState(false);
+
+  const DEBUG = true;
+  const log = (...args: any[]) => console.log('[TerminalPanel]', ...args);
+  const logError = (...args: any[]) => console.error('[TerminalPanel ERROR]', ...args);
+  const logWarn = (...args: any[]) => console.warn('[TerminalPanel WARN]', ...args);
   
   // Phase 2: Sandbox lifecycle control
   const [sandboxStatus, setSandboxStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
@@ -163,16 +185,24 @@ export default function TerminalPanel({
     getSnapshot: getVfsSnapshot,
   } = virtualFilesystem;
 
+  // Memoize getVfsSnapshot to prevent unnecessary effect re-runs
+  const getVfsSnapshotMemoized = useCallback(() => getVfsSnapshot(), [getVfsSnapshot]);
+
   // Sync local filesystem with virtual filesystem on mount and when scope changes
   const [isVfsSynced, setIsVfsSynced] = useState(false);
   const [vfsFileCount, setVfsFileCount] = useState(0);
   
   useEffect(() => {
-   if (!isOpen) return;
+   if (!isOpen) {
+     console.log('[TerminalPanel] isOpen is false, skipping VFS sync');
+     return;
+   }
 
+   console.log('[TerminalPanel] Starting VFS sync, scopePath:', filesystemScopePath);
+   
    const syncVfsToLocal = async () => {
      try {
-       const snapshot = await getVfsSnapshot();
+       const snapshot = await getVfsSnapshotMemoized();
        const files = snapshot?.files || [];
 
        console.log('[TerminalPanel] VFS Snapshot received:', {
@@ -181,8 +211,21 @@ export default function TerminalPanel({
          scopePath: filesystemScopePath,
        });
 
+       // FIX: Don't reset filesystem to minimal if VFS returns empty - preserve existing data
+       // This prevents the filesystem from being wiped after sandbox connection failures
        if (files.length === 0) {
-         // VFS is empty - create minimal project structure (no mock files)
+         const existingFs = localFileSystemRef.current;
+         const existingKeys = Object.keys(existingFs).filter(k => k !== 'project');
+         
+         if (existingKeys.length > 0) {
+           // VFS is temporarily empty but we have existing files - keep them
+           console.log('[TerminalPanel] VFS appears empty but keeping existing', existingKeys.length, 'entries');
+           setIsVfsSynced(true);
+           // Don't reset vfsFileCount - keep showing previous count
+           return;
+         }
+         
+         // VFS is truly empty and we have no existing files - create minimal structure
          localFileSystemRef.current = createMinimalProject(filesystemScopePath);
          setIsVfsSynced(true);
          setVfsFileCount(0);
@@ -253,7 +296,7 @@ export default function TerminalPanel({
    };
 
    syncVfsToLocal();
-  }, [isOpen, filesystemScopePath, getVfsSnapshot]);
+  }, [isOpen, filesystemScopePath, getVfsSnapshotMemoized]);
 
   // Update terminal display when VFS sync completes
   useEffect(() => {
@@ -298,80 +341,83 @@ export default function TerminalPanel({
     });
   }, [isVfsSynced, vfsFileCount, isOpen]);
 
-  // Bidirectional sync: Poll VFS for changes from code-preview-panel/editor
-  // Only poll when connected to sandbox to avoid unnecessary requests
+  // Bidirectional sync: Event-driven refresh from code-preview/editor updates
   useEffect(() => {
-    if (!isOpen || sandboxStatus !== 'connected') return;
+    if (!isOpen) return;
 
-    const pollInterval = setInterval(async () => {
+    const handleFilesystemUpdated = async () => {
+      log('[filesystem-updated event] received in TerminalPanel');
+      
       try {
-        const snapshot = await getVfsSnapshot();
-        const currentFiles = Object.keys(localFileSystemRef.current);
-        const vfsFiles = snapshot?.files?.map(f => f.path) || [];
+        const snapshot = await getVfsSnapshotMemoized();
+        const files = snapshot?.files || [];
+        const normalizedScopePath = normalizeProjectScopePath(filesystemScopePathRef.current);
 
-        // Check if VFS has new/changed files
-        const hasChanges = vfsFiles.some(f => !currentFiles.includes(f));
-        if (hasChanges) {
-          console.log('[Terminal] VFS changed, re-syncing...');
-          // Trigger re-sync
-          const syncVfsToLocal = async () => {
-            try {
-              const snapshot = await getVfsSnapshot();
-              const files = snapshot?.files || [];
+        log(`[filesystem-updated] got snapshot, filesCount=${files.length}, scope="${normalizedScopePath}"`);
 
-              if (files.length === 0) {
-                // VFS is empty - ensure minimal project structure exists
-                if (!localFileSystemRef.current['project']) {
-                  localFileSystemRef.current = createMinimalProject(filesystemScopePath);
-                }
-                return;
-              }
-
-              const fs = localFileSystemRef.current;
-
-              if (!fs['project']) {
-                fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
-              }
-              if (!fs[filesystemScopePath]) {
-                fs[filesystemScopePath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
-              }
-
-              for (const file of files) {
-                const fullPath = file.path;
-
-                const parts = fullPath.split('/');
-                for (let i = 1; i < parts.length; i++) {
-                  const dirPath = parts.slice(0, i).join('/');
-                  if (!fs[dirPath]) {
-                    fs[dirPath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
-                  }
-                }
-
-                if (file.content !== undefined) {
-                  fs[fullPath] = {
-                    type: 'file',
-                    content: file.content,
-                    createdAt: Date.now(),
-                    modifiedAt: new Date(file.lastModified).getTime(),
-                  };
-                }
-              }
-
-              console.log('[Terminal] Re-synced VFS:', Object.keys(fs).length, 'entries');
-            } catch (error) {
-              console.error('[Terminal] Re-sync error:', error);
-            }
-          };
-          syncVfsToLocal();
+        // FIX: Don't reset filesystem to minimal if VFS returns empty - preserve existing data
+        if (files.length === 0) {
+          const existingFs = localFileSystemRef.current;
+          const existingKeys = Object.keys(existingFs).filter(k => k !== 'project');
+          
+          if (existingKeys.length > 0) {
+            log('[filesystem-updated] VFS appears empty but keeping existing', existingKeys.length, 'entries');
+            return;
+          }
+          
+          log('[filesystem-updated] VFS empty, creating minimal project structure');
+          localFileSystemRef.current = createMinimalProject(normalizedScopePath);
+          return;
         }
+
+        const fs: LocalFileSystem = {
+          project: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+          [normalizedScopePath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+        };
+
+        let fileCount = 0;
+        let dirCount = 2; // project + scope path
+        
+        for (const file of files) {
+          const fullPath = normalizeProjectScopePath(file.path);
+          const parts = fullPath.split('/');
+          for (let i = 1; i < parts.length; i++) {
+            const dirPath = parts.slice(0, i).join('/');
+            if (!fs[dirPath]) {
+              fs[dirPath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+              dirCount++;
+            }
+          }
+
+          if (file.content !== undefined) {
+            fs[fullPath] = {
+              type: 'file',
+              content: file.content,
+              createdAt: Date.now(),
+              modifiedAt: new Date(file.lastModified).getTime(),
+            };
+            fileCount++;
+          }
+        }
+
+        localFileSystemRef.current = fs;
+        log(`[filesystem-updated] synced VFS to local: ${fileCount} files, ${dirCount} directories`);
       } catch (error) {
-        console.error('[Terminal] Poll error:', error);
+        logError('[filesystem-updated] re-sync failed', error);
+        console.error('[Terminal] Event re-sync error:', error);
       }
-    }, 2000);
+    };
 
-    return () => clearInterval(pollInterval);
-  }, [isOpen, sandboxStatus, getVfsSnapshot]);
+    window.addEventListener('filesystem-updated', handleFilesystemUpdated as EventListener);
+    log('[TerminalPanel] registered filesystem-updated event listener');
+    return () => {
+      window.removeEventListener('filesystem-updated', handleFilesystemUpdated as EventListener);
+      log('[TerminalPanel] removed filesystem-updated event listener');
+    };
+  }, [isOpen, getVfsSnapshotMemoized]);
 
+  console.log('[TerminalPanel] Component rendering, isOpen:', isOpen);
+  
   const localFileSystemRef = useRef<LocalFileSystem>({});
   const localShellCwdRef = useRef<Record<string, string>>({});
   const lastConnectionAttemptRef = useRef<Record<string, number>>({});
@@ -977,19 +1023,17 @@ export default function TerminalPanel({
   }, [getSandboxWorkspaceRoot]);
 
   const syncFileToVFS = useCallback(async (filePath: string, content: string) => {
+    log(`syncFileToVFS: attempting to sync "${filePath}" (contentLength=${content.length})`);
     try {
-      // Ensure file path is scoped to the current filesystem scope
-      const scopePath = filesystemScopePathRef.current || 'project';
-      let scopedFilePath = filePath;
+      const normalizedScope = normalizeProjectScopePath(filesystemScopePathRef.current);
+      const normalizedInput = (filePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+      const scopedFilePath = normalizedInput.startsWith(normalizedScope)
+        ? normalizedInput
+        : `${normalizedScope}/${normalizedInput.replace(/^project\/?/, '')}`.replace(/\/+/g, '/');
       
-      // If filePath doesn't already start with the scope path, prepend it
-      if (!filePath.startsWith(scopePath)) {
-        // Remove 'project/' prefix if present to avoid duplication
-        const cleanPath = filePath.replace(/^project\//, '');
-        scopedFilePath = `${scopePath}/${cleanPath}`.replace(/\/+/g, '/');
-      }
-      
-      await fetch('/api/filesystem/write', {
+      log(`syncFileToVFS: normalized paths - scope="${normalizedScope}", input="${normalizedInput}", scoped="${scopedFilePath}"`);
+
+      const response = await fetch('/api/filesystem/write', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -998,8 +1042,26 @@ export default function TerminalPanel({
         credentials: 'include',
         body: JSON.stringify({ path: scopedFilePath, content }),
       });
-    } catch {
-      // Best-effort sync; local filesystem remains authoritative in local mode
+
+      log(`syncFileToVFS: API response status=${response.status}`);
+      
+      if (response.ok) {
+        // Dispatch event for cross-panel sync
+        const event = new CustomEvent('filesystem-updated', {
+          detail: {
+            path: scopedFilePath,
+            scopePath: normalizedScope,
+            source: 'terminal',
+          },
+        });
+        window.dispatchEvent(event);
+        log(`syncFileToVFS: dispatched filesystem-updated event for "${scopedFilePath}"`);
+      } else {
+        const errorText = await response.text().catch(() => 'unknown');
+        logWarn(`syncFileToVFS: API returned non-OK status ${response.status}: ${errorText}`);
+      }
+    } catch (err: any) {
+      logError(`syncFileToVFS: failed to sync "${filePath}"`, err);
     }
   }, []);
 
@@ -1305,6 +1367,7 @@ export default function TerminalPanel({
       }
 
       case 'mkdir': {
+        console.log('[TerminalPanel] mkdir command, cwd:', cwd, 'arg:', arg1);
         if (!arg1) {
           writeError('mkdir: missing operand');
           return true;
@@ -1313,6 +1376,9 @@ export default function TerminalPanel({
         for (const d of dirs) {
           const dirPath = resolveLocalPath(cwd, d);
           const fs = localFileSystemRef.current;
+          
+          console.log('[TerminalPanel] mkdir, dirPath:', dirPath, 'cwd:', cwd, 'd:', d);
+          console.log('[TerminalPanel] localFileSystem before:', Object.keys(fs));
 
           // Ensure project root and scope path exist
           ensureProjectRootExists();
@@ -1323,16 +1389,21 @@ export default function TerminalPanel({
           }
 
           const parent = getParentPath(dirPath);
+          console.log('[TerminalPanel] mkdir parent:', parent, 'exists:', !!fs[parent]);
           if (!fs[parent] && parent === 'project') {
             fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
           }
 
           if (!fs[parent]) {
             writeError(`mkdir: cannot create directory '${d}': No such file or directory`);
+            console.log('[TerminalPanel] mkdir failed - parent does not exist:', parent);
             continue;
           }
 
           fs[dirPath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
+          console.log('[TerminalPanel] localFileSystem after mkdir:', Object.keys(fs));
+          // Sync directory to VFS by creating a .keep file
+          void syncFileToVFS(`${dirPath}/.keep`, '');
         }
         return true;
       }
@@ -1358,6 +1429,8 @@ export default function TerminalPanel({
             fs[filePath].modifiedAt = Date.now();
           } else {
             fs[filePath] = { type: 'file', content: '', createdAt: Date.now(), modifiedAt: Date.now() };
+            // Sync new file to VFS
+            void syncFileToVFS(filePath, '');
           }
         }
         return true;

@@ -45,6 +45,12 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Debug flag
+  const DEBUG = typeof window !== 'undefined' && (localStorage.getItem('DEBUG_VFS') === 'true' || process.env.NODE_ENV === 'development');
+  const log = (...args: any[]) => DEBUG && console.log('[useVFS]', ...args);
+  const logError = (...args: any[]) => console.error('[useVFS ERROR]', ...args);
+  const logWarn = (...args: any[]) => console.warn('[useVFS WARN]', ...args);
+
   const buildHeaders = useCallback((includeJsonContentType: boolean): HeadersInit => {
     const headers: Record<string, string> = {
       'x-anonymous-session-id': getOrCreateAnonymousSessionId(),
@@ -64,6 +70,8 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
     options: RequestInit & { includeJsonContentType?: boolean } = {},
   ): Promise<TData> => {
     const { includeJsonContentType = true, ...rest } = options;
+    log(`request: ${options.method || 'GET'} ${url}`);
+    
     const response = await fetch(url, {
       ...rest,
       headers: {
@@ -72,6 +80,8 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
       },
     });
 
+    log(`request: response status=${response.status}`);
+    
     let payload: ApiResponse<TData> | null = null;
     try {
       payload = await response.json();
@@ -81,6 +91,7 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
 
     if (!response.ok || !payload?.success) {
       const message = payload?.error || `Request failed (${response.status})`;
+      logError(`request: failed - ${message}`);
       throw new Error(message);
     }
 
@@ -92,6 +103,7 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
   }, [currentPath]);
 
   const listDirectory = useCallback(async (pathToLoad?: string) => {
+    log(`listDirectory: loading "${pathToLoad || currentPathRef.current}"`);
     setIsLoading(true);
     setError(null);
     try {
@@ -100,11 +112,13 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
         `/api/filesystem/list?path=${encodeURIComponent(targetPath)}`,
         { method: 'GET', includeJsonContentType: false },
       );
+      log(`listDirectory: loaded "${data.path}", ${data.nodes.length} entries`);
       setCurrentPath(data.path);
       setNodes(data.nodes);
       return data.nodes;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to list files';
+      logError(`listDirectory: failed - ${message}`);
       setError(message);
       return [];
     } finally {
@@ -120,6 +134,7 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
   }, [request]);
 
   const writeFile = useCallback(async (filePath: string, content: string) => {
+    log(`writeFile: writing "${filePath}" (contentLength=${content.length})`);
     const data = await request<{
       path: string;
       version: number;
@@ -130,6 +145,7 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
       method: 'POST',
       body: JSON.stringify({ path: filePath, content }),
     });
+    log(`writeFile: written "${data.path}", version=${data.version}`);
     await listDirectory(currentPathRef.current);
     return data;
   }, [listDirectory, request]);
@@ -217,9 +233,13 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
     return result.path;
   }, [writeFile]);
 
+  // Load directory on first mount and when initialPath changes
+  const hasMountedRef = useRef(false);
   useEffect(() => {
-    // Only load directory when initialPath actually changes (not on every render)
-    if (initialPathRef.current !== initialPath) {
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      void listDirectory(initialPath);
+    } else if (initialPathRef.current !== initialPath) {
       initialPathRef.current = initialPath;
       void listDirectory(initialPath);
     }

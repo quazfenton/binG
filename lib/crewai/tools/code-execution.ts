@@ -16,7 +16,7 @@
  * @deprecated Use lib/sandbox/providers/* instead for secure code execution
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs/promises';
 import * as path from 'path';
