@@ -117,10 +117,29 @@ export default function ConversationInterface() {
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
     string | null
-  >(null);
+  >(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('current_conversation_id') || null;
+    }
+    return null;
+  });
   const [filesystemSessionId, setFilesystemSessionId] = useState<string>(
-    () => `draft-chat_${Date.now()}_${generateSecureId("chat")}`,
+    () => {
+      if (typeof window !== 'undefined') {
+        // Restore session from sessionStorage on refresh
+        const saved = sessionStorage.getItem('current_filesystem_session_id');
+        if (saved) return saved;
+      }
+      return `draft-chat_${Date.now()}_${generateSecureId("chat")}`;
+    },
   );
+
+  // Persist filesystemSessionId to sessionStorage so page refresh restores it
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('current_filesystem_session_id', filesystemSessionId);
+    }
+  }, [filesystemSessionId]);
   
   // Project name for simpler terminal paths (e.g., "webGame" instead of long session ID)
   const [projectName, setProjectName] = useState<string>('workspace');
@@ -129,6 +148,17 @@ export default function ConversationInterface() {
     () => `project/sessions/${filesystemSessionId}`,
     [filesystemSessionId],
   );
+  
+  // Persist currentConversationId to sessionStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (currentConversationId) {
+        sessionStorage.setItem('current_conversation_id', currentConversationId);
+      } else {
+        sessionStorage.removeItem('current_conversation_id');
+      }
+    }
+  }, [currentConversationId]);
   
   // Expose project name setter globally for LLM/chat to update
   useEffect(() => {
@@ -279,6 +309,17 @@ export default function ConversationInterface() {
     downloadAllHistory,
     // clearAllChats, // Removed as it does not exist in useChatHistory
   } = useChatHistory();
+
+  // Restore chat on mount if there's a saved conversation
+  useEffect(() => {
+    if (currentConversationId && messages.length === 0) {
+      const chat = loadChat(currentConversationId);
+      if (chat) {
+        setMessages(chat.messages);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on mount
 
   // Save chat history whenever messages change (after AI responses)
   useEffect(() => {

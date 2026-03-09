@@ -36,7 +36,8 @@ function getOrCreateAnonymousSessionId(): string {
   return sessionId;
 }
 
-export function useVirtualFilesystem(initialPath: string = 'project') {
+export function useVirtualFilesystem(initialPath: string = 'project', options?: { autoLoad?: boolean }) {
+  const autoLoad = options?.autoLoad !== false; // default true
   const [currentPath, setCurrentPath] = useState(initialPath);
   const currentPathRef = useRef(currentPath);
   const initialPathRef = useRef(initialPath);
@@ -236,6 +237,7 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
   // Load directory on first mount and when initialPath changes
   const hasMountedRef = useRef(false);
   useEffect(() => {
+    if (!autoLoad) return;
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
       void listDirectory(initialPath);
@@ -244,7 +246,7 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
       void listDirectory(initialPath);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialPath]);
+  }, [initialPath, autoLoad]);
 
   const attachedFileList = useMemo(
     () => Object.values(attachedFiles).sort((a, b) => a.path.localeCompare(b.path)),
