@@ -1,19 +1,20 @@
 /**
  * OPFS Adapter
- * 
- * Bridges VirtualFilesystemService with OPFS backend
- * Provides transparent sync between server VFS and client OPFS
- * 
+ *
+ * OPFS backend for client-side file operations
+ * Provides instant file operations using Origin Private File System
+ *
  * Features:
  * - OPFS-first read/write for instant operations
- * - Background server sync with queue management
+ * - Queue management for pending operations
  * - Conflict detection and resolution
  * - Offline mode support
  * - Version tracking
  */
 
+'use client';
+
 import { OPFSCore, OPFSError, opfsCore } from './opfs-core';
-import { virtualFilesystem } from '../virtual-filesystem-service';
 import type { VirtualFile } from '../filesystem-types';
 
 export interface SyncOptions {
@@ -172,25 +173,25 @@ export class OPFSAdapter {
    * 1. Try OPFS first (instant)
    * 2. Fallback to server if not in OPFS
    * 3. Cache server response in OPFS
-   * 
+   *
    * @param ownerId - Owner identifier
    * @param path - File path
    * @returns VirtualFile with content
    */
   async readFile(ownerId: string, path: string): Promise<VirtualFile> {
     if (!this.enabled) {
-      return virtualFilesystem.readFile(ownerId, path);
+      throw new OPFSError('OPFS adapter not enabled. Call enable() first.');
     }
 
     try {
       // Try OPFS first (instant read)
       const opfsFile = await this.core.readFile(path);
-      
+
       // Get version from tracking
       const versions = this.fileVersions.get(path);
-      
+
       console.log('[OPFS] Read cache hit:', path);
-      
+
       return {
         path,
         content: opfsFile.content,
@@ -200,16 +201,8 @@ export class OPFSAdapter {
         size: opfsFile.size,
       };
     } catch (error) {
-      // Fallback to server
-      console.log('[OPFS] Read cache miss, fetching from server:', path);
-      const serverFile = await virtualFilesystem.readFile(ownerId, path);
-      
-      // Cache in OPFS for next time (non-blocking)
-      this.cacheInOPFS(path, serverFile.content).catch(err => {
-        console.warn('[OPFS] Failed to cache file:', path, err);
-      });
-      
-      return serverFile;
+      console.log('[OPFS] Read cache miss:', path);
+      throw error;
     }
   }
 
@@ -234,7 +227,9 @@ export class OPFSAdapter {
     language?: string
   ): Promise<VirtualFile> {
     if (!this.enabled) {
-      return virtualFilesystem.writeFile(ownerId, path, content, language);
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) throw new OPFSError('Server VFS not available');
+      return vfs.writeFile(ownerId, path, content, language);
     }
 
     // Write to OPFS instantly
@@ -262,13 +257,15 @@ export class OPFSAdapter {
 
   /**
    * Delete file from OPFS and queue server delete
-   * 
+   *
    * @param ownerId - Owner identifier
    * @param path - File path
    */
   async deleteFile(ownerId: string, path: string): Promise<void> {
     if (!this.enabled) {
-      await virtualFilesystem.deletePath(ownerId, path);
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) throw new OPFSError('Server VFS not available');
+      await vfs.deletePath(ownerId, path);
       return;
     }
 
@@ -277,7 +274,7 @@ export class OPFSAdapter {
 
     // Note: We don't queue server deletes automatically
     // They should be handled explicitly to prevent accidental data loss
-    
+
     // Clear version tracking
     this.fileVersions.delete(path);
   }
@@ -332,7 +329,17 @@ export class OPFSAdapter {
 
     try {
       // Get server snapshot
-      const snapshot = await virtualFilesystem.exportWorkspace(ownerId);
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) {
+        return {
+          success: false,
+          filesSynced: 0,
+          bytesTransferred: 0,
+          conflicts: [],
+          errors: [{ path: '', message: 'Server VFS not available' }],
+        };
+      }
+      const snapshot = await vfs.exportWorkspace(ownerId);
 
       console.log('[OPFS] Syncing from server:', snapshot.files.length, 'files');
 
@@ -499,17 +506,23 @@ export class OPFSAdapter {
 
       console.log('[OPFS] Flushing', pendingWrites.length, 'pending writes to server');
 
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) {
+        console.warn('[OPFS] Server VFS not available, skipping flush');
+        return;
+      }
+
       for (const write of pendingWrites) {
         try {
-          await virtualFilesystem.writeFile(ownerId, write.path, write.content);
-          
+          await vfs.writeFile(ownerId, write.path, write.content);
+
           // Update version tracking (server caught up)
           const versions = this.fileVersions.get(write.path) || { opfs: 0, server: 0 };
           versions.server = versions.opfs;
           this.fileVersions.set(write.path, versions);
-          
+
           write.synced = true;
-          
+
           console.log('[OPFS] Synced to server:', write.path);
         } catch (error: any) {
           console.error('[OPFS] Failed to sync to server:', write.path, error);
@@ -518,7 +531,7 @@ export class OPFSAdapter {
 
       // Remove synced writes from queue
       this.writeQueue = this.writeQueue.filter(w => !w.synced);
-      
+
       // Update last sync time
       this.lastSyncTime.set(ownerId, Date.now());
     } finally {
@@ -675,7 +688,13 @@ export class OPFSAdapter {
   ): Promise<void> {
     try {
       const entries = await this.core.listDirectory(path || '.');
-      
+
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) {
+        console.warn('[OPFS] Server VFS not available, skipping sync to server');
+        return;
+      }
+
       for (const entry of entries) {
         if (entry.type === 'file') {
           // Check include/exclude patterns
@@ -692,9 +711,9 @@ export class OPFSAdapter {
 
           // Read from OPFS and write to server
           const opfsFile = await this.core.readFile(entry.path);
-          
+
           try {
-            await virtualFilesystem.writeFile(ownerId, entry.path, opfsFile.content);
+            await vfs.writeFile(ownerId, entry.path, opfsFile.content);
             
             // Update version tracking
             if (versions) {

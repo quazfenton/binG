@@ -55,7 +55,8 @@ jobs:
           echo "Triggering comment from event: ID=${{ github.event.comment.id }}"
 
           # Fetch ALL review comments on this PR (paginate to combine pages into single array)
-          ALL_REVIEW_COMMENTS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments --paginate --jq '[.[]] | add')
+          # Note: gh api --slurp is incompatible with --jq, so we pipe to jq -s instead
+          ALL_REVIEW_COMMENTS=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/comments" --paginate | jq -s 'add // []')
 
           echo "Total review comments on PR: $(echo "$ALL_REVIEW_COMMENTS" | jq 'length')"
 
@@ -178,8 +179,9 @@ jobs:
           # Fetch only NEW unprocessed reviews from verified bot accounts
           # Filters out reviews that already contain the agent applied marker
           # Gets last 10 complete reviews (not line-count limited to avoid truncation)
+          # Note: select(.body != null) filters out deleted/empty reviews
           RAW_FEEDBACK=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews \
-            --jq '[.[] | select(.user.login | test("'"$BOT_PATTERN"'"; "i")) | select(.state == "COMMENTED" or .state == "CHANGES_REQUESTED") | select(.body | contains("Agent:") | not)] | .[-10:] | .[].body' \
+            --jq '[.[] | select(.body != null) | select(.user.login | test("'"$BOT_PATTERN"'"; "i")) | select(.state == "COMMENTED" or .state == "CHANGES_REQUESTED") | select(.body | contains("Agent:") | not)] | .[-10:] | .[].body' \
             | tac)
           SUGGESTIONS="${RAW_FEEDBACK:-Review the suggestion if there is any for optimizations.}"
 
@@ -289,10 +291,10 @@ jobs:
           git add .
 
           # Only commit and push if the Agent actually changed files
-          # Use git status --porcelain instead of diff-index to avoid HEAD reference issues
+          # Use git diff --cached to check staged changes (no HEAD reference needed)
           if ! git diff --cached --quiet; then
-            # Get list of changed files
-            CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r HEAD | jq -R -s -c 'split("\n")[:-1]')
+            # Get list of changed files from staged area
+            CHANGED_FILES=$(git diff --cached --name-only | jq -R -s -c 'split("\n")[:-1]')
 
             # Get all trigger comment IDs for reference
             COMMENT_IDS="${{ needs.collect-comments.outputs.comment_ids }}"
@@ -428,23 +430,24 @@ jobs:
           PR_NUMBER=${{ github.event.pull_request.number }}
           QUEUE_FILE=".jarvis/queue-pr-${PR_NUMBER}.json"
 
-          # Decode base64 to get comment bodies (preserves multiline)
+          # Decode base64 to get comment bodies (null-separated to preserve multiline)
           TRIGGER_BODIES=$(echo "$TRIGGER_BODIES_B64" | base64 -d)
 
           # Build JSON array: [{"id": 123, "body": "..."}, ...]
-          IFS=',' read -r -a IDS <<< "$COMMENT_IDS"
+          # Use jq to safely build JSON array from null-separated bodies
+          QUEUE_JSON=$(printf '%s' "$TRIGGER_BODIES" | jq -Rs --argjson ids "$(echo "$COMMENT_IDS" | jq -R 'split(",") | [.[] | tonumber]')" '
+            split("\u0000") | 
+            [.[] | select(length > 0)] |
+            to_entries | 
+            map({id: $ids[.key], body: .value})
+          ' 2>/dev/null || echo "[]")
 
-          # Use jq to safely build JSON array (handles multiline, special chars)
-          QUEUE_JSON="[]"
-          idx=0
-          while IFS= read -r body; do
-            if [ $idx -ge ${#IDS[@]} ]; then break; fi
-            if [ -z "$body" ]; then continue; fi
-            QUEUE_JSON=$(echo "$QUEUE_JSON" | jq --argjson id "${IDS[$idx]}" --arg body "$body" '. + [{id: $id, body: $body}]')
-            ((idx++))
-          done <<< "$TRIGGER_BODIES"
+          # Fallback: if jq failed, build empty array
+          if [ "$QUEUE_JSON" = "null" ] || [ -z "$QUEUE_JSON" ]; then
+            QUEUE_JSON="[]"
+          fi
 
-          echo "Saving pending queue with $idx comments for PR $PR_NUMBER"
+          echo "Saving pending queue with $(echo "$QUEUE_JSON" | jq 'length') comments for PR $PR_NUMBER"
 
           # Get the default branch name dynamically
           DEFAULT_BRANCH=$(gh api repos/${{ github.repository }} --jq '.default_branch')

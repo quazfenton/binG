@@ -1,13 +1,29 @@
 /**
  * OPFS Migration Utilities
- * 
+ *
  * Tools to migrate data between server VFS and OPFS
  * Supports bidirectional migration with progress tracking
  */
 
-import { virtualFilesystem } from '../virtual-filesystem-service';
+'use client';
+
 import { opfsCore, type OPFSStats } from './opfs-core';
 import { opfsAdapter } from './opfs-adapter';
+
+// Lazy import virtualFilesystem to avoid bundling node:fs in client
+let _virtualFilesystemModule: typeof import('../virtual-filesystem-service').virtualFilesystem | null = null;
+
+async function getVirtualFilesystem() {
+  if (!_virtualFilesystemModule) {
+    try {
+      const mod = await import('../virtual-filesystem-service');
+      _virtualFilesystemModule = mod.virtualFilesystem;
+    } catch {
+      _virtualFilesystemModule = null;
+    }
+  }
+  return _virtualFilesystemModule;
+}
 
 export interface MigrationResult {
   success: boolean;
@@ -62,7 +78,18 @@ export async function migrateFromServerVFS(options: MigrationOptions): Promise<M
     await opfsCore.initialize(workspaceId);
 
     // Get server snapshot
-    const snapshot = await virtualFilesystem.exportWorkspace(ownerId);
+    const vfs = await getVirtualFilesystem();
+    if (!vfs) {
+      return {
+        success: false,
+        filesMigrated: 0,
+        totalSize: 0,
+        errors: ['Server VFS not available'],
+        duration: Date.now() - startTime,
+        workspaceId,
+      };
+    }
+    const snapshot = await vfs.exportWorkspace(ownerId);
     const files = filterFiles(snapshot.files, options);
 
     console.log(`[OPFS Migration] Starting server → OPFS migration: ${files.length} files`);
@@ -253,7 +280,18 @@ export async function getMigrationStatus(
 
   try {
     // Get server snapshot
-    const snapshot = await virtualFilesystem.exportWorkspace(ownerId);
+    const vfs = await getVirtualFilesystem();
+    if (!vfs) {
+      return {
+        serverFileCount: 0,
+        opfsFileCount: 0,
+        serverTotalSize: 0,
+        opfsTotalSize: 0,
+        isInSync: false,
+        differences: ['Server VFS not available'],
+      };
+    }
+    const snapshot = await vfs.exportWorkspace(ownerId);
     const serverFiles = snapshot.files;
     const serverTotalSize = serverFiles.reduce((sum, f) => sum + f.size, 0);
 
@@ -330,7 +368,12 @@ async function migrateOPFSToServerRecursive(
           const opfsFile = await opfsCore.readFile(entry.path);
 
           // Write to server VFS
-          await virtualFilesystem.writeFile(ownerId, entry.path, opfsFile.content);
+          const vfs = await getVirtualFilesystem();
+          if (!vfs) {
+            errors.push(`Server VFS not available for ${entry.path}`);
+            continue;
+          }
+          await vfs.writeFile(ownerId, entry.path, opfsFile.content);
 
           stats.filesMigrated++;
           stats.totalSize += opfsFile.size;
@@ -368,7 +411,12 @@ async function verifyMigration(
   try {
     if (direction === 'server-to-opfs') {
       // Verify server files exist in OPFS
-      const snapshot = await virtualFilesystem.exportWorkspace(ownerId);
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) {
+        errors.push('Server VFS not available for verification');
+        return;
+      }
+      const snapshot = await vfs.exportWorkspace(ownerId);
       
       for (const file of snapshot.files) {
         try {
@@ -386,7 +434,12 @@ async function verifyMigration(
       // This would require walking OPFS tree and comparing
       // Simplified version: just check file counts
       const opfsStats = await opfsCore.getStats();
-      const snapshot = await virtualFilesystem.exportWorkspace(ownerId);
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) {
+        errors.push('Server VFS not available for verification');
+        return;
+      }
+      const snapshot = await vfs.exportWorkspace(ownerId);
       
       if (opfsStats.totalFiles !== snapshot.files.length) {
         errors.push(`Verification failed: file count mismatch`);
