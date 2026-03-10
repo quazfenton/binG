@@ -314,6 +314,7 @@ export class SandboxMetrics {
   public sandboxActive: Gauge;
   public sandboxExecTotal: Counter;
   public sandboxExecDuration: Histogram;
+  public sandboxCreationDuration: Histogram;
 
   // Snapshot metrics
   public snapshotCreatedTotal: Counter;
@@ -358,6 +359,11 @@ export class SandboxMetrics {
       'sandbox_exec_duration_seconds',
       'Command execution duration in seconds',
       ['status']
+    );
+    this.sandboxCreationDuration = new Histogram(
+      'sandbox_creation_duration_seconds',
+      'Sandbox creation duration in seconds',
+      []
     );
 
     // Snapshot metrics
@@ -462,6 +468,7 @@ export class SandboxMetrics {
     this.registry.register(this.sandboxActive);
     this.registry.register(this.sandboxExecTotal);
     this.registry.register(this.sandboxExecDuration);
+    this.registry.register(this.sandboxCreationDuration);
     this.registry.register(this.snapshotCreatedTotal);
     this.registry.register(this.snapshotRestoredTotal);
     this.registry.register(this.snapshotSizeBytes);

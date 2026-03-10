@@ -215,25 +215,20 @@ jobs:
           if ! git diff-index --quiet HEAD; then
             # Get list of changed files
             CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r HEAD | jq -R -s -c 'split("\n")[:-1]')
-            
+
             # Get all trigger comment IDs and URLs for reference
             COMMENT_IDS="${{ needs.collect-comments.outputs.comment_ids }}"
             COMMENT_COUNT=$(echo "$COMMENT_IDS" | tr ',' '\n' | grep -c .)
-            
-            # Build commit message with all comment references
-            COMMIT_MSG=$(cat <<EOF
-🤖 Agent: Batch applied fixes from $COMMENT_COUNT review comments
 
-Triggered by comments: $COMMENT_IDS
-EOF
-)
-            git commit -m "$COMMIT_MSG"
-            git push origin HEAD --force
+            # Build commit message with all comment references
+            git commit -m "🤖 Agent: Batch applied fixes from $COMMENT_COUNT review comments - Comments: $COMMENT_IDS"
             
+            git push origin HEAD --force
+
             echo "changed_files<<EOF" >> $GITHUB_OUTPUT
             echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
-            
+
             echo "success=true" >> $GITHUB_OUTPUT
             echo "comment_count=$COMMENT_COUNT" >> $GITHUB_OUTPUT
           else

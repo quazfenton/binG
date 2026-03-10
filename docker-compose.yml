@@ -282,6 +282,21 @@ services:
       - WORKSPACE_DIR=/workspace
     volumes:
       - microsandbox-workspaces:/workspace
+      # ⚠️ SECURITY: Docker socket mount - gives container full control over host Docker daemon
+      # This is required for microsandbox to create child containers, but poses CRITICAL security risks:
+      # - Container escape possible
+      # - Host compromise possible
+      # - All containers accessible
+      #
+      # PRODUCTION MITIGATION (REQUIRED):
+      # 1. Use Docker socket proxy (docker-socket-proxy) with limited permissions
+      # 2. Implement rootless Docker
+      # 3. Use user namespaces with restricted UID/GID mapping
+      # 4. Apply AppArmor/SELinux profiles
+      # 5. Run in isolated network segment
+      #
+      # Recommended: Replace with socket proxy service
+      # Example: docker-socket-proxy container with limited API endpoints
       - /var/run/docker.sock:/var/run/docker.sock
     command: >
       sh -c "

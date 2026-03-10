@@ -59,23 +59,23 @@ importers:
         specifier: ^2.4.2
         version: 2.4.2(@hey-api/openapi-ts@0.93.1(typescript@5.9.3))(@xterm/xterm@6.0.0)(ink@6.8.0(@types/react@19.2.14)(bufferutil@4.1.0)(react@19.1.2)(utf-8-validate@6.0.6))
       '@composio/anthropic':
-        specifier: ^0.2.6
-        version: 0.2.6(@anthropic-ai/sdk@0.52.0)(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@mastra/mcp@0.12.0(@cfworker/json-schema@4.1.1)(@mastra/core@1.8.0(@cfworker/json-schema@4.1.1)(@standard-community/standard-json@0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.1(zod@3.25.76))(zod@3.25.76))(@standard-community/standard-openapi@0.2.9(@standard-community/standard-json@0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.1(zod@3.25.76))(zod@3.25.76))(@standard-schema/spec@1.1.0)(openapi-types@12.1.3)(zod@3.25.76))(@types/json-schema@7.0.15)(openapi-types@12.1.3)(zod@3.25.76))(@types/json-schema@7.0.15)(zod@3.25.76))
+        specifier: ^0.6.3
+        version: 0.6.4(@anthropic-ai/sdk@0.52.0)(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@mastra/mcp@0.12.0(@cfworker/json-schema@4.1.1)(@mastra/core@1.8.0(@cfworker/json-schema@4.1.1)(@standard-community/standard-json@0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.1(zod@3.25.76))(zod@3.25.76))(@standard-community/standard-openapi@0.2.9(@standard-community/standard-json@0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.1(zod@3.25.76))(zod@3.25.76))(@standard-schema/spec@1.1.0)(openapi-types@12.1.3)(zod@3.25.76))(@types/json-schema@7.0.15)(openapi-types@12.1.3)(zod@3.25.76))(@types/json-schema@7.0.15)(zod@3.25.76))
       '@composio/core':
         specifier: ^0.6.3
         version: 0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76)
       '@composio/google':
-        specifier: ^0.5.2
-        version: 0.5.5(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@google/genai@1.43.0(@modelcontextprotocol/sdk@1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76))(bufferutil@4.1.0)(utf-8-validate@6.0.6))
+        specifier: ^0.6.3
+        version: 0.6.4(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@google/genai@1.43.0(@modelcontextprotocol/sdk@1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76))(bufferutil@4.1.0)(utf-8-validate@6.0.6))
       '@composio/langchain':
-        specifier: ^0.6.2
+        specifier: ^0.6.3
         version: 0.6.3(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@langchain/core@1.1.31(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.207.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@1.30.1(@opentelemetry/api@1.9.0))(openai@4.104.0(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76)))
       '@composio/openai-agents':
-        specifier: ^0.5.5
-        version: 0.5.5(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@openai/agents@0.1.11(@cfworker/json-schema@4.1.1)(bufferutil@4.1.0)(utf-8-validate@6.0.6)(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(zod@3.25.76)
+        specifier: ^0.6.3
+        version: 0.6.4(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@openai/agents@0.1.11(@cfworker/json-schema@4.1.1)(bufferutil@4.1.0)(utf-8-validate@6.0.6)(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(zod@3.25.76)
       '@composio/vercel':
-        specifier: ^0.5.4
-        version: 0.5.5(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(ai@6.0.116(zod@3.25.76))
+        specifier: ^0.6.3
+        version: 0.6.4(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(ai@6.0.116(zod@3.25.76))
       '@craftjs/core':
         specifier: ^0.2.12
         version: 0.2.12(react@19.1.2)
@@ -151,6 +151,9 @@ importers:
       '@nangohq/node':
         specifier: ^0.69.5
         version: 0.69.38
+      '@opencode-ai/sdk':
+        specifier: ^1.2.24
+        version: 1.2.24
       '@radix-ui/react-accordion':
         specifier: 1.2.2
         version: 1.2.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.1.2(react@19.1.2))(react@19.1.2)
@@ -1168,11 +1171,11 @@ packages:
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
     engines: {node: '>=0.1.90'}
 
-  '@composio/anthropic@0.2.6':
-    resolution: {integrity: sha512-Q55N2Elv9kqDkQVMIXKTQCxyNElxUIVaCV/PFXzA+FX0nlms/Bc8qJofkRrVjk7Cj7Yl8kbMgVKPPPqeW2RLpw==}
+  '@composio/anthropic@0.6.4':
+    resolution: {integrity: sha512-Wpy8lSRDpnmsynz4H/ZuEIaskEK1/KYlUSLvaSYJaVb0mOWlMxHiwxL2wf6uxXTArYAkprA3QEFUvUAsVlNmtw==}
     peerDependencies:
       '@anthropic-ai/sdk': ^0.52.0
-      '@composio/core': 0.2.6
+      '@composio/core': 0.6.4
       '@mastra/mcp': ^0.12.0
 
   '@composio/client@0.1.0-alpha.56':
@@ -1183,10 +1186,10 @@ packages:
     peerDependencies:
       zod: ^3.25 || ^4
 
-  '@composio/google@0.5.5':
-    resolution: {integrity: sha512-0W+WZANsVSVAkhaRxbUUpuHJ52O3BbknAEV/C38/1yZq3mmvzx/DlRjGf/tiDRaS7Pxr8WhYwGUKgeyzYR4qAw==}
+  '@composio/google@0.6.4':
+    resolution: {integrity: sha512-SwVvXodI3+IiA8mGwTPE0TTr0M0hCA4yekggWR6wuUFRa5kHlczUFjdHqtgnHEGcNeLTRBeulaASTjBQVna2iQ==}
     peerDependencies:
-      '@composio/core': 0.5.5
+      '@composio/core': 0.6.4
       '@google/genai': ^1.1.0
 
   '@composio/json-schema-to-zod@0.1.20':
@@ -1200,17 +1203,17 @@ packages:
       '@composio/core': 0.6.3
       '@langchain/core': ^1.1.4
 
-  '@composio/openai-agents@0.5.5':
-    resolution: {integrity: sha512-s8fXolOPf+rbya312QsgNU31ly9d/2xIbRn2Ig2AKkdsIZhB5/kXh710n+pGm7ssTXFOs/Jb9/fiXD+M9PL4Ug==}
+  '@composio/openai-agents@0.6.4':
+    resolution: {integrity: sha512-r40HXyBLPp0R7eKxeYf4SYXgEHLdf+r/OTcylTSySSoDe9qAOiw9weeZTu9YZZNxZhp51IxNpyIObcCiLnwX3A==}
     peerDependencies:
-      '@composio/core': 0.5.5
+      '@composio/core': 0.6.4
       '@openai/agents': ^0.1.3
       zod: ^4.1.0
 
-  '@composio/vercel@0.5.5':
-    resolution: {integrity: sha512-Z2nT3/5KLFmGQJVxpq5sXZNoa+PSNWEJnIvjB/9J31adR3K/rnanB+L943R1fQtCk93g+nnv3ggZZfaxMZqktw==}
+  '@composio/vercel@0.6.4':
+    resolution: {integrity: sha512-rDkWmy3WT7Ryjc/NwMTsrFtz5X+zFH4XkuphxPeMnY+xn6PVyzQ5THimm6j1PNkSj+2lxQIKfYPPYeO1/6Sl+A==}
     peerDependencies:
-      '@composio/core': 0.5.5
+      '@composio/core': 0.6.4
       ai: ^5.0.0 || ^6.0.0
 
   '@connectrpc/connect-web@2.0.0-rc.3':
@@ -2417,6 +2420,9 @@ packages:
     resolution: {integrity: sha512-jnaFt54iP71vYDXvpG3EGX2kVRYIU2xBdCT3uFqdXm4KqFAP9JQFNGiKKBEeE5rbXARpqAQpKH+5HfoANndpcQ==}
     peerDependencies:
       zod: ^3.25.40
+
+  '@opencode-ai/sdk@1.2.24':
+    resolution: {integrity: sha512-MQamFkRl4B/3d6oIRLNpkYR2fcwet1V/ffKyOKJXWjtP/CT9PDJMtLpu6olVHjXKQi8zMNltwuMhv1QsNtRlZg==}
 
   '@opentelemetry/api-logs@0.207.0':
     resolution: {integrity: sha512-lAb0jQRVyleQQGiuuvCOTDVspc14nx6XJjP4FspJ1sNARo3Regq4ZZbrc3rN4b1TYSuUCvgH+UXUPug4SLOqEQ==}
@@ -11501,7 +11507,7 @@ snapshots:
   '@colors/colors@1.5.0':
     optional: true
 
-  '@composio/anthropic@0.2.6(@anthropic-ai/sdk@0.52.0)(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@mastra/mcp@0.12.0(@cfworker/json-schema@4.1.1)(@mastra/core@1.8.0(@cfworker/json-schema@4.1.1)(@standard-community/standard-json@0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.1(zod@3.25.76))(zod@3.25.76))(@standard-community/standard-openapi@0.2.9(@standard-community/standard-json@0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.1(zod@3.25.76))(zod@3.25.76))(@standard-schema/spec@1.1.0)(openapi-types@12.1.3)(zod@3.25.76))(@types/json-schema@7.0.15)(openapi-types@12.1.3)(zod@3.25.76))(@types/json-schema@7.0.15)(zod@3.25.76))':
+  '@composio/anthropic@0.6.4(@anthropic-ai/sdk@0.52.0)(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@mastra/mcp@0.12.0(@cfworker/json-schema@4.1.1)(@mastra/core@1.8.0(@cfworker/json-schema@4.1.1)(@standard-community/standard-json@0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.1(zod@3.25.76))(zod@3.25.76))(@standard-community/standard-openapi@0.2.9(@standard-community/standard-json@0.3.5(@standard-schema/spec@1.1.0)(@types/json-schema@7.0.15)(quansync@0.2.11)(zod-to-json-schema@3.25.1(zod@3.25.76))(zod@3.25.76))(@standard-schema/spec@1.1.0)(openapi-types@12.1.3)(zod@3.25.76))(@types/json-schema@7.0.15)(openapi-types@12.1.3)(zod@3.25.76))(@types/json-schema@7.0.15)(zod@3.25.76))':
     dependencies:
       '@anthropic-ai/sdk': 0.52.0
       '@composio/core': 0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76)
@@ -11523,7 +11529,7 @@ snapshots:
     transitivePeerDependencies:
       - ws
 
-  '@composio/google@0.5.5(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@google/genai@1.43.0(@modelcontextprotocol/sdk@1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76))(bufferutil@4.1.0)(utf-8-validate@6.0.6))':
+  '@composio/google@0.6.4(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@google/genai@1.43.0(@modelcontextprotocol/sdk@1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76))(bufferutil@4.1.0)(utf-8-validate@6.0.6))':
     dependencies:
       '@composio/core': 0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76)
       '@google/genai': 1.43.0(@modelcontextprotocol/sdk@1.27.1(@cfworker/json-schema@4.1.1)(zod@3.25.76))(bufferutil@4.1.0)(utf-8-validate@6.0.6)
@@ -11537,13 +11543,13 @@ snapshots:
       '@composio/core': 0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76)
       '@langchain/core': 1.1.31(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.207.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@1.30.1(@opentelemetry/api@1.9.0))(openai@4.104.0(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))
 
-  '@composio/openai-agents@0.5.5(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@openai/agents@0.1.11(@cfworker/json-schema@4.1.1)(bufferutil@4.1.0)(utf-8-validate@6.0.6)(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(zod@3.25.76)':
+  '@composio/openai-agents@0.6.4(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(@openai/agents@0.1.11(@cfworker/json-schema@4.1.1)(bufferutil@4.1.0)(utf-8-validate@6.0.6)(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(zod@3.25.76)':
     dependencies:
       '@composio/core': 0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76)
       '@openai/agents': 0.1.11(@cfworker/json-schema@4.1.1)(bufferutil@4.1.0)(utf-8-validate@6.0.6)(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76)
       zod: 3.25.76
 
-  '@composio/vercel@0.5.5(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(ai@6.0.116(zod@3.25.76))':
+  '@composio/vercel@0.6.4(@composio/core@0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76))(ai@6.0.116(zod@3.25.76))':
     dependencies:
       '@composio/core': 0.6.3(ws@8.19.0(bufferutil@4.1.0)(utf-8-validate@6.0.6))(zod@3.25.76)
       ai: 6.0.116(zod@3.25.76)
@@ -12777,6 +12783,8 @@ snapshots:
       - supports-color
       - utf-8-validate
       - ws
+
+  '@opencode-ai/sdk@1.2.24': {}
 
   '@opentelemetry/api-logs@0.207.0':
     dependencies:

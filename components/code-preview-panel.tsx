@@ -972,11 +972,11 @@ export default function CodePreviewPanel({
     }
     let cancelled = false;
     let isInitialized = false;
-    
+
     const initializeExplorer = async () => {
       if (isInitialized) return;
       isInitialized = true;
-      
+
       setSelectedFilesystemPath("");
       setSelectedFilesystemContent("");
       setSelectedFilesystemLanguage("text");
@@ -1012,11 +1012,12 @@ export default function CodePreviewPanel({
     };
 
     void initializeExplorer();
-    
+
     return () => {
       cancelled = true;
     };
-  }, [filesystemScopePath, isOpen, selectedTab, listFilesystemDirectory]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filesystemScopePath, isOpen, selectedTab]); // Removed listFilesystemDirectory from deps
 
   useEffect(() => {
     if (!isOpen) {
@@ -1059,11 +1060,13 @@ export default function CodePreviewPanel({
   // FIXED: Use refs to avoid re-creating listener on every dependency change
   const filesystemCurrentPathRef = useRef(filesystemCurrentPath);
   const filesystemScopePathRef = useRef(filesystemScopePath);
-  
+  const lastRefreshTimeRef = useRef(0);
+  const REFRESH_COOLDOWN_MS = 1000; // Minimum 1 second between refreshes
+
   useEffect(() => {
     filesystemCurrentPathRef.current = filesystemCurrentPath;
   }, [filesystemCurrentPath]);
-  
+
   useEffect(() => {
     filesystemScopePathRef.current = filesystemScopePath;
   }, [filesystemScopePath]);
@@ -1073,6 +1076,15 @@ export default function CodePreviewPanel({
 
     const handleFilesystemUpdated = async (event?: CustomEvent) => {
       const detail = event?.detail;
+      
+      // Prevent rapid re-refreshing (cooldown)
+      const now = Date.now();
+      if (now - lastRefreshTimeRef.current < REFRESH_COOLDOWN_MS) {
+        log(`[filesystem-updated] skipping - cooldown (${now - lastRefreshTimeRef.current}ms < ${REFRESH_COOLDOWN_MS}ms)`);
+        return;
+      }
+      lastRefreshTimeRef.current = now;
+      
       log(`[filesystem-updated event] received`, detail);
 
       try {

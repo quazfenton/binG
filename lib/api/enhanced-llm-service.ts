@@ -109,10 +109,10 @@ export class EnhancedLLMService {
         priority: 7
       },
       {
-        provider: 'opencode',
-        baseUrl: process.env.OPENCODE_BASE_URL || 'https://api.opencode.ai/v1',
-        apiKey: process.env.OPENCODE_API_KEY || '',
-        models: PROVIDERS.opencode.models,
+        provider: 'zen',
+        baseUrl: process.env.zen_BASE_URL || 'https://api.zen.ai/v1',
+        apiKey: process.env.zen_API_KEY || '',
+        models: PROVIDERS.zen.models,
         priority: 8
       }
     ];
@@ -125,14 +125,14 @@ export class EnhancedLLMService {
   }
 
   private setupFallbackChains(): void {
-    this.fallbackChains.set('openrouter', ['mistral', 'google', 'github', 'opencode']);
+    this.fallbackChains.set('openrouter', ['mistral', 'google', 'github', 'zen']);
     this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google', 'mistral', 'github']);
     this.fallbackChains.set('anthropic', ['openrouter', 'mistral', 'google', 'github']);
-    this.fallbackChains.set('google', ['openrouter', 'mistral', 'github', 'opencode']);
+    this.fallbackChains.set('google', ['openrouter', 'mistral', 'github', 'zen']);
     this.fallbackChains.set('mistral', ['openrouter', 'chutes', 'anthropic', 'google', 'github']);
-    this.fallbackChains.set('github', ['openrouter', 'mistral', 'google', 'opencode']);
+    this.fallbackChains.set('github', ['openrouter', 'mistral', 'google', 'zen']);
     this.fallbackChains.set('portkey', ['openrouter', 'google', 'mistral', 'github']);
-    this.fallbackChains.set('opencode', ['mistral', 'google', 'openrouter', 'github']);
+    this.fallbackChains.set('zen', ['mistral', 'google', 'openrouter', 'github']);
   }
 
   private startHealthMonitoring(): void {

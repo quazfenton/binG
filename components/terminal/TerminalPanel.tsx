@@ -15,6 +15,7 @@ import { secureRandom, generateSecureId } from '@/lib/utils';
 import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '@/lib/terminal/terminal-security';
 import { createLogger } from '@/lib/utils/logger';
 import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
+import { useWebSocketTerminal } from '@/hooks/use-websocket-terminal';
 
 const logger = createLogger('TerminalPanel');
 
@@ -185,6 +186,25 @@ export default function TerminalPanel({
     readFile: readVfsFile,
     getSnapshot: getVfsSnapshot,
   } = virtualFilesystem;
+
+  // Initialize WebSocket terminal server on mount (ensures backend is started)
+  useEffect(() => {
+    const initWebSocketServer = async () => {
+      if (!isOpen) return;
+      try {
+        logger.debug('Initializing WebSocket terminal server...');
+        // Call backend endpoint to trigger WebSocket server initialization
+        await fetch('/api/backend', { 
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        }).catch(() => null);
+        logger.info('WebSocket terminal server initialized');
+      } catch (err) {
+        logger.debug('WebSocket server already initialized or init failed:', err);
+      }
+    };
+    initWebSocketServer();
+  }, [isOpen]);
 
   // Memoize getVfsSnapshot to prevent unnecessary effect re-runs
   const getVfsSnapshotMemoized = useCallback(() => getVfsSnapshot(), [getVfsSnapshot]);
@@ -416,8 +436,6 @@ export default function TerminalPanel({
       log('[TerminalPanel] removed filesystem-updated event listener');
     };
   }, [isOpen, getVfsSnapshotMemoized]);
-
-  console.log('[TerminalPanel] Component rendering, isOpen:', isOpen);
   
   const localFileSystemRef = useRef<LocalFileSystem>({});
   const localShellCwdRef = useRef<Record<string, string>>({});

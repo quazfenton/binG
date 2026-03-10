@@ -106,7 +106,7 @@ export interface ProviderConfig {
     apiKey?: string
     baseURL?: string
   }
-  opencode?: {
+  zen?: {
     apiKey?: string
     baseURL?: string
   }
@@ -324,9 +324,9 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     maxTokens: 128000,
     description: 'GitHub Models - Access to GPT-4, Llama, Mistral, Phi, and more via GitHub Azure'
   },
-  opencode: {
-    id: 'opencode',
-    name: 'OpenCode API',
+  zen: {
+    id: 'zen',
+    name: 'zen API',
     models: [
       'zen',
       'zen-32k',
@@ -338,7 +338,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     ],
     supportsStreaming: true,
     maxTokens: 128000,
-    description: 'OpenCode API - Access to Zen and Kimi 2.5 models with extended context windows'
+    description: 'zen API - Access to Zen and Kimi 2.5 models with extended context windows'
   }
 }
 
@@ -351,7 +351,7 @@ class LLMService {
   private replicate: Replicate | null = null
   private portkey: Portkey | null = null
   private mistral: Mistral | null = null
-  private opencodeClient: OpenAI | null = null
+  private zenClient: OpenAI | null = null
   private composioService: ComposioService | null = null
 
   constructor(config: ProviderConfig = {}) {
@@ -405,11 +405,11 @@ class LLMService {
       })
     }
 
-    if (config.opencode?.apiKey) {
-      // OpenCode API is OpenAI-compatible
-      this.opencodeClient = new OpenAI({
-        apiKey: config.opencode.apiKey,
-        baseURL: config.opencode.baseURL || 'https://api.opencode.ai/v1'
+    if (config.zen?.apiKey) {
+      // zen API is OpenAI-compatible
+      this.zenClient = new OpenAI({
+        apiKey: config.zen.apiKey,
+        baseURL: config.zen.baseURL || 'https://api.zen.ai/v1'
       })
     }
   }
@@ -517,8 +517,8 @@ class LLMService {
         case 'github':
           response = await this.generateGitHubResponse(model, messages, temperature, maxTokens)
           break;
-        case 'opencode':
-          response = await this.generateOpenCodeResponse(model, messages, temperature, maxTokens)
+        case 'zen':
+          response = await this.generatezenResponse(model, messages, temperature, maxTokens)
           break;
         default:
           throw createLLMError(`Unsupported provider: ${provider}`, {
@@ -635,8 +635,8 @@ class LLMService {
             yield chunk;
           }
           break
-        case 'opencode':
-          for await (const chunk of this.streamOpenCodeResponse(model, messages, temperature, maxTokens)) {
+        case 'zen':
+          for await (const chunk of this.streamzenResponse(model, messages, temperature, maxTokens)) {
             chunkCount++;
             yield chunk;
           }
@@ -1015,15 +1015,15 @@ class LLMService {
     }
   }
 
-  private async generateOpenCodeResponse(
+  private async generatezenResponse(
     model: string,
     messages: LLMMessage[],
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    if (!this.opencodeClient) throw new Error('OpenCode API not initialized');
+    if (!this.zenClient) throw new Error('zen API not initialized');
 
-    const response = await this.opencodeClient.chat.completions.create({
+    const response = await this.zenClient.chat.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -1153,15 +1153,15 @@ class LLMService {
     yield { content: '', isComplete: true }
   }
 
-  private async *streamOpenCodeResponse(
+  private async *streamzenResponse(
     model: string,
     messages: LLMMessage[],
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    if (!this.opencodeClient) throw new Error('OpenCode API not initialized');
+    if (!this.zenClient) throw new Error('zen API not initialized');
 
-    const stream = await this.opencodeClient.chat.completions.create({
+    const stream = await this.zenClient.chat.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -1376,8 +1376,8 @@ class LLMService {
           return !!process.env.PORTKEY_API_KEY;
         case 'mistral':
           return !!process.env.MISTRAL_API_KEY;
-        case 'opencode':
-          return !!process.env.OPENCODE_API_KEY;
+        case 'zen':
+          return !!process.env.zen_API_KEY;
         case 'openrouter':
           return !!process.env.OPENROUTER_API_KEY;
         case 'chutes':
@@ -1438,9 +1438,9 @@ export const llmService = new LLMService({
     apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY,
     baseURL: process.env.GITHUB_MODELS_BASE_URL
   },
-  opencode: {
-    apiKey: process.env.OPENCODE_API_KEY,
-    baseURL: process.env.OPENCODE_BASE_URL
+  zen: {
+    apiKey: process.env.zen_API_KEY,
+    baseURL: process.env.zen_BASE_URL
   }
 })
 

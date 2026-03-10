@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
+  <meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
+  <title>WebContainer Integration Test</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    h1 { color: #00dc82; }
+    .test-suite {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+    }
+    .test {
+      background: #0f3460;
+      border-left: 4px solid #666;
+      padding: 10px 15px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+    .test.pass { border-left-color: #00dc82; }
+    .test.fail { border-left-color: #e94560; }
+    .test.pending { border-left-color: #f0ad4e; }
+    .status { font-weight: bold; margin-right: 10px; }
+    .pass .status { color: #00dc82; }
+    .fail .status { color: #e94560; }
+    .pending .status { color: #f0ad4e; }
+    .output {
+      background: #0a0a15;
+      padding: 10px;
+      border-radius: 4px;
+      margin-top: 10px;
+      font-size: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      display: none;
+    }
+    .test.fail .output { display: block; }
+    button {
+      background: #00dc82;
+      color: #1a1a2e;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      margin: 10px 5px;
+    }
+    button:hover { background: #00b86a; }
+    button:disabled { background: #666; cursor: not-allowed; }
+    #summary {
+      background: #16213e;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+    .summary-stat {
+      display: inline-block;
+      margin-right: 20px;
+      font-size: 18px;
+    }
+    .env-warning {
+      background: #e94560;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>📦 WebContainer Integration Tests</h1>
+  
+  <div id="env-warning" class="env-warning">
+    ⚠️ <strong>Environment Warning:</strong> <span id="env-warning-text"></span>
+  </div>
+
+  <div id="summary">
+    <div class="summary-stat">Total: <strong id="total">0</strong></div>
+    <div class="summary-stat">✅ Pass: <strong id="pass" style="color: #00dc82">0</strong></div>
+    <div class="summary-stat">❌ Fail: <strong id="fail" style="color: #e94560">0</strong></div>
+    <div class="summary-stat">⏳ Pending: <strong id="pending" style="color: #f0ad4e">0</strong></div>
+  </div>
+
+  <button id="run-tests" onclick="runAllTests()">▶️ Run All Tests</button>
+  <button onclick="clearResults()">🗑️ Clear Results</button>
+
+  <div id="test-results"></div>
+
+  <script type="module">
+    // Check environment
+    const envWarning = document.getElementById('env-warning');
+    const envWarningText = document.getElementById('env-warning-text');
+    
+    if (typeof window === 'undefined') {
+      envWarningText.textContent = 'This test must run in a browser environment.';
+      envWarning.style.display = 'block';
+    }
+    
+    if (!process?.env?.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID) {
+      envWarningText.textContent = 'NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID not set. Tests may fail.';
+      envWarning.style.display = 'block';
+    }
+
+    // Test state
+    let wcInstance = null;
+    let testResults = { total: 0, pass: 0, fail: 0, pending: 0 };
+
+    // Helper: Read stream to string
+    async function readStreamToString(stream) {
+      if (!stream) return '';
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+      let output = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        output += decoder.decode(value, { stream: true });
+      }
+      return output;
+    }
+
+    // Helper: Create test element
+    function createTestElement(name) {
+      const div = document.createElement('div');
+      div.className = 'test pending';
+      div.innerHTML = `
+        <div><span class="status">⏳</span> ${name}</div>
+        <div class="output"></div>
+      `;
+      return div;
+    }
+
+    // Helper: Update test status
+    function updateTestStatus(testEl, status, output = '') {
+      const icons = { pass: '✅', fail: '❌', pending: '⏳' };
+      testEl.className = `test ${status}`;
+      testEl.querySelector('.status').textContent = icons[status];
+      if (output) {
+        testEl.querySelector('.output').textContent = output;
+      }
+    }
+
+    // Helper: Update summary
+    function updateSummary() {
+      document.getElementById('total').textContent = testResults.total;
+      document.getElementById('pass').textContent = testResults.pass;
+      document.getElementById('fail').textContent = testResults.fail;
+      document.getElementById('pending').textContent = testResults.pending;
+    }
+
+    // Test: Boot WebContainer
+    async function testBootWebContainer() {
+      const testEl = createTestElement('Boot WebContainer');
+      document.getElementById('test-results').appendChild(testEl);
+      testResults.total++;
+      testResults.pending++;
+      updateSummary();
+
+      try {
+        const { WebContainer } = await import('@webcontainer/api');
+        
+        const clientId = process.env.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID || 'wc_api_____';
+        const scope = process.env.NEXT_PUBLIC_WEBCONTAINER_SCOPE || '';
+        
+        if (WebContainer.auth?.init) {
+          WebContainer.auth.init({ clientId, scope });
+        }
+
+        wcInstance = await WebContainer.boot();
+        await wcInstance.fs.mkdir('/workspace', { recursive: true });
+
+        updateTestStatus(testEl, 'pass', 'WebContainer booted successfully');
+        testResults.pending--;
+        testResults.pass++;
+      } catch (error) {
+        updateTestStatus(testEl, 'fail', `Boot failed: ${error.message}`);
+        testResults.pending--;
+        testResults.fail++;
+      }
+      updateSummary();
+    }
+
+    // Test: Write file
+    async function testWriteFile() {
+      const testEl = createTestElement('Write File');
+      document.getElementById('test-results').appendChild(testEl);
+      testResults.total++;
+      testResults.pending++;
+      updateSummary();
+
+      try {
+        const testFile = '/workspace/test-write.txt';
+        const testContent = `Hello from WebContainer! ${Date.now()}`;
+        
+        await wcInstance.fs.writeFile(testFile, testContent);
+        const content = await wcInstance.fs.readFile(testFile, 'utf-8');
+        
+        if (content === testContent) {
+          updateTestStatus(testEl, 'pass', `File written and verified: ${testFile}`);
+          testResults.pass++;
+        } else {
+          throw new Error('Content mismatch');
+        }
+      } catch (error) {
+        updateTestStatus(testEl, 'fail', error.message);
+        testResults.fail++;
+      }
+      testResults.pending--;
+      updateSummary();
+    }
+
+    // Test: Read file
+    async function testReadFile() {
+      const testEl = createTestElement('Read File');
+      document.getElementById('test-results').appendChild(testEl);
+      testResults.total++;
+      testResults.pending++;
+      updateSummary();
+
+      try {
+        const testFile = '/workspace/test-read.txt';
+        const testContent = 'Read test content ' + Math.random().toString(36);
+        
+        await wcInstance.fs.writeFile(testFile, testContent);
+        const content = await wcInstance.fs.readFile(testFile, 'utf-8');
+        
+        updateTestStatus(testEl, 'pass', `Read ${content.length} bytes from ${testFile}`);
+        testResults.pass++;
+      } catch (error) {
+        updateTestStatus(testEl, 'fail', error.message);
+        testResults.fail++;
+      }
+      testResults.pending--;
+      updateSummary();
+    }
+
+    // Test: List directory
+    async function testListDirectory() {
+      const testEl = createTestElement('List Directory');
+      document.getElementById('test-results').appendChild(testEl);
+      testResults.total++;
+      testResults.pending++;
+      updateSummary();
+
+      try {
+        const entries = await wcInstance.fs.readdir('/workspace');
+        updateTestStatus(testEl, 'pass', `Found ${entries.length} entries in /workspace`);
+        testResults.pass++;
+      } catch (error) {
+        updateTestStatus(testEl, 'fail', error.message);
+        testResults.fail++;
+      }
+      testResults.pending--;
+      updateSummary();
+    }
+
+    // Test: Execute node --version
+    async function testNodeVersion() {
+      const testEl = createTestElement('Execute: node --version');
+      document.getElementById('test-results').appendChild(testEl);
+      testResults.total++;
+      testResults.pending++;
+      updateSummary();
+
+      try {
+        const process = await wcInstance.spawn('node', ['--version']);
+        const output = await readStreamToString(process.output);
+        const exitCode = await process.exit;
+        
+        if (exitCode === 0 && output.match(/v\d+\.\d+\.\d+/)) {
+          updateTestStatus(testEl, 'pass', `Node ${output.trim()}`);
+          testResults.pass++;
+        } else {
+          throw new Error(`Unexpected output: ${output}`);
+        }
+      } catch (error) {
+        updateTestStatus(testEl, 'fail', error.message);
+        testResults.fail++;
+      }
+      testResults.pending--;
+      updateSummary();
+    }
+
+    // Test: Execute npm --version
+    async function testNpmVersion() {
+      const testEl = createTestElement('Execute: npm --version');
+      document.getElementById('test-results').appendChild(testEl);
+      testResults.total++;
+      testResults.pending++;
+      updateSummary();
+
+      try {
+        const process = await wcInstance.spawn('npm', ['--version']);
+        const output = await readStreamToString(process.output);
+        const exitCode = await process.exit;
+        
+        if (exitCode === 0 && output.match(/\d+\.\d+\.\d+/)) {
+          updateTestStatus(testEl, 'pass', `npm ${output.trim()}`);
+          testResults.pass++;
+        } else {
+          throw new Error(`Unexpected output: ${output}`);
+        }
+      } catch (error) {
+        updateTestStatus(testEl, 'fail', error.message);
+        testResults.fail++;
+      }
+      testResults.pending--;
+      updateSummary();
+    }
+
+    // Test: Execute JavaScript file
+    async function testExecuteJS() {
+      const testEl = createTestElement('Execute JavaScript File');
+      document.getElementById('test-results').appendChild(testEl);
+      testResults.total++;
+      testResults.pending++;
+      updateSummary();
+
+      try {
+        const jsFile = '/workspace/exec-test.js';
+        const jsContent = `
+          console.log('JavaScript execution test');
+          console.log('PI:', Math.PI);
+          console.log('Timestamp:', Date.now());
+          process.exit(0);
+        `;
+        
+        await wcInstance.fs.writeFile(jsFile, jsContent);
+        const process = await wcInstance.spawn('node', [jsFile]);
+        const output = await readStreamToString(process.output);
+        const exitCode = await process.exit;
+        
+        if (exitCode === 0 && output.includes('JavaScript execution test')) {
+          updateTestStatus(testEl, 'pass', 'JavaScript executed successfully');
+          testResults.pass++;
+        } else {
+          throw new Error(`Unexpected output: ${output}`);
+        }
+      } catch (error) {
+        updateTestStatus(testEl, 'fail', error.message);
+        testResults.fail++;
+      }
+      testResults.pending--;
+      updateSummary();
+    }
+
+    // Test: npm install
+    async function testNpmInstall() {
+      const testEl = createTestElement('npm install (lodash)');
+      document.getElementById('test-results').appendChild(testEl);
+      testResults.total++;
+      testResults.pending++;
+      updateSummary();
+
+      try {
+        const projectDir = '/workspace/npm-test';
+        await wcInstance.fs.mkdir(projectDir, { recursive: true });
+        
+        await wcInstance.fs.writeFile(
+          `${projectDir}/package.json`,
+          JSON.stringify({
+            name: 'npm-test',
+            version: '1.0.0',
+            dependencies: { lodash: '^4.17.21' },
+          }, null, 2)
+        );
+        
+        const process = await wcInstance.spawn('npm', ['install'], { cwd: projectDir });
+        const output = await readStreamToString(process.output);
+        const exitCode = await process.exit;
+        
+        if (exitCode === 0 && output.includes('added')) {
+          updateTestStatus(testEl, 'pass', 'Package installed successfully');
+          testResults.pass++;
+        } else {
+          throw new Error(`npm install failed: ${output}`);
+        }
+      } catch (error) {
+        updateTestStatus(testEl, 'fail', error.message);
+        testResults.fail++;
+      }
+      testResults.pending--;
+      updateSummary();
+    }
+
+    // Test: Start HTTP server
+    async function testHTTPServer() {
+      const testEl = createTestElement('Start HTTP Server');
+      document.getElementById('test-results').appendChild(testEl);
+      testResults.total++;
+      testResults.pending++;
+      updateSummary();
+
+      try {
+        const serverDir = '/workspace/server-test';
+        await wcInstance.fs.mkdir(serverDir, { recursive: true });
+        
+        const serverCode = `
+          const http = require('http');
+          const server = http.createServer((req, res) => {
+            res.writeHead(200, { 'Content-Type': 'text/plain' });
+            res.end('Hello from HTTP Server!');
+          });
+          server.listen(3000, () => console.log('Server on port 3000'));
+          setTimeout(() => { server.close(); process.exit(0); }, 3000);
+        `;
+        
+        await wcInstance.fs.writeFile(`${serverDir}/server.js`, serverCode);
+        const process = await wcInstance.spawn('node', ['server.js'], { cwd: serverDir });
+        const output = await readStreamToString(process.output);
+        const exitCode = await process.exit;
+        
+        if (exitCode === 0 && output.includes('Server on port 3000')) {
+          updateTestStatus(testEl, 'pass', 'HTTP server started and stopped successfully');
+          testResults.pass++;
+        } else {
+          throw new Error(`Server test failed: ${output}`);
+        }
+      } catch (error) {
+        updateTestStatus(testEl, 'fail', error.message);
+        testResults.fail++;
+      }
+      testResults.pending--;
+      updateSummary();
+    }
+
+    // Run all tests
+    window.runAllTests = async function() {
+      const btn = document.getElementById('run-tests');
+      btn.disabled = true;
+      btn.textContent = '⏳ Running...';
+      
+      clearResults();
+      
+      try {
+        await testBootWebContainer();
+        if (wcInstance) {
+          await testWriteFile();
+          await testReadFile();
+          await testListDirectory();
+          await testNodeVersion();
+          await testNpmVersion();
+          await testExecuteJS();
+          await testNpmInstall();
+          await testHTTPServer();
+        }
+      } catch (error) {
+        console.error('Test suite error:', error);
+      }
+      
+      btn.disabled = false;
+      btn.textContent = '▶️ Run All Tests';
+    };
+
+    // Clear results
+    window.clearResults = function() {
+      document.getElementById('test-results').innerHTML = '';
+      testResults = { total: 0, pass: 0, fail: 0, pending: 0 };
+      updateSummary();
+    };
+
+    // Auto-run on load
+    window.addEventListener('load', () => {
+      setTimeout(runAllTests, 1000);
+    });
+  </script>
+</body>
+</html>

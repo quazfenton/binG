@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
 
 export const runtime = 'nodejs';
@@ -9,6 +10,30 @@ const REQUEST_WINDOW_MS = 5000; // 5 second window for tracking
 
 // Debug flag
 const DEBUG = process.env.DEBUG_VFS === 'true' || process.env.NODE_ENV === 'development';
+
+/**
+ * Schema for filesystem snapshot requests
+ * Validates directory path and prevents path traversal attacks
+ * Accepts both relative paths (project, project/sessions) and absolute paths
+ */
+const snapshotRequestSchema = z.object({
+  path: z.string()
+    .min(1, 'Path is required')
+    .max(500, 'Path too long (max 500 characters)')
+    .refine(
+      (path) => !path.includes('..') && !path.includes('\0'),
+      'Path contains invalid characters'
+    )
+    .refine(
+      (path) => {
+        // Allow relative paths (project, project/sessions, etc.)
+        if (!path.startsWith('/')) return true;
+        // If absolute, must start with /home/ or /workspace/
+        return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/');
+      },
+      'Absolute paths must start with /home/, /workspace/, or /tmp/'
+    ),
+});
 const log = (...args: any[]) => DEBUG && console.log('[VFS SNAPSHOT]', ...args);
 const logWarn = (...args: any[]) => console.warn('[VFS SNAPSHOT WARN]', ...args);
 const logError = (...args: any[]) => console.error('[VFS SNAPSHOT ERROR]', ...args);
