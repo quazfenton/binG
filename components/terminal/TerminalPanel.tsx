@@ -192,10 +192,26 @@ export default function TerminalPanel({
        // Use ONLY VFS files with their original paths
        const fs: LocalFileSystem = {};
 
+       // Get the base scope path to normalize file paths
+       // VFS returns paths like: project/sessions/XXX_chat_YYY/src/App.tsx
+       // Terminal expects paths relative to the scope, e.g., project/src/App.tsx
+       const scopeBasePath = filesystemScopePath || 'project';
+       console.log('[TerminalPanel] Normalizing VFS paths relative to scope:', scopeBasePath);
+
        for (const file of files) {
-         // Use the file path as-is from VFS
-         // VFS returns paths like: project/sessions/XXX_chat_YYY/src/App.tsx
-         const fullPath = file.path;
+         // Normalize the file path relative to the terminal's expected root
+         // If VFS path starts with scopeBasePath, strip it to get relative path
+         let normalizedPath = file.path;
+         
+         if (file.path.startsWith(scopeBasePath + '/')) {
+           // Keep the full path including scope for consistency
+           normalizedPath = file.path;
+         } else if (!file.path.startsWith('project/')) {
+           // Ensure path starts with project/
+           normalizedPath = `project/${file.path}`;
+         }
+
+         const fullPath = normalizedPath;
 
          // Create intermediate directories
          const parts = fullPath.split('/');
@@ -275,9 +291,9 @@ export default function TerminalPanel({
   }, [isVfsSynced, vfsFileCount, isOpen]);
 
   // Bidirectional sync: Poll VFS for changes from code-preview-panel/editor
-  // Only poll when connected to sandbox to avoid unnecessary requests
+  // Poll regardless of sandbox connection state to keep terminal in sync with code preview
   useEffect(() => {
-    if (!isOpen || sandboxStatus !== 'connected') return;
+    if (!isOpen) return;
 
     const pollInterval = setInterval(async () => {
       try {
@@ -286,7 +302,9 @@ export default function TerminalPanel({
         const vfsFiles = snapshot?.files?.map(f => f.path) || [];
 
         // Check if VFS has new/changed files
-        const hasChanges = vfsFiles.some(f => !currentFiles.includes(f));
+        const hasChanges = vfsFiles.some(f => !currentFiles.includes(f)) || 
+                          currentFiles.some(f => !vfsFiles.includes(f));
+        
         if (hasChanges) {
           console.log('[Terminal] VFS changed, re-syncing...');
           // Trigger re-sync
@@ -303,14 +321,22 @@ export default function TerminalPanel({
                 return;
               }
 
-              const fs = localFileSystemRef.current;
+              const fs: LocalFileSystem = {};
+              const scopeBasePath = filesystemScopePathRef.current || 'project';
 
               if (!fs['project']) {
                 fs['project'] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() };
               }
 
               for (const file of files) {
-                const fullPath = file.path;
+                // Normalize path relative to scope
+                let normalizedPath = file.path;
+                if (file.path.startsWith(scopeBasePath + '/')) {
+                  normalizedPath = file.path;
+                } else if (!file.path.startsWith('project/')) {
+                  normalizedPath = `project/${file.path}`;
+                }
+                const fullPath = normalizedPath;
 
                 const parts = fullPath.split('/');
                 for (let i = 1; i < parts.length; i++) {
@@ -330,6 +356,8 @@ export default function TerminalPanel({
                 }
               }
 
+              localFileSystemRef.current = fs;
+              setVfsFileCount(files.length);
               console.log('[Terminal] Re-synced VFS:', Object.keys(fs).length, 'entries');
             } catch (error) {
               console.error('[Terminal] Re-sync error:', error);

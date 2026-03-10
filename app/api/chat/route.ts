@@ -573,13 +573,17 @@ function sanitizeAssistantDisplayContent(content: string): string {
   next = next.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
   next = next.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
   next = next.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
-  
+
   // Remove <fs-actions>...</fs-actions> XML tag blocks (LLM sometimes uses XML instead of code blocks)
   next = next.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
 
   // Remove raw WRITE/PATCH heredoc command blocks that leak into visible output
   next = next.replace(/(?:^|\n)\s*(WRITE|PATCH)\s+[^\n]+\n<<<\n[\s\S]*?\n>>>(?=\n|$)/g, '\n');
   next = next.replace(/(?:^|\n)\s*DELETE\s+[^\n]+(?=\n|$)/g, '\n');
+
+  // Remove file_write and folder_create XML tags that leak into display
+  next = next.replace(/<file_write\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_write>/gi, '');
+  next = next.replace(/<folder_create\s+path=["'][^"']+["']\s*\/?>/gi, '');
 
   // Normalize leftover spacing
   next = next.replace(/\n{3,}/g, '\n\n').trim();
@@ -950,6 +954,37 @@ function extractFsActionPatches(content: string): Array<{ path: string; diff: st
   return patches;
 }
 
+function extractFileWriteFolderCreateTags(content: string): {
+  writes: Array<{ path: string; content: string }>;
+  folders: string[];
+} {
+  const writes: Array<{ path: string; content: string }> = [];
+  const folders: string[] = [];
+
+  // Extract <file_write path="...">content</file_write> tags
+  const fileWriteRegex = /<file_write\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_write>/gi;
+  let fileWriteMatch: RegExpExecArray | null;
+
+  while ((fileWriteMatch = fileWriteRegex.exec(content)) !== null) {
+    const path = fileWriteMatch[1]?.trim();
+    const fileContent = fileWriteMatch[2] ?? '';
+    if (!path) continue;
+    writes.push({ path, content: fileContent });
+  }
+
+  // Extract <folder_create path="..."/> tags
+  const folderCreateRegex = /<folder_create\s+path=["']([^"']+)["']\s*\/?>/gi;
+  let folderCreateMatch: RegExpExecArray | null;
+
+  while ((folderCreateMatch = folderCreateRegex.exec(content)) !== null) {
+    const path = folderCreateMatch[1]?.trim();
+    if (!path) continue;
+    folders.push(path);
+  }
+
+  return { writes, folders };
+}
+
 function extractBashHereDocWrites(content: string): Array<{ path: string; content: string }> {
   const writes: Array<{ path: string; content: string }> = [];
   const bashBlockRegex = /```bash\s*([\s\S]*?)```/gi;
@@ -1170,11 +1205,13 @@ async function applyFilesystemEditsFromResponse(input: {
   };
 }): Promise<FilesystemEditResult> {
   // Extract all operations first to check if there's anything to do
+  const fileWriteFolderCreateOps = extractFileWriteFolderCreateTags(input.responseContent || '');
   const combinedWriteEdits = [
     ...extractTaggedFileEdits(input.responseContent || ''),
     ...extractFsActionWrites(input.responseContent || ''),
     ...extractBashHereDocWrites(input.responseContent || ''),
     ...extractFilenameHintCodeBlocks(input.responseContent || ''),
+    ...fileWriteFolderCreateOps.writes.map(w => ({ path: w.path, content: w.content })),
   ];
   const combinedDiffOperations = [
     ...extractFencedDiffEdits(input.responseContent || ''),
@@ -1182,14 +1219,16 @@ async function applyFilesystemEditsFromResponse(input: {
     ...(input.commands?.write_diffs || []),
   ];
   const deleteTargets = extractFsActionDeletes(input.responseContent || '');
+  const folderCreateTargets = fileWriteFolderCreateOps.folders; // Separate folder creation targets
   const requestFiles = input.commands?.request_files || [];
 
-  // Only create transaction if there are mutating operations (write/patch/delete)
+  // Only create transaction if there are mutating operations (write/patch/delete/folder)
   // This prevents memory leaks from accumulating no-op transactions
   const hasMutatingOperations =
     combinedWriteEdits.length > 0 ||
     combinedDiffOperations.length > 0 ||
-    deleteTargets.length > 0;
+    deleteTargets.length > 0 ||
+    folderCreateTargets.length > 0;
 
   const transaction = hasMutatingOperations
     ? filesystemEditSessionService.createTransaction({
@@ -1366,6 +1405,68 @@ async function applyFilesystemEditsFromResponse(input: {
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'unknown error';
         const err = `Failed to delete ${normalizedPath}: ${message}`;
+        result.errors.push(err);
+        filesystemEditSessionService.addError(transaction.id, err);
+      }
+    }
+
+    // Process folder creation operations
+    const seenFolderCreates = new Set<string>();
+    for (const folderPath of folderCreateTargets) {
+      const normalizedPath = resolveScopedPath({
+        requestedPath: folderPath.trim(),
+        scopePath: input.scopePath,
+        attachedPaths: input.attachedPaths,
+        lastUserMessage: input.lastUserMessage,
+      });
+      if (!normalizedPath || seenFolderCreates.has(normalizedPath)) {
+        continue;
+      }
+      seenFolderCreates.add(normalizedPath);
+
+      try {
+        // Check if folder already exists (by checking if any file has this path prefix)
+        let existedBefore = false;
+        try {
+          const listing = await virtualFilesystem.listDirectory(input.ownerId, normalizedPath);
+          // If we can list it, the directory exists (has files or subdirs under it)
+          existedBefore = listing.nodes.length > 0;
+        } catch {
+          existedBefore = false;
+        }
+
+        // In VFS, directories are implicit - they exist when files are in them
+        // To create an empty directory, we create a .gitkeep marker file
+        // This ensures the directory structure is preserved
+        const gitkeepPath = `${normalizedPath}/.gitkeep`;
+        
+        try {
+          // Check if .gitkeep already exists
+          await virtualFilesystem.readFile(input.ownerId, gitkeepPath);
+          existedBefore = true;
+        } catch {
+          // .gitkeep doesn't exist, create it
+          await virtualFilesystem.writeFile(input.ownerId, gitkeepPath, '');
+        }
+
+        result.applied.push({
+          path: normalizedPath,
+          operation: 'write', // Use 'write' since folder creation is via marker file
+          version: 1,
+          previousVersion: null,
+          existedBefore,
+        });
+        filesystemEditSessionService.recordOperation(transaction.id, {
+          path: normalizedPath,
+          operation: 'write',
+          newVersion: 1,
+          previousVersion: null,
+          previousContent: null,
+          existedBefore,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        const err = `Failed to create folder ${normalizedPath}: ${message}`;
         result.errors.push(err);
         filesystemEditSessionService.addError(transaction.id, err);
       }

@@ -1,4 +1,4 @@
-﻿name: ðŸ§  Autobot
+name: 🧠 Autobot
 on:
   pull_request:
     types: [labeled]
@@ -73,9 +73,9 @@ jobs:
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           PROMPT: |
-            "You are an expert Staff Engineer. Analyze the whole repo context. 
+            You are an expert Staff Engineer. Analyze the whole repo context.
             Here is the CodeRabbit review context: ${{ steps.context.outputs.suggestions }}
-            Apply these fixes, ensure Postgres/Terraform logic is intact, and verify type safety."
+            Apply these fixes, ensure Postgres/Terraform logic is intact, and verify type safety.
         run: |
           # Function to run the agent in CI mode (no user prompt, auto-apply, repo map enabled)
           run_agent() {
@@ -112,12 +112,12 @@ jobs:
           
           # Only commit and push if the Agent actually changed files
           if ! git diff-index --quiet HEAD; then
-            git commit -m "ðŸ¤– Agent: Multi-iteration applied fixes & optimizations"
+            git commit -m "🤖 Agent: Multi-iteration applied fixes & optimizations"
             git push origin HEAD --force
-            
+
             # Post a comment back to the PR
             gh pr comment ${{ github.event.pull_request.number }} \
-              --body "ðŸš€ **Agent Workflow Complete!** I analyzed the repo and pushed fixes to \`ai-fixes-${{ github.head_ref }}\`."
+              --body "🚀 **Agent Workflow Complete!** I analyzed the repo and pushed fixes to \`ai-fixes-${{ github.head_ref }}\`."
           else
             echo "No changes were made by the agent."
           fi
