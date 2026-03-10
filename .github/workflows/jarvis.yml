@@ -22,6 +22,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           # For pull_request_review_comment events, the PR number is in github.event.pull_request.number
           PR_NUMBER=${{ github.event.pull_request.number }}
@@ -45,15 +46,16 @@ jobs:
 
           # IMPORTANT: Build the triggering comment JSON safely from github.event context
           # Use jq to safely construct JSON object (prevents command injection from comment body)
+          # Note: github.event.comment.body is passed via env to handle special chars safely
           TRIGGER_COMMENT_FROM_EVENT=$(jq -n \
             --argjson id "${{ github.event.comment.id }}" \
-            --arg body "${{ github.event.comment.body }}" \
+            --arg body "$COMMENT_BODY" \
             --arg created_at "${{ github.event.comment.created_at }}" \
             '{id: $id, body: $body, reactions: {rocket: 0}, created_at: $created_at}')
           echo "Triggering comment from event: ID=${{ github.event.comment.id }}"
 
-          # Fetch ALL review comments on this PR (paginate with slurp to combine pages into single array)
-          ALL_REVIEW_COMMENTS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments --paginate --slurp --jq 'add')
+          # Fetch ALL review comments on this PR (paginate to combine pages into single array)
+          ALL_REVIEW_COMMENTS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments --paginate --jq '[.[]] | add')
 
           echo "Total review comments on PR: $(echo "$ALL_REVIEW_COMMENTS" | jq 'length')"
 
@@ -182,7 +184,8 @@ jobs:
 
           # Sanitize string for bash multiline using printf with proper escaping
           printf '%s\n' "$SUGGESTIONS" > /tmp/suggestions.txt
-          echo "suggestions<<CODE_RABBIT_CONTEXT" >> "$GITHUB_OUTPUT"
+          # Use quoted delimiter 'EOF' to prevent variable expansion and content interference
+          echo "suggestions<<'CODE_RABBIT_CONTEXT'" >> "$GITHUB_OUTPUT"
           cat /tmp/suggestions.txt >> "$GITHUB_OUTPUT"
           echo "CODE_RABBIT_CONTEXT" >> "$GITHUB_OUTPUT"
 
@@ -285,7 +288,8 @@ jobs:
           git add .
 
           # Only commit and push if the Agent actually changed files
-          if ! git diff-index --quiet HEAD; then
+          # Use git status --porcelain instead of diff-index to avoid HEAD reference issues
+          if ! git diff --cached --quiet; then
             # Get list of changed files
             CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r HEAD | jq -R -s -c 'split("\n")[:-1]')
 
@@ -327,11 +331,11 @@ jobs:
             fi
           done)
 
-          # Build list of trigger comment links
+          # Build list of trigger comment links (review comments use rcomment-id format)
           COMMENT_IDS="${{ needs.collect-comments.outputs.comment_ids }}"
           COMMENT_LINKS=$(echo "$COMMENT_IDS" | tr ',' '\n' | while read -r id; do
             if [ -n "$id" ]; then
-              echo "- [Comment #$id](https://github.com/${{ github.repository }}/pull/$PR_NUMBER#discussioncomment-$id)"
+              echo "- [Comment #$id](https://github.com/${{ github.repository }}/pull/$PR_NUMBER#discussioncomment-r$id)"
             fi
           done)
 
