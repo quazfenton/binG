@@ -262,6 +262,7 @@ export class SandboxService {
       throw new Error('Failed to create sandbox with all available providers')
     }
 
+    // Create session object
     const session: WorkspaceSession = {
       sessionId: randomUUID(),
       sandboxId: handle.id,
@@ -273,7 +274,23 @@ export class SandboxService {
     }
 
     log.info(`Workspace session created: ${session.sessionId} (sandbox: ${handle.id})`)
-    saveSession(session)
+    
+    // Save session to store
+    try {
+      saveSession(session)
+    } catch (saveError: any) {
+      // If session save fails, clean up the sandbox to avoid orphaned resources
+      log.error(`Failed to save session, cleaning up sandbox: ${saveError.message}`)
+      try {
+        const provider = await this.resolveProviderForSandbox(handle.id)
+        await provider.destroySandbox(handle.id)
+        this.sandboxProviderById.delete(handle.id)
+      } catch (cleanupError: any) {
+        log.error(`Failed to cleanup sandbox after session save failure: ${cleanupError.message}`)
+      }
+      throw new Error(`Failed to save session: ${saveError.message}`)
+    }
+    
     return session
   }
 

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
 import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
+import { relativePathSchema } from '@/lib/validation/schemas';
 
 // ANSI color codes for terminal output
 const COLORS = {
@@ -20,6 +22,10 @@ const DEBUG = process.env.DEBUG_SANDBOX === 'true' || process.env.NODE_ENV === '
 const log = (...args: any[]) => DEBUG && console.log(`${COLORS.bright}${COLORS.blue}[SANDBOX FILES]${COLORS.reset}`, ...args);
 const logWarn = (...args: any[]) => console.warn(`${COLORS.bright}${COLORS.yellow}[SANDBOX FILES WARN]${COLORS.reset}`, ...args);
 const logError = (...args: any[]) => console.error(`${COLORS.bright}${COLORS.red}[SANDBOX FILES ERROR]${COLORS.reset}`, ...args);
+
+const sandboxFilesQuerySchema = z.object({
+  path: relativePathSchema.optional().default('.'),
+});
 
 export async function GET(req: NextRequest) {
   const startTime = Date.now();
@@ -55,46 +61,23 @@ export async function GET(req: NextRequest) {
 
     log(`${COLORS.dim}[${requestId}]${COLORS.reset} Session found: ${COLORS.cyan}${session.sessionId}${COLORS.reset} (sandbox: ${COLORS.cyan}${session.sandboxId}${COLORS.reset})`);
 
-    // Get dir path from query param, default to '.'
+    // Get and validate query parameters with Zod
     const url = new URL(req.url);
-    let dirPath = url.searchParams.get('path') || '.';
+    const queryParams = Object.fromEntries(url.searchParams);
+    
+    const parseResult = sandboxFilesQuerySchema.safeParse(queryParams);
+    if (!parseResult.success) {
+      const firstError = parseResult.error.errors[0];
+      logError(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.red}Validation failed:${COLORS.reset} ${firstError.message}`);
+      return NextResponse.json(
+        { error: firstError.message, details: parseResult.error.flatten() },
+        { status: 400 }
+      );
+    }
+    
+    const { path: dirPath } = parseResult.data;
 
     log(`${COLORS.dim}[${requestId}]${COLORS.reset} Listing directory: ${COLORS.blue}"${dirPath}"${COLORS.reset}`);
-
-    // SECURITY: Validate path to prevent directory traversal attacks
-    // Reject paths containing '..' which could escape the workspace
-    if (dirPath.includes('..')) {
-      logError(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.red}Directory traversal attempt:${COLORS.reset} ${COLORS.blue}"${dirPath}"${COLORS.reset}`);
-      return NextResponse.json(
-        { error: 'Invalid path: directory traversal not allowed' },
-        { status: 400 }
-      );
-    }
-
-    // Reject null bytes which could be used for path injection
-    if (dirPath.includes('\0')) {
-      logError(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.red}Null byte injection attempt:${COLORS.reset} ${COLORS.blue}"${dirPath}"${COLORS.reset}`);
-      return NextResponse.json(
-        { error: 'Invalid path: contains null bytes' },
-        { status: 400 }
-      );
-    }
-
-    // Normalize path separators and ensure it's not absolute
-    dirPath = dirPath.replace(/\\/g, '/');
-    if (dirPath.startsWith('/')) {
-      logError(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.red}Absolute path not allowed:${COLORS.reset} ${COLORS.blue}"${dirPath}"${COLORS.reset}`);
-      return NextResponse.json(
-        { error: 'Invalid path: absolute paths not allowed' },
-        { status: 400 }
-      );
-    }
-
-    // Empty or whitespace-only path after trimming
-    if (!dirPath.trim()) {
-      dirPath = '.';
-      log(`${COLORS.dim}[${requestId}]${COLORS.reset} Path normalized to: ${COLORS.blue}"."${COLORS.reset}`);
-    }
 
     const result = await sandboxBridge.listDirectory(session.sandboxId, dirPath);
     const duration = Date.now() - startTime;
