@@ -1,9 +1,9 @@
 /**
  * Sandbox Connection Manager
- * 
- * Handles WebSocket/SSE connection to sandbox.
+ *
+ * Handles WebSocket/SSE connection to sandbox with provider-specific PTY support.
  * Migrated from TerminalPanel.tsx lines 3267-3914
- * 
+ *
  * Features:
  * - Connection throttling (5s cooldown)
  * - Abort controller management
@@ -12,13 +12,14 @@
  * - Session creation API calls
  * - Token retrieval
  * - WebSocket connection with full message handling
+ * - Provider-specific PTY connections (E2B, Daytona, Sprites, CodeSandbox)
  * - Reconnection with exponential backoff
  * - SSE fallback when WebSocket unavailable
  * - Auto-cd to workspace
  * - Command queue buffering
  * - Agent tool execution display
  * - Port detection with toast notifications
- * 
+ *
  * @example
  * ```typescript
  * const connectionManager = createSandboxConnectionManager({
@@ -36,7 +37,7 @@
  *   toSandboxScopedPath: (scopePath, sandboxId) => { ... },
  *   filesystemScopePath: 'project/sessions/...',
  * })
- * 
+ *
  * await connectionManager.connect()
  * connectionManager.sendInput('ls -la\n')
  * connectionManager.sendResize(120, 30)
@@ -45,6 +46,7 @@
  */
 
 import { createLogger } from '../utils/logger'
+import type { SandboxProviderType } from './providers'
 
 const logger = createLogger('SandboxConnection')
 
@@ -204,6 +206,10 @@ export class SandboxConnectionManager {
       this.state.sessionId = sessionId
       this.state.sandboxId = sandboxId
 
+      // Detect provider type from sandbox ID prefix
+      const providerType = this.detectProviderType(sandboxId)
+      logger.debug(`Detected provider type: ${providerType} for sandbox ${sandboxId}`)
+
       // Get connection token
       let connectionToken: string | undefined
       try {
@@ -225,7 +231,57 @@ export class SandboxConnectionManager {
         logger.warn('Failed to get connection token', err)
       }
 
-      // Try WebSocket first
+      // Try provider-specific PTY first (if supported)
+      if (providerType && ['e2b', 'daytona', 'sprites', 'codesandbox', 'vercel-sandbox'].includes(providerType)) {
+        try {
+          logger.debug(`Trying ${providerType} PTY connection first`)
+          const providerWs = await this.connectProviderPTY(providerType, sandboxId, sessionId)
+          if (providerWs) {
+            logger.info(`${providerType} PTY connected successfully`)
+            // Update state with provider WebSocket
+            this.state.websocket = providerWs
+            this.state.status = 'connected'
+            this.state.mode = 'pty'
+            this.stopSpinner()
+            this.clearConnectionTimeout()
+            
+            this.updateTerminalState({
+              sandboxInfo: { sessionId, sandboxId, status: 'active' },
+              websocket: providerWs,
+              isConnected: true,
+              mode: 'pty',
+            })
+            
+            this.writeLine('')
+            this.writeLine(`\x1b[1;32m✓ Connected to ${providerType} sandbox!\x1b[0m`)
+            this.writeLine('\x1b[90mYou now have full terminal access.\x1b[0m')
+            this.writeLine('')
+            
+            // Auto-cd to workspace
+            if (this.filesystemScopePath) {
+              const sandboxPath = this.toSandboxScopedPath(this.filesystemScopePath, sandboxId)
+              this.setCwd(this.filesystemScopePath)
+              this.writeLine(`\x1b[90m→ cd ${sandboxPath}\x1b[0m`)
+              this.sendInput(sandboxId, `cd ${sandboxPath}\n`)
+            }
+            
+            // Send initial resize
+            this.sendResize(sandboxId, 120, 30)
+            
+            // Flush command queue
+            for (const cmd of this.commandQueue) {
+              this.sendInput(sandboxId, cmd)
+            }
+            this.commandQueue = []
+            return // Provider PTY successful, exit early
+          }
+        } catch (providerError) {
+          logger.warn(`${providerType} PTY failed, falling back to generic WebSocket`, providerError)
+          // Fall through to generic WebSocket
+        }
+      }
+
+      // Try generic WebSocket
       try {
         await this.connectWebSocket(sessionId, sandboxId, connectionToken)
         return // WebSocket successful, exit early
@@ -240,6 +296,26 @@ export class SandboxConnectionManager {
     } catch (error) {
       this.handleConnectionError(error)
     }
+  }
+
+  /**
+   * Detect provider type from sandbox ID prefix
+   */
+  private detectProviderType(sandboxId: string): SandboxProviderType | null {
+    if (!sandboxId) return null
+    
+    const lowerId = sandboxId.toLowerCase()
+    
+    if (lowerId.startsWith('e2b-') || lowerId.startsWith('e2b_')) return 'e2b'
+    if (lowerId.startsWith('daytona-') || lowerId.startsWith('daytona_')) return 'daytona'
+    if (lowerId.startsWith('sprite-') || lowerId.startsWith('sprite_') || lowerId.startsWith('bing-')) return 'sprites'
+    if (lowerId.startsWith('codesandbox-') || lowerId.startsWith('csb-')) return 'codesandbox'
+    if (lowerId.startsWith('vercel-') || lowerId.startsWith('vc-')) return 'vercel-sandbox'
+    if (lowerId.startsWith('mistral-')) return 'mistral-agent'
+    if (lowerId.startsWith('blaxel-')) return 'blaxel'
+    if (lowerId.startsWith('micro-')) return 'microsandbox'
+    
+    return null
   }
 
   /**
@@ -488,7 +564,7 @@ export class SandboxConnectionManager {
     const tokenParam = connectionToken ? `&token=${encodeURIComponent(connectionToken)}` : ''
     const anonymousSessionId = this.getAnonymousSessionId()
     const anonymousParam = anonymousSessionId ? `&anonymousSessionId=${encodeURIComponent(anonymousSessionId)}` : ''
-    
+
     const streamUrl = `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}${tokenParam}${anonymousParam}`
 
     const eventSource = new EventSource(streamUrl)
@@ -515,6 +591,328 @@ export class SandboxConnectionManager {
       eventSource,
       isConnected: false,
     })
+  }
+
+  /**
+   * Connect to provider-specific PTY
+   * Routes to appropriate provider implementation based on sandbox ID prefix or config
+   */
+  private async connectProviderPTY(
+    providerType: SandboxProviderType,
+    sandboxId: string,
+    sessionId: string
+  ): Promise<WebSocket | null> {
+    logger.debug(`Connecting to provider PTY: ${providerType}`, { sandboxId, sessionId })
+
+    switch (providerType) {
+      case 'e2b':
+        return this.connectE2BPTY(sandboxId, sessionId)
+      case 'daytona':
+        return this.connectDaytonaPTY(sandboxId, sessionId)
+      case 'sprites':
+        return this.connectSpritesPTY(sandboxId, sessionId)
+      case 'codesandbox':
+        return this.connectCodeSandboxPTY(sandboxId, sessionId)
+      case 'vercel-sandbox':
+        return this.connectVercelSandboxPTY(sandboxId, sessionId)
+      default:
+        // Use generic WebSocket for other providers
+        return null
+    }
+  }
+
+  /**
+   * Connect to E2B PTY
+   * Uses E2B's native PTY connection via backend proxy
+   */
+  private async connectE2BPTY(sandboxId: string, sessionId: string): Promise<WebSocket | null> {
+    try {
+      logger.debug('Connecting to E2B PTY', { sandboxId })
+      
+      // Get E2B PTY URL from backend
+      const response = await fetch('/api/sandbox/e2b/pty', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+        },
+        body: JSON.stringify({ sandboxId, sessionId }),
+      })
+
+      if (!response.ok) {
+        logger.warn('E2B PTY connection failed, using generic WebSocket')
+        return null
+      }
+
+      const { ptyUrl } = await response.json()
+      
+      // Connect to E2B PTY WebSocket
+      const ws = new WebSocket(ptyUrl)
+      
+      ws.onopen = () => {
+        logger.debug('E2B PTY connected')
+      }
+
+      ws.onmessage = (event) => {
+        this.write(event.data)
+      }
+
+      ws.onerror = (error) => {
+        logger.warn('E2B PTY error', error)
+      }
+
+      ws.onclose = () => {
+        logger.debug('E2B PTY closed')
+        this.handleWebSocketClose({ code: 1000, reason: 'E2B PTY closed' } as CloseEvent)
+      }
+
+      // Handle terminal input
+      const originalSendInput = this.sendInput
+      this.sendInput = (data: string) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'input', data }))
+        }
+      }
+
+      return ws
+    } catch (error) {
+      logger.warn('Failed to connect E2B PTY, falling back to generic WebSocket', error)
+      return null
+    }
+  }
+
+  /**
+   * Connect to Daytona PTY
+   * Uses Daytona's WebSocket URL from sandbox handle
+   */
+  private async connectDaytonaPTY(sandboxId: string, sessionId: string): Promise<WebSocket | null> {
+    try {
+      logger.debug('Connecting to Daytona PTY', { sandboxId })
+      
+      // Get Daytona sandbox details including WebSocket URL
+      const response = await fetch('/api/sandbox/daytona/pty', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+        },
+        body: JSON.stringify({ sandboxId, sessionId }),
+      })
+
+      if (!response.ok) {
+        logger.warn('Daytona PTY connection failed, using generic WebSocket')
+        return null
+      }
+
+      const { wsUrl } = await response.json()
+      const ws = new WebSocket(wsUrl)
+      
+      ws.onopen = () => {
+        logger.debug('Daytona PTY connected')
+      }
+
+      ws.onmessage = (event) => {
+        this.write(event.data)
+      }
+
+      ws.onerror = (error) => {
+        logger.warn('Daytona PTY error', error)
+      }
+
+      ws.onclose = () => {
+        logger.debug('Daytona PTY closed')
+        this.handleWebSocketClose({ code: 1000, reason: 'Daytona PTY closed' } as CloseEvent)
+      }
+
+      // Handle terminal input
+      const originalSendInput = this.sendInput
+      this.sendInput = (data: string) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(data)
+        }
+      }
+
+      return ws
+    } catch (error) {
+      logger.warn('Failed to connect Daytona PTY, falling back to generic WebSocket', error)
+      return null
+    }
+  }
+
+  /**
+   * Connect to Sprites PTY
+   * Uses Sprites workspace WebSocket URL with optional tar-sync for VFS
+   */
+  private async connectSpritesPTY(sandboxId: string, sessionId: string): Promise<WebSocket | null> {
+    try {
+      logger.debug('Connecting to Sprites PTY', { sandboxId })
+      
+      // Get Sprites workspace PTY URL via backend
+      const response = await fetch('/api/sandbox/sprites/pty', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+        },
+        body: JSON.stringify({ sandboxId, sessionId }),
+      })
+
+      if (!response.ok) {
+        logger.warn('Sprites PTY connection failed, using generic WebSocket')
+        return null
+      }
+
+      const { ptyUrl, workspaceUrl } = await response.json()
+      const ws = new WebSocket(ptyUrl)
+      
+      ws.onopen = () => {
+        logger.debug('Sprites PTY connected')
+      }
+
+      ws.onmessage = (event) => {
+        this.write(event.data)
+      }
+
+      ws.onerror = (error) => {
+        logger.warn('Sprites PTY error', error)
+      }
+
+      ws.onclose = () => {
+        logger.debug('Sprites PTY closed')
+        this.handleWebSocketClose({ code: 1000, reason: 'Sprites PTY closed' } as CloseEvent)
+      }
+
+      // Handle terminal input
+      const originalSendInput = this.sendInput
+      this.sendInput = (data: string) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'input', data }))
+        }
+      }
+
+      // Note: For VFS sync, use sprites-tar-sync.ts service
+      // Example: await syncFilesToSprite(spriteInstance, files, targetDir)
+      // This happens separately via vfsSyncBackService
+
+      return ws
+    } catch (error) {
+      logger.warn('Failed to connect Sprites PTY, falling back to generic WebSocket', error)
+      return null
+    }
+  }
+
+  /**
+   * Connect to CodeSandbox PTY
+   * Uses CodeSandbox DevBox WebSocket
+   */
+  private async connectCodeSandboxPTY(sandboxId: string, sessionId: string): Promise<WebSocket | null> {
+    try {
+      logger.debug('Connecting to CodeSandbox PTY', { sandboxId })
+      
+      const response = await fetch('/api/sandbox/codesandbox/pty', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+        },
+        body: JSON.stringify({ sandboxId, sessionId }),
+      })
+
+      if (!response.ok) {
+        logger.warn('CodeSandbox PTY connection failed, using generic WebSocket')
+        return null
+      }
+
+      const { wsUrl } = await response.json()
+      const ws = new WebSocket(wsUrl)
+      
+      ws.onopen = () => {
+        logger.debug('CodeSandbox PTY connected')
+      }
+
+      ws.onmessage = (event) => {
+        this.write(event.data)
+      }
+
+      ws.onerror = (error) => {
+        logger.warn('CodeSandbox PTY error', error)
+      }
+
+      ws.onclose = () => {
+        logger.debug('CodeSandbox PTY closed')
+        this.handleWebSocketClose({ code: 1000, reason: 'CodeSandbox PTY closed' } as CloseEvent)
+      }
+
+      // Handle terminal input
+      const originalSendInput = this.sendInput
+      this.sendInput = (data: string) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'input', data }))
+        }
+      }
+
+      return ws
+    } catch (error) {
+      logger.warn('Failed to connect CodeSandbox PTY, falling back to generic WebSocket', error)
+      return null
+    }
+  }
+
+  /**
+   * Connect to Vercel Sandbox PTY
+   * Uses Vercel's isolated VM WebSocket
+   */
+  private async connectVercelSandboxPTY(sandboxId: string, sessionId: string): Promise<WebSocket | null> {
+    try {
+      logger.debug('Connecting to Vercel Sandbox PTY', { sandboxId })
+      
+      const response = await fetch('/api/sandbox/vercel/pty', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+        },
+        body: JSON.stringify({ sandboxId, sessionId }),
+      })
+
+      if (!response.ok) {
+        logger.warn('Vercel Sandbox PTY connection failed, using generic WebSocket')
+        return null
+      }
+
+      const { wsUrl } = await response.json()
+      const ws = new WebSocket(wsUrl)
+      
+      ws.onopen = () => {
+        logger.debug('Vercel Sandbox PTY connected')
+      }
+
+      ws.onmessage = (event) => {
+        this.write(event.data)
+      }
+
+      ws.onerror = (error) => {
+        logger.warn('Vercel Sandbox PTY error', error)
+      }
+
+      ws.onclose = () => {
+        logger.debug('Vercel Sandbox PTY closed')
+        this.handleWebSocketClose({ code: 1000, reason: 'Vercel Sandbox PTY closed' } as CloseEvent)
+      }
+
+      // Handle terminal input
+      const originalSendInput = this.sendInput
+      this.sendInput = (data: string) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'input', data }))
+        }
+      }
+
+      return ws
+    } catch (error) {
+      logger.warn('Failed to connect Vercel Sandbox PTY, falling back to generic WebSocket', error)
+      return null
+    }
   }
 
   /**

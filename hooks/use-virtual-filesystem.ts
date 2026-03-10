@@ -8,6 +8,8 @@ import type {
   VirtualFilesystemSearchResult,
   VirtualWorkspaceSnapshot,
 } from '@/lib/virtual-filesystem/filesystem-types';
+import { opfsAdapter } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
+import { opfsCore } from '@/lib/virtual-filesystem/opfs/opfs-core';
 
 export interface AttachedVirtualFile {
   path: string;
@@ -15,6 +17,20 @@ export interface AttachedVirtualFile {
   version: number;
   language: string;
   lastModified: string;
+}
+
+export interface UseVirtualFilesystemOptions {
+  autoLoad?: boolean;
+  useOPFS?: boolean;       // Enable OPFS caching for instant reads/writes
+  offlineMode?: boolean;   // Force offline operation
+}
+
+export interface SyncStatus {
+  isSyncing: boolean;
+  pendingChanges: number;
+  lastSyncTime: number | null;
+  isOnline: boolean;
+  hasConflicts: boolean;
 }
 
 interface ApiResponse<T> {
@@ -36,8 +52,14 @@ function getOrCreateAnonymousSessionId(): string {
   return sessionId;
 }
 
-export function useVirtualFilesystem(initialPath: string = 'project', options?: { autoLoad?: boolean }) {
+export function useVirtualFilesystem(
+  initialPath: string = 'project',
+  options: UseVirtualFilesystemOptions = {}
+) {
   const autoLoad = options?.autoLoad !== false; // default true
+  const useOPFS = options?.useOPFS ?? false;
+  const offlineMode = options?.offlineMode ?? false;
+
   const [currentPath, setCurrentPath] = useState(initialPath);
   const currentPathRef = useRef(currentPath);
   const initialPathRef = useRef(initialPath);
@@ -45,12 +67,77 @@ export function useVirtualFilesystem(initialPath: string = 'project', options?: 
   const [attachedFiles, setAttachedFiles] = useState<Record<string, AttachedVirtualFile>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // OPFS sync status
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>({
+    isSyncing: false,
+    pendingChanges: 0,
+    lastSyncTime: null,
+    isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    hasConflicts: false,
+  });
 
   // Debug flag
   const DEBUG = typeof window !== 'undefined' && (localStorage.getItem('DEBUG_VFS') === 'true' || process.env.NODE_ENV === 'development');
   const log = (...args: any[]) => DEBUG && console.log('[useVFS]', ...args);
   const logError = (...args: any[]) => console.error('[useVFS ERROR]', ...args);
   const logWarn = (...args: any[]) => console.warn('[useVFS WARN]', ...args);
+
+  // Initialize OPFS on mount if enabled
+  useEffect(() => {
+    if (useOPFS && typeof window !== 'undefined') {
+      const sessionId = getOrCreateAnonymousSessionId();
+      opfsAdapter.enable(sessionId).catch(err => {
+        logWarn('OPFS initialization failed, falling back to server-only:', err);
+      });
+    }
+
+    return () => {
+      if (useOPFS) {
+        opfsAdapter.disable().catch(console.error);
+      }
+    };
+  }, [useOPFS, logWarn]);
+
+  // Track online status
+  useEffect(() => {
+    const handleOnline = () => {
+      setSyncStatus(prev => ({ ...prev, isOnline: true }));
+      // Trigger sync when coming back online
+      if (useOPFS && !offlineMode) {
+        syncWithServer().catch(console.error);
+      }
+    };
+    const handleOffline = () => {
+      setSyncStatus(prev => ({ ...prev, isOnline: false }));
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [useOPFS, offlineMode]);
+
+  // Update sync status periodically
+  useEffect(() => {
+    if (!useOPFS) return;
+
+    const interval = setInterval(() => {
+      const status = opfsAdapter.getSyncStatus();
+      setSyncStatus(prev => ({
+        ...prev,
+        isSyncing: status.isSyncing,
+        pendingChanges: status.pendingChanges,
+        lastSyncTime: status.lastSyncTime,
+        isOnline: status.isOnline,
+      }));
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [useOPFS]);
 
   const buildHeaders = useCallback((includeJsonContentType: boolean): HeadersInit => {
     const headers: Record<string, string> = {
@@ -128,14 +215,40 @@ export function useVirtualFilesystem(initialPath: string = 'project', options?: 
   }, [request]);
 
   const readFile = useCallback(async (filePath: string): Promise<VirtualFile> => {
+    // OPFS-first strategy
+    if (useOPFS) {
+      try {
+        const opfsFile = await opfsAdapter.readFile('current-user', filePath);
+        log(`readFile: OPFS cache hit for "${filePath}"`);
+        return opfsFile;
+      } catch (err) {
+        logWarn(`readFile: OPFS cache miss for "${filePath}", fetching from server`);
+      }
+    }
+    
+    // Server fetch
     return request<VirtualFile>('/api/filesystem/read', {
       method: 'POST',
       body: JSON.stringify({ path: filePath }),
     });
-  }, [request]);
+  }, [request, useOPFS, logWarn]);
 
   const writeFile = useCallback(async (filePath: string, content: string) => {
     log(`writeFile: writing "${filePath}" (contentLength=${content.length})`);
+    
+    // OPFS-first strategy
+    if (useOPFS && !offlineMode) {
+      // Write to OPFS instantly
+      const opfsFile = await opfsAdapter.writeFile('current-user', filePath, content);
+      log(`writeFile: OPFS write complete for "${filePath}", version=${opfsFile.version}`);
+      
+      // Update local state immediately
+      await listDirectory(currentPathRef.current);
+      
+      return opfsFile;
+    }
+    
+    // Server-only or offline mode
     const data = await request<{
       path: string;
       version: number;
@@ -146,10 +259,10 @@ export function useVirtualFilesystem(initialPath: string = 'project', options?: 
       method: 'POST',
       body: JSON.stringify({ path: filePath, content }),
     });
-    log(`writeFile: written "${data.path}", version=${data.version}`);
+    log(`writeFile: server write complete for "${data.path}", version=${data.version}`);
     await listDirectory(currentPathRef.current);
     return data;
-  }, [listDirectory, request]);
+  }, [listDirectory, request, useOPFS, offlineMode, log]);
 
   const deletePath = useCallback(async (targetPath: string) => {
     const data = await request<{ deletedCount: number }>('/api/filesystem/delete', {
@@ -194,6 +307,38 @@ export function useVirtualFilesystem(initialPath: string = 'project', options?: 
     );
     return data;
   }, [request]);
+
+  /**
+   * Sync with server (OPFS only)
+   */
+  const syncWithServer = useCallback(async () => {
+    if (!useOPFS) return;
+
+    setSyncStatus(prev => ({ ...prev, isSyncing: true }));
+
+    try {
+      const ownerId = getOrCreateAnonymousSessionId();
+      const result = await opfsAdapter.syncToServer(ownerId);
+      
+      setSyncStatus(prev => ({
+        ...prev,
+        isSyncing: false,
+        pendingChanges: result.filesSynced,
+        lastSyncTime: Date.now(),
+        hasConflicts: result.conflicts.length > 0,
+      }));
+
+      if (result.conflicts.length > 0) {
+        logWarn('Sync completed with conflicts:', result.conflicts);
+      }
+    } catch (err) {
+      logError('Sync failed:', err);
+      setSyncStatus(prev => ({
+        ...prev,
+        isSyncing: false,
+      }));
+    }
+  }, [useOPFS, logWarn, logError]);
 
   const attachFile = useCallback(async (filePath: string): Promise<AttachedVirtualFile> => {
     const file = await readFile(filePath);
@@ -260,6 +405,7 @@ export function useVirtualFilesystem(initialPath: string = 'project', options?: 
     attachedFileList,
     isLoading,
     error,
+    syncStatus,  // NEW: OPFS sync status
     setCurrentPath,
     listDirectory,
     readFile,
@@ -271,5 +417,6 @@ export function useVirtualFilesystem(initialPath: string = 'project', options?: 
     detachFile,
     clearAttachedFiles,
     uploadBrowserFile,
+    syncWithServer,  // NEW: Manual sync trigger
   };
 }

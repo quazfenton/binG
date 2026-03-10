@@ -41,6 +41,8 @@ import JSZip from "jszip";
 import type { Message } from "../types/index";
 import { parsePatch, applyPatch } from "diff";
 import { useVirtualFilesystem } from "../hooks/use-virtual-filesystem";
+import { OPFSStatusIndicator } from "./opfs-status-indicator";
+import { EnhancedDiffViewer } from "./enhanced-diff-viewer";
 import {
   parseCodeBlocksFromMessages,
   type CodeBlock as ParsedCodeBlock,
@@ -3765,14 +3767,22 @@ export default app;`,
           <Card className="h-full bg-transparent border-0 rounded-none">
             <CardHeader className="border-b border-white/10 bg-black/20 px-3 md:px-6">
               <div className="flex items-center justify-between gap-2">
-                <CardTitle className="text-white flex items-center gap-2 text-sm md:text-base">
-                  <CodeIcon className="w-4 h-4 md:w-5 md:h-5" />
-                  <span className="hidden sm:inline">Code Preview Panel</span>
-                  <span className="sm:hidden">Code</span>
-                  <span className="bg-gray-700 text-gray-300 rounded-full px-2 py-0.5 text-xs">
-                    {codeBlocks.length}
-                  </span>
-                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-white flex items-center gap-2 text-sm md:text-base">
+                    <CodeIcon className="w-4 h-4 md:w-5 md:h-5" />
+                    <span className="hidden sm:inline">Code Preview Panel</span>
+                    <span className="sm:hidden">Code</span>
+                    <span className="bg-gray-700 text-gray-300 rounded-full px-2 py-0.5 text-xs">
+                      {codeBlocks.length}
+                    </span>
+                  </CardTitle>
+                  {/* OPFS Status Indicator */}
+                  <OPFSStatusIndicator 
+                    showDetails={false}
+                    enableSync={true}
+                    className="ml-2"
+                  />
+                </div>
                 <div className="flex items-center gap-1 md:gap-2">
                   <button
                     onClick={async () => {

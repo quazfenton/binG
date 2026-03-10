@@ -1,20 +1,22 @@
 /**
  * Terminal Panel Local Filesystem Handler
- * 
+ *
  * Migrates proven local filesystem handling from TerminalPanel.tsx
  * Preserves all working functionality:
  * - Path resolution with scope path awareness
- * - VFS sync integration
+ * - VFS sync integration (bidirectional)
  * - Command-mode fallback execution
  * - Security checks
  * - All 40+ shell commands
- * 
+ * - Snapshot restoration with VFS sync-back
+ *
  * This is a CAREFUL migration - no functionality is changed, just refactored.
  */
 
 import { LocalCommandExecutor, type LocalFilesystemEntry, type LocalCommandExecutorConfig } from './local-filesystem-executor'
 import { createLogger } from '../utils/logger'
 import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '../terminal/terminal-security'
+import { vfsSyncBackService, type VFSyncResult } from './vfs-sync-back'
 
 const logger = createLogger('TerminalLocalFS')
 
@@ -247,6 +249,51 @@ export class TerminalLocalFSHandler {
     if (this.syncToVFS) {
       await this.syncToVFS(filePath, content)
     }
+  }
+
+  /**
+   * Restore snapshot and sync files back to local filesystem
+   * Integrates VFS sync-back for snapshot restoration
+   */
+  async restoreSnapshot(
+    sessionId: string,
+    options?: {
+      syncToVFS?: boolean
+      onProgress?: (progress: { synced: number; total: number; currentFile: string }) => void
+    }
+  ): Promise<VFSyncResult> {
+    logger.info('Restoring snapshot', { sessionId, options })
+
+    // Sync sandbox to VFS
+    const syncResult = await vfsSyncBackService.syncSandboxToVFS(sessionId, {
+      scopePath: this.filesystemScopePath || 'project',
+      syncToVFS: options?.syncToVFS !== false,
+    })
+
+    logger.info('Snapshot restored', {
+      filesSynced: syncResult.filesSynced,
+      status: syncResult.status,
+    })
+
+    // Update local filesystem with restored files
+    if (syncResult.filesSynced > 0 && syncResult.vfsFiles) {
+      const fs = this.getFileSystem()
+      
+      for (const file of syncResult.vfsFiles) {
+        fs[file.path] = {
+          type: file.type,
+          content: file.content,
+          createdAt: file.createdAt || Date.now(),
+          modifiedAt: file.modifiedAt || Date.now(),
+        }
+      }
+      
+      this.setFileSystem(fs)
+      
+      logger.debug(`Updated ${syncResult.filesSynced} files in local filesystem`)
+    }
+
+    return syncResult
   }
 }
 
