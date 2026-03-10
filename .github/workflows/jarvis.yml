@@ -236,26 +236,32 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          # Decode base64 to preserve multiline comment bodies
-          BATCH_COMMENTS: ${{ fromBase64(needs.collect-comments.outputs.trigger_comments_b64) }}
+          # Pass base64 encoded comments to be decoded in shell
+          TRIGGER_BODIES_B64: ${{ needs.collect-comments.outputs.trigger_comments_b64 }}
           PROMPT: |
             You are an expert Staff Engineer. Analyze the whole repo context.
             Here is the CodeRabbit review context: ${{ steps.context.outputs.suggestions }}
 
-            Additional batched trigger comments from reviewers:
-            ${{ fromBase64(needs.collect-comments.outputs.trigger_comments_b64) }}
+            Additional batched trigger comments from reviewers: (decoded from base64 in shell)
 
             Apply these fixes, ensure Postgres/Terraform logic is intact, and verify type safety.
             Group related changes together logically.
         run: |
+          # Decode base64 to get the actual comment bodies
+          BATCH_COMMENTS=$(echo "$TRIGGER_BODIES_B64" | base64 -d)
+
           # Function to run the agent in CI mode (no user prompt, auto-apply, repo map enabled)
           run_agent() {
             local MODEL="$1"
             local EXTRA_ARGS="$2"
             echo "Attempting execution with model: $MODEL"
 
+            # Build full prompt by combining base PROMPT with decoded batch comments
+            # Use printf to avoid YAML parsing issues with multiline strings
+            FULL_PROMPT=$(printf '%s\n%s\n%s' "$PROMPT" "Additional batched trigger comments:" "$BATCH_COMMENTS")
+
             # Aider runs multiple iterations under the hood if it needs to fix lint errors it caused
-            aider --model "$MODEL" --yes --no-auto-commits --dark-mode $EXTRA_ARGS --message "$PROMPT"
+            aider --model "$MODEL" --yes --no-auto-commits --dark-mode $EXTRA_ARGS --message "$FULL_PROMPT"
           }
 
           # 1. Primary: Gemini 2.5 Pro
@@ -319,9 +325,10 @@ jobs:
           
           # Parse changed files and format as markdown list with links
           FILES_JSON='${{ steps.commit.outputs.changed_files }}'
+          FIX_BRANCH="jarvis-fixes-${{ steps.pr.outputs.head_ref }}"
           FILES_LIST=$(echo "$FILES_JSON" | jq -r '.[]' | while read -r file; do
             if [ -n "$file" ]; then
-              echo "- [\`$file\`](https://github.com/${{ github.repository }}/blob/${{ steps.pr.outputs.head_ref }}/$file)"
+              echo "- [\`$file\`](https://github.com/${{ github.repository }}/blob/$FIX_BRANCH/$file)"
             fi
           done)
 
