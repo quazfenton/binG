@@ -61,8 +61,9 @@ jobs:
 
           # Filter for trigger comments (case-insensitive match for "Prompt for AI Agent")
           # Combine API results with the triggering comment from event
+          # Note: Filter out null bodies (deleted comments) before regex match
           TRIGGER_COMMENTS=$(echo "$ALL_REVIEW_COMMENTS" | jq --argjson event_comment "$TRIGGER_COMMENT_FROM_EVENT" '
-            [.[] | select(.body | test("Prompt for AI Agent"; "i"))] + [$event_comment] | unique_by(.id)
+            [.[] | select(.body != null) | select(.body | test("Prompt for AI Agent"; "i"))] + [$event_comment] | unique_by(.id)
           ')
 
           echo "Comments matching trigger pattern (including event comment): $(echo "$TRIGGER_COMMENTS" | jq 'length')"
