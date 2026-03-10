@@ -79,7 +79,9 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [reconnectCount, setReconnectCount] = useState(0);
+  const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // ✅ FIX: Use ref for reconnect count to avoid race conditions with async state updates
+  const reconnectCountRef = useRef(0);
 
   const [state, setState] = useState<WebSocketTerminalState>({
     connected: false,
@@ -87,6 +89,9 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
     error: null,
     reconnectCount: 0,
   });
+
+  // ✅ FIX: Connection timeout constant
+  const CONNECTION_TIMEOUT_MS = 10000; // 10 seconds
 
   // Get auth token
   const getAuthToken = useCallback(() => {
@@ -136,7 +141,22 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
 
       wsRef.current = new WebSocket(url, wsOptions);
 
+      // ✅ FIX: Add connection timeout to prevent hanging connections
+      connectionTimeoutRef.current = setTimeout(() => {
+        if (wsRef.current?.readyState === WebSocket.CONNECTING) {
+          console.warn('[WebSocketTerminal] Connection timeout, closing');
+          wsRef.current.close(4008, 'Connection timeout');
+        }
+        connectionTimeoutRef.current = null;
+      }, CONNECTION_TIMEOUT_MS);
+
       wsRef.current.onopen = () => {
+        // ✅ FIX: Clear connection timeout on successful connection
+        if (connectionTimeoutRef.current) {
+          clearTimeout(connectionTimeoutRef.current);
+          connectionTimeoutRef.current = null;
+        }
+
         console.log('[WebSocketTerminal] Connected');
         setState(prev => ({
           ...prev,
@@ -168,7 +188,12 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
         console.error('[WebSocketTerminal] Error:', error);
         const err = new Error('WebSocket connection error');
         setState(prev => ({ ...prev, error: err }));
-        onError?.(err);
+        // ✅ FIX: Wrap onError in try-catch to prevent handler errors from crashing component
+        try {
+          onError?.(err);
+        } catch (handlerError) {
+          console.error('[WebSocketTerminal] onError handler failed:', handlerError);
+        }
       };
 
       wsRef.current.onclose = (event) => {
@@ -181,12 +206,13 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
         onDisconnect?.();
 
         // Auto-reconnect if not gracefully closed
-        if (event.code !== 1000 && reconnectCount < reconnectAttempts) {
-          const delay = reconnectDelay * Math.pow(2, reconnectCount); // Exponential backoff
-          console.log(`[WebSocketTerminal] Reconnecting in ${delay}ms (attempt ${reconnectCount + 1}/${reconnectAttempts})`);
+        // ✅ FIX: Use ref instead of state to avoid race condition
+        if (event.code !== 1000 && reconnectCountRef.current < reconnectAttempts) {
+          reconnectCountRef.current += 1;
+          const delay = reconnectDelay * Math.pow(2, reconnectCountRef.current); // Exponential backoff
+          console.log(`[WebSocketTerminal] Reconnecting in ${delay}ms (attempt ${reconnectCountRef.current}/${reconnectAttempts})`);
 
           reconnectTimeoutRef.current = setTimeout(() => {
-            setReconnectCount(prev => prev + 1);
             connect();
           }, delay);
         }
@@ -199,9 +225,14 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
         connecting: false,
         error: error,
       }));
-      onError?.(error);
+      // ✅ FIX: Wrap onError in try-catch
+      try {
+        onError?.(error);
+      } catch (handlerError) {
+        console.error('[WebSocketTerminal] onError handler failed:', handlerError);
+      }
     }
-  }, [buildWebSocketUrl, onOutput, onError, onConnect, onDisconnect, reconnectCount, reconnectAttempts, reconnectDelay]);
+  }, [buildWebSocketUrl, onOutput, onError, onConnect, onDisconnect, reconnectAttempts, reconnectDelay]);
 
   // Disconnect from WebSocket
   const disconnect = useCallback(() => {
@@ -209,6 +240,12 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
+    }
+
+    // ✅ FIX: Clear connection timeout
+    if (connectionTimeoutRef.current) {
+      clearTimeout(connectionTimeoutRef.current);
+      connectionTimeoutRef.current = null;
     }
 
     if (wsRef.current) {
@@ -267,6 +304,10 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
     return () => {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+      }
+      // ✅ FIX: Clear connection timeout on unmount
+      if (connectionTimeoutRef.current) {
+        clearTimeout(connectionTimeoutRef.current);
       }
       disconnect();
     };

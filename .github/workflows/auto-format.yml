@@ -1,7 +1,6 @@
 name: 3. Auto-Format & Fix
 on:
-  push:
-    branches-ignore: [main] # Don't auto-commit directly to main
+  pull_request:
 permissions:
   contents: write
   pull-requests: write

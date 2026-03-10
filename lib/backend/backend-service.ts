@@ -356,6 +356,9 @@ class BackendService {
   }
 }
 
+// Export class for testing
+export { BackendService };
+
 // Export singleton instance
 export const backendService = new BackendService();
 

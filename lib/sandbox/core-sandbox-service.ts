@@ -164,7 +164,8 @@ export class SandboxService {
       'opensandbox-agent',
       'microsandbox',
       'e2b',
-      'mistral'
+      'mistral',
+      'vercel-sandbox'
     ]
     const configuredProviders: SandboxProviderType[] = []
     

@@ -9,8 +9,8 @@
  */
 
 import { getDatabase } from '@/lib/database/connection';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs';
+import { dirname, join } from 'path';
 import { createLogger } from '@/lib/utils/logger'
 
 const log = createLogger('QuotaManager')

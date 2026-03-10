@@ -2,19 +2,32 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { absolutePathSchema, fileContentSchema, languageSchema } from '@/lib/validation/schemas';
+import { fileContentSchema, languageSchema } from '@/lib/validation/schemas';
 
 export const runtime = 'nodejs';
 
 /**
  * Schema for filesystem write requests
  * Validates path, content, and prevents path traversal attacks
+ * Accepts both relative paths (project/sessions/...) and absolute paths (/home/..., /workspace/...)
  */
 const writeRequestSchema = z.object({
-  path: absolutePathSchema.refine(
-    (path) => path.startsWith('/home/') || path.startsWith('/workspace/'),
-    'Absolute paths must start with /home/ or /workspace/'
-  ),
+  path: z.string()
+    .min(1, 'Path is required')
+    .max(500, 'Path too long (max 500 characters)')
+    .refine(
+      (path) => !path.includes('..') && !path.includes('\0'),
+      'Path contains invalid characters'
+    )
+    .refine(
+      (path) => {
+        // Allow relative paths (project, project/sessions, etc.)
+        if (!path.startsWith('/')) return true;
+        // If absolute, must start with /home/, /workspace/, or /tmp/
+        return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/');
+      },
+      'Invalid path format'
+    ),
   content: fileContentSchema,
   language: languageSchema.optional(),
 });

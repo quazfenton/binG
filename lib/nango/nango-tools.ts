@@ -88,7 +88,7 @@ export const nangoGitHubTools = {
     parameters: z.object({
       connectionId: z.string().describe('Nango connection ID for GitHub'),
       page: z.number().optional().describe('Page number (default: 1)'),
-      per_page: z.number().max(100).optional().describe('Items per page (default: 30, max: 100)'),
+      per_page: z.number().refine((val) => val <= 100, 'Items per page must be at most 100').optional().describe('Items per page (default: 30, max: 100)'),
     }),
     execute: async ({ connectionId, page = 1, per_page = 30 }) => {
       const result = await executeNangoProxy('github', {
@@ -244,7 +244,7 @@ export const nangoSlackTools = {
     - Get channel metadata`,
     parameters: z.object({
       connectionId: z.string().describe('Nango connection ID for Slack'),
-      limit: z.number().max(100).optional().describe('Maximum number of channels (default: 100)'),
+      limit: z.number().refine((val) => val <= 100, 'Limit must be at most 100').optional().describe('Maximum number of channels (default: 100)'),
     }),
     execute: async ({ connectionId, limit = 100 }) => {
       const result = await executeNangoProxy('slack', {
