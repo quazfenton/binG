@@ -54,7 +54,7 @@ export async function POST(
 
     // Execute workflow
     const run = await workflow.createRun();
-    const result = await run.start({ data: inputData || {} });
+    const result = await run.start({ inputData: inputData || {} });
 
     return NextResponse.json({
       success: true,

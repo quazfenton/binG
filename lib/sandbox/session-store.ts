@@ -226,7 +226,7 @@ export function updateSession(sessionId: string, updates: Partial<WorkspaceSessi
 
 export function deleteSession(sessionId: string): void {
   log.debug(`Deleting session: ${sessionId}`)
-  
+
   if (useSqlite && stmtDelete) {
     const result = stmtDelete.run(sessionId)
     log.debug(`Session ${sessionId} deleted from SQLite (${result.changes} rows affected)`)
@@ -234,6 +234,76 @@ export function deleteSession(sessionId: string): void {
     memSessions.delete(sessionId)
     log.debug(`Session ${sessionId} deleted from memory`)
   }
+}
+
+/**
+ * Clear all sessions for a specific user
+ * Useful for recovering from sandbox creation failures
+ */
+export function clearUserSessions(userId: string): void {
+  log.info(`Clearing all sessions for user: ${userId}`)
+  
+  if (useSqlite && db) {
+    try {
+      const result = db.prepare('DELETE FROM sandbox_sessions WHERE userId = ?').run(userId)
+      log.info(`Deleted ${result.changes} sessions from SQLite for user ${userId}`)
+    } catch (err: any) {
+      log.warn(`Failed to clear user sessions from SQLite: ${err.message}`)
+    }
+  }
+  
+  // Clear from memory store
+  let clearedCount = 0
+  for (const [id, session] of memSessions.entries()) {
+    if (session.userId === userId) {
+      memSessions.delete(id)
+      clearedCount++
+    }
+  }
+  log.info(`Cleared ${clearedCount} sessions from memory for user ${userId}`)
+}
+
+/**
+ * Clear stale sessions (older than TTL or with 'creating' status for > 5 minutes)
+ */
+export function clearStaleSessions(): void {
+  log.info('Clearing stale sessions')
+  const now = Date.now()
+  const staleThreshold = 5 * 60 * 1000 // 5 minutes for 'creating' status
+  
+  if (useSqlite && db) {
+    try {
+      // Delete sessions older than TTL
+      const ttlStmt = db.prepare("DELETE FROM sandbox_sessions WHERE lastActive <= datetime('now', '-4 hours')")
+      const ttlResult = ttlStmt.run()
+      log.info(`Deleted ${ttlResult.changes} TTL-expired sessions`)
+      
+      // Delete stuck 'creating' sessions
+      const creatingStmt = db.prepare(`
+        DELETE FROM sandbox_sessions 
+        WHERE status = 'creating' 
+        AND createdAt <= datetime('now', '-5 minutes')
+      `)
+      const creatingResult = creatingStmt.run()
+      log.info(`Deleted ${creatingResult.changes} stuck 'creating' sessions`)
+    } catch (err: any) {
+      log.warn(`Failed to clear stale sessions from SQLite: ${err.message}`)
+    }
+  }
+  
+  // Clear from memory store
+  let clearedCount = 0
+  for (const [id, session] of memSessions.entries()) {
+    const sessionAge = now - new Date(session.lastActive).getTime()
+    const isCreatingTooLong = session.status === 'creating' && 
+      (now - new Date(session.createdAt).getTime()) > staleThreshold
+    
+    if (sessionAge > SESSION_TTL_MS || isCreatingTooLong) {
+      memSessions.delete(id)
+      clearedCount++
+    }
+  }
+  log.info(`Cleared ${clearedCount} stale sessions from memory`)
 }
 
 /**

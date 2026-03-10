@@ -465,16 +465,63 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     const existing = Array.isArray((msg.metadata as any)?.toolInvocations)
                       ? ([...(msg.metadata as any).toolInvocations] as any[])
                       : [];
-                    const idx = existing.findIndex((inv) => inv.toolCallId === eventData.toolCallId && inv.state === eventData.state);
-                    if (idx === -1) {
-                      existing.push({
-                        toolCallId: eventData.toolCallId,
-                        toolName: eventData.toolName,
-                        state: eventData.state,
-                        args: eventData.args || {},
-                        result: eventData.result,
-                      });
+                    
+                    // Find existing invocation with same toolCallId
+                    const idx = existing.findIndex((inv) => 
+                      inv.toolCallId === eventData.toolCallId
+                    );
+                    
+                    // Handle different states for real-time updates
+                    if (eventData.state === 'partial-call') {
+                      // Streaming arguments - update or create
+                      if (idx === -1) {
+                        existing.push({
+                          toolCallId: eventData.toolCallId,
+                          toolName: eventData.toolName,
+                          state: 'partial-call',
+                          args: eventData.args || {},
+                        });
+                      } else {
+                        existing[idx] = {
+                          ...existing[idx],
+                          state: 'partial-call',
+                          args: { ...existing[idx].args, ...eventData.args },
+                        };
+                      }
+                    } else if (eventData.state === 'call') {
+                      // Tool executing
+                      if (idx === -1) {
+                        existing.push({
+                          toolCallId: eventData.toolCallId,
+                          toolName: eventData.toolName,
+                          state: 'call',
+                          args: eventData.args || {},
+                        });
+                      } else {
+                        existing[idx] = {
+                          ...existing[idx],
+                          state: 'call',
+                        };
+                      }
+                    } else if (eventData.state === 'result') {
+                      // Tool completed
+                      if (idx === -1) {
+                        existing.push({
+                          toolCallId: eventData.toolCallId,
+                          toolName: eventData.toolName,
+                          state: 'result',
+                          args: eventData.args || {},
+                          result: eventData.result,
+                        });
+                      } else {
+                        existing[idx] = {
+                          ...existing[idx],
+                          state: 'result',
+                          result: eventData.result,
+                        };
+                      }
                     }
+                    
                     return {
                       ...msg,
                       metadata: {

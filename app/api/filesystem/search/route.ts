@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { searchQuerySchema, absolutePathSchema } from '@/lib/validation/schemas';
 
 export const runtime = 'nodejs';
 
@@ -9,18 +10,9 @@ export const runtime = 'nodejs';
  * Validates query and path parameters
  */
 const searchRequestSchema = z.object({
-  q: z.string().min(1, 'Search query is required').max(200, 'Query too long'),
-  path: z.string()
-    .min(1)
-    .max(500)
-    .refine(
-      (path) => !path.includes('..') && !path.includes('\0'),
-      'Path contains invalid characters'
-    )
-    .optional()
-    .default('project'),
+  q: searchQuerySchema,
+  path: absolutePathSchema.optional().default('project'),
   limit: z.number().int().positive().max(200).optional(),
-  ownerId: z.string().optional(),
 });
 
 export async function GET(req: NextRequest) {
