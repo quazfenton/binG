@@ -6,13 +6,23 @@ on:
 jobs:
   # Job 1: Collect and batch trigger comments
   collect-comments:
-    if: contains(github.event.comment.body, 'Prompt for AI Agent')
+    if: contains(github.event.comment.body, 'Prompt for AI Agent') || contains(github.event.comment.body, 'Prompt for AI agent')
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
     outputs:
       should_run: ${{ steps.batch.outputs.should_run }}
       comment_ids: ${{ steps.batch.outputs.comment_ids }}
       trigger_comments: ${{ steps.batch.outputs.trigger_comments }}
     steps:
+      - name: Install GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
       - name: Get PR and Batch Info
         id: batch
         env:
@@ -23,26 +33,28 @@ jobs:
           
           # Fetch all trigger comments on this PR in the last 30 minutes
           COMMENTS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments \
-            --jq '[.[] | select(.body | test("@autobot fix|/autofix"; "i")) | select(.created_at > (now - 1800 | todate))]')
+            --jq '[.[] | select(.body | test("Prompt for AI Agent"; "i")) | select(.created_at > (now - 1800 | todate))]')
           
           # Filter out comments that already have 🚀 reaction (already processed)
           UNPROCESSED_COMMENTS=$(echo "$COMMENTS" | jq -c '[.[] | select(
-            # Check if comment has NO rocket reaction
-            ([.reactions // {} | .rocket // 0] | first | . == null or . == 0)
+            (.reactions.rocket // 0) == 0
           )]')
           
           COMMENT_COUNT=$(echo "$UNPROCESSED_COMMENTS" | jq 'length')
-          COMMENT_IDS=$(echo "$UNPROCESSED_COMMENTS" | jq -r '.[].id | tostring' | tr '\n' ',')
-          
+          COMMENT_IDS=$(echo "$UNPROCESSED_COMMENTS" | jq -r '[.[].id | tostring] | join(",")')
+
           echo "Found $COMMENT_COUNT unprocessed trigger comments (excluding already-processed)"
           echo "comment_count=$COMMENT_COUNT" >> $GITHUB_OUTPUT
           echo "comment_ids=$COMMENT_IDS" >> $GITHUB_OUTPUT
-          
+
           # Batch mode: Run only if we have 3+ comments OR if this is the oldest comment (batch leader)
           # Or run immediately if only 1 comment exists
           if [ "$COMMENT_COUNT" -ge 3 ] || [ "$COMMENT_COUNT" -eq 1 ]; then
             echo "should_run=true" >> $GITHUB_OUTPUT
             echo "Running agent with $COMMENT_COUNT batched comments"
+          elif [ "$COMMENT_COUNT" -eq 0 ]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "No unprocessed comments found"
           else
             # Check if we're the oldest (should run) or waiting for more
             OLDEST_ID=$(echo "$UNPROCESSED_COMMENTS" | jq -r '.[0].id')
@@ -54,9 +66,9 @@ jobs:
               echo "Waiting for more comments or batch timeout..."
             fi
           fi
-          
+
           # Extract all trigger comment bodies for context
-          TRIGGER_BODIES=$(echo "$UNPROCESSED_COMMENTS" | jq -r '.[].body' | paste -sd $'\n')
+          TRIGGER_BODIES=$(echo "$UNPROCESSED_COMMENTS" | jq -r '[.[].body] | join("\n")')
           echo "trigger_comments<<EOF" >> $GITHUB_OUTPUT
           echo "$TRIGGER_BODIES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -72,6 +84,14 @@ jobs:
       actions: write
 
     steps:
+      - name: Install GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
       - name: Get Pull Request Data
         id: pr
         env:
@@ -168,40 +188,40 @@ jobs:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           BATCH_COMMENTS: ${{ needs.collect-comments.outputs.trigger_comments }}
           PROMPT: |
-            "You are an expert Staff Engineer. Analyze the whole repo context.
+            You are an expert Staff Engineer. Analyze the whole repo context.
             Here is the CodeRabbit review context: ${{ steps.context.outputs.suggestions }}
 
             Additional batched trigger comments from reviewers:
             ${{ needs.collect-comments.outputs.trigger_comments }}
 
             Apply these fixes, ensure Postgres/Terraform logic is intact, and verify type safety.
-            Group related changes together logically."
+            Group related changes together logically.
         run: |
           # Function to run the agent in CI mode (no user prompt, auto-apply, repo map enabled)
           run_agent() {
             local MODEL="$1"
-            local API_BASE_ARG="$2"
+            local EXTRA_ARGS="$2"
             echo "Attempting execution with model: $MODEL"
 
             # Aider runs multiple iterations under the hood if it needs to fix lint errors it caused
-            aider --model "$MODEL" "$API_BASE_ARG" --message "$PROMPT" --yes --no-auto-commits --dark-mode
+            aider --model "$MODEL" --yes --no-auto-commits --dark-mode $EXTRA_ARGS --message "$PROMPT"
           }
 
-          # 1. Primary: Gemini 3.1 Pro
-          if ! run_agent "gemini/gemini-3.1-pro" ""; then
-            echo "Gemini 3.1 Pro failed or hit rate limit. Fallback 1: Gemini Flash"
+          # 1. Primary: Gemini 2.5 Pro
+          if ! run_agent "gemini/gemini-2.5-pro" ""; then
+            echo "Gemini 2.5 Pro failed or hit rate limit. Fallback 1: Gemini Flash"
 
-            # 2. Fallback: Gemini 3.0 Flash
-            if ! run_agent "gemini/gemini-3.0-flash" ""; then
+            # 2. Fallback: Gemini 2.0 Flash
+            if ! run_agent "gemini/gemini-2.0-flash" ""; then
               echo "Gemini Flash failed. Fallback 2: Mistral Large"
 
               # 3. Fallback: Mistral
               if ! run_agent "mistral/mistral-large-latest" ""; then
                 echo "Mistral failed. Fallback 3: Minimax (OpenCode Zen)"
 
-                # 4. Fallback: Minimax 2.5 Max (Using OpenAI compatible routing)
+                # 4. Fallback: Minimax M2.5 (Using OpenAI compatible routing)
                 export OPENAI_API_KEY="$OPENCODE_API_KEY"
-                run_agent "opencode/minimax-m2.5-free" "--openai-api-base https://opencode.ai/zen/v1/chat/completions"
+                run_agent "openai/minimax-minimax-01" "--openai-api-base https://opencode.ai/zen/v1"
               fi
             fi
           fi
@@ -216,9 +236,9 @@ jobs:
             # Get list of changed files
             CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r HEAD | jq -R -s -c 'split("\n")[:-1]')
 
-            # Get all trigger comment IDs and URLs for reference
+            # Get all trigger comment IDs for reference
             COMMENT_IDS="${{ needs.collect-comments.outputs.comment_ids }}"
-            COMMENT_COUNT=$(echo "$COMMENT_IDS" | tr ',' '\n' | grep -c .)
+            COMMENT_COUNT=$(echo "$COMMENT_IDS" | tr ',' '\n' | grep -c . || echo "0")
 
             # Build commit message with all comment references
             git commit -m "🤖 Agent: Batch applied fixes from $COMMENT_COUNT review comments - Comments: $COMMENT_IDS"
@@ -296,6 +316,14 @@ jobs:
     permissions:
       pull-requests: write
     steps:
+      - name: Install GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
       - name: Add Rocket Reaction to Processed Comments
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

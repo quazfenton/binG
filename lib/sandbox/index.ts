@@ -48,6 +48,59 @@ export type {
   ScalingAction,
 } from './auto-scaling';
 
+// Local filesystem executor (NEW - migrated from TerminalPanel)
+export {
+  LocalCommandExecutor,
+  type LocalFilesystemEntry,
+  type LocalCommandExecutorConfig,
+} from './local-filesystem-executor'
+
+// Terminal handlers (NEW - complete migration)
+export {
+  TerminalLocalFSHandler,
+  createTerminalLocalFSHandler,
+  type TerminalLocalFSConfig,
+} from './terminal-local-fs-handler'
+
+export {
+  TerminalInputHandler,
+  createTerminalInputHandler,
+  type TerminalInputHandlerConfig,
+} from './terminal-input-handler'
+
+export {
+  TerminalEditorHandler,
+  createTerminalEditorHandler,
+  type EditorSession,
+  type TerminalEditorHandlerConfig,
+} from './terminal-editor-handler'
+
+export {
+  SandboxConnectionManager,
+  createSandboxConnectionManager,
+  type SandboxConnectionState,
+  type SandboxConnectionManagerConfig,
+} from './sandbox-connection-manager'
+
+export {
+  TerminalInputBatcher,
+  createTerminalInputBatcher,
+  type TerminalInputBatcherConfig,
+} from './terminal-input-batcher'
+
+export {
+  TerminalHealthMonitor,
+  createTerminalHealthMonitor,
+  type TerminalHealthMonitorConfig,
+} from './terminal-health-monitor'
+
+export {
+  TerminalStateManager,
+  createTerminalStateManager,
+  type TerminalState,
+  type TerminalStateManagerConfig,
+} from './terminal-state-manager';
+
 // ==================== Phase 1 Integration (NEW) ====================
 // Per-user terminal session isolation, auto-snapshots, VFS sync, provider MCP tools
 
