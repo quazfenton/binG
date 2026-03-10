@@ -1,9 +1,9 @@
 /**
  * Git-VFS Sync
- * 
+ *
  * Synchronizes VFS state with git repository in OPFS
  * Provides git-backed version control for VFS files
- * 
+ *
  * Features:
  * - Auto-commit VFS changes to git
  * - Restore VFS from git commits
@@ -11,12 +11,28 @@
  * - Diff between VFS and git state
  */
 
+'use client';
+
 import type { OPFSGitIntegration, GitStatusResult, GitCommit } from './opfs-git';
 import { getOPFSGit } from './opfs-git';
 import type { OPFSCore } from './opfs-core';
 import { opfsCore } from './opfs-core';
-import { virtualFilesystem } from '../virtual-filesystem-service';
 import type { VirtualFile } from '../filesystem-types';
+
+// Lazy import virtualFilesystem to avoid bundling node:fs in client
+let _virtualFilesystemModule: typeof import('../virtual-filesystem-service').virtualFilesystem | null = null;
+
+async function getVirtualFilesystem() {
+  if (!_virtualFilesystemModule) {
+    try {
+      const mod = await import('../virtual-filesystem-service');
+      _virtualFilesystemModule = mod.virtualFilesystem;
+    } catch {
+      _virtualFilesystemModule = null;
+    }
+  }
+  return _virtualFilesystemModule;
+}
 
 export interface GitVFSSyncOptions {
   workspaceId: string;
@@ -102,7 +118,15 @@ export class GitVFSSync {
 
     try {
       // Get VFS snapshot
-      const snapshot = await virtualFilesystem.exportWorkspace(this.options.ownerId);
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) {
+        return {
+          success: false,
+          filesCommitted: 0,
+          error: 'Server VFS not available',
+        };
+      }
+      const snapshot = await vfs.exportWorkspace(this.options.ownerId);
       
       if (snapshot.files.length === 0) {
         return {
@@ -177,14 +201,23 @@ export class GitVFSSync {
 
       // Read all files from OPFS and write to VFS
       const files = status.files.filter(f => f.status !== 'deleted');
-      
+
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) {
+        return {
+          success: false,
+          filesRestored: 0,
+          error: 'Server VFS not available',
+        };
+      }
+
       for (const file of files) {
         try {
           const opfsFile = await this.core.readFile(
             `${this.options.workspaceId}/${file.path}`
           );
 
-          await virtualFilesystem.writeFile(
+          await vfs.writeFile(
             this.options.ownerId,
             file.path,
             opfsFile.content
@@ -285,8 +318,11 @@ export class GitVFSSync {
     // Get VFS version
     let vfsVersion = 0;
     try {
-      const snapshot = await virtualFilesystem.exportWorkspace(this.options.ownerId);
-      vfsVersion = snapshot.version;
+      const vfs = await getVirtualFilesystem();
+      if (vfs) {
+        const snapshot = await vfs.exportWorkspace(this.options.ownerId);
+        vfsVersion = snapshot.version;
+      }
     } catch {
       vfsVersion = 0;
     }

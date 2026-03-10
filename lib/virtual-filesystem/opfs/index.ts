@@ -155,8 +155,6 @@ export {
   safeJoinPath,
   getParentDirectory,
   getFileName,
-  getFileExtension,
-  getFileNameWithoutExtension,
   ensureLeadingSlash,
   ensureTrailingSlash,
   normalizePath,
