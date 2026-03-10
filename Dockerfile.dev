@@ -62,6 +62,9 @@ RUN mkdir -p /var/run && touch /var/run/docker.sock
 RUN mkdir -p /root/.cache/pip /root/.npm /root/.opencode /root/.nullclaw && \
     chown -R nodejs:nodejs /root/.cache/pip /root/.npm /root/.opencode /root/.nullclaw
 
+# Create .next directory with proper permissions
+RUN mkdir -p /app/.next && chown -R nodejs:nodejs /app/.next
+
 # Note: pip cache is available for other Python tools, but Nullclaw runs as container
 
 # Switch to non-root user
@@ -96,5 +99,8 @@ ENV NPM_CONFIG_CACHE=/root/.npm
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:5555/api/health || exit 1
 
-# Start development server
+# Build Next.js for production (avoids .next write issues in dev mode)
+RUN pnpm run build
+
+# Start development server (will use pre-built .next)
 CMD ["pnpm", "run", "dev"]
