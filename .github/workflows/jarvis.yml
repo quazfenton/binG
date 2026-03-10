@@ -119,12 +119,6 @@ jobs:
             fi
           fi
 
-          # Extract all trigger comment bodies for context (handles both API and queue format)
-          TRIGGER_BODIES=$(echo "$ALL_UNPROCESSED" | jq -r '[.[].body] | join("\n")')
-          echo "trigger_comments<<EOF" >> $GITHUB_OUTPUT
-          echo "$TRIGGER_BODIES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
   # Job 2: Run agent with batched context
   multi-iteration-fix:
     needs: collect-comments
@@ -186,10 +180,11 @@ jobs:
             | tac)
           SUGGESTIONS="${RAW_FEEDBACK:-Review the suggestion if there is any for optimizations.}"
 
-          # Sanitize string for bash multiline
-          echo "suggestions<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$SUGGESTIONS" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          # Sanitize string for bash multiline using printf with proper escaping
+          printf '%s\n' "$SUGGESTIONS" > /tmp/suggestions.txt
+          echo "suggestions<<CODE_RABBIT_CONTEXT" >> "$GITHUB_OUTPUT"
+          cat /tmp/suggestions.txt >> "$GITHUB_OUTPUT"
+          echo "CODE_RABBIT_CONTEXT" >> "$GITHUB_OUTPUT"
 
       - name: Manage Shadow Branch
         id: branch
