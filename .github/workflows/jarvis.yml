@@ -1,4 +1,4 @@
-﻿name: 🧠 jarvis
+name: 🧠 jarvis
 on:
   pull_request_review_comment:
     types: [created]

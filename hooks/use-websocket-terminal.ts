@@ -65,6 +65,51 @@ const DEFAULT_CONFIG: Partial<WebSocketTerminalConfig> = {
 
 const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || `ws://localhost:${process.env.NEXT_PUBLIC_WEBSOCKET_PORT || 8080}`;
 
+// Persistence key for WebSocket connection state
+const WS_STATE_STORAGE_KEY = 'websocket_terminal_state';
+
+// Save connection state to localStorage
+const saveConnectionState = (sandboxId: string, connected: boolean) => {
+  if (typeof window === 'undefined') return;
+  try {
+    const state = { sandboxId, connected, timestamp: Date.now() };
+    localStorage.setItem(WS_STATE_STORAGE_KEY, JSON.stringify(state));
+    console.log('[WebSocketTerminal] Connection state saved:', state);
+  } catch (error) {
+    console.warn('[WebSocketTerminal] Failed to save connection state:', error);
+  }
+};
+
+// Load connection state from localStorage
+const loadConnectionState = (): { sandboxId: string; connected: boolean; timestamp: number } | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(WS_STATE_STORAGE_KEY);
+    if (!raw) return null;
+    const state = JSON.parse(raw);
+    // Invalidate state older than 5 minutes
+    if (Date.now() - state.timestamp > 5 * 60 * 1000) {
+      console.log('[WebSocketTerminal] Cached connection state expired');
+      return null;
+    }
+    return state;
+  } catch (error) {
+    console.warn('[WebSocketTerminal] Failed to load connection state:', error);
+    return null;
+  }
+};
+
+// Clear persisted connection state
+const clearConnectionState = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(WS_STATE_STORAGE_KEY);
+    console.log('[WebSocketTerminal] Connection state cleared');
+  } catch (error) {
+    console.warn('[WebSocketTerminal] Failed to clear connection state:', error);
+  }
+};
+
 export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
   const {
     sandboxId,
@@ -126,17 +171,19 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
     }
 
     setState(prev => ({ ...prev, connecting: true, error: null }));
+    console.log('[WebSocketTerminal] Initiating connection to sandbox:', sandboxId);
 
     try {
       const url = buildWebSocketUrl();
       const authToken = getAuthToken();
-      
+
       console.log('[WebSocketTerminal] Connecting to:', url);
+      console.log('[WebSocketTerminal] Auth token present:', !!authToken);
 
       // SECURITY: Send token via WebSocket subprotocol (not URL query param)
       // This prevents token leakage in logs and browser history
-      const wsOptions: string[] | undefined = authToken 
-        ? [`Bearer ${authToken}`] 
+      const wsOptions: string[] | undefined = authToken
+        ? [`Bearer ${authToken}`]
         : undefined;
 
       wsRef.current = new WebSocket(url, wsOptions);
@@ -157,7 +204,8 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
           connectionTimeoutRef.current = null;
         }
 
-        console.log('[WebSocketTerminal] Connected');
+        console.log('[WebSocketTerminal] ✅ Connected successfully');
+        saveConnectionState(sandboxId, true);
         setState(prev => ({
           ...prev,
           connected: true,
@@ -185,7 +233,7 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
       };
 
       wsRef.current.onerror = (error) => {
-        console.error('[WebSocketTerminal] Error:', error);
+        console.error('[WebSocketTerminal] ❌ Connection error:', error);
         const err = new Error('WebSocket connection error');
         setState(prev => ({ ...prev, error: err }));
         // ✅ FIX: Wrap onError in try-catch to prevent handler errors from crashing component
@@ -197,7 +245,15 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
       };
 
       wsRef.current.onclose = (event) => {
-        console.log('[WebSocketTerminal] Disconnected:', event.code, event.reason);
+        console.log('[WebSocketTerminal] 🔌 Disconnected:', {
+          code: event.code,
+          reason: event.reason || 'No reason provided',
+          wasClean: event.wasClean
+        });
+        
+        // Clear persisted state on disconnect
+        clearConnectionState();
+        
         setState(prev => ({
           ...prev,
           connected: false,
@@ -215,10 +271,15 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
           reconnectTimeoutRef.current = setTimeout(() => {
             connect();
           }, delay);
+        } else if (event.code === 1000) {
+          console.log('[WebSocketTerminal] Graceful disconnect, no reconnect');
+        } else if (reconnectCount >= reconnectAttempts) {
+          console.error('[WebSocketTerminal] ⚠️ Max reconnect attempts reached');
+          onError?.(new Error(`Max reconnect attempts (${reconnectAttempts}) reached`));
         }
       };
     } catch (error: any) {
-      console.error('[WebSocketTerminal] Connection failed:', error);
+      console.error('[WebSocketTerminal] ❌ Connection failed:', error);
       setState(prev => ({
         ...prev,
         connected: false,
@@ -233,6 +294,7 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
       }
     }
   }, [buildWebSocketUrl, onOutput, onError, onConnect, onDisconnect, reconnectAttempts, reconnectDelay]);
+  }, [buildWebSocketUrl, onOutput, onError, onConnect, onDisconnect, reconnectCount, reconnectAttempts, reconnectDelay, sandboxId]);
 
   // Disconnect from WebSocket
   const disconnect = useCallback(() => {
@@ -288,9 +350,17 @@ export function useWebSocketTerminal(config: WebSocketTerminalConfig) {
     send('\x1b[2J\x1b[H');
   }, [send]);
 
-  // Auto-connect on mount
+  // Auto-connect on mount with state restoration
   useEffect(() => {
+    // Check for persisted connection state
+    const savedState = loadConnectionState();
+    
+    if (savedState) {
+      console.log('[WebSocketTerminal] 📦 Restored connection state from storage:', savedState);
+    }
+    
     if (autoConnect && sandboxId) {
+      console.log('[WebSocketTerminal] Auto-connecting to sandbox:', sandboxId);
       connect();
     }
 
