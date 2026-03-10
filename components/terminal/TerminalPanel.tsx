@@ -15,8 +15,7 @@ import { secureRandom, generateSecureId } from '@/lib/utils';
 import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '@/lib/terminal/terminal-security';
 import { createLogger } from '@/lib/utils/logger';
 import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
-import { useWebSocketTerminal } from '@/hooks/use-websocket-terminal';
-import { createTerminalLocalFSHandler } from '@/lib/sandbox/terminal-local-fs-handler';
+import { wireTerminalHandlers, cleanupHandlers, type TerminalHandlers } from '@/lib/sandbox/terminal-handler-wiring';
 import type { LocalFilesystemEntry } from '@/lib/sandbox/local-filesystem-executor';
 
 const logger = createLogger('TerminalPanel');
@@ -441,10 +440,10 @@ export default function TerminalPanel({
   
   const localFileSystemRef = useRef<LocalFileSystem>({});
   const localShellCwdRef = useRef<Record<string, string>>({});
-  
-  // NEW: Terminal Local FS Handler (migrates proven logic to reusable handler)
-  const localFSHandlers = useRef<Record<string, ReturnType<typeof createTerminalLocalFSHandler>>>({});
-  
+
+  // NEW: Terminal Handlers (wired up for each terminal)
+  const terminalHandlersRef = useRef<Record<string, TerminalHandlers>>({});
+
   const lastConnectionAttemptRef = useRef<Record<string, number>>({});
   const reconnectCooldownUntilRef = useRef<Record<string, number>>({});
   const commandQueueRef = useRef<Record<string, string[]>>({});
@@ -593,6 +592,13 @@ export default function TerminalPanel({
 
   // Phase 2: Idle timeout monitoring
   useEffect(() => {
+    // USE HANDLER IF AVAILABLE
+    const handler = terminalHandlersRef.current[activeTerminalId || '']?.ui;
+    if (handler) {
+      return handler.startIdleMonitoring();
+    }
+
+    // FALLBACK: Inline idle monitoring (to be removed after testing)
     // Only monitor if sandbox is connected and timeout is enabled
     if (sandboxStatus !== 'connected' || IDLE_TIMEOUT_MS <= 0) {
       setIdleTimeLeft(null);
@@ -619,7 +625,7 @@ export default function TerminalPanel({
     }, 10000); // Check every 10 seconds
 
     return () => clearInterval(checkIdle);
-  }, [sandboxStatus, lastActivity, IDLE_TIMEOUT_MS, IDLE_WARNING_MS, toggleSandboxConnection]);
+  }, [sandboxStatus, lastActivity, IDLE_TIMEOUT_MS, IDLE_WARNING_MS, toggleSandboxConnection, activeTerminalId]);
 
   // Refs for callback functions to avoid circular dependency
   const copyOutputRef = useRef<() => Promise<void>>();
@@ -629,6 +635,13 @@ export default function TerminalPanel({
 
   // Keyboard shortcuts for copy/paste and context menu handling
   useEffect(() => {
+    // USE HANDLER IF AVAILABLE
+    const handler = terminalHandlersRef.current[activeTerminalId || '']?.ui;
+    if (handler) {
+      return handler.setupKeyboardShortcuts(isOpen);
+    }
+
+    // FALLBACK: Inline keyboard shortcuts (to be removed after testing)
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only handle if terminal is open and not typing in an input
       if (!isOpen) return;
@@ -666,7 +679,27 @@ export default function TerminalPanel({
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('click', handleClick);
     };
-  }, [isOpen, contextMenu]);
+  }, [isOpen, contextMenu, activeTerminalId]);
+
+  // Health monitoring for active terminal
+  useEffect(() => {
+    const handler = terminalHandlersRef.current[activeTerminalId || '']?.health;
+    if (handler) {
+      handler.start();
+      return () => handler.stop();
+    }
+    // No fallback - health monitoring is new feature
+  }, [activeTerminalId]);
+
+  // State persistence for active terminal
+  useEffect(() => {
+    const handler = terminalHandlersRef.current[activeTerminalId || '']?.state;
+    if (handler) {
+      const cleanup = handler.setupAutoSave();
+      return cleanup;
+    }
+    // No fallback - state persistence already handled by inline useEffect below
+  }, [activeTerminalId]);
 
   // Update last activity on user input
   const updateActivity = useCallback(() => {
@@ -863,13 +896,43 @@ export default function TerminalPanel({
     cursorPosRef.current[id] = 0;
     editorSessionRef.current[id] = null;
 
-    // NEW: Create Local FS Handler for this terminal
-    localFSHandlers.current[id] = createTerminalLocalFSHandler({
+    // WIRE UP ALL HANDLERS
+    terminalHandlersRef.current[id] = wireTerminalHandlers({
       terminalId: id,
       filesystemScopePath: filesystemScopePathRef.current,
-      syncToVFS: syncFileToVFS,
       getLocalFileSystem: () => localFileSystemRef.current,
       setLocalFileSystem: (fs) => { localFileSystemRef.current = fs },
+      syncFileToVFS: syncFileToVFS,
+      executeCommand: executeLocalShellCommand,
+      write: (text) => {
+        const term = terminalsRef.current.find(t => t.id === id);
+        term?.terminal?.write(text);
+      },
+      writeLine: (text) => {
+        const term = terminalsRef.current.find(t => t.id === id);
+        term?.terminal?.write(text + '\r\n');
+      },
+      getPrompt: getPrompt,
+      getCwd: (terminalId) => localShellCwdRef.current[terminalId] || 'project',
+      setCwd: (terminalId, cwd) => { localShellCwdRef.current[terminalId] = cwd },
+      updateTerminalState: updateTerminalState,
+      sendInput: sendInput,
+      sendResize: sendResize,
+      getAuthToken: getAuthToken,
+      getAuthHeaders: getAuthHeaders,
+      getAnonymousSessionId: getAnonymousSessionId,
+      toSandboxScopedPath: toSandboxScopedPath,
+      getCommandHistory: (terminalId) => commandHistoryRef.current[terminalId] || [],
+      setCommandHistory: (terminalId, history) => { commandHistoryRef.current[terminalId] = history },
+      saveTerminalSession: saveTerminalSession,
+      getSandboxStatus: () => sandboxStatus,
+      setSandboxStatus: setSandboxStatus,
+      connectTerminal: connectTerminal,
+      getTerminals: () => terminalsRef.current,
+      getActiveTerminalId: () => activeTerminalId,
+      onContextMenu: (x, y, terminalId) => setContextMenu({ x, y, terminalId }),
+      onClose: onClose,
+      onMinimize: onMinimize,
     });
 
     // Load persisted command history
@@ -890,11 +953,36 @@ export default function TerminalPanel({
     setActiveTerminalId(id);
 
     return id;
-  }, []);
+  }, [
+    filesystemScopePathRef,
+    syncFileToVFS,
+    executeLocalShellCommand,
+    getPrompt,
+    updateTerminalState,
+    sendInput,
+    sendResize,
+    getAuthToken,
+    getAuthHeaders,
+    getAnonymousSessionId,
+    toSandboxScopedPath,
+    saveTerminalSession,
+    sandboxStatus,
+    setSandboxStatus,
+    connectTerminal,
+    activeTerminalId,
+    onClose,
+    onMinimize,
+  ]);
 
   const closeTerminal = useCallback((terminalId: string) => {
     const terminal = terminalsRef.current.find(t => t.id === terminalId);
     if (terminal) {
+      // CLEANUP HANDLERS FIRST
+      const handlers = terminalHandlersRef.current[terminalId];
+      if (handlers) {
+        cleanupHandlers(terminalHandlersRef.current, terminalId);
+      }
+
       terminal.eventSource?.close();
       terminal.websocket?.close();
       terminal.terminal?.dispose();
@@ -922,7 +1010,7 @@ export default function TerminalPanel({
         delete inputBatchRef.current[terminalId];
       }
     }
-    
+
     // Save command history before cleanup
     const history = commandHistoryRef.current[terminalId];
     if (history && history.length > 0 && terminal) {
@@ -938,7 +1026,7 @@ export default function TerminalPanel({
         logger.warn('Failed to save command history', err);
       }
     }
-    
+
     delete localShellCwdRef.current[terminalId];
     delete reconnectCooldownUntilRef.current[terminalId];
     delete commandQueueRef.current[terminalId];
@@ -947,7 +1035,7 @@ export default function TerminalPanel({
     delete lineBufferRef.current[terminalId];
     delete editorSessionRef.current[terminalId];
     delete cursorPosRef.current[terminalId];
-    delete localFSHandlers.current[terminalId];
+    delete terminalHandlersRef.current[terminalId];
 
     setTerminals(prev => {
       const updated = prev.filter(t => t.id !== terminalId);
@@ -1146,13 +1234,23 @@ export default function TerminalPanel({
     isPtyMode: boolean = false,
     mode: TerminalMode = 'local'
   ): Promise<boolean> => {
+    // TRY HANDLER FIRST
+    const handlers = terminalHandlersRef.current[terminalId];
+    if (handlers) {
+      return handlers.localFS.executeCommand(command, {
+        isPtyMode,
+        terminalMode: mode,
+      });
+    }
+
+    // FALLBACK: Inline execution (to be removed after testing)
     const cwd = localShellCwdRef.current[terminalId] || 'project';
     const trimmed = command.trim();
     if (!trimmed) {
       write(getPrompt(mode, cwd));
       return true;
     }
-    
+
     // Security check - block dangerous commands in local shell
     if (!isPtyMode) {
       const securityResult = checkCommandSecurity(trimmed);
@@ -2756,15 +2854,22 @@ export default function TerminalPanel({
       terminal.onData((data: string) => {
         // Update idle timeout on any user input
         updateActivity();
-        
+
         const term = terminalsRef.current.find(t => t.id === terminalId);
         if (!term) return;
+
+        // GET HANDLERS FOR THIS TERMINAL
+        const handlers = terminalHandlersRef.current[terminalId];
 
         // PTY mode: forward raw bytes to sandbox, skip local handling
         if (term.mode === 'pty' && term.sandboxInfo.sessionId) {
           // Buffer input until connected
           if (term.sandboxInfo.status === 'active') {
-            void sendInput(term.sandboxInfo.sessionId, data);
+            if (handlers) {
+              handlers.batcher.batch(data);
+            } else {
+              void sendInput(term.sandboxInfo.sessionId, data);
+            }
           } else {
             commandQueueRef.current[terminalId] = [
               ...(commandQueueRef.current[terminalId] || []),
@@ -2780,12 +2885,24 @@ export default function TerminalPanel({
           return;
         }
 
+        // Editor mode - use handler
         const session = editorSessionRef.current[terminalId];
         if (session) {
-          handleEditorInput(terminalId, data, (text) => term.terminal?.write(text));
+          if (handlers) {
+            handlers.editor.handleInput(data);
+          } else {
+            handleEditorInput(terminalId, data, (text) => term.terminal?.write(text));
+          }
           return;
         }
 
+        // Local mode - use input handler
+        if (handlers) {
+          handlers.input.handleInput(data);
+          return;
+        }
+
+        // FALLBACK: Inline input handling (to be removed after testing)
         // Use ref for lineBuffer and cursor position to survive reconnects
         let lineBuffer = lineBufferRef.current[terminalId] || '';
         let cursorPos = cursorPosRef.current[terminalId] ?? lineBuffer.length;
@@ -3193,6 +3310,14 @@ export default function TerminalPanel({
   const connectTerminal = useCallback(async (terminalId: string) => {
     connectTerminalRef.current = connectTerminal;
 
+    // TRY HANDLER FIRST
+    const handlers = terminalHandlersRef.current[terminalId];
+    if (handlers) {
+      await handlers.connection.connect();
+      return;
+    }
+
+    // FALLBACK: Inline connection (to be removed after testing)
     // Check if we're in a cooldown period from a previous failed connection
     const now = Date.now();
     const lastAttempt = lastConnectionAttemptRef.current[terminalId] || 0;

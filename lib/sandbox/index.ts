@@ -99,7 +99,25 @@ export {
   createTerminalStateManager,
   type TerminalState,
   type TerminalStateManagerConfig,
-} from './terminal-state-manager';
+} from './terminal-state-manager'
+
+// Terminal UI Manager (NEW - UI/UX operations)
+export {
+  TerminalUIManager,
+  createTerminalUIManager,
+  type TerminalUIState,
+  type TerminalUIManagerConfig,
+} from './terminal-ui-manager'
+
+// Terminal Handler Wiring (NEW - wiring utilities)
+export {
+  wireTerminalHandlers,
+  getHandler,
+  hasHandler,
+  cleanupHandlers,
+  type TerminalHandlers,
+  type TerminalHandlerWiringConfig,
+} from './terminal-handler-wiring'
 
 // ==================== Phase 1 Integration (NEW) ====================
 // Per-user terminal session isolation, auto-snapshots, VFS sync, provider MCP tools
