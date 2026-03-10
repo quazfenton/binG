@@ -12,6 +12,8 @@ import { chatLogger } from '@/lib/api/chat-logger';
 import { parsePatch, applyPatch } from 'diff';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
+import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
+import { ShadowCommitManager } from '@/lib/stateful-agent/commit/shadow-commit';
 import type { LLMMessage } from "@/lib/api/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { getFilesystemTools, createAgentLoop } from '@/lib/mastra';
@@ -218,7 +220,7 @@ export async function POST(request: NextRequest) {
         ? filesystemContext.scopePath.trim()
         : defaultScopePath;
     const filesystemOwnerId = authResult.success && authResult.userId ? authResult.userId : 'anon:public';
-    const denialContext = filesystemEditSessionService.getRecentDenials(
+    const denialContext = await filesystemEditSessionService.getRecentDenials(
       `${filesystemOwnerId}:${resolvedConversationId}`,
       4,
     );
@@ -227,8 +229,12 @@ export async function POST(request: NextRequest) {
       attachedFilesystemFiles,
       filesystemContext,
     );
+    const useContextPack = shouldUseContextPack(messages);
     const workspaceSessionContext = enableFilesystemEdits
-      ? await buildWorkspaceSessionContext(filesystemOwnerId, requestedScopePath)
+      ? await buildWorkspaceSessionContext(filesystemOwnerId, requestedScopePath, {
+          useContextPack,
+          maxTokens: body.maxTokens,
+        })
       : '';
     const contextualMessages = appendFilesystemContextMessages(
       messages,
@@ -309,9 +315,11 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
       // Process response through unified handler
       const unifiedResponse = unifiedResponseHandler.processResponse(routerResponse, requestId);
       let rawResponseContent = unifiedResponse.content || '';
-      
+
       // LLM Agent Tools: Execute filesystem tools if enabled and user is authenticated
       let agentToolResults = null;
+      let agentToolStreamingResult: any = null;
+      
       if (LLM_AGENT_TOOLS_ENABLED && authenticatedUserId && requestType === 'tool') {
         try {
           chatLogger.info('Executing filesystem tools', { requestId, userId: authenticatedUserId }, {
@@ -325,33 +333,49 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
             LLM_AGENT_TOOLS_MAX_ITERATIONS
           );
 
-          // Set timeout for agent execution with proper cleanup
-          let agentTimeoutId: NodeJS.Timeout | null = null;
-          const agentPromise = agentLoop.executeTask(rawResponseContent);
-          const timeoutPromise = new Promise((_, reject) => {
-            agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), LLM_AGENT_TOOLS_TIMEOUT_MS);
-          });
+          // Check if agent supports streaming (ToolLoopAgent integration)
+          const supportsStreaming = 'executeTaskStreaming' in agentLoop;
+          
+          if (supportsStreaming && stream) {
+            // Use streaming execution for real-time tool invocations and reasoning
+            chatLogger.info('Using ToolLoopAgent streaming execution', { requestId });
+            
+            // Store streaming result for later processing in stream handler
+            agentToolStreamingResult = {
+              agentLoop,
+              task: rawResponseContent,
+              timeout: LLM_AGENT_TOOLS_TIMEOUT_MS,
+            };
+          } else {
+            // Use non-streaming execution (backward compatible)
+            // Set timeout for agent execution with proper cleanup
+            let agentTimeoutId: NodeJS.Timeout | null = null;
+            const agentPromise = agentLoop.executeTask(rawResponseContent);
+            const timeoutPromise = new Promise((_, reject) => {
+              agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), LLM_AGENT_TOOLS_TIMEOUT_MS);
+            });
 
-          try {
-            agentToolResults = await Promise.race([agentPromise, timeoutPromise]) as any;
-          } finally {
-            if (agentTimeoutId) clearTimeout(agentTimeoutId);
-          }
+            try {
+              agentToolResults = await Promise.race([agentPromise, timeoutPromise]) as any;
+            } finally {
+              if (agentTimeoutId) clearTimeout(agentTimeoutId);
+            }
 
-          chatLogger.info('Agent tools execution completed', { requestId }, {
-            success: agentToolResults.success,
-            iterations: agentToolResults.iterations,
-            resultsCount: agentToolResults.results?.length,
-          });
+            chatLogger.info('Agent tools execution completed', { requestId }, {
+              success: agentToolResults.success,
+              iterations: agentToolResults.iterations,
+              resultsCount: agentToolResults.results?.length,
+            });
 
-          // Append agent tool results to response
-          if (agentToolResults.success && agentToolResults.results?.length > 0) {
-            const toolSummary = agentToolResults.results
-              .map((r: any) => `${r.tool}: ${JSON.stringify(r.result)}`)
-              .join('\n');
-            unifiedResponse.content = `${rawResponseContent}\n\n[Agent Tools Executed]\n${toolSummary}`;
-            // Sync rawResponseContent so subsequent rendering uses updated content
-            rawResponseContent = unifiedResponse.content;
+            // Append agent tool results to response
+            if (agentToolResults.success && agentToolResults.results?.length > 0) {
+              const toolSummary = agentToolResults.results
+                .map((r: any) => `${r.tool}: ${JSON.stringify(r.result)}`)
+                .join('\n');
+              unifiedResponse.content = `${rawResponseContent}\n\n[Agent Tools Executed]\n${toolSummary}`;
+              // Sync rawResponseContent so subsequent rendering uses updated content
+              rawResponseContent = unifiedResponse.content;
+            }
           }
         } catch (error: any) {
           chatLogger.error('Agent tools execution failed', { requestId }, {
@@ -399,6 +423,155 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
         const streamStartTime = Date.now();
         let chunkCount = 0;
 
+        // Check if we have ToolLoopAgent streaming available
+        const hasToolLoopStreaming = agentToolStreamingResult && stream;
+
+        if (hasToolLoopStreaming) {
+          // Handle ToolLoopAgent real-time streaming
+          chatLogger.info('Streaming with ToolLoopAgent real-time events', { requestId: streamRequestId });
+          
+          const encoder = new TextEncoder();
+          let encoderRef = encoder;
+
+          const readableStream = new ReadableStream({
+            async start(controller) {
+              const cleanup = () => {
+                encoderRef = null;
+              };
+
+              if (request.signal) {
+                request.signal.addEventListener('abort', () => {
+                  cleanup();
+                  chatLogger.warn('Stream cancelled by client', { requestId: streamRequestId });
+                });
+              }
+
+              try {
+                const { agentLoop, task, timeout } = agentToolStreamingResult;
+                let agentTimeoutId: NodeJS.Timeout | null = null;
+
+                // Set up timeout for entire streaming operation
+                const timeoutPromise = new Promise((_, reject) => {
+                  agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), timeout);
+                });
+
+                // Stream from agent
+                const streamPromise = (async () => {
+                  // First, send initial token events from base response
+                  const baseEvents = unifiedResponseHandler.createStreamingEvents(clientResponse, streamRequestId);
+                  for (const event of baseEvents) {
+                    if (request.signal?.aborted) return;
+                    controller.enqueue(encoderRef.encode(event));
+                    chunkCount++;
+                    await new Promise(resolve => setTimeout(resolve, 30));
+                  }
+
+                  // Now stream tool invocations and reasoning in real-time
+                  for await (const chunk of agentLoop.executeTaskStreaming(task)) {
+                    if (request.signal?.aborted) return;
+
+                    // Transform chunk to SSE format
+                    if (chunk.type === 'tool-invocation') {
+                      const toolEvent = `event: tool_invocation\ndata: ${JSON.stringify({
+                        requestId: streamRequestId,
+                        toolCallId: chunk.toolInvocation.toolCallId,
+                        toolName: chunk.toolInvocation.toolName,
+                        state: chunk.toolInvocation.state,
+                        args: chunk.toolInvocation.args,
+                        result: chunk.toolInvocation.result,
+                        timestamp: Date.now(),
+                      })}\n\n`;
+                      controller.enqueue(encoderRef.encode(toolEvent));
+                      chunkCount++;
+                    } else if (chunk.type === 'reasoning') {
+                      const reasoningEvent = `event: reasoning\ndata: ${JSON.stringify({
+                        requestId: streamRequestId,
+                        reasoning: chunk.reasoning,
+                        timestamp: Date.now(),
+                      })}\n\n`;
+                      controller.enqueue(encoderRef.encode(reasoningEvent));
+                      chunkCount++;
+                    } else if (chunk.type === 'text-delta') {
+                      // Stream text response
+                      const tokenEvent = `event: token\ndata: ${JSON.stringify({
+                        content: chunk.textDelta,
+                        timestamp: Date.now(),
+                      })}\n\n`;
+                      controller.enqueue(encoderRef.encode(tokenEvent));
+                      chunkCount++;
+                    }
+
+                    // Small delay for smooth streaming
+                    await new Promise(resolve => setTimeout(resolve, 30));
+                  }
+
+                  // Send completion event
+                  const doneEvent = `event: done\ndata: ${JSON.stringify({
+                    requestId: streamRequestId,
+                    timestamp: Date.now(),
+                  })}\n\n`;
+                  controller.enqueue(encoderRef.encode(doneEvent));
+                  chunkCount++;
+                })();
+
+                await Promise.race([streamPromise, timeoutPromise]);
+
+                if (agentTimeoutId) clearTimeout(agentTimeoutId);
+
+                const streamDuration = Date.now() - streamStartTime;
+                chatLogger.info('ToolLoopAgent stream completed', { requestId: streamRequestId }, {
+                  chunkCount,
+                  latencyMs: streamDuration,
+                });
+
+                controller.close();
+              } catch (error) {
+                const streamDuration = Date.now() - streamStartTime;
+                chatLogger.error('ToolLoopAgent streaming error', { requestId: streamRequestId }, {
+                  error: error instanceof Error ? error.message : String(error),
+                  chunkCount,
+                  latencyMs: streamDuration,
+                });
+
+                if (!request.signal?.aborted) {
+                  const errorEvent = `event: error\ndata: ${JSON.stringify({
+                    requestId: streamRequestId,
+                    message: 'Streaming error occurred',
+                    canRetry: true,
+                  })}\n\n`;
+                  controller.enqueue(encoderRef.encode(errorEvent));
+                }
+                controller.close();
+              } finally {
+                cleanup();
+              }
+            },
+            cancel() {
+              const streamDuration = Date.now() - streamStartTime;
+              chatLogger.warn('Stream cancelled (cancel callback)', { requestId: streamRequestId }, {
+                chunkCount,
+                latencyMs: streamDuration,
+              });
+            }
+          });
+
+          return new Response(readableStream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache, no-store, must-revalidate",
+              Pragma: "no-cache",
+              Expires: "0",
+              Connection: "keep-alive",
+              "X-Accel-Buffering": "no",
+              "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || "",
+              "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+              "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
+              "Vary": "Origin",
+            },
+          });
+        }
+
+        // Fallback: Standard streaming (non-agent or ToolLoopAgent not available)
         // Create streaming events from unified response
         const events = unifiedResponseHandler.createStreamingEvents(clientResponse, streamRequestId);
         const supplementalAgenticEvents = buildSupplementalAgenticEvents(clientResponse, streamRequestId, events);
@@ -644,9 +817,11 @@ function sanitizeAssistantDisplayContent(content: string): string {
   // Remove <fs-actions>...</fs-actions> XML tag blocks (LLM sometimes uses XML instead of code blocks)
   next = next.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
 
-  // Remove raw WRITE/PATCH heredoc command blocks that leak into visible output
-  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH)\s+[^\n]+\n<<<\n[\s\S]*?\n>>>(?=\n|$)/g, '\n');
+  // Remove raw WRITE/PATCH/APPLY_DIFF heredoc command blocks that leak into visible output
+  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+\n<<<\n[\s\S]*?\n>>>(?=\n|$)/g, '\n');
   next = next.replace(/(?:^|\n)\s*DELETE\s+[^\n]+(?=\n|$)/g, '\n');
+  // Remove <apply_diff> XML tags
+  next = next.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
 
   // Normalize leftover spacing
   next = next.replace(/\n{3,}/g, '\n\n').trim();
@@ -743,7 +918,89 @@ function shouldHandleFilesystemEdits(
   return /\b(file|files|code|edit|patch|create|write|update|project|program|build|run|execute|install|scaffold|component|page|app|module|function|class)\b/i.test(lastUserMessage);
 }
 
-async function buildWorkspaceSessionContext(ownerId: string, scopePath?: string): Promise<string> {
+/**
+ * Detect if user is requesting a comprehensive context pack
+ * Look for keywords suggesting they want full project context
+ */
+function shouldUseContextPack(messages: LLMMessage[]): boolean {
+  const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content;
+  if (typeof lastUserMessage !== 'string') {
+    return false;
+  }
+
+  // Keywords that suggest user wants comprehensive project context
+  const contextPackKeywords = [
+    'full project',
+    'entire project',
+    'whole project',
+    'complete codebase',
+    'full codebase',
+    'entire codebase',
+    'project structure',
+    'codebase structure',
+    'project overview',
+    'codebase overview',
+    'all files',
+    'everything in',
+    'context pack',
+    'repomix',
+    'gitingest',
+    'bundle.*context',
+    'pack.*files',
+    'scaffold.*project',
+    'understand.*project',
+    'analyze.*project',
+    'review.*codebase',
+  ];
+
+  const pattern = new RegExp(contextPackKeywords.join('|'), 'i');
+  return pattern.test(lastUserMessage);
+}
+
+async function buildWorkspaceSessionContext(
+  ownerId: string,
+  scopePath?: string,
+  options?: { useContextPack?: boolean; maxTokens?: number }
+): Promise<string> {
+  // Use context pack if requested and available
+  if (options?.useContextPack) {
+    try {
+      const contextPack = await contextPackService.generateContextPack(ownerId, scopePath || '/', {
+        format: 'plain',
+        includeContents: true,
+        includeTree: true,
+        maxFileSize: 50 * 1024, // 50KB per file
+        maxLinesPerFile: 200,
+        maxTotalSize: options.maxTokens ? options.maxTokens * 4 : 500 * 1024, // ~500KB default
+        excludePatterns: [
+          'node_modules/**',
+          '.git/**',
+          '.next/**',
+          'dist/**',
+          'build/**',
+          '*.log',
+          '*.lock',
+          '.env*',
+        ],
+      });
+      
+      return [
+        `=== WORKSPACE CONTEXT (Context Pack) ===`,
+        `Root: ${scopePath || '/'}`,
+        `Files: ${contextPack.fileCount}`,
+        `Directories: ${contextPack.directoryCount}`,
+        `Estimated Tokens: ${contextPack.estimatedTokens}`,
+        contextPack.hasTruncation ? `⚠️ Some files were truncated` : '',
+        '',
+        contextPack.bundle,
+      ].filter(Boolean).join('\n');
+    } catch (error: unknown) {
+      console.warn('[Chat] Context pack generation failed, falling back to basic context:', error);
+      // Fall through to basic context
+    }
+  }
+  
+  // Basic workspace context (existing implementation)
   try {
     const snapshot = await virtualFilesystem.exportWorkspace(ownerId);
     const scopedFiles = scopePath
@@ -831,6 +1088,25 @@ function appendFilesystemContextMessages(
       allowFileEdits
         ? [
             'For file changes, prefer one of these parseable schemas:',
+            '',
+            'FOR EXISTING FILES, prefer surgical edits (APPLY_DIFF) over full rewrites:',
+            '  <apply_diff path="src/utils.ts">',
+            '    <search>function oldName() {',
+            '      return 1;',
+            '    }</search>',
+            '    <replace>function newName() {',
+            '      return 2;',
+            '    }</replace>',
+            '  </apply_diff>',
+            'Or in fs-actions blocks:',
+            '  APPLY_DIFF <path>',
+            '  <<<',
+            '  <exact code to find>',
+            '  ===',
+            '  <replacement code>',
+            '  >>>',
+            '',
+            'FOR NEW FILES, use full writes:',
             '1) <file_edit path="...">...</file_edit>',
             '2) COMMANDS write_diffs',
             '3) ```fs-actions ...``` blocks with:',
@@ -843,6 +1119,10 @@ function appendFilesystemContextMessages(
             '   <unified diff body>',
             '   >>>',
             '   DELETE <path>',
+            '',
+            'IMPORTANT: For edits to existing files, ALWAYS use APPLY_DIFF instead of WRITE.',
+            'APPLY_DIFF only replaces the exact block you specify, preventing context truncation.',
+            'Use WRITE only when creating new files or when a complete rewrite is explicitly needed.',
             'Prefer concrete multi-file edits when user requests full project scaffolding.',
             '',
             'To read a file from the workspace, use: <file_read path="..." />',
@@ -1038,6 +1318,59 @@ function extractFsActionPatches(content: string): Array<{ path: string; diff: st
   }
 
   return patches;
+}
+
+function extractApplyDiffOperations(content: string): Array<{ path: string; search: string; replace: string; thought?: string }> {
+  const diffs: Array<{ path: string; search: string; replace: string; thought?: string }> = [];
+
+  // Extract from ```fs-actions ... ``` blocks: APPLY_DIFF path <<< search === replace >>>
+  const blockRegex = /```fs-actions\s*([\s\S]*?)```/gi;
+  let blockMatch: RegExpExecArray | null;
+
+  while ((blockMatch = blockRegex.exec(content)) !== null) {
+    const blockContent = blockMatch[1] || '';
+    const diffRegex = /APPLY_DIFF\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*===\s*([\s\S]*?)\s*>>>/gi;
+    let diffMatch: RegExpExecArray | null;
+    while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
+      const path = diffMatch[1]?.trim();
+      const search = diffMatch[2] ?? '';
+      const replace = diffMatch[3] ?? '';
+      if (!path || !search) continue;
+      diffs.push({ path, search, replace });
+    }
+  }
+
+  // Extract from <fs-actions>...</fs-actions> XML tags
+  const xmlBlockRegex = /<fs-actions>([\s\S]*?)<\/fs-actions>/gi;
+  let xmlBlockMatch: RegExpExecArray | null;
+
+  while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
+    const blockContent = xmlBlockMatch[1] || '';
+    const diffRegex = /APPLY_DIFF\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*===\s*([\s\S]*?)\s*>>>/gi;
+    let diffMatch: RegExpExecArray | null;
+    while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
+      const path = diffMatch[1]?.trim();
+      const search = diffMatch[2] ?? '';
+      const replace = diffMatch[3] ?? '';
+      if (!path || !search) continue;
+      diffs.push({ path, search, replace });
+    }
+  }
+
+  // Extract from <apply_diff> XML tags: <apply_diff path="..."><search>...</search><replace>...</replace></apply_diff>
+  const xmlDiffRegex = /<apply_diff\s+path=["']([^"']+)["']\s*>\s*<search>([\s\S]*?)<\/search>\s*<replace>([\s\S]*?)<\/replace>\s*(?:<thought>([\s\S]*?)<\/thought>\s*)?<\/apply_diff>/gi;
+  let xmlDiffMatch: RegExpExecArray | null;
+
+  while ((xmlDiffMatch = xmlDiffRegex.exec(content)) !== null) {
+    const path = xmlDiffMatch[1]?.trim();
+    const search = xmlDiffMatch[2] ?? '';
+    const replace = xmlDiffMatch[3] ?? '';
+    const thought = xmlDiffMatch[4]?.trim();
+    if (!path || !search) continue;
+    diffs.push({ path, search, replace, thought });
+  }
+
+  return diffs;
 }
 
 function extractBashHereDocWrites(content: string): Array<{ path: string; content: string }> {
@@ -1271,14 +1604,16 @@ async function applyFilesystemEditsFromResponse(input: {
     ...extractFsActionPatches(input.responseContent || ''),
     ...(input.commands?.write_diffs || []),
   ];
+  const applyDiffOperations = extractApplyDiffOperations(input.responseContent || '');
   const deleteTargets = extractFsActionDeletes(input.responseContent || '');
   const requestFiles = input.commands?.request_files || [];
 
-  // Only create transaction if there are mutating operations (write/patch/delete)
+  // Only create transaction if there are mutating operations (write/patch/delete/apply_diff)
   // This prevents memory leaks from accumulating no-op transactions
   const hasMutatingOperations =
     combinedWriteEdits.length > 0 ||
     combinedDiffOperations.length > 0 ||
+    applyDiffOperations.length > 0 ||
     deleteTargets.length > 0;
 
   const transaction = hasMutatingOperations
@@ -1406,6 +1741,72 @@ async function applyFilesystemEditsFromResponse(input: {
       }
     }
 
+    // Process APPLY_DIFF operations (surgical search & replace)
+    const seenApplyDiffKey = new Set<string>();
+    for (const diffOp of applyDiffOperations) {
+      const targetPath = resolveScopedPath({
+        requestedPath: diffOp.path,
+        scopePath: input.scopePath,
+        attachedPaths: input.attachedPaths,
+        lastUserMessage: input.lastUserMessage,
+      });
+      const diffKey = `${targetPath}::${diffOp.search}::${diffOp.replace}`;
+      if (seenApplyDiffKey.has(diffKey)) continue;
+      seenApplyDiffKey.add(diffKey);
+
+      try {
+        let currentContent = '';
+        let previousVersion: number | null = null;
+        let previousContent: string | null = null;
+        let existedBefore = false;
+        try {
+          const existingFile = await virtualFilesystem.readFile(input.ownerId, targetPath);
+          currentContent = existingFile.content;
+          previousVersion = existingFile.version;
+          previousContent = existingFile.content;
+          existedBefore = true;
+        } catch {
+          currentContent = '';
+          existedBefore = false;
+        }
+
+        if (!existedBefore) {
+          result.errors.push(`APPLY_DIFF failed for ${targetPath}: file does not exist. Use WRITE for new files.`);
+          continue;
+        }
+
+        // Perform search & replace
+        if (!currentContent.includes(diffOp.search)) {
+          result.errors.push(`APPLY_DIFF failed for ${targetPath}: search block not found in file.`);
+          continue;
+        }
+
+        const updatedContent = currentContent.replace(diffOp.search, diffOp.replace);
+        const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, updatedContent);
+
+        result.applied.push({
+          path: file.path,
+          operation: 'patch',
+          version: file.version,
+          previousVersion,
+          existedBefore,
+        });
+        filesystemEditSessionService.recordOperation(transaction.id, {
+          path: file.path,
+          operation: 'patch',
+          newVersion: file.version,
+          previousVersion,
+          previousContent,
+          existedBefore,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        const err = `Failed to apply_diff for ${targetPath}: ${message}`;
+        result.errors.push(err);
+        filesystemEditSessionService.addError(transaction.id, err);
+      }
+    }
+
     // Process delete operations
     const seenDeleteTargets = new Set<string>();
     for (const deletePath of deleteTargets) {
@@ -1464,6 +1865,55 @@ async function applyFilesystemEditsFromResponse(input: {
     // Update status if no operations succeeded
     if (result.applied.length === 0 && result.errors.length === 0) {
       result.status = 'none';
+    }
+
+    // Auto-commit: create a git-backed snapshot after successful edits
+    if (result.applied.length > 0) {
+      try {
+        const commitManager = new ShadowCommitManager();
+
+        // Get recorded operations from the edit session (includes previousContent)
+        const editTx = transaction ? filesystemEditSessionService.getTransactionSync(transaction.id) : null;
+        const recordedOps = editTx?.operations || [];
+
+        // Build transaction entries with original + new content for rollback support
+        const transactions = result.applied.map(op => {
+          const recorded = recordedOps.find((r: any) => r.path === op.path);
+          return {
+            path: op.path,
+            type: (op.operation === 'delete' ? 'DELETE' : op.existedBefore ? 'UPDATE' : 'CREATE') as 'UPDATE' | 'CREATE' | 'DELETE',
+            timestamp: Date.now(),
+            originalContent: recorded?.previousContent ?? undefined,
+            newContent: undefined as string | undefined,
+          };
+        });
+
+        // Read current content for each applied file to include in commit
+        const vfs: Record<string, string> = {};
+        for (const op of result.applied) {
+          if (op.operation !== 'delete') {
+            try {
+              const file = await virtualFilesystem.readFile(input.ownerId, op.path);
+              vfs[op.path] = file.content;
+              const txn = transactions.find(t => t.path === op.path);
+              if (txn) txn.newContent = file.content;
+            } catch { /* file may have been deleted */ }
+          }
+        }
+
+        const filesSummary = result.applied
+          .map(op => `${op.operation} ${op.path}`)
+          .join(', ');
+
+        await commitManager.commit(vfs, transactions, {
+          sessionId: input.conversationId,
+          message: `Auto-commit: ${filesSummary}`,
+          author: input.ownerId,
+        });
+      } catch (commitError) {
+        // Non-fatal: edits were applied even if commit fails
+        console.error('[Chat] Auto-commit failed:', commitError);
+      }
     }
   }
 

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { absolutePathSchema } from '@/lib/validation/schemas';
+import { resolveFilesystemOwnerWithFallback } from './utils';
 
 export const runtime = 'nodejs';
 
@@ -34,24 +36,24 @@ const logError = (...args: any[]) => console.error(`${COLORS.bright}${COLORS.red
 function trackRequest(path: string): { isPolling: boolean; requestCount: number; windowMs: number } {
   const now = Date.now();
   const key = path;
-  
+
   if (!requestTracker.has(key)) {
     requestTracker.set(key, { count: 1, lastRequest: now, firstRequest: now });
     return { isPolling: false, requestCount: 1, windowMs: 0 };
   }
-  
+
   const tracker = requestTracker.get(key)!;
   const windowMs = now - tracker.firstRequest;
-  
+
   // Reset if outside window
   if (windowMs > REQUEST_WINDOW_MS) {
     requestTracker.set(key, { count: 1, lastRequest: now, firstRequest: now });
     return { isPolling: false, requestCount: 1, windowMs: 0 };
   }
-  
+
   tracker.count++;
   tracker.lastRequest = now;
-  
+
   const isPolling = tracker.count > 3; // More than 3 requests in 5s = polling
   return { isPolling, requestCount: tracker.count, windowMs };
 }
@@ -61,18 +63,10 @@ function trackRequest(path: string): { isPolling: boolean; requestCount: number;
  * Validates directory path and prevents path traversal attacks
  */
 const listRequestSchema = z.object({
-  path: z.string()
-    .min(1, 'Path is required')
-    .max(500, 'Path too long (max 500 characters)')
-    .refine(
-      (path) => !path.includes('..') && !path.includes('\0'),
-      'Path contains invalid characters'
-    )
-    .refine(
-      (path) => !path.startsWith('/') || path.startsWith('/home/') || path.startsWith('/workspace/'),
-      'Absolute paths must start with /home/ or /workspace/'
-    ),
-  ownerId: z.string().optional().nullable(),
+  path: absolutePathSchema.refine(
+    (path) => path.startsWith('/home/') || path.startsWith('/workspace/'),
+    'Absolute paths must start with /home/ or /workspace/'
+  ),
 });
 
 export async function GET(req: NextRequest) {
@@ -116,7 +110,10 @@ export async function GET(req: NextRequest) {
 
     // SECURITY: Always derive ownerId from authenticated request context
     // Reject any attempt to override ownerId via query parameter
-    const authResolution = await resolveFilesystemOwner(req);
+    const authResolution = await resolveFilesystemOwnerWithFallback(req, {
+      route: 'list',
+      requestId,
+    });
     const authenticatedOwnerId = authResolution.ownerId;
 
     // If ownerId was explicitly provided in query, verify it matches authenticated user

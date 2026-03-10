@@ -271,6 +271,82 @@ export function createFilesystemTools(userId: string): FilesystemTool[] {
         }
       },
     },
+
+    {
+      name: 'context_pack',
+      description: 'Generate a dense, LLM-friendly bundle of directory structure and file contents. Similar to Repomix or Gitingest. Use this to get a comprehensive view of a project structure with file contents in a single response.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Root directory path to pack (default: "/")',
+          },
+          format: {
+            type: 'string',
+            description: 'Output format: markdown, xml, json, or plain (default: markdown)',
+            enum: ['markdown', 'xml', 'json', 'plain'],
+          },
+          includeContents: {
+            type: 'boolean',
+            description: 'Include file contents (default: true)',
+          },
+          includeTree: {
+            type: 'boolean',
+            description: 'Include directory tree visualization (default: true)',
+          },
+          maxFileSize: {
+            type: 'number',
+            description: 'Maximum file size in bytes to include (default: 102400)',
+          },
+          maxLinesPerFile: {
+            type: 'number',
+            description: 'Maximum lines per file before truncation (default: 500)',
+          },
+          excludePatterns: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Glob patterns to exclude (e.g., ["node_modules/**", "*.log"])',
+          },
+        },
+        required: [],
+      },
+      execute: async (args: Record<string, any>): Promise<ToolCallResult> => {
+        try {
+          const { contextPackService } = await import('@/lib/virtual-filesystem/context-pack-service');
+          
+          const result = await contextPackService.generateContextPack(
+            userId,
+            args.path || '/',
+            {
+              format: args.format || 'markdown',
+              includeContents: args.includeContents !== false,
+              includeTree: args.includeTree !== false,
+              maxFileSize: args.maxFileSize || 102400,
+              maxLinesPerFile: args.maxLinesPerFile || 500,
+              excludePatterns: args.excludePatterns,
+            }
+          );
+          
+          return {
+            success: true,
+            bundle: result.bundle,
+            fileCount: result.fileCount,
+            directoryCount: result.directoryCount,
+            totalSize: result.totalSize,
+            estimatedTokens: result.estimatedTokens,
+            hasTruncation: result.hasTruncation,
+            warnings: result.warnings,
+            format: result.format,
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to generate context pack',
+          };
+        }
+      },
+    },
   ];
 }
 

@@ -1,4 +1,4 @@
-﻿name: 🧠 Autobot
+﻿name: 🧠 jarvis
 on:
   pull_request_review_comment:
     types: [created]
@@ -25,10 +25,16 @@ jobs:
           COMMENTS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments \
             --jq '[.[] | select(.body | test("@autobot fix|/autofix"; "i")) | select(.created_at > (now - 1800 | todate))]')
           
-          COMMENT_COUNT=$(echo "$COMMENTS" | jq 'length')
-          COMMENT_IDS=$(echo "$COMMENTS" | jq -r '.[].id | tostring' | tr '\n' ',')
+          # Filter out comments that already have 🚀 reaction (already processed)
+          UNPROCESSED_COMMENTS=$(echo "$COMMENTS" | jq -c '[.[] | select(
+            # Check if comment has NO rocket reaction
+            ([.reactions // {} | .rocket // 0] | first | . == null or . == 0)
+          )]')
           
-          echo "Found $COMMENT_COUNT trigger comments"
+          COMMENT_COUNT=$(echo "$UNPROCESSED_COMMENTS" | jq 'length')
+          COMMENT_IDS=$(echo "$UNPROCESSED_COMMENTS" | jq -r '.[].id | tostring' | tr '\n' ',')
+          
+          echo "Found $COMMENT_COUNT unprocessed trigger comments (excluding already-processed)"
           echo "comment_count=$COMMENT_COUNT" >> $GITHUB_OUTPUT
           echo "comment_ids=$COMMENT_IDS" >> $GITHUB_OUTPUT
           
@@ -39,7 +45,7 @@ jobs:
             echo "Running agent with $COMMENT_COUNT batched comments"
           else
             # Check if we're the oldest (should run) or waiting for more
-            OLDEST_ID=$(echo "$COMMENTS" | jq -r '.[0].id')
+            OLDEST_ID=$(echo "$UNPROCESSED_COMMENTS" | jq -r '.[0].id')
             if [ "$TRIGGER_COMMENT_ID" = "$OLDEST_ID" ]; then
               echo "should_run=true" >> $GITHUB_OUTPUT
               echo "Oldest comment - running agent"
@@ -50,7 +56,7 @@ jobs:
           fi
           
           # Extract all trigger comment bodies for context
-          TRIGGER_BODIES=$(echo "$COMMENTS" | jq -r '.[].body' | paste -sd $'\n')
+          TRIGGER_BODIES=$(echo "$UNPROCESSED_COMMENTS" | jq -r '.[].body' | paste -sd $'\n')
           echo "trigger_comments<<EOF" >> $GITHUB_OUTPUT
           echo "$TRIGGER_BODIES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -73,16 +79,17 @@ jobs:
         run: |
           PR_DATA=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.number }})
           echo "head_ref=$(echo "$PR_DATA" | jq -r '.head.ref')" >> $GITHUB_OUTPUT
+          echo "head_sha=$(echo "$PR_DATA" | jq -r '.head.sha')" >> $GITHUB_OUTPUT
           echo "base_ref=$(echo "$PR_DATA" | jq -r '.base.ref')" >> $GITHUB_OUTPUT
-          
+
           # Store the trigger comment URL for reference
           echo "comment_url=${{ github.event.comment.html_url }}" >> $GITHUB_OUTPUT
           echo "comment_id=${{ github.event.comment.id }}" >> $GITHUB_OUTPUT
 
-      - name: Checkout Full Repository
+      - name: Checkout Full Repository (Latest HEAD)
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.pr.outputs.head_ref }}
+          ref: ${{ steps.pr.outputs.head_sha }}  # Use SHA for exact commit, not branch name
           fetch-depth: 0 # CRITICAL: Required for AST Repo Mapping
 
       - name: Setup Python & Agent Tooling
@@ -116,21 +123,42 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Manage Shadow Branch
+        id: branch
         run: |
-          FIX_BRANCH="ai-fixes-${{ steps.pr.outputs.head_ref }}"
+          FIX_BRANCH="jarvis-fixes-${{ steps.pr.outputs.head_ref }}"
           git config user.name "jarvis"
           git config user.email "fullmetal@solo-dev.internal"
+          
+          MERGE_RESULT="none"
 
-          # If the branch exists remotely, fetch it and hard reset to the current PR state
+          # If the fix branch exists remotely, merge latest PR HEAD into it (preserve fixes!)
           if git ls-remote --heads origin $FIX_BRANCH | grep -q $FIX_BRANCH; then
-            echo "Shadow branch exists. Syncing..."
+            echo "Shadow branch exists. Fetching and merging PR HEAD..."
             git fetch origin $FIX_BRANCH
             git checkout $FIX_BRANCH
-            git reset --hard origin/${{ steps.pr.outputs.head_ref }}
+            
+            # Fetch the latest PR HEAD
+            git fetch origin ${{ steps.pr.outputs.head_sha }}
+            
+            # Merge PR HEAD into fix branch (preserves previous fixes)
+            if git merge -X theirs ${{ steps.pr.outputs.head_sha }} --no-commit; then
+              # If merge succeeded with conflicts auto-resolved, commit
+              git commit -m "🔄 Merge PR HEAD (${{ steps.pr.outputs.head_sha }})" || echo "Nothing to commit"
+              MERGE_RESULT="merged"
+            else
+              # If merge has conflicts, abort and just reset (agent will reapply)
+              git merge --abort
+              echo "Merge had conflicts, resetting to PR HEAD..."
+              git reset --hard ${{ steps.pr.outputs.head_sha }}
+              MERGE_RESULT="reset"
+            fi
           else
-            echo "Creating new shadow branch..."
+            echo "Creating new shadow branch from PR HEAD..."
             git checkout -b $FIX_BRANCH
+            MERGE_RESULT="new"
           fi
+          
+          echo "merge_result=$MERGE_RESULT" >> $GITHUB_OUTPUT
 
       - name: Multi-Iteration Agent Execution & Fallback Routing
         env:
@@ -217,6 +245,7 @@ EOF
         if: steps.commit.outputs.success == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_RESULT: ${{ steps.branch.outputs.merge_result }}
         run: |
           # Parse changed files and format as markdown list with links
           FILES_JSON='${{ steps.commit.outputs.changed_files }}'
@@ -234,6 +263,13 @@ EOF
             fi
           done)
           
+          # Determine previous fixes status
+          case "$MERGE_RESULT" in
+            "merged") PREV_FIXES="✅ Preserved (merged PR HEAD)" ;;
+            "reset") PREV_FIXES="⚠️ Reset (merge conflicts)" ;;
+            *) PREV_FIXES="🆕 New branch" ;;
+          esac
+          
           # Build the comment body
           COMMENT_BODY=$(cat <<EOF
 ### 🚀 Agent Workflow Complete! (Batch: ${{ steps.commit.outputs.comment_count }} comments)
@@ -241,12 +277,14 @@ EOF
 **Triggered by:**
 $COMMENT_LINKS
 
-**Branch:** \`ai-fixes-${{ steps.pr.outputs.head_ref }}\`
+**Base PR:** \`${{ steps.pr.outputs.head_ref }}\`@[\`${{ steps.pr.outputs.head_sha }}\`](https://github.com/${{ github.repository }}/commit/${{ steps.pr.outputs.head_sha }})
+**Fix Branch:** \`jarvis-fixes-${{ steps.pr.outputs.head_ref }}\`
+**Previous Fixes:** $PREV_FIXES
 
 **Files Modified:**
 $FILES_LIST
 
-**Commit:** [\`$(git rev-parse --short HEAD)\`](https://github.com/${{ github.repository }}/commit/$(git rev-parse HEAD))
+**Agent Commit:** [\`$(git rev-parse --short HEAD)\`](https://github.com/${{ github.repository }}/commit/$(git rev-parse HEAD))
 
 ---
 *This is an automated response from the Jarvis agent. All batched review comments have been addressed in this commit.*

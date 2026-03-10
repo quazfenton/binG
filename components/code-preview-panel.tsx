@@ -605,6 +605,7 @@ export default function CodePreviewPanel({
     
     try {
       const targetPath = directoryPath || filesystemCurrentPath;
+      // Silent - only log on error
       console.log('[Manual Preview] Loading files from:', targetPath);
       
       // Get all files from the directory
@@ -2639,10 +2640,10 @@ export default app;`,
           const bootWebContainer = async () => {
             setIsWebcontainerBooting(true);
             setWebcontainerUrl(null);
-            
+
             try {
               log('[WebContainer] Creating sandbox via provider...');
-              
+
               // Use the sandbox bridge to create WebContainer sandbox
               const response = await fetch('/api/sandbox/webcontainer', {
                 method: 'POST',
@@ -2651,19 +2652,35 @@ export default app;`,
                   files: useStructure.files,
                 }),
               });
-              
+
               if (!response.ok) {
-                throw new Error('Failed to create WebContainer sandbox');
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.error || `Failed to create WebContainer sandbox (${response.status})`);
               }
-              
+
               const data = await response.json();
               const { sandboxId, url } = data;
-              
+
               log(`[WebContainer] Sandbox ready: ${sandboxId}`);
               setWebcontainerUrl(url);
               setIsWebcontainerBooting(false);
             } catch (err: any) {
               logError('[WebContainer] Boot error:', err);
+              
+              // If error mentions "Unauthorized" or "not found", suggest clearing sessions
+              if (err.message.includes('Unauthorized') || err.message.includes('not found')) {
+                log('[WebContainer] Session may be stale, suggesting cleanup');
+                toast.error('WebContainer failed - session may be stale', {
+                  description: 'Try clicking "Clear Sessions" and retry',
+                  duration: 5000,
+                });
+              } else {
+                toast.error('WebContainer boot failed', {
+                  description: err.message,
+                  duration: 5000,
+                });
+              }
+              
               setWebcontainerUrl(`Error: ${err.message}`);
               setIsWebcontainerBooting(false);
             }
@@ -2911,10 +2928,10 @@ export default app;`,
           const bootCodeSandbox = async () => {
             setIsCodesandboxLoading(true);
             setCodesandboxUrl(null);
-            
+
             try {
               log('[CodeSandbox] Creating cloud dev environment...');
-              
+
               // Call API to create CodeSandbox devbox
               const response = await fetch('/api/sandbox/devbox', {
                 method: 'POST',
@@ -2924,19 +2941,41 @@ export default app;`,
                   template: hasDocker ? 'docker' : 'node',
                 }),
               });
-              
+
               if (!response.ok) {
-                throw new Error('Failed to create CodeSandbox environment');
+                const errorData = await response.json().catch(() => ({}));
+                const errorMsg = errorData.error || `Failed to create CodeSandbox environment (${response.status})`;
+                
+                // If error mentions "Unauthorized", suggest clearing sessions
+                if (errorMsg.includes('Unauthorized') || errorMsg.includes('not found')) {
+                  log('[CodeSandbox] Session may be stale, suggesting cleanup');
+                  throw new Error(`SESSION_STALE: ${errorMsg}`);
+                }
+                throw new Error(errorMsg);
               }
-              
+
               const data = await response.json();
               const sandboxUrl = data.url || `https://${data.sandboxId}.csb.app`;
-              
+
               setCodesandboxUrl(sandboxUrl);
               log(`[CodeSandbox] DevBox ready: ${sandboxUrl}`);
               setIsCodesandboxLoading(false);
             } catch (err: any) {
               logError('[CodeSandbox] Boot error:', err);
+              
+              // Handle stale session errors
+              if (err.message.includes('SESSION_STALE')) {
+                toast.error('CodeSandbox failed - session may be stale', {
+                  description: 'Click the "🗑️ Clear Sessions" button and retry',
+                  duration: 6000,
+                });
+              } else {
+                toast.error('CodeSandbox boot failed', {
+                  description: err.message,
+                  duration: 5000,
+                });
+              }
+              
               setCodesandboxUrl(`Error: ${err.message}`);
               setIsCodesandboxLoading(false);
             }
@@ -3723,6 +3762,47 @@ export default app;`,
                   </span>
                 </CardTitle>
                 <div className="flex items-center gap-1 md:gap-2">
+                  <button
+                    onClick={async () => {
+                      // Clear stale sandbox sessions
+                      try {
+                        const response = await fetch('/api/sandbox/clear-sessions', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                        });
+                        const data = await response.json();
+                        if (data.success) {
+                          toast.success('Sessions cleared', {
+                            description: `Cleared ${data.clearedCount || 0} stale sessions`,
+                            duration: 3000,
+                          });
+                          // Reset all sandbox states
+                          setWebcontainerUrl(null);
+                          setCodesandboxUrl(null);
+                          setNextjsUrl(null);
+                          setIsWebcontainerBooting(false);
+                          setIsCodesandboxLoading(false);
+                          setIsNextjsBuilding(false);
+                        } else {
+                          toast.error('Failed to clear sessions', {
+                            description: data.error || 'Unknown error',
+                            duration: 4000,
+                          });
+                        }
+                      } catch (err: any) {
+                        toast.error('Failed to clear sessions', {
+                          description: err.message,
+                          duration: 4000,
+                        });
+                      }
+                    }}
+                    className="bg-red-600 hover:bg-red-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
+                    title="Clear stale sandbox sessions (fixes 'Unauthorized' and 'not found' errors)"
+                  >
+                    <Trash2 className="w-3 h-3 md:w-4 md:h-4 mr-1" />
+                    <span className="hidden sm:inline">Clear Sessions</span>
+                    <span className="sm:hidden">🗑️</span>
+                  </button>
                   <button
                     onClick={downloadAsZip}
                     className="bg-blue-600 hover:bg-blue-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"

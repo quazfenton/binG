@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { z } from 'zod';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
 import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
+import { sandboxIdSchema, commandSchema } from '@/lib/validation/schemas';
 
 // ANSI color codes for terminal output
 const COLORS = {
@@ -21,6 +23,13 @@ const log = (...args: any[]) => DEBUG && console.log(`${COLORS.bright}${COLORS.g
 const logWarn = (...args: any[]) => console.warn(`${COLORS.bright}${COLORS.yellow}[SANDBOX EXECUTE WARN]${COLORS.reset}`, ...args);
 const logError = (...args: any[]) => console.error(`${COLORS.bright}${COLORS.red}[SANDBOX EXECUTE ERROR]${COLORS.reset}`, ...args);
 const logCommand = (...args: any[]) => DEBUG && console.log(`${COLORS.bright}${COLORS.magenta}[SANDBOX COMMAND]${COLORS.reset}`, ...args);
+
+const sandboxExecuteRequestSchema = z.object({
+  sandboxId: sandboxIdSchema,
+  command: commandSchema,
+  cwd: z.string().optional(),
+  env: z.record(z.string()).optional(),
+});
 
 export async function POST(req: NextRequest) {
   const startTime = Date.now();
@@ -54,15 +63,22 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { command, sandboxId } = body;
-
-    if (!command || !sandboxId) {
-      logError(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.red}Missing required fields:${COLORS.reset} command=${COLORS.blue}${command}${COLORS.reset}, sandboxId=${COLORS.blue}${sandboxId}${COLORS.reset}`);
+    
+    // Validate request body with Zod
+    const parseResult = sandboxExecuteRequestSchema.safeParse(body);
+    if (!parseResult.success) {
+      const firstError = parseResult.error.errors[0];
+      logError(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.red}Validation failed:${COLORS.reset} ${firstError.message}`);
       return NextResponse.json(
-        { error: 'command and sandboxId are required' },
+        { 
+          error: firstError.message,
+          details: parseResult.error.flatten(),
+        },
         { status: 400 }
       );
     }
+    
+    const { command, sandboxId, cwd, env } = parseResult.data;
 
     logCommand(`${COLORS.dim}[${requestId}]${COLORS.reset} Command: ${COLORS.blue}"${command}"${COLORS.reset} | Sandbox: ${COLORS.cyan}${sandboxId}${COLORS.reset}`);
 

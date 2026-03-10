@@ -16,6 +16,8 @@ import {
   getSessionByUserId as storeGetSessionByUserId,
   getAllActiveSessions,
   deleteSession as deleteSessionFromStore,
+  clearUserSessions as clearUserSessionsFromStore,
+  clearStaleSessions as clearStaleSessionsFromStore,
 } from './session-store';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { sandboxFilesystemSync } from './sandbox-filesystem-sync';
@@ -163,6 +165,20 @@ export class SandboxServiceBridge {
    */
   deleteSession(sessionId: string): void {
     deleteSessionFromStore(sessionId);
+  }
+
+  /**
+   * Clear all sessions for a user (e.g., to recover from failures)
+   */
+  clearUserSessions(userId: string): void {
+    clearUserSessionsFromStore(userId);
+  }
+
+  /**
+   * Clear stale sessions (expired or stuck in 'creating' status)
+   */
+  clearStaleSessions(): void {
+    clearStaleSessionsFromStore();
   }
 
   /**

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
+import { absolutePathSchema, fileContentSchema, languageSchema } from '@/lib/validation/schemas';
 
 export const runtime = 'nodejs';
 
@@ -10,21 +11,12 @@ export const runtime = 'nodejs';
  * Validates path, content, and prevents path traversal attacks
  */
 const writeRequestSchema = z.object({
-  path: z.string()
-    .min(1, 'Path is required')
-    .max(500, 'Path too long (max 500 characters)')
-    .refine(
-      (path) => !path.includes('..') && !path.includes('\0'),
-      'Path contains invalid characters'
-    )
-    .refine(
-      (path) => !path.startsWith('/') || path.startsWith('/home/') || path.startsWith('/workspace/'),
-      'Absolute paths must start with /home/ or /workspace/'
-    ),
-  content: z.string()
-    .max(10 * 1024 * 1024, 'Content too large (max 10MB)'),
-  ownerId: z.string().optional(),
-  language: z.string().optional(),
+  path: absolutePathSchema.refine(
+    (path) => path.startsWith('/home/') || path.startsWith('/workspace/'),
+    'Absolute paths must start with /home/ or /workspace/'
+  ),
+  content: fileContentSchema,
+  language: languageSchema.optional(),
 });
 
 export async function POST(req: NextRequest) {

@@ -237,8 +237,8 @@ export class ShadowCommitManager {
         transactions: transactions.map(t => ({
           path: t.path,
           type: t.type,
-          originalContent: t.originalContent?.slice(0, 1000),
-          newContent: vfs[t.path]?.slice(0, 1000),
+          originalContent: t.originalContent,
+          newContent: vfs[t.path] ?? t.newContent,
         })),
       };
 

@@ -17,6 +17,7 @@ import { isEmbeddableUrl, transformToEmbed, getSuggestedPlugin } from "@/lib/uti
 import { ReasoningDisplay, ReasoningSummary } from "@/components/reasoning-display"
 import { ToolInvocationsList } from "@/components/tool-invocation-card"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
+import { toast } from "sonner"
 
 interface MessageBubbleProps {
   message: Message
@@ -165,9 +166,17 @@ export default function MessageBubble({
         throw new Error(payload?.error || `Failed to accept edits (${response.status})`);
       }
       setFileEditDecision("accepted");
+      toast.success("File edits accepted", {
+        description: "Changes are now permanent",
+        duration: 2000,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to accept edits";
       console.error(message);
+      toast.error("Failed to accept edits", {
+        description: message,
+        duration: 4000,
+      });
     } finally {
       setIsApplyingEditAction(false);
     }
@@ -190,12 +199,31 @@ export default function MessageBubble({
         throw new Error(payload?.error || `Failed to deny edits (${response.status})`);
       }
       const txStatus = payload?.data?.transaction?.status;
-      setFileEditDecision(
-        txStatus === "reverted_with_conflicts" ? "reverted_with_conflicts" : "denied",
-      );
+      const conflicts = payload?.data?.conflicts || [];
+      const revertedPaths = payload?.data?.revertedPaths || [];
+      
+      if (txStatus === "reverted_with_conflicts") {
+        setFileEditDecision("reverted_with_conflicts");
+        toast.error("Reverted with conflicts", {
+          description: conflicts.length > 0 
+            ? `${revertedPaths.length} files reverted, ${conflicts.length} conflicts detected`
+            : "Some files could not be fully reverted",
+          duration: 5000,
+        });
+      } else {
+        setFileEditDecision("denied");
+        toast.success("File edits reverted", {
+          description: `${revertedPaths.length} file(s) restored to previous state`,
+          duration: 3000,
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to deny edits";
       console.error(message);
+      toast.error("Failed to revert edits", {
+        description: message,
+        duration: 5000,
+      });
     } finally {
       setIsApplyingEditAction(false);
     }

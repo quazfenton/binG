@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { absolutePathSchema } from '@/lib/validation/schemas';
+import { resolveFilesystemOwnerWithFallback } from '../utils';
 
 export const runtime = 'nodejs';
 
@@ -9,21 +11,15 @@ export const runtime = 'nodejs';
  * Validates path and prevents path traversal attacks
  */
 const readRequestSchema = z.object({
-  path: z.string()
-    .min(1, 'Path is required')
-    .max(500, 'Path too long (max 500 characters)')
-    .refine(
-      (path) => !path.includes('..') && !path.includes('\0'),
-      'Path contains invalid characters'
-    )
-    .refine(
-      (path) => !path.startsWith('/') || path.startsWith('/home/') || path.startsWith('/workspace/'),
-      'Absolute paths must start with /home/ or /workspace/'
-    ),
-  ownerId: z.string().optional(),
+  path: absolutePathSchema.refine(
+    (path) => path.startsWith('/home/') || path.startsWith('/workspace/'),
+    'Absolute paths must start with /home/ or /workspace/'
+  ),
 });
 
 export async function POST(req: NextRequest) {
+  const requestId = Math.random().toString(36).slice(2, 8);
+  
   try {
     const body = await req.json();
 
@@ -47,7 +43,10 @@ export async function POST(req: NextRequest) {
 
     // SECURITY: Always derive ownerId from authenticated request context
     // Never trust user-supplied ownerId for read operations
-    const authResolution = await resolveFilesystemOwner(req);
+    const authResolution = await resolveFilesystemOwnerWithFallback(req, {
+      route: 'read',
+      requestId,
+    });
     const ownerId = authResolution.ownerId;
 
     const file = await virtualFilesystem.readFile(ownerId, filePath);
@@ -66,8 +65,8 @@ export async function POST(req: NextRequest) {
     const message = error instanceof Error ? error.message : 'Failed to read file';
     const status = message.toLowerCase().includes('not found') ? 404 : 400;
     // SECURITY: Don't expose raw internal error messages
-    const safeMessage = message.toLowerCase().includes('not found') 
-      ? 'File not found' 
+    const safeMessage = message.toLowerCase().includes('not found')
+      ? 'File not found'
       : 'Failed to read file';
     return NextResponse.json({ success: false, error: safeMessage }, { status });
   }
