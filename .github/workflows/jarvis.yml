@@ -45,10 +45,7 @@ jobs:
           TRIGGER_BODY_ESCAPED=$(printf '%s' '${{ github.event.comment.body }}' | jq -Rs '.')
           TRIGGER_CREATED_AT='${{ github.event.comment.created_at }}'
           
-          TRIGGER_COMMENT_FROM_EVENT=$(cat <<EOFJSON
-{"id": ${{ github.event.comment.id }}, "body": $TRIGGER_BODY_ESCAPED, "reactions": {"rocket": 0}, "created_at": "$TRIGGER_CREATED_AT"}
-EOFJSON
-)
+          TRIGGER_COMMENT_FROM_EVENT="{\"id\": ${{ github.event.comment.id }}, \"body\": $TRIGGER_BODY_ESCAPED, \"reactions\": {\"rocket\": 0}, \"created_at\": \"$TRIGGER_CREATED_AT\"}"
           echo "Triggering comment from event: ID=${{ github.event.comment.id }}"
 
           # Fetch ALL review comments on this PR
@@ -155,6 +152,7 @@ EOFJSON
         with:
           python-version: "3.11"
       - name: Install Aider (Agent Engine)
+        shell: bash
         run: python -m pip install aider-chat
 
       - name: Extract CodeRabbit Context
@@ -184,6 +182,7 @@ EOFJSON
 
       - name: Manage Shadow Branch
         id: branch
+        shell: bash
         run: |
           FIX_BRANCH="jarvis-fixes-${{ steps.pr.outputs.head_ref }}"
           git config user.name "jarvis"
@@ -268,6 +267,7 @@ EOFJSON
 
       - name: Commit and Force-Push Fixes
         id: commit
+        shell: bash
         run: |
           git add .
 
@@ -397,19 +397,22 @@ EOFJSON
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENT_IDS: ${{ needs.collect-comments.outputs.comment_ids }}
-          TRIGGER_COMMENTS: ${{ needs.collect-comments.outputs.trigger_comments }}
         run: |
           QUEUE_BRANCH="jarvis-queue"
           PR_NUMBER=${{ github.event.pull_request.number }}
 
+          # Get trigger comment bodies from the output (newline separated)
+          TRIGGER_BODIES='${{ needs.collect-comments.outputs.trigger_comments }}'
+
           # Build JSON array: [{"id": 123, "body": "..."}, ...]
           IFS=',' read -r -a IDS <<< "$COMMENT_IDS"
-          
+
           echo "[" > /tmp/queue.json
           first=true
           idx=0
           while IFS= read -r body; do
             if [ $idx -ge ${#IDS[@]} ]; then break; fi
+            if [ -z "$body" ]; then continue; fi
             if [ "$first" = true ]; then
               first=false
             else
@@ -419,7 +422,7 @@ EOFJSON
             escaped=$(printf '%s' "$body" | jq -Rs '.')
             printf '  {"id": %s, "body": %s}' "${IDS[$idx]}" "$escaped" >> /tmp/queue.json
             ((idx++))
-          done <<< "$TRIGGER_COMMENTS"
+          done <<< "$TRIGGER_BODIES"
           echo "" >> /tmp/queue.json
           echo "]" >> /tmp/queue.json
 

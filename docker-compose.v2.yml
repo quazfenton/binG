@@ -13,14 +13,25 @@ services:
       - "5555:5555"
       - "8080:8080"
     volumes:
-      - .:/app
-      - /var/run/docker.sock:/var/run/docker.sock  # Allow app to manage Nullclaw container
+      - type: bind
+        source: .
+        target: /app
+        consistency: cached
+        bind:
+          create_host_path: true
+          propagation: cached
+      - type: volume
+        source: next_cache
+        target: /app/.next
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
       - workspace_data:/workspace
-      - pnpm_store:/root/.local/share/pnpm/store  # Persist pnpm cache
-      - pip_cache:/root/.cache/pip  # Persist Python pip cache (for other tools)
-      - npm_global:/root/.npm  # Persist global npm packages
-      - opencode_data:/root/.opencode  # Persist OpenCode data/cache
-      - nullclaw_data:/root/.nullclaw  # Persist Nullclaw data/cache
+      - pnpm_store:/root/.local/share/pnpm/store
+      - pip_cache:/root/.cache/pip
+      - npm_global:/root/.npm
+      - opencode_data:/root/.opencode
+      - nullclaw_data:/root/.nullclaw
     environment:
       - NODE_ENV=development
       - PORT=5555
@@ -87,4 +98,6 @@ volumes:
   nullclaw_data:
     driver: local
   nullclaw_config:
+    driver: local
+  next_cache:
     driver: local
