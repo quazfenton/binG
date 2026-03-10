@@ -41,7 +41,7 @@ const DiffOperationSchema = z.object({
   lineRange: z.tuple([z.number(), z.number()]),
   content: z.string(),
   description: z.string().optional(),
-  confidence: z.number().min(0).max(1).optional(),
+  confidence: z.number().min(0).refine((val) => val <= 1, 'Confidence must be at most 1').optional(),
   preview: z.string().optional(),
   dependencies: z.array(z.string()).optional()
 });

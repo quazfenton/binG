@@ -35,7 +35,7 @@ export interface ReflectionConfig {
 // Reflection output schema for structured LLM output
 const ReflectionOutputSchema = z.object({
   improvements: z.array(z.string()).describe('List of specific, actionable improvements'),
-  confidence: z.number().min(0).max(1).describe('Confidence score 0-1'),
+  confidence: z.number().min(0).refine((val) => val <= 1, 'Confidence score must be between 0 and 1').describe('Confidence score 0-1'),
   suggestedChanges: z.string().describe('Summary of suggested changes'),
   criticalIssues: z.array(z.string()).optional().describe('Any critical issues found'),
 });

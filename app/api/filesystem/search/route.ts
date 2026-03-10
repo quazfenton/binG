@@ -12,7 +12,7 @@ export const runtime = 'nodejs';
 const searchRequestSchema = z.object({
   q: searchQuerySchema,
   path: absolutePathSchema.optional().default('project'),
-  limit: z.number().int().positive().max(200).optional(),
+  limit: z.number().int().positive().refine((val) => val <= 200, 'Limit must be at most 200').optional(),
 });
 
 export async function GET(req: NextRequest) {

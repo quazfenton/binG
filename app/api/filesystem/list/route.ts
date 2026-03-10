@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
-import { absolutePathSchema } from '@/lib/validation/schemas';
-import { resolveFilesystemOwnerWithFallback } from './utils';
+import { resolveFilesystemOwnerWithFallback } from '../utils';
 
 export const runtime = 'nodejs';
 
@@ -61,12 +60,26 @@ function trackRequest(path: string): { isPolling: boolean; requestCount: number;
 /**
  * Schema for filesystem list requests
  * Validates directory path and prevents path traversal attacks
+ * Accepts both relative paths (project, project/sessions) and absolute paths
  */
 const listRequestSchema = z.object({
-  path: absolutePathSchema.refine(
-    (path) => path.startsWith('/home/') || path.startsWith('/workspace/'),
-    'Absolute paths must start with /home/ or /workspace/'
-  ),
+  path: z.string()
+    .min(1, 'Path is required')
+    .max(500, 'Path too long (max 500 characters)')
+    .refine(
+      (path) => !path.includes('..') && !path.includes('\0'),
+      'Path contains invalid characters'
+    )
+    .refine(
+      (path) => {
+        // Allow relative paths (project, project/sessions, etc.)
+        if (!path.startsWith('/')) return true;
+        // If absolute, must start with /home/ or /workspace/
+        return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/');
+      },
+      'Absolute paths must start with /home/, /workspace/, or /tmp/'
+    ),
+  ownerId: z.string().optional().nullable(),
 });
 
 export async function GET(req: NextRequest) {

@@ -55,6 +55,19 @@ class SandboxFilesystemSync {
 
     console.log(`[SandboxSync] Starting sync for sandbox ${sandboxId} (interval: ${this.syncIntervalMs}ms)`);
 
+    // ✅ FIX: Perform initial sync immediately so files are available when terminal connects
+    (async () => {
+      try {
+        await this.syncVFSToSandbox(sandboxId, userId);
+        console.log(`[SandboxSync] Initial sync completed for sandbox ${sandboxId}`);
+      } catch (err) {
+        console.warn(
+          `[SandboxSync] Initial sync error for sandbox ${sandboxId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    })();
+
     const interval = setInterval(async () => {
       try {
         await this.syncSandboxToVFS(sandboxId, userId);
@@ -152,9 +165,17 @@ class SandboxFilesystemSync {
       return;
     }
 
+    // Get VFS workspace root to strip from paths when syncing to sandbox
+    // This ensures files appear directly in /workspace instead of /workspace/project/
+    const vfsRoot = 'project';
+
     for (const file of snapshot.files) {
       const workspaceDir = getWorkspaceDirForSandbox(sandboxId);
-      const sandboxPath = `${workspaceDir}/${file.path}`;
+      // Strip VFS workspace root prefix so files go directly to sandbox workspace
+      const relativePath = file.path.startsWith(vfsRoot + '/')
+        ? file.path.slice(vfsRoot.length + 1)
+        : file.path;
+      const sandboxPath = `${workspaceDir}/${relativePath}`;
       try {
         await sandboxBridge.writeFile(sandboxId, sandboxPath, file.content);
       } catch (err) {

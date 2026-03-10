@@ -237,11 +237,11 @@ export const contextPackOptionsSchema = z.object({
   maxFileSize: z.number()
     .optional()
     .default(102400)
-    .max(10 * 1024 * 1024, 'Max file size is 10MB'),
+    .refine((val) => val <= 10 * 1024 * 1024, 'Max file size is 10MB'),
   maxLinesPerFile: z.number()
     .optional()
     .default(500)
-    .max(10000, 'Max lines per file is 10000'),
+    .refine((val) => val <= 10000, 'Max lines per file is 10000'),
   excludePatterns: globPatternsArraySchema.optional(),
   includePatterns: globPatternsArraySchema.optional(),
 });

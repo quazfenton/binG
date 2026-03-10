@@ -121,8 +121,8 @@ export class BlaxelProvider implements SandboxProvider {
   private defaultTtl: string
 
   constructor() {
-    this.apiKey = process.env.BLAXEL_API_KEY || ''
-    this.workspace = process.env.BLAXEL_WORKSPACE || 'default'
+    this.apiKey = (process.env.BLAXEL_API_KEY || '').trim().replace(/^['"]+|['"]+$/g, '')
+    this.workspace = (process.env.BLAXEL_WORKSPACE || 'default').trim()
     this.defaultRegion = process.env.BLAXEL_DEFAULT_REGION || 'us-pdx-1'
     this.defaultImage = process.env.BLAXEL_DEFAULT_IMAGE || 'blaxel/base-image:latest'
     this.defaultMemory = parseInt(process.env.BLAXEL_DEFAULT_MEMORY || '4096', 10)

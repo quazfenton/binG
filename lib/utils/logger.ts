@@ -51,7 +51,9 @@ const DEFAULT_CONFIG: LoggerConfig = {
 
 // Override with env vars on server-side only
 if (typeof window === 'undefined' && typeof process !== 'undefined') {
-  DEFAULT_CONFIG.logFilePath = process.env.LOG_FILE_PATH || require('path').join(process.cwd(), 'logs', 'app.log');
+  // Only use require on server-side
+  const path = require('path');
+  DEFAULT_CONFIG.logFilePath = process.env.LOG_FILE_PATH || path.join(process.cwd(), 'logs', 'app.log');
   DEFAULT_CONFIG.maxFileSize = parseInt(process.env.LOG_MAX_FILE_SIZE || '10', 10);
   DEFAULT_CONFIG.maxFiles = parseInt(process.env.LOG_MAX_FILES || '5', 10);
 }
@@ -66,6 +68,7 @@ function initializeFileLogging() {
   if (typeof window !== 'undefined' || !DEFAULT_CONFIG.logToFile) return;
 
   try {
+    // Dynamic require only on server-side
     fsModule = require('fs');
     pathModule = require('path');
 

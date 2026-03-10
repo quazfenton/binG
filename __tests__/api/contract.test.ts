@@ -16,7 +16,7 @@ const ChatRequestSchema = z.object({
   })),
   provider: z.string(),
   model: z.string(),
-  temperature: z.number().min(0).max(2).optional(),
+  temperature: z.number().min(0).refine((val) => val <= 2, 'Temperature must be at most 2').optional(),
   maxTokens: z.number().positive().optional(),
   stream: z.boolean().optional(),
 });

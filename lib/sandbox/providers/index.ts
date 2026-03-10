@@ -41,6 +41,7 @@ export type SandboxProviderType =
   | 'opensandbox-agent'
   | 'mistral-agent'
   | 'mistral'
+  | 'vercel-sandbox'
 
 // Provider registry
 interface ProviderEntry {
@@ -54,14 +55,15 @@ interface ProviderEntry {
   failureCount: number
   circuitBreaker?: CircuitBreaker
   factory?: () => SandboxProvider
+  asyncFactory?: () => Promise<SandboxProvider>
 }
 
 const providerRegistry = new Map<SandboxProviderType, ProviderEntry>()
 
 function initializeRegistry() {
   // Register providers with priority (lower = higher priority in fallback chain)
-  // Use factory functions for lazy initialization to avoid SDK import errors in tests
-  
+  // Use async factory functions for lazy initialization to avoid SDK import errors in tests
+
   providerRegistry.set('daytona', {
     provider: null as any,
     priority: 1,
@@ -71,8 +73,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { DaytonaProvider } = require('./daytona-provider')
+    asyncFactory: async () => {
+      const { DaytonaProvider } = await import('./daytona-provider')
       return new DaytonaProvider()
     },
   })
@@ -86,8 +88,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { E2BProvider } = require('./e2b-provider')
+    asyncFactory: async () => {
+      const { E2BProvider } = await import('./e2b-provider')
       return new E2BProvider()
     },
   })
@@ -101,8 +103,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { RunloopProvider } = require('./runloop-provider')
+    asyncFactory: async () => {
+      const { RunloopProvider } = await import('./runloop-provider')
       return new RunloopProvider()
     },
   })
@@ -116,8 +118,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { MicrosandboxProvider } = require('./microsandbox-provider')
+    asyncFactory: async () => {
+      const { MicrosandboxProvider } = await import('./microsandbox-provider')
       return new MicrosandboxProvider()
     },
   })
@@ -131,8 +133,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { BlaxelProvider } = require('./blaxel-provider')
+    asyncFactory: async () => {
+      const { BlaxelProvider } = await import('./blaxel-provider')
       return new BlaxelProvider()
     },
   })
@@ -147,8 +149,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { BlaxelMcpServer } = require('./blaxel-mcp-server')
+    asyncFactory: async () => {
+      const { BlaxelMcpServer } = await import('./blaxel-mcp-server')
       return new BlaxelMcpServer()
     },
   })
@@ -162,8 +164,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { SpritesProvider } = require('./sprites-provider')
+    asyncFactory: async () => {
+      const { SpritesProvider } = await import('./sprites-provider')
       return new SpritesProvider()
     },
   })
@@ -177,8 +179,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { CodeSandboxProvider } = require('./codesandbox-provider')
+    asyncFactory: async () => {
+      const { CodeSandboxProvider } = await import('./codesandbox-provider')
       return new CodeSandboxProvider()
     },
   })
@@ -192,8 +194,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { WebContainerProvider } = require('./webcontainer-provider')
+    asyncFactory: async () => {
+      const { WebContainerProvider } = await import('./webcontainer-provider')
       return new WebContainerProvider()
     },
   })
@@ -207,8 +209,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { WebContainerFileSystemProvider } = require('./webcontainer-filesystem-provider')
+    asyncFactory: async () => {
+      const { WebContainerFileSystemProvider } = await import('./webcontainer-filesystem-provider')
       return new WebContainerFileSystemProvider()
     },
   })
@@ -222,8 +224,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { WebContainerSpawnProvider } = require('./webcontainer-spawn-provider')
+    asyncFactory: async () => {
+      const { WebContainerSpawnProvider } = await import('./webcontainer-spawn-provider')
       return new WebContainerSpawnProvider()
     },
   })
@@ -237,8 +239,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { OpenSandboxProvider } = require('./opensandbox-provider')
+    asyncFactory: async () => {
+      const { OpenSandboxProvider } = await import('./opensandbox-provider')
       return new OpenSandboxProvider()
     },
   })
@@ -252,8 +254,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { OpenSandboxCodeInterpreterProvider } = require('./opensandbox-code-interpreter-provider')
+    asyncFactory: async () => {
+      const { OpenSandboxCodeInterpreterProvider } = await import('./opensandbox-code-interpreter-provider')
       return new OpenSandboxCodeInterpreterProvider()
     },
   })
@@ -267,8 +269,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { OpenSandboxAgentSandboxProvider } = require('./opensandbox-agent-sandbox-provider')
+    asyncFactory: async () => {
+      const { OpenSandboxAgentSandboxProvider } = await import('./opensandbox-agent-sandbox-provider')
       return new OpenSandboxAgentSandboxProvider()
     },
   })
@@ -283,8 +285,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { MistralAgentProvider } = require('./mistral/mistral-agent-provider')
+    asyncFactory: async () => {
+      const { MistralAgentProvider } = await import('./mistral/mistral-agent-provider')
       return new MistralAgentProvider()
     },
   })
@@ -299,10 +301,26 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
+    asyncFactory: async () => {
       // Lazy import to avoid circular dependencies
-      const { MistralCodeInterpreterProvider } = require('./mistral-code-interpreter-provider')
+      const { MistralCodeInterpreterProvider } = await import('./mistral-code-interpreter-provider')
       return new MistralCodeInterpreterProvider()
+    },
+  })
+
+  // Vercel Sandbox - Isolated Linux VMs with snapshot support
+  providerRegistry.set('vercel-sandbox', {
+    provider: null as any,
+    priority: 8,
+    enabled: true,
+    available: false,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { VercelSandboxProvider } = await import('./vercel-sandbox-provider')
+      return new VercelSandboxProvider()
     },
   })
 }
@@ -339,7 +357,7 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
     throw new Error(`Provider ${providerType} is disabled`)
   }
 
-  if (!entry.provider && !entry.factory) {
+  if (!entry.provider && !entry.factory && !entry.asyncFactory) {
     log.error(`Provider ${providerType} has no initialization factory`)
     throw new Error(`Provider ${providerType} has no initialization factory`)
   }
@@ -358,6 +376,18 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
     throw new Error(
       `Provider ${providerType} is unavailable (circuit breaker ${stats.state}). ` +
       `Next attempt at: ${stats.nextAttemptTime?.toISOString() || 'unknown'}`
+    );
+  }
+
+  // Check health checker status (if running)
+  const { providerHealthChecker } = await import('./health-checker');
+  const healthStatus = providerHealthChecker.getProviderHealth(providerType);
+  if (healthStatus && !healthStatus.healthy && healthStatus.consecutiveFailures >= 3) {
+    log.warn(`Provider ${providerType} is unhealthy: ${healthStatus.lastError}`)
+    sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'unhealthy' });
+    throw new Error(
+      `Provider ${providerType} is unhealthy (${healthStatus.consecutiveFailures} consecutive failures). ` +
+      `Last error: ${healthStatus.lastError || 'unknown'}`
     );
   }
 
@@ -383,7 +413,9 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         log.debug(`Provider ${providerType} initialization attempt ${attempt}/${MAX_RETRIES}`)
-        if (entry.factory) {
+        if (entry.asyncFactory) {
+          entry.provider = await entry.asyncFactory()
+        } else if (entry.factory) {
           entry.provider = entry.factory()
         }
         if (!entry.provider) {
@@ -487,6 +519,15 @@ export async function getSandboxProviderWithFallback(
  */
 export function getAllProviders(): SandboxProviderType[] {
   return Array.from(providerRegistry.keys())
+}
+
+/**
+ * Get enabled providers (not disabled in registry)
+ */
+export function getEnabledProviders(): SandboxProviderType[] {
+  return Array.from(providerRegistry.entries())
+    .filter(([, entry]) => entry.enabled)
+    .map(([type]) => type)
 }
 
 /**

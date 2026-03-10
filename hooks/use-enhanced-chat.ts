@@ -77,11 +77,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
   const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    
-    console.log('[DEBUG] useEnhancedChat: handleSubmit called', { api: options.api, hasBody: !!options.body });
-    
+
     if (!input.trim() || isLoading) {
-      console.log('[DEBUG] useEnhancedChat: Skipping - empty input or already loading');
       return;
     }
 
@@ -118,13 +115,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         messages: [...messagesRef.current, userMessage],
         ...resolvedBody,
       };
-      
-      console.log('[DEBUG] useEnhancedChat: Sending request to', options.api, {
-        messageCount: requestBody.messages.length,
-        provider: resolvedBody.provider,
-        model: resolvedBody.model,
-        stream: resolvedBody.stream
-      });
 
       const response = await fetch(options.api, {
         method: 'POST',
@@ -181,7 +171,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           return;
         }
 
-        console.error('[DEBUG] useEnhancedChat: HTTP error', response.status, errorText);
         throw new Error(`HTTP ${response.status}: ${response.statusText}${payload?.error?.message ? ` - ${payload.error.message}` : ''}`);
       }
 
@@ -224,15 +213,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         }
       }
 
-      console.log('[DEBUG] useEnhancedChat: Response received, status:', response.status);
-
       if (!response.body) {
-        console.error('[DEBUG] useEnhancedChat: No response body');
         throw new Error('No response body for streaming');
       }
 
       // Handle streaming response
-      console.log('[DEBUG] useEnhancedChat: Starting to handle streaming response');
       await handleStreamingResponse(response.body, assistantMessage, abortController);
 
     } catch (err) {
@@ -332,7 +317,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             // Handle event type declarations
             if (line.startsWith('event: ')) {
               currentEventType = line.slice(7).trim();
-              console.log('[DEBUG] useEnhancedChat: Event type:', currentEventType);
               continue;
             }
 
@@ -340,15 +324,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             if (line.startsWith('data: ')) {
               const dataString = line.slice(6).trim();
               if (!dataString) continue;
-              
-              console.log('[DEBUG] useEnhancedChat: Data line received, length:', dataString.length, 'preview:', dataString.substring(0, 100));
 
               let eventData;
               try {
                 eventData = JSON.parse(dataString);
-                console.log('[DEBUG] useEnhancedChat: Parsed event data:', { type: eventData.type, hasContent: !!eventData.content });
               } catch (jsonError) {
-                console.warn('[DEBUG] useEnhancedChat: JSON parse failed, trying fallback:', jsonError);
                 // If JSON parsing fails, check if it's a simple text response
                 if (dataString && typeof dataString === 'string' && dataString.trim()) {
                   // Handle different possible formats
@@ -383,7 +363,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
               // Determine event type from current context or data
               const eventType = currentEventType || eventData.type || 'token';
-              console.log('[DEBUG] useEnhancedChat: Processing event type:', eventType);
 
               switch (eventType) {
                 case 'init':

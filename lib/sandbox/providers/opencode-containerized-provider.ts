@@ -6,7 +6,7 @@ import type {
   LLMAgentResult,
   LLMAgentStep,
 } from './llm-provider'
-import { getSandboxProvider } from '../providers'
+import { getSandboxProvider } from '.'
 import type { SandboxHandle } from './sandbox-provider'
 
 const DEFAULT_MAX_STEPS = 15
