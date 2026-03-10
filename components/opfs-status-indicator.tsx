@@ -20,7 +20,7 @@ import {
   Wifi,
   WifiOff,
   Clock,
-  FileSync,
+  FileCheck,
 } from 'lucide-react';
 
 export interface OPFSStatusIndicatorProps {
@@ -73,7 +73,7 @@ export function OPFSStatusIndicator({
     if (!status.isOnline) return <WifiOff className="w-4 h-4" />;
     if (status.isSyncing) return <RefreshCw className="w-4 h-4 animate-spin" />;
     if (status.hasConflicts) return <AlertCircle className="w-4 h-4" />;
-    if (status.pendingChanges > 0) return <FileSync className="w-4 h-4" />;
+    if (status.pendingChanges > 0) return <FileCheck className="w-4 h-4" />;
     return <CheckCircle className="w-4 h-4" />;
   };
 
@@ -142,7 +142,7 @@ export function OPFSStatusIndicator({
           {/* Pending changes */}
           {status.pendingChanges > 0 && (
             <div className="flex items-center gap-1" title="Pending changes">
-              <FileSync className="w-3.5 h-3.5" />
+              <FileCheck className="w-3.5 h-3.5" />
               <span>{status.pendingChanges} files</span>
             </div>
           )}

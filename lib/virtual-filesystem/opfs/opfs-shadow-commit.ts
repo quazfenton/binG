@@ -1,9 +1,9 @@
 /**
  * OPFS Shadow Commit Manager
- * 
+ *
  * Enhanced shadow commit system using OPFS for local commit storage
  * Provides instant commits with background server sync
- * 
+ *
  * Features:
  * - Local commits in OPFS (instant)
  * - Background sync to server
@@ -12,10 +12,26 @@
  * - Conflict detection with server
  */
 
+'use client';
+
 import { opfsCore } from './opfs-core';
 import { opfsAdapter } from './opfs-adapter';
-import { virtualFilesystem } from '../virtual-filesystem-service';
-import { generateUnifiedDiff } from '../stateful-agent/commit/shadow-commit';
+import { generateUnifiedDiff } from './diff-utils';
+
+// Lazy import virtualFilesystem to avoid bundling node:fs in client
+let _virtualFilesystemModule: typeof import('../virtual-filesystem-service').virtualFilesystem | null = null;
+
+async function getVirtualFilesystem() {
+  if (!_virtualFilesystemModule) {
+    try {
+      const mod = await import('../virtual-filesystem-service');
+      _virtualFilesystemModule = mod.virtualFilesystem;
+    } catch {
+      _virtualFilesystemModule = null;
+    }
+  }
+  return _virtualFilesystemModule;
+}
 
 // Generate UUID for commit IDs
 function generateUUID(): string {
@@ -157,10 +173,19 @@ export class OPFSShadowCommitManager {
 
     try {
       // Get current VFS state
-      const vfs = await virtualFilesystem.exportWorkspace(options.ownerId);
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) {
+        return {
+          success: false,
+          committedFiles: 0,
+          error: 'Server VFS not available',
+          timestamp,
+        };
+      }
+      const exportData = await vfs.exportWorkspace(options.ownerId);
       const vfsRecord: Record<string, string> = {};
-      
-      for (const file of vfs.files) {
+
+      for (const file of exportData.files) {
         vfsRecord[file.path] = file.content;
       }
 
@@ -252,13 +277,19 @@ export class OPFSShadowCommitManager {
       const commitPath = `.opfs-commits/${commitId}`;
       
       const entries = await this.core.listDirectory(commitPath);
-      
+
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) {
+        console.warn('[OPFS ShadowCommit] Server VFS not available');
+        return false;
+      }
+
       for (const entry of entries) {
         if (entry.type === 'file') {
           const file = await this.core.readFile(`${commitPath}/${entry.name}`);
-          
+
           // Write to server VFS
-          await virtualFilesystem.writeFile(this.ownerId!, entry.name, file.content);
+          await vfs.writeFile(this.ownerId!, entry.name, file.content);
         }
       }
 
@@ -294,13 +325,18 @@ export class OPFSShadowCommitManager {
       const entries = await this.core.listDirectory(commitPath);
       let restoredFiles = 0;
 
+      const vfs = await getVirtualFilesystem();
+      if (!vfs) {
+        return { success: false, restoredFiles: 0, error: 'Server VFS not available' };
+      }
+
       for (const entry of entries) {
         if (entry.type === 'file') {
           try {
             const file = await this.core.readFile(`${commitPath}/${entry.name}`);
-            
+
             // Restore to VFS
-            await virtualFilesystem.writeFile(this.ownerId!, entry.name, file.content);
+            await vfs.writeFile(this.ownerId!, entry.name, file.content);
             
             restoredFiles++;
           } catch (error: any) {
