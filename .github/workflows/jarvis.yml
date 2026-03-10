@@ -6,7 +6,7 @@ on:
 jobs:
   # Job 1: Collect and batch trigger comments
   collect-comments:
-    if: contains(github.event.comment.body, '@autobot fix') || contains(github.event.comment.body, '/autofix')
+    if: contains(github.event.comment.body, 'Prompt for AI Agent')
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.batch.outputs.should_run }}
