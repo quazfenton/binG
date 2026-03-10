@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
+      contents: read
     outputs:
       should_run: ${{ steps.batch.outputs.should_run }}
       comment_ids: ${{ steps.batch.outputs.comment_ids }}
@@ -24,48 +25,93 @@ jobs:
           # For pull_request_review_comment events, the PR number is in github.event.pull_request.number
           PR_NUMBER=${{ github.event.pull_request.number }}
           TRIGGER_COMMENT_ID=${{ github.event.comment.id }}
+          QUEUE_BRANCH="jarvis-queue"
 
           echo "PR_NUMBER: $PR_NUMBER"
           echo "TRIGGER_COMMENT_ID: $TRIGGER_COMMENT_ID"
+          echo "TRIGGER_BODY: ${{ github.event.comment.body }}"
 
-          # Fetch all trigger comments on this PR in the last 30 minutes
-          COMMENTS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments \
-            --jq '[.[] | select(.body | test("Prompt for AI Agent"; "i")) | select(.created_at > (now - 1800 | todate))]')
-          
+          # Fetch the persistent queue file (contains comment objects from failed runs)
+          PENDING_QUEUE="[]"
+          if gh api repos/${{ github.repository }}/git/ref/heads/$QUEUE_BRANCH >/dev/null 2>&1; then
+            PENDING_QUEUE=$(gh api repos/${{ github.repository }}/contents/.jarvis/queue.json?ref=$QUEUE_BRANCH --jq '.content' | base64 -d 2>/dev/null || echo "[]")
+            if [ -z "$PENDING_QUEUE" ] || [ "$PENDING_QUEUE" = "null" ]; then
+              PENDING_QUEUE="[]"
+            fi
+            echo "Loaded pending queue: $(echo "$PENDING_QUEUE" | jq 'length') comments"
+          fi
+
+          # IMPORTANT: The triggering comment may not appear in API query yet (eventual consistency)
+          # So we ALWAYS include the triggering comment directly from github.event
+          TRIGGER_COMMENT_FROM_EVENT='{
+            "id": ${{ github.event.comment.id }},
+            "body": ${{ github.event.comment.body | toJSON }},
+            "reactions": {"rocket": 0},
+            "created_at": "${{ github.event.comment.created_at }}"
+          }'
+
+          # Fetch ALL review comments on this PR
+          ALL_REVIEW_COMMENTS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments --paginate --jq '.')
+
+          echo "Total review comments on PR: $(echo "$ALL_REVIEW_COMMENTS" | jq 'length')"
+
+          # Filter for trigger comments (case-insensitive match for "Prompt for AI Agent")
+          # Combine API results with the triggering comment from event
+          TRIGGER_COMMENTS=$(echo "$ALL_REVIEW_COMMENTS" | jq --argjson event_comment "$TRIGGER_COMMENT_FROM_EVENT" '
+            [.[] | select(.body | test("Prompt for AI Agent"; "i"))] + [$event_comment] | unique_by(.id)
+          ')
+
+          echo "Comments matching trigger pattern (including event comment): $(echo "$TRIGGER_COMMENTS" | jq 'length')"
+
           # Filter out comments that already have 🚀 reaction (already processed)
-          UNPROCESSED_COMMENTS=$(echo "$COMMENTS" | jq -c '[.[] | select(
+          UNPROCESSED_NEW=$(echo "$TRIGGER_COMMENTS" | jq -c '[.[] | select(
             (.reactions.rocket // 0) == 0
           )]')
-          
-          COMMENT_COUNT=$(echo "$UNPROCESSED_COMMENTS" | jq 'length')
-          COMMENT_IDS=$(echo "$UNPROCESSED_COMMENTS" | jq -r '[.[].id | tostring] | join(",")')
 
-          echo "Found $COMMENT_COUNT unprocessed trigger comments (excluding already-processed)"
+          echo "Unprocessed (no rocket reaction): $(echo "$UNPROCESSED_NEW" | jq 'length')"
+
+          # Convert pending queue to same format as API response (extract just IDs for dedup)
+          PENDING_IDS=$(echo "$PENDING_QUEUE" | jq -c '[.[] | {id: .id, body: .body}]')
+
+          # Combine pending queue with new unprocessed comments (deduplicate by ID)
+          ALL_UNPROCESSED=$(echo "$UNPROCESSED_NEW" | jq --argjson pending "$PENDING_IDS" '
+            ($pending | map({id, body})) as $pending_objs |
+            (. + $pending_objs) | unique_by(.id)
+          ')
+
+          COMMENT_COUNT=$(echo "$ALL_UNPROCESSED" | jq 'length')
+          COMMENT_IDS=$(echo "$ALL_UNPROCESSED" | jq -r '[.[].id | tostring] | join(",")')
+          PENDING_COUNT=$(echo "$PENDING_QUEUE" | jq 'length')
+
+          echo "Found $COMMENT_COUNT unprocessed trigger comments ($PENDING_COUNT from failed runs)"
           echo "comment_count=$COMMENT_COUNT" >> $GITHUB_OUTPUT
           echo "comment_ids=$COMMENT_IDS" >> $GITHUB_OUTPUT
 
-          # Batch mode: Run only if we have 3+ comments OR if this is the oldest comment (batch leader)
-          # Or run immediately if only 1 comment exists
-          if [ "$COMMENT_COUNT" -ge 3 ] || [ "$COMMENT_COUNT" -eq 1 ]; then
+          # Batch mode: Run only if we have 7+ comments OR if this is the oldest comment (batch leader)
+          # Or run immediately if only 1 comment exists (no batching for single comments)
+          if [ "$COMMENT_COUNT" -ge 7 ]; then
             echo "should_run=true" >> $GITHUB_OUTPUT
-            echo "Running agent with $COMMENT_COUNT batched comments"
+            echo "✓ Running agent with $COMMENT_COUNT batched comments (threshold: 7)"
+          elif [ "$COMMENT_COUNT" -eq 1 ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "✓ Single comment - running immediately"
           elif [ "$COMMENT_COUNT" -eq 0 ]; then
             echo "should_run=false" >> $GITHUB_OUTPUT
             echo "No unprocessed comments found"
           else
             # Check if we're the oldest (should run) or waiting for more
-            OLDEST_ID=$(echo "$UNPROCESSED_COMMENTS" | jq -r '.[0].id')
+            OLDEST_ID=$(echo "$ALL_UNPROCESSED" | jq -r '.[0].id')
             if [ "$TRIGGER_COMMENT_ID" = "$OLDEST_ID" ]; then
               echo "should_run=true" >> $GITHUB_OUTPUT
-              echo "Oldest comment - running agent"
+              echo "✓ Oldest comment - running agent (timeout fallback)"
             else
               echo "should_run=false" >> $GITHUB_OUTPUT
-              echo "Waiting for more comments or batch timeout..."
+              echo "⏳ Waiting for more comments to reach batch of 7..."
             fi
           fi
 
-          # Extract all trigger comment bodies for context
-          TRIGGER_BODIES=$(echo "$UNPROCESSED_COMMENTS" | jq -r '[.[].body] | join("\n")')
+          # Extract all trigger comment bodies for context (handles both API and queue format)
+          TRIGGER_BODIES=$(echo "$ALL_UNPROCESSED" | jq -r '[.[].body] | join("\n")')
           echo "trigger_comments<<EOF" >> $GITHUB_OUTPUT
           echo "$TRIGGER_BODIES" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
@@ -304,25 +350,112 @@ jobs:
           # Post the comment
           gh pr comment $PR_NUMBER --body-file /tmp/comment.md
 
-  # Job 3: Optional - Cleanup processed trigger comments (add reaction to mark as done)
+  # Job 3: Mark processed comments with rocket reaction AND clear queue on success
   mark-comments-processed:
     needs: [collect-comments, multi-iteration-fix]
-    if: always() && needs.collect-comments.outputs.comment_ids != ''
+    if: always() && needs.collect-comments.outputs.comment_ids != '' && needs.multi-iteration-fix.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
+      contents: write
     steps:
-      - name: Add Rocket Reaction to Processed Comments
+      - name: Add Rocket Reaction AND Clear Queue
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
           COMMENT_IDS="${{ needs.collect-comments.outputs.comment_ids }}"
+          QUEUE_BRANCH="jarvis-queue"
+
+          # Add 🚀 reaction to all processed comments
           for id in $(echo "$COMMENT_IDS" | tr ',' ' '); do
             if [ -n "$id" ]; then
-              # Add 🚀 reaction to indicate the comment was processed
               gh api repos/${{ github.repository }}/pulls/comments/$id/reactions \
                 -f content=rocket || true
             fi
           done
+
+          # Clear the queue file on success (delete the branch or empty the file)
+          if gh api repos/${{ github.repository }}/git/ref/heads/$QUEUE_BRANCH >/dev/null 2>&1; then
+            # Option 1: Delete the queue branch entirely
+            gh api -X DELETE repos/${{ github.repository }}/git/refs/heads/$QUEUE_BRANCH || true
+            echo "Cleared queue branch (success)"
+          fi
+
+  # Job 4: Persist pending queue on failure (save unprocessed comments for next run)
+  persist-queue-on-failure:
+    needs: [collect-comments, multi-iteration-fix]
+    if: always() && needs.collect-comments.outputs.comment_ids != '' && needs.multi-iteration-fix.result != 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Save Pending Queue to Branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_IDS: ${{ needs.collect-comments.outputs.comment_ids }}
+          TRIGGER_COMMENTS: ${{ needs.collect-comments.outputs.trigger_comments }}
+        run: |
+          QUEUE_BRANCH="jarvis-queue"
+          PR_NUMBER=${{ github.event.pull_request.number }}
+
+          # Build JSON array: [{"id": 123, "body": "..."}, ...]
+          IFS=',' read -r -a IDS <<< "$COMMENT_IDS"
+          
+          echo "[" > /tmp/queue.json
+          first=true
+          idx=0
+          while IFS= read -r body; do
+            if [ $idx -ge ${#IDS[@]} ]; then break; fi
+            if [ "$first" = true ]; then
+              first=false
+            else
+              echo "," >> /tmp/queue.json
+            fi
+            # Escape body for JSON using jq
+            escaped=$(printf '%s' "$body" | jq -Rs '.')
+            printf '  {"id": %s, "body": %s}' "${IDS[$idx]}" "$escaped" >> /tmp/queue.json
+            ((idx++))
+          done <<< "$TRIGGER_COMMENTS"
+          echo "" >> /tmp/queue.json
+          echo "]" >> /tmp/queue.json
+
+          QUEUE_JSON=$(cat /tmp/queue.json)
+          echo "Saving pending queue with $idx comments"
+
+          # Get the default branch name dynamically
+          DEFAULT_BRANCH=$(gh api repos/${{ github.repository }} --jq '.default_branch')
+
+          # Checkout or create the queue branch
+          if gh api repos/${{ github.repository }}/git/ref/heads/$QUEUE_BRANCH >/dev/null 2>&1; then
+            echo "Queue branch exists, updating..."
+          else
+            MAIN_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/$DEFAULT_BRANCH --jq '.object.sha')
+            gh api -X POST repos/${{ github.repository }}/git/refs \
+              -f ref="refs/heads/$QUEUE_BRANCH" \
+              -f sha="$MAIN_SHA" || true
+          fi
+
+          QUEUE_CONTENT=$(cat /tmp/queue.json | base64 -w 0)
+
+          EXISTING_SHA=""
+          if gh api repos/${{ github.repository }}/contents/.jarvis/queue.json?ref=$QUEUE_BRANCH >/dev/null 2>&1; then
+            EXISTING_SHA=$(gh api repos/${{ github.repository }}/contents/.jarvis/queue.json?ref=$QUEUE_BRANCH --jq '.sha')
+          fi
+
+          if [ -n "$EXISTING_SHA" ]; then
+            gh api -X PUT repos/${{ github.repository }}/contents/.jarvis/queue.json \
+              -f message="🔄 Update pending queue (PR #$PR_NUMBER)" \
+              -f branch="$QUEUE_BRANCH" \
+              -f content="$QUEUE_CONTENT" \
+              -f sha="$EXISTING_SHA"
+          else
+            gh api -X PUT repos/${{ github.repository }}/contents/.jarvis/queue.json \
+              -f message="📝 Create pending queue (PR #$PR_NUMBER)" \
+              -f branch="$QUEUE_BRANCH" \
+              -f content="$QUEUE_CONTENT"
+          fi
+
+          echo "✅ Queue persisted with $idx comments. Will retry on next trigger."
