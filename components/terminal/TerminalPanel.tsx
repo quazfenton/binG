@@ -16,6 +16,8 @@ import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT
 import { createLogger } from '@/lib/utils/logger';
 import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
 import { useWebSocketTerminal } from '@/hooks/use-websocket-terminal';
+import { createTerminalLocalFSHandler } from '@/lib/sandbox/terminal-local-fs-handler';
+import type { LocalFilesystemEntry } from '@/lib/sandbox/local-filesystem-executor';
 
 const logger = createLogger('TerminalPanel');
 
@@ -439,6 +441,10 @@ export default function TerminalPanel({
   
   const localFileSystemRef = useRef<LocalFileSystem>({});
   const localShellCwdRef = useRef<Record<string, string>>({});
+  
+  // NEW: Terminal Local FS Handler (migrates proven logic to reusable handler)
+  const localFSHandlers = useRef<Record<string, ReturnType<typeof createTerminalLocalFSHandler>>>({});
+  
   const lastConnectionAttemptRef = useRef<Record<string, number>>({});
   const reconnectCooldownUntilRef = useRef<Record<string, number>>({});
   const commandQueueRef = useRef<Record<string, string[]>>({});
@@ -857,6 +863,15 @@ export default function TerminalPanel({
     cursorPosRef.current[id] = 0;
     editorSessionRef.current[id] = null;
 
+    // NEW: Create Local FS Handler for this terminal
+    localFSHandlers.current[id] = createTerminalLocalFSHandler({
+      terminalId: id,
+      filesystemScopePath: filesystemScopePathRef.current,
+      syncToVFS: syncFileToVFS,
+      getLocalFileSystem: () => localFileSystemRef.current,
+      setLocalFileSystem: (fs) => { localFileSystemRef.current = fs },
+    });
+
     // Load persisted command history
     // Match by terminal name (stable) instead of id (randomly generated)
     try {
@@ -932,6 +947,7 @@ export default function TerminalPanel({
     delete lineBufferRef.current[terminalId];
     delete editorSessionRef.current[terminalId];
     delete cursorPosRef.current[terminalId];
+    delete localFSHandlers.current[terminalId];
 
     setTerminals(prev => {
       const updated = prev.filter(t => t.id !== terminalId);
@@ -1483,6 +1499,16 @@ export default function TerminalPanel({
             delete fs[path];
           }
         }
+        
+        // Trigger VFS refresh to reflect deletion
+        window.dispatchEvent(new CustomEvent('filesystem-updated', {
+          detail: {
+            path: getParentPath(targetPath),
+            scopePath: filesystemScopePathRef.current || 'project',
+            source: 'terminal',
+          },
+        }))
+        
         return true;
       }
 
@@ -1522,29 +1548,33 @@ export default function TerminalPanel({
         const srcPath = resolveLocalPath(cwd, arg1);
         const dstPath = resolveLocalPath(cwd, arg2);
         const fs = localFileSystemRef.current;
-        
+
         if (!fs[srcPath]) {
           writeError(`cp: cannot stat '${arg1}': No such file or directory`);
           return true;
         }
-        
+
         if (fs[srcPath].type === 'directory') {
           writeError(`cp: cannot copy directory '${arg1}': Not implemented`);
           return true;
         }
-        
+
         const dstParent = getParentPath(dstPath);
         if (!fs[dstParent]) {
           writeError(`cp: cannot create file '${arg2}': No such file or directory`);
           return true;
         }
-        
+
         fs[dstPath] = {
           type: 'file',
           content: fs[srcPath].content,
           createdAt: Date.now(),
           modifiedAt: Date.now()
         };
+        
+        // Sync copied file to VFS
+        syncFileToVFS(dstPath, fs[srcPath].content || '')
+        
         return true;
       }
 
@@ -1556,20 +1586,25 @@ export default function TerminalPanel({
         const srcPath = resolveLocalPath(cwd, arg1);
         const dstPath = resolveLocalPath(cwd, arg2);
         const fs = localFileSystemRef.current;
-        
+
         if (!fs[srcPath]) {
           writeError(`mv: cannot stat '${arg1}': No such file or directory`);
           return true;
         }
-        
+
         const dstParent = getParentPath(dstPath);
         if (!fs[dstParent]) {
           writeError(`mv: cannot move '${arg1}': No such file or directory`);
           return true;
         }
-        
+
         fs[dstPath] = { ...fs[srcPath], modifiedAt: Date.now() };
         delete fs[srcPath];
+        
+        // Sync moved file to VFS (new location)
+        syncFileToVFS(dstPath, fs[dstPath].content || '')
+        // Note: Old file will be removed from VFS on next VFS sync cycle
+        
         return true;
       }
 

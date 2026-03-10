@@ -35,6 +35,7 @@ import { createLogger } from '../utils/logger';
 import { userTerminalSessionManager, type UserTerminalSession } from './user-terminal-sessions';
 import { autoSnapshotService } from './auto-snapshot-service';
 import type { SandboxProviderType } from './providers';
+import { LocalCommandExecutor, type LocalFilesystemEntry } from './local-filesystem-executor';
 
 const logger = createLogger('PTYTerminal');
 
@@ -133,97 +134,15 @@ export interface PTYTerminalInstance {
 }
 
 /**
- * Local command executor (fallback mode)
- */
-class LocalCommandExecutor {
-  private cwd: Record<string, string> = {};
-  private fileSystem: Record<string, { type: 'file' | 'directory'; content?: string }> = {};
-  
-  constructor(terminalId: string) {
-    this.cwd[terminalId] = '~/project';
-    this.fileSystem = {
-      'project': { type: 'directory' },
-    };
-  }
-  
-  async execute(terminalId: string, command: string): Promise<string> {
-    const trimmed = command.trim();
-    
-    // Handle built-in commands
-    if (trimmed === 'clear') {
-      return '\x1bc';
-    }
-    
-    if (trimmed === 'pwd') {
-      return this.cwd[terminalId] + '\n';
-    }
-    
-    if (trimmed.startsWith('cd ')) {
-      const target = trimmed.slice(3).trim();
-      if (target === '..') {
-        const parts = this.cwd[terminalId].split('/');
-        parts.pop();
-        this.cwd[terminalId] = parts.join('/') || '/';
-      } else if (target.startsWith('/')) {
-        this.cwd[terminalId] = target;
-      } else {
-        this.cwd[terminalId] = `${this.cwd[terminalId]}/${target}`;
-      }
-      return '';
-    }
-    
-    if (trimmed === 'ls' || trimmed === 'ls -la') {
-      return this.listDirectory(this.cwd[terminalId]);
-    }
-    
-    if (trimmed.startsWith('echo ')) {
-      return trimmed.slice(5) + '\n';
-    }
-    
-    if (trimmed === 'help') {
-      return `Available commands:
-  clear     - Clear terminal
-  pwd       - Print working directory
-  cd <dir>  - Change directory
-  ls        - List directory
-  echo      - Print text
-  help      - Show this help
-  
-Note: This is local fallback mode.
-Type 'connect' to connect to full sandbox.`;
-    }
-    
-    if (trimmed === 'connect') {
-      return '\x1b[33mSandbox connection initiated...\x1b[0m\n';
-    }
-    
-    // Unknown command
-    return `bash: ${trimmed}: command not found\n`;
-  }
-  
-  private listDirectory(path: string): string {
-    const entries = Object.keys(this.fileSystem)
-      .filter(k => k.startsWith(path + '/'))
-      .map(k => {
-        const name = k.replace(path + '/', '').split('/')[0];
-        const isDir = this.fileSystem[k]?.type === 'directory';
-        return `${isDir ? '\x1b[34m' : ''}${name}${isDir ? '\x1b[0m' : ''}`;
-      });
-    
-    return Array.from(new Set(entries)).join('  ') + '\n';
-  }
-}
-
-/**
  * Enhanced PTY Terminal Manager
  */
 export class EnhancedPTYTerminalManager {
   /** Active terminals */
   private terminals = new Map<string, PTYTerminalInstance>();
-  
+
   /** Local command executors */
   private localExecutors = new Map<string, LocalCommandExecutor>();
-  
+
   /** xterm.js module (lazy loaded) */
   private xtermModule: any = null;
   
@@ -285,10 +204,23 @@ export class EnhancedPTYTerminalManager {
     };
     
     this.terminals.set(terminalId, instance);
-    this.localExecutors.set(terminalId, new LocalCommandExecutor(terminalId));
     
+    // Create local command executor with write callbacks
+    const executor = new LocalCommandExecutor({
+      terminalId,
+      onWrite: (text) => instance.terminal.write(text),
+      onWriteLine: (text) => instance.terminal.write(text + '\r\n'),
+      onWriteError: (text) => instance.terminal.write(`\x1b[31m${text}\x1b[0m\r\n`),
+      syncToVFS: async (path, content) => {
+        // Sync to VFS when files are created/modified
+        logger.debug(`Syncing ${path} to VFS`)
+        // VFS sync would be called here
+      },
+    })
+    this.localExecutors.set(terminalId, executor)
+
     // Start in local mode
-    await this.startLocal(terminalId);
+    await this.startLocal(terminalId)
     
     logger.info(`Created PTY terminal ${terminalId} in local mode`);
     
@@ -303,18 +235,18 @@ export class EnhancedPTYTerminalManager {
     if (!instance) {
       throw new Error(`Terminal ${terminalId} not found`);
     }
-    
+
     instance.mode = 'local';
-    
+
     const executor = this.localExecutors.get(terminalId)!;
     let inputBuffer = '';
-    
+
     // Write prompt
     instance.terminal.writeln('\x1b[1;32m● Local Terminal\x1b[0m');
     instance.terminal.writeln('\x1b[90mType "help" for available commands. Type "connect" for full sandbox.\x1b[0m');
     instance.terminal.writeln('');
-    this.writePrompt(instance.terminal, '~/project');
-    
+    this.writePrompt(instance.terminal, executor.getCwd());
+
     // Handle input
     instance.terminal.onData((data: string) => {
       if (data === '\r') {
@@ -322,11 +254,10 @@ export class EnhancedPTYTerminalManager {
         instance.terminal.write('\r\n');
         const command = inputBuffer;
         inputBuffer = '';
-        
+
         // Execute command
-        executor.execute(terminalId, command).then(output => {
-          instance.terminal.write(output);
-          this.writePrompt(instance.terminal, executor.cwd[terminalId]);
+        executor.execute(command).then(() => {
+          this.writePrompt(instance.terminal, executor.getCwd());
         });
       } else if (data === '\u007f') {
         // Backspace
@@ -340,7 +271,7 @@ export class EnhancedPTYTerminalManager {
         instance.terminal.write(data);
       }
     });
-    
+
     logger.debug(`Terminal ${terminalId} started in local mode`);
   }
   

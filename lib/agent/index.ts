@@ -1,36 +1,40 @@
 /**
- * Agent Module
+ * Agent V2 Module
  * 
- * Unified interface for AI agent interactions with:
- * - Terminal (WebSocket/SSE)
- * - Desktop (Computer Use)
- * - MCP Tools
- * - Code Execution
- * - Git Operations
- * 
- * @module agent
+ * OpenCode V2 Engine with Nullclaw integration.
+ * Provides containerized agentic capabilities with per-user isolation.
  */
 
-// Core agent
-export {
-  UnifiedAgent,
-  createAgent,
-  createQuickAgent,
-  type UnifiedAgentConfig,
-  type AgentCapability,
+// Session Management
+export { 
+  agentSessionManager, 
+  AgentSessionManager,
   type AgentSession,
-  type TerminalOutput,
-  type CodeExecutionResult,
-  type GitStatus,
-} from './unified-agent'
+  type AgentSessionConfig,
+} from './agent-session-manager';
 
-// React hook
-export {
-  useAgent,
-  useDesktopAgent,
-  useTerminalAgent,
-  type UseAgentOptions,
-  type UseAgentReturn,
-} from './use-agent'
+// Filesystem Bridge
+export { 
+  agentFSBridge, 
+  AgentFSBridge,
+  type SyncResult,
+  type SyncOptions,
+} from './agent-fs-bridge';
 
+// Nullclaw Integration
+export { 
+  nullclawIntegration, 
+  NullclawIntegration,
+  type NullclawConfig,
+  type NullclawTask,
+  type NullclawStatus,
+} from './nullclaw-integration';
 
+// Cloud Offload
+export { 
+  cloudAgentOffload, 
+  CloudAgentOffload,
+  type CloudAgentConfig,
+  type CloudAgentInstance,
+  type CloudAgentResult,
+} from './cloud-agent-offload';

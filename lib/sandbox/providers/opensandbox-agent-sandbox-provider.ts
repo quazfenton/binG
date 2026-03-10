@@ -306,7 +306,8 @@ class OpenSandboxAgentSandboxHandle implements SandboxHandle {
       }
 
       const formData = new FormData()
-      formData.append('file', new Blob([content]), path.basename(filePath))
+      // Convert Buffer to Uint8Array for Blob compatibility
+      formData.append('file', new Blob([new Uint8Array(content)]), path.basename(filePath))
       formData.append('path', filePath)
 
       const response = await fetch(`${this.record.execdBaseUrl}/files/upload`, {

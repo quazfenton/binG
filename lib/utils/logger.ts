@@ -50,12 +50,17 @@ const DEFAULT_CONFIG: LoggerConfig = {
 };
 
 // Override with env vars on server-side only
+// Use dynamic import to avoid bundler issues
 if (typeof window === 'undefined' && typeof process !== 'undefined') {
-  // Only use require on server-side
-  const path = require('path');
-  DEFAULT_CONFIG.logFilePath = process.env.LOG_FILE_PATH || path.join(process.cwd(), 'logs', 'app.log');
-  DEFAULT_CONFIG.maxFileSize = parseInt(process.env.LOG_MAX_FILE_SIZE || '10', 10);
-  DEFAULT_CONFIG.maxFiles = parseInt(process.env.LOG_MAX_FILES || '5', 10);
+  try {
+    // Dynamic import for path module (server-side only)
+    const pathModule = require('path');
+    DEFAULT_CONFIG.logFilePath = process.env.LOG_FILE_PATH || pathModule.join(process.cwd(), 'logs', 'app.log');
+    DEFAULT_CONFIG.maxFileSize = parseInt(process.env.LOG_MAX_FILE_SIZE || '10', 10);
+    DEFAULT_CONFIG.maxFiles = parseInt(process.env.LOG_MAX_FILES || '5', 10);
+  } catch (error) {
+    // Silently fail - file logging won't work but console logging will
+  }
 }
 
 // Server-side file stream (only initialized on server)
@@ -100,7 +105,11 @@ function initializeFileLogging() {
 
 // Initialize on module load (server-side only)
 if (typeof window === 'undefined') {
-  initializeFileLogging();
+  try {
+    initializeFileLogging();
+  } catch (error) {
+    // Silent fail - console logging still works
+  }
 }
 
 class Logger {
