@@ -15,22 +15,19 @@ jobs:
       comment_ids: ${{ steps.batch.outputs.comment_ids }}
       trigger_comments: ${{ steps.batch.outputs.trigger_comments }}
     steps:
-      - name: Install GitHub CLI
-        run: |
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt update
-          sudo apt install gh -y
-
       - name: Get PR and Batch Info
         id: batch
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUMBER=${{ github.event.number }}
+          # For pull_request_review_comment events, the PR number is in github.event.pull_request.number
+          PR_NUMBER=${{ github.event.pull_request.number }}
           TRIGGER_COMMENT_ID=${{ github.event.comment.id }}
-          
+
+          echo "PR_NUMBER: $PR_NUMBER"
+          echo "TRIGGER_COMMENT_ID: $TRIGGER_COMMENT_ID"
+
           # Fetch all trigger comments on this PR in the last 30 minutes
           COMMENTS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments \
             --jq '[.[] | select(.body | test("Prompt for AI Agent"; "i")) | select(.created_at > (now - 1800 | todate))]')
@@ -84,20 +81,14 @@ jobs:
       actions: write
 
     steps:
-      - name: Install GitHub CLI
-        run: |
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt update
-          sudo apt install gh -y
-
       - name: Get Pull Request Data
         id: pr
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_DATA=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.number }})
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          PR_DATA=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER)
           echo "head_ref=$(echo "$PR_DATA" | jq -r '.head.ref')" >> "$GITHUB_OUTPUT"
           echo "head_sha=$(echo "$PR_DATA" | jq -r '.head.sha')" >> "$GITHUB_OUTPUT"
           echo "base_ref=$(echo "$PR_DATA" | jq -r '.base.ref')" >> "$GITHUB_OUTPUT"
@@ -121,9 +112,11 @@ jobs:
 
       - name: Extract CodeRabbit Context
         id: context
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
           # Grabs the last 100 lines of CodeRabbit feedback to give the agent its mission
           # SECURITY: Uses gh api to fetch only verified bot reviews, preventing prompt injection from malicious PR comments
           # SECURITY: Anchored regex with optional [bot] suffix to prevent substring matches
@@ -132,7 +125,7 @@ jobs:
           # Fetch only NEW unprocessed reviews from verified bot accounts
           # Filters out reviews that already contain the agent applied marker
           # Gets last 10 complete reviews (not line-count limited to avoid truncation)
-          RAW_FEEDBACK=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.number }}/reviews \
+          RAW_FEEDBACK=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews \
             --jq '[.[] | select(.user.login | test("'"$BOT_PATTERN"'"; "i")) | select(.state == "COMMENTED" or .state == "CHANGES_REQUESTED") | select(.body | contains("Agent:") | not)] | .[-10:] | .[].body' \
             | tac)
           SUGGESTIONS="${RAW_FEEDBACK:-Review the suggestion if there is any for optimizations.}"
@@ -258,10 +251,13 @@ jobs:
 
       - name: Post Summary Comment
         if: steps.commit.outputs.success == 'true'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_RESULT: ${{ steps.branch.outputs.merge_result }}
         run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          
           # Parse changed files and format as markdown list with links
           FILES_JSON='${{ steps.commit.outputs.changed_files }}'
           FILES_LIST=$(echo "$FILES_JSON" | jq -r '.[]' | while read -r file; do
@@ -274,7 +270,7 @@ jobs:
           COMMENT_IDS="${{ needs.collect-comments.outputs.comment_ids }}"
           COMMENT_LINKS=$(echo "$COMMENT_IDS" | tr ',' '\n' | while read -r id; do
             if [ -n "$id" ]; then
-              echo "- [Comment #$id](https://github.com/${{ github.repository }}/pull/${{ github.event.number }}#discussioncomment-$id)"
+              echo "- [Comment #$id](https://github.com/${{ github.repository }}/pull/$PR_NUMBER#discussioncomment-$id)"
             fi
           done)
 
@@ -306,7 +302,7 @@ jobs:
           } > /tmp/comment.md
 
           # Post the comment
-          gh pr comment ${{ github.event.number }} --body-file /tmp/comment.md
+          gh pr comment $PR_NUMBER --body-file /tmp/comment.md
 
   # Job 3: Optional - Cleanup processed trigger comments (add reaction to mark as done)
   mark-comments-processed:
@@ -316,18 +312,12 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - name: Install GitHub CLI
-        run: |
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-          sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-          sudo apt update
-          sudo apt install gh -y
-
       - name: Add Rocket Reaction to Processed Comments
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
           COMMENT_IDS="${{ needs.collect-comments.outputs.comment_ids }}"
           for id in $(echo "$COMMENT_IDS" | tr ',' ' '); do
             if [ -n "$id" ]; then
