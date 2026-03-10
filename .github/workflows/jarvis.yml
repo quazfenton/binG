@@ -29,7 +29,6 @@ jobs:
 
           echo "PR_NUMBER: $PR_NUMBER"
           echo "TRIGGER_COMMENT_ID: $TRIGGER_COMMENT_ID"
-          echo "TRIGGER_BODY: ${{ github.event.comment.body }}"
 
           # Fetch the persistent queue file (contains comment objects from failed runs)
           PENDING_QUEUE="[]"
@@ -41,14 +40,16 @@ jobs:
             echo "Loaded pending queue: $(echo "$PENDING_QUEUE" | jq 'length') comments"
           fi
 
-          # IMPORTANT: The triggering comment may not appear in API query yet (eventual consistency)
-          # So we ALWAYS include the triggering comment directly from github.event
-          TRIGGER_COMMENT_FROM_EVENT='{
-            "id": ${{ github.event.comment.id }},
-            "body": ${{ github.event.comment.body | toJSON }},
-            "reactions": {"rocket": 0},
-            "created_at": "${{ github.event.comment.created_at }}"
-          }'
+          # IMPORTANT: Build the triggering comment JSON from github.event context
+          # Escape the body for JSON using jq
+          TRIGGER_BODY_ESCAPED=$(printf '%s' '${{ github.event.comment.body }}' | jq -Rs '.')
+          TRIGGER_CREATED_AT='${{ github.event.comment.created_at }}'
+          
+          TRIGGER_COMMENT_FROM_EVENT=$(cat <<EOFJSON
+{"id": ${{ github.event.comment.id }}, "body": $TRIGGER_BODY_ESCAPED, "reactions": {"rocket": 0}, "created_at": "$TRIGGER_CREATED_AT"}
+EOFJSON
+)
+          echo "Triggering comment from event: ID=${{ github.event.comment.id }}"
 
           # Fetch ALL review comments on this PR
           ALL_REVIEW_COMMENTS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/comments --paginate --jq '.')
