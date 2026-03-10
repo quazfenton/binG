@@ -1,14 +1,28 @@
 # Development Dockerfile for binG Backend
 # Optimized for fast iteration and hot-reload
+# V2 Enhanced: Includes OpenCode + Nullclaw support
+# Node.js 22+ required for Mastra, Tambo, and other dependencies
 
-FROM node:20-alpine AS development
+FROM node:22-alpine AS development
+
+# Install pnpm globally
+RUN npm install -g pnpm
+
+# Set PNPM_HOME for global packages (pnpm setup doesn't work well in Alpine)
+ENV PNPM_HOME=/root/.local/share/pnpm
+ENV PATH=$PNPM_HOME:$PATH
 
 # Install system dependencies
 RUN apk add --no-cache \
     libc6-compat \
     libstdc++ \
     curl \
-    git
+    git \
+    python3 \
+    py3-pip \
+    openssh-client \
+    docker \
+    docker-compose
 
 # Create non-root user for security
 # This prevents the container from running as root, reducing attack surface
@@ -18,10 +32,16 @@ RUN addgroup -g 1001 -S nodejs && \
 WORKDIR /app
 
 # Copy package files
-COPY package.json package-lock.json* ./
+COPY package.json pnpm-lock.yaml* ./
 
-# Install ALL dependencies (including devDependencies)
-RUN npm install --legacy-peer-deps && npm cache clean --force
+# Install dependencies with pnpm (uses persistent cache)
+RUN pnpm install --no-frozen-lockfile
+
+# Install OpenCode CLI globally (cached in /root/.npm)
+RUN pnpm add -g opencode-ai || npm install -g opencode-ai
+
+# Note: Nullclaw runs as a separate Docker container (see docker-compose.v2.yml)
+# No pip installation needed - Python cache available for other tools
 
 # Copy source files
 COPY . .
@@ -29,21 +49,52 @@ COPY . .
 # Set proper ownership to non-root user
 RUN chown -R nodejs:nodejs /app
 
+# Create workspace directories
+RUN mkdir -p /workspace/users && chown -R nodejs:nodejs /workspace
+
+# Create MCP config directory
+RUN mkdir -p /app/.mcp && chown -R nodejs:nodejs /app/.mcp
+
+# Create docker socket directory (for managing Nullclaw container)
+RUN mkdir -p /var/run && touch /var/run/docker.sock
+
+# Create cache directories with proper permissions
+RUN mkdir -p /root/.cache/pip /root/.npm /root/.opencode /root/.nullclaw && \
+    chown -R nodejs:nodejs /root/.cache/pip /root/.npm /root/.opencode /root/.nullclaw
+
+# Note: pip cache is available for other Python tools, but Nullclaw runs as container
+
 # Switch to non-root user
 USER nodejs
 
 # Expose ports
-EXPOSE 3000 8080
+EXPOSE 5555 8080 3001
 
 # Set development environment
 ENV NODE_ENV=development
-ENV PORT=3000
+ENV PORT=5555
 ENV WEBSOCKET_PORT=8080
 ENV WATCHPACK_POLLING=true
 
+# V2 Agent environment variables
+ENV OPENCODE_CONTAINERIZED=true
+ENV OPENCODE_MODEL=claude-3-5-sonnet
+ENV OPENCODE_BIN=/usr/local/bin/opencode
+ENV NULLCLAW_ENABLED=true
+ENV NULLCLAW_IMAGE=ghcr.io/nullclaw/nullclaw:latest
+ENV NULLCLAW_PORT=3001
+ENV NULLCLAW_TIMEOUT=3600
+ENV NULLCLAW_ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
+ENV NULLCLAW_NETWORK=bing-network
+ENV WORKSPACE_DIR=/workspace
+
+# Cache environment variables
+ENV PIP_CACHE_DIR=/root/.cache/pip
+ENV NPM_CONFIG_CACHE=/root/.npm
+
 # Health check for container monitoring
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:5555/api/health || exit 1
 
 # Start development server
-CMD ["npm", "run", "dev"]
+CMD ["pnpm", "run", "dev"]

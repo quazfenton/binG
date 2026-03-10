@@ -56,9 +56,32 @@ This V2 architecture provides a powerful alternative to the V1 LLM API chat syst
 
 ---
 
-### 2. Nullclaw Task Assistant
+### 2. Nullclaw Task Assistant (Containerized)
 
 **Source:** `docs/sdk/opensandbox/examples/nullclaw/main.py`
+
+**Deployment:** Separate Docker container communicating via HTTP
+
+**Architecture:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Docker Network: bing-network             │
+│                                                             │
+│  ┌─────────────────┐        HTTP         ┌───────────────┐ │
+│  │ OpenCode Agent  │ ◄─────────────────► │   Nullclaw    │ │
+│  │  (Sandbox A)    │    API Calls        │  Container    │ │
+│  │  Port: 3000     │                     │  Port: 3001   │ │
+│  └─────────────────┘                     └───────┬───────┘ │
+│                                                  │         │
+│                                                  ▼         │
+│                                         ┌───────────────┐ │
+│                                         │ External APIs │ │
+│                                         │ - Discord     │ │
+│                                         │ - Telegram    │ │
+│                                         │ - Web         │ │
+│                                         └───────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
 
 **Capabilities:**
 - Discord/Telegram messaging
@@ -68,63 +91,23 @@ This V2 architecture provides a powerful alternative to the V1 LLM API chat syst
 - Scheduled tasks
 - Event-driven triggers
 
-**Integration Strategy:**
-
-```typescript
-// lib/agent/nullclaw-integration.ts
-interface NullclawConfig {
-  serverUrl: string;
-  image: string; // 'ghcr.io/nullclaw/nullclaw:latest'
-  timeout: number; // seconds
-  allowedDomains: string[]; // Network policy
-}
-
-class NullclawIntegration {
-  private sandbox: OpenSandboxHandle;
-  
-  async initialize(config: NullclawConfig): Promise<void> {
-    // Create OpenSandbox instance for Nullclaw
-    this.sandbox = await createOpenSandbox({
-      image: config.image,
-      timeout: config.timeout,
-      networkPolicy: {
-        defaultAction: 'deny',
-        egress: config.allowedDomains.map(d => ({
-          action: 'allow',
-          target: d,
-        })),
-      },
-    });
-    
-    // Wait for health check
-    await this.waitForReady();
-  }
-  
-  async executeTask(task: string): Promise<ToolResult> {
-    // Send task to Nullclaw via HTTP API
-    const response = await fetch(`${this.sandbox.getEndpoint(3000)}/api/execute`, {
-      method: 'POST',
-      body: JSON.stringify({ task }),
-    });
-    
-    return response.json();
-  }
-  
-  private async waitForReady(): Promise<void> {
-    // Poll health endpoint (from nullclaw example)
-    const endpoint = this.sandbox.getEndpoint(3000);
-    const url = `http://${endpoint.endpoint}/health`;
-    
-    for (let i = 0; i < 150; i++) {
-      try {
-        const resp = await fetch(url, { timeout: 1000 });
-        if (resp.status === 200) return;
-      } catch {}
-      await sleep(200);
-    }
-    throw new Error('Nullclaw health check timeout');
-  }
-}
+**Container Configuration:**
+```yaml
+services:
+  nullclaw:
+    image: ghcr.io/nullclaw/nullclaw:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - NULLCLAW_TIMEOUT=3600
+      - ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 ```
 
 ---
