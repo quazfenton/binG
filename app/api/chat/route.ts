@@ -16,7 +16,7 @@ import { contextPackService } from '@/lib/virtual-filesystem/context-pack-servic
 import { ShadowCommitManager } from '@/lib/stateful-agent/commit/shadow-commit';
 import type { LLMMessage } from "@/lib/api/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
-import { getFilesystemTools, createAgentLoop } from '@/lib/mastra';
+import { createFilesystemTools, createAgentLoop } from '@/lib/mastra';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -813,7 +813,7 @@ function sanitizeAssistantDisplayContent(content: string): string {
   next = next.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
   next = next.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
   next = next.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
-  
+
   // Remove <fs-actions>...</fs-actions> XML tag blocks (LLM sometimes uses XML instead of code blocks)
   next = next.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
 
@@ -1593,11 +1593,13 @@ async function applyFilesystemEditsFromResponse(input: {
   };
 }): Promise<FilesystemEditResult> {
   // Extract all operations first to check if there's anything to do
+  const fileWriteFolderCreateOps = extractFileWriteFolderCreateTags(input.responseContent || '');
   const combinedWriteEdits = [
     ...extractTaggedFileEdits(input.responseContent || ''),
     ...extractFsActionWrites(input.responseContent || ''),
     ...extractBashHereDocWrites(input.responseContent || ''),
     ...extractFilenameHintCodeBlocks(input.responseContent || ''),
+    ...fileWriteFolderCreateOps.writes.map(w => ({ path: w.path, content: w.content })),
   ];
   const combinedDiffOperations = [
     ...extractFencedDiffEdits(input.responseContent || ''),
@@ -1606,6 +1608,7 @@ async function applyFilesystemEditsFromResponse(input: {
   ];
   const applyDiffOperations = extractApplyDiffOperations(input.responseContent || '');
   const deleteTargets = extractFsActionDeletes(input.responseContent || '');
+  const folderCreateTargets = fileWriteFolderCreateOps.folders; // Separate folder creation targets
   const requestFiles = input.commands?.request_files || [];
 
   // Only create transaction if there are mutating operations (write/patch/delete/apply_diff)
@@ -1857,6 +1860,68 @@ async function applyFilesystemEditsFromResponse(input: {
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'unknown error';
         const err = `Failed to delete ${normalizedPath}: ${message}`;
+        result.errors.push(err);
+        filesystemEditSessionService.addError(transaction.id, err);
+      }
+    }
+
+    // Process folder creation operations
+    const seenFolderCreates = new Set<string>();
+    for (const folderPath of folderCreateTargets) {
+      const normalizedPath = resolveScopedPath({
+        requestedPath: folderPath.trim(),
+        scopePath: input.scopePath,
+        attachedPaths: input.attachedPaths,
+        lastUserMessage: input.lastUserMessage,
+      });
+      if (!normalizedPath || seenFolderCreates.has(normalizedPath)) {
+        continue;
+      }
+      seenFolderCreates.add(normalizedPath);
+
+      try {
+        // Check if folder already exists (by checking if any file has this path prefix)
+        let existedBefore = false;
+        try {
+          const listing = await virtualFilesystem.listDirectory(input.ownerId, normalizedPath);
+          // If we can list it, the directory exists (has files or subdirs under it)
+          existedBefore = listing.nodes.length > 0;
+        } catch {
+          existedBefore = false;
+        }
+
+        // In VFS, directories are implicit - they exist when files are in them
+        // To create an empty directory, we create a .gitkeep marker file
+        // This ensures the directory structure is preserved
+        const gitkeepPath = `${normalizedPath}/.gitkeep`;
+        
+        try {
+          // Check if .gitkeep already exists
+          await virtualFilesystem.readFile(input.ownerId, gitkeepPath);
+          existedBefore = true;
+        } catch {
+          // .gitkeep doesn't exist, create it
+          await virtualFilesystem.writeFile(input.ownerId, gitkeepPath, '');
+        }
+
+        result.applied.push({
+          path: normalizedPath,
+          operation: 'write', // Use 'write' since folder creation is via marker file
+          version: 1,
+          previousVersion: null,
+          existedBefore,
+        });
+        filesystemEditSessionService.recordOperation(transaction.id, {
+          path: normalizedPath,
+          operation: 'write',
+          newVersion: 1,
+          previousVersion: null,
+          previousContent: null,
+          existedBefore,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        const err = `Failed to create folder ${normalizedPath}: ${message}`;
         result.errors.push(err);
         filesystemEditSessionService.addError(transaction.id, err);
       }

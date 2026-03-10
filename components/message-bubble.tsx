@@ -322,26 +322,26 @@ export default function MessageBubble({
     const thinkingRegex = /<think>([\s\S]*?)<\/think>/g
     const reasoningRegex = /\*\*Reasoning:\*\*([\s\S]*?)(?=\*\*|$)/g
     const thoughtRegex = /\*\*Thought:\*\*([\s\S]*?)(?=\*\*|$)/g
-    
+
     let reasoning = ""
     let mainContent = content
-    
+
     let match
     while ((match = thinkingRegex.exec(content)) !== null) {
       reasoning += match[1].trim() + "\n\n"
       mainContent = mainContent.replace(match[0], "")
     }
-    
+
     while ((match = reasoningRegex.exec(content)) !== null) {
       reasoning += "**Reasoning:**" + match[1].trim() + "\n\n"
       mainContent = mainContent.replace(match[0], "")
     }
-    
+
     while ((match = thoughtRegex.exec(content)) !== null) {
       reasoning += "**Thought:**" + match[1].trim() + "\n\n"
       mainContent = mainContent.replace(match[0], "")
     }
-    
+
     return {
       reasoning: reasoning.trim(),
       mainContent: mainContent.trim()
@@ -429,7 +429,7 @@ export default function MessageBubble({
           ${layout.isPortrait ? 'portrait-layout' : 'landscape-layout'}
         `}
         style={{
-          maxWidth: layout.isMobile ? 'calc(100vw - 2.25rem)' : dynamicStyles.maxWidth,
+          maxWidth: layout.isMobile ? 'min(calc(100vw - 2.25rem), 600px)' : dynamicStyles.maxWidth,
           padding: dynamicStyles.padding,
           fontSize: dynamicStyles.fontSize,
           backgroundColor: isUser ? 'var(--user-bubble-bg)' : 'var(--assistant-bubble-bg)',
@@ -437,7 +437,11 @@ export default function MessageBubble({
           borderColor: isUser ? 'transparent' : 'var(--assistant-bubble-border)',
           wordBreak: dynamicStyles.overflowStrategy === 'wrap' ? 'break-word' : 'normal',
           overflowWrap: dynamicStyles.overflowStrategy === 'wrap' ? 'break-word' : 'normal',
-          whiteSpace: contentAnalysis.hasCodeBlocks && layout.isMobile ? 'pre' : 'pre-wrap'
+          whiteSpace: contentAnalysis.hasCodeBlocks && layout.isMobile ? 'pre' : 'pre-wrap',
+          // Mobile scrolling: allow touch scrolling on message bubbles
+          touchAction: 'auto',
+          // Prevent text from breaking out of bubble
+          overflowX: layout.isMobile ? 'hidden' : 'visible',
         }}
         onMouseEnter={() => !layout.isMobile && setShowStreamingControls(true)}
         onMouseLeave={() => {

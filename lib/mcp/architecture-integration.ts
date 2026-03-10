@@ -273,7 +273,7 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
 
 /**
  * Get MCP tools in AI SDK format for Architecture 1
- * 
+ *
  * Use this in your chat/agent implementation to get MCP tools
  * in the format expected by AI SDK's tool calling
  */
@@ -283,7 +283,7 @@ export async function getMCPToolsForAI_SDK() {
   }
 
   const nativeTools = isMCPAvailable() ? mcpToolRegistry.getToolDefinitions() : []
-  
+
   // Conditionally include Blaxel codegen tools when API key is available
   const blaxelTools: Array<{
     type: 'function'
@@ -304,14 +304,18 @@ export async function getMCPToolsForAI_SDK() {
     }
   }> = process.env.ARCADE_API_KEY ? await getArcadeToolDefinitions() : []
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools]
+  // NEW: Include provider-specific advanced tools (E2B, Daytona, CodeSandbox, Sprites)
+  const { getAllProviderAdvancedTools } = await import('./provider-advanced-tools')
+  const providerTools = getAllProviderAdvancedTools()
+
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools]
 
   if (tools.length === 0) {
     logger.debug('MCP not available - no tools to return')
     return []
   }
 
-  logger.debug(`Returning ${tools.length} MCP tools for AI SDK (${blaxelTools.length} Blaxel, ${arcadeTools.length} Arcade)`)
+  logger.debug(`Returning ${tools.length} MCP tools for AI SDK (${blaxelTools.length} Blaxel, ${arcadeTools.length} Arcade, ${providerTools.length} provider-specific)`)
   return tools
 }
 
@@ -384,11 +388,11 @@ async function executeBlaxelCodegenTool(
 ): Promise<{ success: boolean; output: string; error?: string }> {
   try {
     const blaxel = getBlaxelProviderInstance()
-    
+
     // Map tool name to method
     const methodName = toolName.replace(/^blaxel_/, '')
     const method = (blaxel as any)[methodName]
-    
+
     if (!method || typeof method !== 'function') {
       return {
         success: false,
@@ -442,6 +446,32 @@ async function executeBlaxelCodegenTool(
       success: false,
       output: '',
       error: error.message || 'Blaxel tool execution failed',
+    }
+  }
+}
+
+/**
+ * Execute a provider-specific advanced tool (E2B, Daytona, CodeSandbox, Sprites)
+ */
+async function executeProviderAdvancedTool(
+  toolName: string,
+  args: Record<string, any>
+): Promise<{ success: boolean; output: string; error?: string }> {
+  try {
+    const { callProviderTool } = await import('./provider-advanced-tools')
+    const result = await callProviderTool(toolName, args)
+
+    return {
+      success: result.success,
+      output: result.output,
+      error: result.error,
+    }
+  } catch (error: any) {
+    logger.error(`Provider advanced tool failed: ${toolName}`, error)
+    return {
+      success: false,
+      output: '',
+      error: error.message || 'Provider tool execution failed',
     }
   }
 }
@@ -529,6 +559,16 @@ export async function callMCPToolFromAI_SDK(
     // Check if it's an Arcade tool
     if (toolName.startsWith('arcade_') && process.env.ARCADE_API_KEY) {
       return executeArcadeTool(toolName, args, userId)
+    }
+
+    // NEW: Check if it's a provider-specific advanced tool
+    if (
+      toolName.startsWith('e2b_') ||
+      toolName.startsWith('daytona_') ||
+      toolName.startsWith('codesandbox_') ||
+      toolName.startsWith('sprites_')
+    ) {
+      return executeProviderAdvancedTool(toolName, args)
     }
 
     const nativeResult = await mcpToolRegistry.callTool(toolName, args)
