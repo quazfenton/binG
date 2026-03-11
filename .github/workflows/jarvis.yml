@@ -48,51 +48,53 @@ jobs:
           # IMPORTANT: Build the triggering comment JSON safely from github.event context
           # Use jq to safely construct JSON object (prevents command injection from comment body)
           # Note: github.event.comment.body is passed via env to handle special chars safely
-          TRIGGER_COMMENT_FROM_EVENT=$(jq -n \
+          jq -n \
             --argjson id "${{ github.event.comment.id }}" \
             --arg body "$COMMENT_BODY" \
             --arg created_at "${{ github.event.comment.created_at }}" \
-            '{id: $id, body: $body, reactions: {rocket: 0}, created_at: $created_at}')
+            '{id: $id, body: $body, reactions: {rocket: 0}, created_at: $created_at}' > /tmp/trigger_event.json
           echo "Triggering comment from event: ID=${{ github.event.comment.id }}"
 
           # Fetch ALL review comments on this PR (paginate to combine pages into single array)
           # Note: gh api --slurp is incompatible with --jq, so we pipe to jq -s instead
-          ALL_REVIEW_COMMENTS=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/comments" --paginate | jq -s 'add // []')
+          # Write to file to avoid "argument list too long" errors
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/comments" --paginate | jq -s 'add // []' > /tmp/all_review_comments.json
 
-          echo "Total review comments on PR: $(echo "$ALL_REVIEW_COMMENTS" | jq 'length')"
+          echo "Total review comments on PR: $(jq 'length' /tmp/all_review_comments.json)"
 
           # Filter for trigger comments (case-insensitive match for "Prompt for AI Agent")
           # Combine API results with the triggering comment from event
           # Note: Filter out null bodies (deleted comments) before regex match
-          TRIGGER_COMMENTS=$(echo "$ALL_REVIEW_COMMENTS" | jq --argjson event_comment "$TRIGGER_COMMENT_FROM_EVENT" '
-            [.[] | select(.body != null) | select(.body | test("Prompt for AI Agent"; "i"))] + [$event_comment] | unique_by(.id)
-          ')
+          # Use --slurpfile to read files instead of passing as arguments
+          jq --slurpfile event /tmp/trigger_event.json '
+            [.[] | select(.body != null) | select(.body | test("Prompt for AI Agent"; "i"))] + $event | unique_by(.id)
+          ' /tmp/all_review_comments.json > /tmp/trigger_comments.json
 
-          echo "Comments matching trigger pattern (including event comment): $(echo "$TRIGGER_COMMENTS" | jq 'length')"
+          echo "Comments matching trigger pattern (including event comment): $(jq 'length' /tmp/trigger_comments.json)"
 
           # Filter out comments that already have 🚀 reaction (already processed)
-          UNPROCESSED_NEW=$(echo "$TRIGGER_COMMENTS" | jq -c '[.[] | select(
-            (.reactions.rocket // 0) == 0
-          )]')
+          jq -c '[.[] | select((.reactions.rocket // 0) == 0)]' /tmp/trigger_comments.json > /tmp/unprocessed_new.json
 
-          echo "Unprocessed (no rocket reaction): $(echo "$UNPROCESSED_NEW" | jq 'length')"
+          echo "Unprocessed (no rocket reaction): $(jq 'length' /tmp/unprocessed_new.json)"
 
           # Convert pending queue to same format (already has id and body)
-          PENDING_IDS="$PENDING_QUEUE"
+          # Write pending queue to file
+          echo "$PENDING_QUEUE" | jq '.' > /tmp/pending_queue.json
 
           # Combine pending queue with new unprocessed comments (deduplicate by ID)
-          ALL_UNPROCESSED=$(echo "$UNPROCESSED_NEW" | jq --argjson pending "$PENDING_IDS" '
-            ($pending | map({id, body})) as $pending_objs |
+          # Use --slurpfile to read both files
+          jq --slurpfile pending /tmp/pending_queue.json '
+            ($pending[0] | map({id, body})) as $pending_objs |
             (. + $pending_objs) | unique_by(.id)
-          ')
+          ' /tmp/unprocessed_new.json > /tmp/all_unprocessed.json
 
-          COMMENT_COUNT=$(echo "$ALL_UNPROCESSED" | jq 'length')
-          COMMENT_IDS=$(echo "$ALL_UNPROCESSED" | jq -r '[.[].id | tostring] | join(",")')
-          PENDING_COUNT=$(echo "$PENDING_QUEUE" | jq 'length')
+          COMMENT_COUNT=$(jq 'length' /tmp/all_unprocessed.json)
+          COMMENT_IDS=$(jq -r '[.[].id | tostring] | join(",")' /tmp/all_unprocessed.json)
+          PENDING_COUNT=$(jq 'length' /tmp/pending_queue.json)
 
           # Save trigger comments to file (too large for job outputs)
           # Store as compact JSON to save space
-          echo "$ALL_UNPROCESSED" | jq -c '.' > /tmp/trigger_comments.json
+          jq -c '.' /tmp/all_unprocessed.json > /tmp/trigger_comments.json
           echo "comment_count=$COMMENT_COUNT" >> $GITHUB_OUTPUT
           echo "comment_ids=$COMMENT_IDS" >> $GITHUB_OUTPUT
 
@@ -111,7 +113,8 @@ jobs:
             echo "No unprocessed comments found"
           else
             # Check if we're the oldest (should run) or waiting for more
-            OLDEST_ID=$(echo "$ALL_UNPROCESSED" | jq -r '.[0].id')
+            # Read from file instead of variable
+            OLDEST_ID=$(jq -r '.[0].id' /tmp/all_unprocessed.json)
             if [ "$TRIGGER_COMMENT_ID" = "$OLDEST_ID" ]; then
               echo "should_run=true" >> $GITHUB_OUTPUT
               echo "✓ Oldest comment - running agent (timeout fallback)"
