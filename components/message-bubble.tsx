@@ -6,8 +6,8 @@ import remarkGfm from "remark-gfm"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Button } from "@/components/ui/button"
-import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal, ExternalLink } from "lucide-react"
-import type { Message } from "@/types"
+import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal, ExternalLink, FileCode, Plus, Minus, Eye, Download, CheckCircle, XCircle } from "lucide-react"
+import type { Message, CodeArtifact } from "@/types"
 import { useEnhancedStreamingDisplay } from "@/hooks/use-enhanced-streaming-display"
 import { useResponsiveLayout, calculateDynamicWidth, getOverflowStrategy } from "@/hooks/use-responsive-layout"
 import { analyzeMessageContent, getContentBasedStyling, shouldUseCompactLayout } from "@/lib/message-content-analyzer"
@@ -96,6 +96,8 @@ export default function MessageBubble({
   const [authDismissed, setAuthDismissed] = useState(false)
   const [isApplyingEditAction, setIsApplyingEditAction] = useState(false)
   const [fileEditDecision, setFileEditDecision] = useState<"auto_applied" | "accepted" | "denied" | "reverted_with_conflicts" | null>(null)
+  const [expandedArtifacts, setExpandedArtifacts] = useState<Set<string>>(new Set())
+  const [applyingArtifact, setApplyingArtifact] = useState<string | null>(null)
 
   const isUser = message.role === "user"
 
@@ -393,6 +395,72 @@ export default function MessageBubble({
     : (message.metadata?.reasoningChunks || []);
   const activeFullReasoning = reasoningStream.fullReasoning || combinedReasoning;
 
+  // Code artifacts from V2 agent execution
+  const codeArtifacts = useMemo(() => {
+    const artifacts = message.metadata?.codeArtifacts as CodeArtifact[] | undefined;
+    if (!artifacts || !Array.isArray(artifacts)) return [];
+    return artifacts.filter(a => a && a.path);
+  }, [message.metadata?.codeArtifacts]);
+
+  // Generate unified diff between two contents
+  const generateDiff = useCallback((oldContent: string | undefined, newContent: string | undefined, path: string) => {
+    const oldLines = oldContent?.split('\n') || [];
+    const newLines = newContent?.split('\n') || [];
+    const result: string[] = [`--- a/${path}`, `+++ b/${path}`];
+    const maxLen = Math.max(oldLines.length, newLines.length);
+    for (let i = 0; i < maxLen; i++) {
+      const oldLine = oldLines[i];
+      const newLine = newLines[i];
+      if (oldLine === newLine) {
+        result.push(` ${oldLine || ''}`);
+      } else if (oldLine === undefined) {
+        result.push(`+${newLine}`);
+      } else if (newLine === undefined) {
+        result.push(`-${oldLine}`);
+      } else {
+        result.push(`-${oldLine}`);
+        result.push(`+${newLine}`);
+      }
+    }
+    return result.join('\n');
+  }, []);
+
+  // Toggle artifact expansion
+  const toggleArtifact = useCallback((path: string) => {
+    setExpandedArtifacts(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  // Apply artifact to filesystem
+  const handleApplyArtifact = useCallback(async (artifact: CodeArtifact) => {
+    if (!artifact.content || applyingArtifact) return;
+    setApplyingArtifact(artifact.path);
+    try {
+      const response = await fetch('/api/filesystem/write', {
+        method: 'POST',
+        headers: buildRequestHeaders(),
+        body: JSON.stringify({
+          path: artifact.path,
+          content: artifact.content,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.error || `Failed to apply (${response.status})`);
+      }
+      toast.success('File applied', { description: artifact.path, duration: 2000 });
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : 'Failed to apply';
+      toast.error('Failed to apply file', { description: errMsg, duration: 4000 });
+    } finally {
+      setApplyingArtifact(null);
+    }
+  }, [buildRequestHeaders, applyingArtifact]);
+
   const handleAuthDismiss = () => {
     setAuthDismissed(true)
     onAuthPromptDismiss?.()
@@ -686,6 +754,119 @@ export default function MessageBubble({
         {/* Tool Invocations Display - Enhanced with new component */}
         {!isUser && toolInvocations.length > 0 && (
           <ToolInvocationsList toolInvocations={toolInvocations} />
+        )}
+
+        {/* Code Artifacts Display - V2 Agent Generated Files */}
+        {!isUser && codeArtifacts.length > 0 && (
+          <div className="mt-3 rounded-lg border border-white/15 bg-black/25 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-white/80">
+                <FileCode className="w-4 h-4" />
+                <span className="text-sm font-medium">Generated Files</span>
+                <span className="text-xs text-white/50">({codeArtifacts.length})</span>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {codeArtifacts.map((artifact) => {
+                const isExpanded = expandedArtifacts.has(artifact.path);
+                const isApplying = applyingArtifact === artifact.path;
+                const diff = artifact.previousContent 
+                  ? generateDiff(artifact.previousContent, artifact.content, artifact.path)
+                  : null;
+                const additions = diff ? diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length : 0;
+                const deletions = diff ? diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length : 0;
+                
+                return (
+                  <div key={artifact.path} className="rounded border border-white/10 overflow-hidden">
+                    <div 
+                      className="flex items-center justify-between px-3 py-2 bg-white/5 cursor-pointer hover:bg-white/10 transition-colors"
+                      onClick={() => toggleArtifact(artifact.path)}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {artifact.operation === 'write' && <Plus className="w-3.5 h-3.5 text-green-400 shrink-0" />}
+                        {artifact.operation === 'patch' && <FileCode className="w-3.5 h-3.4 text-blue-400 shrink-0" />}
+                        {artifact.operation === 'delete' && <Minus className="w-3.5 h-3.5 text-red-400 shrink-0" />}
+                        <code className="text-xs text-white/80 truncate">{artifact.path}</code>
+                        {artifact.language && (
+                          <span className="text-[10px] text-white/40 px-1.5 py-0.5 bg-white/10 rounded">
+                            {artifact.language}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {additions > 0 && <span className="text-xs text-green-400">+{additions}</span>}
+                        {deletions > 0 && <span className="text-xs text-red-400">-{deletions}</span>}
+                        {isExpanded ? <ChevronUp className="w-4 h-4 text-white/50" /> : <ChevronDown className="w-4 h-4 text-white/50" />}
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div className="border-t border-white/10">
+                        {diff && diff.length > 100 ? (
+                          <div className="max-h-64 overflow-y-auto bg-black/30 p-2">
+                            <pre className="text-xs font-mono text-white/70 whitespace-pre-wrap">
+                              {diff.split('\n').slice(0, 50).join('\n')}
+                              {diff.split('\n').length > 50 && '\n... (truncated)'}
+                            </pre>
+                          </div>
+                        ) : artifact.content ? (
+                          <div className="max-h-64 overflow-y-auto bg-black/30 p-2">
+                            <SyntaxHighlighter
+                              style={vscDarkPlus as any}
+                              language={artifact.language || 'typescript'}
+                              customStyle={{
+                                fontSize: '11px',
+                                padding: '8px',
+                                borderRadius: '4px',
+                                margin: 0,
+                                background: 'transparent',
+                              }}
+                            >
+                              {artifact.content.slice(0, 2000)}
+                              {artifact.content.length > 2000 && '\n// ... truncated'}
+                            </SyntaxHighlighter>
+                          </div>
+                        ) : (
+                          <div className="p-3 text-xs text-white/50">No content available</div>
+                        )}
+                        <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-white/10 bg-white/5">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigator.clipboard.writeText(artifact.content || '');
+                              toast.success('Copied', { duration: 1500 });
+                            }}
+                          >
+                            <Copy className="w-3 h-3 mr-1" />
+                            Copy
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="h-7 text-xs bg-green-600 hover:bg-green-500"
+                            disabled={isApplying || !artifact.content}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleApplyArtifact(artifact);
+                            }}
+                          >
+                            {isApplying ? (
+                              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                            ) : (
+                              <CheckCircle className="w-3 h-3 mr-1" />
+                            )}
+                            Apply
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         )}
 
         {!isUser && fileEditInfo && (
