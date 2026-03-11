@@ -71,12 +71,11 @@ RUN mkdir -p /app/.next && chown -R nodejs:nodejs /app/.next
 USER nodejs
 
 # Expose ports
-EXPOSE 5555 8080 3001
+EXPOSE 5555 3001
 
 # Set development environment
 ENV NODE_ENV=development
 ENV PORT=5555
-ENV WEBSOCKET_PORT=8080
 ENV WATCHPACK_POLLING=true
 
 # V2 Agent environment variables

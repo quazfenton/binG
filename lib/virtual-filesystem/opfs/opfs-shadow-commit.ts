@@ -17,21 +17,7 @@
 import { opfsCore } from './opfs-core';
 import { opfsAdapter } from './opfs-adapter';
 import { generateUnifiedDiff } from './diff-utils';
-
-// Lazy import virtualFilesystem to avoid bundling node:fs in client
-let _virtualFilesystemModule: typeof import('../virtual-filesystem-service').virtualFilesystem | null = null;
-
-async function getVirtualFilesystem() {
-  if (!_virtualFilesystemModule) {
-    try {
-      const mod = await import('../virtual-filesystem-service');
-      _virtualFilesystemModule = mod.virtualFilesystem;
-    } catch {
-      _virtualFilesystemModule = null;
-    }
-  }
-  return _virtualFilesystemModule;
-}
+import { getWorkspaceSnapshot, writeFileToServer } from './opfs-api-client';
 
 // Generate UUID for commit IDs
 function generateUUID(): string {
@@ -172,20 +158,19 @@ export class OPFSShadowCommitManager {
     const timestamp = new Date().toISOString();
 
     try {
-      // Get current VFS state
-      const vfs = await getVirtualFilesystem();
-      if (!vfs) {
+      // Get current VFS state via API
+      const snapshot = await getWorkspaceSnapshot(options.ownerId);
+      if (!snapshot) {
         return {
           success: false,
           committedFiles: 0,
-          error: 'Server VFS not available',
+          error: 'Failed to fetch workspace snapshot',
           timestamp,
         };
       }
-      const exportData = await vfs.exportWorkspace(options.ownerId);
       const vfsRecord: Record<string, string> = {};
 
-      for (const file of exportData.files) {
+      for (const file of snapshot.files) {
         vfsRecord[file.path] = file.content;
       }
 
@@ -275,21 +260,15 @@ export class OPFSShadowCommitManager {
       // Get all files from commit
       const commit = this.metadata.commits[commitIndex];
       const commitPath = `.opfs-commits/${commitId}`;
-      
-      const entries = await this.core.listDirectory(commitPath);
 
-      const vfs = await getVirtualFilesystem();
-      if (!vfs) {
-        console.warn('[OPFS ShadowCommit] Server VFS not available');
-        return false;
-      }
+      const entries = await this.core.listDirectory(commitPath);
 
       for (const entry of entries) {
         if (entry.type === 'file') {
           const file = await this.core.readFile(`${commitPath}/${entry.name}`);
 
-          // Write to server VFS
-          await vfs.writeFile(this.ownerId!, entry.name, file.content);
+          // Write to server VFS via API
+          await writeFileToServer(this.ownerId!, entry.name, file.content);
         }
       }
 
@@ -325,20 +304,17 @@ export class OPFSShadowCommitManager {
       const entries = await this.core.listDirectory(commitPath);
       let restoredFiles = 0;
 
-      const vfs = await getVirtualFilesystem();
-      if (!vfs) {
-        return { success: false, restoredFiles: 0, error: 'Server VFS not available' };
-      }
-
       for (const entry of entries) {
         if (entry.type === 'file') {
           try {
             const file = await this.core.readFile(`${commitPath}/${entry.name}`);
 
-            // Restore to VFS
-            await vfs.writeFile(this.ownerId!, entry.name, file.content);
+            // Restore to VFS via API
+            const success = await writeFileToServer(this.ownerId!, entry.name, file.content);
             
-            restoredFiles++;
+            if (success) {
+              restoredFiles++;
+            }
           } catch (error: any) {
             console.warn('[OPFS ShadowCommit] Failed to restore file:', entry.name, error.message);
           }

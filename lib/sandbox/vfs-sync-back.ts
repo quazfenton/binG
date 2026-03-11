@@ -1,21 +1,21 @@
 /**
  * VFS Sync-Back Service for Snapshot Restoration
- * 
+ *
  * Syncs sandbox filesystem state back to the virtual filesystem (VFS)
  * after snapshot restoration or on-demand.
- * 
+ *
  * Use Cases:
  * - After restoring from snapshot, sync files back to VFS
  * - Periodic sync of sandbox → VFS for backup
  * - On-demand sync before session transfer
  * - Cross-provider migration (export from one, import to another)
- * 
+ *
  * This module is ADDITIVE - doesn't affect existing VFS sync logic.
- * 
+ *
  * @see lib/virtual-filesystem/virtual-filesystem-service.ts - Main VFS implementation
  * @see lib/sandbox/auto-snapshot-service.ts - Auto-snapshot service
  * @see lib/sandbox/user-terminal-sessions.ts - User session management
- * 
+ *
  * @example
  * ```typescript
  * // After snapshot restoration
@@ -23,14 +23,18 @@
  *   vfsScopePath: 'project',
  *   syncMode: 'full',  // or 'incremental'
  * });
- * 
+ *
  * // Get sync status
  * const status = await vfsSyncBackService.getSyncStatus(sessionId);
  * console.log(`Files synced: ${status.filesSynced}`);
  * ```
  */
 
-import { getSandboxProvider, type SandboxProviderType } from './providers';
+// Re-export types from separate file to avoid pulling in server modules for client components
+export type { VFSFileEntry, SyncMode, VFSyncConfig, VFSyncResult, VFSyncStatus } from './vfs-sync-back.types';
+
+// Dynamic import to prevent bundling in client components
+import type { SandboxProviderType } from './providers';
 import { getTerminalSession } from './terminal-session-store';
 import { createLogger } from '../utils/logger';
 
@@ -155,6 +159,8 @@ export class VFSyncBackService {
     this.activeSyncs.set(sessionId, status);
     
     try {
+      // Dynamic import to prevent bundling in client components
+      const { getSandboxProvider } = await import('./providers');
       const provider = await getSandboxProvider(this.inferProviderType(session.sandboxId));
       const handle = await provider.getSandbox(session.sandboxId);
       
