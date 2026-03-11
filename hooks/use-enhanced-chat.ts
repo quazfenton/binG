@@ -416,6 +416,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   ));
                   emitFilesystemUpdated({
                     scopePath: typeof eventData?.scopePath === 'string' ? eventData.scopePath : undefined,
+                    sessionId: typeof eventData?.sessionId === 'string' ? eventData.sessionId : undefined,
+                    commitId: typeof eventData?.commitId === 'string' ? eventData.commitId : undefined,
+                    workspaceVersion: typeof eventData?.workspaceVersion === 'number' ? eventData.workspaceVersion : undefined,
                     applied: eventData?.applied,
                     errors: eventData?.errors,
                     source: 'chat',

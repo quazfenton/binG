@@ -86,6 +86,8 @@ interface CodePreviewPanelProps {
 // Use CodeBlock from the parser module
 type CodeBlock = ParsedCodeBlock;
 
+const previewLogger = createDebugLogger('CodePreviewPanel', 'DEBUG_CODE_PREVIEW');
+
 interface ProjectStructure {
   name: string;
   files: { [key: string]: string };
@@ -134,7 +136,7 @@ export default function CodePreviewPanel({
 }: CodePreviewPanelProps) {
   const [detectedFramework] = useState<"react" | "vue" | "vanilla">("vanilla");
 
-  const { log, error: logError, warn: logWarn } = createDebugLogger('CodePreviewPanel', 'DEBUG_CODE_PREVIEW');
+  const { log, error: logError, warn: logWarn } = previewLogger;
   const [selectedTab, setSelectedTab] = useState("preview");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [projectStructure, setProjectStructure] =
@@ -383,6 +385,9 @@ export default function CodePreviewPanel({
         path: createdPath,
         scopePath: cleanParentPath,
         source: 'code-preview',
+        workspaceVersion: createdFile?.workspaceVersion,
+        commitId: createdFile?.commitId,
+        sessionId: createdFile?.sessionId,
       });
       log(`handleCreateFile: dispatched filesystem-updated event`);
       
@@ -403,7 +408,7 @@ export default function CodePreviewPanel({
     const folderName = name.trim();
     const newPath = `${cleanParentPath.replace(/\/+$/, '')}/${folderName}/.gitkeep`;
 
-    writeFilesystemFile(newPath, '').then(async () => {
+    writeFilesystemFile(newPath, '').then(async (createdFolderMarker) => {
       await listFilesystemDirectory(cleanParentPath);
       
       // Dispatch event for cross-panel sync
@@ -412,6 +417,9 @@ export default function CodePreviewPanel({
         path: folderPath,
         scopePath: cleanParentPath,
         source: 'code-preview',
+        workspaceVersion: createdFolderMarker?.workspaceVersion,
+        commitId: createdFolderMarker?.commitId,
+        sessionId: createdFolderMarker?.sessionId,
       });
       
       toast.success('Folder created: ' + folderName);
@@ -997,6 +1005,9 @@ export default function CodePreviewPanel({
       try {
         const snapshot = await getFilesystemSnapshot(filesystemScopePath);
         if (cancelled) return;
+        if (typeof snapshot?.version === 'number') {
+          lastWorkspaceVersionRef.current = Math.max(lastWorkspaceVersionRef.current, snapshot.version);
+        }
         const files = (snapshot?.files || []).reduce(
           (acc, file) => {
             acc[file.path] = file.content;
@@ -1024,6 +1035,7 @@ export default function CodePreviewPanel({
   // FIXED: Use refs to avoid re-creating listener on every dependency change
   const filesystemCurrentPathRef = useRef(filesystemCurrentPath);
   const filesystemScopePathRef = useRef(filesystemScopePath);
+  const lastWorkspaceVersionRef = useRef(0);
 
   useEffect(() => {
     filesystemCurrentPathRef.current = filesystemCurrentPath;
@@ -1040,6 +1052,12 @@ export default function CodePreviewPanel({
       log(`[filesystem-updated event] received`, detail);
 
       try {
+        const eventWorkspaceVersion = typeof detail?.workspaceVersion === 'number' ? detail.workspaceVersion : null;
+        if (eventWorkspaceVersion !== null && eventWorkspaceVersion <= lastWorkspaceVersionRef.current) {
+          log(`[filesystem-updated] skipped stale event at workspaceVersion=${eventWorkspaceVersion}`);
+          return;
+        }
+
         // Use refs to avoid re-creating listener
         const currentPath = filesystemCurrentPathRef.current || filesystemScopePathRef.current || 'project';
         const normalizedScopePath = normalizeProjectPath(currentPath);
@@ -1051,6 +1069,11 @@ export default function CodePreviewPanel({
         const scopePath = filesystemScopePathRef.current;
         if (scopePath) {
           const snapshot = await getFilesystemSnapshot(scopePath);
+          if (typeof snapshot?.version === 'number') {
+            lastWorkspaceVersionRef.current = Math.max(lastWorkspaceVersionRef.current, snapshot.version);
+          } else if (eventWorkspaceVersion !== null) {
+            lastWorkspaceVersionRef.current = Math.max(lastWorkspaceVersionRef.current, eventWorkspaceVersion);
+          }
           const files = (snapshot?.files || []).reduce(
             (acc, file) => {
               acc[file.path] = file.content;
@@ -4228,7 +4251,7 @@ export default app;`,
                                       const filePath = normalizeProjectPath(selectedFilesystemPath);
                                       log(`handleSave: saving file "${filePath}", contentLength=${editableContent.length}`);
                                       
-                                      writeFilesystemFile(filePath, editableContent).then(async () => {
+                                      writeFilesystemFile(filePath, editableContent).then(async (fileData) => {
                                         log(`handleSave: write completed, re-reading file to confirm`);
                                         
                                         // Re-read the file to confirm save worked
@@ -4263,6 +4286,9 @@ export default app;`,
                                           path: filePath,
                                           scopePath: normalizedFilesystemPath,
                                           source: 'code-preview',
+                                          workspaceVersion: fileData?.workspaceVersion,
+                                          commitId: fileData?.commitId,
+                                          sessionId: fileData?.sessionId,
                                         });
                                         log(`handleSave: dispatched filesystem-updated event`);
                                         

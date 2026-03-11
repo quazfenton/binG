@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem } from '@/lib/virtual-filesystem';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
+import { ShadowCommitManager } from '@/lib/stateful-agent/commit/shadow-commit';
+import { extractSessionIdFromPath } from '@/lib/virtual-filesystem/scope-utils';
 import { fileContentSchema, languageSchema } from '@/lib/validation/schemas';
 
 export const runtime = 'nodejs';
@@ -30,6 +32,9 @@ const writeRequestSchema = z.object({
     ),
   content: fileContentSchema,
   language: languageSchema.optional(),
+  sessionId: z.string().min(1).max(200).optional(),
+  source: z.string().min(1).max(100).optional(),
+  integration: z.string().min(1).max(100).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -61,20 +66,73 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { path: filePath, content, language } = validation.data;
+    const {
+      path: filePath,
+      content,
+      language,
+      sessionId: requestedSessionId,
+      source,
+      integration,
+    } = validation.data;
 
-    // SECURITY: Always derive ownerId from authenticated request context
-    // Never trust user-supplied ownerId for write operations
-    // Use authResult.userId directly (already formatted correctly by resolveRequestAuth)
     const ownerId = authResult.userId;
 
+    let previousContent: string | undefined;
+    let previousVersion: number | null = null;
+    let existedBefore = false;
+
+    try {
+      const previousFile = await virtualFilesystem.readFile(ownerId, filePath);
+      previousContent = previousFile.content;
+      previousVersion = previousFile.version;
+      existedBefore = true;
+    } catch {
+      previousContent = undefined;
+      previousVersion = null;
+      existedBefore = false;
+    }
+
     const file = await virtualFilesystem.writeFile(ownerId, filePath, content, language);
+    const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
+
+    const resolvedSessionId = requestedSessionId || extractSessionIdFromPath(filePath);
+    let commitId: string | undefined;
+
+    if (resolvedSessionId) {
+      const commitManager = new ShadowCommitManager();
+      const commitResult = await commitManager.commit(
+        { [file.path]: file.content },
+        [{
+          path: file.path,
+          type: existedBefore ? 'UPDATE' : 'CREATE',
+          timestamp: Date.now(),
+          originalContent: previousContent,
+          newContent: file.content,
+        }],
+        {
+          sessionId: `${ownerId}:${resolvedSessionId}`,
+          message: `${source || 'filesystem'} write: ${file.path}`,
+          author: ownerId,
+          source: source || 'filesystem-write',
+          integration: integration || source || 'filesystem',
+          workspaceVersion,
+        },
+      );
+
+      if (commitResult.success) {
+        commitId = commitResult.commitId;
+      }
+    }
 
     return NextResponse.json({
       success: true,
       data: {
         path: file.path,
         version: file.version,
+        previousVersion,
+        workspaceVersion,
+        sessionId: resolvedSessionId,
+        commitId,
         language: file.language,
         size: file.size,
         lastModified: file.lastModified,

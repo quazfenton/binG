@@ -40,6 +40,8 @@ interface ApiResponse<T> {
   data: T;
 }
 
+const vfsLogger = createDebugLogger('useVFS', 'DEBUG_VFS');
+
 export function useVirtualFilesystem(
   initialPath: string = 'project',
   options: UseVirtualFilesystemOptions = {}
@@ -65,7 +67,7 @@ export function useVirtualFilesystem(
     hasConflicts: false,
   });
 
-  const { log, error: logError, warn: logWarn } = createDebugLogger('useVFS', 'DEBUG_VFS');
+  const { log, error: logError, warn: logWarn } = vfsLogger;
 
   // Initialize OPFS on mount if enabled
   useEffect(() => {
@@ -226,12 +228,16 @@ export function useVirtualFilesystem(
     const data = await request<{
       path: string;
       version: number;
+      previousVersion?: number | null;
+      workspaceVersion?: number;
+      sessionId?: string | null;
+      commitId?: string;
       language: string;
       size: number;
       lastModified: string;
     }>('/api/filesystem/write', {
       method: 'POST',
-      body: JSON.stringify({ path: filePath, content }),
+      body: JSON.stringify({ path: filePath, content, source: 'use-virtual-filesystem' }),
     });
     log(`writeFile: server write complete for "${data.path}", version=${data.version}`);
     await listDirectory(currentPathRef.current);
