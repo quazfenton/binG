@@ -83,8 +83,8 @@ export function createDebugLogger(tag: string, storageKey: string): DebugLogger 
 
   return {
     log: (...args: any[]) => { if (isEnabled()) console.log(`[${tag}]`, ...args); },
-    warn: (...args: any[]) => console.warn(`[${tag} WARN]`, ...args),
-    error: (...args: any[]) => console.error(`[${tag} ERROR]`, ...args),
+    warn: (...args: any[]) => { if (isEnabled()) console.warn(`[${tag} WARN]`, ...args); },
+    error: (...args: any[]) => { if (isEnabled()) console.error(`[${tag} ERROR]`, ...args); },
   };
 }
 

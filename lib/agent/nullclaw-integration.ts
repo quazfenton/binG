@@ -101,12 +101,6 @@ class NullclawIntegration {
     const sessionKey = `${userId}:${conversationId}`;
     const containerId = this.sessionContainers.get(sessionKey);
     if (containerId) {
-      return this.containers.get(containerId);
-    }
-    if (this.defaultConfig.mode === 'per-session') {
-      return undefined;
-    }
-    return Array.from(this.containers.values()).find(c => c.status === 'ready');
       const container = this.containers.get(containerId);
       // Return only if container exists and is ready
       if (container && container.status === 'ready') {
@@ -114,9 +108,13 @@ class NullclawIntegration {
       }
       return undefined;
     }
-    // In per-session mode, never fall back to another session's container
-    // to maintain isolation. Return undefined to signal no container available.
-    return undefined;
+    if (this.defaultConfig.mode === 'per-session') {
+      // In per-session mode, never fall back to another session's container
+      // to maintain isolation. Return undefined to signal no container available.
+      return undefined;
+    }
+    // Shared mode: return any ready container
+    return Array.from(this.containers.values()).find(c => c.status === 'ready');
   }
 
   private getNextAvailablePort(config: NullclawConfig): number {
@@ -158,7 +156,9 @@ class NullclawIntegration {
         '-d',
         '--name', containerId,
         '--network', nullclawConfig.dockerNetwork,
-        '-p', `${nullclawConfig.port}:3000`,
+        // SECURITY: Bind to localhost only to prevent external access
+        // This prevents unauthenticated access from internet-facing hosts
+        '-p', `127.0.0.1:${nullclawConfig.port}:3000`,
         '--env', `NULLCLAW_TIMEOUT=${nullclawConfig.timeout}`,
         '--env', `ALLOWED_DOMAINS=${nullclawConfig.allowedDomains.join(',')}`,
         '--label', 'managed-by=bing-agent-v2',

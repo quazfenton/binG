@@ -22,15 +22,19 @@ export function createRefreshScheduler<TDetail = unknown>(
   const execute = async () => {
     if (inFlight) return;
     inFlight = true;
+    // Capture pending detail and use null (not undefined) as the sentinel
     const detail = pendingDetail;
-    pendingDetail = undefined;
+    pendingDetail = null; // Use null to indicate "no pending payload"
     try {
       await run(detail);
     } finally {
       inFlight = false;
       lastRunAt = Date.now();
-      if (pendingDetail !== undefined) {
-        schedule(pendingDetail);
+      // Check if a new schedule was requested during execution
+      if (pendingDetail !== null) {
+        const pending = pendingDetail;
+        pendingDetail = null; // Reset before scheduling
+        schedule(pending);
       }
     }
   };
@@ -55,7 +59,7 @@ export function createRefreshScheduler<TDetail = unknown>(
       clearTimeout(timer);
       timer = null;
     }
-    pendingDetail = undefined;
+    pendingDetail = null;
   };
 
   return { schedule, dispose };

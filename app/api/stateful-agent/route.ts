@@ -223,12 +223,16 @@ export async function POST(request: NextRequest) {
         try {
           sandboxProvider = await getSandboxProvider(inferredProvider as SandboxProviderType);
         } catch (error: any) {
+          // Differentiate between "unknown provider" errors and other initialization failures
+          const isUnknown = error?.message?.includes('Unknown sandbox provider') || 
+                           error?.message?.includes('not supported') ||
+                           error?.message?.includes('not recognized');
           console.warn(
             `[StatefulAgent API] Failed to initialize provider ${inferredProvider} for sandbox ${sandboxId}: ${error?.message || error}`,
           );
           return NextResponse.json(
-            { error: 'Sandbox provider not recognized' },
-            { status: 400 }
+            { error: isUnknown ? 'Sandbox provider not recognized' : 'Failed to initialize sandbox provider' },
+            { status: isUnknown ? 400 : 500 }
           );
         }
 

@@ -113,9 +113,14 @@ export function buildApiHeaders(options?: { json?: boolean }): Record<string, st
   }
 
   if (typeof window !== 'undefined') {
-    const token = localStorage.getItem(AUTH_TOKEN_KEY);
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
+    // Guard token lookup with try/catch to handle restricted browser storage contexts
+    try {
+      const token = localStorage.getItem(AUTH_TOKEN_KEY);
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+    } catch {
+      // localStorage unavailable; continue without auth token
     }
     headers['x-anonymous-session-id'] = getOrCreateAnonymousSessionId();
   }

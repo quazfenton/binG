@@ -3,14 +3,20 @@
  * Bidirectional sync between sandbox filesystems and the virtual filesystem.
  * Detects changes made via terminal (nano/vim) and syncs them to VFS,
  * and pushes VFS updates back into sandboxes.
- * 
+ *
  * FIX: Added global singleton pattern to prevent HMR interval leaks
  * in Next.js dev mode. See: https://nextjs.org/docs/pages/architecture/
  * development-closures
+ * 
+ * FIX: Added emitFilesystemUpdated to notify UI panels of sandbox changes
+ * 
+ * FIX: Polling only runs for API-based sandbox providers (E2B, Daytona, etc.)
+ *      Self-hosted containers (OpenSandbox, MicroSandbox) use direct event emission
  */
 
 import { sandboxBridge } from './sandbox-service-bridge';
-import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
+import { emitFilesystemUpdated } from '../virtual-filesystem/sync-events';
 
 // Workspace directory varies by provider
 // This will be resolved per-sandbox based on the provider
@@ -21,9 +27,29 @@ function getWorkspaceDirForSandbox(sandboxId: string): string {
   if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return '/home/sprite/workspace';
   if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return '/workspace'; // CodeSandbox
   if (sandboxId.startsWith('e2b-')) return '/home/user';
-  
+
   // Default to Daytona
   return '/home/daytona/workspace';
+}
+
+/**
+ * Check if sandbox requires polling (API-based providers)
+ * Self-hosted containers (OpenSandbox, MicroSandbox) use OPTIMIZED polling
+ * with longer intervals since they're on the same network
+ */
+function getPollingConfig(sandboxId: string): { enabled: boolean; intervalMs?: number } {
+  // Self-hosted containers - use optimized (slower) polling
+  // They're on same network so changes are less frequent and latency is lower
+  if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) {
+    return { enabled: true, intervalMs: 10000 }; // 10 seconds
+  }
+  if (sandboxId.startsWith('microsandbox-') || sandboxId.startsWith('micro-')) {
+    return { enabled: true, intervalMs: 10000 }; // 10 seconds
+  }
+  
+  // API-based providers - standard polling
+  // External services need more frequent checks for real-time feel
+  return { enabled: true }; // Use default interval
 }
 
 // Global singleton to prevent HMR interval leaks
@@ -48,12 +74,22 @@ class SandboxFilesystemSync {
       return;
     }
 
+    // Get polling config for this sandbox type
+    const pollingConfig = getPollingConfig(sandboxId);
+    
+    if (!pollingConfig.enabled) {
+      console.log(`[SandboxSync] Polling disabled for sandbox: ${sandboxId}`);
+      return;
+    }
+
     if (this.syncIntervals.has(sandboxId)) {
       console.warn(`[SandboxSync] Sync already running for sandbox ${sandboxId}`);
       return;
     }
 
-    console.log(`[SandboxSync] Starting sync for sandbox ${sandboxId} (interval: ${this.syncIntervalMs}ms)`);
+    // Use sandbox-specific interval or default
+    const intervalMs = pollingConfig.intervalMs ?? this.syncIntervalMs;
+    console.log(`[SandboxSync] Starting sync for ${sandboxId} (interval: ${intervalMs}ms, type: ${pollingConfig.intervalMs ? 'optimized' : 'standard'})`);
 
     // ✅ FIX: Perform initial sync immediately so files are available when terminal connects
     (async () => {
@@ -78,7 +114,7 @@ class SandboxFilesystemSync {
           err instanceof Error ? err.message : err,
         );
       }
-    }, this.syncIntervalMs);
+    }, intervalMs);
 
     interval.unref?.();
     this.syncIntervals.set(sandboxId, interval);
@@ -111,6 +147,9 @@ class SandboxFilesystemSync {
 
     const files = entries.filter((e) => e.type === 'file');
 
+    // Track synced files for event emission
+    const syncedFiles: Array<{ path: string; workspaceVersion?: number }> = [];
+
     for (const file of files) {
       const sandboxPath = `${workspaceDir}/${file.name}`;
       try {
@@ -127,8 +166,14 @@ class SandboxFilesystemSync {
         }
 
         if (vfsContent !== sandboxContent) {
-          await virtualFilesystem.writeFile(userId, vfsPath, sandboxContent);
+          const result = await virtualFilesystem.writeFile(userId, vfsPath, sandboxContent);
           console.log(`[SandboxSync] Sandbox → VFS: ${vfsPath} (sandbox ${sandboxId})`);
+          
+          // Track for event emission
+          syncedFiles.push({
+            path: vfsPath,
+            workspaceVersion: result?.version,
+          });
         }
       } catch (err) {
         console.warn(
@@ -136,6 +181,18 @@ class SandboxFilesystemSync {
           err instanceof Error ? err.message : err,
         );
       }
+    }
+
+    // Emit event if files were synced (client-side only)
+    if (syncedFiles.length > 0 && typeof window !== 'undefined') {
+      emitFilesystemUpdated({
+        scopePath: 'project',
+        source: 'sandbox',
+        paths: syncedFiles.map(f => f.path),
+        workspaceVersion: syncedFiles[0]?.workspaceVersion,
+        sessionId: sandboxId,
+      });
+      console.log(`[SandboxSync] Emitted filesystem-updated event for ${syncedFiles.length} files from sandbox ${sandboxId}`);
     }
   }
 

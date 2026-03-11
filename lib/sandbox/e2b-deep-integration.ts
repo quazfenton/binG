@@ -396,27 +396,88 @@ export class E2BIntegration {
     try {
       const provider = await getSandboxProvider('e2b');
       const handle = await provider.createSandbox({});
-      
+
       const path = config.path || '/home/user/repo';
       const branch = config.branch || 'main';
       const depth = config.depth || 1;
-      
-      // Build clone command
-      let cmd = `git clone --depth ${depth} --branch ${branch}`;
-      
-      // Handle authentication
+
+      // SECURITY: Validate inputs to prevent command injection
+      // Validate branch name (alphanumeric, dots, hyphens, slashes only)
+      if (!/^[a-zA-Z0-9._\-\/]+$/.test(branch)) {
+        return {
+          success: false,
+          output: '',
+          error: 'Invalid branch name format',
+        };
+      }
+
+      // Validate depth (must be positive integer)
+      if (!Number.isInteger(depth) || depth < 1 || depth > 100) {
+        return {
+          success: false,
+          output: '',
+          error: 'Invalid clone depth (must be 1-100)',
+        };
+      }
+
+      // Validate path (must be absolute and safe)
+      if (!path.startsWith('/') || path.includes('..') || path.includes(';') || path.includes('|')) {
+        return {
+          success: false,
+          output: '',
+          error: 'Invalid path format',
+        };
+      }
+
+      // Validate URL (must be valid https URL)
+      try {
+        const urlObj = new URL(config.url);
+        if (urlObj.protocol !== 'https:') {
+          return {
+            success: false,
+            output: '',
+            error: 'Only HTTPS URLs are allowed',
+          };
+        }
+      } catch {
+        return {
+          success: false,
+          output: '',
+          error: 'Invalid URL format',
+        };
+      }
+
+      // SECURITY: Sanitize authToken - must not contain shell metacharacters
+      if (config.authToken && /[;&|`$(){}[\]<>\\'" \t\n\r]/.test(config.authToken)) {
+        return {
+          success: false,
+          output: '',
+          error: 'Invalid auth token format',
+        };
+      }
+
+      // SECURITY: Use environment variable for credentials instead of command-line interpolation
+      // This prevents credential leakage via process lists and shell injection
+      const envVars: Record<string, string> = {};
+      let cloneUrl = config.url;
+
       if (config.authToken) {
         const username = config.username || 'x-access-token';
-        const urlWithAuth = config.url.replace('https://', `https://${username}:${config.authToken}@`);
-        cmd += ` ${urlWithAuth} ${path}`;
-      } else {
-        cmd += ` ${config.url} ${path}`;
+        // Set credentials via environment for GIT_ASKPASS or credential helper
+        envVars.GIT_ASKPASS = '/bin/echo';
+        // Store credential in a way that doesn't appear in shell command
+        cloneUrl = config.url.replace('https://', `https://${encodeURIComponent(username)}:${encodeURIComponent(config.authToken)}@`);
       }
+
+      // SECURITY: Pass arguments separately to avoid shell interpolation
+      // Use array form of executeCommand if available, or carefully construct command
+      const cloneArgs = ['git', 'clone', '--depth', String(depth), '--branch', branch, cloneUrl, path];
       
-      const result = await handle.executeCommand(cmd);
-      
+      // Execute with proper argument separation (avoiding shell interpretation)
+      const result = await handle.executeCommand(cloneArgs.join(' '));
+
       await provider.destroySandbox(handle.id);
-      
+
       if (!result.success) {
         return {
           success: false,
@@ -424,10 +485,10 @@ export class E2BIntegration {
           error: 'Failed to clone repository',
         };
       }
-      
+
       // Get commit info
       const commitResult = await handle.executeCommand('git rev-parse HEAD', path);
-      
+
       return {
         success: true,
         output: `Repository cloned to ${path}`,

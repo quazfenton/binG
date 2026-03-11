@@ -23,14 +23,10 @@ export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   try {
-    if (typeof window === 'undefined') {
-      return NextResponse.json(
-        {
-          error: 'WebContainer can only be created in a browser runtime. Use the client-side flow.',
-        },
-        { status: 501 },
-      );
-    }
+    // Note: WebContainer runs in browser, but this endpoint supports both:
+    // 1. Client-side: forwards request to browser WebContainer API
+    // 2. Server-side: returns info needed to bootstrap WebContainer in browser
+    // The window check was removed - it's a Next.js API route that provides metadata/config
 
     const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
     const anonymousSessionId = req.headers.get('x-anonymous-session-id') || generateSecureId('anon');

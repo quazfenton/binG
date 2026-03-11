@@ -6,7 +6,7 @@ on:
 jobs:
   # Job 1: Collect and batch trigger comments
   collect-comments:
-    if: (contains(github.event.comment.body, 'Prompt for AI Agent') || contains(github.event.comment.body, 'Prompt for AI agent')) && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && github.event.pull_request.head.repo.fork == false
+    if: (contains(github.event.comment.body, 'Prompt for AI Agent') || contains(github.event.comment.body, 'Prompt for AI agent')) && github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read

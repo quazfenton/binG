@@ -215,6 +215,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // SECURITY: Verify sandbox ownership before returning PTY URL (IDOR fix)
+    const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
+    const session = sandboxBridge.getSessionBySandboxId(sandboxId);
+    
+    if (!session) {
+      return NextResponse.json(
+        { error: 'Sandbox not found or has been terminated' },
+        { status: 404 }
+      );
+    }
+    
+    // Verify the authenticated user owns this sandbox
+    if (session.userId !== authResult.userId) {
+      logger.warn('PTY IDOR attempt', {
+        requestingUser: authResult.userId,
+        sandboxOwner: session.userId,
+        sandboxId,
+      });
+      return NextResponse.json(
+        { error: 'You do not have access to this sandbox' },
+        { status: 403 }
+      );
+    }
+
     logger.debug('Provider PTY request', {
       sandboxId,
       sessionId,

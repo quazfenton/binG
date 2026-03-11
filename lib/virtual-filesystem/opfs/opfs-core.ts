@@ -93,9 +93,10 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
     if (typeof window === 'undefined') {
       return false;
     }
-    
+
     // Check for the new File System Access API
-    return 'storage' in window && 'getDirectory' in window.storage;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return 'storage' in window && 'getDirectory' in (window as any).storage;
   }
 
   /**
@@ -131,7 +132,8 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
 
     try {
       // Get root directory handle from OPFS
-      this.rootHandle = await window.storage.getDirectory(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      this.rootHandle = await (window as any).storage.getDirectory(
         `${this.options.rootName}/${workspaceId}`
       );
       
@@ -359,26 +361,27 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
    */
   async listDirectory(path: string): Promise<OPFSDirectoryEntry[]> {
     await this.ensureInitialized();
-    
+
     const dirHandle = await this.getDirectoryHandle(path);
     const entries: OPFSDirectoryEntry[] = [];
-    
-    for await (const [name, handle] of dirHandle.entries()) {
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for await (const [name, handle] of (dirHandle as any).entries()) {
       const entry: OPFSDirectoryEntry = {
         name,
         path: path === '' ? name : `${path}/${name}`,
         type: handle.kind === 'file' ? 'file' : 'directory',
       };
-      
+
       if (handle.kind === 'file') {
         const file = await handle.getFile();
         entry.size = file.size;
         entry.lastModified = file.lastModified;
       }
-      
+
       entries.push(entry);
     }
-    
+
     return entries;
   }
 
@@ -480,18 +483,19 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
    */
   async clear(): Promise<void> {
     await this.ensureInitialized();
-    
+
     if (!this.rootHandle) return;
-    
+
     // Delete all entries
-    for await (const [name, handle] of this.rootHandle.entries()) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for await (const [name, handle] of (this.rootHandle as any).entries()) {
       await this.rootHandle.removeEntry(name, { recursive: true });
     }
-    
+
     // Clear caches
     this.fileHandleCache.clear();
     this.directoryHandleCache.clear();
-    
+
     this.emit('clear');
   }
 
@@ -682,8 +686,9 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
     let files = 0;
     let dirs = 0;
     let size = 0;
-    
-    for await (const [name, handle] of dir.entries()) {
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for await (const [name, handle] of (dir as any).entries()) {
       if (handle.kind === 'file') {
         files++;
         const file = await handle.getFile();

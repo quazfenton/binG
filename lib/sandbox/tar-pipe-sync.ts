@@ -10,13 +10,16 @@
  * - Speedup: 10x for 10+ files
  *
  * @see https://codesandbox.io/docs/sync
+ * 
+ * FIX: Added emitFilesystemUpdated for cross-panel sync
  */
 
 import { createWriteStream, createReadStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { pack, unpack } from 'tar-stream';
-import { VirtualFilesystemService } from '@/lib/virtual-filesystem/virtual-filesystem-service';
-import type { SandboxHandle } from './types';
+import { VirtualFilesystemService } from '../virtual-filesystem/virtual-filesystem-service';
+import type { SandboxHandle } from './providers/sandbox-provider';
+import { emitFilesystemUpdated } from '../virtual-filesystem/sync-events';
 
 const vfs = new VirtualFilesystemService();
 
@@ -270,6 +273,16 @@ export async function syncSandboxToVFS(
     // Clean up tar file
     await sandbox.executeCommand(`rm ${tarPath}`);
 
+    // Emit event for cross-panel sync (client-side only)
+    if (filesSynced > 0 && typeof window !== 'undefined') {
+      emitFilesystemUpdated({
+        scopePath: 'project',
+        source: 'sandbox',
+        workspaceVersion: undefined, // Version tracking handled by VFS service
+        sessionId: sandbox.id,
+      });
+    }
+
     return {
       success: true,
       filesSynced,
@@ -303,19 +316,33 @@ async function readIndividualFiles(
   let filesSynced = 0;
 
   try {
+    const syncedPaths: string[] = [];
+    
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const result = await sandbox.readFile(file.path);
-      
+
       if (result.success) {
         await vfs.writeFile(ownerId, file.path, result.content || '');
         bytesTransferred += (result.content || '').length;
         filesSynced++;
+        syncedPaths.push(file.path);
       }
 
       if (onProgress) {
         onProgress(i + 1, files.length);
       }
+    }
+
+    // Emit event for cross-panel sync (client-side only)
+    if (filesSynced > 0 && typeof window !== 'undefined') {
+      emitFilesystemUpdated({
+        scopePath: 'project',
+        source: 'sandbox',
+        paths: syncedPaths,
+        workspaceVersion: undefined,
+        sessionId: sandbox.id,
+      });
     }
 
     return {
