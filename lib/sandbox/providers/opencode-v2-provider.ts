@@ -164,8 +164,10 @@ export class OpencodeV2Provider implements LLMProvider {
       const model = process.env.OPENCODE_MODEL || 'claude-3-5-sonnet';
       const modelFlag = model ? `--model '${model.replace(/'/g, "'\\''")}'` : '';
       
+      const escapedSystemPrompt = (systemPrompt || '').replace(/'/g, "'\\''");
+      const command = `OPENCODE_SYSTEM_PROMPT='${escapedSystemPrompt}' opencode chat --json ${modelFlag} < ${promptFile}`.trim();
       const result = await this.sandboxHandle.executeCommand(
-        `OPENCODE_SYSTEM_PROMPT='${(systemPrompt || '').replace(/'/g, "'\\''")}' cat ${promptFile} | opencode chat --json ${modelFlag}`.trim(),
+        command,
         this.currentSession.workspaceDir,
         PROCESS_TIMEOUT_MS / 1000,
       );

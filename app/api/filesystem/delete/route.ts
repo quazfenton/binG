@@ -10,10 +10,15 @@ export const runtime = 'nodejs';
  * Validates path and prevents path traversal attacks
  */
 const deleteRequestSchema = z.object({
-  path: absolutePathSchema.refine(
-    (path) => path.startsWith('/home/') || path.startsWith('/workspace/'),
-    'Absolute paths must start with /home/ or /workspace/'
-  ),
+  path: absolutePathSchema
+    .refine(
+      (path) => path.startsWith('/home/') || path.startsWith('/workspace/'),
+      'Absolute paths must start with /home/ or /workspace/'
+    )
+    .refine(
+      (path) => !path.includes('..'),
+      'Path traversal sequences (..) are not allowed'
+    ),
 });
 
 export async function POST(req: NextRequest) {

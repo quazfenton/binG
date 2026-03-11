@@ -3,6 +3,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { streamingErrorHandler } from '@/lib/streaming/streaming-error-handler';
 import type { Message } from '@/types';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync-events';
+import { buildApiHeaders } from '@/lib/utils';
 
 export interface UseChatOptions {
   api: string;
@@ -54,25 +56,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   }, []);
 
   const buildRequestHeaders = useCallback((): HeadersInit => {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('token');
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-
-      let anonymousSessionId = localStorage.getItem('anonymous_session_id');
-      if (!anonymousSessionId) {
-        anonymousSessionId = `anon_${Date.now()}`;
-        localStorage.setItem('anonymous_session_id', anonymousSessionId);
-      }
-      headers['x-anonymous-session-id'] = anonymousSessionId;
-    }
-
-    return headers;
+    return buildApiHeaders();
   }, []);
 
   const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
@@ -244,15 +228,25 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           options.onError(new Error(userMessage));
         }
       } else {
-        // Log error for debugging but don't show to user
-        console.warn('Chat error (handled silently):', error);
+        // We have accumulated content, so the response is partially usable.
+        // Log the original error and still surface it as a non-blocking warning
+        // so the user knows the response may be incomplete.
+        console.warn('Chat streaming interrupted (partial content preserved):', error);
 
-        // If we have content, consider the request successful
-        if (hasContent && options.onFinish && currentMessageRef.current) {
-          options.onFinish({
-            ...currentMessageRef.current,
-            content: currentMessage?.content || ''
-          });
+        if (hasContent && currentMessageRef.current) {
+          // Append a subtle indicator that the response was truncated
+          const partialContent = (currentMessage?.content || '') + '\n\n⚠️ _Response may be incomplete due to a connection issue._';
+          setMessages(prev => prev.map(msg =>
+            msg.id === currentMessageRef.current!.id
+              ? { ...msg, content: partialContent }
+              : msg
+          ));
+          if (options.onFinish) {
+            options.onFinish({
+              ...currentMessageRef.current,
+              content: partialContent,
+            });
+          }
         }
       }
 
@@ -420,6 +414,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         }
                       : msg
                   ));
+                  emitFilesystemUpdated({
+                    scopePath: typeof eventData?.scopePath === 'string' ? eventData.scopePath : undefined,
+                    applied: eventData?.applied,
+                    errors: eventData?.errors,
+                    source: 'chat',
+                  });
                   break;
 
                 case 'reasoning':

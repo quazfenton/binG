@@ -18,6 +18,7 @@ import { toolAuthManager } from '../services/tool-authorization-manager';
 import { sandboxBridge } from '../sandbox';
 import type { LLMMessage } from './llm-providers';
 import { detectRequestType } from '../utils/request-type-detector';
+import { normalizeToolInvocations } from '@/lib/types/tool-invocation';
 import { initializeComposioService, getComposioService, type ComposioToolRequest } from './composio-service';
 import { quotaManager } from '../services/quota-manager';
 
@@ -1012,6 +1013,9 @@ class PriorityRequestRouter {
             source: 'tool-execution',
             toolCalls: [{ name: detectionResult.detectedTool, arguments: detectionResult.toolInput }],
             toolResults: [{ name: detectionResult.detectedTool, result: result.output }],
+            toolInvocations: normalizeToolInvocations([
+              { name: detectionResult.detectedTool, args: detectionResult.toolInput, result: result.output },
+            ]),
             type: 'tool_execution'
           }
         };

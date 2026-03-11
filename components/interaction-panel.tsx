@@ -470,6 +470,14 @@ export default function InteractionPanel({
     onAttachedFilesChange?.(virtualFilesystem.attachedFiles);
   }, [onAttachedFilesChange, virtualFilesystem.attachedFiles]);
 
+  const previousScopeRef = useRef(filesystemScopePath);
+  useEffect(() => {
+    if (previousScopeRef.current !== filesystemScopePath) {
+      virtualFilesystem.clearAttachedFiles();
+      previousScopeRef.current = filesystemScopePath;
+    }
+  }, [filesystemScopePath, virtualFilesystem]);
+
   // Initialize plugin migration service
   useEffect(() => {
     // Perform the migration: move Advanced AI Plugins to Extra tab

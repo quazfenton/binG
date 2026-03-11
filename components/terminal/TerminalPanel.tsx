@@ -17,6 +17,9 @@ import { createLogger } from '@/lib/utils/logger';
 import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
 import { wireTerminalHandlers, cleanupHandlers, type TerminalHandlers } from '@/lib/sandbox/terminal-handler-wiring';
 import type { LocalFilesystemEntry } from '@/lib/sandbox/local-filesystem-executor';
+import { normalizeScopePath } from '@/lib/virtual-filesystem/scope-utils';
+import { emitFilesystemUpdated, onFilesystemUpdated } from '@/lib/virtual-filesystem/sync-events';
+import { createRefreshScheduler } from '@/lib/virtual-filesystem/refresh-scheduler';
 
 const logger = createLogger('TerminalPanel');
 
@@ -111,25 +114,8 @@ function getAuthHeaders(): Record<string, string> {
   return headers;
 }
 
-const normalizeProjectScopePath = (scopePath?: string): string => {
-  const rawPath = (scopePath || 'project')
-    .replace(/\\/g, '/')
-    .trim()
-    .replace(/^\/+/, '');
-
-  if (!rawPath || rawPath === 'project') {
-    return 'project';
-  }
-
-  if (rawPath.startsWith('project/')) {
-    return rawPath.replace(/^(project\/)+/i, 'project/');
-  }
-
-  return `project/${rawPath.replace(/^project\/?/i, '')}`;
-};
-
 const createMinimalProject = (scopePath: string = 'project'): LocalFileSystem => ({
-  [normalizeProjectScopePath(scopePath)]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+  [normalizeScopePath(scopePath)]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
   'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
 });
 
@@ -367,13 +353,13 @@ export default function TerminalPanel({
   useEffect(() => {
     if (!isOpen) return;
 
-    const handleFilesystemUpdated = async () => {
+    const refresh = async () => {
       log('[filesystem-updated event] received in TerminalPanel');
-      
+
       try {
         const snapshot = await getVfsSnapshotMemoized();
         const files = snapshot?.files || [];
-        const normalizedScopePath = normalizeProjectScopePath(filesystemScopePathRef.current);
+        const normalizedScopePath = normalizeScopePath(filesystemScopePathRef.current);
 
         log(`[filesystem-updated] got snapshot, filesCount=${files.length}, scope="${normalizedScopePath}"`);
 
@@ -401,7 +387,7 @@ export default function TerminalPanel({
         let dirCount = 2; // project + scope path
         
         for (const file of files) {
-          const fullPath = normalizeProjectScopePath(file.path);
+          const fullPath = normalizeScopePath(file.path);
           const parts = fullPath.split('/');
           for (let i = 1; i < parts.length; i++) {
             const dirPath = parts.slice(0, i).join('/');
@@ -430,10 +416,12 @@ export default function TerminalPanel({
       }
     };
 
-    window.addEventListener('filesystem-updated', handleFilesystemUpdated as EventListener);
+    const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 1000, maxDelayMs: 3000 });
+    const unsubscribe = onFilesystemUpdated(() => scheduler.schedule());
     log('[TerminalPanel] registered filesystem-updated event listener');
     return () => {
-      window.removeEventListener('filesystem-updated', handleFilesystemUpdated as EventListener);
+      unsubscribe();
+      scheduler.dispose();
       log('[TerminalPanel] removed filesystem-updated event listener');
     };
   }, [isOpen, getVfsSnapshotMemoized]);
@@ -968,7 +956,7 @@ export default function TerminalPanel({
   const syncFileToVFS = useCallback(async (filePath: string, content: string) => {
     log(`syncFileToVFS: attempting to sync "${filePath}" (contentLength=${content.length})`);
     try {
-      const normalizedScope = normalizeProjectScopePath(filesystemScopePathRef.current);
+      const normalizedScope = normalizeScopePath(filesystemScopePathRef.current);
       const normalizedInput = (filePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
       const scopedFilePath = normalizedInput.startsWith(normalizedScope)
         ? normalizedInput
@@ -1005,15 +993,11 @@ export default function TerminalPanel({
       log(`syncFileToVFS: API response status=${response.status}`);
 
       if (response.ok) {
-        // Dispatch event for cross-panel sync
-        const event = new CustomEvent('filesystem-updated', {
-          detail: {
-            path: scopedFilePath,
-            scopePath: normalizedScope,
-            source: 'terminal',
-          },
+        emitFilesystemUpdated({
+          path: scopedFilePath,
+          scopePath: normalizedScope,
+          source: 'terminal',
         });
-        window.dispatchEvent(event);
         log(`syncFileToVFS: dispatched filesystem-updated event for "${scopedFilePath}"`);
       } else {
         const errorText = await response.text().catch(() => 'unknown');

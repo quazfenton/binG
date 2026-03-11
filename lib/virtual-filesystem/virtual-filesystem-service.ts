@@ -10,6 +10,7 @@ import type {
   VirtualWorkspaceSnapshot,
 } from './filesystem-types';
 import { diffTracker } from './filesystem-diffs';
+import { stripWorkspacePrefixes } from './scope-utils';
 import { VFSBatchOperations } from './vfs-batch-operations';
 
 // Default configuration
@@ -127,12 +128,22 @@ export class VirtualFilesystemService {
     return file;
   }
 
-  async writeFile(ownerId: string, filePath: string, content: string, language?: string): Promise<VirtualFile> {
+  async writeFile(
+    ownerId: string,
+    filePath: string,
+    content: string,
+    language?: string,
+    options?: { failIfExists?: boolean },
+  ): Promise<VirtualFile> {
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
     const previous = workspace.files.get(normalizedPath);
     const now = new Date().toISOString();
     const normalizedContent = typeof content === 'string' ? content : String(content ?? '');
+
+    if (previous && options?.failIfExists) {
+      throw new Error(`File already exists: ${normalizedPath}`);
+    }
 
     // Check for concurrent modification (conflict detection)
     if (previous) {
@@ -549,27 +560,10 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
-    // Strip common sandbox/workspace prefixes to prevent path accumulation
-    // This prevents issues like /tmp/workspaces/tmp/workspaces/...
-    // Handle both absolute and relative paths
-    let strippedPath = rawPath
-      .replace(/^\/tmp\/workspaces\//i, '')
-      .replace(/^\/tmp\/workspaces/i, '')
-      .replace(/^tmp\/workspaces\//i, '')
-      .replace(/^tmp\/workspaces/i, '')
-      .replace(/^\/workspace\//i, '')
-      .replace(/^\/workspace/i, '')
-      .replace(/^workspace\//i, '')
-      .replace(/^workspace/i, '')
-      .replace(/^\/home\/[^/]+\/workspace\//i, '')
-      .replace(/^\/home\/[^/]+\/workspace/i, '')
-      .replace(/^home\/[^/]+\/workspace\//i, '')
-      .replace(/^home\/[^/]+\/workspace/i, '')
-      .replace(/^project\//, '')
-      .replace(/^\/project\//, '');
-
-    // Remove any leading slashes after stripping
-    strippedPath = strippedPath.replace(/^\/+/, '');
+    // Strip common sandbox/workspace prefixes (single source of truth in scope-utils)
+    let strippedPath = stripWorkspacePrefixes(rawPath);
+    // Also strip project/ prefix for server-side resolution
+    strippedPath = strippedPath.replace(/^project\//, '');
 
     // Handle empty path after stripping
     if (!strippedPath) {

@@ -25,24 +25,17 @@ import {
   debugContentProcessing
 } from "@/lib/input-response-separator";
 import { useAuth } from "@/contexts/auth-context";
-import { generateSecureId } from "@/lib/utils";
+import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from "@/lib/utils";
 import type { AttachedVirtualFile } from "@/hooks/use-virtual-filesystem";
 import { parsePatch, applyPatch } from "diff";
+import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
+import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync-events";
 
 /**
  * Render the main conversation interface with chat, filesystem attachments, providers/models selection,
  * history, voice integration, streaming state, code previews, and terminal visibility.
  */
-function getStableSessionId(): string {
-  if (typeof window === 'undefined') return 'server-session';
-  
-  let sessionId = localStorage.getItem('anonymous_session_id');
-  if (!sessionId) {
-    sessionId = generateSecureId('anon');
-    localStorage.setItem('anonymous_session_id', sessionId);
-  }
-  return sessionId;
-}
+const getStableSessionId = getOrCreateAnonymousSessionId;
 
 function getFilesystemScopeMappingKey(chatId: string): string {
   return `chat_filesystem_scope_${chatId}`;
@@ -64,38 +57,7 @@ function restoreFilesystemScope(chatId: string): string | null {
   }
 }
 
-function buildFilesystemHeaders(): HeadersInit {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (typeof window !== "undefined") {
-    const token = localStorage.getItem("token");
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    let anonymousSessionId = localStorage.getItem("anonymous_session_id");
-    if (!anonymousSessionId) {
-      anonymousSessionId = generateSecureId("anon");
-      localStorage.setItem("anonymous_session_id", anonymousSessionId);
-    }
-    headers["x-anonymous-session-id"] = anonymousSessionId;
-  }
-  return headers;
-}
-
-function normalizeScopedPath(inputPath: string, scopePath: string): string {
-  const scope = (scopePath || "project").replace(/^\/+/, "").replace(/\/+$/, "") || "project";
-  const rawPath = (inputPath || "").replace(/\\/g, "/").trim();
-  if (!rawPath) return scope;
-  const stripped = rawPath.replace(/^\/+/, "");
-  if (stripped.startsWith(`${scope}/`) || stripped === scope) {
-    return stripped;
-  }
-  if (stripped.startsWith("project/")) {
-    return stripped;
-  }
-  return `${scope}/${stripped}`.replace(/\/{2,}/g, "/");
-}
+const buildFilesystemHeaders = (): HeadersInit => buildApiHeaders();
 
 function applyUnifiedDiffToContent(currentContent: string, path: string, diffBody: string): string | null {
   const diffText = diffBody.endsWith("\n") ? diffBody : `${diffBody}\n`;
@@ -110,6 +72,7 @@ function applyUnifiedDiffToContent(currentContent: string, path: string, diffBod
 }
 
 function applySimpleLineDiff(currentContent: string, diffBody: string): string | null {
+  if (currentContent && currentContent.trim().length > 0) return null;
   const lines = diffBody
     .split("\n")
     .filter((l) => /^(\+\s|\-\s|\s\s)/.test(l.trimStart()))
@@ -214,6 +177,27 @@ export default function ConversationInterface() {
     () => `project/sessions/${filesystemSessionId}`,
     [filesystemSessionId],
   );
+
+  const providerRef = useRef(currentProvider);
+  const modelRef = useRef(currentModel);
+  const filesystemContextRef = useRef<{ attachedFiles: AttachedVirtualFile[]; applyFileEdits: boolean; scopePath: string }>({
+    attachedFiles: [],
+    applyFileEdits: true,
+    scopePath: filesystemScopePath,
+  });
+  const filesystemSessionIdRef = useRef(filesystemSessionId);
+
+  useEffect(() => {
+    providerRef.current = currentProvider;
+  }, [currentProvider]);
+
+  useEffect(() => {
+    modelRef.current = currentModel;
+  }, [currentModel]);
+
+  useEffect(() => {
+    filesystemSessionIdRef.current = filesystemSessionId;
+  }, [filesystemSessionId]);
   
   // Persist currentConversationId to sessionStorage
   useEffect(() => {
@@ -291,6 +275,14 @@ export default function ConversationInterface() {
     scopePath: filesystemScopePath,
   }), [attachedFilesystemFiles, filesystemScopePath]);
 
+  useEffect(() => {
+    filesystemContextRef.current = {
+      attachedFiles: Object.values(attachedFilesystemFiles),
+      applyFileEdits: true,
+      scopePath: filesystemScopePath,
+    };
+  }, [attachedFilesystemFiles, filesystemScopePath]);
+
   // ESC key handler for closing temporary panels
   useEffect(() => {
     const handleEscKey = (event: KeyboardEvent) => {
@@ -323,13 +315,23 @@ export default function ConversationInterface() {
     setInput, // Destructure setInput from enhanced chat hook
   } = useEnhancedChat({
     api: "/api/chat",
-    body: {
-      provider: currentProvider,
-      model: currentModel,
+    body: () => ({
+      provider: providerRef.current,
+      model: modelRef.current,
       stream: true,
-      conversationId: filesystemSessionId,
-      filesystemContext,
-    },
+      conversationId: filesystemSessionIdRef.current,
+      filesystemContext: {
+        attachedFiles: filesystemContextRef.current.attachedFiles.map((file) => ({
+          path: file.path,
+          content: file.content,
+          language: file.language,
+          version: file.version,
+          lastModified: file.lastModified,
+        })),
+        applyFileEdits: true,
+        scopePath: filesystemContextRef.current.scopePath,
+      },
+    }),
     onResponse: async (response) => {
       if (response.status === 401) {
         toast.error(
@@ -813,7 +815,7 @@ export default function ConversationInterface() {
     let appliedCount = 0;
 
     for (const entry of entries) {
-      const resolvedPath = normalizeScopedPath(entry.path, scopePath);
+      const resolvedPath = resolveScopedPath(entry.path, scopePath);
       let currentContent = "";
       try {
         const readResponse = await fetch("/api/filesystem/read", {
@@ -864,20 +866,23 @@ export default function ConversationInterface() {
     }
 
     if (appliedCount > 0) {
-      window.dispatchEvent(new CustomEvent("filesystem-updated", {
-        detail: {
-          scopePath: filesystemScopePath || "project",
-          source: "command-diff",
-        },
-      }));
+      emitFilesystemUpdated({
+        scopePath: filesystemScopePath || "project",
+        source: "command-diff",
+      });
     }
 
     setCommandsByFile((prev) => {
+      const attemptedPaths = new Set(entries.map((entry) => entry.path));
       const next: Record<string, string[]> = {};
       for (const [path, diffs] of Object.entries(prev)) {
         const remaining = failed[path] || [];
-        if (remaining.length > 0) {
-          next[path] = remaining;
+        if (attemptedPaths.has(path)) {
+          if (remaining.length > 0) {
+            next[path] = remaining;
+          }
+        } else {
+          next[path] = diffs;
         }
       }
       return next;
@@ -893,10 +898,128 @@ export default function ConversationInterface() {
   }, [filesystemScopePath]);
 
   // Handle chat submission - no login restrictions
-  const handleChatSubmit = (content: string) => {
+  const refreshAttachedFiles = useCallback(async (
+    files: Record<string, AttachedVirtualFile>,
+    scopePath: string,
+  ): Promise<Record<string, AttachedVirtualFile>> => {
+    const entries = Object.values(files);
+    if (entries.length === 0) return files;
+
+    const headers = buildFilesystemHeaders();
+    const refreshed = await Promise.all(entries.map(async (file) => {
+      const resolvedPath = resolveScopedPath(file.path, scopePath);
+      try {
+        const response = await fetch("/api/filesystem/read", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ path: resolvedPath }),
+        });
+        if (!response.ok) {
+          return file;
+        }
+        const payload = await response.json().catch(() => null);
+        if (!payload?.success || !payload?.data) {
+          return file;
+        }
+        const data = payload.data;
+        return {
+          path: data.path || resolvedPath,
+          content: typeof data.content === "string" ? data.content : file.content,
+          language: data.language || file.language,
+          version: typeof data.version === "number" ? data.version : file.version,
+          lastModified: data.lastModified || file.lastModified,
+        } as AttachedVirtualFile;
+      } catch {
+        return file;
+      }
+    }));
+
+    const next: Record<string, AttachedVirtualFile> = {};
+    for (const entry of refreshed) {
+      next[entry.path] = entry;
+    }
+    return next;
+  }, []);
+
+  const attachmentRefreshState = useRef({
+    lastRefreshAt: 0,
+    inFlight: false,
+    timer: null as ReturnType<typeof setTimeout> | null,
+  });
+
+  const scheduleAttachmentRefresh = useCallback((reason: string) => {
+    if (Object.keys(attachedFilesystemFiles).length === 0) return;
+
+    const now = Date.now();
+    const MIN_REFRESH_MS = 3000;
+    const state = attachmentRefreshState.current;
+    const elapsed = now - state.lastRefreshAt;
+    const delay = Math.max(0, MIN_REFRESH_MS - elapsed);
+
+    if (state.timer) {
+      return;
+    }
+
+    state.timer = setTimeout(async () => {
+      state.timer = null;
+      if (state.inFlight) return;
+      state.inFlight = true;
+      try {
+        const refreshed = await refreshAttachedFiles(attachedFilesystemFiles, filesystemScopePath);
+        setAttachedFilesystemFiles(refreshed);
+        filesystemContextRef.current = {
+          attachedFiles: Object.values(refreshed),
+          applyFileEdits: true,
+          scopePath: filesystemScopePath,
+        };
+      } finally {
+        state.inFlight = false;
+        state.lastRefreshAt = Date.now();
+      }
+    }, delay);
+  }, [attachedFilesystemFiles, filesystemScopePath, refreshAttachedFiles]);
+
+  useEffect(() => {
+    const unsubscribe = onFilesystemUpdated((event) => {
+      const scopePath = event?.detail?.scopePath;
+      if (scopePath && scopePath !== filesystemScopePath) {
+        return;
+      }
+      scheduleAttachmentRefresh('filesystem-updated');
+    });
+    return () => {
+      unsubscribe();
+      const state = attachmentRefreshState.current;
+      if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+    };
+  }, [filesystemScopePath, scheduleAttachmentRefresh]);
+
+  useEffect(() => {
+    if (Object.keys(attachedFilesystemFiles).length === 0) return;
+    const interval = setInterval(() => {
+      scheduleAttachmentRefresh('interval');
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [attachedFilesystemFiles, scheduleAttachmentRefresh]);
+
+  const handleChatSubmit = async (content: string) => {
     // Increment prompt count for tracking (no restrictions)
     if (!isLoggedIn) {
       setPromptCount((prev) => prev + 1);
+    }
+
+    let refreshedFiles = attachedFilesystemFiles;
+    if (Object.keys(attachedFilesystemFiles).length > 0) {
+      refreshedFiles = await refreshAttachedFiles(attachedFilesystemFiles, filesystemScopePath);
+      setAttachedFilesystemFiles(refreshedFiles);
+      filesystemContextRef.current = {
+        attachedFiles: Object.values(refreshedFiles),
+        applyFileEdits: true,
+        scopePath: filesystemScopePath,
+      };
     }
 
     setInput(content);

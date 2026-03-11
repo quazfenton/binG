@@ -110,7 +110,11 @@
       envWarning.style.display = 'block';
     }
     
-    if (!process?.env?.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID) {
+    const hasClientId =
+      typeof process !== 'undefined' &&
+      process.env &&
+      process.env.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID;
+    if (!hasClientId) {
       envWarningText.textContent = 'NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID not set. Tests may fail.';
       envWarning.style.display = 'block';
     }
@@ -475,7 +479,7 @@
 
     // Auto-run on load
     window.addEventListener('load', () => {
-      setTimeout(runAllTests, 1000);
+      setTimeout(() => window.runAllTests(), 1000);
     });
   </script>
 </body>

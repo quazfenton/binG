@@ -271,6 +271,7 @@ export function useOPFS(
         type: entry.type,
       }));
     } catch (error) {
+      console.error('[useOPFS] listDirectory failed for path:', path, error);
       onError?.(error as Error);
       return [];
     }

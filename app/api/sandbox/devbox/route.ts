@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { createLogger } from '@/lib/utils/logger';
+import { generateSecureId } from '@/lib/utils';
 
 const logger = createLogger('DevBoxAPI');
 
@@ -23,7 +24,8 @@ export const runtime = 'nodejs';
 export async function POST(req: NextRequest) {
   try {
     const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
-    const userId = authResult.userId || 'anonymous';
+    const anonymousSessionId = req.headers.get('x-anonymous-session-id') || generateSecureId('anon');
+    const userId = authResult.userId || `anonymous:${anonymousSessionId}`;
 
     const body = await req.json();
     const { files, template = 'node' } = body;

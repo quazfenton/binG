@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader } from "../ui/card";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import { ExternalLink, RefreshCw, BarChart2, Monitor } from "lucide-react";
+import { ExternalLink, RefreshCw, BarChart2, BarChart3, Monitor } from "lucide-react";
 
 export interface ObservableEmbedPluginProps {
   onOpenWindow?: (notebookId: string, title: string) => void;

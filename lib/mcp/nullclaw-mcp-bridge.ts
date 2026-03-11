@@ -467,7 +467,10 @@ class NullclawMCPBridge {
         if (container && container.status === 'ready') {
           // Keep container warm for a bit, then stop
           setTimeout(() => {
-            if (!this.sessionToContainer.has(sessionId)) {
+            const stillInUse = Array.from(this.sessionToContainer.values()).some(
+              mappedId => mappedId === containerId
+            );
+            if (!stillInUse) {
               nullclawIntegration.stopContainer(containerId).catch(logger.error);
               this.containerPool.delete(containerId);
             }

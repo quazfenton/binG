@@ -19,7 +19,7 @@
  *   - NODE_ENV: 'development' enables debug level by default
  */
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent';
 
 export interface LogContext {
   requestId?: string;
@@ -43,6 +43,7 @@ class ChatLogger {
     info: 1,
     warn: 2,
     error: 3,
+    silent: 4,
   };
 
   constructor(component: string = 'Chat API', defaultLevel?: LogLevel) {

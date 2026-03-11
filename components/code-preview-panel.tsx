@@ -43,10 +43,14 @@ import { parsePatch, applyPatch } from "diff";
 import { useVirtualFilesystem } from "../hooks/use-virtual-filesystem";
 import { OPFSStatusIndicator } from "./opfs-status-indicator";
 import { EnhancedDiffViewer } from "./enhanced-diff-viewer";
+import { normalizeScopePath, stripWorkspacePrefixes } from "@/lib/virtual-filesystem/scope-utils";
+import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync-events";
+import { createRefreshScheduler } from "@/lib/virtual-filesystem/refresh-scheduler";
 import {
   parseCodeBlocksFromMessages,
   type CodeBlock as ParsedCodeBlock,
 } from "../lib/code-parser";
+import { createDebugLogger } from "@/config/features";
 
 // Lazy load Sandpack to avoid SSR issues
 // React.lazy requires default export, so we remap the named export
@@ -130,11 +134,7 @@ export default function CodePreviewPanel({
 }: CodePreviewPanelProps) {
   const [detectedFramework] = useState<"react" | "vue" | "vanilla">("vanilla");
 
-  // Debug flag - set to true to enable verbose logging
-  const DEBUG = typeof window !== 'undefined' && (localStorage.getItem('DEBUG_CODE_PREVIEW') === 'true' || process.env.NODE_ENV === 'development');
-  const log = (...args: any[]) => DEBUG && console.log('[CodePreviewPanel]', ...args);
-  const logError = (...args: any[]) => console.error('[CodePreviewPanel ERROR]', ...args);
-  const logWarn = (...args: any[]) => console.warn('[CodePreviewPanel WARN]', ...args);
+  const { log, error: logError, warn: logWarn } = createDebugLogger('CodePreviewPanel', 'DEBUG_CODE_PREVIEW');
   const [selectedTab, setSelectedTab] = useState("preview");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [projectStructure, setProjectStructure] =
@@ -179,30 +179,8 @@ export default function CodePreviewPanel({
   const normalizedFilesystemPath = useMemo(() => {
     let cleanPath = filesystemCurrentPath || 'project';
     
-    // Remove accumulated sandbox/workspace prefixes
-    cleanPath = cleanPath
-      .replace(/^(\/tmp\/workspaces\/)+/gi, '')
-      .replace(/^(tmp\/workspaces\/)+/gi, '')
-      .replace(/^(\/workspace\/)+/gi, '')
-      .replace(/^(workspace\/)+/gi, '')
-      .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(\/sessions\/)+/gi, '')
-      .replace(/^(sessions\/)+/gi, '');
-
-    // Ensure path starts with project/
-    if (!cleanPath.startsWith('project/') && cleanPath !== 'project') {
-      cleanPath = cleanPath.replace(/^\/+/, '');
-      if (cleanPath.startsWith('project/')) {
-        cleanPath = cleanPath.replace(/^project\/(project\/)+/, 'project/');
-      } else if (cleanPath) {
-        cleanPath = `project/${cleanPath}`;
-      } else {
-        cleanPath = 'project';
-      }
-    }
-    
-    return cleanPath;
+    cleanPath = stripWorkspacePrefixes(cleanPath);
+    return normalizeScopePath(cleanPath);
   }, [filesystemCurrentPath]);
 
   // Debounce loading state to prevent rapid re-renders
@@ -272,42 +250,10 @@ export default function CodePreviewPanel({
   // Centralized path normalization helper
   const normalizeProjectPath = useCallback((path: string): string => {
     const originalPath = path;
-    let cleanPath = (path || 'project')
-      .replace(/\\/g, '/')
-      .trim();
-
-    // Remove accumulated sandbox/workspace prefixes
-    cleanPath = cleanPath
-      .replace(/^(\/tmp\/workspaces\/)+/gi, '')
-      .replace(/^(tmp\/workspaces\/)+/gi, '')
-      .replace(/^(\/workspace\/)+/gi, '')
-      .replace(/^(workspace\/)+/gi, '')
-      .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(\/sessions\/)+/gi, '')
-      .replace(/^(sessions\/)+/gi, '')
-      .replace(/^\/+/, '');
-
-    if (!cleanPath || cleanPath === 'project') {
-      log(`normalizeProjectPath: "${originalPath}" -> "project"`);
-      return 'project';
-    }
-
-    if (cleanPath === 'project') {
-      log(`normalizeProjectPath: "${originalPath}" -> "project" (exact)`);
-      return 'project';
-    }
-
-    // Remove duplicate project/ prefixes
-    if (cleanPath.startsWith('project/')) {
-      const result = cleanPath.replace(/^(project\/)+/i, 'project/');
-      log(`normalizeProjectPath: "${originalPath}" -> "${result}" (had duplicate prefix)`);
-      return result;
-    }
-
-    const result = `project/${cleanPath.replace(/^project\/?/i, '')}`;
-    log(`normalizeProjectPath: "${originalPath}" -> "${result}"`);
-    return result;
+    const cleanPath = stripWorkspacePrefixes(path || 'project');
+    const normalized = normalizeScopePath(cleanPath);
+    log(`normalizeProjectPath: "${originalPath}" -> "${normalized}"`);
+    return normalized;
   }, []);
 
   const openFilesystemDirectory = useCallback((path: string) => {
@@ -433,14 +379,11 @@ export default function CodePreviewPanel({
       log(`handleCreateFile: selected new file in UI`);
       
       // Dispatch event for cross-panel sync
-      const event = new CustomEvent('filesystem-updated', {
-        detail: {
-          path: createdPath,
-          scopePath: cleanParentPath,
-          source: 'code-preview',
-        },
+      emitFilesystemUpdated({
+        path: createdPath,
+        scopePath: cleanParentPath,
+        source: 'code-preview',
       });
-      window.dispatchEvent(event);
       log(`handleCreateFile: dispatched filesystem-updated event`);
       
       toast.success('File created: ' + name.trim());
@@ -465,13 +408,11 @@ export default function CodePreviewPanel({
       
       // Dispatch event for cross-panel sync
       const folderPath = `${cleanParentPath.replace(/\/+$/, '')}/${folderName}`;
-      window.dispatchEvent(new CustomEvent('filesystem-updated', {
-        detail: {
-          path: folderPath,
-          scopePath: cleanParentPath,
-          source: 'code-preview',
-        },
-      }));
+      emitFilesystemUpdated({
+        path: folderPath,
+        scopePath: cleanParentPath,
+        source: 'code-preview',
+      });
       
       toast.success('Folder created: ' + folderName);
       setContextMenu(null);
@@ -599,13 +540,19 @@ export default function CodePreviewPanel({
   // FIXED: Add ref guard to prevent multiple concurrent calls
   const handleManualPreviewRef = useRef(false);
   
-  const handleManualPreview = useCallback(async (directoryPath?: string, mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'local' | 'cloud') => {
+  const handleManualPreview = useCallback(async (
+    directoryPath?: string,
+    mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'local' | 'cloud',
+    options?: { silent?: boolean; preserveTab?: boolean },
+  ) => {
     // Prevent multiple concurrent calls
     if (handleManualPreviewRef.current) {
       log('[handleManualPreview] already running, skipping duplicate call');
       return;
     }
     handleManualPreviewRef.current = true;
+    const silent = options?.silent ?? false;
+    const preserveTab = options?.preserveTab ?? false;
     
     try {
       const targetPath = directoryPath || filesystemCurrentPath;
@@ -640,7 +587,9 @@ export default function CodePreviewPanel({
       await loadFiles(targetPath);
 
       if (Object.keys(files).length === 0) {
-        toast.error('No files found in directory');
+        if (!silent) {
+          toast.error('No files found in directory');
+        }
         return;
       }
 
@@ -783,7 +732,9 @@ export default function CodePreviewPanel({
       setManualPreviewFiles(previewFiles);
       setIsManualPreviewActive(true);
       setPreviewMode(selectedMode);
-      setSelectedTab('preview');  // Always switch to preview tab
+      if (!preserveTab) {
+        setSelectedTab('preview');  // Always switch to preview tab
+      }
 
       const modeIcon = {
         sandpack: '▶', iframe: '📄', raw: '📝', parcel: '⚡',
@@ -793,13 +744,17 @@ export default function CodePreviewPanel({
 
       const execIcon = { local: '💻', cloud: '☁️', hybrid: '🔄' }[detectedExecutionMode];
 
-      toast.success(`${modeIcon} Preview loaded (${selectedMode}) - ${execIcon} ${detectedExecutionMode} execution`, {
-        description: `${Object.keys(previewFiles).length} files (root: "${selectedRoot || 'project root'}")`
-      });
+      if (!silent) {
+        toast.success(`${modeIcon} Preview loaded (${selectedMode}) - ${execIcon} ${detectedExecutionMode} execution`, {
+          description: `${Object.keys(previewFiles).length} files (root: "${selectedRoot || 'project root'}")`
+        });
+      }
     } catch (error: any) {
       logError(`[handleManualPreview] failed`, error);
       console.error('[Manual Preview] Error:', error);
-      toast.error('Failed to load preview: ' + error.message);
+      if (!silent) {
+        toast.error('Failed to load preview: ' + error.message);
+      }
     } finally {
       // Reset the guard to allow future calls
       handleManualPreviewRef.current = false;
@@ -1069,8 +1024,6 @@ export default function CodePreviewPanel({
   // FIXED: Use refs to avoid re-creating listener on every dependency change
   const filesystemCurrentPathRef = useRef(filesystemCurrentPath);
   const filesystemScopePathRef = useRef(filesystemScopePath);
-  const lastRefreshTimeRef = useRef(0);
-  const REFRESH_COOLDOWN_MS = 1000; // Minimum 1 second between refreshes
 
   useEffect(() => {
     filesystemCurrentPathRef.current = filesystemCurrentPath;
@@ -1083,17 +1036,7 @@ export default function CodePreviewPanel({
   useEffect(() => {
     if (!isOpen) return;
 
-    const handleFilesystemUpdated = async (event?: CustomEvent) => {
-      const detail = event?.detail;
-      
-      // Prevent rapid re-refreshing (cooldown)
-      const now = Date.now();
-      if (now - lastRefreshTimeRef.current < REFRESH_COOLDOWN_MS) {
-        log(`[filesystem-updated] skipping - cooldown (${now - lastRefreshTimeRef.current}ms < ${REFRESH_COOLDOWN_MS}ms)`);
-        return;
-      }
-      lastRefreshTimeRef.current = now;
-      
+    const refresh = async (detail?: any) => {
       log(`[filesystem-updated event] received`, detail);
 
       try {
@@ -1122,7 +1065,7 @@ export default function CodePreviewPanel({
         if (manualPreviewActiveRef.current) {
           const manualPath = manualPreviewPathRef.current || filesystemScopePathRef.current || normalizedScopePath;
           log(`[filesystem-updated] refreshing manual preview from "${manualPath}"`);
-          await handleManualPreview(manualPath);
+          await handleManualPreview(manualPath, undefined, { silent: true, preserveTab: true });
         }
       } catch (error) {
         logError(`[filesystem-updated] refresh failed`, error);
@@ -1130,10 +1073,12 @@ export default function CodePreviewPanel({
       }
     };
 
-    window.addEventListener('filesystem-updated', handleFilesystemUpdated as EventListener);
+    const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 1000, maxDelayMs: 3000 });
+    const unsubscribe = onFilesystemUpdated((event) => scheduler.schedule(event.detail));
     log('[CodePreviewPanel] registered filesystem-updated event listener');
     return () => {
-      window.removeEventListener('filesystem-updated', handleFilesystemUpdated as EventListener);
+      unsubscribe();
+      scheduler.dispose();
       log('[CodePreviewPanel] removed filesystem-updated event listener');
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4314,14 +4259,11 @@ export default app;`,
                                         log(`handleSave: refreshed directory`);
                                         
                                         // Dispatch event for cross-panel sync
-                                        const event = new CustomEvent('filesystem-updated', {
-                                          detail: {
-                                            path: filePath,
-                                            scopePath: normalizedFilesystemPath,
-                                            source: 'code-preview',
-                                          },
+                                        emitFilesystemUpdated({
+                                          path: filePath,
+                                          scopePath: normalizedFilesystemPath,
+                                          source: 'code-preview',
                                         });
-                                        window.dispatchEvent(event);
                                         log(`handleSave: dispatched filesystem-updated event`);
                                         
                                         toast.success('File saved');

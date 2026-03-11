@@ -157,6 +157,8 @@ class CloudFSManager {
     
     if (targetProvider === 'local') {
       logger.debug('CloudFS: Using local VFS fallback');
+      this.activeHandle = undefined;
+      this.activeProvider = 'local';
       return undefined;
     }
 
@@ -384,6 +386,7 @@ class CloudFSManager {
       if (providerConfig) {
         providerConfig.quotaUsed = (providerConfig.quotaUsed || 0) + totalSize;
       }
+      this.syncCache.clear();
 
       return {
         success: synced === files.length,

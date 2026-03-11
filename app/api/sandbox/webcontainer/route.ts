@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { createLogger } from '@/lib/utils/logger';
+import { generateSecureId } from '@/lib/utils';
 
 const logger = createLogger('WebContainerAPI');
 
@@ -22,8 +23,18 @@ export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   try {
+    if (typeof window === 'undefined') {
+      return NextResponse.json(
+        {
+          error: 'WebContainer can only be created in a browser runtime. Use the client-side flow.',
+        },
+        { status: 501 },
+      );
+    }
+
     const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
-    const userId = authResult.userId || 'anonymous';
+    const anonymousSessionId = req.headers.get('x-anonymous-session-id') || generateSecureId('anon');
+    const userId = authResult.userId || `anonymous:${anonymousSessionId}`;
 
     const body = await req.json();
     const { files, startCommand, waitForPort } = body;

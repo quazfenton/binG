@@ -18,6 +18,7 @@ import { ReasoningDisplay, ReasoningSummary } from "@/components/reasoning-displ
 import { ToolInvocationsList } from "@/components/tool-invocation-card"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
+import { buildApiHeaders } from "@/lib/utils"
 
 interface MessageBubbleProps {
   message: Message
@@ -135,23 +136,7 @@ export default function MessageBubble({
   }, [fileEditInfo?.status]);
 
   const buildRequestHeaders = useCallback((): HeadersInit => {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-
-    if (typeof window !== "undefined") {
-      const token = localStorage.getItem("token");
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-
-      const anonymousSessionId = localStorage.getItem("anonymous_session_id");
-      if (anonymousSessionId) {
-        headers["x-anonymous-session-id"] = anonymousSessionId;
-      }
-    }
-
-    return headers;
+    return buildApiHeaders();
   }, []);
 
   const handleAcceptEdits = useCallback(async () => {
@@ -437,22 +422,24 @@ export default function MessageBubble({
 
   // Apply artifact to filesystem
   const handleApplyArtifact = useCallback(async (artifact: CodeArtifact) => {
-    if (!artifact.content || applyingArtifact) return;
+    if (applyingArtifact) return;
+    if (artifact.operation !== 'delete' && artifact.content == null) return;
     setApplyingArtifact(artifact.path);
     try {
-      const response = await fetch('/api/filesystem/write', {
+      const isDelete = artifact.operation === 'delete';
+      const response = await fetch(isDelete ? '/api/filesystem/delete' : '/api/filesystem/write', {
         method: 'POST',
         headers: buildRequestHeaders(),
         body: JSON.stringify({
           path: artifact.path,
-          content: artifact.content,
+          content: isDelete ? undefined : artifact.content ?? '',
         }),
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok || !payload?.success) {
         throw new Error(payload?.error || `Failed to apply (${response.status})`);
       }
-      toast.success('File applied', { description: artifact.path, duration: 2000 });
+      toast.success(isDelete ? 'File deleted' : 'File applied', { description: artifact.path, duration: 2000 });
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : 'Failed to apply';
       toast.error('Failed to apply file', { description: errMsg, duration: 4000 });

@@ -81,8 +81,13 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    const success =
+      direction === 'bidirectional'
+        ? result.toSandbox.success && result.fromSandbox.success
+        : result.success;
+
     return NextResponse.json({
-      success: result.success,
+      success,
       data: result,
     });
 

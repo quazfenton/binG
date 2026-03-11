@@ -251,24 +251,34 @@ class TaskRouter {
     });
 
     // Extract file changes from V2 agent steps
-    const fileChanges: Array<{ path: string; action: string; content?: string }> = [];
+    const fileChanges: Array<{ path: string; action: string; operation: 'write' | 'patch' | 'delete'; content?: string }> = [];
     if (result.steps) {
       for (const step of result.steps) {
         // Look for file operation tool calls in steps
         if (step.toolName && ['write_file', 'read_file', 'delete_file', 'edit_file', 'Bash'].includes(step.toolName)) {
           const args = step.args || {};
-          const path = args.path || args.file || args.target || '';
-          if (path) {
-            if (step.toolName === 'Bash' && args.command) {
-              // Extract file paths from bash commands like "echo > file.txt"
-              const match = args.command.match(/(?:>\s*|tee\s+|cat\s*>\s*)([^\s|]+)/);
-              if (match) {
-                fileChanges.push({ path: match[1], action: 'modify' });
-              }
-            } else {
-              fileChanges.push({ path, action: step.toolName === 'delete_file' ? 'delete' : 'modify' });
+          if (step.toolName === 'Bash' && args.command) {
+            // Extract file paths from bash commands like "echo > file.txt"
+            const match = args.command.match(/(?:>\s*|tee\s+|cat\s*>\s*)([^\s|]+)/);
+            if (match) {
+              fileChanges.push({
+                path: match[1],
+                action: 'modify',
+                operation: 'patch',
+              });
             }
+            continue;
           }
+
+          const path = args.path || args.file || args.target || '';
+          if (!path) continue;
+          const isDelete = step.toolName === 'delete_file';
+          const isPatch = step.toolName === 'edit_file';
+          fileChanges.push({
+            path,
+            action: isDelete ? 'delete' : 'modify',
+            operation: isDelete ? 'delete' : isPatch ? 'patch' : 'write',
+          });
         }
       }
     }

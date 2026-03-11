@@ -88,19 +88,9 @@ export async function POST(req: NextRequest) {
 
     log(`${COLORS.dim}[${requestId}]${COLORS.reset} Creating file: ${COLORS.blue}"${filePath}"${COLORS.reset} (language: ${COLORS.magenta}${language}${COLORS.reset}) for owner=${COLORS.magenta}"${authenticatedOwnerId}"${COLORS.reset}`);
 
-    // Check if file already exists
-    try {
-      await virtualFilesystem.readFile(authenticatedOwnerId, filePath);
-      logError(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.red}File already exists:${COLORS.reset} ${COLORS.blue}"${filePath}"${COLORS.reset}`);
-      return NextResponse.json(
-        { success: false, error: `File already exists: ${filePath}` },
-        { status: 409 }
-      );
-    } catch (e) {
-      // File doesn't exist, which is what we want
-    }
-
-    const result = await virtualFilesystem.writeFile(authenticatedOwnerId, filePath, content, language);
+    const result = await virtualFilesystem.writeFile(authenticatedOwnerId, filePath, content, language, {
+      failIfExists: true,
+    });
     const duration = Date.now() - startTime;
 
     log(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.green}Success${COLORS.reset}: Created file ${COLORS.blue}"${result.path}"${COLORS.reset} (${COLORS.cyan}${result.size} bytes${COLORS.reset}) in ${COLORS.cyan}${duration}ms${COLORS.reset}`);
@@ -120,9 +110,16 @@ export async function POST(req: NextRequest) {
     const message = error instanceof Error ? error.message : 'Failed to create file';
     logError(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.red}ERROR${COLORS.reset} after ${COLORS.cyan}${duration}ms${COLORS.reset}:`, message);
 
+    if (message.includes('File already exists')) {
+      return NextResponse.json(
+        { success: false, error: message },
+        { status: 409 },
+      );
+    }
+
     return NextResponse.json(
       { success: false, error: message },
-      { status: 400 }
+      { status: 500 }
     );
   }
 }

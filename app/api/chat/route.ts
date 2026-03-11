@@ -14,6 +14,7 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { ShadowCommitManager } from '@/lib/stateful-agent/commit/shadow-commit';
+import { resolveScopedPath as resolveScopeUtil } from '@/lib/virtual-filesystem/scope-utils';
 import type { LLMMessage } from "@/lib/api/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/mastra';
@@ -21,6 +22,7 @@ import { executeV2Task, executeV2TaskStreaming } from '@/lib/agent/v2-executor';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/api/unified-agent-service';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@/lib/agent/workforce-manager';
+import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -387,12 +389,9 @@ export async function POST(request: NextRequest) {
       };
 
       if (stream) {
-        const encoder = new TextEncoder();
         const streamBody = new ReadableStream({
           async start(controller) {
-            const sendEvent = (type: string, data: any) => {
-              controller.enqueue(encoder.encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`));
-            };
+            const emit = createSSEEmitter(controller);
             const processingSteps: Array<{
               step: string;
               status: 'started' | 'completed' | 'failed';
@@ -412,13 +411,13 @@ export async function POST(request: NextRequest) {
                 ...detail,
               };
               processingSteps.push(payload);
-              sendEvent('step', payload);
+              emit(SSE_EVENT_TYPES.STEP, payload);
             };
 
             try {
               sendStep('Start agentic pipeline', 'started');
               config.onStreamChunk = (chunk: string) => {
-                sendEvent('token', { content: chunk, timestamp: Date.now() });
+                emit(SSE_EVENT_TYPES.TOKEN, { content: chunk, timestamp: Date.now() });
               };
               config.onToolExecution = (toolName: string, args: any, result: any) => {
                 const toolCallId = `${toolName}-${Date.now()}`;
@@ -427,7 +426,7 @@ export async function POST(request: NextRequest) {
                   toolCallId,
                   result,
                 });
-                sendEvent('tool_invocation', {
+                emit(SSE_EVENT_TYPES.TOOL_INVOCATION, {
                   toolCallId,
                   toolName,
                   state: 'result',
@@ -438,8 +437,8 @@ export async function POST(request: NextRequest) {
               };
 
               const result = await processUnifiedAgentRequest(config);
-              sendStep('Start agentic pipeline', 'completed');
-              sendEvent('done', {
+              sendStep('Start agentic pipeline', result.success ? 'completed' : 'failed');
+              emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
                 content: result.response,
                 messageMetadata: {
@@ -450,23 +449,14 @@ export async function POST(request: NextRequest) {
                 data: result,
               });
             } catch (error: any) {
-              sendEvent('error', { message: error.message || 'Agentic execution failed' });
+              emit(SSE_EVENT_TYPES.ERROR, { message: error.message || 'Agentic execution failed' });
             } finally {
               controller.close();
             }
           },
         });
 
-        return new Response(streamBody, {
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            Pragma: 'no-cache',
-            Expires: '0',
-            Connection: 'keep-alive',
-            'X-Accel-Buffering': 'no',
-          },
-        });
+        return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
       }
 
       const result = await processUnifiedAgentRequest(config);
@@ -740,9 +730,11 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
                   chunkCount++;
                 })();
 
-                await Promise.race([streamPromise, timeoutPromise]);
-
-                if (agentTimeoutId) clearTimeout(agentTimeoutId);
+                try {
+                  await Promise.race([streamPromise, timeoutPromise]);
+                } finally {
+                  if (agentTimeoutId) clearTimeout(agentTimeoutId);
+                }
 
                 const streamDuration = Date.now() - streamStartTime;
                 chatLogger.info('ToolLoopAgent stream completed', { requestId: streamRequestId }, {
@@ -817,6 +809,7 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
             applied: filesystemEdits.applied,
             errors: filesystemEdits.errors,
             requestedFiles: filesystemEdits.requestedFiles,
+            scopePath: filesystemEdits.scopePath,
           })}\n\n`;
           events.splice(Math.max(0, events.length - 1), 0, filesystemEvent);
         }
@@ -1044,7 +1037,7 @@ function sanitizeAssistantDisplayContent(content: string): string {
   next = next.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
 
   // Remove raw WRITE/PATCH/APPLY_DIFF heredoc command blocks that leak into visible output
-  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+\n<<<\n[\s\S]*?\n>>>(?=\n|$)/g, '\n');
+  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+\n\s*<<<\s*\n[\s\S]*?\n\s*>>>(?=\n|$)/g, '\n');
   next = next.replace(/(?:^|\n)\s*DELETE\s+[^\n]+(?=\n|$)/g, '\n');
   // Remove <apply_diff> XML tags
   next = next.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
@@ -1091,6 +1084,7 @@ interface FilesystemEditResult {
   applied: FilesystemEditSummary[];
   errors: string[];
   requestedFiles: Array<{ path: string; content: string; language: string; version: number }>;
+  scopePath?: string;
 }
 
 function normalizeFilesystemContext(
@@ -1697,33 +1691,33 @@ function resolveScopedPath(input: {
 }): string {
   const rawPath = (input.requestedPath || '').trim().replace(/^\/+/, '');
   if (!rawPath) {
-    return input.scopePath;
+    return resolveScopeUtil('', input.scopePath);
   }
 
   const attachedSet = new Set((input.attachedPaths || []).map((path) => path.replace(/^\/+/, '')));
   if (attachedSet.has(rawPath)) {
-    return rawPath;
+    return resolveScopeUtil(rawPath, input.scopePath);
   }
 
   const escapedPath = rawPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   if (new RegExp(`\\b${escapedPath}\\b`, 'i').test(input.lastUserMessage || '')) {
-    return rawPath;
+    return resolveScopeUtil(rawPath, input.scopePath);
   }
 
   const baseName = rawPath.split('/').pop() || rawPath;
   const escapedBaseName = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   if (new RegExp(`\\b${escapedBaseName}\\b`, 'i').test(input.lastUserMessage || '')) {
-    return rawPath;
+    return resolveScopeUtil(rawPath, input.scopePath);
   }
 
   if (rawPath.startsWith(`${input.scopePath}/`) || rawPath === input.scopePath) {
-    return rawPath;
+    return resolveScopeUtil(rawPath, input.scopePath);
   }
 
   const normalizedRelative = rawPath.startsWith('project/')
     ? rawPath.slice('project/'.length)
     : rawPath;
-  return `${input.scopePath}/${normalizedRelative}`.replace(/\/{2,}/g, '/');
+  return resolveScopeUtil(normalizedRelative, input.scopePath);
 }
 
 function applyUnifiedDiff(currentContent: string, targetPath: string, rawDiff: string): string {
@@ -1894,7 +1888,8 @@ async function applyFilesystemEditsFromResponse(input: {
     combinedWriteEdits.length > 0 ||
     combinedDiffOperations.length > 0 ||
     applyDiffOperations.length > 0 ||
-    deleteTargets.length > 0;
+    deleteTargets.length > 0 ||
+    folderCreateTargets.length > 0;
 
   const transaction = hasMutatingOperations
     ? filesystemEditSessionService.createTransaction({
@@ -1910,6 +1905,7 @@ async function applyFilesystemEditsFromResponse(input: {
     applied: [],
     errors: [],
     requestedFiles: [],
+    scopePath: input.scopePath,
   };
 
   // Process write operations only if we have a transaction

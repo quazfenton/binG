@@ -101,6 +101,12 @@ class NullclawIntegration {
     const sessionKey = `${userId}:${conversationId}`;
     const containerId = this.sessionContainers.get(sessionKey);
     if (containerId) {
+      return this.containers.get(containerId);
+    }
+    if (this.defaultConfig.mode === 'per-session') {
+      return undefined;
+    }
+    return Array.from(this.containers.values()).find(c => c.status === 'ready');
       const container = this.containers.get(containerId);
       // Return only if container exists and is ready
       if (container && container.status === 'ready') {
@@ -111,6 +117,17 @@ class NullclawIntegration {
     // In per-session mode, never fall back to another session's container
     // to maintain isolation. Return undefined to signal no container available.
     return undefined;
+  }
+
+  private getNextAvailablePort(config: NullclawConfig): number {
+    const basePort = config.basePort || 3001;
+    const maxContainers = config.maxContainers || 1;
+    const usedPorts = new Set(Array.from(this.containers.values()).map(c => c.port));
+    for (let i = 0; i < maxContainers; i++) {
+      const candidate = basePort + i;
+      if (!usedPorts.has(candidate)) return candidate;
+    }
+    return basePort + this.containers.size;
   }
 
   /**
@@ -270,7 +287,7 @@ class NullclawIntegration {
           throw new Error('Nullclaw per-session container limit reached');
         }
 
-        const port = (nullclawConfig.basePort || 3001) + this.containers.size;
+        const port = this.getNextAvailablePort(nullclawConfig);
         const container = await this.startContainer({ ...config, port });
         this.sessionContainers.set(sessionKey, container.id);
 
@@ -291,7 +308,7 @@ class NullclawIntegration {
         if (this.containers.size >= (nullclawConfig.maxContainers || 1)) {
           throw new Error('Nullclaw container pool exhausted');
         }
-        const port = (nullclawConfig.basePort || 3001) + this.containers.size;
+        const port = this.getNextAvailablePort(nullclawConfig);
         container = await this.startContainer({ ...config, port });
       }
 
@@ -323,6 +340,12 @@ class NullclawIntegration {
   ): Promise<NullclawTask> {
     const sessionKey = `${userId}:${conversationId}`;
     const containerId = this.sessionContainers.get(sessionKey);
+    const container =
+      (containerId && this.containers.get(containerId)) ||
+      (this.defaultConfig.mode === 'per-session'
+        ? undefined
+        : Array.from(this.containers.values()).find(c => c.status === 'ready'));
+    
     const container = containerId ? this.containers.get(containerId) : undefined;
 
     if (!container) {

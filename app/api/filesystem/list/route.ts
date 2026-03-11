@@ -8,6 +8,7 @@ export const runtime = 'nodejs';
 // Request tracking for detecting polling loops
 const requestTracker = new Map<string, { count: number; lastRequest: number; firstRequest: number }>();
 const REQUEST_WINDOW_MS = 5000; // 5 second window for tracking
+const MAX_TRACKED_PATHS = 1000;
 
 // Debug flag
 const DEBUG = process.env.DEBUG_VFS === 'true' || process.env.NODE_ENV === 'development';
@@ -35,6 +36,22 @@ const logError = (...args: any[]) => console.error(`${COLORS.bright}${COLORS.red
 function trackRequest(path: string): { isPolling: boolean; requestCount: number; windowMs: number } {
   const now = Date.now();
   const key = path;
+
+  // Cleanup old entries to prevent unbounded growth
+  for (const [trackedKey, tracked] of requestTracker.entries()) {
+    if (now - tracked.lastRequest > REQUEST_WINDOW_MS * 2) {
+      requestTracker.delete(trackedKey);
+    }
+  }
+
+  if (requestTracker.size > MAX_TRACKED_PATHS) {
+    const oldest = Array.from(requestTracker.entries())
+      .sort((a, b) => a[1].lastRequest - b[1].lastRequest)
+      .slice(0, requestTracker.size - MAX_TRACKED_PATHS);
+    for (const [trackedKey] of oldest) {
+      requestTracker.delete(trackedKey);
+    }
+  }
 
   if (!requestTracker.has(key)) {
     requestTracker.set(key, { count: 1, lastRequest: now, firstRequest: now });

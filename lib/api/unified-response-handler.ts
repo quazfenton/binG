@@ -3,6 +3,8 @@
  * Provides structured response format, commands extraction, and quality metrics
  */
 
+import { normalizeToolInvocations } from '@/lib/types/tool-invocation';
+
 export interface UnifiedResponse {
   success: boolean;
   content: string;
@@ -90,7 +92,9 @@ export class UnifiedResponseHandler {
         model: response.metadata?.actualModel || response.data?.model || response.model,
         provider: response.metadata?.actualProvider || response.data?.provider || response.provider,
         toolCalls: response.data?.toolCalls,
-        toolInvocations: response.data?.toolInvocations || response.metadata?.toolInvocations,
+        toolInvocations: normalizeToolInvocations(
+          response.data?.toolInvocations || response.metadata?.toolInvocations || response.data?.toolResults
+        ),
         files: response.data?.files,
         chainedAgents: response.data?.chainedAgents,
         qualityScore: response.data?.qualityScore,

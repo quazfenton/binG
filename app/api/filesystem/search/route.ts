@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
-import { searchQuerySchema, absolutePathSchema } from '@/lib/validation/schemas';
+import { searchQuerySchema, pathSchema } from '@/lib/validation/schemas';
 
 export const runtime = 'nodejs';
 
@@ -11,7 +11,7 @@ export const runtime = 'nodejs';
  */
 const searchRequestSchema = z.object({
   q: searchQuerySchema,
-  path: absolutePathSchema.optional().default('project'),
+  path: pathSchema.optional().default('project'),
   limit: z.number().int().positive().refine((val) => val <= 200, 'Limit must be at most 200').optional(),
 });
 
