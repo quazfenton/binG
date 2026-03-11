@@ -393,14 +393,42 @@ export async function POST(request: NextRequest) {
             const sendEvent = (type: string, data: any) => {
               controller.enqueue(encoder.encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`));
             };
+            const processingSteps: Array<{
+              step: string;
+              status: 'started' | 'completed' | 'failed';
+              timestamp: number;
+              stepIndex: number;
+              toolName?: string;
+              toolCallId?: string;
+              result?: any;
+            }> = [];
+
+            const sendStep = (step: string, status: 'started' | 'completed' | 'failed', detail?: Partial<typeof processingSteps[number]>) => {
+              const payload = {
+                step,
+                status,
+                timestamp: Date.now(),
+                stepIndex: processingSteps.length,
+                ...detail,
+              };
+              processingSteps.push(payload);
+              sendEvent('step', payload);
+            };
 
             try {
+              sendStep('Start agentic pipeline', 'started');
               config.onStreamChunk = (chunk: string) => {
                 sendEvent('token', { content: chunk, timestamp: Date.now() });
               };
               config.onToolExecution = (toolName: string, args: any, result: any) => {
+                const toolCallId = `${toolName}-${Date.now()}`;
+                sendStep(`Tool ${toolName}`, result?.success === false ? 'failed' : 'completed', {
+                  toolName,
+                  toolCallId,
+                  result,
+                });
                 sendEvent('tool_invocation', {
-                  toolCallId: `${toolName}-${Date.now()}`,
+                  toolCallId,
                   toolName,
                   state: 'result',
                   args,
@@ -410,12 +438,14 @@ export async function POST(request: NextRequest) {
               };
 
               const result = await processUnifiedAgentRequest(config);
+              sendStep('Start agentic pipeline', 'completed');
               sendEvent('done', {
                 success: result.success,
                 content: result.response,
                 messageMetadata: {
                   agent: 'unified',
                   mode: result.mode,
+                  processingSteps,
                 },
                 data: result,
               });

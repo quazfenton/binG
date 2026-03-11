@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
-import { absolutePathSchema } from '@/lib/validation/schemas';
+import { pathSchema } from '@/lib/validation/schemas';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 
 export const runtime = 'nodejs';
@@ -11,9 +11,12 @@ export const runtime = 'nodejs';
  * Validates path and prevents path traversal attacks
  */
 const readRequestSchema = z.object({
-  path: absolutePathSchema.refine(
-    (path) => path.startsWith('/home/') || path.startsWith('/workspace/'),
-    'Absolute paths must start with /home/ or /workspace/'
+  path: pathSchema.refine(
+    (path) => {
+      if (!path.startsWith('/')) return true;
+      return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/');
+    },
+    'Invalid path format'
   ),
 });
 
