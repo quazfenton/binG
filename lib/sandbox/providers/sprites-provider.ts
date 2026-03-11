@@ -30,6 +30,7 @@ import { quotaManager } from '@/lib/services/quota-manager'
 import { SandboxSecurityManager } from '../security-manager'
 import { syncVfsSnapshotToSprite, syncChangedFilesToSprite, type TarSyncFile } from './sprites-tar-sync'
 import { SpritesCheckpointManager, createCheckpointManager, type RetentionPolicy } from './sprites-checkpoint-manager'
+import { generateSecureId } from '@/lib/utils'
 
 const WORKSPACE_DIR = '/home/sprite/workspace'
 const MAX_INSTANCES = 30
@@ -149,7 +150,7 @@ export class SpritesProvider implements SandboxProvider {
         }
       }
 
-      const spriteName = `bing-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const spriteName = generateSecureId('bing')
 
       // Build create config with auto-suspend services if enabled
       const createConfig: any = {}

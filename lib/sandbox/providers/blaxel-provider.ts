@@ -35,6 +35,7 @@ import { quotaManager } from '@/lib/services/quota-manager'
 import { blaxelAsyncManager, verifyWebhookFromRequest } from './blaxel-async'
 import { getDatabase } from '@/lib/database/connection'
 import { encryptSecret, decryptSecret, generateSecureSecret } from '@/lib/utils/crypto'
+import { generateSecureId } from '@/lib/utils'
 
 const WORKSPACE_DIR = '/workspace'
 const MAX_INSTANCES = 50
@@ -339,7 +340,7 @@ export class BlaxelProvider implements SandboxProvider {
       }
 
       // Build sandbox spec per Blaxel API docs
-      const sandboxName = `blaxel-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const sandboxName = generateSecureId('blaxel')
       const createRequest = {
         metadata: {
           name: sandboxName,

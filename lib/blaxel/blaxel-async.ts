@@ -4,6 +4,7 @@
  */
 
 import { createHmac, timingSafeEqual } from 'crypto';
+import { generateSecureId } from '@/lib/utils';
 
 export interface AsyncTriggerConfig {
   webhookUrl?: string;
@@ -34,7 +35,7 @@ export class BlaxelAsyncManager {
     fn: () => Promise<any>,
     config?: AsyncTriggerConfig
   ): Promise<AsyncExecutionResult> {
-    const executionId = `exec_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    const executionId = generateSecureId('exec');
     
     this.executions.set(executionId, {
       success: false,

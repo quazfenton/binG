@@ -12,6 +12,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Task status
@@ -153,7 +154,7 @@ export class BlaxelBatchJobsManager extends EventEmitter {
     command: string;
     dependencies?: string[];
   }>): BatchJob {
-    const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const jobId = generateSecureId('job');
     
     const taskMap = new Map<string, BatchTask>();
     for (const task of tasks) {

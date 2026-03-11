@@ -5,6 +5,7 @@
  */
 
 import { RoleAgent } from './role-agent';
+import { generateSecureId } from '@/lib/utils';
 
 export interface AgentConfig {
   role: string;
@@ -17,7 +18,7 @@ export interface AgentConfig {
  * Generate a unique session ID
  */
 function generateSessionId(): string {
-  return `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  return generateSecureId('session');
 }
 
 /**

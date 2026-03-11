@@ -14,9 +14,10 @@ import {
 } from '@/lib/composio/webhook-handler';
 import { checkRateLimitMiddleware } from '@/lib/middleware/rate-limit';
 import { addCORSHeaders } from '@/lib/middleware/cors';
+import { generateSecureId } from '@/lib/utils';
 
 export async function POST(request: NextRequest) {
-  const requestId = `webhook_composio_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const requestId = generateSecureId('webhook_composio');
 
   try {
     // Check rate limit

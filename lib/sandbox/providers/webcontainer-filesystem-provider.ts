@@ -6,6 +6,7 @@ import type {
   SandboxCreateConfig,
 } from './sandbox-provider'
 import { SandboxSecurityManager } from '../security-manager'
+import { generateSecureId } from '@/lib/utils'
 
 const WORKSPACE_DIR = '/workspace'
 
@@ -133,7 +134,7 @@ export class WebContainerFileSystemProvider implements SandboxProvider {
       await instance.mount(tree)
     }
 
-    const id = `wc-fs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const id = generateSecureId('wc-fs')
     const handle = new WebContainerFileSystemHandle(id, instance)
     filesystemHandles.set(id, handle)
     return handle

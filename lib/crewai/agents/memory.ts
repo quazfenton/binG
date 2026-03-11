@@ -4,6 +4,8 @@
  * Implements short-term, long-term, and entity memory for agents.
  */
 
+import { generateSecureId } from '@/lib/utils';
+
 export interface MemoryEntry {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -44,7 +46,7 @@ export class ShortTermMemory {
   }
 
   add(entry: Omit<MemoryEntry, 'id' | 'timestamp'>): string {
-    const id = `mem_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const id = generateSecureId('mem');
     this.entries.push({
       ...entry,
       id,
@@ -167,7 +169,7 @@ export class PersistentMemory {
       session.set(dayKey, dayEntries);
     }
 
-    const id = `mem_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const id = generateSecureId('mem');
     dayEntries.entries.push({
       ...entry,
       id,
