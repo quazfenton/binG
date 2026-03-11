@@ -107,6 +107,7 @@ import {
 } from "lucide-react";
 
 import type { VFSProject } from "../app/visual-editor/page";
+import { createDebugLogger } from "@/config/features";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CRAFT COMPONENT PROPS & TYPES
@@ -5942,11 +5943,7 @@ export function VisualEditorMain({
   // We keep a ref to the Craft serialised JSON so the toolbar can read it on save
   const craftJsonRef = useRef<Record<string, unknown>>({});
 
-  // Debug flag for visual editor
-  const DEBUG = typeof window !== 'undefined' && (localStorage.getItem('DEBUG_VISUAL_EDITOR') === 'true' || process.env.NODE_ENV === 'development');
-  const log = (...args: any[]) => DEBUG && console.log('[VisualEditor]', ...args);
-  const logError = (...args: any[]) => console.error('[VisualEditor ERROR]', ...args);
-  const logWarn = (...args: any[]) => console.warn('[VisualEditor WARN]', ...args);
+  const { log, error: logError, warn: logWarn } = createDebugLogger('VisualEditor', 'DEBUG_VISUAL_EDITOR');
 
   const handleFileChange = useCallback((path: string, content: string) => {
     log(`handleFileChange: "${path}" (contentLength=${content.length})`);

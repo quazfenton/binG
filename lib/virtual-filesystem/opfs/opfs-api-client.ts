@@ -5,56 +5,14 @@
  * Handles authentication, session management, and error handling
  */
 
-/**
- * Get auth token from localStorage
- */
-function getAuthToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return localStorage.getItem('token');
-  } catch {
-    return null;
-  }
-}
+import { buildApiHeaders } from '@/lib/utils';
 
 /**
- * Get anonymous session ID for unauthenticated users
- */
-function getAnonymousSessionId(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    let sessionId = localStorage.getItem('anonymous_session_id');
-    if (!sessionId) {
-      // Generate a simple anonymous session ID
-      sessionId = 'anon_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem('anonymous_session_id', sessionId);
-    }
-    return sessionId;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Get authentication headers for API requests
+ * Get authentication headers for API requests.
+ * Delegates to the shared `buildApiHeaders` utility.
  */
 export function getAuthHeaders(): Record<string, string> {
-  const token = getAuthToken();
-  const anonymousSessionId = getAnonymousSessionId();
-  
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  
-  if (anonymousSessionId) {
-    headers['X-Anonymous-Session-ID'] = anonymousSessionId;
-  }
-  
-  return headers;
+  return buildApiHeaders();
 }
 
 /**

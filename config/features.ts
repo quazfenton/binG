@@ -51,6 +51,43 @@ export const getFeatureConfig = <T>(feature: keyof typeof FEATURE_FLAGS): T => {
   return FEATURE_FLAGS[feature] as T;
 };
 
+// ---------------------------------------------------------------------------
+// Client-side debug logger factory
+// ---------------------------------------------------------------------------
+
+export interface DebugLogger {
+  log: (...args: any[]) => void;
+  warn: (...args: any[]) => void;
+  error: (...args: any[]) => void;
+}
+
+/**
+ * Create a debug logger controlled by a localStorage flag.
+ *
+ * This is the single source of truth for the repeated pattern:
+ *   const DEBUG = localStorage.getItem('DEBUG_X') === 'true' || process.env.NODE_ENV === 'development';
+ *   const log = (...args) => DEBUG && console.log('[Tag]', ...args);
+ *
+ * @param tag        Display prefix, e.g. "CodePreviewPanel"
+ * @param storageKey localStorage key, e.g. "DEBUG_CODE_PREVIEW"
+ */
+export function createDebugLogger(tag: string, storageKey: string): DebugLogger {
+  const isEnabled = (): boolean => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return localStorage.getItem(storageKey) === 'true' || process.env.NODE_ENV === 'development';
+    } catch {
+      return false;
+    }
+  };
+
+  return {
+    log: (...args: any[]) => { if (isEnabled()) console.log(`[${tag}]`, ...args); },
+    warn: (...args: any[]) => console.warn(`[${tag} WARN]`, ...args),
+    error: (...args: any[]) => console.error(`[${tag} ERROR]`, ...args),
+  };
+}
+
 // Cloud Storage Service Interface
 export interface CloudStorageService {
   upload(file: File, path: string): Promise<string>;

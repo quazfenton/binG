@@ -701,7 +701,7 @@ export function checkMCPHealth(): {
   
   const serverStatuses = rawStatuses.map(s => {
     const state = s.info?.state;
-    const connected = state === 'connected' || state === 'connecting';
+    const connected = state === 'connected';
     return {
       id: s.id,
       name: s.name,

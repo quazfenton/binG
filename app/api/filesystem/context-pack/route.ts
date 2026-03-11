@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner } from '@/lib/virtual-filesystem';
 import { contextPackService, type ContextPackFormat } from '@/lib/virtual-filesystem/context-pack-service';
-import { contextPackOptionsSchema } from '@/lib/validation/schemas';
+import { absolutePathSchema, contextPackOptionsSchema } from '@/lib/validation/schemas';
 
 export const runtime = 'nodejs';
 
@@ -14,7 +14,7 @@ export const runtime = 'nodejs';
  */
 
 const contextPackQuerySchema = contextPackOptionsSchema.extend({
-  path: z.string().optional().default('/'),
+  path: absolutePathSchema.optional().default('/'),
   excludePatterns: z.string()
     .optional()
     .transform(val => val ? val.split(',').map(p => p.trim()) : undefined),
@@ -51,7 +51,15 @@ export async function GET(req: NextRequest) {
         { status: 400 },
       );
     }
-    
+
+    // Prevent path traversal attacks
+    if (path.includes('..')) {
+      return NextResponse.json(
+        { success: false, error: 'Path traversal is not allowed.' },
+        { status: 400 },
+      );
+    }
+
     // Validate format
     const validFormats: ContextPackFormat[] = ['markdown', 'xml', 'json', 'plain'];
     if (options.format && !validFormats.includes(options.format)) {
@@ -88,9 +96,9 @@ export async function GET(req: NextRequest) {
     });
   } catch (error: unknown) {
     console.error('[Context Pack] Error:', error);
-    const message = error instanceof Error ? error.message : 'Failed to generate context pack';
+    // Return generic error to client, log details server-side
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: 'Failed to generate context pack.' },
       { status: 400 },
     );
   }
@@ -106,30 +114,38 @@ const contextPackBodySchema = contextPackOptionsSchema;
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    
+
     // Validate request body with Zod
     const parseResult = contextPackBodySchema.safeParse(body);
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];
       return NextResponse.json(
-        { 
-          success: false, 
+        {
+          success: false,
           error: firstError.message,
           details: parseResult.error.flatten(),
         },
         { status: 400 },
       );
     }
-    
+
     const { path = '/', ...options } = parseResult.data;
-    
+
+    // Validate path for path traversal
+    if (path.includes('..')) {
+      return NextResponse.json(
+        { success: false, error: 'Path traversal is not allowed.' },
+        { status: 400 },
+      );
+    }
+
     // Resolve filesystem owner
     const authResolution = await resolveFilesystemOwner(req);
     const ownerId = authResolution.ownerId;
-    
+
     // Generate context pack
     const result = await contextPackService.generateContextPack(ownerId, path, options);
-    
+
     // Return response
     const contentType = {
       markdown: 'text/markdown',
@@ -137,7 +153,7 @@ export async function POST(req: NextRequest) {
       json: 'application/json',
       plain: 'text/plain',
     }[options.format || 'markdown'];
-    
+
     return new NextResponse(result.bundle, {
       status: 200,
       headers: {
@@ -150,9 +166,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: unknown) {
     console.error('[Context Pack] Error:', error);
-    const message = error instanceof Error ? error.message : 'Failed to generate context pack';
+    // Return generic error to client, log details server-side
     return NextResponse.json(
-      { success: false, error: message },
+      { success: false, error: 'Failed to generate context pack.' },
       { status: 400 },
     );
   }

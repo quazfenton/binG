@@ -48,8 +48,8 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
     agentSessionManager.updateActivity(options.userId, options.conversationId);
   }
 
-  // Sync back after OpenCode execution
-  if (result.agent === 'opencode') {
+  // Sync back after agents that can mutate the sandbox workspace
+  if (result.agent === 'opencode' || result.agent === 'cli') {
     await agentFSBridge.syncFromSandbox(options.userId, options.conversationId);
   }
 
@@ -67,6 +67,12 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
 
   const formatEvent = (type: string, data: any) =>
     `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+  const resolveScopePath = (conversationId: string): string => {
+    const trimmed = (conversationId || '').replace(/^\/+/, '').trim();
+    if (!trimmed) return 'project';
+    if (trimmed.startsWith('project/')) return trimmed;
+    return `project/sessions/${trimmed}`.replace(/\/{2,}/g, '/');
+  };
 
   return new ReadableStream({
     async start(controller) {
@@ -166,7 +172,7 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
         const result = await resultPromise;
         emitStep('Execute task', 'completed');
 
-        if (result.agent === 'opencode') {
+        if (result.agent === 'opencode' || result.agent === 'cli') {
           emitStep('Sync workspace from sandbox', 'started');
           await agentFSBridge.syncFromSandbox(options.userId, options.conversationId);
           emitStep('Sync workspace from sandbox', 'completed');
@@ -188,20 +194,45 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
 
         // Extract code artifacts from result with full content
         if (result.fileChanges && result.fileChanges.length > 0) {
-          messageMetadata.codeArtifacts = result.fileChanges.map((fc: any) => ({
-            path: fc.path,
-            operation: fc.operation || 'write',
-            language: fc.language || 'typescript',
-            content: fc.content || '',
-            previousContent: fc.previousContent || fc.oldContent || undefined,
-            newVersion: fc.newVersion,
-            previousVersion: fc.previousVersion,
-          }));
+          messageMetadata.codeArtifacts = result.fileChanges.map((fc: any) => {
+            const rawAction = fc.operation || fc.action;
+            const operation: 'write' | 'patch' | 'delete' | 'read' =
+              rawAction === 'delete'
+                ? 'delete'
+                : rawAction === 'modify' || rawAction === 'patch'
+                  ? 'patch'
+                  : rawAction === 'read'
+                    ? 'read'
+                    : 'write';
+            return {
+              path: fc.path,
+              operation,
+              language: fc.language || 'typescript',
+              content: fc.content || '',
+              previousContent: fc.previousContent || fc.oldContent || undefined,
+              newVersion: fc.newVersion,
+              previousVersion: fc.previousVersion,
+            };
+          });
         }
 
         // Include reasoning if available
         if (result.reasoning) {
           messageMetadata.reasoning = result.reasoning;
+        }
+
+        if (result.fileChanges && result.fileChanges.length > 0) {
+          controller.enqueue(encoder.encode(formatEvent('filesystem', {
+            requestId: `v2-${session.id}`,
+            status: 'auto_applied',
+            applied: result.fileChanges.map((fc: any) => ({
+              path: fc.path,
+              operation: fc.operation || fc.action || 'write',
+            })),
+            errors: [],
+            requestedFiles: [],
+            scopePath: resolveScopePath(options.conversationId),
+          })));
         }
 
         controller.enqueue(encoder.encode(formatEvent('done', {
