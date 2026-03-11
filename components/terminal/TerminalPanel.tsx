@@ -17,7 +17,7 @@ import { createLogger } from '@/lib/utils/logger';
 import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
 import { wireTerminalHandlers, cleanupHandlers, type TerminalHandlers } from '@/lib/sandbox/terminal-handler-wiring';
 import type { LocalFilesystemEntry } from '@/lib/sandbox/local-filesystem-executor';
-import { normalizeScopePath } from '@/lib/virtual-filesystem/scope-utils';
+import { extractSessionIdFromPath, normalizeScopePath } from '@/lib/virtual-filesystem/scope-utils';
 import { emitFilesystemUpdated, onFilesystemUpdated } from '@/lib/virtual-filesystem/sync-events';
 import { createRefreshScheduler } from '@/lib/virtual-filesystem/refresh-scheduler';
 
@@ -199,6 +199,7 @@ export default function TerminalPanel({
   // Sync local filesystem with virtual filesystem on mount and when scope changes
   const [isVfsSynced, setIsVfsSynced] = useState(false);
   const [vfsFileCount, setVfsFileCount] = useState(0);
+  const lastWorkspaceVersionRef = useRef(0);
   
   useEffect(() => {
    if (!isOpen) {
@@ -211,6 +212,9 @@ export default function TerminalPanel({
    const syncVfsToLocal = async () => {
      try {
        const snapshot = await getVfsSnapshotMemoized();
+       if (typeof snapshot?.version === 'number') {
+         lastWorkspaceVersionRef.current = Math.max(lastWorkspaceVersionRef.current, snapshot.version);
+       }
        const files = snapshot?.files || [];
 
        console.log('[TerminalPanel] VFS Snapshot received:', {
@@ -353,11 +357,22 @@ export default function TerminalPanel({
   useEffect(() => {
     if (!isOpen) return;
 
-    const refresh = async () => {
-      log('[filesystem-updated event] received in TerminalPanel');
+    const refresh = async (detail?: any) => {
+      log('[filesystem-updated event] received in TerminalPanel', detail);
 
       try {
+        const eventWorkspaceVersion = typeof detail?.workspaceVersion === 'number' ? detail.workspaceVersion : null;
+        if (eventWorkspaceVersion !== null && eventWorkspaceVersion <= lastWorkspaceVersionRef.current) {
+          log(`[filesystem-updated] skipped stale terminal refresh at workspaceVersion=${eventWorkspaceVersion}`);
+          return;
+        }
+
         const snapshot = await getVfsSnapshotMemoized();
+        if (typeof snapshot?.version === 'number') {
+          lastWorkspaceVersionRef.current = Math.max(lastWorkspaceVersionRef.current, snapshot.version);
+        } else if (eventWorkspaceVersion !== null) {
+          lastWorkspaceVersionRef.current = Math.max(lastWorkspaceVersionRef.current, eventWorkspaceVersion);
+        }
         const files = snapshot?.files || [];
         const normalizedScopePath = normalizeScopePath(filesystemScopePathRef.current);
 
@@ -417,7 +432,7 @@ export default function TerminalPanel({
     };
 
     const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 1000, maxDelayMs: 3000 });
-    const unsubscribe = onFilesystemUpdated(() => scheduler.schedule());
+    const unsubscribe = onFilesystemUpdated((event) => scheduler.schedule(event.detail));
     log('[TerminalPanel] registered filesystem-updated event listener');
     return () => {
       unsubscribe();
@@ -987,16 +1002,26 @@ export default function TerminalPanel({
           ...getAuthHeaders(),
         },
         credentials: 'include',
-        body: JSON.stringify({ path: scopedFilePath, content }),
+        body: JSON.stringify({
+          path: scopedFilePath,
+          content,
+          sessionId: extractSessionIdFromPath(normalizedScope),
+          source: 'terminal',
+          integration: 'terminal',
+        }),
       });
 
       log(`syncFileToVFS: API response status=${response.status}`);
 
       if (response.ok) {
+        const payload = await response.json().catch(() => null);
         emitFilesystemUpdated({
           path: scopedFilePath,
           scopePath: normalizedScope,
           source: 'terminal',
+          workspaceVersion: payload?.data?.workspaceVersion,
+          commitId: payload?.data?.commitId,
+          sessionId: payload?.data?.sessionId || extractSessionIdFromPath(normalizedScope),
         });
         log(`syncFileToVFS: dispatched filesystem-updated event for "${scopedFilePath}"`);
       } else {

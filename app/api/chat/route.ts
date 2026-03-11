@@ -14,7 +14,7 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { ShadowCommitManager } from '@/lib/stateful-agent/commit/shadow-commit';
-import { resolveScopedPath as resolveScopeUtil } from '@/lib/virtual-filesystem/scope-utils';
+import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil } from '@/lib/virtual-filesystem/scope-utils';
 import type { LLMMessage } from "@/lib/api/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/mastra';
@@ -810,6 +810,9 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
             errors: filesystemEdits.errors,
             requestedFiles: filesystemEdits.requestedFiles,
             scopePath: filesystemEdits.scopePath,
+            workspaceVersion: filesystemEdits.workspaceVersion,
+            commitId: filesystemEdits.commitId,
+            sessionId: filesystemEdits.sessionId,
           })}\n\n`;
           events.splice(Math.max(0, events.length - 1), 0, filesystemEvent);
         }
@@ -1085,6 +1088,9 @@ interface FilesystemEditResult {
   errors: string[];
   requestedFiles: Array<{ path: string; content: string; language: string; version: number }>;
   scopePath?: string;
+  workspaceVersion?: number;
+  commitId?: string;
+  sessionId?: string;
 }
 
 function normalizeFilesystemContext(
@@ -1906,6 +1912,7 @@ async function applyFilesystemEditsFromResponse(input: {
     errors: [],
     requestedFiles: [],
     scopePath: input.scopePath,
+    sessionId: extractSessionIdFromPath(input.scopePath) || input.conversationId,
   };
 
   // Process write operations only if we have a transaction
@@ -2226,7 +2233,6 @@ async function applyFilesystemEditsFromResponse(input: {
           };
         });
 
-        // Read current content for each applied file to include in commit
         const vfs: Record<string, string> = {};
         for (const op of result.applied) {
           if (op.operation !== 'delete') {
@@ -2235,19 +2241,30 @@ async function applyFilesystemEditsFromResponse(input: {
               vfs[op.path] = file.content;
               const txn = transactions.find(t => t.path === op.path);
               if (txn) txn.newContent = file.content;
-            } catch { /* file may have been deleted */ }
+            } catch (readError) {
+              void readError;
+            }
           }
         }
 
         const filesSummary = result.applied
           .map(op => `${op.operation} ${op.path}`)
           .join(', ');
+        const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(input.ownerId);
+        result.workspaceVersion = workspaceVersion;
 
-        await commitManager.commit(vfs, transactions, {
-          sessionId: input.conversationId,
+        const commitResult = await commitManager.commit(vfs, transactions, {
+          sessionId: result.sessionId || input.conversationId,
           message: `Auto-commit: ${filesSummary}`,
           author: input.ownerId,
+          source: 'chat',
+          integration: 'chat',
+          workspaceVersion,
         });
+
+        if (commitResult.success) {
+          result.commitId = commitResult.commitId;
+        }
       } catch (commitError) {
         // Non-fatal: edits were applied even if commit fails
         console.error('[Chat] Auto-commit failed:', commitError);

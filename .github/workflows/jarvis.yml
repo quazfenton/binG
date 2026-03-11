@@ -251,19 +251,18 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          SUGGESTIONS: ${{ steps.context.outputs.suggestions }}
         run: |
           # Read trigger comments from downloaded artifact and write to file
           # Use file-based approach to avoid "argument list too long" errors
           jq -r '[.[].body] | join("\n\n---\n\n")' /tmp/trigger_comments.json > /tmp/batch_comments.txt
 
-          # Write base prompt to file
-          cat > /tmp/base_prompt.txt << 'BASE_PROMPT_EOF'
-You are an expert Staff Engineer. Analyze the whole repo context.
-Here is the CodeRabbit review context: ${{ steps.context.outputs.suggestions }}
-
-Apply these fixes, ensure Postgres/Terraform logic is intact, and verify type safety.
-Group related changes together logically.
-BASE_PROMPT_EOF
+          # Write base prompt to file (use printf to avoid heredoc YAML issues)
+          printf '%s\n' "You are an expert Staff Engineer. Analyze the whole repo context." > /tmp/base_prompt.txt
+          printf '%s\n' "Here is the CodeRabbit review context: $SUGGESTIONS" >> /tmp/base_prompt.txt
+          printf '%s\n' "" >> /tmp/base_prompt.txt
+          printf '%s\n' "Apply these fixes, ensure Postgres/Terraform logic is intact, and verify type safety." >> /tmp/base_prompt.txt
+          printf '%s\n' "Group related changes together logically." >> /tmp/base_prompt.txt
 
           # Function to run the agent in CI mode (no user prompt, auto-apply, repo map enabled)
           run_agent() {

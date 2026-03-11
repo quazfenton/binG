@@ -31,7 +31,7 @@ export function stripWorkspacePrefixes(rawPath: string): string {
 }
 
 export function normalizeScopePath(scopePath?: string): string {
-  let path = (scopePath || 'project')
+  const path = (scopePath || 'project')
     .replace(/\\/g, '/')
     .trim()
     .replace(/^\/+/, '')
@@ -64,4 +64,10 @@ export function resolveScopedPath(requestedPath: string, scopePath?: string): st
   }
 
   return `${scope}/${raw}`.replace(/\/{2,}/g, '/');
+}
+
+export function extractSessionIdFromPath(scopePath?: string): string | null {
+  const normalizedPath = normalizeScopePath(scopePath);
+  const match = normalizedPath.match(/^project\/sessions\/([^/]+)/i);
+  return match?.[1] || null;
 }
