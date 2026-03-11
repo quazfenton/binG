@@ -75,7 +75,7 @@ export class TerminalLocalFSHandler {
     command: string,
     options?: {
       isPtyMode?: boolean
-      terminalMode?: 'local' | 'pty' | 'sandbox-cmd' | 'connecting' | 'editor'
+      terminalMode?: 'local' | 'pty' | 'sandbox-cmd' | 'connecting' | 'editor' | 'command-mode'
     }
   ): Promise<boolean> {
     const trimmed = command.trim()

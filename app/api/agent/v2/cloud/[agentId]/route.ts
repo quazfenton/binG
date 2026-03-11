@@ -21,10 +21,10 @@ const getResultSchema = z.object({
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { agentId: string } },
+  { params }: { params: Promise<{ agentId: string }> },
 ) {
   try {
-    const { agentId } = params;
+    const { agentId } = await params;
 
     const instance = cloudAgentOffload.getStatus(agentId);
 
@@ -64,10 +64,10 @@ export async function GET(
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { agentId: string } },
+  { params }: { params: Promise<{ agentId: string }> },
 ) {
   try {
-    const { agentId } = params;
+    const { agentId } = await params;
 
     const body = await request.json();
     const validation = getResultSchema.safeParse(body);
@@ -95,10 +95,10 @@ export async function POST(
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { agentId: string } },
+  { params }: { params: Promise<{ agentId: string }> },
 ) {
   try {
-    const { agentId } = params;
+    const { agentId } = await params;
 
     await cloudAgentOffload.cancel(agentId);
 

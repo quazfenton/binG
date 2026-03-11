@@ -17,6 +17,13 @@ export interface TaskRequest {
   conversationId: string;
   task: string;
   stream?: boolean;
+  onStreamChunk?: (chunk: string) => void;
+  onToolExecution?: (toolName: string, args: Record<string, any>, result: any) => void;
+  preferredAgent?: 'opencode' | 'nullclaw' | 'cli';
+  cliCommand?: {
+    command: string;
+    args?: string[];
+  };
 }
 
 export interface TaskRoutingResult {
@@ -142,14 +149,23 @@ class TaskRouter {
    * Execute task with appropriate agent
    */
   async executeTask(request: TaskRequest): Promise<any> {
-    const routing = this.analyzeTask(request.task);
+    const routing = request.preferredAgent
+      ? {
+          type: 'unknown' as TaskType,
+          confidence: 1,
+          target: request.preferredAgent,
+          reasoning: 'Preferred agent override',
+        }
+      : this.analyzeTask(request.task);
 
     logger.info(`Routing task to ${routing.target} (${routing.type})`);
 
     if (routing.target === 'opencode') {
       return this.executeWithOpenCode(request);
-    } else {
+    } else if (routing.target === 'nullclaw') {
       return this.executeWithNullclaw(request, routing.type);
+    } else {
+      return this.executeWithCliAgent(request);
     }
   }
 
@@ -157,32 +173,90 @@ class TaskRouter {
    * Execute task with OpenCode agent
    */
   private async executeWithOpenCode(request: TaskRequest): Promise<any> {
-    // Import dynamically to avoid circular dependencies
-    const { createOpenCodeEngine } = await import('../api/opencode-engine-service');
-    
-    const engine = createOpenCodeEngine({
-      model: process.env.OPENCODE_MODEL,
-      workingDir: `/workspace/users/${request.userId}/${request.conversationId}`,
-      enableBash: true,
-      enableFileOps: true,
-      enableCodegen: true,
-    });
+    const useV2 =
+      process.env.OPENCODE_CONTAINERIZED === 'true' ||
+      process.env.V2_AGENT_ENABLED === 'true';
 
-    if (request.stream) {
+    if (!useV2) {
+      // Fallback to local OpenCode engine
+      const { createOpenCodeEngine } = await import('../api/opencode-engine-service');
+      const engine = createOpenCodeEngine({
+        model: process.env.OPENCODE_MODEL,
+        workingDir: `/workspace/users/${request.userId}/sessions/${request.conversationId}`,
+        enableBash: true,
+        enableFileOps: true,
+        enableCodegen: true,
+      });
+
+      if (request.stream) {
+        return {
+          type: 'stream',
+          stream: engine.executeStream(request.task),
+        };
+      }
+
+      const result = await engine.execute(request.task);
       return {
-        type: 'stream',
-        stream: engine.executeStream(request.task),
+        success: result.success,
+        response: result.response,
+        bashCommands: result.bashCommands,
+        fileChanges: result.fileChanges,
+        agent: 'opencode',
       };
     }
 
-    const result = await engine.execute(request.task);
-    
+    const { OpencodeV2Provider } = await import('../sandbox/providers/opencode-v2-provider');
+    const { agentSessionManager } = await import('./agent-session-manager');
+    const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('../mcp');
+
+    const session = await agentSessionManager.getOrCreateSession(
+      request.userId,
+      request.conversationId,
+      { enableMCP: true, enableNullclaw: true, mode: 'hybrid' },
+    );
+
+    const provider = new OpencodeV2Provider({
+      session: {
+        userId: request.userId,
+        conversationId: request.conversationId,
+        enableMcp: true,
+        enableNullclaw: true,
+        workspaceDir: session.workspacePath,
+      },
+      sandboxHandle: session.sandboxHandle,
+    });
+
+    const tools = await getMCPToolsForAI_SDK();
+
+    const result = await provider.runAgentLoop({
+      userMessage: request.task,
+      tools: tools.map(t => ({
+        name: t.function.name,
+        description: t.function.description,
+        parameters: t.function.parameters,
+      })),
+      systemPrompt: process.env.OPENCODE_SYSTEM_PROMPT,
+      maxSteps: parseInt(process.env.OPENCODE_MAX_STEPS || '15', 10),
+      onStreamChunk: request.onStreamChunk,
+      onToolExecution: request.onToolExecution,
+      executeTool: async (name, args) => {
+        const toolResult = await callMCPToolFromAI_SDK(name, args, request.userId);
+        return {
+          success: toolResult.success,
+          output: toolResult.output,
+          exitCode: toolResult.success ? 0 : 1,
+        };
+      },
+    });
+
     return {
-      success: result.success,
+      success: true,
       response: result.response,
-      bashCommands: result.bashCommands,
-      fileChanges: result.fileChanges,
+      steps: result.steps,
+      totalSteps: result.totalSteps,
       agent: 'opencode',
+      sessionId: result.sessionId,
+      nullclawTasks: (result as any).nullclawTasks,
     };
   }
 
@@ -218,11 +292,46 @@ class TaskRouter {
       task,
     );
 
+    request.onToolExecution?.('nullclaw_task', task.params, result);
+
     return {
       success: result.status === 'completed',
       response: result.result,
       error: result.error,
       agent: 'nullclaw',
+    };
+  }
+
+  /**
+   * Execute task with a generic CLI agent inside the sandbox
+   */
+  private async executeWithCliAgent(request: TaskRequest): Promise<any> {
+    const { agentSessionManager } = await import('./agent-session-manager');
+    const session = await agentSessionManager.getOrCreateSession(
+      request.userId,
+      request.conversationId,
+      { mode: 'opencode' },
+    );
+
+    const command = request.cliCommand?.command;
+    if (!command) {
+      throw new Error('CLI agent requires cliCommand.command');
+    }
+
+    const args = request.cliCommand?.args || [];
+    const fullCommand = [command, ...args].join(' ');
+    const result = await session.sandboxHandle.executeCommand(
+      fullCommand,
+      session.workspacePath,
+    );
+
+    request.onToolExecution?.('cli_exec', { command: fullCommand }, result);
+
+    return {
+      success: result.success,
+      response: result.output,
+      agent: 'cli',
+      exitCode: result.exitCode,
     };
   }
 

@@ -2,13 +2,14 @@
  * Agent Session Manager
  * 
  * Manages per-user OpenSandbox instances with conversation isolation.
- * Each user gets a dedicated sandbox workspace at /workspace/users/{userId}/{conversationId}
+ * Each user gets a dedicated sandbox workspace at /workspace/users/{userId}/sessions/{conversationId}
  */
 
 import { v4 as uuidv4 } from 'uuid';
 import { getSandboxProvider } from '../sandbox/providers';
 import type { SandboxHandle, SandboxCreateConfig } from '../sandbox/providers/sandbox-provider';
 import { createLogger } from '../utils/logger';
+import { openCodeV2SessionManager } from '../api/opencode-v2-session-manager';
 
 const logger = createLogger('Agent:SessionManager');
 
@@ -19,6 +20,7 @@ export interface AgentSession {
   sandboxHandle: SandboxHandle;
   workspacePath: string;
   nullclawEndpoint?: string;
+  v2SessionId?: string;
   createdAt: Date;
   lastActiveAt: Date;
   state: 'initializing' | 'ready' | 'busy' | 'idle' | 'error';
@@ -39,6 +41,7 @@ export interface AgentSessionConfig {
 
 class AgentSessionManager {
   private sessions = new Map<string, AgentSession>();
+  private sessionsById = new Map<string, AgentSession>();
   private readonly TTL_MS = 30 * 60 * 1000; // 30 minutes
   private readonly CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
   private cleanupTimer?: NodeJS.Timeout;
@@ -63,6 +66,7 @@ class AgentSessionManager {
       logger.debug(`Returning existing session for ${key}`);
       existing.lastActiveAt = new Date();
       existing.state = 'ready';
+      this.sessionsById.set(existing.id, existing);
       return existing;
     }
 
@@ -89,9 +93,30 @@ class AgentSessionManager {
     if (Date.now() - session.lastActiveAt.getTime() > this.TTL_MS) {
       logger.warn(`Session ${key} expired, removing`);
       this.sessions.delete(key);
+      this.sessionsById.delete(session.id);
       return undefined;
     }
     
+    return session;
+  }
+
+  /**
+   * Get existing session by UUID (returns undefined if not found)
+   */
+  getSessionById(sessionId: string): AgentSession | undefined {
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      return undefined;
+    }
+
+    // Check TTL
+    if (Date.now() - session.lastActiveAt.getTime() > this.TTL_MS) {
+      logger.warn(`Session ${sessionId} expired, removing`);
+      this.sessionsById.delete(sessionId);
+      this.sessions.delete(this.getSessionKey(session.userId, session.conversationId));
+      return undefined;
+    }
+
     return session;
   }
 
@@ -135,10 +160,15 @@ class AgentSessionManager {
     try {
       logger.info(`Destroying session ${key}`);
       await session.sandboxHandle.executeCommand('echo "Session cleanup complete"');
+      if (session.v2SessionId) {
+        await openCodeV2SessionManager.stopSession(session.v2SessionId);
+      }
       this.sessions.delete(key);
+      this.sessionsById.delete(session.id);
     } catch (error: any) {
       logger.error(`Failed to cleanup session ${key}`, error);
       this.sessions.delete(key);
+      this.sessionsById.delete(session.id);
     }
   }
 
@@ -218,7 +248,7 @@ class AgentSessionManager {
     conversationId: string,
     config: AgentSessionConfig,
   ): Promise<AgentSession> {
-    const workspacePath = `/workspace/users/${userId}/${conversationId}`;
+    const workspacePath = `/workspace/users/${userId}/sessions/${conversationId}`;
     
     try {
       const provider = await getSandboxProvider();
@@ -253,13 +283,23 @@ class AgentSessionManager {
       // Ensure workspace directory exists
       await sandbox.executeCommand(`mkdir -p ${workspacePath}`);
 
+      const sessionId = uuidv4();
+      const v2Session = await openCodeV2SessionManager.createSession({
+        userId,
+        conversationId,
+        enableNullclaw: config.enableNullclaw,
+        enableMcp: config.enableMCP,
+        workspaceDir: workspacePath,
+      });
+
       const session: AgentSession = {
-        id: uuidv4(),
+        id: sessionId,
         userId,
         conversationId,
         sandboxHandle: sandbox,
         workspacePath,
         nullclawEndpoint: undefined, // Will be set if Nullclaw is enabled
+        v2SessionId: v2Session.id,
         createdAt: new Date(),
         lastActiveAt: new Date(),
         state: 'ready',
@@ -271,6 +311,7 @@ class AgentSessionManager {
       };
 
       logger.info(`Created session ${session.id} for ${userId}:${conversationId}`);
+      this.sessionsById.set(session.id, session);
       return session;
 
     } catch (error: any) {
@@ -293,7 +334,11 @@ class AgentSessionManager {
     const session = this.sessions.get(key);
     if (session) {
       await session.sandboxHandle.executeCommand('echo "Session cleanup"');
+      if (session.v2SessionId) {
+        await openCodeV2SessionManager.stopSession(session.v2SessionId);
+      }
       this.sessions.delete(key);
+      this.sessionsById.delete(session.id);
     }
   }
 

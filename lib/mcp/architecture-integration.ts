@@ -13,6 +13,7 @@ import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } fro
 import { createLogger } from '../utils/logger'
 import { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../api/arcade-service'
+import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
 
 // Blaxel codegen tool definitions for LLM tool calling
 const getBlaxelCodegenToolDefinitions = (): Array<{
@@ -308,7 +309,17 @@ export async function getMCPToolsForAI_SDK() {
   const { getAllProviderAdvancedTools } = await import('./provider-advanced-tools')
   const providerTools = getAllProviderAdvancedTools()
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools]
+  // NEW: Include Nullclaw tools when enabled
+  const nullclawTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = process.env.NULLCLAW_ENABLED === 'true' ? nullclawMCPBridge.getToolDefinitions() : []
+
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools]
 
   if (tools.length === 0) {
     logger.debug('MCP not available - no tools to return')
@@ -571,6 +582,11 @@ export async function callMCPToolFromAI_SDK(
       return executeProviderAdvancedTool(toolName, args)
     }
 
+    // NEW: Check if it's a Nullclaw tool
+    if (toolName.startsWith('nullclaw_') && process.env.NULLCLAW_ENABLED === 'true') {
+      return nullclawMCPBridge.executeTool(toolName, args, userId)
+    }
+
     const nativeResult = await mcpToolRegistry.callTool(toolName, args)
     if (nativeResult.success || !nativeResult.isError || !nativeResult.content.includes('Tool not found')) {
       logger.debug(`MCP tool result: ${toolName}`, {
@@ -677,11 +693,22 @@ export async function shutdownMCPConnections(): Promise<void> {
 export function checkMCPHealth(): {
   available: boolean
   toolCount: number
-  serverStatuses: Array<{ id: string; name: string; connected: boolean }>
+  serverStatuses: Array<{ id: string; name: string; connected: boolean; info?: any }>
 } {
   const available = isMCPAvailable()
   const toolCount = getMCPToolCount()
-  const serverStatuses = mcpToolRegistry.getAllServerStatuses()
+  const rawStatuses = mcpToolRegistry.getAllServerStatuses()
+  
+  const serverStatuses = rawStatuses.map(s => {
+    const state = s.info?.state;
+    const connected = state === 'connected' || state === 'connecting';
+    return {
+      id: s.id,
+      name: s.name,
+      connected,
+      info: s.info,
+    };
+  })
   
   return {
     available,

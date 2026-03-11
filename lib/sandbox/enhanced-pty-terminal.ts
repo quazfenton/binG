@@ -131,6 +131,15 @@ export interface PTYTerminalInstance {
   
   /** Connected to sandbox */
   isConnected: boolean;
+
+  /** Local input subscription */
+  localInputHandler?: { dispose: () => void };
+
+  /** PTY input subscription */
+  ptyInputHandler?: { dispose: () => void };
+
+  /** Resize subscription */
+  resizeHandler?: { dispose: () => void };
 }
 
 /**
@@ -153,14 +162,18 @@ export class EnhancedPTYTerminalManager {
    * Create PTY terminal
    */
   async createPTYTerminal(config: PTYTerminalConfig): Promise<PTYTerminalInstance> {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      throw new Error('PTY terminals can only be created in the browser');
+    }
+
     // Lazy load xterm.js
     if (!this.xtermModule) {
       try {
-        this.xtermModule = await import('xterm');
-        this.fitAddonModule = await import('xterm-addon-fit');
+        this.xtermModule = await import('@xterm/xterm');
+        this.fitAddonModule = await import('@xterm/addon-fit');
       } catch (error: any) {
         logger.error('Failed to load xterm.js:', error?.message);
-        throw new Error('xterm.js not available. Install with: npm install xterm xterm-addon-fit');
+        throw new Error('xterm.js not available. Install with: npm install @xterm/xterm @xterm/addon-fit');
       }
     }
     
@@ -247,8 +260,10 @@ export class EnhancedPTYTerminalManager {
     instance.terminal.writeln('');
     this.writePrompt(instance.terminal, executor.getCwd());
 
+    this.clearTerminalHandlers(instance)
+
     // Handle input
-    instance.terminal.onData((data: string) => {
+    instance.localInputHandler = instance.terminal.onData((data: string) => {
       if (data === '\r') {
         // Enter - execute command
         instance.terminal.write('\r\n');
@@ -311,80 +326,87 @@ export class EnhancedPTYTerminalManager {
       const wsUrl = process.env.NEXT_PUBLIC_WEBSOCKET_URL || 
                     `ws://localhost:${process.env.NEXT_PUBLIC_WEBSOCKET_PORT || 8080}`;
       
-      const ws = new WebSocket(`${wsUrl}/pty?sessionId=${session.sessionId}&sandboxId=${session.sandboxId}`);
-      
-      ws.onopen = () => {
-        logger.info(`PTY WebSocket connected for terminal ${terminalId}`);
-        
-        instance.websocket = ws;
-        instance.mode = 'pty';
-        instance.isConnected = true;
-        
-        instance.terminal.writeln('\x1b[1;32m● Connected to Sandbox\x1b[0m');
-        instance.terminal.writeln(`\x1b[90m  Session: ${session.sessionId.slice(0, 12)}...\x1b[0m`);
-        instance.terminal.writeln(`\x1b[90m  Provider: ${session.providerType}\x1b[0m`);
-        instance.terminal.writeln('');
-        
-        // Handle PTY output
-        ws.onmessage = (event) => {
-          const message = JSON.parse(event.data);
-          if (message.type === 'output') {
-            instance.terminal.write(message.data);
-          }
-        };
-        
-        // Handle PTY input
-        instance.terminal.onData((data: string) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: 'input',
-              data,
-            }));
-          }
-        });
-        
-        // Handle resize
-        instance.fitAddon.onResize(({ cols, rows }) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: 'resize',
-              cols,
-              rows,
-            }));
-          }
-        });
-      };
-      
-      ws.onerror = (error) => {
-        logger.error('PTY WebSocket error:', error);
-        instance.terminal.writeln('\x1b[31mConnection failed. Falling back to local mode.\x1b[0m');
-        instance.mode = 'local';
-      };
-      
-      ws.onclose = () => {
-        logger.info('PTY WebSocket closed');
-        instance.websocket = null;
-        instance.isConnected = false;
-        instance.mode = 'disconnected';
-      };
-      
-      // Wait for connection
+      const ws = new WebSocket(`${wsUrl}/pty?sessionId=${session.sessionId}&sandboxId=${session.sandboxId}`)
+
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
-          reject(new Error('Connection timeout'));
-        }, 30000);
-        
+          reject(new Error('Connection timeout'))
+        }, 30000)
+
         ws.onopen = () => {
-          clearTimeout(timeout);
-          resolve();
-        };
+          clearTimeout(timeout)
+          resolve()
+        }
+
         ws.onerror = () => {
-          clearTimeout(timeout);
-          reject(new Error('Connection failed'));
-        };
-      });
+          clearTimeout(timeout)
+          reject(new Error('Connection failed'))
+        }
+      })
+
+      logger.info(`PTY WebSocket connected for terminal ${terminalId}`)
+
+      this.clearTerminalHandlers(instance)
+      instance.websocket = ws
+      instance.mode = 'pty'
+      instance.isConnected = true
+
+      instance.terminal.writeln('\x1b[1;32m● Connected to Sandbox\x1b[0m')
+      instance.terminal.writeln(`\x1b[90m  Session: ${session.sessionId.slice(0, 12)}...\x1b[0m`)
+      instance.terminal.writeln(`\x1b[90m  Provider: ${session.providerType}\x1b[0m`)
+      instance.terminal.writeln('')
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data)
+          if (message.type === 'output') {
+            instance.terminal.write(message.data)
+          }
+        } catch (error: any) {
+          logger.warn('Failed to parse PTY message:', error?.message)
+        }
+      }
+
+      ws.onerror = (error) => {
+        logger.error('PTY WebSocket error:', error)
+      }
+
+      ws.onclose = () => {
+        logger.info('PTY WebSocket closed')
+        this.clearTerminalHandlers(instance)
+        instance.websocket = null
+        instance.isConnected = false
+        instance.mode = 'disconnected'
+      }
+
+      instance.ptyInputHandler = instance.terminal.onData((data: string) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'input',
+            data,
+          }))
+        }
+      })
+
+      instance.resizeHandler = instance.terminal.onResize(({ cols, rows }: { cols: number; rows: number }) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'resize',
+            cols,
+            rows,
+          }))
+        }
+      })
+
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'resize',
+          cols: instance.terminal.cols,
+          rows: instance.terminal.rows,
+        }))
+      }
       
-      logger.info(`Terminal ${terminalId} connected to sandbox ${session.sandboxId}`);
+      logger.info(`Terminal ${terminalId} connected to sandbox ${session.sandboxId}`)
       
       return { success: true };
     } catch (error: any) {
@@ -514,6 +536,16 @@ export class EnhancedPTYTerminalManager {
     }
   }
   
+  private clearTerminalHandlers(instance: PTYTerminalInstance): void {
+    instance.localInputHandler?.dispose?.()
+    instance.ptyInputHandler?.dispose?.()
+    instance.resizeHandler?.dispose?.()
+
+    instance.localInputHandler = undefined
+    instance.ptyInputHandler = undefined
+    instance.resizeHandler = undefined
+  }
+
   /**
    * Write prompt
    */

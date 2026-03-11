@@ -36,10 +36,19 @@ services:
       - NODE_ENV=development
       - PORT=5555
       - OPENCODE_CONTAINERIZED=true
+      - V2_AGENT_ENABLED=true
+      - MCP_ENABLED=true
+      - MCP_CLI_PORT=8888
       - NULLCLAW_ENABLED=${NULLCLAW_ENABLED:-false}  # Disabled by default
+      - NULLCLAW_MODE=${NULLCLAW_MODE:-per-session}
+      - NULLCLAW_MAX_CONTAINERS=${NULLCLAW_MAX_CONTAINERS:-4}
+      - NULLCLAW_BASE_PORT=${NULLCLAW_BASE_PORT:-3001}
       - NULLCLAW_NETWORK=bing-network
       - NULLCLAW_PORT=3001
       - NULLCLAW_URL=http://nullclaw:3000
+      - CHAT_AGENTIC_PIPELINE=auto
+      - WORKFORCE_ENABLED=true
+      - WORKFORCE_MAX_CONCURRENCY=4
       - PIP_CACHE_DIR=/root/.cache/pip
       - NPM_CONFIG_CACHE=/root/.npm
     depends_on:

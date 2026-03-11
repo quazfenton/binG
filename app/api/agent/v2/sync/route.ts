@@ -18,6 +18,7 @@ const syncSchema = z.object({
   direction: z.enum(['to-sandbox', 'from-sandbox', 'bidirectional']).default('bidirectional'),
   includePatterns: z.array(z.string()).optional(),
   excludePatterns: z.array(z.string()).optional(),
+  conversationId: z.string().optional(),
 });
 
 /**
@@ -40,11 +41,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { sessionId, direction, includePatterns, excludePatterns } = validation.data;
+    const { sessionId, direction, includePatterns, excludePatterns, conversationId } = validation.data;
 
     // Get session
-    const conversationId = sessionId.split(':')[1] || sessionId;
-    const session = agentSessionManager.getSession(userId, conversationId);
+    const resolvedConversationId =
+      conversationId ||
+      sessionId.split(':')[1] ||
+      agentSessionManager.getSessionById(sessionId)?.conversationId ||
+      sessionId;
+    const session = agentSessionManager.getSession(userId, resolvedConversationId);
     
     if (!session) {
       return NextResponse.json(
@@ -58,18 +63,18 @@ export async function POST(request: NextRequest) {
     let result;
     
     if (direction === 'bidirectional') {
-      result = await agentFSBridge.syncBidirectional(userId, conversationId, {
+      result = await agentFSBridge.syncBidirectional(userId, resolvedConversationId, {
         includePatterns,
         excludePatterns,
       });
     } else if (direction === 'to-sandbox') {
-      result = await agentFSBridge.syncToSandbox(userId, conversationId, {
+      result = await agentFSBridge.syncToSandbox(userId, resolvedConversationId, {
         direction: 'to-sandbox',
         includePatterns,
         excludePatterns,
       });
     } else {
-      result = await agentFSBridge.syncFromSandbox(userId, conversationId, {
+      result = await agentFSBridge.syncFromSandbox(userId, resolvedConversationId, {
         direction: 'from-sandbox',
         includePatterns,
         excludePatterns,

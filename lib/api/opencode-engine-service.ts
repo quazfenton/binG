@@ -48,7 +48,7 @@ export interface OpenCodeEngineResult {
   }>;
   fileChanges?: Array<{
     path: string;
-    action: 'create' | 'modify' | 'delete';
+    action: string;
     content?: string;
   }>;
   steps?: number;
@@ -104,6 +104,10 @@ class OpenCodeSessionManager {
       session.lastActivity = Date.now();
       session.messageCount++;
     }
+  }
+
+  deleteSession(id: string): void {
+    this.sessions.delete(id);
   }
 
   cleanup(): void {
@@ -197,7 +201,7 @@ export class OpenCodeEngineService {
         },
       };
     } catch (error: any) {
-      openCodeSessionManager.sessions.delete(sessionId);
+      openCodeSessionManager.deleteSession(sessionId);
       
       return {
         success: false,
@@ -334,7 +338,7 @@ export class OpenCodeEngineService {
       });
 
     } catch (error: any) {
-      openCodeSessionManager.sessions.delete(sessionId);
+      openCodeSessionManager.deleteSession(sessionId);
       
       yield {
         type: 'error',
@@ -502,9 +506,12 @@ export class OpenCodeEngineService {
 
         // File operations
         if (parsed.file_operation) {
+          const action = parsed.file_operation.action;
           fileChanges.push({
             path: parsed.file_operation.path,
-            action: parsed.file_operation.action,
+            action: (action === 'create' || action === 'modify' || action === 'delete') 
+              ? action 
+              : 'modify' as const,
             content: parsed.file_operation.content,
           });
           steps++;

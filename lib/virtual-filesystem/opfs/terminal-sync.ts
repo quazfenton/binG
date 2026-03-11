@@ -189,6 +189,13 @@ export class TerminalOPFSSync {
   }
 
   /**
+   * Check if terminal sync is enabled
+   */
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  /**
    * Disable terminal sync
    */
   async disable(): Promise<void> {

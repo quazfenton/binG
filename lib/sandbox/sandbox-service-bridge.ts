@@ -141,9 +141,10 @@ export class SandboxServiceBridge {
 
   /**
    * Infer provider type from sandbox ID
+   * P1 FIX: Extended to include more providers and return null for unknown instead of defaulting to e2b
    */
   inferProviderFromSandboxId(sandboxId: string): string | null {
-    if (sandboxId.startsWith('blaxel-')) return 'blaxel';
+    if (sandboxId.startsWith('blaxel-') || sandboxId.startsWith('blaxel-mcp-')) return 'blaxel';
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites';
     if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent';
     if (sandboxId.startsWith('mistral-')) return 'mistral';
@@ -152,12 +153,21 @@ export class SandboxServiceBridge {
     if (sandboxId.startsWith('runloop-')) return 'runloop';
     if (sandboxId.startsWith('microsandbox-')) return 'microsandbox';
     if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox';
+    if (sandboxId.startsWith('webcontainer-')) return 'webcontainer';
+    if (sandboxId.startsWith('opensandbox-')) return 'opensandbox';
+    if (sandboxId.startsWith('vercel-')) return 'vercel';
+    if (sandboxId.startsWith('codespace-')) return 'codespaces';
+    // P1 FIX: Return null instead of defaulting to e2b - let caller decide how to handle unknown
     return null;
   }
 
   async getProvider(name: string | null) {
     const { getSandboxProvider } = await import('./providers');
-    return getSandboxProvider((name as any) || 'e2b');
+    // P1 FIX: Don't silently default to e2b - throw error for unknown providers
+    if (!name) {
+      throw new Error('Cannot determine sandbox provider: sandbox ID format not recognized');
+    }
+    return getSandboxProvider(name as any);
   }
 
   /**

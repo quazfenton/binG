@@ -40,6 +40,10 @@ export interface NullclawConfig {
   allowedDomains: string[]; // Network egress rules
   healthCheckTimeout?: number; // milliseconds
   dockerNetwork?: string; // Docker network for communication
+  mode?: 'shared' | 'per-session';
+  maxContainers?: number;
+  basePort?: number;
+  externalUrl?: string;
 }
 
 export interface NullclawContainer {
@@ -59,7 +63,7 @@ export interface NullclawTask {
   status: 'pending' | 'running' | 'completed' | 'failed';
   result?: any;
   error?: string;
-  createdAt: Date;
+  createdAt?: Date;
   completedAt?: Date;
 }
 
@@ -83,16 +87,42 @@ class NullclawIntegration {
     allowedDomains: (process.env.NULLCLAW_ALLOWED_DOMAINS || 'openrouter.ai,api.discord.com,api.telegram.org').split(','),
     healthCheckTimeout: parseInt(process.env.NULLCLAW_HEALTH_TIMEOUT || '30000'),
     dockerNetwork: process.env.NULLCLAW_NETWORK || 'bing-network',
+    mode: (process.env.NULLCLAW_MODE as 'shared' | 'per-session') || 'shared',
+    maxContainers: parseInt(process.env.NULLCLAW_MAX_CONTAINERS || '4'),
+    basePort: parseInt(process.env.NULLCLAW_BASE_PORT || '3001'),
+    externalUrl: process.env.NULLCLAW_URL,
   };
 
   private containers = new Map<string, NullclawContainer>();
+  private sessionContainers = new Map<string, string>();
   private tasks = new Map<string, NullclawTask>();
+
+  getContainerForSession(userId: string, conversationId: string): NullclawContainer | undefined {
+    const sessionKey = `${userId}:${conversationId}`;
+    const containerId = this.sessionContainers.get(sessionKey);
+    if (containerId) {
+      return this.containers.get(containerId);
+    }
+    return Array.from(this.containers.values()).find(c => c.status === 'ready');
+  }
 
   /**
    * Start Nullclaw container
    */
   async startContainer(config: Partial<NullclawConfig> = {}): Promise<NullclawContainer> {
     const nullclawConfig = { ...this.defaultConfig, ...config };
+    if (nullclawConfig.externalUrl) {
+      const container: NullclawContainer = {
+        id: 'nullclaw-external',
+        endpoint: nullclawConfig.externalUrl,
+        port: nullclawConfig.port,
+        status: 'ready',
+        healthUrl: `${nullclawConfig.externalUrl}/health`,
+      };
+      this.containers.set(container.id, container);
+      return container;
+    }
+
     const containerId = `nullclaw-${uuidv4()}`;
 
     logger.info(`Starting Nullclaw container: ${containerId}`);
@@ -167,6 +197,12 @@ class NullclawIntegration {
       return;
     }
 
+    if (containerId === 'nullclaw-external') {
+      this.containers.delete(containerId);
+      logger.info('External Nullclaw endpoint released');
+      return;
+    }
+
     logger.info(`Stopping Nullclaw container: ${containerId}`);
 
     try {
@@ -175,6 +211,9 @@ class NullclawIntegration {
       
       container.status = 'stopped';
       this.containers.delete(containerId);
+      for (const [key, id] of this.sessionContainers.entries()) {
+        if (id === containerId) this.sessionContainers.delete(key);
+      }
       
       logger.info(`Nullclaw container ${containerId} stopped`);
     } catch (error: any) {
@@ -197,12 +236,56 @@ class NullclawIntegration {
     }
 
     try {
-      // Check if we have a running container
+      const nullclawConfig = { ...this.defaultConfig, ...config };
+      const sessionKey = `${userId}:${conversationId}`;
+
+      // External URL mode
+      if (nullclawConfig.externalUrl) {
+        const container = await this.startContainer({ externalUrl: nullclawConfig.externalUrl });
+        this.sessionContainers.set(sessionKey, container.id);
+        const session = await agentSessionManager.getOrCreateSession(userId, conversationId, {
+          mode: 'hybrid',
+          enableNullclaw: true,
+        });
+        session.nullclawEndpoint = container.endpoint;
+        return container.endpoint;
+      }
+
+      // Per-session container mode
+      if (nullclawConfig.mode === 'per-session') {
+        const existingId = this.sessionContainers.get(sessionKey);
+        const existing = existingId ? this.containers.get(existingId) : undefined;
+        if (existing && existing.status === 'ready') {
+          return existing.endpoint;
+        }
+
+        if (this.containers.size >= (nullclawConfig.maxContainers || 1)) {
+          throw new Error('Nullclaw per-session container limit reached');
+        }
+
+        const port = (nullclawConfig.basePort || 3001) + this.containers.size;
+        const container = await this.startContainer({ ...config, port });
+        this.sessionContainers.set(sessionKey, container.id);
+
+        const session = await agentSessionManager.getOrCreateSession(userId, conversationId, {
+          mode: 'hybrid',
+          enableNullclaw: true,
+        });
+        session.nullclawEndpoint = container.endpoint;
+        logger.info(`Nullclaw per-session container ready at ${container.endpoint}`);
+        return container.endpoint;
+      }
+
+      // Shared pool mode (default)
       let container = Array.from(this.containers.values()).find(c => c.status === 'ready');
       
       // Start new container if needed
       if (!container) {
-        container = await this.startContainer(config);
+        if (this.containers.size >= (nullclawConfig.maxContainers || 1)) {
+          throw new Error('Nullclaw container pool exhausted');
+        }
+        const port = (nullclawConfig.basePort || 3001) + this.containers.size;
+        container = await this.startContainer({ ...config, port });
       }
 
       // Get session and associate with container
@@ -212,6 +295,7 @@ class NullclawIntegration {
       });
 
       session.nullclawEndpoint = container.endpoint;
+      this.sessionContainers.set(sessionKey, container.id);
 
       logger.info(`Nullclaw initialized for session ${session.id} at ${container.endpoint}`);
       return container.endpoint;
@@ -230,8 +314,11 @@ class NullclawIntegration {
     conversationId: string,
     task: NullclawTask,
   ): Promise<NullclawTask> {
-    // Find running container
-    const container = Array.from(this.containers.values()).find(c => c.status === 'ready');
+    const sessionKey = `${userId}:${conversationId}`;
+    const containerId = this.sessionContainers.get(sessionKey);
+    const container =
+      (containerId && this.containers.get(containerId)) ||
+      Array.from(this.containers.values()).find(c => c.status === 'ready');
     
     if (!container) {
       throw new Error('Nullclaw container not running. Call initializeForSession first.');
@@ -500,7 +587,7 @@ class NullclawIntegration {
         logger.error(`Failed to stop container ${containerId}`, error);
       }
     }
-    
+    this.sessionContainers.clear();
     logger.info('Nullclaw shutdown complete');
   }
 }
