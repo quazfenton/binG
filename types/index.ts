@@ -1,3 +1,14 @@
+export interface CodeArtifact {
+  path: string;
+  operation: 'write' | 'patch' | 'delete' | 'read';
+  language?: string;
+  content?: string;
+  previousContent?: string;
+  diff?: string;
+  newVersion?: number;
+  previousVersion?: number;
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "system" | "data";
@@ -27,6 +38,7 @@ export interface Message {
       result?: any;
     }>;
     sandboxId?: string;
+    codeArtifacts?: CodeArtifact[];
     [key: string]: any;
   };
 }

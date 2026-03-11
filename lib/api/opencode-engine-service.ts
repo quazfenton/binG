@@ -52,6 +52,7 @@ export interface OpenCodeEngineResult {
     content?: string;
   }>;
   steps?: number;
+  reasoning?: string;
   error?: string;
   metadata?: {
     model: string;
@@ -476,12 +477,14 @@ export class OpenCodeEngineService {
     fileChanges: Array<{ path: string; action: string; content?: string }>;
     steps: number;
     tokensUsed?: number;
+    reasoning?: string;
   } {
     const bashCommands: any[] = [];
     const fileChanges: any[] = [];
     let response = '';
     let steps = 0;
     let tokensUsed = 0;
+    let reasoning = '';
 
     const lines = result.stdout.split('\n').filter(Boolean);
 
@@ -533,6 +536,11 @@ export class OpenCodeEngineService {
             response = parsed.response;
           }
         }
+
+        // Extract reasoning/thinking from the output
+        if (parsed.thinking || parsed.reasoning || parsed.thought) {
+          reasoning += (parsed.thinking || parsed.reasoning || parsed.thought) + '\n';
+        }
       } catch {
         // Non-JSON line, append to response
         response += line + '\n';
@@ -545,6 +553,7 @@ export class OpenCodeEngineService {
       fileChanges,
       steps,
       tokensUsed,
+      reasoning: reasoning.trim() || undefined,
     };
   }
 

@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "updatedAt": "2026-03-11T03:35:32.711Z",
+  "updatedAt": "2026-03-11T05:16:13.022Z",
   "quotas": {
     "composio": {
       "monthlyLimit": 20000,
-      "currentUsage": 3308,
+      "currentUsage": 3528,
       "resetDate": "2026-04-01T04:00:00.000Z",
       "isDisabled": false
     },

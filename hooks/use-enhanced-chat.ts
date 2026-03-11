@@ -510,6 +510,53 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     };
                   }));
                   break;
+                
+                case 'step':
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id !== assistantMessage.id) return msg;
+                    const existing = Array.isArray((msg.metadata as any)?.processingSteps)
+                      ? ([...(msg.metadata as any).processingSteps] as any[])
+                      : [];
+                    const stepIndex = typeof eventData.stepIndex === 'number'
+                      ? eventData.stepIndex
+                      : existing.length;
+                    if (stepIndex >= 0) {
+                      existing[stepIndex] = {
+                        ...(existing[stepIndex] || {}),
+                        ...eventData,
+                      };
+                    } else {
+                      existing.push(eventData);
+                    }
+                    return {
+                      ...msg,
+                      metadata: {
+                        ...(msg.metadata || {}),
+                        processingSteps: existing,
+                      },
+                    };
+                  }));
+                  break;
+
+                case 'step_metric':
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id !== assistantMessage.id) return msg;
+                    const existing = Array.isArray((msg.metadata as any)?.stepMetrics)
+                      ? ([...(msg.metadata as any).stepMetrics] as any[])
+                      : [];
+                    existing.push({
+                      ...eventData,
+                      timestamp: eventData?.timestamp || Date.now(),
+                    });
+                    return {
+                      ...msg,
+                      metadata: {
+                        ...(msg.metadata || {}),
+                        stepMetrics: existing,
+                      },
+                    };
+                  }));
+                  break;
 
                 // Non-content events - just log for debugging in development
                 case 'heartbeat':
