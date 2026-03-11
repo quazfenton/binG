@@ -30,7 +30,7 @@
  * 
  * // Run parallel tests
  * const testResults = await phase2.runParallelTests({
- *   testFiles: ['src/**/*.test.ts'],
+ *   testFiles: ['src/tests/*.test.ts'],
  *   command: 'npm test --',
  * });
  * 

@@ -842,20 +842,12 @@ export default function TerminalPanel({
     return id;
   }, [
     filesystemScopePathRef,
-    syncFileToVFS,
-    executeLocalShellCommand,
-    getPrompt,
-    updateTerminalState,
-    sendInput,
-    sendResize,
     getAuthToken,
     getAuthHeaders,
     getAnonymousSessionId,
-    toSandboxScopedPath,
     saveTerminalSession,
     sandboxStatus,
     setSandboxStatus,
-    connectTerminal,
     activeTerminalId,
     onClose,
     onMinimize,
@@ -1081,6 +1073,7 @@ export default function TerminalPanel({
     // Command history handled by handler
     
     return true; // Handler will execute
+  }, []);
 
 
 
@@ -1291,7 +1284,7 @@ export default function TerminalPanel({
           if (handlers) {
             handlers.editor.handleInput(data);
           } else {
-            handleEditorInput(terminalId, data, (text) => term.terminal?.write(text));
+            console.warn('[TerminalPanel] Editor handler missing for active session');
           }
           return;
         }
@@ -1335,7 +1328,7 @@ export default function TerminalPanel({
       logger.error('Failed to load xterm.js', err as Error);
       toast.error('Failed to initialize terminal. Install @xterm/xterm @xterm/addon-fit @xterm/addon-web-links');
     }
-  }, [executeLocalShellCommand, handleEditorInput, updateTerminalState, sendInput, sendResize]);
+  }, [executeLocalShellCommand, updateTerminalState, sendInput, sendResize]);
 
   // Handle sandbox command-mode input (line-based execution)
   const handleSandboxCmdInput = useCallback((
@@ -1462,6 +1455,7 @@ export default function TerminalPanel({
     
     logger.warn('Connection handler should have been used');
     return;
+  }, []);
 
 
 

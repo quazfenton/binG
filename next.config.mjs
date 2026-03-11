@@ -8,6 +8,9 @@ const projectRoot = resolve(__dirname);
 const nextConfig = {
   turbopack: {
     root: projectRoot,
+    // Turbopack doesn't support boolean aliases like webpack
+    // Node.js built-ins are automatically externalized for server
+    // For client, we rely on tree-shaking and serverExternalPackages
   },
   typescript: {
     ignoreBuildErrors: true,
@@ -68,6 +71,26 @@ const nextConfig = {
       "replicate",
       "@google/generative-ai",
       "portkey-ai",
+      // Sandbox providers - server-only
+      "@daytonaio/sdk",
+      "@e2b/code-interpreter",
+      "@e2b/desktop",
+      "e2b",
+      "dockerode",
+      "microsandbox",
+      "@blaxel/core",
+      // Database
+      "better-sqlite3",
+      "ioredis",
+      "bullmq",
+      // Email
+      "nodemailer",
+      "mailersend",
+      "@getbrevo/brevo",
+      // Auth
+      "jsonwebtoken",
+      "jose",
+      "bcryptjs",
     ],
   webpack: (config, { isServer, dev }) => {
     // Suppress specific warnings in development
@@ -79,7 +102,7 @@ const nextConfig = {
         (warning) => {
           const moduleName = typeof warning.module === 'string' ? warning.module : (warning.module?.resource || '');
           const message = warning.message || '';
-          
+
           if (moduleName && moduleName.includes('require-in-the-middle')) {
             return true;
           }

@@ -13,10 +13,10 @@
  * @example
  * ```typescript
  * import { codesandboxBatch } from '@/lib/sandbox/phase2-integration';
- * 
+ *
  * // Run tests in parallel
  * const testResults = await codesandboxBatch.runParallelTests({
- *   testFiles: ['src/**/*.test.ts'],
+ *   testFiles: ['src/tests/*.test.ts'],
  *   command: 'npm test --',
  *   maxConcurrent: 10,
  * });
