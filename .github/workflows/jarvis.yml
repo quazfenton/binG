@@ -182,24 +182,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
+          PR_NUMBER=${{ needs.collect-comments.outputs.pr_number }}
           # Grabs the last 100 lines of CodeRabbit feedback to give the agent its mission
           # SECURITY: Uses gh api to fetch only verified bot reviews, preventing prompt injection from malicious PR comments
-          # SECURITY: Anchored regex with optional [bot] suffix to prevent substring matches
-          BOT_PATTERN="^(coderabbitai|qodo-code-review|cubic-dev-ai|codeant-ai)(\\[bot\\])?$"
+          # Note: jq regex doesn't need escape for literal brackets, use [bot] directly
+          BOT_PATTERN='^(coderabbitai|qodo-code-review|cubic-dev-ai|codeant-ai)([bot])?$'
 
           # Fetch only NEW unprocessed reviews from verified bot accounts
           # Filters out reviews that already contain the agent applied marker
           # Gets last 10 complete reviews (not line-count limited to avoid truncation)
           # Note: select(.body != null) filters out deleted/empty reviews
           RAW_FEEDBACK=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews \
-            --jq '[.[] | select(.body != null) | select(.user.login | test("'"$BOT_PATTERN"'"; "i")) | select(.state == "COMMENTED" or .state == "CHANGES_REQUESTED") | select(.body | contains("Agent:") | not)] | .[-10:] | .[].body' \
+            --jq "[.[] | select(.body != null) | select(.user.login | test(\"$BOT_PATTERN\"; \"i\")) | select(.state == \"COMMENTED\" or .state == \"CHANGES_REQUESTED\") | select(.body | contains(\"Agent:\") | not)] | .[-10:] | .[].body" \
             | tac)
           SUGGESTIONS="${RAW_FEEDBACK:-Review the suggestion if there is any for optimizations.}"
 
           # Sanitize string for bash multiline using printf with proper escaping
           printf '%s\n' "$SUGGESTIONS" > /tmp/suggestions.txt
-          # Use quoted delimiter 'EOF' to prevent variable expansion and content interference
+          # Use quoted delimiter to prevent variable expansion and content interference
           echo "suggestions<<'CODE_RABBIT_CONTEXT'" >> "$GITHUB_OUTPUT"
           cat /tmp/suggestions.txt >> "$GITHUB_OUTPUT"
           echo "CODE_RABBIT_CONTEXT" >> "$GITHUB_OUTPUT"
