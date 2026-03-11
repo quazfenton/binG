@@ -43,10 +43,11 @@ export async function POST(request: NextRequest) {
 
     const { sessionId, direction, includePatterns, excludePatterns, conversationId } = validation.data;
 
-    // Get session
+    // Get session - prefer explicit conversationId, otherwise lookup by session UUID
+    // Note: sessionId is a UUID (e.g., "550e8400-e29b-41d4-a716-446655440000")
+    // Session lookup uses agentSessionManager.getSessionById() which handles UUIDs correctly
     const resolvedConversationId =
       conversationId ||
-      sessionId.split(':')[1] ||
       agentSessionManager.getSessionById(sessionId)?.conversationId ||
       sessionId;
     const session = agentSessionManager.getSession(userId, resolvedConversationId);

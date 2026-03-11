@@ -56,7 +56,8 @@ export function resolveScopedPath(requestedPath: string, scopePath?: string): st
   raw = raw.replace(/^\/+/, '');
 
   if (raw === scope || raw.startsWith(`${scope}/`)) {
-    return raw;
+    // Always normalize multiple slashes even for scope-matching paths
+    return raw.replace(/\/+/g, '/');
   }
 
   if (raw.startsWith('project/')) {

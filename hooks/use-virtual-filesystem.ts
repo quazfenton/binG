@@ -42,6 +42,94 @@ interface ApiResponse<T> {
 
 const vfsLogger = createDebugLogger('useVFS', 'DEBUG_VFS');
 
+// =============================================================================
+// SHARED IN-MEMORY SNAPSHOT CACHE
+// =============================================================================
+// Single shared cache for VFS snapshots to prevent redundant API calls
+// between CodePreviewPanel and TerminalPanel
+// =============================================================================
+interface SnapshotCacheEntry {
+  snapshot: {
+    root: string;
+    version: number;
+    updatedAt: string;
+    path: string;
+    files: Array<{
+      path: string;
+      content: string;
+      language: string;
+      version: number;
+      size: number;
+      lastModified: string;
+    }>;
+  };
+  timestamp: number;
+}
+
+const snapshotCache = new Map<string, SnapshotCacheEntry>();
+const SNAPSHOT_CACHE_TTL_MS = 5000; // 5 seconds cache TTL
+const SNAPSHOT_CACHE_MAX_ENTRIES = 10; // Limit cache entries
+
+function getCacheKey(path: string, ownerId: string): string {
+  return `${ownerId}:${path}`;
+}
+
+function getCachedSnapshot(path: string, ownerId: string): { snapshot: SnapshotCacheEntry['snapshot']; isFresh: boolean } | null {
+  const key = getCacheKey(path, ownerId);
+  const entry = snapshotCache.get(key);
+  
+  if (!entry) return null;
+  
+  const age = Date.now() - entry.timestamp;
+  const isFresh = age < SNAPSHOT_CACHE_TTL_MS;
+  
+  // Clean up stale entries
+  if (!isFresh) {
+    snapshotCache.delete(key);
+    return null;
+  }
+  
+  return { snapshot: entry.snapshot, isFresh };
+}
+
+function setCachedSnapshot(path: string, ownerId: string, snapshot: SnapshotCacheEntry['snapshot']): void {
+  const key = getCacheKey(path, ownerId);
+  
+  // Evict oldest entries if cache is full
+  if (snapshotCache.size >= SNAPSHOT_CACHE_MAX_ENTRIES) {
+    let oldestKey: string | null = null;
+    let oldestTimestamp = Infinity;
+    
+    for (const [k, v] of snapshotCache.entries()) {
+      if (v.timestamp < oldestTimestamp) {
+        oldestTimestamp = v.timestamp;
+        oldestKey = k;
+      }
+    }
+    
+    if (oldestKey) {
+      snapshotCache.delete(oldestKey);
+    }
+  }
+  
+  snapshotCache.set(key, { snapshot, timestamp: Date.now() });
+}
+
+function invalidateSnapshotCache(path?: string, ownerId?: string): void {
+  if (!path && !ownerId) {
+    // Clear all
+    snapshotCache.clear();
+    return;
+  }
+  
+  // Clear specific path or all paths for owner
+  for (const key of snapshotCache.keys()) {
+    if (ownerId && !key.startsWith(ownerId + ':')) continue;
+    if (path && !key.includes(path)) continue;
+    snapshotCache.delete(key);
+  }
+}
+
 export function useVirtualFilesystem(
   initialPath: string = 'project',
   options: UseVirtualFilesystemOptions = {}
@@ -167,6 +255,9 @@ export function useVirtualFilesystem(
   }, [currentPath]);
 
   const listDirectory = useCallback(async (pathToLoad?: string) => {
+    // Invalidate snapshot cache when directory changes
+    invalidateSnapshotCache(pathToLoad || currentPathRef.current, getOrCreateAnonymousSessionId());
+    
     log(`listDirectory: loading "${pathToLoad || currentPathRef.current}"`);
     setIsLoading(true);
     setError(null);
@@ -212,6 +303,9 @@ export function useVirtualFilesystem(
   const writeFile = useCallback(async (filePath: string, content: string) => {
     log(`writeFile: writing "${filePath}" (contentLength=${content.length})`);
     
+    // Invalidate snapshot cache on write
+    invalidateSnapshotCache();
+    
     // OPFS-first strategy
     if (useOPFS && !offlineMode) {
       // Write to OPFS instantly
@@ -245,6 +339,9 @@ export function useVirtualFilesystem(
   }, [listDirectory, request, useOPFS, offlineMode, log]);
 
   const deletePath = useCallback(async (targetPath: string) => {
+    // Invalidate snapshot cache on delete
+    invalidateSnapshotCache(targetPath, getOrCreateAnonymousSessionId());
+    
     const data = await request<{ deletedCount: number }>('/api/filesystem/delete', {
       method: 'POST',
       body: JSON.stringify({ path: targetPath }),
@@ -275,6 +372,17 @@ export function useVirtualFilesystem(
 
   const getSnapshot = useCallback(async (pathForSnapshot?: string) => {
     const targetPath = pathForSnapshot || currentPathRef.current;
+    const ownerId = getOrCreateAnonymousSessionId();
+    
+    // Check shared cache first
+    const cached = getCachedSnapshot(targetPath, ownerId);
+    if (cached) {
+      vfsLogger.log(`getSnapshot: cache hit for "${targetPath}" (fresh: ${cached.isFresh})`);
+      return cached.snapshot;
+    }
+    
+    vfsLogger.log(`getSnapshot: cache miss for "${targetPath}", fetching from API`);
+    
     const data = await request<{
       root: string;
       version: number;
@@ -285,6 +393,10 @@ export function useVirtualFilesystem(
       `/api/filesystem/snapshot?path=${encodeURIComponent(targetPath)}`,
       { method: 'GET', includeJsonContentType: false },
     );
+    
+    // Store in shared cache
+    setCachedSnapshot(targetPath, ownerId, data);
+    
     return data;
   }, [request]);
 
@@ -307,6 +419,9 @@ export function useVirtualFilesystem(
         lastSyncTime: Date.now(),
         hasConflicts: result.conflicts.length > 0,
       }));
+
+      // Invalidate snapshot cache after OPFS sync (files may have changed)
+      invalidateSnapshotCache(undefined, ownerId);
 
       if (result.conflicts.length > 0) {
         logWarn('Sync completed with conflicts:', result.conflicts);

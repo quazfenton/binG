@@ -35,6 +35,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // SECURITY: Verify session ownership - resolve session from server-side store
+    // and ensure it belongs to the authenticated user (IDOR prevention)
+    const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
+    const session = sandboxBridge.getSession(sessionId);
+
+    if (!session) {
+      return NextResponse.json(
+        { error: 'Session not found' },
+        { status: 404 }
+      );
+    }
+
+    // Verify the authenticated user owns this session
+    if (session.userId !== authResult.userId) {
+      logger.warn('Snapshot restore IDOR attempt', {
+        requestingUser: authResult.userId,
+        sessionOwner: session.userId,
+        sessionId,
+      });
+      return NextResponse.json(
+        { error: 'You do not have access to this session' },
+        { status: 403 }
+      );
+    }
+
     logger.info(`[${requestId}] Restoring snapshot`, {
       sessionId,
       scopePath,
@@ -45,7 +70,7 @@ export async function POST(req: NextRequest) {
     // Dynamic import - server-only module
     const { vfsSyncBackService } = await import('@/lib/sandbox/vfs-sync-back');
 
-    // Sync sandbox to VFS
+    // Sync sandbox to VFS (session ownership already verified above)
     const result = await vfsSyncBackService.syncSandboxToVFS(sessionId, {
       vfsScopePath: scopePath,
       syncMode: syncToVFS ? 'incremental' : 'changed-only',
