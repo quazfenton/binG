@@ -46,7 +46,7 @@ export const ChatRequestSchema = z.object({
     required_error: 'Model is required',
     invalid_type_error: 'Model must be a string',
   }),
-  temperature: z.number().min(0).refine((val) => val <= 2, 'Temperature must be at most 2').optional().default(0.7),
+  temperature: z.number().min(0).max(2).optional().default(0.7),
   maxTokens: z.number().positive().optional().default(4000),
   stream: z.boolean().optional().default(true),
   apiKeys: z.record(z.string()).optional(),
