@@ -468,28 +468,28 @@ jobs:
               -f sha="$MAIN_SHA" || true
           fi
 
-          # Encode file content as base64
-          QUEUE_CONTENT=$(base64 -w 0 < /tmp/queue.json)
+          # Encode file content as base64 and write to temp file
+          base64 -w 0 < /tmp/queue.json > /tmp/content.b64
 
           EXISTING_SHA=""
           if gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" >/dev/null 2>&1; then
             EXISTING_SHA=$(gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" --jq '.sha')
           fi
 
-          # Use --input to read from file instead of passing as argument
+          # Build JSON payload by writing parts to file (avoids arg list limits)
           if [ -n "$EXISTING_SHA" ]; then
-            # Build JSON payload in temp file
-            jq -n --arg msg "🔄 Update pending queue (PR #$PR_NUMBER)" \
-                  --arg branch "$QUEUE_BRANCH" \
-                  --arg content "$QUEUE_CONTENT" \
-                  --arg sha "$EXISTING_SHA" \
-                  '{message: $msg, branch: $branch, content: $content, sha: $sha}' > /tmp/payload.json
+            {
+              printf '{"message":"🔄 Update pending queue (PR #%s)","branch":"%s","content":"' "$PR_NUMBER" "$QUEUE_BRANCH"
+              cat /tmp/content.b64
+              printf '","sha":"%s"}' "$EXISTING_SHA"
+            } > /tmp/payload.json
             gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json
           else
-            jq -n --arg msg "📝 Create pending queue (PR #$PR_NUMBER)" \
-                  --arg branch "$QUEUE_BRANCH" \
-                  --arg content "$QUEUE_CONTENT" \
-                  '{message: $msg, branch: $branch, content: $content}' > /tmp/payload.json
+            {
+              printf '{"message":"📝 Create pending queue (PR #%s)","branch":"%s","content":"' "$PR_NUMBER" "$QUEUE_BRANCH"
+              cat /tmp/content.b64
+              printf '"}'
+            } > /tmp/payload.json
             gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json
           fi
 

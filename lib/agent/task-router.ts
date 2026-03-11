@@ -200,8 +200,9 @@ class TaskRouter {
         success: result.success,
         response: result.response,
         bashCommands: result.bashCommands,
-        fileChanges: result.fileChanges,
+        fileChanges: result.fileChanges || [],
         agent: 'opencode',
+        reasoning: result.reasoning,
       };
     }
 
@@ -249,6 +250,29 @@ class TaskRouter {
       },
     });
 
+    // Extract file changes from V2 agent steps
+    const fileChanges: Array<{ path: string; action: string; content?: string }> = [];
+    if (result.steps) {
+      for (const step of result.steps) {
+        // Look for file operation tool calls in steps
+        if (step.toolName && ['write_file', 'read_file', 'delete_file', 'edit_file', 'Bash'].includes(step.toolName)) {
+          const args = step.args || {};
+          const path = args.path || args.file || args.target || '';
+          if (path) {
+            if (step.toolName === 'Bash' && args.command) {
+              // Extract file paths from bash commands like "echo > file.txt"
+              const match = args.command.match(/(?:>\s*|tee\s+|cat\s*>\s*)([^\s|]+)/);
+              if (match) {
+                fileChanges.push({ path: match[1], action: 'modify' });
+              }
+            } else {
+              fileChanges.push({ path, action: step.toolName === 'delete_file' ? 'delete' : 'modify' });
+            }
+          }
+        }
+      }
+    }
+
     return {
       success: true,
       response: result.response,
@@ -257,6 +281,8 @@ class TaskRouter {
       agent: 'opencode',
       sessionId: result.sessionId,
       nullclawTasks: (result as any).nullclawTasks,
+      fileChanges,
+      reasoning: (result as any).reasoning,
     };
   }
 
