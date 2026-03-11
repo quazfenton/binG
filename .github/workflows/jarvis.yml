@@ -35,14 +35,18 @@ jobs:
 
           # Fetch the persistent queue file (contains comment objects from failed runs)
           # Queue is scoped to PR number to prevent cross-PR contamination
-          PENDING_QUEUE="[]"
+          # Write directly to file to avoid "argument list too long" errors
           QUEUE_FILE=".jarvis/queue-pr-${PR_NUMBER}.json"
           if gh api repos/${{ github.repository }}/git/ref/heads/$QUEUE_BRANCH >/dev/null 2>&1; then
-            PENDING_QUEUE=$(gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || echo "[]")
-            if [ -z "$PENDING_QUEUE" ] || [ "$PENDING_QUEUE" = "null" ]; then
-              PENDING_QUEUE="[]"
+            gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" --jq '.content' 2>/dev/null | base64 -d > /tmp/pending_queue.json 2>/dev/null || echo "[]" > /tmp/pending_queue.json
+            # Validate JSON, write empty array if invalid
+            if ! jq '.' /tmp/pending_queue.json > /tmp/pending_queue_validated.json 2>/dev/null || [ ! -s /tmp/pending_queue_validated.json ]; then
+              echo "[]" > /tmp/pending_queue_validated.json
             fi
-            echo "Loaded pending queue for PR $PR_NUMBER: $(echo "$PENDING_QUEUE" | jq 'length') comments"
+            mv /tmp/pending_queue_validated.json /tmp/pending_queue.json
+            echo "Loaded pending queue for PR $PR_NUMBER: $(jq 'length' /tmp/pending_queue.json) comments"
+          else
+            echo "[]" > /tmp/pending_queue.json
           fi
 
           # IMPORTANT: Build the triggering comment JSON safely from github.event context
@@ -76,10 +80,6 @@ jobs:
           jq -c '[.[] | select((.reactions.rocket // 0) == 0)]' /tmp/trigger_comments.json > /tmp/unprocessed_new.json
 
           echo "Unprocessed (no rocket reaction): $(jq 'length' /tmp/unprocessed_new.json)"
-
-          # Convert pending queue to same format (already has id and body)
-          # Write pending queue to file
-          echo "$PENDING_QUEUE" | jq '.' > /tmp/pending_queue.json
 
           # Combine pending queue with new unprocessed comments (deduplicate by ID)
           # Use --slurpfile to read both files
@@ -161,9 +161,8 @@ jobs:
           echo "head_sha=$(echo "$PR_DATA" | jq -r '.head.sha')" >> "$GITHUB_OUTPUT"
           echo "base_ref=$(echo "$PR_DATA" | jq -r '.base.ref')" >> "$GITHUB_OUTPUT"
 
-          # Store the trigger comment URL for reference
-          echo "comment_url=${{ github.event.comment.html_url }}" >> "$GITHUB_OUTPUT"
-          echo "comment_id=${{ github.event.comment.id }}" >> "$GITHUB_OUTPUT"
+          # Note: github.event.comment.* is not available in jobs triggered by workflow dependency
+          # Use needs.collect-comments.outputs for data from parent job
 
       - name: Checkout Full Repository (Latest HEAD)
         uses: actions/checkout@v4
@@ -252,17 +251,19 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          PROMPT: |
-            You are an expert Staff Engineer. Analyze the whole repo context.
-            Here is the CodeRabbit review context: ${{ steps.context.outputs.suggestions }}
-
-            Additional batched trigger comments from reviewers: (read from /tmp/trigger_comments.json)
-
-            Apply these fixes, ensure Postgres/Terraform logic is intact, and verify type safety.
-            Group related changes together logically.
         run: |
-          # Read trigger comments from downloaded artifact
-          BATCH_COMMENTS=$(jq -r '[.[].body] | join("\n\n---\n\n")' /tmp/trigger_comments.json)
+          # Read trigger comments from downloaded artifact and write to file
+          # Use file-based approach to avoid "argument list too long" errors
+          jq -r '[.[].body] | join("\n\n---\n\n")' /tmp/trigger_comments.json > /tmp/batch_comments.txt
+
+          # Write base prompt to file
+          cat > /tmp/base_prompt.txt << 'BASE_PROMPT_EOF'
+You are an expert Staff Engineer. Analyze the whole repo context.
+Here is the CodeRabbit review context: ${{ steps.context.outputs.suggestions }}
+
+Apply these fixes, ensure Postgres/Terraform logic is intact, and verify type safety.
+Group related changes together logically.
+BASE_PROMPT_EOF
 
           # Function to run the agent in CI mode (no user prompt, auto-apply, repo map enabled)
           run_agent() {
@@ -270,11 +271,17 @@ jobs:
             local EXTRA_ARGS="$2"
             echo "Attempting execution with model: $MODEL"
 
-            # Build full prompt by combining base PROMPT with batch comments
-            FULL_PROMPT=$(printf '%s\n\n%s\n\n%s' "$PROMPT" "Additional batched trigger comments:" "$BATCH_COMMENTS")
+            # Build full prompt by combining files (avoids shell variable limits)
+            {
+              cat /tmp/base_prompt.txt
+              echo ""
+              echo "Additional batched trigger comments:"
+              echo ""
+              cat /tmp/batch_comments.txt
+            } > /tmp/full_prompt.txt
 
             # Aider runs multiple iterations under the hood if it needs to fix lint errors it caused
-            aider --model "$MODEL" --yes --no-auto-commits --dark-mode $EXTRA_ARGS --message "$FULL_PROMPT"
+            aider --model "$MODEL" --yes --no-auto-commits --dark-mode $EXTRA_ARGS --message-file /tmp/full_prompt.txt
           }
 
           # 1. Primary: Gemini 2.5 Pro
@@ -306,20 +313,24 @@ jobs:
           # Use git diff --cached to check staged changes (no HEAD reference needed)
           if ! git diff --cached --quiet; then
             # Get list of changed files from staged area
-            CHANGED_FILES=$(git diff --cached --name-only | jq -R -s -c 'split("\n")[:-1]')
+            # Write to file to avoid variable overflow
+            git diff --cached --name-only > /tmp/changed_files.txt
+            CHANGED_FILES=$(cat /tmp/changed_files.txt | jq -R -s -c 'split("\n")[:-1]')
 
             # Get all trigger comment IDs for reference
-            COMMENT_IDS="${{ needs.collect-comments.outputs.comment_ids }}"
-            COMMENT_COUNT=$(echo "$COMMENT_IDS" | tr ',' '\n' | grep -c . || echo "0")
+            # Write to file to avoid "argument list too long" errors
+            echo "${{ needs.collect-comments.outputs.comment_ids }}" | tr ',' '\n' > /tmp/comment_ids.txt
+            COMMENT_COUNT=$(wc -l < /tmp/comment_ids.txt | tr -d ' ')
 
             # Build commit message with all comment references
-            git commit -m "🤖 Agent: Batch applied fixes from $COMMENT_COUNT review comments - Comments: $COMMENT_IDS"
+            git commit -m "🤖 Agent: Batch applied fixes from $COMMENT_COUNT review comments"
 
             git push origin HEAD --force
 
-            echo "changed_files<<EOF" >> "$GITHUB_OUTPUT"
+            # Write changed files to output using unique delimiter
+            echo "changed_files<<CHANGED_FILES_EOF" >> "$GITHUB_OUTPUT"
             echo "$CHANGED_FILES" >> "$GITHUB_OUTPUT"
-            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "CHANGED_FILES_EOF" >> "$GITHUB_OUTPUT"
 
             echo "success=true" >> "$GITHUB_OUTPUT"
             echo "comment_count=$COMMENT_COUNT" >> "$GITHUB_OUTPUT"
@@ -335,24 +346,28 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGE_RESULT: ${{ steps.branch.outputs.merge_result }}
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
-          
+          PR_NUMBER=${{ needs.collect-comments.outputs.pr_number }}
+
           # Parse changed files and format as markdown list with links
-          FILES_JSON='${{ steps.commit.outputs.changed_files }}'
+          # Write to file to avoid heredoc delimiter issues
+          echo '${{ steps.commit.outputs.changed_files }}' | jq -r '.[]' > /tmp/files_list.txt
           FIX_BRANCH="jarvis-fixes-${{ steps.pr.outputs.head_ref }}"
-          FILES_LIST=$(echo "$FILES_JSON" | jq -r '.[]' | while read -r file; do
+          FILES_LIST=""
+          while IFS= read -r file; do
             if [ -n "$file" ]; then
-              echo "- [\`$file\`](https://github.com/${{ github.repository }}/blob/$FIX_BRANCH/$file)"
+              FILES_LIST="${FILES_LIST}- [\`$file\`](https://github.com/${{ github.repository }}/blob/$FIX_BRANCH/$file)"$'\n'
             fi
-          done)
+          done < /tmp/files_list.txt
 
           # Build list of trigger comment links (review comments use rcomment-id format)
-          COMMENT_IDS="${{ needs.collect-comments.outputs.comment_ids }}"
-          COMMENT_LINKS=$(echo "$COMMENT_IDS" | tr ',' '\n' | while read -r id; do
+          # Write to file to avoid "argument list too long" errors
+          echo "${{ needs.collect-comments.outputs.comment_ids }}" | tr ',' '\n' > /tmp/comment_ids.txt
+          COMMENT_LINKS=""
+          while IFS= read -r id; do
             if [ -n "$id" ]; then
-              echo "- [Comment #$id](https://github.com/${{ github.repository }}/pull/$PR_NUMBER#discussioncomment-r$id)"
+              COMMENT_LINKS="${COMMENT_LINKS}- [Comment #$id](https://github.com/${{ github.repository }}/pull/$PR_NUMBER#discussioncomment-r$id)"$'\n'
             fi
-          done)
+          done < /tmp/comment_ids.txt
 
           # Determine previous fixes status
           case "$MERGE_RESULT" in
@@ -366,14 +381,14 @@ jobs:
             echo "### 🚀 Agent Workflow Complete! (Batch: ${{ steps.commit.outputs.comment_count }} comments)"
             echo ""
             echo "**Triggered by:**"
-            echo "${COMMENT_LINKS:-No trigger comments}"
+            if [ -n "$COMMENT_LINKS" ]; then echo "$COMMENT_LINKS"; else echo "No trigger comments"; fi
             echo ""
             echo "**Base PR:** \`${{ steps.pr.outputs.head_ref }}\`@[\`${{ steps.pr.outputs.head_sha }}\`](https://github.com/${{ github.repository }}/commit/${{ steps.pr.outputs.head_sha }})"
             echo "**Fix Branch:** \`jarvis-fixes-${{ steps.pr.outputs.head_ref }}\`"
             echo "**Previous Fixes:** ${PREV_FIXES:-N/A}"
             echo ""
             echo "**Files Modified:**"
-            echo "${FILES_LIST:-No files modified}"
+            if [ -n "$FILES_LIST" ]; then echo "$FILES_LIST"; else echo "No files modified"; fi
             echo ""
             echo "**Agent Commit:** [\`$(git rev-parse --short HEAD)\`](https://github.com/${{ github.repository }}/commit/$(git rev-parse HEAD))"
             echo ""
@@ -397,20 +412,21 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          COMMENT_IDS: ${{ needs.collect-comments.outputs.comment_ids }}
         run: |
-          PR_NUMBER=${{ github.event.pull_request.number }}
+          PR_NUMBER=${{ needs.collect-comments.outputs.pr_number }}
           COMMENT_IDS="${{ needs.collect-comments.outputs.comment_ids }}"
           QUEUE_BRANCH="jarvis-queue"
           QUEUE_FILE=".jarvis/queue-pr-${PR_NUMBER}.json"
 
           # Add 🚀 reaction to all processed comments
-          for id in $(echo "$COMMENT_IDS" | tr ',' ' '); do
+          # Write IDs to file to avoid "argument list too long" errors
+          echo "$COMMENT_IDS" | tr ',' '\n' > /tmp/comment_ids.txt
+          while IFS= read -r id; do
             if [ -n "$id" ]; then
               gh api repos/${{ github.repository }}/pulls/comments/$id/reactions \
                 -f content=rocket || true
             fi
-          done
+          done < /tmp/comment_ids.txt
 
           # Clear the queue file on success (delete the branch or empty the file)
           if gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" >/dev/null 2>&1; then

@@ -294,12 +294,21 @@ class CloudFSManager {
 
     try {
       const result = await this.activeHandle.writeFile(path, content);
-      
+
       if (result.success) {
         // Update quota usage
         const providerConfig = this.providers.get(this.activeProvider!);
         if (providerConfig) {
           providerConfig.quotaUsed = (providerConfig.quotaUsed || 0) + content.length;
+        }
+
+        // Invalidate cache entries that might contain the written path
+        // to prevent getSnapshot from returning stale data
+        for (const [cacheKey, cached] of this.syncCache.entries()) {
+          const pathPrefix = cacheKey.split(':')[1];
+          if (path.startsWith(pathPrefix) || pathPrefix.startsWith(path.substring(0, path.lastIndexOf('/')))) {
+            this.syncCache.delete(cacheKey);
+          }
         }
       }
 
@@ -348,12 +357,25 @@ class CloudFSManager {
     try {
       let synced = 0;
       let totalSize = 0;
+      const successfulPaths: string[] = [];
 
       for (const file of files) {
         const result = await this.activeHandle.writeFile(file.path, file.content);
         if (result.success) {
           synced++;
           totalSize += file.content.length;
+          successfulPaths.push(file.path);
+        }
+      }
+
+      // Invalidate cache entries that might contain the written paths
+      for (const [cacheKey, cached] of this.syncCache.entries()) {
+        const pathPrefix = cacheKey.split(':')[1];
+        for (const writtenPath of successfulPaths) {
+          if (writtenPath.startsWith(pathPrefix) || pathPrefix.startsWith(writtenPath.substring(0, writtenPath.lastIndexOf('/')))) {
+            this.syncCache.delete(cacheKey);
+            break;
+          }
         }
       }
 

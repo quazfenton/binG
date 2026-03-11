@@ -285,8 +285,10 @@ class CloudAgentSpawner {
 
     for (const [agentId, agent] of this.agents.entries()) {
       if (now - agent.lastActivity > this.config.idleTimeout) {
-        await this.stopAgent(agentId);
-        stopped++;
+        const result = await this.stopAgent(agentId);
+        if (result.success) {
+          stopped++;
+        }
       }
     }
 

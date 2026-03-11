@@ -101,9 +101,16 @@ class NullclawIntegration {
     const sessionKey = `${userId}:${conversationId}`;
     const containerId = this.sessionContainers.get(sessionKey);
     if (containerId) {
-      return this.containers.get(containerId);
+      const container = this.containers.get(containerId);
+      // Return only if container exists and is ready
+      if (container && container.status === 'ready') {
+        return container;
+      }
+      return undefined;
     }
-    return Array.from(this.containers.values()).find(c => c.status === 'ready');
+    // In per-session mode, never fall back to another session's container
+    // to maintain isolation. Return undefined to signal no container available.
+    return undefined;
   }
 
   /**
@@ -316,12 +323,18 @@ class NullclawIntegration {
   ): Promise<NullclawTask> {
     const sessionKey = `${userId}:${conversationId}`;
     const containerId = this.sessionContainers.get(sessionKey);
-    const container =
-      (containerId && this.containers.get(containerId)) ||
-      Array.from(this.containers.values()).find(c => c.status === 'ready');
-    
+    const container = containerId ? this.containers.get(containerId) : undefined;
+
     if (!container) {
-      throw new Error('Nullclaw container not running. Call initializeForSession first.');
+      throw new Error(
+        `No Nullclaw container assigned for session ${sessionKey}. Call initializeForSession first.`
+      );
+    }
+
+    if (container.status !== 'ready' && container.status !== 'running') {
+      throw new Error(
+        `Nullclaw container status is ${container.status}. Cannot execute tasks.`
+      );
     }
 
     task.createdAt = new Date();
@@ -343,7 +356,7 @@ class NullclawIntegration {
       }
 
       const result = await response.json();
-      
+
       task.status = result.status || 'completed';
       task.result = result.result;
       task.error = result.error;
@@ -358,7 +371,7 @@ class NullclawIntegration {
       task.error = error.message;
       task.completedAt = new Date();
       this.tasks.set(task.id, task);
-      
+
       return task;
     }
   }
