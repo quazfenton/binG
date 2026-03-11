@@ -216,9 +216,11 @@ export class UserTerminalSessionManager {
     quotaManager.recordUsage(providerType);
     
     // Create session record
+    const sessionId = `user-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const session: UserTerminalSession = {
-      sessionId: `user-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      sessionId,
       sandboxId: handle.id,
+      ptySessionId: sessionId,
       userId,
       providerType,
       mode: 'pty',

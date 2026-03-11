@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
     // Sync sandbox to VFS
     const result = await vfsSyncBackService.syncSandboxToVFS(sessionId, {
       vfsScopePath: scopePath,
-      syncToVFS,
+      syncMode: syncToVFS ? 'incremental' : 'changed-only',
     });
 
     logger.info(`[${requestId}] Snapshot restored`, {

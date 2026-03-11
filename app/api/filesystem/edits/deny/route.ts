@@ -11,8 +11,8 @@ export const runtime = 'nodejs';
 const denyEditRequestSchema = z.object({
   transactionId: transactionIdSchema,
   reason: z.string()
-    .optional()
-    .max(1000, 'Reason too long (max 1000 characters)'),
+    .max(1000, 'Reason too long (max 1000 characters)')
+    .optional(),
 });
 
 export async function POST(req: NextRequest) {

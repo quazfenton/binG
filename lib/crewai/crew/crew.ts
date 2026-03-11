@@ -568,14 +568,14 @@ export class Crew {
     inputs: Record<string, string | number | boolean> | undefined,
     outputs: TaskOutput[],
   ): Promise<void> {
-    await Promise.all(
-      this.tasks.map(async (task) => {
-        const startedAt = Date.now();
-        const output = await task.execute({ inputs });
-        outputs.push(output);
-        await this.afterTask(task, output, startedAt);
-      })
-    );
+    // P1 FIX: Execute tasks sequentially to respect task dependencies
+    // Promise.all() would run all tasks in parallel, breaking context flow
+    for (const task of this.tasks) {
+      const startedAt = Date.now();
+      const output = await task.execute({ inputs });
+      outputs.push(output);
+      await this.afterTask(task, output, startedAt);
+    }
   }
 
   private async executeHierarchicalAsync(

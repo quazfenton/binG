@@ -16,6 +16,7 @@ import {
 } from '@/lib/backend';
 import { quotaManager } from '@/lib/backend/quota';
 import { snapshotManager } from '@/lib/backend/snapshot-manager';
+import { initializeMCPForArchitecture2 } from '@/lib/mcp';
 
 const logger = createLogger('Backend:Init');
 
@@ -152,6 +153,9 @@ class BackendService {
 
         // 5. Initialize snapshot manager
         await this.initializeSnapshotManager();
+
+        // 6. Initialize MCP CLI server for V2 agents (optional)
+        await this.initializeMCPServer();
 
         this.initialized = true;
         this.status.initialized = true;
@@ -331,6 +335,21 @@ class BackendService {
       logger.info('Snapshot manager initialized');
     } catch (error) {
       logger.warn('Snapshot manager initialization skipped', error as Error);
+    }
+  }
+
+  private async initializeMCPServer(): Promise<void> {
+    if (process.env.MCP_ENABLED !== 'true') {
+      logger.info('MCP disabled; skipping MCP CLI server initialization');
+      return;
+    }
+
+    try {
+      const port = parseInt(process.env.MCP_CLI_PORT || '8888', 10);
+      await initializeMCPForArchitecture2(port);
+      logger.info(`MCP CLI server initialized on port ${port}`);
+    } catch (error) {
+      logger.warn('MCP CLI server initialization failed', error as Error);
     }
   }
 

@@ -445,14 +445,15 @@ jobs:
           QUEUE_FILE=".jarvis/queue-pr-${PR_NUMBER}.json"
 
           # Read trigger comments from downloaded artifact (already in JSON format)
-          QUEUE_JSON=$(cat /tmp/trigger_comments.json | jq -c '[.[] | {id, body}]')
+          # Write directly to temp file to avoid "argument list too long" error
+          jq -c '[.[] | {id, body}]' /tmp/trigger_comments.json > /tmp/queue.json
 
-          # Fallback: if jq failed, build empty array
-          if [ "$QUEUE_JSON" = "null" ] || [ -z "$QUEUE_JSON" ]; then
-            QUEUE_JSON="[]"
+          # Fallback: if jq failed, create empty array
+          if [ ! -s /tmp/queue.json ]; then
+            echo "[]" > /tmp/queue.json
           fi
 
-          echo "Saving pending queue with $(echo "$QUEUE_JSON" | jq 'length') comments for PR $PR_NUMBER"
+          echo "Saving pending queue with $(jq 'length' /tmp/queue.json) comments for PR $PR_NUMBER"
 
           # Get the default branch name dynamically
           DEFAULT_BRANCH=$(gh api repos/${{ github.repository }} --jq '.default_branch')
@@ -467,24 +468,29 @@ jobs:
               -f sha="$MAIN_SHA" || true
           fi
 
-          QUEUE_CONTENT=$(echo "$QUEUE_JSON" | base64 -w 0)
+          # Encode file content as base64
+          QUEUE_CONTENT=$(base64 -w 0 < /tmp/queue.json)
 
           EXISTING_SHA=""
           if gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" >/dev/null 2>&1; then
             EXISTING_SHA=$(gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" --jq '.sha')
           fi
 
+          # Use --input to read from file instead of passing as argument
           if [ -n "$EXISTING_SHA" ]; then
-            gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" \
-              -f message="🔄 Update pending queue (PR #$PR_NUMBER)" \
-              -f branch="$QUEUE_BRANCH" \
-              -f content="$QUEUE_CONTENT" \
-              -f sha="$EXISTING_SHA"
+            # Build JSON payload in temp file
+            jq -n --arg msg "🔄 Update pending queue (PR #$PR_NUMBER)" \
+                  --arg branch "$QUEUE_BRANCH" \
+                  --arg content "$QUEUE_CONTENT" \
+                  --arg sha "$EXISTING_SHA" \
+                  '{message: $msg, branch: $branch, content: $content, sha: $sha}' > /tmp/payload.json
+            gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json
           else
-            gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" \
-              -f message="📝 Create pending queue (PR #$PR_NUMBER)" \
-              -f branch="$QUEUE_BRANCH" \
-              -f content="$QUEUE_CONTENT"
+            jq -n --arg msg "📝 Create pending queue (PR #$PR_NUMBER)" \
+                  --arg branch "$QUEUE_BRANCH" \
+                  --arg content "$QUEUE_CONTENT" \
+                  '{message: $msg, branch: $branch, content: $content}' > /tmp/payload.json
+            gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json
           fi
 
-          echo "✅ Queue persisted with $idx comments for PR $PR_NUMBER. Will retry on next trigger."
+          echo "✅ Queue persisted with $(jq 'length' /tmp/queue.json) comments for PR $PR_NUMBER. Will retry on next trigger."

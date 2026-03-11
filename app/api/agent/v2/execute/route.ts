@@ -10,8 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { agentSessionManager } from '@/lib/agent/agent-session-manager';
-import { agentFSBridge } from '@/lib/agent/agent-fs-bridge';
-import { taskRouter } from '@/lib/agent/task-router';
+import { executeV2Task, executeV2TaskStreaming } from '@/lib/agent/v2-executor';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:AgentV2:Execute');
@@ -20,6 +19,12 @@ const executeTaskSchema = z.object({
   sessionId: z.string().min(1),
   task: z.string().min(1),
   stream: z.boolean().optional().default(false),
+  conversationId: z.string().optional(),
+  preferredAgent: z.enum(['opencode', 'nullclaw', 'cli']).optional(),
+  cliCommand: z.object({
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+  }).optional(),
 });
 
 /**
@@ -42,11 +47,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { sessionId, task, stream } = validation.data;
+    const { sessionId, task, stream, conversationId, preferredAgent, cliCommand } = validation.data;
 
-    // Get session from sessionId
-    const conversationId = sessionId.split(':')[1] || sessionId;
-    const session = agentSessionManager.getSession(userId, conversationId);
+    // Type guard for cliCommand - ensure command is defined when passed
+    const normalizedCliCommand = cliCommand?.command 
+      ? { command: cliCommand.command, args: cliCommand.args }
+      : undefined;
+
+    // Resolve session
+    const resolvedConversationId =
+      conversationId ||
+      sessionId.split(':')[1] ||
+      agentSessionManager.getSessionById(sessionId)?.conversationId ||
+      sessionId;
+
+    const session = agentSessionManager.getSession(userId, resolvedConversationId);
     
     if (!session) {
       return NextResponse.json(
@@ -58,27 +73,40 @@ export async function POST(request: NextRequest) {
     logger.info(`Executing task in session ${session.id}`);
 
     // Update session state
-    agentSessionManager.setSessionState(userId, conversationId, 'busy');
+    agentSessionManager.setSessionState(userId, resolvedConversationId, 'busy');
 
     try {
-      // Use task router to automatically route to appropriate agent
-      const result = await taskRouter.executeTask({
-        id: `task-${Date.now()}`,
-        userId,
-        conversationId,
-        task,
-        stream,
-      });
+      if (stream) {
+        const streamBody = executeV2TaskStreaming({
+          userId,
+          conversationId: resolvedConversationId,
+          task,
+          preferredAgent,
+          cliCommand: normalizedCliCommand,
+          stream: true,
+        });
 
-      // Sync back from sandbox after OpenCode execution
-      if (result.agent === 'opencode') {
-        await agentFSBridge.syncFromSandbox(userId, conversationId);
+        return new Response(streamBody, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            Pragma: 'no-cache',
+            Expires: '0',
+            Connection: 'keep-alive',
+            'X-Accel-Buffering': 'no',
+          },
+        });
       }
 
-      return NextResponse.json({
-        success: result.success,
-        data: result,
+      const result = await executeV2Task({
+        userId,
+        conversationId: resolvedConversationId,
+        task,
+        preferredAgent,
+        cliCommand: normalizedCliCommand,
       });
+
+      return NextResponse.json(result);
 
     } catch (error: any) {
       logger.error('Task execution failed', error);
@@ -88,8 +116,8 @@ export async function POST(request: NextRequest) {
       );
     } finally {
       // Update session state back to ready
-      agentSessionManager.setSessionState(userId, conversationId, 'ready');
-      agentSessionManager.updateActivity(userId, conversationId);
+      agentSessionManager.setSessionState(userId, resolvedConversationId, 'ready');
+      agentSessionManager.updateActivity(userId, resolvedConversationId);
     }
 
   } catch (error: any) {

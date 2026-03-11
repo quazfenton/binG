@@ -71,7 +71,11 @@ RUN mkdir -p /app/.next && chown -R nodejs:nodejs /app/.next
 USER nodejs
 
 # Expose ports
-EXPOSE 5555 3001
+# 5555: Next.js dev server
+# 3001: Nullclaw container
+# 8888: MCP HTTP server for Architecture 2
+# 8080: WebSocket terminal server
+EXPOSE 5555 3001 8888 8080
 
 # Set development environment
 ENV NODE_ENV=development
@@ -80,15 +84,45 @@ ENV WATCHPACK_POLLING=true
 
 # V2 Agent environment variables
 ENV OPENCODE_CONTAINERIZED=true
+ENV V2_AGENT_ENABLED=true
 ENV OPENCODE_MODEL=claude-3-5-sonnet
 ENV OPENCODE_BIN=/usr/local/bin/opencode
+ENV OPENCODE_MAX_SESSIONS_PER_USER=10
+ENV OPENCODE_DEFAULT_TIMEOUT=300000
+ENV OPENCODE_ENFORCE_QUOTA=false
+ENV CHAT_AGENTIC_PIPELINE=auto
+ENV WORKFORCE_ENABLED=true
+
+# Nullclaw Configuration
 ENV NULLCLAW_ENABLED=true
 ENV NULLCLAW_IMAGE=ghcr.io/nullclaw/nullclaw:latest
+ENV NULLCLAW_MODE=per-session
+ENV NULLCLAW_MAX_CONTAINERS=4
+ENV NULLCLAW_BASE_PORT=3001
 ENV NULLCLAW_PORT=3001
 ENV NULLCLAW_TIMEOUT=3600
 ENV NULLCLAW_ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
 ENV NULLCLAW_NETWORK=bing-network
+ENV NULLCLAW_POOL_SIZE=2
+
+# MCP Server for Architecture 2
+ENV MCP_ENABLED=true
+ENV MCP_CLI_PORT=8888
+ENV MCP_CLI_AUTH_TOKEN=
+
+# Cloud Provider Configuration (priority-based fallback)
+ENV CLOUD_FS_PRIORITY=sprites,e2b,daytona,codesandbox
+ENV PREVIEW_OFFLOAD_THRESHOLD_FILES=50
+ENV PREVIEW_OFFLOAD_THRESHOLD_MB=5
+
+# Cloud Agent Spawner
+ENV MAX_CLOUD_AGENTS=10
+ENV CLOUD_AGENT_IDLE_TIMEOUT=1800000
+ENV CLOUD_AGENT_MAX_UPTIME=3600000
+
+# Workspace Configuration
 ENV WORKSPACE_DIR=/workspace
+ENV USER_WORKSPACE_ROOT=/workspace/users
 
 # Cache environment variables
 ENV PIP_CACHE_DIR=/root/.cache/pip

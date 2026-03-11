@@ -201,7 +201,11 @@ export class SandboxService {
   async createWorkspace(userId: string, config?: SandboxConfig): Promise<WorkspaceSession> {
     log.info(`Creating workspace for user ${userId}${config ? ' with custom config' : ''}`)
     let handle: SandboxHandle | null = null
-    const preferredType = (quotaManager.pickAvailableSandboxProvider(this.primaryProviderType) as SandboxProviderType | null)
+    
+    // P1 FIX: Honor explicit provider in config if provided
+    const explicitProvider = config?.provider as SandboxProviderType | undefined;
+    const preferredType = explicitProvider 
+      || (quotaManager.pickAvailableSandboxProvider(this.primaryProviderType) as SandboxProviderType | null)
       || this.primaryProviderType
     log.debug(`Preferred provider type: ${preferredType}`)
     const candidateTypes = await this.getCandidateProviderTypes(preferredType)

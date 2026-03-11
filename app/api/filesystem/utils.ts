@@ -5,7 +5,7 @@
  */
 
 import { NextRequest } from 'next/server';
-import { resolveFilesystemOwner, type FilesystemOwnerResolution } from '@/lib/virtual-filesystem';
+import { resolveFilesystemOwner, type FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 /**
  * Resolve filesystem owner with graceful fallback

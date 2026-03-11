@@ -399,15 +399,34 @@ export async function POST(req: NextRequest): Promise<NextResponse<SyncResponse>
       );
     }
 
-    // STEP 5: Get sandbox provider
+    // STEP 5: P2 FIX - Resolve provider from session instead of trusting request
+    // This prevents attacks where a malicious user provides wrong provider to access other sandboxes
+    const resolvedProvider = session.provider || sandboxBridge.inferProviderFromSandboxId(sandboxId);
+    
+    if (!resolvedProvider) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Cannot determine sandbox provider. Please reconnect to the sandbox.',
+        },
+        { status: 400 }
+      );
+    }
+    
+    // Validate that the resolved provider matches what was requested (if provided)
+    // This allows backwards compatibility while still being secure
+    if (provider && provider.toLowerCase() !== resolvedProvider.toLowerCase()) {
+      console.warn(`[VFS Sync] Provider mismatch: request said '${provider}' but session has '${resolvedProvider}'. Using session provider.`);
+    }
+    
     let sandboxProvider;
     try {
-      sandboxProvider = await getSandboxProvider(provider as SandboxProviderType);
+      sandboxProvider = await getSandboxProvider(resolvedProvider as SandboxProviderType);
     } catch (providerError: any) {
       return NextResponse.json(
         {
           success: false,
-          error: `Failed to initialize provider ${provider}: ${providerError.message}`,
+          error: `Failed to initialize provider ${resolvedProvider}: ${providerError.message}`,
         },
         { status: 500 }
       );
