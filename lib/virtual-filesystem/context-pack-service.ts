@@ -127,8 +127,13 @@ class ContextPackService {
     const originalSize = totalSize;
 
     if (opts.maxTotalSize && totalSize > opts.maxTotalSize) {
-      // Truncate bundle to roughly maxTotalSize bytes
-      bundle = bundle.slice(0, opts.maxTotalSize);
+      // Truncate bundle to exactly maxTotalSize bytes (not characters)
+      // This handles UTF-8 multibyte characters correctly
+      let end = bundle.length;
+      while (end > 0 && encoder.encode(bundle.slice(0, end)).length > opts.maxTotalSize) {
+        end--;
+      }
+      bundle = bundle.slice(0, end);
       totalSize = encoder.encode(bundle).length;
       warnings.push(
         `Context pack truncated to approximately ${opts.maxTotalSize} bytes (original size ${originalSize} bytes)`

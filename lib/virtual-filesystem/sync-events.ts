@@ -7,7 +7,9 @@ export interface FilesystemUpdatedDetail {
   eventId?: string;
   emittedAt?: number;
   scopePath?: string;
-  path?: string;
+  path?: string;          // Single file path (for single-file operations)
+  paths?: string[];       // Multiple file paths (for batch operations like visual editor)
+  type?: 'create' | 'update' | 'delete';  // Operation type
   source?: string;
   sessionId?: string;
   commitId?: string;

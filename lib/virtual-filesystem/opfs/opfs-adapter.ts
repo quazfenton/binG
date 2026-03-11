@@ -305,7 +305,7 @@ export class OPFSAdapter {
 
   /**
    * Create directory in OPFS
-   * 
+   *
    * @param path - Directory path
    * @param options - Directory creation options
    */
@@ -314,24 +314,37 @@ export class OPFSAdapter {
     options: { recursive?: boolean } = {}
   ): Promise<void> {
     if (!this.enabled) {
+      console.warn('[OPFS] createDirectory called but OPFS not enabled');
       return;
     }
 
-    await this.core.createDirectory(path, options);
+    try {
+      await this.core.createDirectory(path, options);
+    } catch (error: any) {
+      console.error('[OPFS] createDirectory failed for path:', path, error);
+      throw error;
+    }
   }
 
   /**
    * List directory contents from OPFS
-   * 
+   *
    * @param path - Directory path
    * @returns Array of directory entries
    */
   async listDirectory(path: string): Promise<OPFSDirectoryEntry[]> {
     if (!this.enabled) {
+      console.warn('[OPFS] listDirectory called but OPFS not enabled - returning empty array');
       return [];
     }
 
-    return this.core.listDirectory(path);
+    try {
+      return await this.core.listDirectory(path);
+    } catch (error: any) {
+      console.error('[OPFS] listDirectory failed for path:', path, error);
+      // Re-throw to let caller handle (use-opfs.ts logs and returns empty array)
+      throw error;
+    }
   }
 
   /**
@@ -354,7 +367,7 @@ export class OPFSAdapter {
     try {
       // Get server snapshot via API
       const snapshot = await getWorkspaceSnapshot();
-      
+
       if (!snapshot) {
         return {
           success: false,
@@ -362,6 +375,7 @@ export class OPFSAdapter {
           bytesTransferred: 0,
           conflicts: [],
           errors: ['Failed to fetch snapshot from server'],
+          duration: Date.now() - startTime,
         };
       }
 

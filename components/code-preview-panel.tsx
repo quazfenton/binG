@@ -88,6 +88,33 @@ type CodeBlock = ParsedCodeBlock;
 
 const previewLogger = createDebugLogger('CodePreviewPanel', 'DEBUG_CODE_PREVIEW');
 
+// =============================================================================
+// AUTHORITATIVE STATE ARCHITECTURE
+// =============================================================================
+// The Code Preview Panel has multiple file sources that can compete, creating race conditions.
+// To fix this, we establish a clear authority hierarchy:
+//
+// 1. MANUAL (highest priority): User explicitly triggered preview via handleManualPreview()
+//    - Source: explicit user action, represents specific directory
+//    - State: manualPreviewFiles + isManualPreviewActive
+//
+// 2. VFS (default): Virtual Filesystem sync (the canonical source)
+//    - Source: filesystem changes from chat, terminal, or visual editor
+//    - State: scopedPreviewFiles (synced via filesystem-updated events)
+//    - This is the most up-to-date representation of user code
+//
+// 3. LEGACY (lowest priority): Parsed from markdown code blocks
+//    - Source: LLM responses parsed for code blocks
+//    - State: projectStructure
+//    - Deprecated: Use VFS instead for code that should persist
+//
+// The key insight: scopedPreviewFiles is the ONLY source that gets updated via
+// filesystem-updated events (cross-panel sync). Manual preview is explicitly
+// triggered by user. projectStructure is derived from chat messages.
+//
+// Resolution: Use manualPreviewFiles if active, else scopedPreviewFiles (VFS), else projectStructure
+// =============================================================================
+
 interface ProjectStructure {
   name: string;
   files: { [key: string]: string };
@@ -137,6 +164,9 @@ export default function CodePreviewPanel({
   const [detectedFramework] = useState<"react" | "vue" | "vanilla">("vanilla");
 
   const { log, error: logError, warn: logWarn } = previewLogger;
+  
+  // Track previous scope path to detect navigation
+  const previousScopePathRef = useRef(filesystemScopePath);
   const [selectedTab, setSelectedTab] = useState("preview");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [projectStructure, setProjectStructure] =
@@ -195,9 +225,30 @@ export default function CodePreviewPanel({
     return () => clearTimeout(timer);
   }, [isFilesystemLoading]);
   
-  // Manual Sandpack preview state
+  // =============================================================================
+  // AUTHORITATIVE PREVIEW STATE
+  // =============================================================================
+  // CRITICAL: These states have specific, non-overlapping purposes to prevent race conditions.
+  //
+  // manualPreviewFiles: Set ONLY when user explicitly triggers preview (handleManualPreview)
+  //   - Never automatically updated by filesystem events
+  //   - Cleared only when user explicitly clears or navigates away
+  //   - Highest priority in renderLivePreview resolution
+  //
+  // scopedPreviewFiles: Set ONLY from VFS filesystem-updated events or initial load
+  //   - Represents the current state of the virtual filesystem
+  //   - Automatically stays in sync with chat/terminal/editor changes
+  //   - This is THE authoritative source for persisted code
+  //
+  // projectStructure: Set ONLY from parsed code blocks in chat messages
+  //   - Lowest priority, used only as fallback when VFS is empty
+  //   - Deprecated for new code (should go through VFS)
+  // =============================================================================
+  
+  // Manual Sandpack preview state - user-initiated explicit preview
   const [manualPreviewFiles, setManualPreviewFiles] = useState<Record<string, string> | null>(null);
   const [isManualPreviewActive, setIsManualPreviewActive] = useState(false);
+  const [manualPreviewMayBeStale, setManualPreviewMayBeStale] = useState(false); // Track if VFS changed while in manual preview
   const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'node' | 'local' | 'cloud'>('sandpack');
   const [devBoxOutput, setDevBoxOutput] = useState<string[]>([]);
   const [isDevBoxRunning, setIsDevBoxRunning] = useState(false);
@@ -777,8 +828,18 @@ export default function CodePreviewPanel({
   const handleClearManualPreview = useCallback(() => {
     setManualPreviewFiles(null);
     setIsManualPreviewActive(false);
+    setManualPreviewMayBeStale(false); // Clear stale state
     toast.info('Manual preview cleared');
   }, []);
+
+  // Refresh manual preview (clears stale state)
+  const handleRefreshManualPreview = useCallback(() => {
+    if (manualPreviewPathRef.current) {
+      log('[handleRefreshManualPreview] refreshing manual preview');
+      setManualPreviewMayBeStale(false); // Clear stale before refresh
+      void handleManualPreview(manualPreviewPathRef.current, undefined, { silent: false, preserveTab: true });
+    }
+  }, [handleManualPreview]);
 
   // Listen for terminal preview commands
   useEffect(() => {
@@ -804,14 +865,24 @@ export default function CodePreviewPanel({
       lastVfsSaveRef.current = now;
 
       const normalizedScope = normalizeProjectPath(savedScopePath || 'project');
-      
+
+      // Track write results for event emission
+      const writeResults: Array<{ path: string; workspaceVersion?: number; commitId?: string; sessionId?: string | null }> = [];
+
       for (const [filePath, content] of Object.entries(updatedFiles)) {
         let fullPath = filePath;
         if (!filePath.startsWith(normalizedScope + '/') && filePath !== normalizedScope) {
           fullPath = `${normalizedScope}/${filePath}`.replace(/\/+/g, '/');
         }
         try {
-          await writeFilesystemFile(fullPath, content);
+          const result = await writeFilesystemFile(fullPath, content);
+          writeResults.push({
+            path: fullPath,
+            workspaceVersion: result?.workspaceVersion,
+            commitId: result?.commitId,
+            sessionId: result?.sessionId,
+          });
+          log(`[VFS_SAVE] wrote "${fullPath}"`);
         } catch (err) {
           logError(`[VFS_SAVE] failed to write "${fullPath}"`, err);
         }
@@ -833,6 +904,20 @@ export default function CodePreviewPanel({
 
       localStorage.removeItem("visualEditorPendingSave");
       toast.success("Visual editor changes synced to filesystem");
+
+      // Dispatch event for cross-panel sync (Terminal, Chat)
+      // Include all updated file paths so other panels know what changed
+      if (writeResults.length > 0) {
+        emitFilesystemUpdated({
+          scopePath: normalizedScope,
+          source: 'visual-editor',
+          paths: writeResults.map(r => r.path),
+          workspaceVersion: writeResults[0]?.workspaceVersion,
+          commitId: writeResults[0]?.commitId,
+          sessionId: writeResults[0]?.sessionId,
+        });
+        log(`[VFS_SAVE] dispatched filesystem-updated event for ${writeResults.length} files`);
+      }
     };
 
     const bc = new BroadcastChannel(VFS_SAVE_CHANNEL);
@@ -1045,6 +1130,30 @@ export default function CodePreviewPanel({
     filesystemScopePathRef.current = filesystemScopePath;
   }, [filesystemScopePath]);
 
+  // Clear preview state on navigation (filesystemScopePath change)
+  // This ensures fresh state when user navigates to a different session/directory
+  useEffect(() => {
+    const prevScope = previousScopePathRef.current;
+    if (prevScope !== filesystemScopePath) {
+      log(`[navigation] scope changed from "${prevScope}" to "${filesystemScopePath}", clearing preview state`);
+      
+      // Clear manual preview state on navigation
+      setManualPreviewFiles(null);
+      setIsManualPreviewActive(false);
+      setManualPreviewMayBeStale(false);
+      
+      // Clear filesystem selection
+      setSelectedFilesystemPath('');
+      setSelectedFilesystemContent('');
+      setSelectedFilesystemLanguage('text');
+      
+      // Reset workspace version tracking for new scope
+      lastWorkspaceVersionRef.current = 0;
+      
+      previousScopePathRef.current = filesystemScopePath;
+    }
+  }, [filesystemScopePath, log]);
+
   useEffect(() => {
     if (!isOpen) return;
 
@@ -1085,10 +1194,49 @@ export default function CodePreviewPanel({
           log(`[filesystem-updated] refreshed scopedPreviewFiles (${Object.keys(files).length} files)`);
         }
 
+        // CRITICAL: Do NOT auto-refresh manualPreviewFiles!
+        // Manual preview is user-initiated and should NOT be overwritten by automatic events.
+        // If the user wants to refresh their manual preview, they will explicitly do so.
+        // This prevents the race condition where VFS updates overwrite user-selected preview.
         if (manualPreviewActiveRef.current) {
-          const manualPath = manualPreviewPathRef.current || filesystemScopePathRef.current || normalizedScopePath;
-          log(`[filesystem-updated] refreshing manual preview from "${manualPath}"`);
-          await handleManualPreview(manualPath, undefined, { silent: true, preserveTab: true });
+          // PRECISE STALE DETECTION: Only mark as stale if files changed in the previewed directory
+          const eventScopePath = detail?.scopePath;
+          const eventPaths = detail?.paths as string[] | undefined;
+          const previewedDir = manualPreviewPathRef.current;
+          
+          let isRelevantChange = false;
+          
+          if (eventScopePath && previewedDir) {
+            // Check if the scope path matches or is a subdirectory of the previewed directory
+            const normalizedEventScope = normalizeProjectPath(eventScopePath);
+            const normalizedPreviewed = normalizeProjectPath(previewedDir);
+            
+            // Direct match, event is in a subdirectory of previewed, OR previewed is a subdirectory of event
+            // (parent directory changes could add new files that get imported)
+            if (normalizedEventScope === normalizedPreviewed || 
+                normalizedEventScope.startsWith(normalizedPreviewed + '/') ||
+                normalizedPreviewed.startsWith(normalizedEventScope + '/')) {
+              isRelevantChange = true;
+            }
+          } else if (eventPaths && eventPaths.length > 0 && previewedDir) {
+            // Fallback: check if any changed paths are within the previewed directory
+            const normalizedPreviewed = normalizeProjectPath(previewedDir);
+            isRelevantChange = eventPaths.some(p => {
+              const normalizedPath = normalizeProjectPath(p);
+              return normalizedPath.startsWith(normalizedPreviewed + '/') || 
+                     normalizedPath === normalizedPreviewed;
+            });
+          } else if (!eventScopePath && !eventPaths) {
+            // No scope info - assume it's a general change (conservative)
+            isRelevantChange = true;
+          }
+          
+          if (isRelevantChange) {
+            log(`[filesystem-updated] manual preview active - files changed in previewed directory, marking stale`);
+            setManualPreviewMayBeStale(true);
+          } else {
+            log(`[filesystem-updated] manual preview active - change in different directory (${eventScopePath || 'unknown'}), not marking stale`);
+          }
         }
       } catch (error) {
         logError(`[filesystem-updated] refresh failed`, error);
@@ -3850,11 +3998,24 @@ export default app;`,
                 <TabsList className="grid w-full grid-cols-3 bg-black/40 border-b border-white/10 px-2 md:px-4">
                   <TabsTrigger
                     value="preview"
-                    className="text-white text-xs md:text-sm"
+                    className="text-white text-xs md:text-sm relative"
                   >
                     <Eye className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
                     <span className="hidden sm:inline">Live Preview</span>
                     <span className="sm:hidden">Preview</span>
+                    {/* Manual preview indicator + stale state */}
+                    {isManualPreviewActive && (
+                      <span
+                        className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full ${
+                          manualPreviewMayBeStale 
+                            ? 'bg-yellow-500 animate-pulse' 
+                            : 'bg-green-500'
+                        }`}
+                        title={manualPreviewMayBeStale 
+                          ? 'Files changed while in preview - click refresh to update' 
+                          : 'Manual preview active'}
+                      />
+                    )}
                   </TabsTrigger>
                   <TabsTrigger
                     value="files"
@@ -3874,7 +4035,19 @@ export default app;`,
                   </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="preview" className="p-2 md:p-4 h-full">
+                <TabsContent value="preview" className="p-2 md:p-4 h-full relative">
+                  {/* Stale indicator with refresh button */}
+                  {isManualPreviewActive && manualPreviewMayBeStale && (
+                    <div className="absolute top-2 right-2 z-20 flex items-center gap-2 bg-yellow-500/90 text-black px-3 py-1.5 rounded-lg text-xs font-medium shadow-lg animate-pulse">
+                      <span>Files changed</span>
+                      <button
+                        onClick={handleRefreshManualPreview}
+                        className="hover:bg-yellow-600 px-2 py-0.5 rounded bg-white/20 transition-colors"
+                      >
+                        ↻ Refresh
+                      </button>
+                    </div>
+                  )}
                   {renderLivePreview()}
                 </TabsContent>
 
@@ -4064,14 +4237,23 @@ export default app;`,
                                   e.stopPropagation();
                                   const label = node.type === 'directory' ? `Delete folder "${node.name}" and all contents?` : `Delete ${node.name}?`;
                                   if (confirm(label)) {
-                                    deleteFilesystemPath(node.path).then(() => {
+                                    deleteFilesystemPath(node.path).then((deleteResult) => {
                                       toast.success(`Deleted ${node.name}`);
                                       void listFilesystemDirectory(filesystemCurrentPath);
                                       if (selectedFilesystemPath === node.path) {
                                         setSelectedFilesystemPath('');
                                         setSelectedFilesystemContent('');
                                       }
-                                    }).catch(() => toast.error('Failed to delete'));
+                                      // Dispatch event for cross-panel sync (Terminal, Chat)
+                                      emitFilesystemUpdated({
+                                        path: node.path,
+                                        scopePath: normalizedFilesystemPath,
+                                        source: 'code-preview',
+                                        type: 'delete',
+                                      });
+                                    }).catch((err: any) => {
+                                      toast.error('Failed to delete: ' + err.message);
+                                    });
                                   }
                                 }}
                               >
@@ -4491,11 +4673,11 @@ export default app;`,
             <button
               className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 flex items-center gap-2"
               onClick={() => {
-                const label = contextMenu.type === 'directory' 
-                  ? `Delete folder "${contextMenu.path.split('/').pop()}" and all contents?` 
+                const label = contextMenu.type === 'directory'
+                  ? `Delete folder "${contextMenu.path.split('/').pop()}" and all contents?`
                   : `Delete ${contextMenu.path.split('/').pop()}?`;
                 if (confirm(label)) {
-                  deleteFilesystemPath(contextMenu.path).then(() => {
+                  deleteFilesystemPath(contextMenu.path).then((deleteResult) => {
                     toast.success('Deleted ' + contextMenu.path.split('/').pop());
                     void listFilesystemDirectory(filesystemCurrentPath);
                     setContextMenu(null);
@@ -4503,6 +4685,13 @@ export default app;`,
                       setSelectedFilesystemPath('');
                       setSelectedFilesystemContent('');
                     }
+                    // Dispatch event for cross-panel sync (Terminal, Chat)
+                    emitFilesystemUpdated({
+                      path: contextMenu.path,
+                      scopePath: normalizedFilesystemPath,
+                      source: 'code-preview',
+                      type: 'delete',
+                    });
                   }).catch((err: any) => {
                     toast.error('Failed to delete: ' + err.message);
                   });

@@ -15,17 +15,59 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { createLogger } from '@/lib/utils/logger';
-import { generateSecureId } from '@/lib/utils';
 
 const logger = createLogger('DevBoxAPI');
 
 export const runtime = 'nodejs';
 
+// Rate limiting: track sandbox creations per user (simple in-memory, use Redis for production)
+const userSandboxCreations = new Map<string, { count: number; resetAt: number }>();
+const MAX_SANDBOXES_PER_USER = parseInt(process.env.MAX_SANDBOXES_PER_USER || '5', 10);
+const RATE_LIMIT_WINDOW_MS = parseInt(process.env.SANDBOX_RATE_LIMIT_WINDOW_MS || '3600000', 10); // 1 hour default
+
+/**
+ * Check rate limit for sandbox creation
+ */
+function checkRateLimit(userId: string): { allowed: boolean; remaining: number; resetAt: number } {
+  const now = Date.now();
+  const userRecord = userSandboxCreations.get(userId);
+
+  if (!userRecord || now > userRecord.resetAt) {
+    userSandboxCreations.set(userId, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return { allowed: true, remaining: MAX_SANDBOXES_PER_USER - 1, resetAt: now + RATE_LIMIT_WINDOW_MS };
+  }
+
+  if (userRecord.count >= MAX_SANDBOXES_PER_USER) {
+    return { allowed: false, remaining: 0, resetAt: userRecord.resetAt };
+  }
+
+  userRecord.count++;
+  return { allowed: true, remaining: MAX_SANDBOXES_PER_USER - userRecord.count, resetAt: userRecord.resetAt };
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
-    const anonymousSessionId = req.headers.get('x-anonymous-session-id') || generateSecureId('anon');
-    const userId = authResult.userId || `anonymous:${anonymousSessionId}`;
+    // SECURITY: Require authentication - no anonymous sandbox creation allowed
+    const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
+    const userId = authResult.userId;
+
+    // SECURITY: Rate limiting to prevent resource abuse/DoS
+    const rateLimit = checkRateLimit(userId);
+    if (!rateLimit.allowed) {
+      const resetMinutes = Math.ceil((rateLimit.resetAt - Date.now()) / 60000);
+      logger.warn('Sandbox creation rate limit exceeded', { userId });
+      return NextResponse.json(
+        { error: `Rate limit exceeded. Maximum ${MAX_SANDBOXES_PER_USER} sandboxes per ${RATE_LIMIT_WINDOW_MS / 60000} minutes. Try again in ${resetMinutes} minutes.` },
+        { status: 429 }
+      );
+    }
 
     const body = await req.json();
     const { files, template = 'node' } = body;
@@ -37,7 +79,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    logger.info('Creating DevBox', { userId, template, fileCount: Object.keys(files).length });
+    logger.info('Creating DevBox', { userId, template, fileCount: Object.keys(files).length, rateLimitRemaining: rateLimit.remaining });
 
     // Create sandbox via sandbox bridge (uses CodeSandbox provider)
     // The provider internally uses: createSandbox({ template, ephemeral: true })

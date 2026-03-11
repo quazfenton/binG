@@ -306,6 +306,26 @@ class OpenCodeV2SessionManager {
   }
 
   /**
+   * Update session state
+   */
+  updateState(sessionId: string, state: V2Session['status']): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.status = state;
+      if (state === 'active') {
+        session.lastActivity = Date.now();
+      }
+    }
+  }
+
+  /**
+   * Get session by ID
+   */
+  getSessionById(sessionId: string): V2Session | undefined {
+    return this.sessions.get(sessionId);
+  }
+
+  /**
    * Record session metrics
    */
   recordMetrics(

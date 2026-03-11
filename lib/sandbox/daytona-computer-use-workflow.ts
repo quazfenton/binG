@@ -209,19 +209,27 @@ export class DaytonaComputerUseWorkflow {
     try {
       const provider = await getSandboxProvider('daytona');
       const handle = await provider.getSandbox(sandboxId);
-      
-      // Use xdotool for mouse click
+
+      // SECURITY: Validate coordinates to prevent command injection
+      const x = Number(position.x);
+      const y = Number(position.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        logger.warn('Invalid click coordinates', { position });
+        return { success: false };
+      }
+
+      // Use xdotool for mouse click with validated numeric values
       const result = await handle.executeCommand(
-        `xdotool mousemove ${position.x} ${position.y} click 1`
+        `xdotool mousemove ${x} ${y} click 1`
       );
-      
+
       return { success: result.success };
     } catch (error: any) {
       logger.error('Click failed:', error);
       return { success: false };
     }
   }
-  
+
   /**
    * Double-click at position
    */
@@ -229,11 +237,19 @@ export class DaytonaComputerUseWorkflow {
     try {
       const provider = await getSandboxProvider('daytona');
       const handle = await provider.getSandbox(sandboxId);
-      
+
+      // SECURITY: Validate coordinates to prevent command injection
+      const x = Number(position.x);
+      const y = Number(position.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        logger.warn('Invalid double-click coordinates', { position });
+        return { success: false };
+      }
+
       const result = await handle.executeCommand(
-        `xdotool mousemove ${position.x} ${position.y} click --repeat 2 1`
+        `xdotool mousemove ${x} ${y} click --repeat 2 1`
       );
-      
+
       return { success: result.success };
     } catch (error: any) {
       logger.error('Double-click failed:', error);
@@ -248,21 +264,33 @@ export class DaytonaComputerUseWorkflow {
     try {
       const provider = await getSandboxProvider('daytona');
       const handle = await provider.getSandbox(sandboxId);
-      
-      // Escape special characters
-      const escapedText = input.text.replace(/'/g, "'\\''");
-      
+
+      // SECURITY: Validate and escape text input to prevent command injection
+      if (typeof input.text !== 'string') {
+        logger.warn('Invalid text input type', { input });
+        return { success: false };
+      }
+
+      // Escape single quotes and backslashes for safe shell interpolation
+      const escapedText = input.text
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "'\\''")
+        .replace(/[$`;|&(){}[\]<>!]/g, ''); // Remove shell metacharacters
+
+      // Validate delay
+      const delay = typeof input.delay === 'number' && input.delay > 0 ? input.delay : 100;
+
       const result = await handle.executeCommand(
-        `xdotool type --delay ${input.delay || 100} '${escapedText}'`
+        `xdotool type --delay ${delay} '${escapedText}'`
       );
-      
+
       return { success: result.success };
     } catch (error: any) {
       logger.error('Type failed:', error);
       return { success: false };
     }
   }
-  
+
   /**
    * Press key combination
    */
@@ -270,10 +298,42 @@ export class DaytonaComputerUseWorkflow {
     try {
       const provider = await getSandboxProvider('daytona');
       const handle = await provider.getSandbox(sandboxId);
-      
+
+      // SECURITY: Whitelist valid key names to prevent command injection
+      const ALLOWED_KEYS = new Set([
+        // Modifier keys
+        'shift', 'control', 'alt', 'super', 'meta',
+        // Function keys
+        'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+        // Navigation
+        'Up', 'Down', 'Left', 'Right', 'Tab', 'Return', 'Enter', 'Escape', 'BackSpace',
+        'Delete', 'Insert', 'Home', 'End', 'Page_Up', 'Page_Down',
+        // Special
+        'space', 'plus', 'minus', 'underscore', 'equal', 'comma', 'period', 'slash',
+        'question', 'exclam', 'at', 'numbersign', 'dollar', 'percent', 'asciicircum',
+        'ampersand', 'asterisk', 'parenleft', 'parenright', 'bracketleft',
+        'bracketright', 'braceleft', 'braceright', 'colon', 'semicolon', 'quotedbl',
+        'apostrophe', 'backslash', 'bar', 'less', 'greater', 'slash',
+        // Letters and numbers (will be validated below)
+        'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+        'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+      ]);
+
+      // Validate all keys
+      for (const key of keys) {
+        // Allow alphanumeric single characters
+        if (/^[a-zA-Z0-9]$/.test(key)) continue;
+        // Check against whitelist
+        if (!ALLOWED_KEYS.has(key)) {
+          logger.warn('Invalid key name rejected', { key });
+          return { success: false };
+        }
+      }
+
       const keyString = keys.join('+');
       const result = await handle.executeCommand(`xdotool key ${keyString}`);
-      
+
       return { success: result.success };
     } catch (error: any) {
       logger.error('Key press failed:', error);
