@@ -57,6 +57,53 @@ function restoreFilesystemScope(chatId: string): string | null {
   }
 }
 
+const CONVERSATION_UI_STATE_KEY = "conversation_ui_state_v1";
+const CONVERSATION_UI_STATE_VERSION = 1;
+
+interface PersistedConversationUiState {
+  version: number;
+  currentConversationId: string | null;
+  filesystemSessionId: string | null;
+  currentProvider: string | null;
+  currentModel: string | null;
+  updatedAt: number;
+}
+
+function readPersistedConversationUiState(): PersistedConversationUiState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(CONVERSATION_UI_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedConversationUiState>;
+    if (parsed?.version !== CONVERSATION_UI_STATE_VERSION) return null;
+    return {
+      version: CONVERSATION_UI_STATE_VERSION,
+      currentConversationId: typeof parsed.currentConversationId === "string" ? parsed.currentConversationId : null,
+      filesystemSessionId: typeof parsed.filesystemSessionId === "string" ? parsed.filesystemSessionId : null,
+      currentProvider: typeof parsed.currentProvider === "string" ? parsed.currentProvider : null,
+      currentModel: typeof parsed.currentModel === "string" ? parsed.currentModel : null,
+      updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedConversationUiState(state: Omit<PersistedConversationUiState, "version" | "updatedAt">): PersistedConversationUiState | null {
+  if (typeof window === "undefined") return null;
+  const nextState: PersistedConversationUiState = {
+    version: CONVERSATION_UI_STATE_VERSION,
+    updatedAt: Date.now(),
+    ...state,
+  };
+  try {
+    localStorage.setItem(CONVERSATION_UI_STATE_KEY, JSON.stringify(nextState));
+    return nextState;
+  } catch {
+    return null;
+  }
+}
+
 const buildFilesystemHeaders = (): HeadersInit => buildApiHeaders();
 
 function applyUnifiedDiffToContent(currentContent: string, path: string, diffBody: string): string | null {
@@ -132,21 +179,35 @@ export default function ConversationInterface() {
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
     [],
   );
-  const [currentProvider, setCurrentProvider] = useState<string>(
-    typeof window !== 'undefined' 
-      ? (localStorage.getItem("chat_provider") || "openrouter")
-      : "openrouter"
-  );
-  const [currentModel, setCurrentModel] = useState<string>(
-    typeof window !== 'undefined'
-      ? (localStorage.getItem("chat_model") || "nvidia/nemotron-3-nano-30b-a3b:free")
-      : "nvidia/nemotron-3-nano-30b-a3b:free"
-  );
+  const [currentProvider, setCurrentProvider] = useState<string>(() => {
+    const persisted = readPersistedConversationUiState();
+    if (persisted?.currentProvider) {
+      return persisted.currentProvider;
+    }
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem("chat_provider") || "openrouter";
+    }
+    return "openrouter";
+  });
+  const [currentModel, setCurrentModel] = useState<string>(() => {
+    const persisted = readPersistedConversationUiState();
+    if (persisted?.currentModel) {
+      return persisted.currentModel;
+    }
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem("chat_model") || "nvidia/nemotron-3-nano-30b-a3b:free";
+    }
+    return "nvidia/nemotron-3-nano-30b-a3b:free";
+  });
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
     string | null
   >(() => {
+    const persisted = readPersistedConversationUiState();
+    if (persisted?.currentConversationId) {
+      return persisted.currentConversationId;
+    }
     if (typeof window !== 'undefined') {
       return sessionStorage.getItem('current_conversation_id') || null;
     }
@@ -154,8 +215,11 @@ export default function ConversationInterface() {
   });
   const [filesystemSessionId, setFilesystemSessionId] = useState<string>(
     () => {
+      const persisted = readPersistedConversationUiState();
+      if (persisted?.filesystemSessionId) {
+        return persisted.filesystemSessionId;
+      }
       if (typeof window !== 'undefined') {
-        // Restore session from sessionStorage on refresh
         const saved = sessionStorage.getItem('current_filesystem_session_id');
         if (saved) return saved;
       }
@@ -186,6 +250,7 @@ export default function ConversationInterface() {
     scopePath: filesystemScopePath,
   });
   const filesystemSessionIdRef = useRef(filesystemSessionId);
+  const persistedUiStateUpdatedAtRef = useRef(0);
 
   useEffect(() => {
     providerRef.current = currentProvider;
@@ -210,6 +275,52 @@ export default function ConversationInterface() {
     }
   }, [currentConversationId]);
   
+  useEffect(() => {
+    const persisted = writePersistedConversationUiState({
+      currentConversationId,
+      filesystemSessionId,
+      currentProvider,
+      currentModel,
+    });
+    if (persisted) {
+      persistedUiStateUpdatedAtRef.current = persisted.updatedAt;
+    }
+  }, [currentConversationId, filesystemSessionId, currentProvider, currentModel]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== CONVERSATION_UI_STATE_KEY || !event.newValue) {
+        return;
+      }
+
+      const persisted = readPersistedConversationUiState();
+      if (!persisted || persisted.updatedAt <= persistedUiStateUpdatedAtRef.current) {
+        return;
+      }
+
+      persistedUiStateUpdatedAtRef.current = persisted.updatedAt;
+      if (persisted.currentConversationId !== null) {
+        setCurrentConversationId(persisted.currentConversationId);
+      }
+      if (persisted.filesystemSessionId) {
+        setFilesystemSessionId(persisted.filesystemSessionId);
+      }
+      if (persisted.currentProvider) {
+        setCurrentProvider(persisted.currentProvider);
+      }
+      if (persisted.currentModel) {
+        setCurrentModel(persisted.currentModel);
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
   // Expose project name setter globally for LLM/chat to update
   useEffect(() => {
     (window as any).__setProjectName = setProjectName;
@@ -813,6 +924,11 @@ export default function ConversationInterface() {
     const scopePath = filesystemScopePath || "project";
     const failed: Record<string, string[]> = {};
     let appliedCount = 0;
+    let lastWriteMetadata: {
+      workspaceVersion?: number;
+      commitId?: string;
+      sessionId?: string | null;
+    } | null = null;
 
     for (const entry of entries) {
       const resolvedPath = resolveScopedPath(entry.path, scopePath);
@@ -834,7 +950,7 @@ export default function ConversationInterface() {
         currentContent = "";
       }
 
-      let nextContent =
+      const nextContent =
         applyUnifiedDiffToContent(currentContent, resolvedPath, entry.diff) ??
         applySimpleLineDiff(currentContent, entry.diff);
 
@@ -848,7 +964,13 @@ export default function ConversationInterface() {
         const writeResponse = await fetch("/api/filesystem/write", {
           method: "POST",
           headers: buildFilesystemHeaders(),
-          body: JSON.stringify({ path: resolvedPath, content: nextContent }),
+          body: JSON.stringify({
+            path: resolvedPath,
+            content: nextContent,
+            sessionId: filesystemSessionId,
+            source: "command-diff",
+            integration: "command-diff",
+          }),
         });
         if (!writeResponse.ok) {
           const text = await writeResponse.text().catch(() => "");
@@ -858,6 +980,11 @@ export default function ConversationInterface() {
         if (!payload?.success) {
           throw new Error(payload?.error || "Write failed");
         }
+        lastWriteMetadata = {
+          workspaceVersion: payload?.data?.workspaceVersion,
+          commitId: payload?.data?.commitId,
+          sessionId: payload?.data?.sessionId,
+        };
         appliedCount += 1;
       } catch (writeError: any) {
         failed[entry.path] = failed[entry.path] || [];
@@ -869,6 +996,9 @@ export default function ConversationInterface() {
       emitFilesystemUpdated({
         scopePath: filesystemScopePath || "project",
         source: "command-diff",
+        workspaceVersion: lastWriteMetadata?.workspaceVersion,
+        commitId: lastWriteMetadata?.commitId,
+        sessionId: lastWriteMetadata?.sessionId || filesystemSessionId,
       });
     }
 
@@ -895,7 +1025,7 @@ export default function ConversationInterface() {
     if (failedCount > 0) {
       toast.error(`Failed to apply ${failedCount} diff${failedCount === 1 ? "" : "s"}.`);
     }
-  }, [filesystemScopePath]);
+  }, [filesystemScopePath, filesystemSessionId]);
 
   // Handle chat submission - no login restrictions
   const refreshAttachedFiles = useCallback(async (
@@ -946,6 +1076,7 @@ export default function ConversationInterface() {
     inFlight: false,
     timer: null as ReturnType<typeof setTimeout> | null,
   });
+  const lastAttachmentWorkspaceVersionRef = useRef(0);
 
   const scheduleAttachmentRefresh = useCallback((reason: string) => {
     if (Object.keys(attachedFilesystemFiles).length === 0) return;
@@ -984,6 +1115,13 @@ export default function ConversationInterface() {
       const scopePath = event?.detail?.scopePath;
       if (scopePath && scopePath !== filesystemScopePath) {
         return;
+      }
+      const workspaceVersion = event?.detail?.workspaceVersion;
+      if (typeof workspaceVersion === 'number') {
+        if (workspaceVersion <= lastAttachmentWorkspaceVersionRef.current) {
+          return;
+        }
+        lastAttachmentWorkspaceVersionRef.current = workspaceVersion;
       }
       scheduleAttachmentRefresh('filesystem-updated');
     });
