@@ -186,12 +186,16 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           processingSteps: processingSteps,
         };
 
-        // Extract code artifacts from result if available
+        // Extract code artifacts from result with full content
         if (result.fileChanges && result.fileChanges.length > 0) {
           messageMetadata.codeArtifacts = result.fileChanges.map((fc: any) => ({
             path: fc.path,
             operation: fc.operation || 'write',
             language: fc.language || 'typescript',
+            content: fc.content || '',
+            previousContent: fc.previousContent || fc.oldContent || undefined,
+            newVersion: fc.newVersion,
+            previousVersion: fc.previousVersion,
           }));
         }
 

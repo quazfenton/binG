@@ -244,6 +244,8 @@ export default function CodePreviewPanel({
   const [cacheMisses, setCacheMisses] = useState(0);
   const [snapshots, setSnapshots] = useState<Array<{ id: string; date: string; size: string }>>([]);
   const pyodideRef = useRef<any>(null);
+  const manualPreviewPathRef = useRef<string | null>(null);
+  const manualPreviewActiveRef = useRef(false);
 
   // Context menu state for file operations
   const [contextMenu, setContextMenu] = useState<{
@@ -607,6 +609,7 @@ export default function CodePreviewPanel({
     
     try {
       const targetPath = directoryPath || filesystemCurrentPath;
+      manualPreviewPathRef.current = targetPath || null;
       // Silent - only log on error
       console.log('[Manual Preview] Loading files from:', targetPath);
       
@@ -802,6 +805,10 @@ export default function CodePreviewPanel({
       handleManualPreviewRef.current = false;
     }
   }, [filesystemCurrentPath, listFilesystemDirectory, readFilesystemFile]);
+
+  useEffect(() => {
+    manualPreviewActiveRef.current = isManualPreviewActive;
+  }, [isManualPreviewActive]);
 
   // Clear manual preview
   const handleClearManualPreview = useCallback(() => {
@@ -1110,6 +1117,12 @@ export default function CodePreviewPanel({
           );
           setScopedPreviewFiles(files);
           log(`[filesystem-updated] refreshed scopedPreviewFiles (${Object.keys(files).length} files)`);
+        }
+
+        if (manualPreviewActiveRef.current) {
+          const manualPath = manualPreviewPathRef.current || filesystemScopePathRef.current || normalizedScopePath;
+          log(`[filesystem-updated] refreshing manual preview from "${manualPath}"`);
+          await handleManualPreview(manualPath);
         }
       } catch (error) {
         logError(`[filesystem-updated] refresh failed`, error);

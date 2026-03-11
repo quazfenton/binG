@@ -27,6 +27,7 @@ import {
 import { useAuth } from "@/contexts/auth-context";
 import { generateSecureId } from "@/lib/utils";
 import type { AttachedVirtualFile } from "@/hooks/use-virtual-filesystem";
+import { parsePatch, applyPatch } from "diff";
 
 /**
  * Render the main conversation interface with chat, filesystem attachments, providers/models selection,
@@ -61,6 +62,71 @@ function restoreFilesystemScope(chatId: string): string | null {
   } catch {
     return null;
   }
+}
+
+function buildFilesystemHeaders(): HeadersInit {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("token");
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    let anonymousSessionId = localStorage.getItem("anonymous_session_id");
+    if (!anonymousSessionId) {
+      anonymousSessionId = generateSecureId("anon");
+      localStorage.setItem("anonymous_session_id", anonymousSessionId);
+    }
+    headers["x-anonymous-session-id"] = anonymousSessionId;
+  }
+  return headers;
+}
+
+function normalizeScopedPath(inputPath: string, scopePath: string): string {
+  const scope = (scopePath || "project").replace(/^\/+/, "").replace(/\/+$/, "") || "project";
+  const rawPath = (inputPath || "").replace(/\\/g, "/").trim();
+  if (!rawPath) return scope;
+  const stripped = rawPath.replace(/^\/+/, "");
+  if (stripped.startsWith(`${scope}/`) || stripped === scope) {
+    return stripped;
+  }
+  if (stripped.startsWith("project/")) {
+    return stripped;
+  }
+  return `${scope}/${stripped}`.replace(/\/{2,}/g, "/");
+}
+
+function applyUnifiedDiffToContent(currentContent: string, path: string, diffBody: string): string | null {
+  const diffText = diffBody.endsWith("\n") ? diffBody : `${diffBody}\n`;
+  const hasHeaders = diffText.includes("--- ") && diffText.includes("+++ ");
+  const unifiedDiff = hasHeaders
+    ? diffText
+    : `--- ${path}\n+++ ${path}\n${diffText}`;
+  const parsed = parsePatch(unifiedDiff);
+  if (!parsed.length) return null;
+  const patched = applyPatch(currentContent, parsed[0]);
+  return patched === false ? null : patched;
+}
+
+function applySimpleLineDiff(currentContent: string, diffBody: string): string | null {
+  const lines = diffBody
+    .split("\n")
+    .filter((l) => /^(\+\s|\-\s|\s\s)/.test(l.trimStart()))
+    .map((l) => l.replace(/^\s+/, ""));
+  if (!lines.length) return null;
+  const resultLines: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("+ ")) {
+      resultLines.push(line.slice(2));
+    } else if (line.startsWith("- ")) {
+      continue;
+    } else if (line.startsWith("  ")) {
+      resultLines.push(line.slice(2));
+    }
+  }
+  const result = resultLines.join("\n");
+  return result && result !== currentContent ? result : null;
 }
 
 export default function ConversationInterface() {
@@ -707,31 +773,14 @@ export default function ConversationInterface() {
       toast.info("No pending command diffs to apply.");
       return;
     }
-    const diffMessages = entries.map((d, idx) => ({
-      id: `cmd-diff-${Date.now()}-${idx}`,
-      role: "assistant" as const,
-      content: `\`\`\`diff ${d.path}\n${d.diff}\n\`\`\``,
-    }));
-    setMessages((prev) => [...prev, ...diffMessages]);
-    setCommandsByFile({});
-    toast.success(`Applied ${entries.length} diff(s) to preview.`);
+    void applyDiffsToFilesystem(entries);
   };
 
   const applyDiffsForFile = (path: string) => {
     const diffs = commandsByFile[path] || [];
     if (diffs.length === 0) return;
-    const diffMessages = diffs.map((diff, idx) => ({
-      id: `cmd-file-diff-${Date.now()}-${idx}`,
-      role: "assistant" as const,
-      content: `\`\`\`diff ${path}\n${diff}\n\`\`\``,
-    }));
-    setMessages((prev) => [...prev, ...diffMessages]);
-    setCommandsByFile((prev) => {
-      const next = { ...prev };
-      delete next[path];
-      return next;
-    });
-    toast.success(`Applied ${diffs.length} diff(s) for ${path}.`);
+    const entries = diffs.map((diff) => ({ path, diff }));
+    void applyDiffsToFilesystem(entries);
   };
 
   const clearAllCommandDiffs = () => {
@@ -756,6 +805,92 @@ export default function ConversationInterface() {
     });
     toast.success(`Squashed diffs for ${path}.`);
   };
+
+  const applyDiffsToFilesystem = useCallback(async (entries: Array<{ path: string; diff: string }>) => {
+    if (!entries.length) return;
+    const scopePath = filesystemScopePath || "project";
+    const failed: Record<string, string[]> = {};
+    let appliedCount = 0;
+
+    for (const entry of entries) {
+      const resolvedPath = normalizeScopedPath(entry.path, scopePath);
+      let currentContent = "";
+      try {
+        const readResponse = await fetch("/api/filesystem/read", {
+          method: "POST",
+          headers: buildFilesystemHeaders(),
+          body: JSON.stringify({ path: resolvedPath }),
+        });
+        if (readResponse.ok) {
+          const payload = await readResponse.json().catch(() => null);
+          if (payload?.success && payload?.data?.content != null) {
+            currentContent = payload.data.content;
+          }
+        }
+      } catch (readError) {
+        // If read fails, try applying diff to empty content
+        currentContent = "";
+      }
+
+      let nextContent =
+        applyUnifiedDiffToContent(currentContent, resolvedPath, entry.diff) ??
+        applySimpleLineDiff(currentContent, entry.diff);
+
+      if (nextContent == null) {
+        failed[entry.path] = failed[entry.path] || [];
+        failed[entry.path].push(entry.diff);
+        continue;
+      }
+
+      try {
+        const writeResponse = await fetch("/api/filesystem/write", {
+          method: "POST",
+          headers: buildFilesystemHeaders(),
+          body: JSON.stringify({ path: resolvedPath, content: nextContent }),
+        });
+        if (!writeResponse.ok) {
+          const text = await writeResponse.text().catch(() => "");
+          throw new Error(text || `Write failed (${writeResponse.status})`);
+        }
+        const payload = await writeResponse.json().catch(() => null);
+        if (!payload?.success) {
+          throw new Error(payload?.error || "Write failed");
+        }
+        appliedCount += 1;
+      } catch (writeError: any) {
+        failed[entry.path] = failed[entry.path] || [];
+        failed[entry.path].push(entry.diff);
+      }
+    }
+
+    if (appliedCount > 0) {
+      window.dispatchEvent(new CustomEvent("filesystem-updated", {
+        detail: {
+          scopePath: filesystemScopePath || "project",
+          source: "command-diff",
+        },
+      }));
+    }
+
+    setCommandsByFile((prev) => {
+      const next: Record<string, string[]> = {};
+      for (const [path, diffs] of Object.entries(prev)) {
+        const remaining = failed[path] || [];
+        if (remaining.length > 0) {
+          next[path] = remaining;
+        }
+      }
+      return next;
+    });
+
+    if (appliedCount > 0) {
+      toast.success(`Applied ${appliedCount} diff${appliedCount === 1 ? "" : "s"} to filesystem.`);
+    }
+    const failedCount = Object.values(failed).reduce((sum, list) => sum + list.length, 0);
+    if (failedCount > 0) {
+      toast.error(`Failed to apply ${failedCount} diff${failedCount === 1 ? "" : "s"}.`);
+    }
+  }, [filesystemScopePath]);
 
   // Handle chat submission - no login restrictions
   const handleChatSubmit = (content: string) => {
@@ -937,6 +1072,7 @@ export default function ConversationInterface() {
         onActiveTabChange={setActiveTab}
         userId={user?.id?.toString() || getStableSessionId()} // Use stable user ID or session ID
         onAttachedFilesChange={handleAttachedFilesChange}
+        filesystemScopePath={filesystemScopePath}
       />
 
       {/* Chat History Modal */}

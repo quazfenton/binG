@@ -287,6 +287,7 @@ interface InteractionPanelProps {
   onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell" | "images") => void;
   userId?: string;
   onAttachedFilesChange?: (files: Record<string, AttachedVirtualFile>) => void;
+  filesystemScopePath?: string;
 }
 
 export default function InteractionPanel({
@@ -309,6 +310,7 @@ export default function InteractionPanel({
   activeTab = "chat",
   onActiveTabChange,
   onAttachedFilesChange,
+  filesystemScopePath,
 }: InteractionPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragHandleRef = useRef<HTMLDivElement>(null);
@@ -454,7 +456,7 @@ export default function InteractionPanel({
     }
   }, []);
   // Virtual filesystem integration
-  const virtualFilesystem = useVirtualFilesystem("project");
+  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || "project");
   const selectedFilePaths = useMemo(
     () => Object.keys(virtualFilesystem.attachedFiles),
     [virtualFilesystem.attachedFiles],
