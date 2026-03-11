@@ -17,6 +17,7 @@
 import { EventEmitter } from 'events';
 import { getSandboxProvider } from './providers';
 import type { SandboxProviderType } from './providers';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Resource metrics
@@ -448,7 +449,7 @@ export class SandboxResourceMonitor extends EventEmitter {
     }
 
     const alert: ResourceAlert = {
-      id: `alert_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: generateSecureId('alert'),
       sandboxId,
       type,
       severity,

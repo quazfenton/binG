@@ -12,6 +12,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Subscription event types
@@ -129,7 +130,7 @@ export class ComposioSubscriptionManager extends EventEmitter {
       triggerId?: string;
     }
   ): ResourceSubscription {
-    const subscriptionId = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const subscriptionId = generateSecureId('sub');
     
     const subscription: ResourceSubscription = {
       id: subscriptionId,

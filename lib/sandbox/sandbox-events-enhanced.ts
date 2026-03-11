@@ -8,6 +8,7 @@
  */
 
 import { EventEmitter } from 'events'
+import { generateSecureId } from '@/lib/utils'
 
 export type EnhancedSandboxEventType =
   | 'agent:tool_start'
@@ -89,7 +90,7 @@ export class EnhancedSandboxEventEmitter extends EventEmitter {
    */
   emit(sandboxId: string, type: EnhancedSandboxEventType, data: any, metadata?: EnhancedSandboxEvent['metadata']): boolean {
     const event: EnhancedSandboxEvent = {
-      id: `${sandboxId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: generateSecureId(sandboxId),
       type,
       sandboxId,
       timestamp: Date.now(),

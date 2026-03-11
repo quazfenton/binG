@@ -8,6 +8,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Execution record
@@ -152,7 +153,7 @@ export class ComposioExecutionHistory extends EventEmitter {
   recordExecution(record: Omit<ExecutionRecord, 'id' | 'timestamp'>): ExecutionRecord {
     const fullRecord: ExecutionRecord = {
       ...record,
-      id: `exec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: generateSecureId('exec'),
       timestamp: Date.now(),
     };
 

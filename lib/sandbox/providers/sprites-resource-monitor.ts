@@ -12,6 +12,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Resource metrics
@@ -195,7 +196,7 @@ export class SpritesResourceMonitor extends EventEmitter {
     }
 
     const alert: ResourceAlert = {
-      id: `alert_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: generateSecureId('alert'),
       spriteId,
       resourceType,
       severity,

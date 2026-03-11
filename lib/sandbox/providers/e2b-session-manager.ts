@@ -9,6 +9,7 @@
  */
 
 import type { SandboxHandle } from './sandbox-provider';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Session metadata
@@ -340,7 +341,7 @@ export class E2BSessionManager {
    * Generate session ID
    */
   private generateSessionId(): string {
-    return `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    return generateSecureId('session');
   }
 
   /**

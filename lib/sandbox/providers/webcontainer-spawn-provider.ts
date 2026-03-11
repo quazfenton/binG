@@ -8,6 +8,7 @@ import type {
   PtyOptions,
 } from './sandbox-provider'
 import { SandboxSecurityManager } from '../security-manager'
+import { generateSecureId } from '@/lib/utils'
 
 const WORKSPACE_DIR = '/workspace'
 
@@ -99,7 +100,7 @@ export class WebContainerSpawnProvider implements SandboxProvider {
 
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
     const instance = await this.bootWebContainer()
-    const id = `wc-spawn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const id = generateSecureId('wc-spawn')
     const handle = new WebContainerSpawnHandle(id, instance, config.envVars || {})
     spawnHandles.set(id, handle)
     return handle

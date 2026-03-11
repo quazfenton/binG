@@ -1,5 +1,6 @@
 import { virtualFilesystem } from './virtual-filesystem-service';
 import { filesystemEditDatabase } from './filesystem-edit-database';
+import { generateSecureId } from '@/lib/utils';
 
 export type FilesystemEditOperationType = 'write' | 'patch' | 'delete';
 export type FilesystemEditTransactionStatus =
@@ -210,7 +211,7 @@ class FilesystemEditSessionService {
     conversationId: string;
     requestId: string;
   }): FilesystemEditTransaction {
-    const id = `fse_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const id = generateSecureId('fse');
     const tx: FilesystemEditTransaction = {
       id,
       ownerId: input.ownerId,

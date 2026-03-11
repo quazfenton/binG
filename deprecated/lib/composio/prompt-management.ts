@@ -12,6 +12,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Prompt template
@@ -130,7 +131,7 @@ export class ComposioPromptManager extends EventEmitter {
     content: string,
     variables?: string[]
   ): PromptTemplate {
-    const templateId = `prompt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const templateId = generateSecureId('prompt');
     
     // Extract variables from content if not provided
     const extractedVars = variables || this.extractVariables(content);

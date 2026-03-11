@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
 import { DatabaseOperations } from '@/lib/database/connection';
+import { generateSecureId } from '@/lib/utils';
 
 // Check if server-side chat storage is enabled
 const SERVER_CHAT_STORAGE_ENABLED = process.env.ENABLE_SERVER_CHAT_STORAGE === 'true';
@@ -167,7 +168,7 @@ export async function POST(request: NextRequest) {
     
     for (const message of messages) {
       dbOps.saveMessage(
-        message.id || `${id}-${Date.now()}-${Math.random()}`,
+        message.id || generateSecureId('msg'),
         id,
         message.role,
         message.content,

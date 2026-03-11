@@ -18,6 +18,7 @@ import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
 import { getProviderForTask, getModelForTask } from '../config/task-providers';
 import { advancedToolCallDispatcher } from '../tool-integration/parsers/dispatcher';
+import { generateSecureId } from '../utils';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
 
 export interface EnhancedLLMRequest extends LLMRequest {
@@ -540,7 +541,7 @@ export class EnhancedLLMService {
       }
 
       executedCalls.push({ name: selectedTool, arguments: call.arguments });
-      const toolCallId = `tool-${selectedTool}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const toolCallId = generateSecureId(`tool-${selectedTool}`);
       toolInvocations.push({
         toolCallId,
         toolName: selectedTool,

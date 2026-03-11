@@ -12,6 +12,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Memory item
@@ -144,7 +145,7 @@ export class AgentMemoryManager extends EventEmitter {
     }
   ): MemoryItem {
     const memory: MemoryItem = {
-      id: `mem_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: generateSecureId('mem'),
       content,
       type: options?.type || 'observation',
       importance: options?.importance || 0.5,

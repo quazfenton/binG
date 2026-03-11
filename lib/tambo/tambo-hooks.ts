@@ -10,6 +10,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Context Helper function type
@@ -82,7 +83,7 @@ export function useTamboContextAttachments() {
   const [attachments, setAttachments] = useState<ContextAttachment[]>([]);
 
   const addContextAttachment = useCallback((attachment: Omit<ContextAttachment, 'id'>) => {
-    const id = `attachment_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const id = generateSecureId('attachment');
     setAttachments(prev => [...prev, { ...attachment, id }]);
     return id;
   }, []);

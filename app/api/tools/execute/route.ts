@@ -5,9 +5,10 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { checkRateLimitMiddleware } from '@/lib/middleware/rate-limit';
 import { cors, addCORSHeaders } from '@/lib/middleware/cors';
 import { validateToolExecutionRequest } from '@/lib/middleware/validation';
+import { generateSecureId } from '@/lib/utils';
 
 export async function POST(req: NextRequest) {
-  const requestId = `tools_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const requestId = generateSecureId('tools');
 
   try {
     // SECURITY: Only accept auth via Authorization header, NOT query params
@@ -143,7 +144,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const requestId = `tools_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const requestId = generateSecureId('tools');
 
   try {
     // SECURITY: Only accept auth via Authorization header

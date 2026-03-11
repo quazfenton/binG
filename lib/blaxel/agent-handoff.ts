@@ -12,6 +12,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Handoff state
@@ -96,7 +97,7 @@ export class BlaxelAgentHandoffManager extends EventEmitter {
     input: any,
     context?: any
   ): HandoffState {
-    const handoffId = `handoff_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const handoffId = generateSecureId('handoff');
     
     const handoff: HandoffState = {
       id: handoffId,

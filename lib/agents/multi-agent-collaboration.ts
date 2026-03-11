@@ -13,6 +13,7 @@
 
 import { EventEmitter } from 'events';
 import { simulatedOrchestrator } from '../agent/simulated-orchestration';
+import { generateSecureId } from '../utils';
 
 /**
  * Agent role types
@@ -355,7 +356,7 @@ export class MultiAgentCollaboration extends EventEmitter {
     assignedTo?: string;
   }): Task {
     const task: Task = {
-      id: `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: generateSecureId('task'),
       description,
       status: 'pending',
       priority: options?.priority || 5,
@@ -485,7 +486,7 @@ export class MultiAgentCollaboration extends EventEmitter {
     content: any
   ): AgentMessage {
     const message: AgentMessage = {
-      id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: generateSecureId('msg'),
       from,
       to,
       type,
