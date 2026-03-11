@@ -38,3 +38,30 @@ export {
   type CloudAgentInstance,
   type CloudAgentResult,
 } from './cloud-agent-offload';
+
+// Task Router
+export {
+  taskRouter,
+  type TaskRequest,
+  type TaskRoutingResult,
+} from './task-router';
+
+// V2 Executor
+export {
+  executeV2Task,
+  executeV2TaskStreaming,
+  type V2ExecuteOptions,
+} from './v2-executor';
+
+// Workforce State + Manager
+export {
+  workforceManager,
+} from './workforce-manager';
+export {
+  loadState,
+  saveState,
+  addTask,
+  updateTask,
+  type WorkforceTask,
+  type WorkforceState,
+} from './workforce-state';

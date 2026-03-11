@@ -17,6 +17,10 @@ import { ShadowCommitManager } from '@/lib/stateful-agent/commit/shadow-commit';
 import type { LLMMessage } from "@/lib/api/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/mastra';
+import { executeV2Task, executeV2TaskStreaming } from '@/lib/agent/v2-executor';
+import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/api/unified-agent-service';
+import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
+import { workforceManager } from '@/lib/agent/workforce-manager';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -34,6 +38,9 @@ const CHAT_RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
 const CHAT_RATE_LIMIT_MAX_AUTHENTICATED = 60;
 const CHAT_RATE_LIMIT_MAX_ANONYMOUS = 10;
 
+const CHAT_AGENTIC_PIPELINE = (process.env.CHAT_AGENTIC_PIPELINE || 'auto').toLowerCase();
+const WORKFORCE_ENABLED = process.env.WORKFORCE_ENABLED === 'true';
+
 const chatMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
   content: z.union([z.string(), z.array(z.any())]),
@@ -49,6 +56,7 @@ const chatRequestSchema = z.object({
   apiKeys: z.record(z.string()).optional().default({}),
   requestId: z.string().optional(),
   conversationId: z.string().optional(),
+  agentMode: z.enum(['v1', 'v2', 'auto']).optional().default('auto'),
   filesystemContext: z.object({
     attachedFiles: z.any().optional(),
     applyFileEdits: z.boolean().optional(),
@@ -141,6 +149,7 @@ export async function POST(request: NextRequest) {
       apiKeys,
       requestId: incomingRequestId,
       conversationId,
+      agentMode,
       filesystemContext,
     } = body as {
       messages: LLMMessage[];
@@ -152,6 +161,7 @@ export async function POST(request: NextRequest) {
       apiKeys: Record<string, string>;
       requestId?: string;
       conversationId?: string;
+      agentMode?: 'v1' | 'v2' | 'auto';
       filesystemContext?: ChatFilesystemContextPayload;
     };
     provider = requestedProvider;
@@ -230,9 +240,12 @@ export async function POST(request: NextRequest) {
       filesystemContext,
     );
     const useContextPack = shouldUseContextPack(messages);
+    const isCodeRequest = isCodeOrAgenticRequest(messages, attachedFilesystemFiles);
+    const useContextPackForAgentic = enableFilesystemEdits && isCodeRequest;
+    const shouldUseContextPackFinal = useContextPack || useContextPackForAgentic;
     const workspaceSessionContext = enableFilesystemEdits
       ? await buildWorkspaceSessionContext(filesystemOwnerId, requestedScopePath, {
-          useContextPack,
+          useContextPack: shouldUseContextPackFinal,
           maxTokens: body.maxTokens,
         })
       : '';
@@ -250,6 +263,189 @@ export async function POST(request: NextRequest) {
     const requestType = detectRequestType(messages);
     const authenticatedUserId =
       authResult.success && authResult.source !== 'anonymous' ? authResult.userId : undefined;
+
+    // V2 Agent Mode: route to OpenCode/Nullclaw workflow
+    // Auto-detect V2 for code-intensive requests
+    const isCodeRequestAuto = isCodeOrAgenticRequest(messages, attachedFilesystemFiles);
+    const wantsV2 =
+      agentMode === 'v2' ||
+      (agentMode === 'auto' && (
+        process.env.V2_AGENT_ENABLED === 'true' ||
+        process.env.OPENCODE_CONTAINERIZED === 'true' ||
+        isCodeRequestAuto  // Auto-detect code requests and route to V2
+      ));
+
+    if (wantsV2) {
+      if (!authenticatedUserId) {
+        return NextResponse.json({
+          success: false,
+          status: 'auth_required',
+          error: {
+            type: 'auth_required',
+            message: 'Agent V2 requires authentication. Please log in first.',
+          },
+        }, { status: 401 });
+      }
+
+      const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content;
+      const task = typeof lastUserMessage === 'string'
+        ? lastUserMessage
+        : JSON.stringify(lastUserMessage || '');
+
+      const context = buildAgenticContext(contextualMessages);
+
+      if (stream) {
+        const streamBody = executeV2TaskStreaming({
+          userId: authenticatedUserId,
+          conversationId: resolvedConversationId,
+          task,
+          context,
+          stream: true,
+        });
+
+        return new Response(streamBody, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            Pragma: 'no-cache',
+            Expires: '0',
+            Connection: 'keep-alive',
+            'X-Accel-Buffering': 'no',
+          },
+        });
+      }
+
+      const v2Result = await executeV2Task({
+        userId: authenticatedUserId,
+        conversationId: resolvedConversationId,
+        task,
+        context,
+      });
+
+      return NextResponse.json(v2Result);
+    }
+
+    // Agentic pipeline (non-V2) for code-centric requests
+    if (isCodeRequest && CHAT_AGENTIC_PIPELINE !== 'off') {
+      if (!authenticatedUserId) {
+        return NextResponse.json({
+          success: false,
+          status: 'auth_required',
+          error: {
+            type: 'auth_required',
+            message: 'Agentic mode requires authentication. Please log in first.',
+          },
+        }, { status: 401 });
+      }
+
+      const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content;
+      const task = typeof lastUserMessage === 'string'
+        ? lastUserMessage
+        : JSON.stringify(lastUserMessage || '');
+
+      const context = buildAgenticContext(contextualMessages);
+
+      if (WORKFORCE_ENABLED && /parallel|multi-agent|agents|crew|swarm/i.test(task)) {
+        await workforceManager.spawnTask(authenticatedUserId, resolvedConversationId, {
+          title: 'Research & context gathering',
+          description: `Gather context and research for: ${task}`,
+          agent: 'nullclaw',
+        });
+        await workforceManager.spawnTask(authenticatedUserId, resolvedConversationId, {
+          title: 'Implementation',
+          description: task,
+          agent: 'opencode',
+        });
+      }
+
+      const config: UnifiedAgentConfig = {
+        userMessage: context ? `${context}\n\nTASK:\n${task}` : task,
+        conversationHistory: contextualMessages.map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        })),
+        systemPrompt: process.env.OPENCODE_SYSTEM_PROMPT,
+        maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
+        temperature,
+        maxTokens,
+        mode: 'auto',
+      };
+
+      const tools = await getMCPToolsForAI_SDK();
+      config.tools = tools.map(t => ({
+        name: t.function.name,
+        description: t.function.description,
+        parameters: t.function.parameters,
+      }));
+      config.executeTool = async (name: string, args: Record<string, any>) => {
+        const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId);
+        return {
+          success: result.success,
+          output: result.output,
+          exitCode: result.success ? 0 : 1,
+        };
+      };
+
+      if (stream) {
+        const encoder = new TextEncoder();
+        const streamBody = new ReadableStream({
+          async start(controller) {
+            const sendEvent = (type: string, data: any) => {
+              controller.enqueue(encoder.encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`));
+            };
+
+            try {
+              config.onStreamChunk = (chunk: string) => {
+                sendEvent('token', { content: chunk, timestamp: Date.now() });
+              };
+              config.onToolExecution = (toolName: string, args: any, result: any) => {
+                sendEvent('tool_invocation', {
+                  toolCallId: `${toolName}-${Date.now()}`,
+                  toolName,
+                  state: 'result',
+                  args,
+                  result,
+                  timestamp: Date.now(),
+                });
+              };
+
+              const result = await processUnifiedAgentRequest(config);
+              sendEvent('done', {
+                success: result.success,
+                content: result.response,
+                messageMetadata: {
+                  agent: 'unified',
+                  mode: result.mode,
+                },
+                data: result,
+              });
+            } catch (error: any) {
+              sendEvent('error', { message: error.message || 'Agentic execution failed' });
+            } finally {
+              controller.close();
+            }
+          },
+        });
+
+        return new Response(streamBody, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            Pragma: 'no-cache',
+            Expires: '0',
+            Connection: 'keep-alive',
+            'X-Accel-Buffering': 'no',
+          },
+        });
+      }
+
+      const result = await processUnifiedAgentRequest(config);
+      return NextResponse.json({
+        success: result.success,
+        content: result.response,
+        data: result,
+      });
+    }
 
     // Tool/sandbox actions require authenticated user identity for authorization and ownership checks.
     if ((requestType === 'tool' || requestType === 'sandbox') && !authenticatedUserId) {
@@ -1157,6 +1353,30 @@ function appendFilesystemContextMessages(
   return [filesystemContextMessage, ...messages];
 }
 
+function isCodeOrAgenticRequest(
+  messages: LLMMessage[],
+  attachedFiles: ChatFilesystemFileContext[],
+): boolean {
+  if (attachedFiles.length > 0) return true;
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const content =
+    typeof lastUser?.content === 'string'
+      ? lastUser.content
+      : JSON.stringify(lastUser?.content || '');
+  const pattern = /(code|build|implement|refactor|bug|fix|error|stack trace|typescript|javascript|python|react|next\.js|api|endpoint|database|schema|component|file|directory|folder|repo|git|test|lint|compile)/i;
+  return pattern.test(content);
+}
+
+function buildAgenticContext(messages: LLMMessage[]): string {
+  const systemMessages = messages.filter(m => m.role === 'system');
+  const recent = messages.slice(-8);
+  const parts = [
+    ...systemMessages.map(m => `SYSTEM: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`),
+    ...recent.map(m => `${m.role.toUpperCase()}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`),
+  ];
+  return parts.join('\n\n');
+}
+
 function extractTaggedFileEdits(content: string): Array<{ path: string; content: string }> {
   const edits: Array<{ path: string; content: string }> = [];
   const regex = /<file_edit\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_edit>/gi;
@@ -1406,6 +1626,33 @@ function extractFilenameHintCodeBlocks(content: string): Array<{ path: string; c
   }
 
   return writes;
+}
+
+function extractFileWriteFolderCreateTags(content: string): {
+  writes: Array<{ path: string; content: string }>;
+  folders: string[];
+} {
+  const writes: Array<{ path: string; content: string }> = []
+  const folders: string[] = []
+
+  const fileWriteRegex = /<file_write\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_write>/gi
+  let fileWriteMatch: RegExpExecArray | null
+  while ((fileWriteMatch = fileWriteRegex.exec(content)) !== null) {
+    const path = fileWriteMatch[1]?.trim()
+    const fileContent = fileWriteMatch[2] ?? ''
+    if (!path) continue
+    writes.push({ path, content: fileContent })
+  }
+
+  const folderCreateRegex = /<folder_create\s+path=["']([^"']+)["']\s*\/?>/gi
+  let folderCreateMatch: RegExpExecArray | null
+  while ((folderCreateMatch = folderCreateRegex.exec(content)) !== null) {
+    const path = folderCreateMatch[1]?.trim()
+    if (!path) continue
+    folders.push(path)
+  }
+
+  return { writes, folders }
 }
 
 function sanitizePathSegment(input: string): string {

@@ -50,7 +50,10 @@ export async function POST(request: NextRequest) {
     const instance = await cloudAgentOffload.spawnAgent(task, {
       provider,
       image: 'daytonaio/opencode-agent:latest',
-      resources: resources || { cpu: 2, memory: 4 },
+      resources: {
+        cpu: resources?.cpu ?? 2,
+        memory: resources?.memory ?? 4,
+      },
       timeout: timeout || 1800,
       taskId: `${userId}-${Date.now()}`,
     });
@@ -83,10 +86,10 @@ export async function POST(request: NextRequest) {
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { agentId: string } },
+  { params }: { params: Promise<{ agentId: string }> },
 ) {
   try {
-    const { agentId } = params;
+    const { agentId } = await params;
 
     const instance = cloudAgentOffload.getStatus(agentId);
     

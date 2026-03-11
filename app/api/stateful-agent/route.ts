@@ -183,11 +183,46 @@ export async function POST(request: NextRequest) {
       let sandboxHandle;
 
       if (sandboxId) {
-        const sandboxProvider = await getSandboxProvider(DEFAULT_SANDBOX_PROVIDER);
-         sandboxHandle = await sandboxProvider.getSandbox(sandboxId);
+        // P0 FIX: Verify sandbox ownership before allowing access
+        // Get session by sandboxId to verify ownership
+        const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
+        const session = sandboxBridge.getSessionBySandboxId(sandboxId);
+        
+        if (!session) {
+          return NextResponse.json(
+            { error: 'Sandbox not found or has been terminated' },
+            { status: 404 }
+          );
         }
+        
+        // Verify the authenticated user owns this sandbox
+        if (session.userId !== userId) {
+          console.warn(`[StatefulAgent API] Unauthorized sandbox access attempt: user ${userId} tried to access sandbox ${sandboxId} owned by ${session.userId}`);
+          return NextResponse.json(
+            { error: 'You do not have access to this sandbox' },
+            { status: 403 }
+          );
+        }
+        
+        // Validate provider type to prevent runtime cast errors
+        // Include all supported providers from the system
+        const validProviders: SandboxProviderType[] = ['e2b', 'daytona', 'blaxel', 'sprites', 'codesandbox', 'microsandbox', 'mistral', 'webcontainer', 'opensandbox', 'vercel', 'codespaces'];
+        const rawProvider = session.provider;
+        const provider = (rawProvider && rawProvider.trim()) ? rawProvider as SandboxProviderType : null;
+        
+        if (!provider || !validProviders.includes(provider)) {
+          console.warn(`[StatefulAgent API] Unknown or empty provider in session: "${rawProvider}"`);
+          return NextResponse.json(
+            { error: 'Sandbox provider not recognized' },
+            { status: 400 }
+          );
+        }
+        
+        const sandboxProvider = await getSandboxProvider(provider);
+        sandboxHandle = await sandboxProvider.getSandbox(sandboxId);
+      }
 
-        const result = await runStatefulAgent(userMessage, {
+      const result = await runStatefulAgent(userMessage, {
         sessionId,
         sandboxHandle,
         enforcePlanActVerify,

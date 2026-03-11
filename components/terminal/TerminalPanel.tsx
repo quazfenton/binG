@@ -463,7 +463,7 @@ export default function TerminalPanel({
     clipboard: string;
   } | null>>({});
   const connectAbortRef = useRef<Record<string, AbortController>>({});
-  const connectTerminalRef = useRef<(terminalId: string) => Promise<void>>();
+  const connectTerminalRef = useRef<(terminalId: string) => Promise<void> | undefined>(undefined);
 
   // Input batching to reduce HTTP overhead (ARCH 4)
   const inputBatchRef = useRef<Record<string, string>>({});
@@ -562,10 +562,10 @@ export default function TerminalPanel({
   // See: lib/sandbox/terminal-ui-manager.ts
 
   // Refs for callback functions to avoid circular dependency
-  const copyOutputRef = useRef<() => Promise<void>>();
-  const pasteFromClipboardRef = useRef<() => Promise<void>>();
-  const selectAllRef = useRef<() => void>();
-  const closeContextMenuRef = useRef<() => void>();
+  const copyOutputRef = useRef<() => Promise<void> | undefined>(undefined);
+  const pasteFromClipboardRef = useRef<() => Promise<void> | undefined>(undefined);
+  const selectAllRef = useRef<() => void | undefined>(undefined);
+  const closeContextMenuRef = useRef<() => void | undefined>(undefined);
 
   // Keyboard shortcuts handled by TerminalUIManager handler
   // See: lib/sandbox/terminal-ui-manager.ts
@@ -813,7 +813,7 @@ export default function TerminalPanel({
       setCommandHistory: (terminalId, history) => { commandHistoryRef.current[terminalId] = history },
       saveTerminalSession: saveTerminalSession,
       getSandboxStatus: () => sandboxStatus,
-      setSandboxStatus: setSandboxStatus,
+      setSandboxStatus: (status: string) => setSandboxStatus(status as 'connecting' | 'disconnected' | 'connected'),
       connectTerminal: connectTerminal,
       getTerminals: () => terminalsRef.current,
       getActiveTerminalId: () => activeTerminalId,
@@ -982,11 +982,9 @@ export default function TerminalPanel({
           const { terminalOPFSSync } = await import('@/lib/virtual-filesystem/opfs/terminal-sync');
           const sync = terminalOPFSSync;
           
-          if (sync.isEnabled()) {
-            // Write to OPFS instantly (1-10ms)
-            await sync.syncFileEdit(scopedFilePath, content);
-            log(`syncFileToVFS: OPFS write complete for "${scopedFilePath}"`);
-          }
+          // Try to sync to OPFS - will fail gracefully if not enabled
+          await sync.syncFileEdit(scopedFilePath, content);
+          log(`syncFileToVFS: OPFS write complete for "${scopedFilePath}"`);
         } catch (opfsError) {
           logWarn(`syncFileToVFS: OPFS sync failed (non-critical)`, opfsError);
           // Continue with server sync even if OPFS fails
@@ -1060,7 +1058,7 @@ export default function TerminalPanel({
     if (handlers) {
       return handlers.localFS.executeCommand(command, {
         isPtyMode,
-        terminalMode: mode,
+        terminalMode: mode as 'local' | 'connecting' | 'pty' | 'sandbox-cmd' | 'editor',
       });
     }
 
@@ -1294,27 +1292,6 @@ export default function TerminalPanel({
           handlers.input.handleInput(data);
           return;
         }
-
-                // Input handling delegated to TerminalInputHandler
-        // See: lib/sandbox/terminal-input-handler.ts (~250 lines)
-
-
-        if (event.type !== 'keydown') return true;
-        const t = terminalsRef.current.find(t => t.id === terminalId);
-        if (!t) return true;
-        if (t.mode === 'pty') return true; // Let PTY handle everything
-        
-        // Suppress default browser behavior for Ctrl combinations in editor mode
-        if (t.mode === 'editor' || t.mode === 'command-mode' || editorSessionRef.current[terminalId]) {
-          const ctrlKeys = ['g', 'o', 'x', 'k', 'u', 'r', 'y', 'c', 'j', 't', 's'];
-          if (event.ctrlKey && ctrlKeys.includes(event.key.toLowerCase())) {
-            event.preventDefault();
-            return true;
-          }
-        }
-
-        // Allow arrow keys and other special keys to pass through
-        return true;
       });
 
       terminal.onResize(({ cols, rows }: { cols: number; rows: number }) => {

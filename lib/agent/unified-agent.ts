@@ -172,14 +172,17 @@ export class UnifiedAgent {
     log.debug(`Requested capabilities: ${this.config.capabilities?.join(', ') || 'terminal'}`)
 
     try {
-      // Create real sandbox session via bridge with error handling
+      // P1 FIX: Pass provider to bridge and use correct env key
       let workspaceSession
       try {
-        log.debug(`Creating workspace for user ${userId}...`)
+        log.debug(`Creating workspace for user ${userId} with provider ${this.config.provider}...`)
         workspaceSession = await sandboxBridge.createWorkspace(userId, {
-          env: this.config.env,
+          // P1 FIX: Pass provider to ensure sandbox is created on the correct backend
+          provider: this.config.provider,
+          // P1 FIX: Use envVars key instead of env
+          envVars: this.config.env,
         } as any)
-        log.info(`Workspace created: ${workspaceSession.sandboxId}`)
+        log.info(`Workspace created: ${workspaceSession.sandboxId} on provider ${workspaceSession.provider || this.config.provider}`)
       } catch (error: any) {
         log.error(`Failed to create sandbox session: ${error.message}`)
         throw new Error(

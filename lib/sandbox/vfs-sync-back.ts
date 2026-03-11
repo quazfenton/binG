@@ -184,12 +184,13 @@ export class VFSyncBackService {
       };
       
       // Sync files
-      const result = await this.syncFiles(filteredFiles, mergedConfig, status);
+      const result = await this.syncFiles(filteredFiles, mergedConfig, status, session.userId)
+      result.duration = Date.now() - startTime
       
       // Update final status
       status.isSyncing = false;
       status.lastSyncAt = Date.now();
-      status.lastSyncDuration = Date.now() - startTime;
+      status.lastSyncDuration = result.duration;
       status.lastSyncFiles = result.filesSynced;
       status.progress = undefined;
       
@@ -280,11 +281,12 @@ export class VFSyncBackService {
       
       // Read file content
       try {
-        const readResult = await handle.readFile(fileName);
+        const filePath = `${cwd}/${fileName}`
+        const readResult = await handle.readFile(filePath)
         
         if (readResult.success && readResult.output !== undefined) {
           files.push({
-            path: `${cwd}/${fileName}`,
+            path: filePath,
             content: readResult.output,
             lastModified: Date.now(),
             size: size || readResult.output.length,
@@ -331,7 +333,8 @@ export class VFSyncBackService {
   private async syncFiles(
     files: VFSFileEntry[],
     config: VFSyncConfig,
-    status: VFSyncStatus
+    status: VFSyncStatus,
+    ownerId: string
   ): Promise<VFSyncResult> {
     const errors: Array<{ path: string; error: string }> = [];
     let filesSynced = 0;
@@ -383,7 +386,7 @@ export class VFSyncBackService {
         const vfsPath = this.convertToVFSPath(file.path, config.vfsScopePath);
         
         // Use VFS writeFile
-        await vfs.writeFile(vfsPath, file.content);
+        await vfs.writeFile(ownerId, vfsPath, file.content);
         
         filesSynced++;
         bytesSynced += file.content.length;
