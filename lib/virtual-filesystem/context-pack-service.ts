@@ -119,11 +119,24 @@ class ContextPackService {
     const files = await this.collectFiles(ownerId, rootPath, opts, warnings);
     
     // Generate bundle in requested format
-    const bundle = this.generateBundle(tree, files, opts);
-    
+    let bundle = this.generateBundle(tree, files, opts);
+
     // Calculate metrics
-    const totalSize = new TextEncoder().encode(bundle).length;
+    const encoder = new TextEncoder();
+    let totalSize = encoder.encode(bundle).length;
+    const originalSize = totalSize;
+
+    if (opts.maxTotalSize && totalSize > opts.maxTotalSize) {
+      // Truncate bundle to roughly maxTotalSize bytes
+      bundle = bundle.slice(0, opts.maxTotalSize);
+      totalSize = encoder.encode(bundle).length;
+      warnings.push(
+        `Context pack truncated to approximately ${opts.maxTotalSize} bytes (original size ${originalSize} bytes)`
+      );
+    }
+
     const estimatedTokens = Math.ceil(totalSize / 4); // Rough approximation: 1 token ≈ 4 bytes
+    const hasTruncation = files.some(f => f.truncated) || totalSize < originalSize;
     
     return {
       tree,
@@ -134,7 +147,7 @@ class ContextPackService {
       estimatedTokens,
       fileCount: files.length,
       directoryCount: this.countDirectories(tree),
-      hasTruncation: files.some(f => f.truncated),
+      hasTruncation,
       warnings,
     };
   }
@@ -233,7 +246,7 @@ class ContextPackService {
           await this.collectFilesRecursive(ownerId, fullPath, options, files, warnings);
         } else if (entry.type === 'file') {
           // Check if file should be included
-          if (!this.matchesPatterns(entry.name, options.includePatterns) && options.includePatterns.length > 0) {
+          if (!this.matchesPatterns(fullPath, options.includePatterns) && options.includePatterns.length > 0) {
             continue;
           }
           
@@ -536,16 +549,21 @@ class ContextPackService {
    */
   private matchGlob(path: string, pattern: string): boolean {
     // Convert glob pattern to regex
-    let regexPattern = pattern
+    const normalizedPath = path.replace(/^\/+/, '');
+    const normalizedPattern = pattern.replace(/^\/+/, '');
+    let regexPattern = normalizedPattern
       .replace(/\./g, '\\.')
       .replace(/\*\*/g, '.*')
       .replace(/\*/g, '[^/]*')
       .replace(/\?/g, '.');
     
     regexPattern = `^${regexPattern}$`;
-    const regex = new RegExp(regexPattern);
-    
-    return regex.test(path);
+    try {
+      const regex = new RegExp(regexPattern);
+      return regex.test(normalizedPath);
+    } catch {
+      return false;
+    }
   }
   
   /**

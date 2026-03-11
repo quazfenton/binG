@@ -91,9 +91,8 @@ class AgentSessionManager {
     
     // Check TTL
     if (Date.now() - session.lastActiveAt.getTime() > this.TTL_MS) {
-      logger.warn(`Session ${key} expired, removing`);
-      this.sessions.delete(key);
-      this.sessionsById.delete(session.id);
+      logger.warn(`Session ${key} expired, cleaning up`);
+      void this.destroySession(session.userId, session.conversationId);
       return undefined;
     }
     
@@ -111,9 +110,8 @@ class AgentSessionManager {
 
     // Check TTL
     if (Date.now() - session.lastActiveAt.getTime() > this.TTL_MS) {
-      logger.warn(`Session ${sessionId} expired, removing`);
-      this.sessionsById.delete(sessionId);
-      this.sessions.delete(this.getSessionKey(session.userId, session.conversationId));
+      logger.warn(`Session ${sessionId} expired, cleaning up`);
+      void this.destroySession(session.userId, session.conversationId);
       return undefined;
     }
 
@@ -281,7 +279,8 @@ class AgentSessionManager {
       } as SandboxCreateConfig);
 
       // Ensure workspace directory exists
-      await sandbox.executeCommand(`mkdir -p ${workspacePath}`);
+      const safeWorkspacePath = workspacePath.replace(/"/g, '\\"');
+      await sandbox.executeCommand(`mkdir -p "${safeWorkspacePath}"`);
 
       const sessionId = uuidv4();
       const v2Session = await openCodeV2SessionManager.createSession({

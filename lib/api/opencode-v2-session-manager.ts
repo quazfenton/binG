@@ -161,7 +161,7 @@ class OpenCodeV2SessionManager {
     }
 
     // Check global quota
-    if (this.enableQuotaEnforcement && this.globalQuota.computeUsed >= this.globalQuota.computeMinutes * 60 * 1000) {
+    if (this.enableQuotaEnforcement && this.globalQuota.computeUsed >= this.globalQuota.computeMinutes) {
       throw new Error('Global compute quota exhausted');
     }
 
@@ -331,8 +331,11 @@ class OpenCodeV2SessionManager {
       session.totalSteps += steps;
       session.totalBashCommands += bashCommands;
       session.totalFileChanges += fileChanges;
-      session.quota.computeUsed += computeTimeMs / 60000; // Convert to minutes
+      const computeDeltaMinutes = computeTimeMs / 60000; // Convert to minutes
+      session.quota.computeUsed += computeDeltaMinutes;
       session.quota.storageUsed += storageBytes;
+      this.globalQuota.computeUsed += computeDeltaMinutes;
+      this.globalQuota.storageUsed += storageBytes;
       this.updateActivity(sessionId);
     }
   }
@@ -408,7 +411,17 @@ class OpenCodeV2SessionManager {
     
     session.status = 'stopped';
     session.lastActivity = Date.now();
-    
+
+    this.sessions.delete(sessionId);
+    this.sessionMetrics.delete(sessionId);
+    const userSessionIds = this.userSessions.get(session.userId);
+    if (userSessionIds) {
+      userSessionIds.delete(sessionId);
+      if (userSessionIds.size === 0) {
+        this.userSessions.delete(session.userId);
+      }
+    }
+
     logger.info(`Stopped session ${sessionId}`);
   }
 

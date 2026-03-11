@@ -90,11 +90,12 @@ export class VercelPreviewService {
     // Parse command
     const [cmd, ...cmdArgs] = command.split(/\s+/)
     const allArgs = [...cmdArgs, ...args]
+    const fullCommand = [cmd, ...allArgs].join(' ')
 
     // Start dev server in background
     try {
       // Start command (detached so it keeps running)
-      await sandbox.executeCommand(cmd, cwd)
+      await sandbox.executeCommand(fullCommand, cwd)
       
       // Wait for port to be ready (poll with timeout)
       await this.waitForPort(sandbox, port, timeout)

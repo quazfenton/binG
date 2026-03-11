@@ -47,8 +47,14 @@ async function testBoot() {
   try {
     const { WebContainer } = await import('@webcontainer/api');
     
-    const clientId = process.env.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID || 'wc_api_____';
-    const scope = process.env.NEXT_PUBLIC_WEBCONTAINER_SCOPE || '';
+    const clientId =
+      typeof process !== 'undefined' && process.env
+        ? process.env.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID || 'wc_api_____'
+        : 'wc_api_____';
+    const scope =
+      typeof process !== 'undefined' && process.env
+        ? process.env.NEXT_PUBLIC_WEBCONTAINER_SCOPE || ''
+        : '';
     
     if (WebContainer.auth?.init) {
       WebContainer.auth.init({ clientId, scope });
@@ -301,7 +307,10 @@ async function runWebContainerTests() {
     return { success: false, error: 'Browser required' };
   }
   
-  const clientId = process.env.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID;
+  const clientId =
+    typeof process !== 'undefined' && process.env
+      ? process.env.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID
+      : undefined;
   if (!clientId) {
     console.warn('⚠️  NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID not set, using default');
   }
@@ -357,4 +366,7 @@ if (typeof window !== 'undefined') {
   window.WebContainerTestResults = results;
 }
 
-module.exports = { runWebContainerTests };
+// Export for Node.js testing
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { runWebContainerTests };
+}

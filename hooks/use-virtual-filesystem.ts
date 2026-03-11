@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { generateSecureId } from '@/lib/utils';
+import { getOrCreateAnonymousSessionId, buildApiHeaders } from '@/lib/utils';
+import { createDebugLogger } from '@/config/features';
 import type {
   VirtualFile,
   VirtualFilesystemNode,
@@ -39,19 +40,6 @@ interface ApiResponse<T> {
   data: T;
 }
 
-function getOrCreateAnonymousSessionId(): string {
-  if (typeof window === 'undefined') {
-    return 'server-session';
-  }
-
-  let sessionId = localStorage.getItem('anonymous_session_id');
-  if (!sessionId) {
-    sessionId = generateSecureId('anon');
-    localStorage.setItem('anonymous_session_id', sessionId);
-  }
-  return sessionId;
-}
-
 export function useVirtualFilesystem(
   initialPath: string = 'project',
   options: UseVirtualFilesystemOptions = {}
@@ -77,11 +65,7 @@ export function useVirtualFilesystem(
     hasConflicts: false,
   });
 
-  // Debug flag
-  const DEBUG = typeof window !== 'undefined' && (localStorage.getItem('DEBUG_VFS') === 'true' || process.env.NODE_ENV === 'development');
-  const log = (...args: any[]) => DEBUG && console.log('[useVFS]', ...args);
-  const logError = (...args: any[]) => console.error('[useVFS ERROR]', ...args);
-  const logWarn = (...args: any[]) => console.warn('[useVFS WARN]', ...args);
+  const { log, error: logError, warn: logWarn } = createDebugLogger('useVFS', 'DEBUG_VFS');
 
   // Initialize OPFS on mount if enabled
   useEffect(() => {
@@ -139,20 +123,6 @@ export function useVirtualFilesystem(
     return () => clearInterval(interval);
   }, [useOPFS]);
 
-  const buildHeaders = useCallback((includeJsonContentType: boolean): HeadersInit => {
-    const headers: Record<string, string> = {
-      'x-anonymous-session-id': getOrCreateAnonymousSessionId(),
-    };
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    if (includeJsonContentType) {
-      headers['Content-Type'] = 'application/json';
-    }
-    return headers;
-  }, []);
-
   const request = useCallback(async <TData>(
     url: string,
     options: RequestInit & { includeJsonContentType?: boolean } = {},
@@ -163,7 +133,7 @@ export function useVirtualFilesystem(
     const response = await fetch(url, {
       ...rest,
       headers: {
-        ...buildHeaders(includeJsonContentType),
+        ...buildApiHeaders({ json: includeJsonContentType }),
         ...(rest.headers || {}),
       },
     });
@@ -174,6 +144,10 @@ export function useVirtualFilesystem(
     try {
       payload = await response.json();
     } catch {
+      // Response body was not valid JSON – surface the HTTP error directly
+      if (!response.ok) {
+        throw new Error(`Request failed (${response.status} ${response.statusText})`);
+      }
       payload = null;
     }
 
@@ -184,7 +158,7 @@ export function useVirtualFilesystem(
     }
 
     return payload.data;
-  }, [buildHeaders]);
+  }, []);
 
   useEffect(() => {
     currentPathRef.current = currentPath;

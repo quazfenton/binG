@@ -204,21 +204,34 @@ export async function POST(request: NextRequest) {
           );
         }
         
-        // Validate provider type to prevent runtime cast errors
-        // Include all supported providers from the system
-        const validProviders: SandboxProviderType[] = ['e2b', 'daytona', 'blaxel', 'sprites', 'codesandbox', 'microsandbox', 'mistral', 'webcontainer', 'opensandbox', 'vercel', 'codespaces'];
-        const rawProvider = session.provider;
-        const provider = (rawProvider && rawProvider.trim()) ? rawProvider as SandboxProviderType : null;
-        
-        if (!provider || !validProviders.includes(provider)) {
-          console.warn(`[StatefulAgent API] Unknown or empty provider in session: "${rawProvider}"`);
+        // Resolve provider type from session or sandbox ID
+        const rawProvider = (session as any).provider as string | undefined;
+        const inferredProvider =
+          rawProvider && rawProvider.trim()
+            ? rawProvider.trim()
+            : sandboxBridge.inferProviderFromSandboxId(sandboxId);
+
+        if (!inferredProvider) {
+          console.warn(`[StatefulAgent API] Unable to determine provider for sandbox ${sandboxId}`);
           return NextResponse.json(
             { error: 'Sandbox provider not recognized' },
             { status: 400 }
           );
         }
-        
-        const sandboxProvider = await getSandboxProvider(provider);
+
+        let sandboxProvider;
+        try {
+          sandboxProvider = await getSandboxProvider(inferredProvider as SandboxProviderType);
+        } catch (error: any) {
+          console.warn(
+            `[StatefulAgent API] Failed to initialize provider ${inferredProvider} for sandbox ${sandboxId}: ${error?.message || error}`,
+          );
+          return NextResponse.json(
+            { error: 'Sandbox provider not recognized' },
+            { status: 400 }
+          );
+        }
+
         sandboxHandle = await sandboxProvider.getSandbox(sandboxId);
       }
 

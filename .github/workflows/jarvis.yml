@@ -6,7 +6,7 @@ on:
 jobs:
   # Job 1: Collect and batch trigger comments
   collect-comments:
-    if: contains(github.event.comment.body, 'Prompt for AI Agent') || contains(github.event.comment.body, 'Prompt for AI agent')
+    if: (contains(github.event.comment.body, 'Prompt for AI Agent') || contains(github.event.comment.body, 'Prompt for AI agent')) && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
@@ -140,7 +140,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: write
+      actions: read
 
     steps:
       - name: Download Trigger Comments Artifact
@@ -188,7 +188,7 @@ jobs:
           # Grabs the last 100 lines of CodeRabbit feedback to give the agent its mission
           # SECURITY: Uses gh api to fetch only verified bot reviews, preventing prompt injection from malicious PR comments
           # Note: jq regex doesn't need escape for literal brackets, use [bot] directly
-          BOT_PATTERN='^(coderabbitai|qodo-code-review|cubic-dev-ai|codeant-ai)([bot])?$'
+          BOT_PATTERN='^(coderabbitai|qodo-code-review|cubic-dev-ai|codeant-ai)(\\[bot\\])?$'
 
           # Fetch only NEW unprocessed reviews from verified bot accounts
           # Filters out reviews that already contain the agent applied marker
