@@ -22,10 +22,6 @@ const cloudOffloadSchema = z.object({
   timeout: z.number().optional().default(1800),
 });
 
-const getResultSchema = z.object({
-  timeout: z.number().optional(),
-});
-
 /**
  * POST /api/agent/v2/cloud/offload
  * Spawn cloud agent
@@ -119,64 +115,6 @@ export async function GET(
     logger.error('Failed to get agent status', error);
     return NextResponse.json(
       { error: error.message || 'Failed to get status' },
-      { status: 500 },
-    );
-  }
-}
-
-/**
- * POST /api/agent/v2/cloud/:agentId/result
- * Get cloud agent result (blocks until complete)
- */
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { agentId: string } },
-) {
-  try {
-    const { agentId } = params;
-    
-    const body = await request.json();
-    const validation = getResultSchema.safeParse(body);
-    const timeout = validation.success ? validation.data.timeout : undefined;
-
-    const result = await cloudAgentOffload.getResult(agentId, timeout);
-
-    return NextResponse.json({
-      success: result.success,
-      data: result,
-    });
-
-  } catch (error: any) {
-    logger.error('Failed to get agent result', error);
-    return NextResponse.json(
-      { error: error.message || 'Failed to get result' },
-      { status: 500 },
-    );
-  }
-}
-
-/**
- * DELETE /api/agent/v2/cloud/:agentId
- * Cancel cloud agent
- */
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { agentId: string } },
-) {
-  try {
-    const { agentId } = params;
-
-    await cloudAgentOffload.cancel(agentId);
-
-    return NextResponse.json({
-      success: true,
-      message: 'Agent cancelled',
-    });
-
-  } catch (error: any) {
-    logger.error('Failed to cancel agent', error);
-    return NextResponse.json(
-      { error: error.message || 'Failed to cancel agent' },
       { status: 500 },
     );
   }

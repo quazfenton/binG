@@ -16,7 +16,8 @@
 import { LocalCommandExecutor, type LocalFilesystemEntry, type LocalCommandExecutorConfig } from './local-filesystem-executor'
 import { createLogger } from '../utils/logger'
 import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '../terminal/terminal-security'
-import { vfsSyncBackService, type VFSyncResult } from './vfs-sync-back'
+// Types only - no server module imports
+import type { VFSyncResult } from './vfs-sync-back.types'
 
 const logger = createLogger('TerminalLocalFS')
 
@@ -253,7 +254,7 @@ export class TerminalLocalFSHandler {
 
   /**
    * Restore snapshot and sync files back to local filesystem
-   * Integrates VFS sync-back for snapshot restoration
+   * Calls API route instead of direct service import to avoid bundling server modules
    */
   async restoreSnapshot(
     sessionId: string,
@@ -264,36 +265,40 @@ export class TerminalLocalFSHandler {
   ): Promise<VFSyncResult> {
     logger.info('Restoring snapshot', { sessionId, options })
 
-    // Sync sandbox to VFS
-    const syncResult = await vfsSyncBackService.syncSandboxToVFS(sessionId, {
-      scopePath: this.filesystemScopePath || 'project',
-      syncToVFS: options?.syncToVFS !== false,
-    })
+    // Call API route instead of importing server module
+    // This prevents bundling vfs-sync-back.ts and its dependencies in client bundle
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+      const response = await fetch('/api/filesystem/snapshot/restore', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          sessionId,
+          scopePath: this.filesystemScopePath || 'project',
+          syncToVFS: options?.syncToVFS !== false,
+        }),
+      });
 
-    logger.info('Snapshot restored', {
-      filesSynced: syncResult.filesSynced,
-      status: syncResult.status,
-    })
-
-    // Update local filesystem with restored files
-    if (syncResult.filesSynced > 0 && syncResult.vfsFiles) {
-      const fs = this.getFileSystem()
-      
-      for (const file of syncResult.vfsFiles) {
-        fs[file.path] = {
-          type: file.type,
-          content: file.content,
-          createdAt: file.createdAt || Date.now(),
-          modifiedAt: file.modifiedAt || Date.now(),
-        }
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Failed to restore snapshot' }));
+        throw new Error(error.error || 'Failed to restore snapshot');
       }
-      
-      this.setFileSystem(fs)
-      
-      logger.debug(`Updated ${syncResult.filesSynced} files in local filesystem`)
-    }
 
-    return syncResult
+      const result = await response.json();
+      
+      logger.info('Snapshot restored via API', {
+        filesSynced: result.data?.filesSynced,
+        status: result.data?.status,
+      });
+
+      return result.data;
+    } catch (error) {
+      logger.error('Failed to restore snapshot', error);
+      throw error;
+    }
   }
 }
 

@@ -18,21 +18,7 @@ import { getOPFSGit } from './opfs-git';
 import type { OPFSCore } from './opfs-core';
 import { opfsCore } from './opfs-core';
 import type { VirtualFile } from '../filesystem-types';
-
-// Lazy import virtualFilesystem to avoid bundling node:fs in client
-let _virtualFilesystemModule: typeof import('../virtual-filesystem-service').virtualFilesystem | null = null;
-
-async function getVirtualFilesystem() {
-  if (!_virtualFilesystemModule) {
-    try {
-      const mod = await import('../virtual-filesystem-service');
-      _virtualFilesystemModule = mod.virtualFilesystem;
-    } catch {
-      _virtualFilesystemModule = null;
-    }
-  }
-  return _virtualFilesystemModule;
-}
+import { getWorkspaceSnapshot, writeFileToServer } from './opfs-api-client';
 
 export interface GitVFSSyncOptions {
   workspaceId: string;
@@ -117,17 +103,17 @@ export class GitVFSSync {
     await this.initialize();
 
     try {
-      // Get VFS snapshot
-      const vfs = await getVirtualFilesystem();
-      if (!vfs) {
+      // Get VFS snapshot via API
+      const snapshot = await getWorkspaceSnapshot(this.options.ownerId);
+      
+      if (!snapshot) {
         return {
           success: false,
           filesCommitted: 0,
-          error: 'Server VFS not available',
+          error: 'Failed to fetch snapshot from server',
         };
       }
-      const snapshot = await vfs.exportWorkspace(this.options.ownerId);
-      
+
       if (snapshot.files.length === 0) {
         return {
           success: true,
@@ -196,20 +182,11 @@ export class GitVFSSync {
     try {
       // Get git status to find all tracked files
       const status = await this.git.status();
-      
+
       let filesRestored = 0;
 
       // Read all files from OPFS and write to VFS
       const files = status.files.filter(f => f.status !== 'deleted');
-
-      const vfs = await getVirtualFilesystem();
-      if (!vfs) {
-        return {
-          success: false,
-          filesRestored: 0,
-          error: 'Server VFS not available',
-        };
-      }
 
       for (const file of files) {
         try {
@@ -217,13 +194,15 @@ export class GitVFSSync {
             `${this.options.workspaceId}/${file.path}`
           );
 
-          await vfs.writeFile(
+          const success = await writeFileToServer(
             this.options.ownerId,
             file.path,
             opfsFile.content
           );
 
-          filesRestored++;
+          if (success) {
+            filesRestored++;
+          }
         } catch (error: any) {
           console.warn('[Git-VFS] Failed to restore file:', file.path, error.message);
         }
@@ -318,9 +297,8 @@ export class GitVFSSync {
     // Get VFS version
     let vfsVersion = 0;
     try {
-      const vfs = await getVirtualFilesystem();
-      if (vfs) {
-        const snapshot = await vfs.exportWorkspace(this.options.ownerId);
+      const snapshot = await getWorkspaceSnapshot(this.options.ownerId);
+      if (snapshot) {
         vfsVersion = snapshot.version;
       }
     } catch {
