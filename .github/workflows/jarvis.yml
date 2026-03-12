@@ -11,14 +11,48 @@ jobs:
     permissions:
       pull-requests: read
       contents: read
+      actions: read
     outputs:
       should_run: ${{ steps.batch.outputs.should_run }}
       comment_ids: ${{ steps.batch.outputs.comment_ids }}
       comment_count: ${{ steps.batch.outputs.comment_count }}
       pr_number: ${{ steps.batch.outputs.pr_number }}
+      skip: ${{ steps.check_running.outputs.skip }}
     steps:
+      - name: Check for In-Progress Runs (Skip if Already Running)
+        id: check_running
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          CURRENT_RUN_ID=${{ github.run_id }}
+          
+          # Check for other in-progress runs of this workflow on the same PR
+          # Exclude current run from the check
+          RUNNING_RUNS=$(gh api repos/${{ github.repository }}/actions/runs \
+            --jq "[.workflow_runs[] | select(.name == '🧠 jarvis') | select(.status == 'in_progress' or .status == 'queued') | select(.id != $CURRENT_RUN_ID)] | length")
+          
+          if [ "$RUNNING_RUNS" -gt 0 ]; then
+            echo "⏭️ Another run is already in progress (run #$CURRENT_RUN_ID skipping)"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "No other runs in progress, proceeding..."
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip - Upload Empty Artifact (Another Run In Progress)
+        if: steps.check_running.outputs.skip == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: trigger-comments
+          path: /dev/null
+          retention-days: 1
+          overwrite: true
+
       - name: Get PR and Batch Info
         id: batch
+        if: steps.check_running.outputs.skip != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -125,7 +159,7 @@ jobs:
           fi
 
       - name: Upload Trigger Comments Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: trigger-comments
           path: /tmp/trigger_comments.json
@@ -135,7 +169,7 @@ jobs:
   # Job 2: Run agent with batched context
   multi-iteration-fix:
     needs: collect-comments
-    if: needs.collect-comments.outputs.should_run == 'true'
+    if: needs.collect-comments.outputs.should_run == 'true' && needs.collect-comments.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -144,7 +178,7 @@ jobs:
 
     steps:
       - name: Download Trigger Comments Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: trigger-comments
           path: /tmp/
@@ -165,13 +199,13 @@ jobs:
           # Use needs.collect-comments.outputs for data from parent job
 
       - name: Checkout Full Repository (Latest HEAD)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ steps.pr.outputs.head_sha }}  # Use SHA for exact commit, not branch name
           fetch-depth: 0 # CRITICAL: Required for AST Repo Mapping
 
       - name: Setup Python & Agent Tooling
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Install Aider (Agent Engine)
@@ -199,12 +233,15 @@ jobs:
             | tac)
           SUGGESTIONS="${RAW_FEEDBACK:-Review the suggestion if there is any for optimizations.}"
 
-          # Sanitize string for bash multiline using printf with proper escaping
+          # Write suggestions to file and use file-based output (avoids heredoc delimiter issues)
           printf '%s\n' "$SUGGESTIONS" > /tmp/suggestions.txt
-          # Use quoted delimiter to prevent variable expansion and content interference
-          echo "suggestions<<'CODE_RABBIT_CONTEXT'" >> "$GITHUB_OUTPUT"
-          cat /tmp/suggestions.txt >> "$GITHUB_OUTPUT"
-          echo "CODE_RABBIT_CONTEXT" >> "$GITHUB_OUTPUT"
+          # Use GITHUB_OUTPUT file syntax with unique delimiter
+          DELIM="GHA_OUTPUT_DELIM_$$"
+          {
+            echo "suggestions<<$DELIM"
+            cat /tmp/suggestions.txt
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Manage Shadow Branch
         id: branch
@@ -401,7 +438,7 @@ jobs:
   # Job 3: Mark processed comments with rocket reaction AND clear queue on success
   mark-comments-processed:
     needs: [collect-comments, multi-iteration-fix]
-    if: always() && needs.collect-comments.outputs.comment_ids != '' && needs.multi-iteration-fix.result == 'success'
+    if: always() && needs.collect-comments.outputs.comment_ids != '' && needs.multi-iteration-fix.result == 'success' && needs.collect-comments.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -441,13 +478,13 @@ jobs:
   # Job 4: Persist pending queue on failure (save unprocessed comments for next run)
   persist-queue-on-failure:
     needs: [collect-comments, multi-iteration-fix]
-    if: always() && needs.collect-comments.outputs.comment_ids != '' && needs.multi-iteration-fix.result != 'success'
+    if: always() && needs.collect-comments.outputs.comment_ids != '' && needs.multi-iteration-fix.result != 'success' && needs.collect-comments.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - name: Download Trigger Comments Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: trigger-comments
           path: /tmp/
@@ -489,26 +526,52 @@ jobs:
           # Encode file content as base64 and write to temp file
           base64 -w 0 < /tmp/queue.json > /tmp/content.b64
 
-          EXISTING_SHA=""
-          if gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" >/dev/null 2>&1; then
-            EXISTING_SHA=$(gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" --jq '.sha')
-          fi
+          # Retry logic for SHA conflicts (concurrent updates to queue file)
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          SUCCESS=false
 
-          # Build JSON payload by writing parts to file (avoids arg list limits)
-          if [ -n "$EXISTING_SHA" ]; then
-            {
-              printf '{"message":"🔄 Update pending queue (PR #%s)","branch":"%s","content":"' "$PR_NUMBER" "$QUEUE_BRANCH"
-              cat /tmp/content.b64
-              printf '","sha":"%s"}' "$EXISTING_SHA"
-            } > /tmp/payload.json
-            gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json
-          else
-            {
-              printf '{"message":"📝 Create pending queue (PR #%s)","branch":"%s","content":"' "$PR_NUMBER" "$QUEUE_BRANCH"
-              cat /tmp/content.b64
-              printf '"}'
-            } > /tmp/payload.json
-            gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SUCCESS" = "false" ]; do
+            EXISTING_SHA=""
+            if gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" >/dev/null 2>&1; then
+              EXISTING_SHA=$(gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" --jq '.sha')
+            fi
+
+            # Build JSON payload by writing parts to file (avoids arg list limits)
+            if [ -n "$EXISTING_SHA" ]; then
+              {
+                printf '{"message":"🔄 Update pending queue (PR #%s)","branch":"%s","content":"' "$PR_NUMBER" "$QUEUE_BRANCH"
+                cat /tmp/content.b64
+                printf '","sha":"%s"}' "$EXISTING_SHA"
+              } > /tmp/payload.json
+              if gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json 2>/dev/null; then
+                SUCCESS=true
+                echo "✅ Queue updated successfully"
+              fi
+            else
+              {
+                printf '{"message":"📝 Create pending queue (PR #%s)","branch":"%s","content":"' "$PR_NUMBER" "$QUEUE_BRANCH"
+                cat /tmp/content.b64
+                printf '"}'
+              } > /tmp/payload.json
+              if gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json 2>/dev/null; then
+                SUCCESS=true
+                echo "✅ Queue created successfully"
+              fi
+            fi
+
+            if [ "$SUCCESS" = "false" ]; then
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "SHA conflict detected, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
+                sleep 2
+              fi
+            fi
+          done
+
+          if [ "$SUCCESS" = "false" ]; then
+            echo "❌ Failed to update queue after $MAX_RETRIES retries"
+            exit 1
           fi
 
           echo "✅ Queue persisted with $(jq 'length' /tmp/queue.json) comments for PR $PR_NUMBER. Will retry on next trigger."

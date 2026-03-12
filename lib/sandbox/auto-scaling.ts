@@ -474,7 +474,7 @@ export class AutoScalingManager extends EventEmitter {
     for (const [name, timestamp] of this.lastScalingDecision.entries()) {
       history.push({
         policyName: name,
-        action: 'unknown',
+        action: 'maintain', // Default action for history entries without specific action
         timestamp,
       });
     }

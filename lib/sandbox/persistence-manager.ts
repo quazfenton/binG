@@ -1,14 +1,22 @@
 /**
  * Universal Sandbox Persistence Manager
- * 
+ *
  * Provides standardized snapshotting and incremental syncing for all providers.
  * - Hashing-based incremental sync (from Sprites)
  * - File-level snapshotting and diffing (from CodeSandbox)
  * - Provider-agnostic rollback
  */
 
-import { crypto } from '@/lib/utils/crypto';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
+
+// Simple hash function using Web Crypto API
+async function hashContent(content: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(content);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 export interface Snapshot {
   id: string;

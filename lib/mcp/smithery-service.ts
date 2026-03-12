@@ -51,7 +51,7 @@ export interface SmitheryNamespace {
 }
 
 export const SmitheryServerSchema = z.object({
-  namespace: z.string(),
+  namespace: z.string().optional(),
   name: z.string(),
   displayName: z.string().optional(),
   description: z.string().optional(),
@@ -61,7 +61,15 @@ export const SmitheryServerSchema = z.object({
   mcpEndpoint: z.string().optional(),
   iconUrl: z.string().optional(),
   starCount: z.number().optional(),
-});
+}).transform(data => ({
+  ...data,
+  namespace: data.namespace || 'unknown',
+  displayName: data.displayName || data.name,
+  description: data.description || '',
+  verified: data.verified || false,
+  deploymentStatus: data.deploymentStatus || 'external',
+  tools: data.tools || [],
+}));
 
 export const SmitheryConnectionSchema = z.object({
   id: z.string(),
@@ -437,7 +445,9 @@ export class SmitheryService {
 
     // Create form data
     const formData = new FormData();
-    const blob = new Blob([iconBuffer], { type: mimeType });
+    // Convert Buffer to Uint8Array for Blob compatibility
+    const uint8Array = new Uint8Array(iconBuffer);
+    const blob = new Blob([uint8Array], { type: mimeType });
     formData.append('icon', blob, 'icon');
 
     const response = await fetch(`${this.baseUrl}/servers/${qualifiedName}/icon`, {

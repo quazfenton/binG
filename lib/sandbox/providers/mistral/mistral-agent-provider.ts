@@ -132,9 +132,9 @@ export class MistralAgentProvider implements SandboxProvider {
       workspaceDir: WORKSPACE_DIR,
     }
 
-    // Initialize persistent workspace state
+    // Initialize persistent workspace state with proper Record type
     this.workspacePersistence.set(sandboxId, {
-      files: new Map(),
+      files: {} as Record<string, string>,
       environment: { ...config.envVars },
       history: [],
     })
@@ -282,12 +282,32 @@ export class MistralAgentProvider implements SandboxProvider {
    * Create a custom agent (advanced usage)
    */
   async createAgent(agentConfig: AgentConfig) {
+    // Build tools array with proper types for Mistral SDK
+    const tools = agentConfig.tools?.map(type => {
+      switch (type) {
+        case 'code_interpreter':
+          return { type: 'code_interpreter' as const }
+        case 'web_search':
+          return { type: 'web_search' as const }
+        case 'web_search_premium':
+          return { type: 'web_search_premium' as const }
+        case 'image_generation':
+          return { type: 'image_generation' as const }
+        case 'document_library':
+          // DocumentLibraryTool requires libraryIds array
+          return { type: 'document_library' as const, libraryIds: [] }
+        case 'function':
+        default:
+          return { type: 'function' as const }
+      }
+    }) || []
+
     const agent = await this.client.beta.agents.create({
       model: agentConfig.model || this.config.model,
       name: agentConfig.name,
       description: agentConfig.description,
       instructions: agentConfig.instructions,
-      tools: agentConfig.tools?.map(type => ({ type })) || [],
+      tools,
       completionArgs: (agentConfig.completionArgs || {
         temperature: this.config.defaultTemperature,
         topP: this.config.defaultTopP,
@@ -300,12 +320,32 @@ export class MistralAgentProvider implements SandboxProvider {
    * Update an agent
    */
   async updateAgent(agentId: string, update: AgentUpdate) {
+    // Build tools array with proper types for Mistral SDK
+    const tools = update.tools?.map(type => {
+      switch (type) {
+        case 'code_interpreter':
+          return { type: 'code_interpreter' as const }
+        case 'web_search':
+          return { type: 'web_search' as const }
+        case 'web_search_premium':
+          return { type: 'web_search_premium' as const }
+        case 'image_generation':
+          return { type: 'image_generation' as const }
+        case 'document_library':
+          // DocumentLibraryTool requires libraryIds array
+          return { type: 'document_library' as const, libraryIds: [] }
+        case 'function':
+        default:
+          return { type: 'function' as const }
+      }
+    })
+
     return this.client.beta.agents.update({
       agentId,
       agentUpdateRequest: {
         description: update.description,
         instructions: update.instructions,
-        tools: update.tools?.map(type => ({ type })),
+        tools,
         completionArgs: update.completionArgs as any,
       },
     })
@@ -533,7 +573,8 @@ except FileNotFoundError:
       // Start new conversation to clear history
       const response = await this.client.beta.conversations.start({
         agentId: this.session.agentId,
-        inputs: [{ role: 'system', content: 'New conversation started' }],
+        // Use text input instead of structured role-based input
+        inputs: 'New conversation started',
       })
       this.session.conversationId = response.conversationId
     }
