@@ -271,12 +271,12 @@ class OpenCodeV2SessionManager {
   }
 
   /**
-   * Update session Nullclaw endpoint
+   * Update session Nullclaw availability
    */
-  setNullclawEndpoint(sessionId: string, endpoint: string): void {
+  setNullclawAvailable(sessionId: string, available: boolean): void {
     const session = this.sessions.get(sessionId);
     if (session) {
-      session.nullclawEndpoint = endpoint;
+      session.nullclawEnabled = available;
       this.updateActivity(sessionId);
     }
   }

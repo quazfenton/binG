@@ -39,13 +39,22 @@ services:
       - V2_AGENT_ENABLED=true
       - MCP_ENABLED=true
       - MCP_CLI_PORT=8888
-      - NULLCLAW_ENABLED=${NULLCLAW_ENABLED:-false}  # Disabled by default
-      - NULLCLAW_MODE=${NULLCLAW_MODE:-per-session}
+      
+      # Nullclaw Integration
+      # Set NULLCLAW_URL to use external service (URL mode)
+      # Leave empty to use container mode (app spawns containers)
+      - NULLCLAW_ENABLED=${NULLCLAW_ENABLED:-true}
+      - NULLCLAW_URL=${NULLCLAW_URL:-http://nullclaw:3000}
+      - NULLCLAW_API_KEY=${NULLCLAW_API_KEY:-}
+      - NULLCLAW_MODE=${NULLCLAW_MODE:-shared}  # shared | per-session
+      - NULLCLAW_POOL_SIZE=${NULLCLAW_POOL_SIZE:-2}
       - NULLCLAW_MAX_CONTAINERS=${NULLCLAW_MAX_CONTAINERS:-4}
-      - NULLCLAW_BASE_PORT=${NULLCLAW_BASE_PORT:-3001}
+      - NULLCLAW_PORT=${NULLCLAW_PORT:-3001}
       - NULLCLAW_NETWORK=bing-network
-      - NULLCLAW_PORT=3001
-      - NULLCLAW_URL=http://nullclaw:3000
+      - NULLCLAW_TIMEOUT=300000
+      - NULLCLAW_ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
+      - NULLCLAW_HEALTH_TIMEOUT=30000
+      
       - CHAT_AGENTIC_PIPELINE=auto
       - WORKFORCE_ENABLED=true
       - WORKFORCE_MAX_CONCURRENCY=4

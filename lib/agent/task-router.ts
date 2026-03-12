@@ -300,16 +300,11 @@ class TaskRouter {
    * Execute task with Nullclaw agent
    */
   private async executeWithNullclaw(request: TaskRequest, taskType: TaskType): Promise<any> {
-    const { nullclawIntegration } = await import('./nullclaw-integration');
+    const { executeNullclawTask, isNullclawAvailable, initializeNullclaw } = await import('./nullclaw-integration');
 
     // Initialize Nullclaw if needed
-    const endpoint = await nullclawIntegration.initializeForSession(
-      request.userId,
-      request.conversationId,
-    );
-
-    if (!endpoint) {
-      throw new Error('Nullclaw not available');
+    if (!isNullclawAvailable()) {
+      await initializeNullclaw();
     }
 
     // Build Nullclaw task based on type
@@ -318,14 +313,14 @@ class TaskRouter {
       type: taskType === 'messaging' ? 'message' : taskType === 'browsing' ? 'browse' : 'automate',
       description: request.task,
       params: this.extractParams(request.task, taskType),
-      status: 'pending' as const,
-      createdAt: new Date(),
     };
 
-    const result = await nullclawIntegration.executeTask(
+    const result = await executeNullclawTask(
+      task.type,
+      task.description,
+      task.params,
       request.userId,
       request.conversationId,
-      task,
     );
 
     request.onToolExecution?.('nullclaw_task', task.params, result);

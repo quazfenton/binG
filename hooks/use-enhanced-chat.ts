@@ -128,16 +128,27 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             payload?.data?.requiresAuth === true);
 
         if (authRequired) {
+          // Distinguish integration OAuth (has toolName/provider/authUrl) from site login auth
+          const integrationTool = payload?.toolName || payload?.data?.toolName;
+          const integrationProvider = payload?.provider || payload?.data?.provider;
+          const integrationAuthUrl = payload?.authUrl || payload?.data?.authUrl;
+          const isIntegrationAuth = !!(integrationTool && integrationProvider && integrationAuthUrl);
+
           const content =
             payload?.error?.message ||
             payload?.message ||
             `Authentication is required to continue.`;
-          const messageMetadata = {
-            requiresAuth: true,
-            authUrl: payload?.authUrl || payload?.data?.authUrl,
-            toolName: payload?.toolName || payload?.data?.toolName,
-            provider: payload?.provider || payload?.data?.provider
-          };
+          const messageMetadata = isIntegrationAuth
+            ? {
+                requiresAuth: true,
+                authUrl: integrationAuthUrl,
+                toolName: integrationTool,
+                provider: integrationProvider,
+              }
+            : {
+                requiresAuth: false,
+                loginRequired: true,
+              };
 
           setMessages(prev => prev.map(msg =>
             msg.id === assistantMessage.id
@@ -168,17 +179,31 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           payload?.metadata?.messageMetadata?.requiresAuth === true;
 
         if (authRequired) {
+          // Check if this is a real integration auth (has tool/provider/authUrl) or just site login
+          const existingMeta = payload?.metadata?.messageMetadata;
+          const integrationTool = existingMeta?.toolName || payload?.toolName || payload?.data?.toolName;
+          const integrationProvider = existingMeta?.provider || payload?.provider || payload?.data?.provider;
+          const integrationAuthUrl = existingMeta?.authUrl || payload?.authUrl || payload?.data?.authUrl;
+          const isIntegrationAuth = !!(integrationTool && integrationProvider && integrationAuthUrl);
+
           const content =
             payload?.message ||
             payload?.data?.content ||
-            `I need authorization to use ${payload?.toolName || payload?.data?.toolName || 'this tool'}. Please connect your account to proceed.`;
+            (isIntegrationAuth
+              ? `I need authorization to use ${integrationTool}. Please connect your account to proceed.`
+              : 'Authentication is required to continue. Please log in first.');
 
-          const messageMetadata = payload?.metadata?.messageMetadata || {
-            requiresAuth: true,
-            authUrl: payload?.authUrl || payload?.data?.authUrl,
-            toolName: payload?.toolName || payload?.data?.toolName,
-            provider: payload?.provider || payload?.data?.provider
-          };
+          const messageMetadata = isIntegrationAuth
+            ? (existingMeta || {
+                requiresAuth: true,
+                authUrl: integrationAuthUrl,
+                toolName: integrationTool,
+                provider: integrationProvider,
+              })
+            : {
+                requiresAuth: false,
+                loginRequired: true,
+              };
 
           setMessages(prev => prev.map(msg =>
             msg.id === assistantMessage.id

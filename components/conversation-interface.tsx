@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react"; // Import useCallback and useMemo
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"; // Import useCallback, useMemo, and useRef
 import { useEnhancedChat } from "@/hooks/use-enhanced-chat"; // Import enhanced chat hook
 import type { ChatHistory } from "@/types";
 

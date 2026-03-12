@@ -72,6 +72,20 @@ services:
       - MODAL_API_TOKEN=${MODAL_API_TOKEN}
       - COMPOSIO_API_KEY=${COMPOSIO_API_KEY}
 
+      # Nullclaw Integration (Non-Coding Agency)
+      - NULLCLAW_ENABLED=${NULLCLAW_ENABLED:-true}
+      - NULLCLAW_URL=${NULLCLAW_URL:-}  # Set to use external Nullclaw service
+      - NULLCLAW_API_KEY=${NULLCLAW_API_KEY:-}
+      - NULLCLAW_MODE=${NULLCLAW_MODE:-shared}  # shared | per-session
+      - NULLCLAW_POOL_SIZE=${NULLCLAW_POOL_SIZE:-2}
+      - NULLCLAW_MAX_CONTAINERS=${NULLCLAW_MAX_CONTAINERS:-4}
+      - NULLCLAW_PORT=${NULLCLAW_PORT:-3001}
+      - NULLCLAW_IMAGE=${NULLCLAW_IMAGE:-ghcr.io/nullclaw/nullclaw:latest}
+      - NULLCLAW_TIMEOUT=${NULLCLAW_TIMEOUT:-300000}
+      - NULLCLAW_ALLOWED_DOMAINS=${NULLCLAW_ALLOWED_DOMAINS:-openrouter.ai,api.discord.com,api.telegram.org}
+      - NULLCLAW_HEALTH_TIMEOUT=${NULLCLAW_HEALTH_TIMEOUT:-30000}
+      - NULLCLAW_NETWORK=${NULLCLAW_NETWORK:-bing-network}
+
       # S3 Storage (optional)
       - S3_ENDPOINT=${S3_ENDPOINT}
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
@@ -322,6 +336,50 @@ services:
     depends_on:
       - app
 
+  # ===========================================
+  # Nullclaw (Non-Coding Agency Service)
+  # ===========================================
+  # Provides messaging, browsing, and automation capabilities
+  # Two deployment modes:
+  # 1. URL Mode (Production): Set NULLCLAW_URL to use external service
+  # 2. Container Mode (Dev): App spawns containers dynamically
+  #
+  # For production, either:
+  # - Set NULLCLAW_URL=http://nullclaw:3000 (internal service)
+  # - Or use cloud-hosted Nullclaw service
+  #
+  # For development, leave NULLCLAW_URL empty and set:
+  # - NULLCLAW_MODE=shared (container pool)
+  # - NULLCLAW_MODE=per-session (dedicated per user)
+  nullclaw:
+    image: ghcr.io/nullclaw/nullclaw:latest
+    container_name: bing-nullclaw
+    restart: unless-stopped
+    ports:
+      - "${NULLCLAW_EXTERNAL_PORT:-3001}:3000"
+    environment:
+      - NULLCLAW_TIMEOUT=3600
+      - NULLCLAW_ALLOWED_DOMAINS=${NULLCLAW_ALLOWED_DOMAINS:-openrouter.ai,api.discord.com,api.telegram.org}
+    networks:
+      - bing-network
+    volumes:
+      - nullclaw-config:/root/.nullclaw
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+    labels:
+      # Only expose if NULLCLAW_URL is set (URL mode)
+      # Otherwise app will spawn containers dynamically
+      - "com.bing.nullclaw.enabled=${NULLCLAW_ENABLED:-true}"
+
 # ===========================================
 # Networks
 # ===========================================
@@ -353,4 +411,6 @@ volumes:
   microsandbox-workspaces:
     driver: local
   postgres-data:
+    driver: local
+  nullclaw-config:
     driver: local
