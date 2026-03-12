@@ -14,6 +14,7 @@ import { createLogger } from '../utils/logger'
 import { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../api/arcade-service'
 import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
+import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '../agent/nullclaw-integration'
 
 // Blaxel codegen tool definitions for LLM tool calling
 const getBlaxelCodegenToolDefinitions = (): Array<{
@@ -238,16 +239,25 @@ async function refreshMCPorterToolsCache(): Promise<void> {
 
 /**
  * Initialize MCP for Architecture 1 (Main LLM - AI SDK)
- * 
+ *
  * Call this during app initialization to make MCP tools available
  * to the main LLM call implementation
  */
 export async function initializeMCPForArchitecture1(): Promise<void> {
   try {
     logger.info('Initializing MCP for Architecture 1 (AI SDK)...')
-    
+
+    // Initialize Nullclaw first (URL or container pool)
+    if (process.env.NULLCLAW_ENABLED === 'true' || process.env.NULLCLAW_URL) {
+      logger.info('Nullclaw detected, initializing...');
+      await initializeNullclaw();
+      const mode = getNullclawMode();
+      const available = isNullclawAvailable();
+      logger.info(`Nullclaw initialized: mode=${mode}, available=${available}`);
+    }
+
     const configs = parseMCPServerConfigs()
-    
+
     if (configs.length === 0) {
       logger.info('No MCP servers configured. Set MCP_ENABLED=true or create mcp.config.json')
       return
@@ -259,13 +269,13 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
 
     logger.info(`Connecting to ${configs.length} MCP server(s)...`)
     await mcpToolRegistry.connectAll()
-    
+
     await refreshMCPorterToolsCache()
 
     const toolCount = getMCPToolCount()
     const mcporterTools = cachedMCPorterTools.length
     logger.info(`MCP initialized with ${toolCount} native tools and ${mcporterTools} mcporter tools available`)
-    
+
   } catch (error) {
     logger.error('Failed to initialize MCP for Architecture 1', error as Error)
     throw error

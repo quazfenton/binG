@@ -27,12 +27,13 @@ jobs:
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
           CURRENT_RUN_ID=${{ github.run_id }}
-          
+
           # Check for other in-progress runs of this workflow on the same PR
           # Exclude current run from the check
+          # Use workflow file path instead of name to avoid emoji/quote issues
           RUNNING_RUNS=$(gh api repos/${{ github.repository }}/actions/runs \
-            --jq "[.workflow_runs[] | select(.name == '🧠 jarvis') | select(.status == 'in_progress' or .status == 'queued') | select(.id != $CURRENT_RUN_ID)] | length")
-          
+            --jq '[.workflow_runs[] | select(.path == ".github/workflows/jarvis.yml") | select(.status == "in_progress" or .status == "queued") | select(.id != '"$CURRENT_RUN_ID"')] | length')
+
           if [ "$RUNNING_RUNS" -gt 0 ]; then
             echo "⏭️ Another run is already in progress (run #$CURRENT_RUN_ID skipping)"
             echo "skip=true" >> $GITHUB_OUTPUT

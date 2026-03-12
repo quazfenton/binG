@@ -1,6 +1,6 @@
 # Development Dockerfile for binG Backend
 # Optimized for fast iteration and hot-reload
-# V2 Enhanced: Includes OpenCode + Nullclaw support
+# V2 Enhanced: Includes OpenCode
 # Node.js 22+ required for Mastra, Tambo, and other dependencies
 
 FROM node:22-alpine AS development
@@ -98,7 +98,7 @@ ENV NULLCLAW_ENABLED=true
 ENV NULLCLAW_IMAGE=ghcr.io/nullclaw/nullclaw:latest
 ENV NULLCLAW_MODE=per-session
 ENV NULLCLAW_MAX_CONTAINERS=4
-ENV NULLCLAW_BASE_PORT=3001
+ENV NULLCLAW_PORT=3001
 ENV NULLCLAW_PORT=3001
 ENV NULLCLAW_TIMEOUT=3600
 ENV NULLCLAW_ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org

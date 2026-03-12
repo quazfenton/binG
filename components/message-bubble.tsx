@@ -32,20 +32,6 @@ interface MessageBubbleProps {
   userId?: string
 }
 
-const inferProviderFromTool = (toolName?: string): string => {
-  if (!toolName) return 'unknown';
-  const normalized = toolName.toLowerCase();
-  if (normalized.startsWith('gmail.') || normalized.startsWith('google')) return 'google';
-  if (normalized.startsWith('github.')) return 'github';
-  if (normalized.startsWith('slack.')) return 'slack';
-  if (normalized.startsWith('notion.')) return 'notion';
-  if (normalized.startsWith('discord.')) return 'discord';
-  if (normalized.startsWith('twitter.') || normalized.startsWith('x.')) return 'twitter';
-  if (normalized.startsWith('spotify.')) return 'spotify';
-  if (normalized.startsWith('twilio.')) return 'twilio';
-  return normalized.split('.')[0] || 'unknown';
-};
-
 /**
  * Get authorization URL for provider, mirroring backend routing logic
  * Routes Arcade/Nango providers to their respective endpoints
@@ -335,16 +321,16 @@ export default function MessageBubble({
     }
   }
 
-  // Check for auth_required in message metadata
+  // Check for integration OAuth auth_required in message metadata
+  // Only show IntegrationAuthPrompt for real 3rd-party integrations (Arcade/Composio/Nango),
+  // NOT for generic site login auth (which has requiresAuth=false, loginRequired=true)
   const authInfo = useMemo(() => {
-    if ((message as any).metadata?.requiresAuth) {
-      const toolName = (message as any).metadata.toolName || 'unknown';
-      const provider = (message as any).metadata.provider || inferProviderFromTool(toolName);
-      // Use provided authUrl or generate correct one based on provider routing
-      const authUrl = (message as any).metadata.authUrl || getAuthUrlForProvider(provider);
+    const meta = (message as any).metadata;
+    if (meta?.requiresAuth && meta.toolName && meta.provider && meta.provider !== 'unknown') {
+      const authUrl = meta.authUrl || getAuthUrlForProvider(meta.provider);
       return {
-        toolName,
-        provider,
+        toolName: meta.toolName,
+        provider: meta.provider,
         authUrl
       }
     }

@@ -1393,8 +1393,21 @@ function isCodeOrAgenticRequest(
     typeof lastUser?.content === 'string'
       ? lastUser.content
       : JSON.stringify(lastUser?.content || '');
-  const pattern = /(code|build|implement|refactor|bug|fix|error|stack trace|typescript|javascript|python|react|next\.js|api|endpoint|database|schema|component|file|directory|folder|repo|git|test|lint|compile)/i;
-  return pattern.test(content);
+
+  // Strong signals — unambiguous coding/agentic keywords (single match sufficient)
+  const strongPattern = /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|endpoint|database|schema|compile|lint)\b/i;
+  if (strongPattern.test(content)) return true;
+
+  // Weak signals — common words that are ambiguous on their own (e.g. "code", "build", "file", "test", "fix", "error", "api")
+  // Require at least 2 weak signals or a weak signal combined with action verbs like "create", "write", "make", "generate"
+  const weakKeywords = ['code', 'build', 'implement', 'component', 'file', 'directory', 'folder', 'repo', 'git', 'test', 'fix', 'error', 'api'];
+  const actionVerbs = /\b(create|write|generate|make|develop|set\s*up|scaffold|deploy)\b/i;
+  const weakMatches = weakKeywords.filter(kw => new RegExp(`\\b${kw}\\b`, 'i').test(content));
+
+  if (weakMatches.length >= 2) return true;
+  if (weakMatches.length >= 1 && actionVerbs.test(content)) return true;
+
+  return false;
 }
 
 function buildAgenticContext(messages: LLMMessage[]): string {

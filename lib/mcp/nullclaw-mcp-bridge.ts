@@ -1,40 +1,54 @@
 /**
- * Nullclaw MCP Bridge
- * 
+ * Nullclaw MCP Bridge (Hybrid: URL + Container Fallback)
+ *
  * Exposes Nullclaw capabilities as MCP tools for both:
  * - Architecture 1 (AI SDK): Direct tool calls
  * - Architecture 2 (OpenCode CLI): Via MCP HTTP server
- * 
+ *
  * Features:
  * - Discord/Telegram messaging
  * - Internet browsing
  * - Server automation
  * - API integrations
  * - Task scheduling
- * 
+ *
+ * Configuration:
+ * - Primary: NULLCLAW_URL (external service)
+ * - Fallback: Container pool (NULLCLAW_POOL_SIZE, NULLCLAW_MODE)
+ *
  * Architecture:
  * ┌─────────────────┐     MCP Tools    ┌─────────────────┐
  * │  AI SDK /      │ ◄───────────────► │  NullclawMCP   │
  * │  OpenCode CLI  │                  │     Bridge      │
  * └─────────────────┘                  └────────┬────────┘
  *                                                │
- *                                                ▼
- *                                        ┌─────────────────┐
- *                                        │   Nullclaw      │
- *                                        │  Docker Container│
- *                                        └────────┬────────┘
- *                                                │
- *                                                ▼
- *                                        ┌─────────────────┐
- *                                        │  External APIs  │
- *                                        │  Discord/Telegram│
- *                                        │  Web Browsing   │
- *                                        └─────────────────┘
+ *                     ┌──────────────────────────┘
+ *                     │
+ *                     ▼
+ *              ┌─────────────────┐
+ *              │  Nullclaw       │
+ *              │  Integration    │
+ *              │  (URL or Pool)  │
+ *              └────────┬────────┘
+ *                       │
+ *                       ▼
+ *              ┌─────────────────┐
+ *              │  External APIs  │
+ *              │  Discord/Telegram│
+ *              │  Web Browsing   │
+ *              └─────────────────┘
  */
 
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '../utils/logger';
-import { nullclawIntegration, type NullclawTask, type NullclawContainer } from '../agent/nullclaw-integration';
+import { 
+  nullclawIntegration, 
+  type NullclawTask,
+  type NullclawConfig,
+  executeNullclawTask,
+  isNullclawAvailable,
+  initializeNullclaw,
+} from '../agent/nullclaw-integration';
 
 const logger = createLogger('MCP:NullclawBridge');
 
@@ -224,58 +238,16 @@ class NullclawMCPBridge {
   }
 
   /**
-   * Ensure container is available for session
+   * Ensure Nullclaw is initialized for session
    */
-  private async getContainerForSession(sessionId: string): Promise<NullclawContainer | null> {
-    const mode = process.env.NULLCLAW_MODE || 'shared';
-    if (mode === 'per-session' || process.env.NULLCLAW_URL) {
-      await nullclawIntegration.initializeForSession(sessionId, sessionId);
-      const container = nullclawIntegration.getContainerForSession(sessionId, sessionId);
-      if (container && container.status === 'ready') {
-        return container;
-      }
-      return null;
+  private async ensureInitializedForSession(sessionId: string): Promise<void> {
+    // Check if already initialized
+    if (nullclawIntegration.isAvailable()) {
+      return;
     }
 
-    // Check if session already has a container
-    const existingContainerId = this.sessionToContainer.get(sessionId);
-    if (existingContainerId && this.containerPool.has(existingContainerId)) {
-      const container = this.containerPool.get(existingContainerId)!;
-      if (container.status === 'ready') {
-        return container;
-      }
-    }
-
-    // Try to reuse from pool
-    for (const [, container] of this.containerPool) {
-      if (container.status === 'ready') {
-        this.sessionToContainer.set(sessionId, container.id);
-        return container;
-      }
-    }
-
-    // Start new container if pool not full
-    if (this.containerPool.size < this.config.containerPoolSize) {
-      try {
-        const container = await nullclawIntegration.startContainer({
-          port: parseInt(process.env.NULLCLAW_BASE_PORT || '3001', 10) + this.containerPool.size,
-          allowedDomains: this.config.allowedDomains,
-          timeout: this.config.defaultTimeout / 1000,
-        });
-        
-        this.containerPool.set(container.id, container);
-        this.sessionToContainer.set(sessionId, container.id);
-        
-        return container;
-      } catch (error: any) {
-        logger.error('Failed to start Nullclaw container', error);
-        return null;
-      }
-    }
-
-    // Pool is full, wait for available container
-    logger.warn('Nullclaw container pool exhausted');
-    return null;
+    // Initialize (will use URL or spawn containers based on config)
+    await nullclawIntegration.initialize();
   }
 
   /**
@@ -286,23 +258,13 @@ class NullclawMCPBridge {
     message: string,
     sessionId: string
   ): Promise<NullclawMCPToolResult> {
-    const task: NullclawTask = {
-      id: `discord-${uuidv4()}`,
-      type: 'message',
-      description: `Send Discord message to channel ${channelId}`,
-      params: {
-        platform: 'discord',
-        channelId,
-        message,
-      },
-      status: 'pending',
-      createdAt: new Date(),
-    };
+    await this.ensureInitializedForSession(sessionId);
 
-    const result = await nullclawIntegration.executeTask(
+    const result = await nullclawIntegration.sendDiscordMessage(
+      channelId,
+      message,
       sessionId,
-      sessionId,
-      task
+      sessionId
     );
 
     return {
@@ -324,23 +286,13 @@ class NullclawMCPBridge {
     message: string,
     sessionId: string
   ): Promise<NullclawMCPToolResult> {
-    const task: NullclawTask = {
-      id: `telegram-${uuidv4()}`,
-      type: 'message',
-      description: `Send Telegram message to chat ${chatId}`,
-      params: {
-        platform: 'telegram',
-        chatId,
-        message,
-      },
-      status: 'pending',
-      createdAt: new Date(),
-    };
+    await this.ensureInitializedForSession(sessionId);
 
-    const result = await nullclawIntegration.executeTask(
+    const result = await nullclawIntegration.sendTelegramMessage(
+      chatId,
+      message,
       sessionId,
-      sessionId,
-      task
+      sessionId
     );
 
     return {
@@ -362,22 +314,15 @@ class NullclawMCPBridge {
     extractSelector?: string,
     sessionId?: string
   ): Promise<NullclawMCPToolResult> {
-    const task: NullclawTask = {
-      id: `browse-${uuidv4()}`,
-      type: 'browse',
-      description: `Browse and extract content from ${url}`,
-      params: { 
-        url,
-        ...(extractSelector && { extractSelector }),
-      },
-      status: 'pending',
-      createdAt: new Date(),
-    };
+    if (sessionId) {
+      await this.ensureInitializedForSession(sessionId);
+    }
 
-    const result = await nullclawIntegration.executeTask(
-      sessionId || 'default',
-      sessionId || 'default',
-      task
+    const result = await nullclawIntegration.browseUrl(
+      url,
+      extractSelector,
+      sessionId,
+      sessionId
     );
 
     return {
@@ -399,22 +344,13 @@ class NullclawMCPBridge {
     commands: string[],
     sessionId: string
   ): Promise<NullclawMCPToolResult> {
-    const task: NullclawTask = {
-      id: `automate-${uuidv4()}`,
-      type: 'automate',
-      description: `Execute ${commands.length} commands on server`,
-      params: {
-        serverId,
-        commands,
-      },
-      status: 'pending',
-      createdAt: new Date(),
-    };
+    await this.ensureInitializedForSession(sessionId);
 
-    const result = await nullclawIntegration.executeTask(
+    const result = await nullclawIntegration.automateTask(
+      commands,
+      serverId,
       sessionId,
-      sessionId,
-      task
+      sessionId
     );
 
     return {
