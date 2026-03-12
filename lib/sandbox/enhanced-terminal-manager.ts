@@ -247,8 +247,8 @@ export class EnhancedTerminalManager {
     // but we're augmenting, not replacing
   }
 
-  // Private helper methods (would be implemented similar to original terminal-manager.ts)
-  private async resolveHandleForSandbox(sandboxId: string) {
+  // Private helper methods (would call original terminal-manager.ts implementation)
+  private async resolveHandleForSandbox(sandboxId: string): Promise<{ handle: SandboxHandle; providerType: SandboxProviderType }> {
     // Implementation would mirror terminal-manager.ts
     throw new Error('Implementation delegated to base TerminalManager')
   }

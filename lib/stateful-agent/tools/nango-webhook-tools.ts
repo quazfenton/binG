@@ -44,15 +44,39 @@ EXAMPLES:
     webhookTypes: z.array(z.string()).describe('Array of webhook event types to subscribe to'),
     webhookUrl: z.string().url().optional().describe('Custom webhook URL (uses Nango default if not provided)'),
   }),
-  execute: async ({ providerConfigKey, connectionId, webhookTypes, webhookUrl }) => {
+  execute: async ({ providerConfigKey, connectionId, webhookTypes, webhookUrl }): Promise<{
+    success: boolean
+    message?: string
+    error?: string
+    subscription?: any
+    subscriptionId?: string
+    details?: any
+  }> => {
     try {
-      // Subscribe to webhooks via Nango
-      const result = await nango.webhooks.subscribe({
-        providerConfigKey,
-        connectionId,
-        types: webhookTypes,
-        webhookUrl,
-      });
+      // Nango SDK v4+ doesn't have webhooks namespace, use direct API call
+      const nangoSecretKey = process.env.NANGO_SECRET_KEY
+      if (!nangoSecretKey) {
+        return {
+          success: false,
+          error: 'NANGO_SECRET_KEY environment variable is required',
+        }
+      }
+
+      const response = await fetch('https://api.nango.dev/v1/webhooks/subscribe', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${nangoSecretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          providerConfigKey,
+          connectionId,
+          types: webhookTypes,
+          webhookUrl,
+        }),
+      })
+
+      const result = await response.json()
 
       return {
         success: true,
@@ -94,13 +118,32 @@ USE CASES:
     connectionId: z.string().describe('Connection ID for the user'),
     subscriptionId: z.string().describe('Subscription ID to unsubscribe'),
   }),
-  execute: async ({ providerConfigKey, connectionId, subscriptionId }) => {
+  execute: async ({ providerConfigKey, connectionId, subscriptionId }): Promise<{
+    success: boolean
+    message?: string
+    error?: string
+    details?: any
+  }> => {
     try {
-      await nango.webhooks.unsubscribe({
-        providerConfigKey,
-        connectionId,
-        subscriptionId,
-      });
+      // Nango SDK v4+ doesn't have webhooks namespace, use direct API call
+      const nangoSecretKey = process.env.NANGO_SECRET_KEY
+      if (!nangoSecretKey) {
+        return {
+          success: false,
+          error: 'NANGO_SECRET_KEY environment variable is required',
+        }
+      }
+
+      const response = await fetch(`https://api.nango.dev/v1/webhooks/subscribe/${subscriptionId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${nangoSecretKey}`,
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to unsubscribe: ${response.statusText}`)
+      }
 
       return {
         success: true,
@@ -136,12 +179,40 @@ RETURNS: Array of subscriptions with types, URLs, and status`,
     providerConfigKey: z.string().describe('Nango provider config key'),
     connectionId: z.string().optional().describe('Connection ID (optional, lists all if not provided)'),
   }),
-  execute: async ({ providerConfigKey, connectionId }) => {
+  execute: async ({ providerConfigKey, connectionId }): Promise<{
+    success: boolean
+    subscriptions?: any[]
+    count?: number
+    error?: string
+    details?: any
+  }> => {
     try {
-      const result = await nango.webhooks.listSubscriptions({
-        providerConfigKey,
-        connectionId,
-      });
+      // Nango SDK v4+ doesn't have webhooks namespace, use direct API call
+      const nangoSecretKey = process.env.NANGO_SECRET_KEY
+      if (!nangoSecretKey) {
+        return {
+          success: false,
+          error: 'NANGO_SECRET_KEY environment variable is required',
+        }
+      }
+
+      const url = new URL('https://api.nango.dev/v1/webhooks/subscriptions')
+      url.searchParams.set('providerConfigKey', providerConfigKey)
+      if (connectionId) {
+        url.searchParams.set('connectionId', connectionId)
+      }
+
+      const response = await fetch(url.toString(), {
+        headers: {
+          'Authorization': `Bearer ${nangoSecretKey}`,
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to list subscriptions: ${response.statusText}`)
+      }
+
+      const result = await response.json()
 
       return {
         success: true,
@@ -180,7 +251,16 @@ Nango can also process webhooks directly (see subscribe_webhook).`,
     webhookSignature: z.string().optional().describe('Webhook signature for verification'),
     expectedProvider: z.string().optional().describe('Expected provider for validation'),
   }),
-  execute: async ({ webhookPayload, webhookSignature, expectedProvider }) => {
+  execute: async ({ webhookPayload, webhookSignature, expectedProvider }): Promise<{
+    success: boolean
+    processed?: boolean
+    webhookType?: string
+    provider?: string
+    data?: any
+    verified?: boolean
+    error?: string
+    details?: any
+  }> => {
     try {
       // Verify webhook signature if provided
       if (webhookSignature) {
@@ -246,14 +326,42 @@ RETURNS: Webhook configuration with URL and secret`,
     webhookUrl: z.string().url().describe('Your webhook endpoint URL'),
     webhookTypes: z.array(z.string()).optional().describe('Specific webhook types to forward (forwards all if not provided)'),
   }),
-  execute: async ({ providerConfigKey, webhookUrl, webhookTypes }) => {
+  execute: async ({ providerConfigKey, webhookUrl, webhookTypes }): Promise<{
+    success: boolean
+    message?: string
+    config?: any
+    note?: string
+    error?: string
+    details?: any
+  }> => {
     try {
-      // Configure webhook forwarding via Nango
-      const result = await nango.webhooks.configureForwarding({
-        providerConfigKey,
-        webhookUrl,
-        types: webhookTypes,
-      });
+      // Nango SDK v4+ doesn't have webhooks namespace, use direct API call
+      const nangoSecretKey = process.env.NANGO_SECRET_KEY
+      if (!nangoSecretKey) {
+        return {
+          success: false,
+          error: 'NANGO_SECRET_KEY environment variable is required',
+        }
+      }
+
+      const response = await fetch('https://api.nango.dev/v1/webhooks/forwarding', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${nangoSecretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          providerConfigKey,
+          webhookUrl,
+          types: webhookTypes,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to configure forwarding: ${response.statusText}`)
+      }
+
+      const result = await response.json()
 
       return {
         success: true,

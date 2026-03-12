@@ -43,3 +43,6 @@ export interface PreviewInfo {
   url: string
   token?: string
 }
+
+// Re-export from providers for convenience
+export type { SandboxHandle, SandboxProvider } from './providers/sandbox-provider';

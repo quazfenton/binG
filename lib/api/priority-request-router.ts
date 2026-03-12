@@ -80,6 +80,38 @@ class CircuitBreaker {
     this.config = { ...DEFAULT_CIRCUIT_BREAKER_CONFIG, ...config };
   }
 
+  private buildCanonicalToolInvocations(params: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+    provider?: string;
+    sourceSystem: string;
+    requestId?: string;
+    conversationId?: string;
+  }) {
+    return normalizeToolInvocations([this.buildCanonicalToolInvocationRecord(params)]);
+  }
+
+  private buildCanonicalToolInvocationRecord(params: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+    provider?: string;
+    sourceSystem: string;
+    requestId?: string;
+    conversationId?: string;
+  }): Record<string, unknown> {
+    return {
+      toolName: params.toolName,
+      args: params.args ?? {},
+      result: params.result,
+      provider: params.provider,
+      sourceSystem: params.sourceSystem,
+      requestId: params.requestId,
+      conversationId: params.conversationId,
+    };
+  }
+
   /**
    * Get or create circuit breaker state for endpoint
    */
@@ -715,12 +747,26 @@ class PriorityRequestRouter {
       }
 
       // Success response
+      const canonicalToolInvocations = Array.isArray(result.toolCalls)
+        ? normalizeToolInvocations(
+            result.toolCalls.map((toolCall: any, index: number) => this.buildCanonicalToolInvocationRecord({
+              toolName: toolCall?.name || toolCall?.toolName || `composio-tool-${index + 1}`,
+              args: toolCall?.arguments || toolCall?.args || toolCall?.input || {},
+              result: toolCall?.result || toolCall?.output,
+              provider: 'composio',
+              sourceSystem: 'priority-router',
+              requestId: request.requestId,
+              conversationId: result.metadata?.sessionId || request.requestId,
+            }))
+          )
+        : [];
       return {
         content: result.content || 'Tool request completed.',
         data: {
           source: 'composio-tools',
           type: 'composio_execution',
           toolCalls: result.toolCalls,
+          toolInvocations: canonicalToolInvocations,
           connectedAccounts: result.connectedAccounts,
           composioSessionId: result.metadata?.sessionId,
           composioMcp: result.metadata?.mcp,
@@ -1013,9 +1059,15 @@ class PriorityRequestRouter {
             source: 'tool-execution',
             toolCalls: [{ name: detectionResult.detectedTool, arguments: detectionResult.toolInput }],
             toolResults: [{ name: detectionResult.detectedTool, result: result.output }],
-            toolInvocations: normalizeToolInvocations([
-              { name: detectionResult.detectedTool, args: detectionResult.toolInput, result: result.output },
-            ]),
+            toolInvocations: this.buildCanonicalToolInvocations({
+              toolName: detectionResult.detectedTool,
+              args: detectionResult.toolInput,
+              result: result.output,
+              provider: result.provider || toolAuthManager.getRequiredProvider(detectionResult.detectedTool) || 'unknown',
+              sourceSystem: 'priority-router',
+              requestId: request.requestId,
+              conversationId: request.requestId,
+            }),
             type: 'tool_execution'
           }
         };
