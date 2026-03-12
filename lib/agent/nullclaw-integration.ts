@@ -1,58 +1,84 @@
 /**
- * Nullclaw Integration
- * 
- * Integrates Nullclaw task assistant running as a separate Docker container.
+ * Nullclaw Integration (Hybrid: URL + Container Fallback)
+ *
+ * Integrates Nullclaw task assistant with flexible deployment:
+ * - Primary: URL-based (docker-compose, external service)
+ * - Fallback: Local container spawning (development, isolated instances)
+ *
  * Provides non-coding agency:
  * - Discord/Telegram messaging
  * - Internet browsing and data extraction
  * - Server automation
  * - API integrations
  * - Scheduled tasks
- * 
- * Based on: docs/sdk/opensandbox/examples/nullclaw/main.py
- * 
+ *
+ * Configuration Priority:
+ * 1. NULLCLAW_URL - Use external service (recommended for production)
+ * 2. NULLCLAW_MODE=shared - Single shared container (default for local)
+ * 3. NULLCLAW_MODE=per-session - Container per session (isolated)
+ *
  * Architecture:
  * ┌─────────────────┐     HTTP      ┌─────────────────┐
  * │  OpenCode Agent │ ◄──────────►  │  Nullclaw       │
- * │  (Sandbox A)    │   API Calls   │  (Sandbox B)    │
+ * │  (Sandbox A)    │   API Calls   │  Service (URL)  │
  * └─────────────────┘               └─────────────────┘
- *                                     │
- *                                     ▼
- *                              ┌─────────────────┐
- *                              │  External APIs  │
- *                              │  - Discord      │
- *                              │  - Telegram     │
- *                              │  - Web Browsing │
- *                              └─────────────────┘
+ *         │                               │
+ *         │ (fallback)                    ▼
+ *         │                        ┌─────────────────┐
+ *         └───────────────────────►│  Nullclaw       │
+ *           Docker Spawn           │  Container Pool │
+ *                                  └────────┬────────┘
+ *                                           │
+ *                                           ▼
+ *                                    ┌─────────────────┐
+ *                                    │  External APIs  │
+ *                                    │  - Discord      │
+ *                                    │  - Telegram     │
+ *                                    │  - Web Browsing │
+ *                                    └─────────────────┘
+ *
+ * Environment Variables:
+ * - NULLCLAW_URL: Base URL (e.g., 'http://nullclaw:3000' or 'http://localhost:3001')
+ * - NULLCLAW_API_KEY: Optional API key for authentication
+ * - NULLCLAW_MODE: 'shared' (default) or 'per-session'
+ * - NULLCLAW_POOL_SIZE: Number of containers in pool (default: 2, max: 4)
+ * - NULLCLAW_IMAGE: Docker image (default: 'ghcr.io/nullclaw/nullclaw:latest')
+ * - NULLCLAW_PORT: Base port (default: 3001)
+ * - NULLCLAW_TIMEOUT: Request timeout in seconds (default: 300)
+ * - NULLCLAW_ALLOWED_DOMAINS: Comma-separated allowed domains
  */
 
 import { spawn } from 'child_process';
-import { agentSessionManager } from './agent-session-manager';
 import { createLogger } from '../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 
 const logger = createLogger('Agent:Nullclaw');
 
 export interface NullclawConfig {
-  image: string; // 'ghcr.io/nullclaw/nullclaw:latest'
-  port: number; // Default: 3000
-  timeout: number; // seconds
-  allowedDomains: string[]; // Network egress rules
-  healthCheckTimeout?: number; // milliseconds
-  dockerNetwork?: string; // Docker network for communication
-  mode?: 'shared' | 'per-session';
-  maxContainers?: number;
-  basePort?: number;
-  externalUrl?: string;
+  // URL-based configuration (primary)
+  baseUrl?: string;           // e.g., 'http://nullclaw:3000' or 'http://localhost:3001'
+  apiKey?: string;            // Optional API key for authentication
+  
+  // Container-based configuration (fallback)
+  mode?: 'shared' | 'per-session';  // Container sharing mode
+  poolSize?: number;          // Number of containers in pool (shared mode)
+  image?: string;             // Docker image
+  basePort?: number;          // Base port for containers
+  timeout?: number;           // Request timeout in milliseconds
+  allowedDomains?: string[];  // Network egress rules
+  healthCheckTimeout?: number; // Health check timeout in ms
+  dockerNetwork?: string;     // Docker network for communication
 }
 
 export interface NullclawContainer {
   id: string;
-  containerId?: string;
-  endpoint: string;
+  containerId?: string;       // Docker container ID (if locally spawned)
+  endpoint: string;           // Base URL for API calls
   port: number;
   status: 'starting' | 'ready' | 'running' | 'stopped' | 'error';
   healthUrl: string;
+  isExternal: boolean;        // true if using external URL, false if locally spawned
+  assignedSessions?: string[]; // Sessions assigned to this container
 }
 
 export interface NullclawTask {
@@ -63,13 +89,21 @@ export interface NullclawTask {
   status: 'pending' | 'running' | 'completed' | 'failed';
   result?: any;
   error?: string;
-  createdAt?: Date;
+  createdAt: Date;
   completedAt?: Date;
+  containerId?: string;       // Which container executed this task
 }
 
 export interface NullclawStatus {
   available: boolean;
-  container?: NullclawContainer;
+  mode: 'url' | 'shared' | 'per-session';
+  baseUrl?: string;
+  containers: {
+    total: number;
+    ready: number;
+    starting: number;
+    error: number;
+  };
   health: 'healthy' | 'unhealthy' | 'unknown';
   tasks: {
     pending: number;
@@ -81,47 +115,158 @@ export interface NullclawStatus {
 
 class NullclawIntegration {
   private readonly defaultConfig: NullclawConfig = {
+    baseUrl: process.env.NULLCLAW_URL,
+    apiKey: process.env.NULLCLAW_API_KEY,
+    mode: (process.env.NULLCLAW_MODE as 'shared' | 'per-session') || 'shared',
+    poolSize: parseInt(process.env.NULLCLAW_POOL_SIZE || '2'),
     image: process.env.NULLCLAW_IMAGE || 'ghcr.io/nullclaw/nullclaw:latest',
-    port: parseInt(process.env.NULLCLAW_PORT || '3000'),
-    timeout: parseInt(process.env.NULLCLAW_TIMEOUT || '3600'),
+    basePort: parseInt(process.env.NULLCLAW_PORT || '3001'),
+    timeout: parseInt(process.env.NULLCLAW_TIMEOUT || '300000'),
     allowedDomains: (process.env.NULLCLAW_ALLOWED_DOMAINS || 'openrouter.ai,api.discord.com,api.telegram.org').split(','),
     healthCheckTimeout: parseInt(process.env.NULLCLAW_HEALTH_TIMEOUT || '30000'),
     dockerNetwork: process.env.NULLCLAW_NETWORK || 'bing-network',
-    mode: (process.env.NULLCLAW_MODE as 'shared' | 'per-session') || 'shared',
-    maxContainers: parseInt(process.env.NULLCLAW_MAX_CONTAINERS || '4'),
-    basePort: parseInt(process.env.NULLCLAW_BASE_PORT || '3001'),
-    externalUrl: process.env.NULLCLAW_URL,
   };
 
   private containers = new Map<string, NullclawContainer>();
-  private sessionContainers = new Map<string, string>();
+  private sessionContainers = new Map<string, string>(); // sessionKey -> containerId
   private tasks = new Map<string, NullclawTask>();
+  private initializationPromise: Promise<void> | null = null;
 
+  /**
+   * Check if URL-based configuration is available
+   */
+  private isUrlMode(): boolean {
+    return !!this.defaultConfig.baseUrl;
+  }
+
+  /**
+   * Get Nullclaw configuration
+   */
+  getConfig(): NullclawConfig {
+    return { ...this.defaultConfig };
+  }
+
+  /**
+   * Check if Nullclaw is configured and available
+   */
+  isAvailable(): boolean {
+    return this.isUrlMode() || this.containers.size > 0;
+  }
+
+  /**
+   * Get current mode
+   */
+  getMode(): 'url' | 'shared' | 'per-session' {
+    if (this.isUrlMode()) return 'url';
+    return this.defaultConfig.mode || 'shared';
+  }
+
+  /**
+   * Make HTTP request to Nullclaw service
+   */
+  private async request<T>(
+    endpoint: string,
+    container?: NullclawContainer,
+    options: RequestInit = {}
+  ): Promise<T> {
+    const targetContainer = container || this.getAvailableContainer();
+    if (!targetContainer) {
+      throw new Error('No Nullclaw container available');
+    }
+
+    const { apiKey, timeout } = this.defaultConfig;
+    const baseUrl = targetContainer.endpoint;
+    
+    const url = `${baseUrl}${endpoint}`;
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+      ...(apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {}),
+      ...options.headers,
+    };
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => 'Unknown error');
+        throw new Error(`Nullclaw request failed (${response.status}): ${errorText}`);
+      }
+
+      // Handle empty responses
+      const text = await response.text();
+      if (!text) {
+        return {} as T;
+      }
+
+      return JSON.parse(text) as T;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error(`Nullclaw request timeout (${timeout}ms)`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get or create container for session
+   */
   getContainerForSession(userId: string, conversationId: string): NullclawContainer | undefined {
     const sessionKey = `${userId}:${conversationId}`;
     const containerId = this.sessionContainers.get(sessionKey);
+    
     if (containerId) {
       const container = this.containers.get(containerId);
       // Return only if container exists and is ready
       if (container && container.status === 'ready') {
         return container;
       }
-      return undefined;
+      // Container not ready, clear assignment
+      this.sessionContainers.delete(sessionKey);
     }
+
+    // In per-session mode, never fall back to another session's container
     if (this.defaultConfig.mode === 'per-session') {
-      // In per-session mode, never fall back to another session's container
-      // to maintain isolation. Return undefined to signal no container available.
       return undefined;
     }
-    // Shared mode: return any ready container
-    return Array.from(this.containers.values()).find(c => c.status === 'ready');
+
+    // Shared mode or URL mode: return any ready container
+    return this.getAvailableContainer();
   }
 
-  private getNextAvailablePort(config: NullclawConfig): number {
-    const basePort = config.basePort || 3001;
-    const maxContainers = config.maxContainers || 1;
+  /**
+   * Get available container from pool
+   */
+  private getAvailableContainer(): NullclawContainer | undefined {
+    const readyContainers = Array.from(this.containers.values()).filter(c => c.status === 'ready');
+    
+    if (readyContainers.length === 0) {
+      return undefined;
+    }
+
+    // Simple round-robin: return first ready container
+    // Could be enhanced with load balancing logic
+    return readyContainers[0];
+  }
+
+  /**
+   * Get next available port for container
+   */
+  private getNextAvailablePort(): number {
+    const basePort = this.defaultConfig.basePort || 3001;
+    const poolSize = this.defaultConfig.poolSize || 2;
     const usedPorts = new Set(Array.from(this.containers.values()).map(c => c.port));
-    for (let i = 0; i < maxContainers; i++) {
+    
+    for (let i = 0; i < poolSize; i++) {
       const candidate = basePort + i;
       if (!usedPorts.has(candidate)) return candidate;
     }
@@ -129,500 +274,389 @@ class NullclawIntegration {
   }
 
   /**
-   * Start Nullclaw container
+   * Initialize Nullclaw (URL or container pool)
    */
-  async startContainer(config: Partial<NullclawConfig> = {}): Promise<NullclawContainer> {
-    const nullclawConfig = { ...this.defaultConfig, ...config };
-    if (nullclawConfig.externalUrl) {
-      const container: NullclawContainer = {
-        id: 'nullclaw-external',
-        endpoint: nullclawConfig.externalUrl,
-        port: nullclawConfig.port,
-        status: 'ready',
-        healthUrl: `${nullclawConfig.externalUrl}/health`,
-      };
-      this.containers.set(container.id, container);
-      return container;
+  async initialize(): Promise<void> {
+    if (this.initializationPromise) {
+      return this.initializationPromise;
     }
 
-    const containerId = `nullclaw-${uuidv4()}`;
+    this.initializationPromise = (async () => {
+      try {
+        if (this.isUrlMode()) {
+          // URL mode: register external service
+          logger.info(`Using Nullclaw URL: ${this.defaultConfig.baseUrl}`);
+          const container: NullclawContainer = {
+            id: 'nullclaw-external',
+            endpoint: this.defaultConfig.baseUrl!,
+            port: new URL(this.defaultConfig.baseUrl!).port ? parseInt(new URL(this.defaultConfig.baseUrl!).port) : 80,
+            status: 'ready',
+            healthUrl: `${this.defaultConfig.baseUrl}/health`,
+            isExternal: true,
+            assignedSessions: [],
+          };
+          this.containers.set(container.id, container);
+          logger.info('Nullclaw external service registered');
+        } else {
+          // Container mode: spawn pool based on NULLCLAW_MODE
+          const mode = this.defaultConfig.mode || 'shared';
+          const poolSize = mode === 'per-session' ? 1 : (this.defaultConfig.poolSize || 2);
+          
+          logger.info(`Spawning Nullclaw container pool (mode: ${mode}, size: ${poolSize})`);
+          
+          const spawnPromises = Array.from({ length: poolSize }, (_, i) => 
+            this.spawnContainer(`nullclaw-pool-${i}`)
+          );
+          
+          await Promise.all(spawnPromises);
+          logger.info(`Nullclaw container pool ready (${poolSize} containers)`);
+        }
+      } catch (error) {
+        logger.error('Failed to initialize Nullclaw:', error);
+        throw error;
+      } finally {
+        this.initializationPromise = null;
+      }
+    })();
 
-    logger.info(`Starting Nullclaw container: ${containerId}`);
+    return this.initializationPromise;
+  }
 
-    try {
-      // Build docker run command
+  /**
+   * Initialize Nullclaw for a specific session (for per-session mode)
+   */
+  async initializeForSession(userId: string, conversationId: string): Promise<string | undefined> {
+    const sessionKey = `${userId}:${conversationId}`;
+    
+    // Check if already has container
+    const existingContainer = this.getContainerForSession(userId, conversationId);
+    if (existingContainer) {
+      return existingContainer.endpoint;
+    }
+
+    // In per-session mode, spawn dedicated container
+    if (this.defaultConfig.mode === 'per-session') {
+      const containerId = `nullclaw-session-${uuidv4()}`;
+      const container = await this.spawnContainer(containerId);
+      
+      this.sessionContainers.set(sessionKey, container.id);
+      logger.info(`Spawned dedicated Nullclaw container for session ${sessionKey}`);
+      
+      return container.endpoint;
+    }
+
+    // In shared mode, ensure pool is initialized
+    await this.initialize();
+    const sharedContainer = this.getAvailableContainer();
+    
+    if (sharedContainer) {
+      this.sessionContainers.set(sessionKey, sharedContainer.id);
+      return sharedContainer.endpoint;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Spawn a single Nullclaw container
+   */
+  private async spawnContainer(containerId: string): Promise<NullclawContainer> {
+    const config = this.defaultConfig;
+    const port = this.getNextAvailablePort();
+    const container: NullclawContainer = {
+      id: containerId,
+      containerId: undefined,
+      endpoint: `http://localhost:${port}`,
+      port,
+      status: 'starting',
+      healthUrl: `http://localhost:${port}/health`,
+      isExternal: false,
+      assignedSessions: [],
+    };
+
+    this.containers.set(containerId, container);
+
+    return new Promise((resolve, reject) => {
       const dockerArgs = [
-        'run',
-        '-d',
+        'run', '-d',
         '--name', containerId,
-        '--network', nullclawConfig.dockerNetwork,
-        // SECURITY: Bind to localhost only to prevent external access
-        // This prevents unauthenticated access from internet-facing hosts
-        '-p', `127.0.0.1:${nullclawConfig.port}:3000`,
-        '--env', `NULLCLAW_TIMEOUT=${nullclawConfig.timeout}`,
-        '--env', `ALLOWED_DOMAINS=${nullclawConfig.allowedDomains.join(',')}`,
-        '--label', 'managed-by=bing-agent-v2',
+        '-p', `${port}:3000`,
+        '--network', config.dockerNetwork || 'host',
+        '-e', `NULLCLAW_ALLOWED_DOMAINS=${config.allowedDomains?.join(',')}`,
         '--restart', 'unless-stopped',
-        nullclawConfig.image,
+        config.image || 'ghcr.io/nullclaw/nullclaw:latest',
       ];
 
-      logger.debug(`Docker command: docker ${dockerArgs.join(' ')}`);
+      logger.debug(`Spawning Nullclaw container: ${dockerArgs.join(' ')}`);
 
-      // Start container
-      await this.runDockerCommand(dockerArgs);
+      const docker = spawn('docker', dockerArgs);
 
-      const container: NullclawContainer = {
-        id: containerId,
-        containerId,
-        endpoint: `http://localhost:${nullclawConfig.port}`,
-        port: nullclawConfig.port,
-        status: 'starting',
-        healthUrl: `http://localhost:${nullclawConfig.port}/health`,
-      };
-
-      this.containers.set(containerId, container);
-
-      // Wait for health check
-      const ready = await this.waitForHealth(container, nullclawConfig.healthCheckTimeout!);
-      
-      if (!ready) {
-        throw new Error('Nullclaw container health check timeout');
-      }
-
-      container.status = 'ready';
-      logger.info(`Nullclaw container ready at ${container.endpoint}`);
-
-      return container;
-
-    } catch (error: any) {
-      logger.error('Failed to start Nullclaw container', error);
-      
-      const container: NullclawContainer = {
-        id: containerId,
-        endpoint: '',
-        port: nullclawConfig.port,
-        status: 'error',
-        healthUrl: '',
-      };
-      
-      this.containers.set(containerId, container);
-      throw error;
-    }
-  }
-
-  /**
-   * Stop Nullclaw container
-   */
-  async stopContainer(containerId: string): Promise<void> {
-    const container = this.containers.get(containerId);
-    
-    if (!container) {
-      logger.debug(`Container ${containerId} not found`);
-      return;
-    }
-
-    if (containerId === 'nullclaw-external') {
-      this.containers.delete(containerId);
-      logger.info('External Nullclaw endpoint released');
-      return;
-    }
-
-    logger.info(`Stopping Nullclaw container: ${containerId}`);
-
-    try {
-      await this.runDockerCommand(['stop', containerId, '-t', '10']);
-      await this.runDockerCommand(['rm', containerId]);
-      
-      container.status = 'stopped';
-      this.containers.delete(containerId);
-      for (const [key, id] of this.sessionContainers.entries()) {
-        if (id === containerId) this.sessionContainers.delete(key);
-      }
-      
-      logger.info(`Nullclaw container ${containerId} stopped`);
-    } catch (error: any) {
-      logger.error(`Failed to stop container ${containerId}`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Initialize Nullclaw for a session (starts container if not running)
-   */
-  async initializeForSession(
-    userId: string,
-    conversationId: string,
-    config: Partial<NullclawConfig> = {},
-  ): Promise<string | undefined> {
-    if (process.env.NULLCLAW_ENABLED !== 'true') {
-      logger.debug('Nullclaw is disabled');
-      return undefined;
-    }
-
-    try {
-      const nullclawConfig = { ...this.defaultConfig, ...config };
-      const sessionKey = `${userId}:${conversationId}`;
-
-      // External URL mode
-      if (nullclawConfig.externalUrl) {
-        const container = await this.startContainer({ externalUrl: nullclawConfig.externalUrl });
-        this.sessionContainers.set(sessionKey, container.id);
-        const session = await agentSessionManager.getOrCreateSession(userId, conversationId, {
-          mode: 'hybrid',
-          enableNullclaw: true,
-        });
-        session.nullclawEndpoint = container.endpoint;
-        return container.endpoint;
-      }
-
-      // Per-session container mode
-      if (nullclawConfig.mode === 'per-session') {
-        const existingId = this.sessionContainers.get(sessionKey);
-        const existing = existingId ? this.containers.get(existingId) : undefined;
-        if (existing && existing.status === 'ready') {
-          return existing.endpoint;
-        }
-
-        if (this.containers.size >= (nullclawConfig.maxContainers || 1)) {
-          throw new Error('Nullclaw per-session container limit reached');
-        }
-
-        const port = this.getNextAvailablePort(nullclawConfig);
-        const container = await this.startContainer({ ...config, port });
-        this.sessionContainers.set(sessionKey, container.id);
-
-        const session = await agentSessionManager.getOrCreateSession(userId, conversationId, {
-          mode: 'hybrid',
-          enableNullclaw: true,
-        });
-        session.nullclawEndpoint = container.endpoint;
-        logger.info(`Nullclaw per-session container ready at ${container.endpoint}`);
-        return container.endpoint;
-      }
-
-      // Shared pool mode (default)
-      let container = Array.from(this.containers.values()).find(c => c.status === 'ready');
-      
-      // Start new container if needed
-      if (!container) {
-        if (this.containers.size >= (nullclawConfig.maxContainers || 1)) {
-          throw new Error('Nullclaw container pool exhausted');
-        }
-        const port = this.getNextAvailablePort(nullclawConfig);
-        container = await this.startContainer({ ...config, port });
-      }
-
-      // Get session and associate with container
-      const session = await agentSessionManager.getOrCreateSession(userId, conversationId, {
-        mode: 'hybrid',
-        enableNullclaw: true,
+      docker.stdout.on('data', (data) => {
+        const dockerContainerId = data.toString().trim();
+        container.containerId = dockerContainerId;
+        logger.info(`Nullclaw container spawned: ${dockerContainerId} on port ${port}`);
       });
 
-      session.nullclawEndpoint = container.endpoint;
-      this.sessionContainers.set(sessionKey, container.id);
+      docker.stderr.on('data', (data) => {
+        logger.error(`Nullclaw spawn error: ${data.toString()}`);
+      });
 
-      logger.info(`Nullclaw initialized for session ${session.id} at ${container.endpoint}`);
-      return container.endpoint;
+      docker.on('close', async (code) => {
+        if (code === 0) {
+          // Wait for health check
+          const healthy = await this.waitForHealth(container);
+          if (healthy) {
+            container.status = 'ready';
+            resolve(container);
+          } else {
+            container.status = 'error';
+            reject(new Error(`Nullclaw container ${containerId} failed health check`));
+          }
+        } else {
+          container.status = 'error';
+          reject(new Error(`Nullclaw spawn exited with code ${code}`));
+        }
+      });
 
-    } catch (error: any) {
-      logger.error('Failed to initialize Nullclaw', error);
-      return undefined;
-    }
+      docker.on('error', (error) => {
+        container.status = 'error';
+        reject(new Error(`Nullclaw spawn failed: ${error.message}`));
+      });
+    });
   }
 
   /**
-   * Execute task via Nullclaw container
+   * Wait for container to be healthy
+   */
+  private async waitForHealth(container: NullclawContainer, maxAttempts = 30): Promise<boolean> {
+    const timeout = this.defaultConfig.healthCheckTimeout || 30000;
+    const interval = timeout / maxAttempts;
+
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const response = await fetch(container.healthUrl);
+        if (response.ok) {
+          return true;
+        }
+      } catch {
+        // Health check failed, retry
+      }
+      await new Promise(resolve => setTimeout(resolve, interval));
+    }
+    return false;
+  }
+
+  /**
+   * Check Nullclaw health
+   */
+  async checkHealth(): Promise<'healthy' | 'unhealthy' | 'unknown'> {
+    const containers = Array.from(this.containers.values());
+    const healthyCount = await Promise.all(
+      containers.map(async (c) => {
+        try {
+          await this.request('/health', c);
+          return 1;
+        } catch {
+          return 0;
+        }
+      })
+    );
+
+    const healthy = healthyCount.reduce((a, b) => a + b, 0);
+    
+    if (healthy === containers.length) return 'healthy';
+    if (healthy > 0) return 'unhealthy';
+    return 'unknown';
+  }
+
+  /**
+   * Execute a task on Nullclaw
    */
   async executeTask(
-    userId: string,
-    conversationId: string,
-    task: NullclawTask,
+    type: NullclawTask['type'],
+    description: string,
+    params: Record<string, any>,
+    userId?: string,
+    conversationId?: string
   ): Promise<NullclawTask> {
-    const sessionKey = `${userId}:${conversationId}`;
-    const containerId = this.sessionContainers.get(sessionKey);
-    const container =
-      (containerId && this.containers.get(containerId)) ||
-      (this.defaultConfig.mode === 'per-session'
-        ? undefined
-        : Array.from(this.containers.values()).find(c => c.status === 'ready'));
-    
-    const container = containerId ? this.containers.get(containerId) : undefined;
+    // Ensure initialized
+    if (!this.isAvailable()) {
+      await this.initialize();
+    }
+
+    // Get container for session
+    const container = (userId && conversationId) 
+      ? this.getContainerForSession(userId, conversationId)
+      : this.getAvailableContainer();
 
     if (!container) {
-      throw new Error(
-        `No Nullclaw container assigned for session ${sessionKey}. Call initializeForSession first.`
-      );
+      throw new Error('No Nullclaw container available');
     }
 
-    if (container.status !== 'ready' && container.status !== 'running') {
-      throw new Error(
-        `Nullclaw container status is ${container.status}. Cannot execute tasks.`
-      );
-    }
+    const fullTask: NullclawTask = {
+      type,
+      description,
+      params,
+      id: uuidv4(),
+      status: 'pending',
+      createdAt: new Date(),
+      containerId: container.id,
+    };
 
-    task.createdAt = new Date();
-    task.status = 'pending';
-    this.tasks.set(task.id, task);
+    this.tasks.set(fullTask.id, fullTask);
 
     try {
-      logger.debug(`Executing Nullclaw task: ${task.type} - ${task.description}`);
+      logger.debug(`Executing Nullclaw task: ${type} - ${description}`);
 
       // Send task to Nullclaw via HTTP API
-      const response = await fetch(`${container.endpoint}/api/execute`, {
+      const result = await this.request<any>('/tasks/execute', container, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(task),
+        body: JSON.stringify({
+          type: fullTask.type,
+          description: fullTask.description,
+          params: fullTask.params,
+        }),
       });
 
-      if (!response.ok) {
-        throw new Error(`Nullclaw API error: ${response.status} ${response.statusText}`);
-      }
+      fullTask.status = 'completed';
+      fullTask.result = result;
+      fullTask.completedAt = new Date();
 
-      const result = await response.json();
-
-      task.status = result.status || 'completed';
-      task.result = result.result;
-      task.error = result.error;
-      task.completedAt = new Date();
-      this.tasks.set(task.id, task);
-
-      return task;
-
+      logger.debug(`Nullclaw task completed: ${type}`);
     } catch (error: any) {
-      logger.error('Nullclaw task execution failed', error);
-      task.status = 'failed';
-      task.error = error.message;
-      task.completedAt = new Date();
-      this.tasks.set(task.id, task);
-
-      return task;
+      fullTask.status = 'failed';
+      fullTask.error = error.message;
+      logger.error(`Nullclaw task failed: ${type}`, error);
     }
+
+    this.tasks.set(fullTask.id, fullTask);
+    return fullTask;
   }
 
   /**
    * Send Discord message via Nullclaw
    */
-  async sendDiscordMessage(
-    userId: string,
-    conversationId: string,
-    channelId: string,
-    message: string,
-  ): Promise<NullclawTask> {
-    const task: NullclawTask = {
-      id: `discord-${Date.now()}`,
-      type: 'message',
-      description: `Send Discord message to channel ${channelId}`,
-      params: {
-        platform: 'discord',
-        channelId,
-        message,
-      },
-      status: 'pending',
-    };
-
-    return this.executeTask(userId, conversationId, task);
+  async sendDiscordMessage(channelId: string, message: string, userId?: string, conversationId?: string): Promise<NullclawTask> {
+    return this.executeTask('message', `Send Discord message to channel ${channelId}`, { channelId, message }, userId, conversationId);
   }
 
   /**
    * Send Telegram message via Nullclaw
    */
-  async sendTelegramMessage(
-    userId: string,
-    conversationId: string,
-    chatId: string,
-    message: string,
-  ): Promise<NullclawTask> {
-    const task: NullclawTask = {
-      id: `telegram-${Date.now()}`,
-      type: 'message',
-      description: `Send Telegram message to chat ${chatId}`,
-      params: {
-        platform: 'telegram',
-        chatId,
-        message,
-      },
-      status: 'pending',
-    };
-
-    return this.executeTask(userId, conversationId, task);
+  async sendTelegramMessage(chatId: string, message: string, userId?: string, conversationId?: string): Promise<NullclawTask> {
+    return this.executeTask('message', `Send Telegram message to chat ${chatId}`, { chatId, message }, userId, conversationId);
   }
 
   /**
-   * Browse URL and extract content via Nullclaw
+   * Browse URL via Nullclaw
    */
-  async browseURL(
-    userId: string,
-    conversationId: string,
-    url: string,
-  ): Promise<NullclawTask> {
-    const task: NullclawTask = {
-      id: `browse-${Date.now()}`,
-      type: 'browse',
-      description: `Browse and extract content from ${url}`,
-      params: { url },
-      status: 'pending',
-    };
-
-    return this.executeTask(userId, conversationId, task);
+  async browseUrl(url: string, action?: string, userId?: string, conversationId?: string): Promise<NullclawTask> {
+    return this.executeTask('browse', `Browse ${url}${action ? ` and ${action}` : ''}`, { url, action }, userId, conversationId);
   }
 
   /**
-   * Execute server automation task via Nullclaw
+   * Execute automation task via Nullclaw
    */
-  async automateServer(
-    userId: string,
-    conversationId: string,
-    commands: string[],
-    serverId?: string,
-  ): Promise<NullclawTask> {
-    const task: NullclawTask = {
-      id: `automate-${Date.now()}`,
-      type: 'automate',
-      description: `Execute ${commands.length} commands on server`,
-      params: {
-        serverId,
-        commands,
-      },
-      status: 'pending',
-    };
-
-    return this.executeTask(userId, conversationId, task);
+  async automateTask(commands: string[], serverId?: string, userId?: string, conversationId?: string): Promise<NullclawTask> {
+    return this.executeTask('automate', `Execute ${commands.length} command(s)${serverId ? ` on server ${serverId}` : ''}`, { commands, serverId }, userId, conversationId);
   }
 
   /**
-   * Get Nullclaw status
+   * Get task status
    */
-  async getStatus(): Promise<NullclawStatus> {
-    const container = Array.from(this.containers.values()).find(c => c.status === 'ready');
-    
-    if (!container) {
-      return {
-        available: false,
-        health: 'unknown',
-        tasks: { pending: 0, running: 0, completed: 0, failed: 0 },
-      };
-    }
-
-    try {
-      const response = await fetch(container.healthUrl, {
-        signal: AbortSignal.timeout(5000),
-      });
-      
-      if (!response.ok) {
-        return {
-          available: true,
-          container,
-          health: 'unhealthy',
-          tasks: this.getTaskStats(),
-        };
-      }
-
-      const data = await response.json();
-      
-      return {
-        available: true,
-        container,
-        health: 'healthy',
-        tasks: data.tasks || this.getTaskStats(),
-      };
-
-    } catch (error: any) {
-      return {
-        available: true,
-        container,
-        health: 'unhealthy',
-        tasks: this.getTaskStats(),
-      };
-    }
+  getTask(taskId: string): NullclawTask | undefined {
+    return this.tasks.get(taskId);
   }
 
   /**
    * Get task statistics
    */
-  private getTaskStats(): { pending: number; running: number; completed: number; failed: number } {
-    const tasks = Array.from(this.tasks.values());
+  getTaskStats(): { pending: number; running: number; completed: number; failed: number } {
+    const stats = { pending: 0, running: 0, completed: 0, failed: 0 };
+    for (const task of this.tasks.values()) {
+      stats[task.status]++;
+    }
+    return stats;
+  }
+
+  /**
+   * Get Nullclaw status
+   */
+  getStatus(): NullclawStatus {
+    const containers = Array.from(this.containers.values());
     return {
-      pending: tasks.filter(t => t.status === 'pending').length,
-      running: tasks.filter(t => t.status === 'running').length,
-      completed: tasks.filter(t => t.status === 'completed').length,
-      failed: tasks.filter(t => t.status === 'failed').length,
+      available: this.isAvailable(),
+      mode: this.getMode(),
+      baseUrl: this.isUrlMode() ? this.defaultConfig.baseUrl : undefined,
+      containers: {
+        total: containers.length,
+        ready: containers.filter(c => c.status === 'ready').length,
+        starting: containers.filter(c => c.status === 'starting').length,
+        error: containers.filter(c => c.status === 'error').length,
+      },
+      health: 'unknown', // Would need periodic health checks
+      tasks: this.getTaskStats(),
     };
   }
 
   /**
-   * Run docker command
+   * Clear completed tasks older than specified time
    */
-  private async runDockerCommand(args: string[]): Promise<{ stdout: string; stderr: string }> {
-    return new Promise((resolve, reject) => {
-      const proc = spawn('docker', args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-
-      let stdout = '';
-      let stderr = '';
-
-      proc.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-
-      proc.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve({ stdout, stderr });
-        } else {
-          reject(new Error(`Docker command failed (code ${code}): ${stderr}`));
-        }
-      });
-
-      proc.on('error', reject);
-    });
-  }
-
-  /**
-   * Wait for container health check
-   */
-  private async waitForHealth(container: NullclawContainer, timeout: number): Promise<boolean> {
-    const startTime = Date.now();
-    
-    while (Date.now() - startTime < timeout) {
-      try {
-        const response = await fetch(container.healthUrl, {
-          signal: AbortSignal.timeout(2000),
-        });
-        
-        if (response.status === 200) {
-          const elapsed = Date.now() - startTime;
-          logger.debug(`Nullclaw container ready after ${elapsed}ms`);
-          return true;
-        }
-      } catch {
-        // Not ready yet
+  cleanupTasks(maxAgeMs: number = 3600000): void {
+    const now = Date.now();
+    for (const [id, task] of this.tasks.entries()) {
+      if (
+        (task.status === 'completed' || task.status === 'failed') &&
+        task.completedAt &&
+        (now - task.completedAt.getTime() > maxAgeMs)
+      ) {
+        this.tasks.delete(id);
       }
-      
-      await new Promise(resolve => setTimeout(resolve, 500));
     }
-    
-    return false;
   }
 
   /**
-   * Shutdown all Nullclaw containers
+   * Stop a specific container (only for locally spawned)
+   */
+  async stopContainer(containerId: string): Promise<void> {
+    const container = this.containers.get(containerId);
+    if (!container || container.isExternal) {
+      return;
+    }
+
+    if (container.containerId) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const docker = spawn('docker', ['stop', container.containerId!]);
+          docker.on('close', () => resolve());
+          docker.on('error', reject);
+        });
+        logger.info(`Stopped Nullclaw container: ${containerId}`);
+        this.containers.delete(containerId);
+      } catch (error) {
+        logger.error(`Failed to stop container ${containerId}:`, error);
+      }
+    }
+  }
+
+  /**
+   * Shutdown and cleanup all containers (only for locally spawned)
    */
   async shutdown(): Promise<void> {
-    logger.info('Shutting down Nullclaw containers...');
-    
-    const containerIds = Array.from(this.containers.keys());
-    
-    for (const containerId of containerIds) {
-      try {
-        await this.stopContainer(containerId);
-      } catch (error: any) {
-        logger.error(`Failed to stop container ${containerId}`, error);
+    logger.info('Shutting down Nullclaw integration...');
+
+    // Only stop locally spawned containers
+    for (const container of this.containers.values()) {
+      if (!container.isExternal && container.containerId) {
+        try {
+          await this.stopContainer(container.id);
+        } catch (error) {
+          logger.error(`Failed to stop container ${container.id}:`, error);
+        }
       }
     }
+
+    this.containers.clear();
     this.sessionContainers.clear();
     logger.info('Nullclaw shutdown complete');
   }
@@ -631,5 +665,105 @@ class NullclawIntegration {
 // Singleton instance
 export const nullclawIntegration = new NullclawIntegration();
 
-// Export for testing
-export { NullclawIntegration };
+/**
+ * Initialize Nullclaw (call at app startup)
+ */
+export async function initializeNullclaw(): Promise<void> {
+  return nullclawIntegration.initialize();
+}
+
+/**
+ * Check if Nullclaw is available
+ */
+export function isNullclawAvailable(): boolean {
+  return nullclawIntegration.isAvailable();
+}
+
+/**
+ * Get Nullclaw status
+ */
+export function getNullclawStatus(): NullclawStatus {
+  return nullclawIntegration.getStatus();
+}
+
+/**
+ * Get Nullclaw configuration
+ */
+export function getNullclawConfig(): NullclawConfig {
+  return nullclawIntegration.getConfig();
+}
+
+/**
+ * Get Nullclaw mode
+ */
+export function getNullclawMode(): 'url' | 'shared' | 'per-session' {
+  return nullclawIntegration.getMode();
+}
+
+/**
+ * Execute a Nullclaw task
+ */
+export async function executeNullclawTask(
+  type: NullclawTask['type'],
+  description: string,
+  params: Record<string, any>,
+  userId?: string,
+  conversationId?: string
+): Promise<NullclawTask> {
+  return nullclawIntegration.executeTask(type, description, params, userId, conversationId);
+}
+
+/**
+ * Send Discord message via Nullclaw
+ */
+export async function sendNullclawDiscordMessage(
+  channelId: string,
+  message: string,
+  userId?: string,
+  conversationId?: string
+): Promise<NullclawTask> {
+  return nullclawIntegration.sendDiscordMessage(channelId, message, userId, conversationId);
+}
+
+/**
+ * Send Telegram message via Nullclaw
+ */
+export async function sendNullclawTelegramMessage(
+  chatId: string,
+  message: string,
+  userId?: string,
+  conversationId?: string
+): Promise<NullclawTask> {
+  return nullclawIntegration.sendTelegramMessage(chatId, message, userId, conversationId);
+}
+
+/**
+ * Browse URL via Nullclaw
+ */
+export async function browseNullclawUrl(
+  url: string,
+  action?: string,
+  userId?: string,
+  conversationId?: string
+): Promise<NullclawTask> {
+  return nullclawIntegration.browseUrl(url, action, userId, conversationId);
+}
+
+/**
+ * Execute automation via Nullclaw
+ */
+export async function automateNullclawTask(
+  commands: string[],
+  serverId?: string,
+  userId?: string,
+  conversationId?: string
+): Promise<NullclawTask> {
+  return nullclawIntegration.automateTask(commands, serverId, userId, conversationId);
+}
+
+/**
+ * Shutdown Nullclaw (call at app shutdown)
+ */
+export async function shutdownNullclaw(): Promise<void> {
+  return nullclawIntegration.shutdown();
+}

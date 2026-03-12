@@ -84,9 +84,11 @@ export async function POST(request: NextRequest) {
     });
 
     // Initialize Nullclaw if enabled
-    let nullclawEndpoint: string | undefined;
+    let nullclawAvailable = false;
     if (enableNullclaw) {
-      nullclawEndpoint = await nullclawIntegration.initializeForSession(userId, conversationId);
+      const { initializeNullclaw, isNullclawAvailable } = await import('@/lib/agent/nullclaw-integration');
+      await initializeNullclaw();
+      nullclawAvailable = isNullclawAvailable();
     }
 
     // Sync VFS to sandbox
@@ -101,9 +103,9 @@ export async function POST(request: NextRequest) {
         conversationId: session.conversationId,
         status: session.state,
         workspacePath: session.workspacePath,
-        nullclawEndpoint,
+        nullclawAvailable,
         v2SessionId: session.v2SessionId,
-        mcpServerUrl: process.env.MCP_CLI_PORT 
+        mcpServerUrl: process.env.MCP_CLI_PORT
           ? `http://localhost:${process.env.MCP_CLI_PORT}`
           : undefined,
         createdAt: session.createdAt,
