@@ -68,7 +68,7 @@ export interface BlaxelInvocationResponse {
 }
 
 const BlaxelMcpServerSchema = z.object({
-  id: z.string(),
+  id: z.string().optional(),
   name: z.string(),
   status: z.enum(['deploying', 'deployed', 'error', 'deleted']),
   endpoint: z.string().optional(),
@@ -77,12 +77,18 @@ const BlaxelMcpServerSchema = z.object({
     name: z.string(),
     description: z.string(),
     inputSchema: z.record(z.any()),
-  })),
-  createdAt: z.string(),
-  updatedAt: z.string(),
+  })).optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
   runtime: z.string().optional(),
   region: z.string().optional(),
-});
+}).transform(data => ({
+  ...data,
+  id: data.id || `blaxel-${Date.now()}`,
+  tools: data.tools || [],
+  createdAt: data.createdAt || new Date().toISOString(),
+  updatedAt: data.updatedAt || new Date().toISOString(),
+}));
 
 export class BlaxelMcpService {
   private apiKey: string;
@@ -349,7 +355,7 @@ export class BlaxelMcpService {
     agentId: string,
     callbackUrl?: string
   ): Promise<{ id: string; type: string; callbackUrl?: string }> {
-    const response = await this.request(
+    const response = await this.request<{ id?: string; type?: string; callbackUrl?: string }>(
       `/agents/${agentId}/triggers`,
       {
         method: 'POST',
@@ -359,7 +365,11 @@ export class BlaxelMcpService {
         }),
       }
     );
-    return response;
+    return {
+      id: response.id || `trigger-${Date.now()}`,
+      type: response.type || 'http-async',
+      callbackUrl: response.callbackUrl,
+    };
   }
 
   /**

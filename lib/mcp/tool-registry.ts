@@ -230,9 +230,13 @@ export class MCPToolRegistry {
       // Convert result content to string
       const content = result.content
         .map(c => {
-          if (c.type === 'text') return c.text
-          if (c.type === 'image') return `[Image: ${c.mimeType}]`
-          if (c.type === 'resource') return `[Resource: ${c.resource.uri}]`
+          // Handle text content
+          if ('text' in c && typeof c.text === 'string') return c.text
+          // Handle image content
+          if ('mimeType' in c && 'data' in c) return `[Image: ${c.mimeType}]`
+          // Handle resource content
+          if ('resource' in c && c.resource && 'uri' in c.resource) return `[Resource: ${c.resource.uri}]`
+          // Fallback: stringify unknown content types
           return JSON.stringify(c)
         })
         .join('\n')

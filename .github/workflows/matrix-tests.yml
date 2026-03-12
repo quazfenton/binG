@@ -2,6 +2,16 @@
 on:
   push:
     branches: [main, master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '**/*.md'
+      - '.gitignore'
+      - '.dockerignore'
+      - '*.md'
+  schedule:
+    # Run full matrix on Saturdays at 2 AM UTC
+    - cron: '0 2 * * 6'
 jobs:
   node-matrix:
     runs-on: ${{ matrix.os }}
@@ -9,7 +19,8 @@ jobs:
       fail-fast: false  # Don't cancel other matrix jobs if one fails
       matrix:
         os: [ubuntu-latest, windows-latest]
-        node-version: [18, 20, 22]
+        # Full matrix on schedule, latest only on push
+        node-version: ${{ fromJSON(github.event_name == 'schedule' && '[18, 20, 22]' || '[22]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,7 +37,8 @@ jobs:
       fail-fast: false  # Don't cancel other matrix jobs if one fails
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ['3.10', '3.11', '3.12']
+        # Full matrix on schedule, latest only on push
+        python-version: ${{ fromJSON(github.event_name == 'schedule' && '["3.10", "3.11", "3.12"]' || '["3.12"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

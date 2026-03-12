@@ -15,6 +15,14 @@ export interface ToolInvocation {
   args?: Record<string, unknown>;
   result?: unknown;
   timestamp?: number;
+  metadata?: {
+    provider?: string;
+    sourceAgent?: string;
+    sourceSystem?: string;
+    requestId?: string;
+    conversationId?: string;
+    rawState?: string;
+  };
 }
 
 /**
@@ -27,8 +35,9 @@ export interface ToolInvocation {
  * - Unified handler: `{ toolName | name, result, ... }`
  */
 export function normalizeToolInvocation(raw: Record<string, any>): ToolInvocation {
-  const toolName = raw.toolName ?? raw.name ?? 'unknown';
-  const toolCallId = raw.toolCallId ?? `${toolName}-${raw.timestamp ?? Date.now()}`;
+  const toolName = raw.toolName ?? raw.name ?? raw.tool ?? 'unknown';
+  const timestamp = coerceTimestamp(raw.timestamp);
+  const toolCallId = raw.toolCallId ?? raw.callId ?? `${toolName}-${timestamp}`;
   const state: ToolInvocation['state'] =
     raw.state === 'partial-call' || raw.state === 'call'
       ? raw.state
@@ -38,9 +47,10 @@ export function normalizeToolInvocation(raw: Record<string, any>): ToolInvocatio
     toolCallId,
     toolName,
     state,
-    args: raw.args ?? raw.arguments ?? raw.input ?? undefined,
+    args: normalizeArgs(raw.args ?? raw.arguments ?? raw.input ?? undefined),
     result: raw.result ?? raw.output ?? undefined,
-    timestamp: raw.timestamp ?? Date.now(),
+    timestamp,
+    metadata: normalizeMetadata(raw, state),
   };
 }
 
@@ -52,4 +62,72 @@ export function normalizeToolInvocations(
 ): ToolInvocation[] {
   if (!Array.isArray(rawList)) return [];
   return rawList.map(normalizeToolInvocation);
+}
+
+function normalizeArgs(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function coerceTimestamp(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return Date.now();
+}
+
+function normalizeMetadata(
+  raw: Record<string, any>,
+  normalizedState: ToolInvocation['state'],
+): ToolInvocation['metadata'] | undefined {
+  const provider =
+    raw.provider ??
+    raw.authProvider ??
+    raw.metadata?.provider ??
+    raw.metadata?.authProvider ??
+    undefined;
+  const sourceAgent =
+    raw.sourceAgent ??
+    raw.agent ??
+    raw.metadata?.sourceAgent ??
+    raw.metadata?.agent ??
+    undefined;
+  const sourceSystem =
+    raw.sourceSystem ??
+    raw.source ??
+    raw.metadata?.sourceSystem ??
+    raw.metadata?.source ??
+    undefined;
+  const requestId =
+    raw.requestId ??
+    raw.metadata?.requestId ??
+    undefined;
+  const conversationId =
+    raw.conversationId ??
+    raw.metadata?.conversationId ??
+    undefined;
+  const rawState = typeof raw.state === 'string' && raw.state !== normalizedState
+    ? raw.state
+    : undefined;
+
+  if (!provider && !sourceAgent && !sourceSystem && !requestId && !conversationId && !rawState) {
+    return undefined;
+  }
+
+  return {
+    provider: typeof provider === 'string' ? provider : undefined,
+    sourceAgent: typeof sourceAgent === 'string' ? sourceAgent : undefined,
+    sourceSystem: typeof sourceSystem === 'string' ? sourceSystem : undefined,
+    requestId: typeof requestId === 'string' ? requestId : undefined,
+    conversationId: typeof conversationId === 'string' ? conversationId : undefined,
+    rawState,
+  };
 }

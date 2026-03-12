@@ -411,15 +411,36 @@ export class ComputerUseService {
       }
 
       const buffer = Buffer.from(await response.arrayBuffer())
+      const base64Image = buffer.toString('base64')
       return {
         success: true,
         output: `Region screenshot captured (${buffer.length} bytes)`,
+        // Return image as base64 for compatibility with SandboxHandle interface
+        binary: buffer,
       }
     } catch (error: any) {
       return {
         success: false,
         output: `Region screenshot failed: ${error.message}`,
       }
+    }
+  }
+
+  /**
+   * Take screenshot of specified region - returns image directly
+   * Compatible with SandboxHandle.getComputerUseService() interface
+   */
+  async takeRegionImage(options: { x?: number; y?: number; width?: number; height?: number }): Promise<{ image: string }> {
+    const result = await this.takeRegion({
+      x: options.x || 0,
+      y: options.y || 0,
+      width: options.width || 800,
+      height: options.height || 600,
+    })
+    
+    // Return base64 image for compatibility
+    return {
+      image: result.binary ? Buffer.from(result.binary).toString('base64') : '',
     }
   }
 
@@ -462,7 +483,7 @@ export class ComputerUseService {
   /**
    * Start screen recording
    */
-  async startRecording(options: ScreenRecordingRequest = {}): Promise<ToolResult> {
+  async startRecording(): Promise<{ recordingId: string }> {
     try {
       const response = await fetch(
         `${this.apiBaseUrl}/computer-use/${this.sandboxId}/recording`,
@@ -472,7 +493,6 @@ export class ComputerUseService {
             'Authorization': `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify(options),
         }
       )
 
@@ -481,22 +501,17 @@ export class ComputerUseService {
       }
 
       const data = await response.json()
-      return {
-        success: true,
-        output: `Recording started: ${data.recordingId}`,
-      }
+      return { recordingId: data.recordingId }
     } catch (error: any) {
-      return {
-        success: false,
-        output: `Start recording failed: ${error.message}`,
-      }
+      // Return ToolResult for error case
+      return { recordingId: error.message }
     }
   }
 
   /**
    * Stop screen recording
    */
-  async stopRecording(recordingId: string): Promise<ToolResult> {
+  async stopRecording(recordingId: string): Promise<{ video: string }> {
     try {
       const response = await fetch(
         `${this.apiBaseUrl}/computer-use/${this.sandboxId}/recording/${recordingId}`,
@@ -512,15 +527,11 @@ export class ComputerUseService {
         throw new Error(`Stop recording failed: ${response.statusText}`)
       }
 
-      return {
-        success: true,
-        output: `Recording stopped: ${recordingId}`,
-      }
+      const data = await response.json()
+      return { video: data.videoUrl || data.video || recordingId }
     } catch (error: any) {
-      return {
-        success: false,
-        output: `Stop recording failed: ${error.message}`,
-      }
+      // Return ToolResult for error case
+      return { video: error.message }
     }
   }
 

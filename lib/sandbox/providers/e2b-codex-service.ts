@@ -164,18 +164,23 @@ export interface CodexEvent {
 export interface CodexExecutionResult {
   /** Standard output */
   stdout: string
-  
+
   /** Standard error */
   stderr: string
-  
+
   /** Exit code */
   exitCode: number
-  
+
   /** Parsed events if streaming was enabled */
   events?: CodexEvent[]
-  
+
   /** Parsed output if schema was used */
   parsedOutput?: any
+
+  // Compatibility properties for tests and SDK integration
+  success: boolean
+  output: string
+  error?: string
 }
 
 /**
@@ -245,7 +250,7 @@ export function createCodexService(
     const command = `${CODEX_CMD} ${args}`
 
     const executeOptions: any = {
-      timeout: config.timeout || 600000, // 10 minutes default
+      timeoutMs: config.timeout || 600000, // 10 minutes default
     }
 
     if (config.onStdout) {
@@ -281,6 +286,10 @@ export function createCodexService(
       exitCode: result.exitCode || 0,
       events,
       parsedOutput,
+      // Compatibility properties for tests and SDK integration
+      success: (result.exitCode || 0) === 0,
+      output: result.stdout.trim() || ((result.exitCode || 0) === 0 ? 'Task completed' : ''),
+      error: (result.exitCode || 0) !== 0 ? result.stderr : undefined,
     }
   }
 
@@ -300,7 +309,7 @@ export function createCodexService(
 
     // Execute command and capture output
     const result = await sandbox.commands.run(command, {
-      timeout: config.timeout || 600000,
+      timeoutMs: config.timeout || 600000,
     })
 
     // Parse JSONL output (events to stdout, progress to stderr)
@@ -528,10 +537,11 @@ export async function executeCodexTask(config: {
     throw new Error('OPENAI_API_KEY environment variable is required for Codex')
   }
 
-  const sandbox = await Sandbox.create({
-    template: config.template || 'base',
-    apiKey,
-  })
+  // Use template string directly (newer SDK signature)
+  const sandbox = await Sandbox.create(
+    config.template || 'base',
+    { apiKey }
+  )
 
   try {
     const codexService = createCodexService(sandbox, apiKey)
@@ -539,7 +549,7 @@ export async function executeCodexTask(config: {
       prompt: config.prompt,
       timeout: config.timeout,
     })
-    
+
     return {
       output: result.stdout || '',
       exitCode: result.exitCode || 0,

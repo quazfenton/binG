@@ -13,34 +13,37 @@ import type BetterSqlite3 from 'better-sqlite3'
 export interface TerminalSessionState {
   /** Unique session identifier */
   sessionId: string
-  
+
   /** Sandbox identifier */
   sandboxId: string
-  
+
   /** PTY session identifier */
   ptySessionId: string
-  
+
   /** User identifier */
   userId: string
-  
+
   /** Terminal mode */
   mode: 'pty' | 'command-mode'
-  
+
   /** Current working directory */
   cwd: string
-  
+
   /** Terminal columns */
   cols: number
-  
+
   /** Terminal rows */
   rows: number
-  
+
   /** Last activity timestamp */
   lastActive: number
-  
+
   /** Command history */
   history: string[]
-  
+
+  /** Last snapshot ID (for auto-snapshot service) */
+  lastSnapshotId?: string
+
   /** Additional metadata */
   metadata?: Record<string, any>
 }

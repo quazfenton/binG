@@ -1,6 +1,7 @@
 name: 3. Auto-Format & Fix
 on:
   pull_request:
+    types: [opened, reopened]  # Only on first open/reopen, not every commit push
 permissions:
   contents: write
   pull-requests: write
