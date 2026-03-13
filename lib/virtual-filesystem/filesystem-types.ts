@@ -8,6 +8,12 @@ export interface VirtualFile {
   version: number;
   size: number;
   isDirectoryMarker?: boolean; // True for .directory marker files
+  
+  // Shadow commit system properties (for VFS sync and session tracking)
+  commitId?: string;
+  sessionId?: string | null;
+  workspaceVersion?: number;
+  previousVersion?: number | null;
 }
 
 export interface VirtualFilesystemNode {

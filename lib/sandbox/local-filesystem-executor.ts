@@ -86,6 +86,15 @@ export class LocalCommandExecutor {
   }
 
   /**
+   * Save filesystem to external storage if available
+   */
+  private saveToExternal(): void {
+    if (this.setExtFileSystem) {
+      this.setExtFileSystem(this.fileSystem)
+    }
+  }
+
+  /**
    * Execute a shell command
    */
   async execute(command: string): Promise<string> {
@@ -500,6 +509,7 @@ export class LocalCommandExecutor {
         this.syncToVFS(`${dirPath}/.keep`, '')
       }
     }
+    this.saveToExternal()
     return ''
   }
 
@@ -528,6 +538,7 @@ export class LocalCommandExecutor {
         }
       }
     }
+    this.saveToExternal()
     return ''
   }
 
@@ -556,6 +567,7 @@ export class LocalCommandExecutor {
         delete this.fileSystem[path]
       }
     }
+    this.saveToExternal()
     return ''
   }
 
@@ -583,6 +595,7 @@ export class LocalCommandExecutor {
     }
 
     delete this.fileSystem[dirPath]
+    this.saveToExternal()
     return ''
   }
 
@@ -616,6 +629,7 @@ export class LocalCommandExecutor {
       createdAt: Date.now(),
       modifiedAt: Date.now()
     }
+    this.saveToExternal()
     return ''
   }
 
@@ -640,6 +654,7 @@ export class LocalCommandExecutor {
 
     this.fileSystem[dstPath] = { ...this.fileSystem[srcPath], modifiedAt: Date.now() }
     delete this.fileSystem[srcPath]
+    this.saveToExternal()
     return ''
   }
 
@@ -680,6 +695,7 @@ export class LocalCommandExecutor {
       if (this.syncToVFS) {
         this.syncToVFS(filePath, echoText.trim() + '\n')
       }
+      this.saveToExternal()
       return ''
     }
 
