@@ -93,7 +93,7 @@ export interface TerminalHandlers {
  * Wire up all terminal handlers for a terminal instance
  */
 export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): TerminalHandlers {
-  // Create editor handler once
+  // Create SINGLE editor handler instance - used by both localFS and terminal
   const editorHandler = createTerminalEditorHandler({
     terminalId: config.terminalId,
     filePath: '',
@@ -109,15 +109,18 @@ export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): Termi
   })
 
   return {
-    // Local filesystem handler
+    // Local filesystem handler - uses the SAME editor handler
     localFS: createTerminalLocalFSHandler({
       terminalId: config.terminalId,
       filesystemScopePath: config.filesystemScopePath,
       syncToVFS: config.syncFileToVFS,
       getLocalFileSystem: config.getLocalFileSystem,
       setLocalFileSystem: config.setLocalFileSystem,
+      onWrite: config.write,
+      onWriteLine: config.writeLine,
+      onWriteError: config.writeLine,
       onOpenEditor: (filePath, editorType) => {
-        // Open file in editor handler
+        // Open file in the SHARED editor handler
         editorHandler.openFile(filePath, editorType)
       },
     }),
@@ -137,20 +140,8 @@ export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): Termi
       getPrompt: (cwd) => config.getPrompt('local', cwd),
     }),
 
-    // Editor handler
-    editor: createTerminalEditorHandler({
-      terminalId: config.terminalId,
-      filePath: '',
-      content: '',
-      write: config.write,
-      writeLine: config.writeLine,
-      getPrompt: (cwd) => config.getPrompt('editor', cwd),
-      syncToVFS: config.syncFileToVFS,
-      updateTerminalState: (updates) => config.updateTerminalState(config.terminalId, updates),
-      getCwd: () => config.getCwd(config.terminalId),
-      getFileSystem: config.getLocalFileSystem,
-      setFileSystem: config.setLocalFileSystem,
-    }),
+    // Editor handler - use the SAME instance
+    editor: editorHandler,
 
     // Connection manager
     connection: createSandboxConnectionManager({
