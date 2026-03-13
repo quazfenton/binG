@@ -4,6 +4,7 @@
  * Global test configuration and mocks
  */
 
+import '@testing-library/jest-dom/vitest';
 import { vi } from 'vitest';
 
 // Mock console methods to reduce noise in tests
@@ -36,5 +37,6 @@ if (typeof global.crypto === 'undefined') {
 }
 
 // Mock environment variables for tests
-process.env.JWT_SECRET = 'test-secret-key-for-testing-only-min-16-chars';
-process.env.NODE_ENV = 'test';
+vi.stubEnv('JWT_SECRET', 'test-secret-key-for-testing-only-min-16-chars');
+vi.stubEnv('NODE_ENV', 'test');
+

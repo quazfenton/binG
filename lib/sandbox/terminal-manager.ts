@@ -83,6 +83,7 @@ setInterval(() => {
   for (const [sessionId, conn] of activePtyConnections.entries()) {
     if (now - conn.lastActive > CONNECTION_IDLE_TIMEOUT_MS) {
       log.warn(`Cleaning up idle PTY connection: ${sessionId}`)
+      void conn.ptyHandle.disconnect().catch(() => {})
       activePtyConnections.delete(sessionId)
       cleaned++
     }
@@ -320,8 +321,6 @@ export class TerminalManager {
       },
     })
 
-    await ptyHandle.waitForConnection()
-
     // ✅ FIX: Check connection limit before adding
     if (activePtyConnections.size >= MAX_PTY_CONNECTIONS) {
       log.warn(`PTY connection limit reached (${MAX_PTY_CONNECTIONS}), cleaning up oldest`)
@@ -335,6 +334,10 @@ export class TerminalManager {
         }
       }
       if (oldestId) {
+        const oldestConn = activePtyConnections.get(oldestId)
+        if (oldestConn) {
+          void oldestConn.ptyHandle.disconnect().catch(() => {})
+        }
         activePtyConnections.delete(oldestId)
         log.info(`Evicted oldest PTY connection: ${oldestId}`)
       }

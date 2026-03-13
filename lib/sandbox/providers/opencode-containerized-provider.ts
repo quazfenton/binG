@@ -274,7 +274,7 @@ export class OpencodeProvider implements LLMProvider {
 
       // Ensure opencode is installed in the sandbox
       await sandbox.executeCommand(
-        'which opencode || npm install -g opencode 2>/dev/null || echo "opencode not available"'
+        'which opencode || npm install -g opencode-ai 2>/dev/null || echo "opencode not available"'
       )
 
       // Write the prompt to a temp file to avoid shell escaping issues

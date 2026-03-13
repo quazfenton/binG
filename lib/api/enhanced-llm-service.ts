@@ -745,6 +745,15 @@ export class EnhancedLLMService {
   }
 
   private async extractToolCallsFromLLMResponse(response: LLMResponse): Promise<Array<{ name: string; arguments: Record<string, any> }>> {
+    // Prefer canonical tool calls from provider response (native tool_use blocks)
+    const nativeToolCalls = (response as any)?.toolCalls || (response as any)?.tool_calls;
+    if (Array.isArray(nativeToolCalls) && nativeToolCalls.length > 0) {
+      return nativeToolCalls.map((tc: any) => ({
+        name: tc.name || tc.function?.name || 'unknown',
+        arguments: tc.arguments || tc.function?.arguments || tc.args || tc.input || {},
+      }));
+    }
+
     const nativeTools = Object.entries(TOOL_REGISTRY).map(([name, cfg]) => ({
       name,
       inputSchema: cfg.inputSchema as any,

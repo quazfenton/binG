@@ -28,4 +28,32 @@ describe('normalizeToolInvocation', () => {
       rawState: 'custom-state',
     });
   });
+
+  it('falls back to "unknown" when no tool name field is present', () => {
+    const normalized = normalizeToolInvocation({
+      result: { items: [1, 2, 3] },
+      provider: 'composio',
+      sourceSystem: 'priority-router',
+    });
+
+    expect(normalized.toolName).toBe('unknown');
+    expect(normalized.toolCallId).toMatch(/^unknown-/);
+    expect(normalized.state).toBe('result');
+    expect(normalized.metadata?.provider).toBe('composio');
+  });
+
+  it('preserves explicit composio fallback name like composio-tool-1', () => {
+    const normalized = normalizeToolInvocation({
+      toolName: 'composio-tool-1',
+      args: { query: 'test' },
+      result: { ok: true },
+      provider: 'composio',
+      sourceSystem: 'priority-router',
+      requestId: 'req-42',
+    });
+
+    expect(normalized.toolName).toBe('composio-tool-1');
+    expect(normalized.metadata?.provider).toBe('composio');
+    expect(normalized.metadata?.requestId).toBe('req-42');
+  });
 });
