@@ -41,8 +41,6 @@ import JSZip from "jszip";
 import type { Message } from "../types/index";
 import { parsePatch, applyPatch } from "diff";
 import { useVirtualFilesystem } from "../hooks/use-virtual-filesystem";
-import { OPFSStatusIndicator } from "./opfs-status-indicator";
-import { EnhancedDiffViewer } from "./enhanced-diff-viewer";
 import { normalizeScopePath, stripWorkspacePrefixes } from "@/lib/virtual-filesystem/scope-utils";
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync-events";
 import { createRefreshScheduler } from "@/lib/virtual-filesystem/refresh-scheduler";
@@ -183,7 +181,7 @@ export default function CodePreviewPanel({
     [commandsByFile],
   );
   
-  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || 'project');
+  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || 'project', { useOPFS: true });
   const {
     currentPath: filesystemCurrentPath,
     nodes: filesystemRawNodes,
@@ -1395,11 +1393,15 @@ export default function CodePreviewPanel({
       || null;
 
     // Infer preview mode hint
+    const nextJsInPackageJson = packageJsonContent && packageJsonContent.includes('"next"');
+    const nextJsConfig = filePaths.some((p) => p.includes('next.config'));
+    const nextJsPagesOrApp = filePaths.some((p) => p.startsWith('pages/') || p.startsWith('app/'));
+    
     const previewModeHint =
       inferredBundler === 'vite' ? 'vite'
       : inferredBundler === 'webpack' ? 'webpack'
       : inferredBundler === 'parcel' ? 'parcel'
-      : filePaths.some((p) => p.startsWith('next.config')) || (packageJsonContent && packageJsonContent.includes('"next"')) ? 'nextjs'
+      : nextJsConfig || nextJsInPackageJson || nextJsPagesOrApp ? 'nextjs'
       : filePaths.some((p) => ['server.js', 'app.js', 'index.js'].includes(p) && packageJsonContent) ? 'webcontainer'
       : filePaths.some((p) => p === 'Dockerfile' || p === 'docker-compose.yml') ? 'codesandbox'
       : filePaths.some((p) => p.endsWith('.html')) ? 'iframe'
@@ -2086,33 +2088,78 @@ export default app;`,
 
         const template = getSandpackTemplate(useStructure.framework);
 
-        // If manual preview with iframe mode and has HTML file, use iframe
+        // Manual preview with HTML files - use Sandpack for proper bundling
         if (isManualPreviewActive && previewMode === 'iframe') {
-          const htmlFile = Object.entries(useStructure.files).find(
+          const htmlFileEntry = Object.entries(useStructure.files).find(
             ([path]) => path.endsWith('.html')
           );
-          
-          if (htmlFile) {
+
+          if (htmlFileEntry) {
+            // Use Sandpack with vanilla template for proper HTML/CSS/JS bundling
+            const sandpackFiles: Record<string, { code: string }> = {};
+            
+            // Add all files to Sandpack
+            Object.entries(useStructure.files).forEach(([path, content]) => {
+              if (typeof content === "string" && content.trim()) {
+                const sandpackPath = path.startsWith("/") ? path : `/${path}`;
+                sandpackFiles[sandpackPath] = { code: content };
+              }
+            });
+
             return (
-              <div className="h-full bg-white rounded-lg overflow-hidden">
-                <div className="bg-gray-800 px-4 py-2 flex items-center justify-between">
-                  <span className="text-white text-sm font-medium">HTML Preview</span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setPreviewMode('sandpack')}
-                    className="text-xs"
-                  >
-                    Switch to Sandpack
-                  </Button>
+              <Suspense fallback={
+                <div className="h-full flex items-center justify-center bg-gray-900 rounded-lg">
+                  <div className="text-center text-gray-400">
+                    <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin" />
+                    <p>Loading HTML preview...</p>
+                  </div>
                 </div>
-                <iframe
-                  srcDoc={htmlFile[1]}
-                  className="w-full h-[calc(100%-40px)] border-0"
-                  title="Preview"
-                  sandbox="allow-scripts allow-same-origin"
-                />
-              </div>
+              }>
+                <div className="h-full bg-gray-900 rounded-lg overflow-hidden flex flex-col">
+                  <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-white text-sm font-medium">📄 HTML Preview (Sandpack)</span>
+                      <span className="text-blue-300 text-xs">Bundled with CSS/JS</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setPreviewMode('raw')}
+                        className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                      >
+                        View Raw
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setPreviewMode('sandpack')}
+                        className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                      >
+                        Full Sandpack
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    <Sandpack
+                      template="vanilla"
+                      theme="dark"
+                      options={{
+                        showTabs: true,
+                        showLineNumbers: false,
+                        showNavigator: true,
+                        showConsole: false,
+                        showRefreshButton: true,
+                        autorun: true,
+                        recompileMode: "delayed",
+                        recompileDelay: 300,
+                      }}
+                      files={sandpackFiles}
+                      customSetup={{ dependencies: {} }}
+                    />
+                  </div>
+                </div>
+              </Suspense>
             );
           }
         }
@@ -2122,7 +2169,7 @@ export default app;`,
           const htmlFile = Object.entries(useStructure.files).find(
             ([path]) => path.endsWith('.html')
           );
-          
+
           if (htmlFile) {
             return (
               <div className="h-full bg-gray-900 rounded-lg overflow-hidden">
@@ -2135,7 +2182,7 @@ export default app;`,
                       onClick={() => setPreviewMode('iframe')}
                       className="text-xs"
                     >
-                      Iframe
+                      Preview
                     </Button>
                     <Button
                       size="sm"
@@ -2227,7 +2274,8 @@ export default app;`,
                 srcDoc={inlineHtml}
                 className="w-full flex-1 border-0"
                 title="Parcel Preview"
-                sandbox="allow-scripts allow-same-origin allow-modals"
+                sandbox="allow-scripts allow-same-origin allow-modals allow-forms allow-popups allow-downloads"
+                referrerPolicy="no-referrer"
               />
             </div>
           );
@@ -3540,7 +3588,7 @@ export default app;`,
       }
     }
 
-    // Enhanced vanilla HTML/CSS/JS preview with JSBin-style features
+    // Enhanced vanilla HTML/CSS/JS preview with Sandpack bundling
     try {
       const normalizedFiles = useStructure
         ? Object.entries(useStructure.files).map(([path, content]) => ({
@@ -3581,8 +3629,108 @@ export default app;`,
             (block) => block.language === "typescript" || block.language === "ts",
           );
 
-      // If no HTML but has other web files, create a basic HTML structure
+      // Use Sandpack for HTML/CSS/JS bundling (preferred over iframe)
+      const hasWebFiles = htmlFile || cssFile || jsFile || tsFile;
+      const shouldUseSandpackForVanilla = hasWebFiles && !useStructure?.framework;
+
+      if (shouldUseSandpackForVanilla) {
+        // Build Sandpack files with proper path resolution
+        const sandpackFiles: Record<string, { code: string }> = {};
+
+        // Process all files and add to Sandpack
+        if (useStructure) {
+          Object.entries(useStructure.files).forEach(([path, content]) => {
+            if (typeof content === "string" && content.trim()) {
+              const sandpackPath = path.startsWith("/") ? path : `/${path}`;
+              sandpackFiles[sandpackPath] = { code: content };
+            }
+          });
+        }
+
+        // If HTML file found via codeBlocks (not structure), add it
+        if (htmlFile && !sandpackFiles["/index.html"]) {
+          sandpackFiles["/index.html"] = { code: htmlFile.code };
+        }
+
+        // Add CSS file if found
+        if (cssFile && !Object.keys(sandpackFiles).some(p => p.endsWith(".css"))) {
+          sandpackFiles["/style.css"] = { code: cssFile.code };
+        }
+
+        // Add JS file if found
+        if (jsFile && !Object.keys(sandpackFiles).some(p => p.endsWith(".js"))) {
+          sandpackFiles["/index.js"] = { code: jsFile.code };
+        }
+
+        // Ensure we have an entry point
+        if (!sandpackFiles["/index.html"] && (cssFile || jsFile)) {
+          sandpackFiles["/index.html"] = {
+            code: `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Preview</title>
+  ${cssFile ? '<link rel="stylesheet" href="/style.css">' : ''}
+</head>
+<body>
+  <div id="app">
+    <h1>Preview</h1>
+    <p>Generated from your code</p>
+  </div>
+  ${jsFile ? '<script src="/index.js"></script>' : ''}
+</body>
+</html>`,
+          };
+        }
+
+        return (
+          <Suspense fallback={
+            <div className="h-96 flex items-center justify-center bg-gray-900 rounded-lg">
+              <div className="text-center text-gray-400">
+                <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin" />
+                <p>Loading preview...</p>
+              </div>
+            </div>
+          }>
+            <div className="h-96">
+              <Sandpack
+                template="vanilla"
+                theme="dark"
+                options={{
+                  showTabs: true,
+                  showLineNumbers: false,
+                  showNavigator: true,
+                  showConsole: false,
+                  showRefreshButton: true,
+                  autorun: true,
+                  recompileMode: "delayed",
+                  recompileDelay: 300,
+                }}
+                files={sandpackFiles}
+                customSetup={{
+                  dependencies: {},
+                }}
+              />
+            </div>
+          </Suspense>
+        );
+      }
+
+      // Fallback: If no HTML but has other web files, create a basic HTML structure with inlined assets
       if (!htmlFile && (cssFile || jsFile || tsFile)) {
+        // Process TypeScript/JavaScript to remove ES6 imports for inline preview
+        const processScriptForInline = (code: string): string => {
+          if (!code) return '';
+          return code
+            // Remove ES6 imports
+            .replace(/import\s+.*?from\s+['"].*?['"];?/g, '// Import removed - external modules not available in inline preview')
+            .replace(/import\s+['"].*?['"];?/g, '// Side-effect import removed')
+            // Remove export statements
+            .replace(/export\s+(default|const|let|var|function|class|interface|type)\s+/g, '$1 ')
+            .replace(/export\s*\{[^}]*\}\s*(from\s+['"].*?['"];?)?/g, '// Export removed');
+        };
+
         const autoGeneratedHtml = `
 <!DOCTYPE html>
 <html lang="en">
@@ -3591,6 +3739,8 @@ export default app;`,
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Generated Preview</title>
   ${cssFile ? `<style>${cssFile.code}</style>` : ""}
+  <!-- Babel for TypeScript/JSX transpilation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
 <body>
   <div id="app">
@@ -3598,12 +3748,26 @@ export default app;`,
     <p>This preview was automatically generated from your code.</p>
     <div id="content"></div>
   </div>
-  ${jsFile ? `<script>${jsFile.code}</script>` : ""}
+  ${
+    jsFile
+      ? `<script>
+    try {
+      ${processScriptForInline(jsFile.code)}
+    } catch (e) {
+      console.error('Error executing JavaScript:', e);
+      document.getElementById('content').innerHTML = '<p style="color: red;">Error: ' + e.message + '</p>';
+    }
+  </script>`
+      : ""
+  }
   ${
     tsFile
-      ? `<script type="module">
-    // TypeScript code (simplified for preview)
-    ${tsFile.code.replace(/import .* from .*/g, "// Import removed for preview")}
+      ? `<script type="text/babel" data-presets="typescript,react">
+    try {
+      ${processScriptForInline(tsFile.code)}
+    } catch (e) {
+      console.error('Error executing TypeScript:', e);
+    }
   </script>`
       : ""
   }
@@ -3632,7 +3796,8 @@ export default app;`,
               srcDoc={autoGeneratedHtml}
               className={`w-full bg-white rounded-lg border ${isFullscreen ? "h-screen" : "h-96"}`}
               title="Auto-generated Preview"
-              sandbox="allow-scripts allow-same-origin"
+              sandbox="allow-scripts allow-same-origin allow-modals allow-forms allow-popups allow-downloads"
+              referrerPolicy="no-referrer"
             />
           </div>
         );
@@ -3780,7 +3945,8 @@ export default app;`,
             srcDoc={combinedHtml}
             className={`w-full bg-white rounded-lg border ${isFullscreen ? "h-screen" : "h-96"}`}
             title="Live Preview"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            sandbox="allow-scripts allow-same-origin allow-modals allow-forms allow-popups allow-downloads"
+            referrerPolicy="no-referrer"
             onError={(e) => console.error("Iframe error", e)}
           />
         </div>
@@ -3920,12 +4086,6 @@ export default app;`,
                       {codeBlocks.length}
                     </span>
                   </CardTitle>
-                  {/* OPFS Status Indicator */}
-                  <OPFSStatusIndicator 
-                    showDetails={false}
-                    enableSync={true}
-                    className="ml-2"
-                  />
                 </div>
                 <div className="flex items-center gap-1 md:gap-2">
                   <button

@@ -75,6 +75,7 @@ export interface TerminalHandlerWiringConfig {
   onContextMenu?: (x: number, y: number, terminalId: string) => void
   onClose?: () => void
   onMinimize?: () => void
+  onOpenEditor?: (filePath: string, editorType: 'nano' | 'vim' | 'vi') => void
 }
 
 export interface TerminalHandlers {
@@ -92,6 +93,21 @@ export interface TerminalHandlers {
  * Wire up all terminal handlers for a terminal instance
  */
 export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): TerminalHandlers {
+  // Create editor handler once
+  const editorHandler = createTerminalEditorHandler({
+    terminalId: config.terminalId,
+    filePath: '',
+    content: '',
+    write: config.write,
+    writeLine: config.writeLine,
+    getPrompt: (cwd) => config.getPrompt('editor', cwd),
+    syncToVFS: config.syncFileToVFS,
+    updateTerminalState: (updates) => config.updateTerminalState(config.terminalId, updates),
+    getCwd: () => config.getCwd(config.terminalId),
+    getFileSystem: config.getLocalFileSystem,
+    setFileSystem: config.setLocalFileSystem,
+  })
+
   return {
     // Local filesystem handler
     localFS: createTerminalLocalFSHandler({
@@ -100,6 +116,10 @@ export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): Termi
       syncToVFS: config.syncFileToVFS,
       getLocalFileSystem: config.getLocalFileSystem,
       setLocalFileSystem: config.setLocalFileSystem,
+      onOpenEditor: (filePath, editorType) => {
+        // Open file in editor handler
+        editorHandler.openFile(filePath, editorType)
+      },
     }),
 
     // Input handler
@@ -169,9 +189,9 @@ export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): Termi
 
     // State manager
     state: createTerminalStateManager({
-      getCommandHistory: () => config.getCommandHistory(config.terminalId),
+      getCommandHistory: () => ({ [config.terminalId]: config.getCommandHistory(config.terminalId) }),
       getSandboxStatus: config.getSandboxStatus,
-      restoreCommandHistory: (history) => config.setCommandHistory(config.terminalId, history),
+      restoreCommandHistory: (history) => config.setCommandHistory(config.terminalId, history[config.terminalId] || []),
       restoreSandboxStatus: (status) => config.setSandboxStatus(status),
     }),
 

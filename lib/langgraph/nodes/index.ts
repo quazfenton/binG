@@ -17,7 +17,7 @@ import type { SandboxHandle } from '@/lib/sandbox/providers';
 interface EnhancedError {
   message: string;
   step: string;
-  timestamp: number;
+  timestamp: string;
   operation?: string;
   parameters?: any;
   stack?: string;
@@ -36,9 +36,9 @@ function createEnhancedError(
 ): EnhancedError {
   const message = error instanceof Error ? error.message : String(error);
   const stack = error instanceof Error ? error.stack : undefined;
-  
+
   // Determine if error is recoverable
-  const recoverable = !message.includes('fatal') && 
+  const recoverable = !message.includes('fatal') &&
                       !message.includes('unrecoverable') &&
                       !message.includes('permission denied');
 
@@ -61,7 +61,7 @@ function createEnhancedError(
   return {
     message,
     step,
-    timestamp: Date.now(),
+    timestamp: new Date().toISOString(),
     operation,
     parameters,
     stack,
@@ -161,12 +161,12 @@ export async function verifierNode(state: AgentStateType): Promise<Partial<Agent
   try {
     const verified = await agent.runVerificationPhase();
 
-    if (verified.errors && verified.errors.length > 0) {
+    if (verified && 'errors' in verified && verified.errors && verified.errors.length > 0) {
       return {
         errors: [...state.errors, ...verified.errors.map((e: any) => ({
           ...e,
           step: 'verification',
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
           recoverable: true, // Verification errors are usually fixable
           suggestions: ['Review the code for syntax errors', 'Use apply_diff to fix the issues'],
         }))],
@@ -210,7 +210,7 @@ export async function selfHealingNode(state: AgentStateType): Promise<Partial<Ag
       errors: [...state.errors, {
         message: 'Max self-healing attempts exceeded',
         step: 'self-healing',
-        timestamp: Date.now(),
+        timestamp: new Date().toISOString(),
         recoverable: false,
         suggestions: ['Try a completely different approach', 'Break the task into smaller steps'],
       }],
@@ -229,7 +229,7 @@ export async function selfHealingNode(state: AgentStateType): Promise<Partial<Ag
         errors: healed.errors.map((e: any) => ({
           ...e,
           step: 'self-healing',
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
         })),
         next: 'self-healing', // Retry
       };

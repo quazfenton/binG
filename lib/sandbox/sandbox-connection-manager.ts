@@ -306,6 +306,10 @@ export class SandboxConnectionManager {
     
     const lowerId = sandboxId.toLowerCase()
     
+    // E2B new format: some IDs don't have the 'e2b-' prefix (e.g., 'ii8938a6cyxwggwamxh1k')
+    const isE2BFormat = /^[a-z0-9]{15,25}$/i.test(sandboxId);
+    if (isE2BFormat) return 'e2b';
+    
     if (lowerId.startsWith('e2b-') || lowerId.startsWith('e2b_')) return 'e2b'
     if (lowerId.startsWith('daytona-') || lowerId.startsWith('daytona_')) return 'daytona'
     if (lowerId.startsWith('sprite-') || lowerId.startsWith('sprite_') || lowerId.startsWith('bing-')) return 'sprites'

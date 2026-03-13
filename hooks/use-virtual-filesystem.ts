@@ -9,7 +9,7 @@ import type {
   VirtualFilesystemSearchResult,
   VirtualWorkspaceSnapshot,
 } from '@/lib/virtual-filesystem/filesystem-types';
-import { opfsAdapter } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
+import { opfsAdapter, OPFSAdapter } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
 import { opfsCore } from '@/lib/virtual-filesystem/opfs/opfs-core';
 
 export interface AttachedVirtualFile {
@@ -161,7 +161,16 @@ export function useVirtualFilesystem(
   useEffect(() => {
     if (useOPFS && typeof window !== 'undefined') {
       const sessionId = getOrCreateAnonymousSessionId();
-      opfsAdapter.enable(sessionId).catch(err => {
+      
+      // Check if OPFS is supported
+      if (!OPFSAdapter.isSupported()) {
+        logWarn('OPFS not supported in this browser - using server-only mode');
+        return;
+      }
+      
+      opfsAdapter.enable(sessionId).then(() => {
+        log('OPFS enabled successfully for session:', sessionId);
+      }).catch(err => {
         logWarn('OPFS initialization failed, falling back to server-only:', err);
       });
     }

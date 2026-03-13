@@ -1301,13 +1301,8 @@ export default function TerminalPanel({
         }
 
         // Editor mode - use handler
-        const session = editorSessionRef.current[terminalId];
-        if (session) {
-          if (handlers) {
-            handlers.editor.handleInput(data);
-          } else {
-            console.warn('[TerminalPanel] Editor handler missing for active session');
-          }
+        if (term.mode === 'editor' && handlers?.editor.isOpen()) {
+          handlers.editor.handleInput(data);
           return;
         }
 

@@ -21,6 +21,12 @@ import { emitFilesystemUpdated } from '../virtual-filesystem/sync-events';
 // Workspace directory varies by provider
 // This will be resolved per-sandbox based on the provider
 function getWorkspaceDirForSandbox(sandboxId: string): string {
+  // E2B new format: some IDs don't have the 'e2b-' prefix (e.g., 'ii8938a6cyxwggwamxh1k')
+  // These are alphanumeric strings, typically 18-20 chars
+  const isE2BFormat = /^[a-z0-9]{15,25}$/i.test(sandboxId);
+  
+  if (isE2BFormat) return '/home/user';
+  
   // Infer provider from sandbox ID prefix
   if (sandboxId.startsWith('mistral-')) return '/workspace';
   if (sandboxId.startsWith('blaxel-')) return '/workspace';
