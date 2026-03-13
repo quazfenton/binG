@@ -282,6 +282,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({
           success: false,
           status: 'auth_required',
+          loginRequired: true, // Explicitly mark as site login, not OAuth
           error: {
             type: 'auth_required',
             message: 'Agent V2 requires authentication. Please log in first.',
@@ -351,14 +352,24 @@ export async function POST(request: NextRequest) {
     }
 
     // Agentic pipeline (non-V2) for code-centric requests
-    if (isCodeRequest && CHAT_AGENTIC_PIPELINE !== 'off') {
+    // Only route to agentic pipeline if it's actually an integration request (OAuth needed)
+    // Regular coding requests should use V2 (handled above) or regular chat
+    const isIntegrationRequest = requiresThirdPartyOAuth(messages);
+    if (isCodeRequest && !isIntegrationRequest && CHAT_AGENTIC_PIPELINE !== 'off') {
+      // For non-integration code requests that don't want V2, fall through to regular chat
+      // This allows "code a nextjs app" to get regular LLM response instead of agentic pipeline
+    } else if (isCodeRequest && isIntegrationRequest && CHAT_AGENTIC_PIPELINE !== 'off') {
+      // This is an integration request that needs OAuth
       if (!authenticatedUserId) {
         return NextResponse.json({
           success: false,
           status: 'auth_required',
+          authUrl: '/api/auth/signin', // Site login for integration OAuth
+          toolName: 'integration',
+          provider: 'integration',
           error: {
             type: 'auth_required',
-            message: 'Agentic mode requires authentication. Please log in first.',
+            message: 'This request requires connecting to an external service. Please log in.',
           },
         }, { status: 401 });
       }
@@ -1418,19 +1429,36 @@ function isCodeOrAgenticRequest(
       : JSON.stringify(lastUser?.content || '');
 
   // Strong signals — unambiguous coding/agentic keywords (single match sufficient)
-  const strongPattern = /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|endpoint|database|schema|compile|lint)\b/i;
+  // These are for V2/OpenCode execution, NOT for 3rd party OAuth
+  // "code a nextjs app" should route to V2 for interactive coding session
+  const strongPattern = /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|vue\.js|angular|node\.?js|endpoint|database|schema|compile|lint|migrations?|docker|kubernetes|k8s|redis|mongodb|postgresql|mysql|sqlite|express|fastapi|flask|django|spring|rails|laravel|symfony|golang|rust|java|c\+\+|cpp|c#|dotnet|swift|kotlin|flutter|react\s*native|electron|code|build|implement|create\s+app|create\s+project|scaffold|generate\s+app)\b/i;
   if (strongPattern.test(content)) return true;
 
-  // Weak signals — common words that are ambiguous on their own (e.g. "code", "build", "file", "test", "fix", "error", "api")
-  // Require at least 2 weak signals or a weak signal combined with action verbs like "create", "write", "make", "generate"
-  const weakKeywords = ['code', 'build', 'implement', 'component', 'file', 'directory', 'folder', 'repo', 'git', 'test', 'fix', 'error', 'api'];
-  const actionVerbs = /\b(create|write|generate|make|develop|set\s*up|scaffold|deploy)\b/i;
+  // Weak signals — require 2+ signals to trigger (lower threshold, not higher)
+  // We WANT coding requests to use V2 (OpenCode) for interactive sessioning
+  const weakKeywords = ['app', 'project', 'component', 'file', 'api', 'function', 'class', 'module', 'package', 'implement', 'build', 'develop'];
   const weakMatches = weakKeywords.filter(kw => new RegExp(`\\b${kw}\\b`, 'i').test(content));
-
   if (weakMatches.length >= 2) return true;
-  if (weakMatches.length >= 1 && actionVerbs.test(content)) return true;
 
   return false;
+}
+
+/**
+ * Check if request specifically needs 3rd party OAuth integration (not just general coding)
+ * This is separate from isCodeOrAgenticRequest - it returns true ONLY for actual integrations
+ */
+function requiresThirdPartyOAuth(messages: LLMMessage[]): boolean {
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const content =
+    typeof lastUser?.content === 'string'
+      ? lastUser.content
+      : JSON.stringify(lastUser?.content || '');
+
+  // EXPLICIT 3RD PARTY INTEGRATION SIGNALS - these require OAuth to external services
+  // Must have specific service names that are known 3rd party integrations
+  // Use possessive/contextual patterns to avoid false positives like "github clone"
+  const thirdPartyServicePattern = /\b(my\s+)?gmail|(my\s+)?google\s+(drive|sheets|docs|calendar)|slack|discord|twitter|x\s*api|notion|zoom|hubspot|salesforce|shopify|stripe|pipedrive|airtable|jira|confluence|trello|dropbox|onedrive|box\s*file|aws\s*s3|s3\s*bucket|heroku|vercel|netlify|railway|render\s*static|cloudflare\s*pages|figma|miro|miroboard|(my|our)\s+github\s+(repo|branch|pr|issue|organization|team)/i;
+  return thirdPartyServicePattern.test(content);
 }
 
 function buildAgenticContext(messages: LLMMessage[]): string {
