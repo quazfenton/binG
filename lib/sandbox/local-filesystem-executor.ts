@@ -40,6 +40,7 @@ export interface LocalCommandExecutorConfig {
   syncToVFS?: (filePath: string, content: string) => Promise<void>
   getFileSystem?: () => Record<string, LocalFilesystemEntry>
   setFileSystem?: (fs: Record<string, LocalFilesystemEntry>) => void
+  onOpenEditor?: (filePath: string, editorType: 'nano' | 'vim' | 'vi') => void
 }
 
 export class LocalCommandExecutor {
@@ -53,6 +54,7 @@ export class LocalCommandExecutor {
   private syncToVFS?: (filePath: string, content: string) => Promise<void>
   private getExtFileSystem?: () => Record<string, LocalFilesystemEntry>
   private setExtFileSystem?: (fs: Record<string, LocalFilesystemEntry>) => void
+  private onOpenEditor?: (filePath: string, editorType: 'nano' | 'vim' | 'vi') => void
 
   constructor(config: LocalCommandExecutorConfig | string) {
     if (typeof config === 'string') {
@@ -65,6 +67,7 @@ export class LocalCommandExecutor {
       this.syncToVFS = config.syncToVFS
       this.getExtFileSystem = config.getFileSystem
       this.setExtFileSystem = config.setFileSystem
+      this.onOpenEditor = config.onOpenEditor
       
       // If external filesystem provided, load initial state from it
       if (this.getExtFileSystem) {
@@ -826,7 +829,21 @@ export class LocalCommandExecutor {
     }
     const filePath = this.resolvePath(this.cwd[this.terminalId], args[1])
     
+    // Check if file exists, get its content
+    const fs = this.getFileSystem()
+    const fileExists = !!fs[filePath]
+    
+    // Try to open editor - if callback provided, use it; otherwise show message
+    if (this.onOpenEditor) {
+      this.onOpenEditor(filePath, cmd as 'nano' | 'vim' | 'vi')
+      return ''
+    }
+    
+    // Fallback message if no editor callback
     writeLine(`\x1b[33mOpening ${cmd} editor for ${filePath}...\x1b[0m`)
+    if (!fileExists) {
+      writeLine(`\x1b[90m(File will be created on save)\x1b[0m`)
+    }
     writeLine(`\x1b[90m(Use the Files panel to edit files in the UI)\x1b[0m`)
     return ''
   }

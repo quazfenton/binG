@@ -144,6 +144,11 @@ export class SandboxServiceBridge {
    * P1 FIX: Extended to include more providers and return null for unknown instead of defaulting to e2b
    */
   inferProviderFromSandboxId(sandboxId: string): string | null {
+    // E2B new format: some IDs don't have the 'e2b-' prefix (e.g., 'ii8938a6cyxwggwamxh1k')
+    // These are alphanumeric strings, typically 18-20 chars
+    const isE2BFormat = /^[a-z0-9]{15,25}$/i.test(sandboxId);
+    if (isE2BFormat) return 'e2b';
+    
     if (sandboxId.startsWith('blaxel-') || sandboxId.startsWith('blaxel-mcp-')) return 'blaxel';
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites';
     if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent';

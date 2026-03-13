@@ -581,6 +581,10 @@ export class UserTerminalSessionManager {
    * Infer provider type from sandbox ID
    */
   private inferProviderType(sandboxId: string): SandboxProviderType {
+    // E2B new format: some IDs don't have the 'e2b-' prefix (e.g., 'ii8938a6cyxwggwamxh1k')
+    const isE2BFormat = /^[a-z0-9]{15,25}$/i.test(sandboxId);
+    if (isE2BFormat) return 'e2b';
+    
     if (sandboxId.startsWith('mistral-')) return 'mistral';
     if (sandboxId.startsWith('blaxel-mcp-')) return 'blaxel-mcp';
     if (sandboxId.startsWith('blaxel-')) return 'blaxel';
