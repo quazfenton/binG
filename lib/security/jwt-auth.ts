@@ -177,13 +177,21 @@ export async function verifyToken(
       };
     }
     
+    // Validate required userId claim
+    if (!payload.userId) {
+      return {
+        valid: false,
+        error: 'Token missing required userId claim',
+      };
+    }
+    
     return {
       valid: true,
       payload: payload as TokenPayload,
     };
   } catch (error) {
     if (error instanceof Error) {
-      if (error.message.includes('expired')) {
+      if (error.message.includes('expired') || error.message.includes('"exp" claim')) {
         return {
           valid: false,
           error: 'Token has expired',
@@ -191,7 +199,7 @@ export async function verifyToken(
         };
       }
       
-      if (error.message.includes('invalid')) {
+      if (error.message.includes('invalid') || error.message.includes('signature')) {
         return {
           valid: false,
           error: 'Invalid token signature',
