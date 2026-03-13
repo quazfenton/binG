@@ -277,6 +277,11 @@ export default function CodePreviewPanel({
   const manualPreviewPathRef = useRef<string | null>(null);
   const manualPreviewActiveRef = useRef(false);
 
+  // WebContainer refs (top-level to satisfy Rules of Hooks)
+  const webcontainerInstanceRef = useRef<any>(null);
+  const webcontainerProcessRef = useRef<any>(null);
+  const webcontainerUrlRef = useRef<string | null>(null);
+
   // Context menu state for file operations
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -836,6 +841,32 @@ export default function CodePreviewPanel({
   useEffect(() => {
     manualPreviewActiveRef.current = isManualPreviewActive;
   }, [isManualPreviewActive]);
+
+  // WebContainer URL tracking (top-level to satisfy Rules of Hooks)
+  useEffect(() => {
+    webcontainerUrlRef.current = webcontainerUrl;
+  }, [webcontainerUrl]);
+
+  // WebContainer cleanup on unmount (top-level to satisfy Rules of Hooks)
+  useEffect(() => {
+    return () => {
+      if (webcontainerProcessRef.current) {
+        webcontainerProcessRef.current.kill();
+      }
+      if (webcontainerInstanceRef.current) {
+        webcontainerInstanceRef.current.destroy?.();
+      }
+    };
+  }, []);
+
+  // Pyodide cleanup on unmount (top-level to satisfy Rules of Hooks)
+  useEffect(() => {
+    return () => {
+      if (pyodideRef.current) {
+        pyodideRef.current = null;
+      }
+    };
+  }, []);
 
   // Clear manual preview
   const handleClearManualPreview = useCallback(() => {
@@ -2276,11 +2307,155 @@ export default app;`,
           log(`[Sandpack] Detected entry file: ${detectedEntryFile}`);
         }
 
-        // Add entry file to normalized files (not the original sandpackFiles)
-        addEntryFileIfMissing();
-        
-        // Update normalized files with any added entry files
-        const finalSandpackFiles = normalizeFilesForSandpack(sandpackFiles);
+        // CRITICAL FIX: Normalize file paths to be relative to project root for Sandpack
+        // The VFS paths are like "/project/sessions/draft-chat_xxx/src/main.js" but Sandpack needs "/src/main.js"
+        // We need to strip the filesystem scope prefix from all file paths
+        const finalSandpackFiles = (() => {
+          // Create a copy of sandpackFiles to work with
+          const filesCopy = { ...sandpackFiles };
+          
+          // Add entry file stub if missing (using same logic as addEntryFileIfMissing but as pure function)
+          const existingEntryFile = Object.keys(filesCopy).some(path => {
+            const fileName = path.split('/').pop() || '';
+            return /^index\.(js|jsx|ts|tsx|mjs|cjs|vue)$/.test(fileName) ||
+                   /^main\.(js|jsx|ts|tsx|mjs|cjs|vue)$/.test(fileName) ||
+                   /^App\.(js|jsx|ts|tsx|vue)$/.test(fileName) ||
+                   /^page\.(js|jsx|ts|tsx)$/.test(fileName);
+          });
+          
+          if (!existingEntryFile) {
+            // Add framework-specific stub files
+            const framework = useStructure.framework;
+            switch (framework) {
+              case "vue":
+              case "nuxt":
+                filesCopy["/src/App.vue"] = { code: `<template>
+  <div id="app">
+    <h1>Hello Vue!</h1>
+    <p>This is a generated Vue application.</p>
+  </div>
+</template>
+
+<script>
+export default {
+  name: 'App'
+}
+</script>
+
+<style>
+#app {
+  font-family: Avenir, Helvetica, Arial, sans-serif;
+  text-align: center;
+  color: #2c3e50;
+  margin-top: 60px;
+}
+</style>` };
+                filesCopy["/src/main.js"] = { code: `import { createApp } from 'vue';
+import App from './App.vue';
+createApp(App).mount('#app');` };
+                filesCopy["/index.html"] = { code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>` };
+                break;
+              case "react":
+              case "next":
+              case "vite-react":
+              default:
+                filesCopy["/src/index.jsx"] = { code: `import React from 'react';
+import ReactDOM from 'react-dom/client';
+
+function App() {
+  return (
+    <div className="App">
+      <h1>Hello React!</h1>
+      <p>This is a generated React application.</p>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);` };
+                filesCopy["/index.html"] = { code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/index.jsx"></script>
+  </body>
+</html>` };
+                break;
+            }
+          }
+          
+          // Normalize and strip the filesystem scope prefix from all paths
+          const normalized = normalizeFilesForSandpack(filesCopy);
+          
+          // Get the scope path to strip - this is the full VFS path like "project/sessions/draft-chat_xxx"
+          const scopePath = filesystemScopePath || '';
+          const scopePathParts = scopePath.split('/').filter(Boolean);
+          
+          // Build a regex to strip the scope path prefix from file paths
+          // Scope path could be: "project/sessions/draft-chat_xxx" or "project/sessions/draft-chat_xxx/my-vue-app"
+          // Files paths are like: "/project/sessions/draft-chat_xxx/src/main.js" or "/my-vue-app/src/main.js"
+          let prefixToStrip = '';
+          
+          // Try to build a stripping pattern from the scope path
+          if (scopePathParts.length > 0) {
+            // The scope path comes from filesystemScopePath which is like "project/sessions/draft-chat_xxx"
+            // We need to strip this prefix from file paths
+            // Files from VFS may have full paths like "/project/sessions/draft-chat_xxx/src/main.js"
+            // or relative paths like "src/main.js" depending on how they were loaded
+            
+            // Escape special regex characters in the scope path
+            const escapedScope = scopePath.replace(/[.+*?^${}()|[\]\\]/g, '\\$&');
+            prefixToStrip = `^/?${escapedScope}/`;
+          }
+          
+          const stripped: Record<string, { code: string }> = {};
+          for (const [path, fileObj] of Object.entries(normalized)) {
+            // Try to strip the scope prefix first
+            let relativePath = path;
+            
+            if (prefixToStrip) {
+              relativePath = path.replace(new RegExp(prefixToStrip), '/');
+            }
+            
+            // Also handle case where files have path with project root folder like "my-vue-app/src/main.js"
+            // If we have a valid project folder name, try stripping that too
+            if (scopePathParts.length >= 2) {
+              // Get the last meaningful segment (could be project folder or session ID)
+              const lastSegment = scopePathParts[scopePathParts.length - 1];
+              if (lastSegment && !lastSegment.startsWith('draft-chat_')) {
+                // This is likely the project folder (e.g., "my-vue-app")
+                const escapedLast = lastSegment.replace(/[.+*?^${}()|[\]\\]/g, '\\$&');
+                relativePath = relativePath.replace(new RegExp(`^/?${escapedLast}/`), '/');
+              }
+            }
+            
+            // Ensure path starts with /
+            if (!relativePath.startsWith('/')) {
+              relativePath = '/' + relativePath;
+            }
+            
+            stripped[relativePath] = fileObj;
+          }
+          
+          log(`[Sandpack] Normalized ${Object.keys(normalized).length} files to ${Object.keys(stripped).length} relative paths`);
+          return stripped;
+        })();
 
         const template = getSandpackTemplate(useStructure.framework);
 
@@ -2541,129 +2716,111 @@ export default app;`,
             ([path]) => path === 'requirements.txt'
           );
           
-          // Enhanced Pyodide with package installation and caching
-          React.useEffect(() => {
-            const loadPyodide = async () => {
-              setIsPyodideLoading(true);
-              setPyodideOutput('');
+          // Pyodide loading function (regular function, NOT a hook)
+          const loadPyodideRuntime = async () => {
+            setIsPyodideLoading(true);
+            setPyodideOutput('');
 
-              try {
-                // Multiple CDN sources for reliability
-                const CDN_SOURCES = [
-                  'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/',
-                  'https://unpkg.com/pyodide@0.23.4/',
-                ];
-                
-                let pyodide: any = null;
-                let lastError: any = null;
+            try {
+              const CDN_SOURCES = [
+                'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/',
+                'https://unpkg.com/pyodide@0.23.4/',
+              ];
+              
+              let pyodide: any = null;
+              let lastError: any = null;
 
-                // Try each CDN until one works
-                for (const cdn of CDN_SOURCES) {
-                  try {
-                    const script = document.createElement('script');
-                    script.src = 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js';
-                    script.async = true;
-                    
-                    await new Promise((resolve, reject) => {
-                      script.onload = resolve;
-                      script.onerror = reject;
-                      document.head.appendChild(script);
+              for (const cdn of CDN_SOURCES) {
+                try {
+                  const script = document.createElement('script');
+                  script.src = 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js';
+                  script.async = true;
+                  
+                  await new Promise((resolve, reject) => {
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.head.appendChild(script);
+                  });
+
+                  if ((window as any).loadPyodide) {
+                    pyodide = await (window as any).loadPyodide({
+                      indexURL: cdn,
+                      packageCacheDir: '/lib/python3.11/site-packages',
                     });
-
-                    if ((window as any).loadPyodide) {
-                      pyodide = await (window as any).loadPyodide({
-                        indexURL: cdn,
-                        // Enable IndexedDB caching
-                        packageCacheDir: '/lib/python3.11/site-packages',
-                      });
-                      break; // Success!
-                    }
-                  } catch (err: any) {
-                    lastError = err;
-                    console.warn(`CDN ${cdn} failed, trying next...`);
-                    continue;
+                    break;
                   }
+                } catch (err: any) {
+                  lastError = err;
+                  console.warn(`CDN ${cdn} failed, trying next...`);
+                  continue;
                 }
-
-                if (!pyodide) {
-                  throw new Error(`All CDNs failed: ${lastError?.message}`);
-                }
-
-                pyodideRef.current = pyodide;
-
-                // Enhanced stdout capture
-                pyodide.setStdout({
-                  batched: (msg: string) => {
-                    setPyodideOutput(prev => prev + msg);
-                  },
-                  write: (msg: string) => {
-                    setPyodideOutput(prev => prev + msg);
-                  },
-                  isatty: () => false,
-                });
-
-                // Preload common packages if configured
-                const preloadPackages = process.env.NEXT_PUBLIC_PYODIDE_PRELOAD_PACKAGES?.split(',') || [];
-                
-                if (preloadPackages.length > 0) {
-                  setPyodideOutput(prev => prev + `# Preloading ${preloadPackages.length} package(s)...\n`);
-                  try {
-                    await pyodide.loadPackage(preloadPackages);
-                    setPyodideOutput(prev => prev + `✓ Preloaded: ${preloadPackages.join(', ')}\n`);
-                  } catch (err: any) {
-                    setPyodideOutput(prev => prev + `⚠ Preload warning: ${err.message}\n`);
-                  }
-                }
-
-                // Install requirements if present
-                if (requirementsFile) {
-                  setPyodideOutput(prev => prev + '# Installing requirements...\n');
-                  try {
-                    await pyodide.runPythonAsync(`
-                      import micropip
-                      requirements = """${requirementsFile[1]}"""
-                      for pkg in requirements.strip().split('\\n'):
-                          pkg = pkg.strip()
-                          if pkg and not pkg.startswith('#'):
-                              try:
-                                  await micropip.install(pkg)
-                                  print(f'✓ Installed {pkg}')
-                              except Exception as e:
-                                  print(f'⚠ Could not install {pkg}: {e}')
-                    `);
-                  } catch (err: any) {
-                    setPyodideOutput(prev => prev + `⚠ Package installation warning: ${err.message}\n`);
-                  }
-                }
-
-                // Execute main Python file
-                if (mainFile) {
-                  setPyodideOutput(prev => prev + `\n# Running ${mainFile[0]}...\n# ─────────────────────────────\n`);
-                  try {
-                    await pyodide.runPythonAsync(mainFile[1]);
-                    setPyodideOutput(prev => prev + '\n✅ Execution complete!\n');
-                  } catch (err: any) {
-                    setPyodideOutput(prev => prev + `\n❌ Error: ${err.message}\n`);
-                  }
-                }
-
-                setIsPyodideLoading(false);
-              } catch (err: any) {
-                console.error('Failed to load Pyodide:', err);
-                setPyodideOutput(prev => prev + `❌ Failed to load Pyodide: ${err.message}\n`);
-                setIsPyodideLoading(false);
               }
-            };
 
-            loadPyodide();
-
-            return () => {
-              // Cleanup
-              if (pyodideRef.current) {
-                pyodideRef.current = null;
+              if (!pyodide) {
+                throw new Error(`All CDNs failed: ${lastError?.message}`);
               }
-            };
-          }, [mainFile, requirementsFile]);
+
+              pyodideRef.current = pyodide;
+
+              pyodide.setStdout({
+                batched: (msg: string) => {
+                  setPyodideOutput(prev => prev + msg);
+                },
+                write: (msg: string) => {
+                  setPyodideOutput(prev => prev + msg);
+                },
+                isatty: () => false,
+              });
+
+              const preloadPackages = process.env.NEXT_PUBLIC_PYODIDE_PRELOAD_PACKAGES?.split(',') || [];
+              
+              if (preloadPackages.length > 0) {
+                setPyodideOutput(prev => prev + `# Preloading ${preloadPackages.length} package(s)...\n`);
+                try {
+                  await pyodide.loadPackage(preloadPackages);
+                  setPyodideOutput(prev => prev + `✓ Preloaded: ${preloadPackages.join(', ')}\n`);
+                } catch (err: any) {
+                  setPyodideOutput(prev => prev + `⚠ Preload warning: ${err.message}\n`);
+                }
+              }
+
+              if (requirementsFile) {
+                setPyodideOutput(prev => prev + '# Installing requirements...\n');
+                try {
+                  await pyodide.runPythonAsync(`
+                    import micropip
+                    requirements = """${requirementsFile[1]}"""
+                    for pkg in requirements.strip().split('\\n'):
+                        pkg = pkg.strip()
+                        if pkg and not pkg.startswith('#'):
+                            try:
+                                await micropip.install(pkg)
+                                print(f'✓ Installed {pkg}')
+                            except Exception as e:
+                                print(f'⚠ Could not install {pkg}: {e}')
+                  `);
+                } catch (err: any) {
+                  setPyodideOutput(prev => prev + `⚠ Package installation warning: ${err.message}\n`);
+                }
+              }
+
+              if (mainFile) {
+                setPyodideOutput(prev => prev + `\n# Running ${mainFile[0]}...\n# ─────────────────────────────\n`);
+                try {
+                  await pyodide.runPythonAsync(mainFile[1]);
+                  setPyodideOutput(prev => prev + '\n✅ Execution complete!\n');
+                } catch (err: any) {
+                  setPyodideOutput(prev => prev + `\n❌ Error: ${err.message}\n`);
+                }
+              }
+
+              setIsPyodideLoading(false);
+            } catch (err: any) {
+              console.error('Failed to load Pyodide:', err);
+              setPyodideOutput(prev => prev + `❌ Failed to load Pyodide: ${err.message}\n`);
+              setIsPyodideLoading(false);
+            }
+          };
 
           return (
             <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
@@ -2677,16 +2834,19 @@ export default app;`,
                     size="sm"
                     variant="outline"
                     onClick={() => {
-                      setPyodideOutput('');
                       if (pyodideRef.current && mainFile) {
+                        setPyodideOutput('');
                         pyodideRef.current.runPythonAsync(mainFile[1]).catch((err: any) => {
                           setPyodideOutput(prev => prev + `\nError: ${err.message}\n`);
                         });
+                      } else {
+                        void loadPyodideRuntime();
                       }
                     }}
                     className="text-xs bg-green-600 hover:bg-green-700 text-white"
+                    disabled={isPyodideLoading}
                   >
-                    ▶ Re-run
+                    {isPyodideLoading ? '⏳ Loading...' : pyodideRef.current ? '▶ Re-run' : '▶ Load & Run'}
                   </Button>
                   <Button
                     size="sm"
@@ -2729,7 +2889,7 @@ export default app;`,
                       <div className="w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin" />
                       <span>Loading Pyodide (this may take a moment)...</span>
                     </div>
-                  ) : (
+                  ) : pyodideRef.current ? (
                     <div className="space-y-1">
                       <p className="text-gray-500"># Pyodide Python Runtime</p>
                       <p className="text-gray-500"># Executing: {mainFile?.[0] || 'unknown'}</p>
@@ -2740,6 +2900,11 @@ export default app;`,
                         <p className="text-gray-600">No output yet...</p>
                       )}
                       <p className="text-blue-400 animate-pulse">▊</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 text-gray-400">
+                      <p>Click "▶ Load & Run" to start the Python runtime.</p>
+                      <p className="text-xs text-gray-500">Pyodide runs Python natively in the browser — no server needed!</p>
                     </div>
                   )}
                 </div>
@@ -2803,38 +2968,87 @@ export default app;`,
           const bootWebContainer = async () => {
             setIsWebcontainerBooting(true);
             setWebcontainerUrl(null);
+            webcontainerUrlRef.current = null;
 
             try {
-              log('[WebContainer] Creating sandbox via provider...');
-
-              // Use the sandbox bridge to create WebContainer sandbox
-              const response = await fetch('/api/sandbox/webcontainer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  files: useStructure.files,
-                }),
-              });
-
-              if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error || `Failed to create WebContainer sandbox (${response.status})`);
+              log('[WebContainer] Bootstrapping in browser...');
+              
+              // Dynamically import WebContainer API (browser-only)
+              const { WebContainer } = await import('@webcontainer/api');
+              
+              // Boot the WebContainer instance
+              const webcontainer = await WebContainer.boot();
+              webcontainerInstanceRef.current = webcontainer;
+              
+              log('[WebContainer] Instance booted, writing files...');
+              
+              // Write all files to the virtual filesystem
+              const files = useStructure.files;
+              for (const [filePath, content] of Object.entries(files)) {
+                await webcontainer.fs.writeFile(filePath, content);
               }
-
-              const data = await response.json();
-              const { sandboxId, url } = data;
-
-              log(`[WebContainer] Sandbox ready: ${sandboxId}`);
-              setWebcontainerUrl(url);
-              setIsWebcontainerBooting(false);
+              
+              log('[WebContainer] Files written, installing dependencies...');
+              
+              // Install dependencies if package.json exists
+              const hasPackageJson = files['package.json'] !== undefined;
+              if (hasPackageJson) {
+                try {
+                  const installProcess = await webcontainer.spawn('npm', ['install']);
+                  await installProcess.exit;
+                  log('[WebContainer] Dependencies installed');
+                } catch (installErr: any) {
+                  logWarn('[WebContainer] npm install failed:', installErr.message);
+                  // Continue anyway - some projects don't need deps
+                }
+              }
+              
+              log('[WebContainer] Starting server...');
+              
+              // Determine start command
+              const hasStartScript = hasPackageJson && files['package.json'].includes('"start"');
+              const startCommand = hasStartScript ? 'npm start' : 'node server.js';
+              
+              // Start the development server
+              const process = await webcontainer.spawn('sh', {
+                args: ['-c', startCommand],
+              });
+              webcontainerProcessRef.current = process;
+              
+              // Listen for server-ready event
+              webcontainer.on('server-ready', (port: number, url: string) => {
+                log(`[WebContainer] Server ready: ${url}`);
+                setWebcontainerUrl(url);
+                setIsWebcontainerBooting(false);
+              });
+              
+              // Also watch for output to detect server start
+              let serverOutput = '';
+              process.output.pipeTo(new WritableStream({
+                write(data) {
+                  serverOutput += data;
+                  // Look for port in output
+                  const portMatch = serverOutput.match(/listening on.*?:(\d+)/) || serverOutput.match(/port.*?(\d+)/);
+                  if (portMatch && !webcontainerUrlRef.current) {
+                    const port = parseInt(portMatch[1], 10);
+                    // WebContainer typically exposes on localhost
+                    setWebcontainerUrl(`http://localhost:${port}`);
+                  }
+                }
+              }));
+              
+              // Set a fallback URL after timeout if no server-ready event
+              setTimeout(() => {
+                setWebcontainerUrl(prev => prev || 'http://localhost:3000');
+                setIsWebcontainerBooting(false);
+              }, 15000);
+              
             } catch (err: any) {
               logError('[WebContainer] Boot error:', err);
               
-              // If error mentions "Unauthorized" or "not found", suggest clearing sessions
-              if (err.message.includes('Unauthorized') || err.message.includes('not found')) {
-                log('[WebContainer] Session may be stale, suggesting cleanup');
-                toast.error('WebContainer failed - session may be stale', {
-                  description: 'Try clicking "Clear Sessions" and retry',
+              if (err.message.includes('SharedArrayBuffer') || err.message.includes('cross-origin')) {
+                toast.error('WebContainer requires cross-origin isolation', {
+                  description: 'Your browser may not support SharedArrayBuffer. Try Chrome or Edge.',
                   duration: 5000,
                 });
               } else {
