@@ -180,19 +180,17 @@ describe('JWT Auth Flow Integration', () => {
 
   describe('Security Edge Cases', () => {
     it('should reject tokens with missing required fields', async () => {
-      // Try to create token without userId
       const { SignJWT } = await import('jose');
       
       const token = await new SignJWT({})
         .setProtectedHeader({ alg: 'HS256' })
         .setIssuedAt()
-        .setIssuer('test')
-        .setAudience('test')
+        .setIssuer('binG')
+        .setAudience('binG-app')
         .setExpirationTime('1h')
-        .sign(new TextEncoder().encode('test-secret'));
+        .sign(new TextEncoder().encode('test-secret-key-for-testing-only-min-16-chars'));
 
       const result = await verifyToken(token);
-      // Token is valid JWT but missing userId - should be rejected
       expect(result.valid).toBe(false);
       expect(result.error).toBe('Token missing required userId claim');
     });
