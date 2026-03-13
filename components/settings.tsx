@@ -115,13 +115,66 @@ export default function Settings({
   // Color picker state
   const [openColorPicker, setOpenColorPicker] = useState<string | null>(null);
   const [selectedColorType, setSelectedColorType] = useState<'bg' | 'text' | 'border'>('bg');
+  
+  // Background URL selector state
+  const [showBgSelector, setShowBgSelector] = useState(false);
+  const [bgUrlName, setBgUrlName] = useState("");
+  
+  // Preset background URLs
+  const PRESET_BACKGROUNDS = [
+    { id: 'default', name: 'Default', url: process.env.NEXT_PUBLIC_BG_MEDIA_URL || '' },
+    { id: 'sky', name: 'Sky', url: 'https://media.tenor.com/CWaT-F5vNb8AAAAM/sky-gif.gif' },
+    { id: 'aurora', name: 'Aurora', url: 'https://i.pinimg.com/originals/64/ce/9f/64ce9f3c2463b528dfba90720fed9ea5.gif' },
+    { id: 'none', name: 'None', url: '' },
+  ];
+  
+  // Get saved backgrounds from localStorage
+  const getSavedBackgrounds = (): Array<{ name: string; url: string }> => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const saved = localStorage.getItem('custom_bg_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  };
+  
+  const [savedBackgrounds, setSavedBackgrounds] = useState<Array<{ name: string; url: string }>>([]);
+  
+  useEffect(() => {
+    setSavedBackgrounds(getSavedBackgrounds());
+  }, []);
+  
+  const saveToBackgroundHistory = (url: string, name?: string) => {
+    if (!url) return;
+    const extractedName = name || extractUrlTitle(url);
+    const newEntry = { name: extractedName, url };
+    
+    const existing = getSavedBackgrounds();
+    const filtered = existing.filter(bg => bg.url !== url);
+    const updated = [newEntry, ...filtered].slice(0, 10); // Keep last 10
+    
+    localStorage.setItem('custom_bg_history', JSON.stringify(updated));
+    setSavedBackgrounds(updated);
+  };
+  
+  const extractUrlTitle = (url: string): string => {
+    try {
+      const urlObj = new URL(url);
+      const pathname = urlObj.pathname;
+      const lastSegment = pathname.split('/').pop() || '';
+      const name = lastSegment
+        .replace(/\.[^/.]+$/, '') // Remove extension
+        .replace(/[-_]/g, ' ') // Replace dashes/underscores with spaces
+        .replace(/\b\w/g, l => l.toUpperCase()); // Title case
+      return name || urlObj.hostname;
+    } catch {
+      return 'Custom Background';
+    }
+  };
 
   // Preset color swatches
   const COLOR_SWATCHES = [
-    '#000000', '#1a1a1a', '#2d2d2d', '#4a4a4a', '#6b6b6b', '#8e8e8e',
-    '#ffffff', '#f5f5f5', '#e0e0e0', '#c4c4c4', '#a3a3a3', '#858585',
-    '#7c3aed', '#6d28d9', '#5b21b6', '#4c1d95', '#312e81', '#1e1b4b',
-    '#dc2626', '#b91c1c', '#991b1b', '#7f1d1d', '#991b1b', '#450a0a',
     '#ea580c', '#c2410c', '#9a3412', '#7c2d12', '#431407', '#2c0d00',
     '#16a34a', '#15803d', '#166534', '#14532d', '#052e16', '#022c22',
     '#2563eb', '#1d4ed8', '#1e40af', '#1e3a8a', '#172554', '#0c0a09',
@@ -308,9 +361,13 @@ export default function Settings({
     }
     try {
       new URL(trimmed);
-      if (typeof window !== "undefined") localStorage.setItem(CUSTOM_BG_MEDIA_KEY, trimmed);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(CUSTOM_BG_MEDIA_KEY, trimmed);
+        saveToBackgroundHistory(trimmed, bgUrlName || undefined);
+      }
       applyCustomBackgroundMedia(trimmed);
       toast.success("Custom ambient background applied");
+      setBgUrlName("");
     } catch {
       toast.error("Invalid background media URL");
     }
@@ -318,8 +375,25 @@ export default function Settings({
 
   const handleClearCustomBg = () => {
     setCustomBgUrl("");
+    setBgUrlName("");
     if (typeof window !== "undefined") localStorage.removeItem(CUSTOM_BG_MEDIA_KEY);
     applyCustomBackgroundMedia("");
+  };
+  
+  const handleSelectBackground = (url: string, name?: string) => {
+    setCustomBgUrl(url);
+    if (url) {
+      if (typeof window !== "undefined") {
+        localStorage.setItem(CUSTOM_BG_MEDIA_KEY, url);
+        if (name) saveToBackgroundHistory(url, name);
+      }
+      applyCustomBackgroundMedia(url);
+      toast.success(`${name || 'Background'} applied`);
+    } else {
+      handleClearCustomBg();
+      toast.success("Background cleared");
+    }
+    setShowBgSelector(false);
   };
 
   const handleApplyBubbleColors = () => {
@@ -416,23 +490,18 @@ export default function Settings({
           {isAuthenticated ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
-                    <User className="h-4 w-4 text-white" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate" title={user?.email}>
-                      {user?.email || 'N/A'}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate" title={user?.email}>
+                    {user?.email || 'N/A'}
+                  </p>
+                  {user?.username && (
+                    <p className="text-xs text-gray-400 truncate" title={user.username}>
+                      @{user.username}
                     </p>
-                    {user?.username && (
-                      <p className="text-xs text-gray-400 truncate" title={user.username}>
-                        @{user.username}
-                      </p>
-                    )}
-                    <div className="flex items-center gap-1">
-                      <div className="w-2 h-2 bg-green-400 rounded-full"></div>
-                      <span className="text-xs text-green-400">Online</span>
-                    </div>
+                  )}
+                  <div className="flex items-center gap-1">
+                    <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                    <span className="text-xs text-green-400">Online</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
@@ -524,23 +593,30 @@ export default function Settings({
             <h3 className="font-medium">Theme</h3>
           </div>
 
-          <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
             {THEME_OPTIONS.map((option) => {
               const isActive = theme === option.id;
               return (
                 <button
                   key={option.id}
                   onClick={() => setTheme(option.id)}
-                  className={`w-full flex items-center gap-3 p-2.5 rounded-lg border transition-all ${
+                  className={`relative overflow-hidden flex flex-col items-center gap-2 p-3 rounded-xl border transition-all duration-200 ${
                     isActive
-                      ? 'border-white/30 bg-white/10'
-                      : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+                      ? 'border-white/40 bg-white/15 shadow-lg shadow-white/5'
+                      : 'border-white/10 hover:border-white/25 hover:bg-white/8'
                   }`}
                 >
-                  <span className={`flex-1 h-6 rounded ${option.swatch}`} />
-                  <span className="text-xs font-medium flex-1">{option.label}</span>
+                  {/* Theme preview gradient */}
+                  <div className={`w-full h-10 rounded-lg ${option.swatch} shadow-inner`} />
+                  
+                  {/* Theme name */}
+                  <span className="text-xs font-medium text-white/90">{option.label}</span>
+                  
+                  {/* Active indicator */}
                   {isActive && (
-                    <div className="w-2 h-2 bg-white rounded-full" />
+                    <div className="absolute top-2 right-2 w-5 h-5 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center">
+                      <Check className="w-3 h-3 text-white" />
+                    </div>
                   )}
                 </button>
               );
@@ -548,14 +624,12 @@ export default function Settings({
           </div>
 
           <div className="mt-3 text-xs text-gray-400 text-center">
-            Current: <span className="text-white font-medium capitalize">{resolvedTheme || theme}</span>
-            <span className="mx-2">•</span>
-            Available: <span className="text-white font-medium">{themes.length}</span>
+            Active: <span className="text-white font-medium capitalize">{resolvedTheme || theme}</span>
           </div>
 
           <div className="mt-4 space-y-2">
             <Label htmlFor="custom-bg-url" className="text-xs text-white/70">
-              Custom Ambient GIF/Image URL
+              Custom: Background URL
             </Label>
             <Input
               id="custom-bg-url"
@@ -564,14 +638,72 @@ export default function Settings({
               placeholder="https://.../background.gif"
               className="bg-black/30 border-white/20 text-xs"
             />
+            <Input
+              value={bgUrlName}
+              onChange={(e) => setBgUrlName(e.target.value)}
+              placeholder="Save as (optional, e.g. 'Sunset Sky')"
+              className="bg-black/30 border-white/20 text-xs"
+            />
             <div className="flex gap-2">
               <Button size="sm" className="flex-1" onClick={handleApplyCustomBg}>
                 Apply
               </Button>
-              <Button size="sm" variant="outline" className="flex-1" onClick={handleClearCustomBg}>
-                Clear
+              <Button size="sm" variant="outline" onClick={() => setShowBgSelector(!showBgSelector)}>
+                {showBgSelector ? 'Close' : 'Select'}
               </Button>
             </div>
+            
+            {/* Background URL Selector */}
+            {showBgSelector && (
+              <div className="space-y-3 mt-2 p-3 bg-black/30 rounded-lg border border-white/10">
+                <div className="text-xs text-gray-400 font-medium">Preset Backgrounds</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {PRESET_BACKGROUNDS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      onClick={() => handleSelectBackground(preset.url, preset.name)}
+                      className="relative overflow-hidden h-16 rounded-lg border border-white/10 hover:border-white/30 transition-all group"
+                    >
+                      {preset.url ? (
+                        <img
+                          src={preset.url}
+                          alt={preset.name}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                          <X className="w-6 h-6 text-gray-500" />
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <span className="text-xs text-white font-medium">{preset.name}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                
+                {savedBackgrounds.length > 0 && (
+                  <>
+                    <div className="text-xs text-gray-400 font-medium mt-3">Saved Backgrounds</div>
+                    <div className="space-y-1 max-h-32 overflow-auto">
+                      {savedBackgrounds.map((bg, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => handleSelectBackground(bg.url, bg.name)}
+                          className="w-full flex items-center gap-2 p-2 rounded bg-black/20 hover:bg-white/10 transition-all text-left"
+                        >
+                          <div className="w-8 h-6 rounded overflow-hidden flex-shrink-0 bg-gray-800">
+                            <img src={bg.url} alt={bg.name} className="w-full h-full object-cover" />
+                          </div>
+                          <span className="text-xs text-white/80 truncate flex-1">{bg.name}</span>
+                          <span className="text-[10px] text-gray-500 truncate max-w-[100px]">{bg.url}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="mt-4 space-y-2">
