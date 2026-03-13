@@ -177,6 +177,14 @@ export async function verifyToken(
       };
     }
     
+    // Validate required userId claim
+    if (!payload.userId) {
+      return {
+        valid: false,
+        error: 'Token missing required userId claim',
+      };
+    }
+    
     return {
       valid: true,
       payload: payload as TokenPayload,

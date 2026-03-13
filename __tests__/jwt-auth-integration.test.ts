@@ -192,9 +192,9 @@ describe('JWT Auth Flow Integration', () => {
         .sign(new TextEncoder().encode('test-secret'));
 
       const result = await verifyToken(token);
-      // Token is valid JWT but missing userId - should still verify but payload won't have userId
-      expect(result.valid).toBe(true);
-      expect(result.payload?.userId).toBeUndefined();
+      // Token is valid JWT but missing userId - should be rejected
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('Token missing required userId claim');
     });
 
     it('should handle concurrent token operations', async () => {
