@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-03-13T07:05:58.718Z",
+  "updatedAt": "2026-03-13T09:04:36.445Z",
   "quotas": {
     "composio": {
       "monthlyLimit": 20000,
@@ -34,7 +34,7 @@
     },
     "microsandbox": {
       "monthlyLimit": 10000,
-      "currentUsage": 131,
+      "currentUsage": 134,
       "resetDate": "2026-04-01T04:00:00.000Z",
       "isDisabled": false
     },

@@ -152,7 +152,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     name: 'Chutes',
     models: ['deepseek-ai/DeepSeek-R1-0528', 'deepseek-ai/DeepSeek-Chat-V3-0324', 'tngtech/DeepSeek-TNG-R1T2-Chimera', 'gemma-3-27b-it', 'meta-llama/Llama-4-Maverick', 'meta-llama/Llama-3.3-70B-Instruct'],
     supportsStreaming: true,
-    maxTokens: 10096,
+    maxTokens: 100000,
     description: 'Chutes AI with high-performance models'
   },
   anthropic: {
