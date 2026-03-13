@@ -791,8 +791,9 @@ export default function TerminalPanel({
       isConnected: false,
     };
 
-    // Set default cwd to the filesystem scope path (matches code preview panel)
-    localShellCwdRef.current[id] = filesystemScopePathRef.current || 'project';
+    // Set default cwd to 'project' - VFS stores files relative to project root
+    // The session scope path is only for VFS lookups, not for terminal cwd
+    localShellCwdRef.current[id] = 'project';
     reconnectCooldownUntilRef.current[id] = 0;
     commandQueueRef.current[id] = [];
     commandHistoryRef.current[id] = [];

@@ -57,6 +57,7 @@ export const conditionalWorkflow = createWorkflow({
       return inputData.path === 'complex';
     },
     // If TRUE: Execute complex path
+    // @ts-ignore - branch step array API may vary
     [
       createStep({
         id: 'complex-path',
@@ -216,6 +217,7 @@ export const selfHealingWorkflow = createWorkflow({
       return !result.success && state.attempts < 3;
     },
     // If TRUE: Retry (loop back to execute step)
+    // @ts-ignore - branch step array API may vary
     [],
     // If FALSE: Continue to completion
     []

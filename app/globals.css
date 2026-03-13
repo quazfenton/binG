@@ -345,7 +345,7 @@
     --card-foreground: 0 0% 98%;
     --popover: 240 10% 3.9%;
     --popover-foreground: 0 0% 98%;
-    --primary: 252 87% 60%;
+    --primary: 0 0% 0%;
     --primary-foreground: 0 0% 100%;
     --secondary: 240 3.7% 15.9%;
     --secondary-foreground: 0 0% 98%;
@@ -370,7 +370,7 @@
     --app-noise-opacity: 0.08;
     --app-bg-media: none;
     --app-bg-media-opacity: 0;
-    --user-bubble-bg: #7c3aed;
+    --user-bubble-bg: rgba(0, 0, 0, 0.85);
     --user-bubble-text: #ffffff;
     --assistant-bubble-bg: rgba(0, 0, 0, 0.72);
     --assistant-bubble-text: #ffffff;
@@ -595,7 +595,8 @@ body::after {
 }
 
 :where(.light, .ocean, .forest, .sepia) [class*="bg-black"] {
-    background-color: hsl(var(--background)) !important;
+    background-color: hsl(var(--background) / 0.6) !important;
+    backdrop-filter: blur(12px);
 }
 
 :where(.light, .ocean, .forest, .sepia) [class*="text-white"] {
@@ -607,7 +608,7 @@ body::after {
 }
 
 :where(.light, .ocean, .forest, .sepia) [class*="bg-white/"] {
-    background-color: hsl(var(--secondary)) !important;
+    background-color: hsl(var(--secondary) / 0.5) !important;
 }
 
 :where(.light, .ocean, .forest, .sepia) [class*="text-gray-"] {

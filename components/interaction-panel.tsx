@@ -1506,7 +1506,7 @@ export default function InteractionPanel({
               }}
               className={`flex-1 flex flex-col min-h-0 transition-all duration-300 ease-out`}
             >
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2 sticky top-0 z-20 bg-black/70 backdrop-blur-sm py-1">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2 sticky top-0 z-20 py-1">
                 <div className="w-full sm:w-auto overflow-x-auto no-scrollbar">
                   <TabsList className="bg-black/40 w-max min-w-full sm:min-w-0 sm:w-auto">
                     <TabsTrigger value="chat" className="text-xs sm:text-sm">
