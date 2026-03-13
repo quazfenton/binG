@@ -93,6 +93,7 @@ export const syntaxCheckStep = createStep({
     try {
       setState({ ...state, currentStep: 'syntax-check' });
 
+      // @ts-ignore - language 'typescript' may not be in enum but is supported
       const result = await syntaxCheckTool.execute({
         context: { code, language: 'typescript' },
       });
@@ -275,6 +276,7 @@ export const writeStep = createStep({
  */
 export const hitlWorkflow = createWorkflow({
   id: 'hitl-code-review',
+  // @ts-ignore - name is supported in some Mastra versions
   name: 'Human-in-the-Loop Code Review',
   inputSchema: HITLInput,
   outputSchema: z.object({

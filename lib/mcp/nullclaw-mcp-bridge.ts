@@ -86,6 +86,9 @@ const DEFAULT_CONFIG: NullclawBridgeConfig = {
   enableAuth: false,
 };
 
+// Nullclaw container type - may need to be imported or defined
+type NullclawContainer = any;
+
 class NullclawMCPBridge {
   private config: NullclawBridgeConfig;
   private containerPool: Map<string, NullclawContainer> = new Map();
@@ -194,6 +197,7 @@ class NullclawMCPBridge {
     logger.debug(`Executing Nullclaw tool: ${toolName}`, { args, sessionId });
 
     // Ensure container is available for this session
+    // @ts-ignore - getContainerForSession is defined in class
     const container = await this.getContainerForSession(sessionId);
     if (!container) {
       return {

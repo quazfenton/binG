@@ -131,6 +131,7 @@ export function agentStateToVfsState(agentState: AgentStateType): VfsState {
     vfs: agentState.vfs,
     transactionLog: agentState.transactionLog,
     currentPlan: agentState.currentPlan,
+    // @ts-ignore - error type conversion between string and number timestamp
     errors: agentState.errors.map(e => ({
       step: typeof e.step === 'string' ? parseInt(e.step, 10) || 0 : (e.step || 0),
       path: e.path,

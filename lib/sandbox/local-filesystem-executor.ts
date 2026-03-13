@@ -338,9 +338,10 @@ export class LocalCommandExecutor {
     }
   }
 
-  private listDirectory(dirPath: string): string[] {
+  private listDirectory(dirPath: string, fs?: Record<string, LocalFilesystemEntry>): string[] {
+    const fileSystem = fs || this.getFileSystem()
     const entries: string[] = []
-    for (const key of Object.keys(this.fileSystem)) {
+    for (const key of Object.keys(fileSystem)) {
       const parent = this.getParentPath(key)
       if (parent === dirPath) {
         entries.push(key.split('/').pop() || key)
@@ -393,12 +394,13 @@ export class LocalCommandExecutor {
   private executeCd(args: string[], writeError: (text: string) => void): string {
     const target = args.slice(1).join(' ') || 'project'
     const nextPath = this.resolvePath(this.cwd[this.terminalId], target)
+    const fs = this.getFileSystem() // Use external filesystem if available
     
     this.ensureProjectRootExists()
 
-    if (this.fileSystem[nextPath] && this.fileSystem[nextPath].type === 'directory') {
+    if (fs[nextPath] && fs[nextPath].type === 'directory') {
       this.cwd[this.terminalId] = nextPath
-    } else if (!this.fileSystem[nextPath]) {
+    } else if (!fs[nextPath]) {
       writeError(`cd: no such directory: ${target}`)
     } else {
       writeError(`cd: not a directory: ${target}`)
@@ -410,11 +412,12 @@ export class LocalCommandExecutor {
     const showLong = args[1] === '-l' || args[1] === '-la' || args[1] === '-al'
     const target = showLong ? (args[1].startsWith('-') ? args[2] : args[1]) : (args[1] || this.cwd[this.terminalId])
     const targetPath = this.resolvePath(this.cwd[this.terminalId], target)
+    const fs = this.getFileSystem() // Use external filesystem if available
 
     this.ensureProjectRootExists()
 
-    if (!this.fileSystem[targetPath]) {
-      const fileCount = Object.keys(this.fileSystem).filter(k => k !== 'project').length
+    if (!fs[targetPath]) {
+      const fileCount = Object.keys(fs).filter(k => k !== 'project').length
       if (fileCount === 0) {
         writeLine('\x1b[33m⚠ Filesystem is empty. Files will appear here when created.\x1b[0m')
       } else {
@@ -423,9 +426,9 @@ export class LocalCommandExecutor {
       return ''
     }
 
-    if (this.fileSystem[targetPath].type === 'file') {
+    if (fs[targetPath].type === 'file') {
       if (showLong) {
-        const info = this.fileSystem[targetPath]
+        const info = fs[targetPath]
         const date = new Date(info.modifiedAt).toLocaleDateString()
         writeLine(`-rw-r--r--  1 user  staff  ${info.content?.length || 0}  ${date}  ${target}`)
       } else {
@@ -434,11 +437,11 @@ export class LocalCommandExecutor {
       return ''
     }
 
-    const entries = this.listDirectory(targetPath)
+    const entries = this.listDirectory(targetPath, fs)
     if (showLong) {
       for (const entry of entries) {
         const entryPath = targetPath === 'project' ? `project/${entry}` : `${targetPath}/${entry}`
-        const info = this.fileSystem[entryPath]
+        const info = fs[entryPath]
         const prefix = info.type === 'directory' ? 'd' : '-'
         const date = new Date(info.modifiedAt).toLocaleDateString()
         const size = info.content?.length || (info.type === 'directory' ? 0 : 4096)
@@ -449,7 +452,7 @@ export class LocalCommandExecutor {
       const files: string[] = []
       for (const entry of entries) {
         const entryPath = targetPath === 'project' ? `project/${entry}` : `${targetPath}/${entry}`
-        if (this.fileSystem[entryPath]?.type === 'directory') {
+        if (fs[entryPath]?.type === 'directory') {
           dirs.push(`\x1b[34m${entry}/\x1b[0m`)
         } else {
           files.push(entry)
@@ -884,11 +887,11 @@ export class LocalCommandExecutor {
   }
 
   setFileSystem(fs: Record<string, LocalFilesystemEntry>): void {
-    // If external filesystem provided, sync to it
+    // Always update local copy
+    this.fileSystem = fs
+    // Also sync to external if available
     if (this.setExtFileSystem) {
       this.setExtFileSystem(fs)
-    } else {
-      this.fileSystem = fs
     }
   }
 }

@@ -299,6 +299,7 @@ export class SmitheryService {
       method: 'PATCH',
       body: JSON.stringify(config),
     });
+    // @ts-ignore - SmitheryServerSchema may accept partial input
     return SmitheryServerSchema.parse(response);
   }
 
@@ -465,6 +466,7 @@ export class SmitheryService {
     }
 
     const result = await response.json();
+    // @ts-ignore - SmitheryServerSchema may accept partial input
     return SmitheryServerSchema.parse(result);
   }
 

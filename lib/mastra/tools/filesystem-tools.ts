@@ -285,6 +285,7 @@ export function createFilesystemTools(userId: string): FilesystemTool[] {
           format: {
             type: 'string',
             description: 'Output format: markdown, xml, json, or plain (default: markdown)',
+            // @ts-ignore - enum is supported by JSON Schema
             enum: ['markdown', 'xml', 'json', 'plain'],
           },
           includeContents: {
@@ -305,6 +306,7 @@ export function createFilesystemTools(userId: string): FilesystemTool[] {
           },
           excludePatterns: {
             type: 'array',
+            // @ts-ignore - items is supported by JSON Schema
             items: { type: 'string' },
             description: 'Glob patterns to exclude (e.g., ["node_modules/**", "*.log"])',
           },

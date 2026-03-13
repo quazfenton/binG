@@ -4089,49 +4089,8 @@ export default app;`,
                 </div>
                 <div className="flex items-center gap-1 md:gap-2">
                   <button
-                    onClick={async () => {
-                      // Clear stale sandbox sessions
-                      try {
-                        const response = await fetch('/api/sandbox/clear-sessions', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                        });
-                        const data = await response.json();
-                        if (data.success) {
-                          toast.success('Sessions cleared', {
-                            description: `Cleared ${data.clearedCount || 0} stale sessions`,
-                            duration: 3000,
-                          });
-                          // Reset all sandbox states
-                          setWebcontainerUrl(null);
-                          setCodesandboxUrl(null);
-                          setNextjsUrl(null);
-                          setIsWebcontainerBooting(false);
-                          setIsCodesandboxLoading(false);
-                          setIsNextjsBuilding(false);
-                        } else {
-                          toast.error('Failed to clear sessions', {
-                            description: data.error || 'Unknown error',
-                            duration: 4000,
-                          });
-                        }
-                      } catch (err: any) {
-                        toast.error('Failed to clear sessions', {
-                          description: err.message,
-                          duration: 4000,
-                        });
-                      }
-                    }}
-                    className="bg-red-600 hover:bg-red-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
-                    title="Clear stale sandbox sessions (fixes 'Unauthorized' and 'not found' errors)"
-                  >
-                    <Trash2 className="w-3 h-3 md:w-4 md:h-4 mr-1" />
-                    <span className="hidden sm:inline">Clear Sessions</span>
-                    <span className="sm:hidden">🗑️</span>
-                  </button>
-                  <button
                     onClick={downloadAsZip}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
+                    className="bg-blue-600/50 hover:bg-blue-500/60 backdrop-blur-sm text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center transition-all duration-200"
                   >
                     <Package className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
                     <span className="hidden sm:inline">Download ZIP</span>
@@ -4147,7 +4106,7 @@ export default app;`,
                         );
                         window.open("/visual-editor", "_blank", "noopener,noreferrer");
                       }}
-                      className="bg-purple-600 hover:bg-purple-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
+                      className="bg-purple-600/50 hover:bg-purple-500/60 backdrop-blur-sm text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center transition-all duration-200"
                     >
                       <Edit className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
                       <span className="hidden sm:inline">Edit</span>
@@ -4234,7 +4193,7 @@ export default app;`,
 
                 <TabsContent value="files" className="p-0 h-full">
                   <div className="flex h-full flex-col md:flex-row">
-                    <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 bg-black/30 overflow-y-auto max-h-48 md:max-h-none">
+                    <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 bg-black/30 overflow-y-auto max-h-48 md:max-h-none [scrollbar-width:thin] [scrollbar-color:rgba(0,0,0,0.3)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-black/30 [&::-webkit-scrollbar-thumb:hover]:bg-black">
                       <div className="p-2 md:p-4">
                         <h3 className="text-sm font-medium text-gray-300 mb-2">
                           Filesystem Explorer

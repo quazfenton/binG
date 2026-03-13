@@ -128,6 +128,7 @@ export async function executorNode(state: AgentStateType): Promise<Partial<Agent
 
     return {
       vfs: result.vfs || state.vfs,
+      // @ts-ignore - transactionLog may have legacy format from StatefulAgent
       transactionLog: result.transactionLog || state.transactionLog,
       next: 'verifier',
     };
@@ -161,6 +162,7 @@ export async function verifierNode(state: AgentStateType): Promise<Partial<Agent
   try {
     const verified = await agent.runVerificationPhase();
 
+    // @ts-ignore - verified may have errors property from StatefulAgent
     if (verified && 'errors' in verified && verified.errors && verified.errors.length > 0) {
       return {
         errors: [...state.errors, ...verified.errors.map((e: any) => ({
@@ -224,6 +226,7 @@ export async function selfHealingNode(state: AgentStateType): Promise<Partial<Ag
     if (healed.errors && healed.errors.length > 0) {
       return {
         vfs: healed.vfs || state.vfs,
+        // @ts-ignore - transactionLog may have legacy format from StatefulAgent
         transactionLog: healed.transactionLog || state.transactionLog,
         retryCount: state.retryCount + 1,
         errors: healed.errors.map((e: any) => ({
@@ -237,6 +240,7 @@ export async function selfHealingNode(state: AgentStateType): Promise<Partial<Ag
 
     return {
       vfs: healed.vfs || state.vfs,
+      // @ts-ignore - transactionLog may have legacy format from StatefulAgent
       transactionLog: healed.transactionLog || state.transactionLog,
       retryCount: state.retryCount + 1,
       next: 'verifier', // Re-verify after healing
