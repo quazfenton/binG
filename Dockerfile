@@ -35,15 +35,23 @@ COPY --from=deps /app/node_modules ./node_modules
 # Copy source files
 COPY . .
 
+# Build-time arguments for required environment variables
+# These must be passed during docker build using --build-arg
+ARG ENCRYPTION_KEY
+ARG JWT_SECRET
+ARG BLAXEL_SECRET_ENCRYPTION_KEY
+ARG NANGO_SECRET_KEY
+ARG DATABASE_URL
+
 # Build Next.js application
 # Skip telemetry and use standalone output for Docker
 ENV NEXT_TELEMETRY_DISABLED=1
 # Provide minimal required env vars for build (NOT for production use!)
-ENV ENCRYPTION_KEY=build-time-temporary-key-32chars!!
-ENV JWT_SECRET=build-time-temporary-secret-key-for-build-only
-ENV BLAXEL_SECRET_ENCRYPTION_KEY=build-time-blaxel-key-32chars!
-ENV NANGO_SECRET_KEY=nango_build_temp_key
-ENV DATABASE_URL=postgresql://build:build@localhost:5432/build_temp
+ENV ENCRYPTION_KEY=${ENCRYPTION_KEY}
+ENV JWT_SECRET=${JWT_SECRET}
+ENV BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY}
+ENV NANGO_SECRET_KEY=${NANGO_SECRET_KEY}
+ENV DATABASE_URL=${DATABASE_URL}
 RUN npm run build
 
 # ===========================================

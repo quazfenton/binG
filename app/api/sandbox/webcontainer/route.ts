@@ -1,19 +1,16 @@
 /**
  * WebContainer API Endpoint
  * 
- * Creates a WebContainer sandbox for running Node.js in the browser.
- * Uses the WebContainerProvider which wraps @webcontainer/api SDK.
+ * Returns configuration and metadata needed for the client to bootstrap
+ * WebContainer in the browser. The actual WebContainer API runs client-side.
  * 
- * SDK Pattern:
- * - WebContainerProvider.createSandbox() → WebContainerSandboxHandle
- * - handle.writeFile() → instance.fs.writeFile()
- * - handle.executeCommand() → instance.spawn()
- * - handle.getPreviewLink(port) → server-ready event URL
+ * Client-side flow:
+ * 1. Client calls this endpoint to get config (clientId, etc.)
+ * 2. Client uses WebContainerProvider directly in browser to boot and use WebContainer
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { createLogger } from '@/lib/utils/logger';
 import { generateSecureId } from '@/lib/utils';
 
@@ -23,11 +20,6 @@ export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   try {
-    // Note: WebContainer runs in browser, but this endpoint supports both:
-    // 1. Client-side: forwards request to browser WebContainer API
-    // 2. Server-side: returns info needed to bootstrap WebContainer in browser
-    // The window check was removed - it's a Next.js API route that provides metadata/config
-
     const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
     const anonymousSessionId = req.headers.get('x-anonymous-session-id') || generateSecureId('anon');
     const userId = authResult.userId || `anonymous:${anonymousSessionId}`;
@@ -42,94 +34,44 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    logger.info('Creating WebContainer', { userId, fileCount: Object.keys(files).length });
+    logger.info('WebContainer config requested', { userId, fileCount: Object.keys(files).length });
 
-    // Create WebContainer sandbox via sandbox bridge
-    // The provider internally uses: WebContainer.boot()
-    const session = await sandboxBridge.getOrCreateSession(userId, {
-      language: 'typescript',
-      template: 'node',
-    });
-
-    logger.info('WebContainer created', { 
-      sandboxId: session.sandboxId, 
-      sessionId: session.sessionId 
-    });
-
-    // Get the WebContainer provider to access SDK methods
-    const provider = await sandboxBridge.getProvider('webcontainer');
-    const sandbox = await provider.getSandbox(session.sandboxId);
-
-    // Write all files to WebContainer workspace using SDK's fs API
-    logger.info('Writing files to WebContainer...');
-    for (const [filePath, content] of Object.entries(files)) {
-      try {
-        const result = await sandbox.writeFile(filePath, content as string);
-        logger.debug(`Written: ${filePath} - ${result.success ? 'OK' : 'FAILED'}`);
-      } catch (err: any) {
-        logger.warn(`Failed to write file ${filePath}:`, err.message);
-      }
-    }
-
-    // Install dependencies if package.json exists
-    if (files['package.json']) {
-      logger.info('Installing dependencies...');
-      try {
-        await sandbox.executeCommand('npm install');
-      } catch (err: any) {
-        logger.warn('npm install failed:', err.message);
-      }
-    }
-
-    // Start server and wait for preview URL
-    const cmdToRun = startCommand || (files['package.json']?.includes('"start"') ? 'npm start' : 'node server.js');
+    // Get WebContainer configuration from environment
+    const clientId = (process.env.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID || 'wc_api_____').trim();
+    const scope = (process.env.NEXT_PUBLIC_WEBCONTAINER_SCOPE || '').trim();
     
-    logger.info('Starting server:', cmdToRun);
-    // Run server in background (don't wait for exit)
-    sandbox.executeCommand(cmdToRun).catch(err => {
-      logger.warn('Server command error:', err.message);
-    });
-
-    // Wait for server-ready event and get preview URL
+    // Generate a unique session ID for this WebContainer instance
+    const sandboxId = `webcontainer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sessionId = generateSecureId('wc sess');
+    
+    // Determine start command
+    const hasPackageJson = files['package.json'] !== undefined;
+    const hasStartScript = hasPackageJson && files['package.json'].includes('"start"');
+    const cmdToRun = startCommand || (hasStartScript ? 'npm start' : 'node server.js');
+    
     const targetPort = waitForPort || 3000;
-    // Format: https://<sandboxId>-<port>.webcontainer.io
-    const previewUrl = await Promise.race([
-      new Promise<string>((resolve) => {
-        // Poll for preview URL (WebContainer sets it via server-ready event)
-        const checkInterval = setInterval(async () => {
-          try {
-            const preview = await sandbox.getPreviewLink(targetPort);
-            if (preview.url && !preview.url.includes('localhost')) {
-              clearInterval(checkInterval);
-              resolve(preview.url);
-            }
-          } catch {
-            // Ignore errors while polling
-          }
-        }, 500);
-        
-        // Timeout after 30 seconds (longer for Next.js first build)
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          resolve(`http://localhost:${targetPort}`);
-        }, waitForPort ? 60000 : 30000);
-      }),
-    ]);
 
-    logger.info('WebContainer ready', {
-      sandboxId: session.sandboxId,
-      url: previewUrl,
-    });
-
+    // Return configuration for client-side WebContainer bootstrapping
+    // The client will use WebContainerProvider directly in the browser
     return NextResponse.json({
       success: true,
-      sandboxId: session.sandboxId,
-      sessionId: session.sessionId,
-      url: previewUrl,
-      provider: 'webcontainer',
+      sandboxId,
+      sessionId,
+      config: {
+        clientId,
+        scope: scope || undefined,
+        workspaceDir: '/workspace',
+        startCommand: cmdToRun,
+        waitForPort: targetPort,
+        hasPackageJson,
+        hasStartScript,
+      },
+      // Include files in response so client can write them directly
+      files,
+      message: 'WebContainer runs in browser. Use WebContainerProvider client-side to boot.',
     });
   } catch (error: any) {
-    logger.error('Failed to create WebContainer:', error);
+    logger.error('Failed to generate WebContainer config:', error);
     
     return NextResponse.json(
       { 
