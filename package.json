@@ -68,7 +68,7 @@
     "@livekit/components-react": "^2.9.3",
     "@livekit/components-styles": "^1.1.4",
     "@mastra/core": "^1.8.0",
-    "@mastra/deployer": "^1.10.0",
+    "@mastra/deployer": "^1.12.0",
     "@mistralai/mistralai": "^1.14.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@nangohq/frontend": "^0.69.7",
