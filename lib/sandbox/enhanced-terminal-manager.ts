@@ -1,13 +1,13 @@
 /**
  * Enhanced Terminal Manager with Advanced Features
- * 
+ *
  * Augments the existing terminal-manager.ts with:
  * - Desktop integration for computer use agents
  * - MCP gateway integration
  * - Advanced port detection and preview
  * - Session persistence and auto-resume
  * - Multi-provider fallback support
- * 
+ *
  * @see docs/sdk/e2b-llms-full.txt - E2B Desktop and MCP integration
  * @see docs/sdk/daytona-llms.txt - Daytona Computer Use Service
  * @see docs/sdk/blaxel-llms-full.txt - Blaxel async triggers and callbacks
@@ -16,7 +16,10 @@
 import { getSandboxProvider, type SandboxHandle, type PtyHandle as ProviderPtyHandle, type SandboxProviderType } from './providers'
 import { updateSession } from './session-store'
 import type { PreviewInfo } from './types'
-import { sandboxEvents } from './sandbox-events'
+import { emitEvent } from './sandbox-events'
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('TerminalManager')
 
 // Re-export existing functionality
 export * from './terminal-manager'
@@ -71,13 +74,18 @@ export class EnhancedTerminalManager {
       mcpConfig?: Record<string, any>
     },
   ): Promise<string> {
+    log.info(`Creating terminal session: sessionId=${sessionId}, sandboxId=${sandboxId}`)
+    log.debug(`Session options: ${JSON.stringify(options || {})}`)
+    
     const { handle, providerType } = await this.resolveHandleForSandbox(sandboxId)
+    log.debug(`Resolved sandbox handle from provider: ${providerType}`)
 
     // Clean up existing connection
     await this.disconnectTerminal(sessionId)
 
     // Initialize desktop if requested and supported
     if (options?.enableDesktop && handle.createDesktop) {
+      log.debug('Initializing desktop support...')
       const desktopHandle = await handle.createDesktop()
       this.desktopSessions.set(sessionId, {
         handle: desktopHandle,
@@ -85,24 +93,21 @@ export class EnhancedTerminalManager {
         sessionId,
         providerType,
       })
+      log.info(`Desktop session initialized for ${sessionId}`)
 
       // Emit desktop ready event
-      sandboxEvents.emit(sandboxId, {
-        type: 'desktop:ready',
-        data: { sessionId, desktopId: desktopHandle.id },
-      })
+      emitEvent(sandboxId, 'desktop:ready', { sessionId, desktopId: desktopHandle.id })
     }
 
     // Initialize MCP gateway if configured
     if (options?.mcpConfig && handle.getMcpGateway) {
+      log.debug('Initializing MCP gateway...')
       const mcpGateway = await handle.getMcpGateway(options.mcpConfig)
       this.mcpGateways.set(sessionId, mcpGateway)
+      log.info(`MCP gateway initialized for ${sessionId}`)
 
       // Emit MCP ready event
-      sandboxEvents.emit(sandboxId, {
-        type: 'mcp:ready',
-        data: { sessionId, tools: mcpGateway.availableTools },
-      })
+      emitEvent(sandboxId, 'mcp:ready', { sessionId, tools: mcpGateway.availableTools })
     }
 
     // Create PTY or command mode connection
@@ -156,24 +161,31 @@ export class EnhancedTerminalManager {
     onData: (data: string) => void,
     onPortDetected?: (info: PreviewInfo) => void,
   ): Promise<string | null> {
+    log.info(`Auto-resuming terminal session: sessionId=${sessionId}, sandboxId=${sandboxId}`)
+    
     try {
       const { handle, providerType } = await this.resolveHandleForSandbox(sandboxId)
-      
+
       // Check if sandbox is still active
       const status = await handle.getStatus?.()
       if (status?.status === 'stopped') {
-        console.log(`[EnhancedTerminalManager] Sandbox ${sandboxId} is stopped, cannot auto-resume`)
+        log.warn(`Sandbox ${sandboxId} is stopped, cannot auto-resume`)
         return null
       }
 
+      log.debug(`Sandbox ${sandboxId} is active, reconnecting...`)
       // Reconnect PTY or command mode
       if (handle.createPty) {
-        return this.createPtySession(sessionId, handle, providerType, onData, onPortDetected)
+        const result = await this.createPtySession(sessionId, handle, providerType, onData, onPortDetected)
+        log.info(`Auto-resume successful for ${sessionId}`)
+        return result
       } else {
-        return this.createCommandModeSession(sessionId, handle, providerType, onData, onPortDetected)
+        const result = await this.createCommandModeSession(sessionId, handle, providerType, onData, onPortDetected)
+        log.info(`Auto-resume successful for ${sessionId} (command mode)`)
+        return result
       }
-    } catch (error) {
-      console.error('[EnhancedTerminalManager] Auto-resume failed:', error)
+    } catch (error: any) {
+      log.error(`Auto-resume failed: ${error.message}`)
       return null
     }
   }
@@ -235,8 +247,8 @@ export class EnhancedTerminalManager {
     // but we're augmenting, not replacing
   }
 
-  // Private helper methods (would be implemented similar to original terminal-manager.ts)
-  private async resolveHandleForSandbox(sandboxId: string) {
+  // Private helper methods (would call original terminal-manager.ts implementation)
+  private async resolveHandleForSandbox(sandboxId: string): Promise<{ handle: SandboxHandle; providerType: SandboxProviderType }> {
     // Implementation would mirror terminal-manager.ts
     throw new Error('Implementation delegated to base TerminalManager')
   }

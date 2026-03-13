@@ -286,7 +286,8 @@ class FilesystemEditSessionService {
     transactionId: string;
     reason?: string;
   }): Promise<DenyFilesystemEditResult | null> {
-    const tx = this.transactions.get(input.transactionId);
+    // Use getTransaction to support both in-memory and database-persisted transactions
+    const tx = await this.getTransaction(input.transactionId);
     if (!tx) return null;
 
     const revertedPaths: string[] = [];
@@ -345,11 +346,11 @@ class FilesystemEditSessionService {
       reason: tx.deniedReason,
       paths: tx.operations.map((op) => op.path),
     };
-    
+
     // Persist transaction and denial to database
     filesystemEditDatabase.persistTransaction(tx);
     filesystemEditDatabase.persistDenial(denialRecord);
-    
+
     const denialList = this.denialHistoryByConversation.get(tx.conversationId) || [];
     denialList.push(denialRecord);
     this.denialHistoryByConversation.set(
@@ -364,18 +365,25 @@ class FilesystemEditSessionService {
     };
   }
 
-  getRecentDenials(conversationId: string, limit = 3): FilesystemEditDenialRecord[] {
+  async getRecentDenials(conversationId: string, limit = 3): Promise<FilesystemEditDenialRecord[]> {
     // Try database first for persistence
-    const dbDenials = filesystemEditDatabase.getDenialsByConversation(conversationId);
+    const dbDenials = await filesystemEditDatabase.getDenialsByConversation(conversationId);
     if (dbDenials.length > 0) {
       return dbDenials.slice(-Math.max(1, limit));
     }
-    
+
     // Fallback to in-memory
     const list = this.denialHistoryByConversation.get(conversationId) || [];
     return list.slice(-Math.max(1, limit));
   }
   
+  /**
+   * Get transaction by ID synchronously (in-memory only, for auto-commit)
+   */
+  getTransactionSync(transactionId: string): FilesystemEditTransaction | null {
+    return this.transactions.get(transactionId) || null;
+  }
+
   /**
    * Get transaction by ID (from database or memory)
    */

@@ -10,6 +10,7 @@ import type {
   VirtualWorkspaceSnapshot,
 } from './filesystem-types';
 import { diffTracker } from './filesystem-diffs';
+import { stripWorkspacePrefixes } from './scope-utils';
 import { VFSBatchOperations } from './vfs-batch-operations';
 
 // Default configuration
@@ -127,12 +128,22 @@ export class VirtualFilesystemService {
     return file;
   }
 
-  async writeFile(ownerId: string, filePath: string, content: string, language?: string): Promise<VirtualFile> {
+  async writeFile(
+    ownerId: string,
+    filePath: string,
+    content: string,
+    language?: string,
+    options?: { failIfExists?: boolean },
+  ): Promise<VirtualFile> {
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
     const previous = workspace.files.get(normalizedPath);
     const now = new Date().toISOString();
     const normalizedContent = typeof content === 'string' ? content : String(content ?? '');
+
+    if (previous && options?.failIfExists) {
+      throw new Error(`File already exists: ${normalizedPath}`);
+    }
 
     // Check for concurrent modification (conflict detection)
     if (previous) {
@@ -203,6 +214,60 @@ export class VirtualFilesystemService {
     await this.persistWorkspace(ownerId, workspace);
 
     return file;
+  }
+
+  /**
+   * Create a directory (ensures parent directories exist)
+   * Directories are implicit in the VFS (created when files are written),
+   * but this method allows explicit directory creation for empty folders.
+   */
+  async createDirectory(ownerId: string, dirPath: string): Promise<{ path: string; createdAt: string }> {
+    const workspace = await this.ensureWorkspace(ownerId);
+    const normalizedPath = this.normalizePath(dirPath);
+    const now = new Date().toISOString();
+
+    // Validate directory path
+    if (!normalizedPath || normalizedPath === '.') {
+      throw new Error('Directory path is required');
+    }
+
+    // Check if a file already exists at this path
+    const existingFile = workspace.files.get(normalizedPath);
+    if (existingFile) {
+      throw new Error(`A file already exists at this path: ${normalizedPath}`);
+    }
+
+    // Check if directory already exists (by checking if any file has this as parent)
+    const hasChildFiles = Array.from(workspace.files.keys()).some(
+      filePath => filePath.startsWith(normalizedPath + '/')
+    );
+
+    // Create a marker file to represent the directory
+    // Directories are implicit in VFS, but we create a .gitkeep-like marker for empty dirs
+    const dirMarkerPath = `${normalizedPath}/.directory`;
+    const dirMarker: VirtualFile = {
+      path: dirMarkerPath,
+      content: '',
+      language: 'markdown',
+      lastModified: now,
+      version: 1,
+      size: 0,
+      isDirectoryMarker: true,
+    };
+
+    workspace.files.set(dirMarkerPath, dirMarker);
+    workspace.version += 1;
+    workspace.updatedAt = now;
+
+    this.emitFileChange(ownerId, normalizedPath, 'create', workspace.version);
+    this.emitSnapshotChange(ownerId, workspace.version);
+
+    await this.persistWorkspace(ownerId, workspace);
+
+    return {
+      path: normalizedPath,
+      createdAt: now,
+    };
   }
 
   /**
@@ -295,6 +360,22 @@ export class VirtualFilesystemService {
     const directoryPrefix = `${normalizedDirectoryPath}/`;
 
     for (const file of workspace.files.values()) {
+      // Skip .directory marker files (used to track empty directories)
+      if (file.isDirectoryMarker || file.path.endsWith('/.directory')) {
+        // But still use them to detect directory existence
+        const dirPath = file.path.slice(0, -'/'.length - '.directory'.length);
+        const dirName = path.posix.basename(dirPath);
+        if (dirPath.startsWith(directoryPrefix) && !directoryNodes.has(dirName)) {
+          directoryNodes.set(dirName, {
+            type: 'directory',
+            name: dirName,
+            path: dirPath,
+            isExplicit: true, // Mark as explicitly created directory
+          });
+        }
+        continue;
+      }
+
       if (file.path === normalizedDirectoryPath) {
         fileNodes.push(this.toFileNode(file));
         continue;
@@ -319,6 +400,7 @@ export class VirtualFilesystemService {
             type: 'directory',
             name: directoryName,
             path: `${normalizedDirectoryPath}/${directoryName}`,
+            isExplicit: false, // Implicit directory from file paths
           });
         }
       }
@@ -478,27 +560,10 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
-    // Strip common sandbox/workspace prefixes to prevent path accumulation
-    // This prevents issues like /tmp/workspaces/tmp/workspaces/...
-    // Handle both absolute and relative paths
-    let strippedPath = rawPath
-      .replace(/^\/tmp\/workspaces\//i, '')
-      .replace(/^\/tmp\/workspaces/i, '')
-      .replace(/^tmp\/workspaces\//i, '')
-      .replace(/^tmp\/workspaces/i, '')
-      .replace(/^\/workspace\//i, '')
-      .replace(/^\/workspace/i, '')
-      .replace(/^workspace\//i, '')
-      .replace(/^workspace/i, '')
-      .replace(/^\/home\/[^/]+\/workspace\//i, '')
-      .replace(/^\/home\/[^/]+\/workspace/i, '')
-      .replace(/^home\/[^/]+\/workspace\//i, '')
-      .replace(/^home\/[^/]+\/workspace/i, '')
-      .replace(/^project\//, '')
-      .replace(/^\/project\//, '');
-
-    // Remove any leading slashes after stripping
-    strippedPath = strippedPath.replace(/^\/+/, '');
+    // Strip common sandbox/workspace prefixes (single source of truth in scope-utils)
+    let strippedPath = stripWorkspacePrefixes(rawPath);
+    // Also strip project/ prefix for server-side resolution
+    strippedPath = strippedPath.replace(/^project\//, '');
 
     // Handle empty path after stripping
     if (!strippedPath) {

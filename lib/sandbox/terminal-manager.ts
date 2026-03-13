@@ -1,12 +1,12 @@
 /**
  * Terminal Manager
- * 
+ *
  * Manages terminal sessions across all sandbox providers
  * Enhanced with:
  * - Enhanced port detection (10+ patterns)
  * - Terminal session persistence
  * - Enhanced event emission
- * 
+ *
  * @see lib/sandbox/enhanced-port-detector.ts
  * @see lib/sandbox/terminal-session-store.ts
  * @see lib/sandbox/sandbox-events-enhanced.ts
@@ -24,6 +24,9 @@ import {
   type TerminalSessionState,
 } from './terminal-session-store'
 import { emitEvent } from './sandbox-events'
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('TerminalManager')
 
 interface PtyConnection {
   ptyHandle: ProviderPtyHandle
@@ -58,6 +61,11 @@ const activePtyConnections = new Map<string, PtyConnection>()
 const commandModeConnections = new Map<string, CommandModeConnection>()
 const websocketConnections = new Map<string, WebSocketConnection>()
 
+// ✅ FIX: Connection limits to prevent resource exhaustion
+const MAX_PTY_CONNECTIONS = 50
+const MAX_WEBSOCKET_CONNECTIONS = 100
+const CONNECTION_IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
+
 // Legacy port patterns (kept for backward compatibility)
 const LEGACY_PORT_PATTERNS = [
   /(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/,
@@ -65,6 +73,45 @@ const LEGACY_PORT_PATTERNS = [
   /started\s+(?:on\s+)?(?:port\s+)?(\d+)/i,
   /server\s+(?:running|started)\s+(?:at|on)\s+.*?:(\d+)/i,
 ]
+
+// ✅ FIX: Periodic cleanup of idle connections
+setInterval(() => {
+  const now = Date.now()
+  let cleaned = 0
+  
+  // Clean up idle PTY connections
+  for (const [sessionId, conn] of activePtyConnections.entries()) {
+    if (now - conn.lastActive > CONNECTION_IDLE_TIMEOUT_MS) {
+      log.warn(`Cleaning up idle PTY connection: ${sessionId}`)
+      void conn.ptyHandle.disconnect().catch(() => {})
+      activePtyConnections.delete(sessionId)
+      cleaned++
+    }
+  }
+  
+  // Clean up idle command-mode connections
+  for (const [sessionId, conn] of commandModeConnections.entries()) {
+    if (now - conn.lastActive > CONNECTION_IDLE_TIMEOUT_MS) {
+      log.warn(`Cleaning up idle command-mode connection: ${sessionId}`)
+      commandModeConnections.delete(sessionId)
+      cleaned++
+    }
+  }
+  
+  // Clean up idle WebSocket connections
+  for (const [sessionId, conn] of websocketConnections.entries()) {
+    if (now - conn.lastActive > CONNECTION_IDLE_TIMEOUT_MS) {
+      log.warn(`Cleaning up idle WebSocket connection: ${sessionId}`)
+      conn.ws.close(4008, 'Idle timeout')
+      websocketConnections.delete(sessionId)
+      cleaned++
+    }
+  }
+  
+  if (cleaned > 0) {
+    log.info(`Cleaned up ${cleaned} idle connections`)
+  }
+}, 5 * 60 * 1000) // Run every 5 minutes
 
 export class TerminalManager {
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
@@ -145,7 +192,7 @@ export class TerminalManager {
     
     // Try all known providers to locate the sandbox (supports quota-based fallbacks)
     // This is critical because sandbox-service can create sandboxes on any provider via fallback
-    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'blaxel-mcp', 'sprites', 'codesandbox', 'webcontainer', 'webcontainer-filesystem', 'webcontainer-spawn', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral']
+    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'blaxel-mcp', 'sprites', 'codesandbox', 'webcontainer', 'webcontainer-filesystem', 'webcontainer-spawn', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral', 'vercel-sandbox'] //codesandbox***
     for (const providerType of allProviders) {
       const result = await tryProvider(providerType)
       if (result) return result
@@ -177,7 +224,10 @@ export class TerminalManager {
     options?: { cols?: number; rows?: number },
     userId?: string,
   ): Promise<string> {
+    log.info(`Creating terminal session: sessionId=${sessionId}, sandboxId=${sandboxId}`)
+    
     const { handle, providerType } = await this.resolveHandleForSandbox(sandboxId)
+    log.debug(`Resolved sandbox handle from provider: ${providerType}, workspace: ${handle.workspaceDir}`)
     const provider = await getSandboxProvider(providerType)
     const ptyId = `pty-${sessionId}-${Date.now()}`
 
@@ -192,6 +242,7 @@ export class TerminalManager {
     }, { userId })
 
     if (!handle.createPty) {
+      log.debug(`PTY not available for ${sandboxId}, using command-mode`)
       // Fallback providers (e.g. microsandbox) can still support command execution mode.
       commandModeConnections.set(sessionId, {
         sandboxId,
@@ -205,13 +256,13 @@ export class TerminalManager {
         execQueue: Promise.resolve(),
         providerType,
       })
-      
+
       const modeMessage = '\r\n\x1b[33m[command-mode] PTY unavailable, using line-based execution.\x1b[0m\r\n'
       onData(modeMessage)
       onData(`${handle.workspaceDir || '/workspace'} $ `)
-      
+
       updateSession(sessionId, { ptySessionId: 'command-mode' })
-      
+
       // Save terminal session for persistence
       saveTerminalSession({
         sessionId,
@@ -225,35 +276,41 @@ export class TerminalManager {
         lastActive: Date.now(),
         history: [],
       })
-      
+      log.info(`Terminal session created in command-mode for ${sessionId}`)
+
       return 'command-mode'
     }
 
-    const ptyHandle = await handle.createPty({
-      id: ptyId,
-      envs: { TERM: 'xterm-256color', LANG: 'en_US.UTF-8' },
-      cols: options?.cols ?? 120,
-      rows: options?.rows ?? 30,
-      onData: (data: Uint8Array) => {
-        const text = new TextDecoder().decode(data)
-        onData(text)
+    log.debug(`Creating PTY session with dimensions: ${options?.cols ?? 120}x${options?.rows ?? 30}`)
 
-        // Enhanced port detection
-        if (onPortDetected) {
-          const detectedPorts = enhancedPortDetector.detectPorts(text)
-          const connection = activePtyConnections.get(sessionId)
-          
-          for (const { port, protocol, url } of detectedPorts) {
-            if (handle.getPreviewLink && !connection?.detectedPorts.has(port)) {
-              handle.getPreviewLink(port).then(preview => {
-                onPortDetected!(preview)
-                connection?.detectedPorts.add(port)
-                
-                // Emit port detected event
-                emitEvent(sandboxId, 'port_detected', {
-                  port,
-                  url: url || preview.url,
-                  protocol,
+    let ptyHandle: any
+    try {
+      ptyHandle = await handle.createPty({
+        id: ptyId,
+        envs: { TERM: 'xterm-256color', LANG: 'en_US.UTF-8' },
+        cols: options?.cols ?? 120,
+        rows: options?.rows ?? 30,
+        onData: (data: Uint8Array) => {
+          const text = new TextDecoder().decode(data)
+          onData(text)
+
+          // Enhanced port detection
+          if (onPortDetected) {
+            const detectedPorts = enhancedPortDetector.detectPorts(text)
+            const connection = activePtyConnections.get(sessionId)
+
+            for (const { port, protocol, url } of detectedPorts) {
+              if (handle.getPreviewLink && !connection?.detectedPorts.has(port)) {
+                handle.getPreviewLink(port).then(preview => {
+                  log.info(`Port detected: ${port} (${protocol}) -> ${url || preview.url}`)
+                  onPortDetected!(preview)
+                  connection?.detectedPorts.add(port)
+
+                  // Emit port detected event
+                  emitEvent(sandboxId, 'port_detected', {
+                    port,
+                    url: url || preview.url,
+                    protocol,
                 }, { userId })
               }).catch(() => {
                 // Port not yet available, ignore
@@ -264,33 +321,69 @@ export class TerminalManager {
       },
     })
 
-    await ptyHandle.waitForConnection()
+    // ✅ FIX: Check connection limit before adding
+    if (activePtyConnections.size >= MAX_PTY_CONNECTIONS) {
+      log.warn(`PTY connection limit reached (${MAX_PTY_CONNECTIONS}), cleaning up oldest`)
+      // Clean up oldest connection
+      let oldestId: string | null = null
+      let oldestTime = Infinity
+      for (const [id, conn] of activePtyConnections.entries()) {
+        if (conn.lastActive < oldestTime) {
+          oldestTime = conn.lastActive
+          oldestId = id
+        }
+      }
+      if (oldestId) {
+        const oldestConn = activePtyConnections.get(oldestId)
+        if (oldestConn) {
+          void oldestConn.ptyHandle.disconnect().catch(() => {})
+        }
+        activePtyConnections.delete(oldestId)
+        log.info(`Evicted oldest PTY connection: ${oldestId}`)
+      }
+    }
 
-    activePtyConnections.set(sessionId, {
-      ptyHandle,
-      sandboxId,
-      sessionId,
-      lastActive: Date.now(),
-      detectedPorts: new Set(),
-    })
+    // ✅ FIX: Wrap PTY connection in try-catch with cleanup on error
+    try {
+      await ptyHandle.waitForConnection()
 
-    updateSession(sessionId, { ptySessionId: ptyId })
-    
-    // Save terminal session for persistence
-    saveTerminalSession({
-      sessionId,
-      sandboxId,
-      ptySessionId: ptyId,
-      userId: userId || '',
-      mode: 'pty',
-      cwd: handle.workspaceDir || '/workspace',
-      cols: options?.cols ?? 120,
-      rows: options?.rows ?? 30,
-      lastActive: Date.now(),
-      history: [],
-    })
-    
-    return ptyId
+      activePtyConnections.set(sessionId, {
+        ptyHandle,
+        sandboxId,
+        sessionId,
+        lastActive: Date.now(),
+        detectedPorts: new Set(),
+      })
+
+      updateSession(sessionId, { ptySessionId: ptyId })
+
+      // Save terminal session for persistence
+      saveTerminalSession({
+        sessionId,
+        sandboxId,
+        ptySessionId: ptyId,
+        userId: userId || '',
+        mode: 'pty',
+        cwd: handle.workspaceDir || '/workspace',
+        cols: options?.cols ?? 120,
+        rows: options?.rows ?? 30,
+        lastActive: Date.now(),
+        history: [],
+      })
+
+      return ptyId
+    } catch (error: any) {
+      // ✅ FIX: Clean up on error to prevent connection leaks
+      log.error(`PTY connection failed, cleaning up: ${error.message}`)
+      activePtyConnections.delete(sessionId)
+      throw error
+    }
+  } catch (error: any) {
+    // Handle errors from createPty
+    log.error(`Failed to create PTY: ${error.message}`)
+    activePtyConnections.delete(sessionId)
+    throw error
+  }
   }
 
   async reconnectTerminal(
@@ -389,6 +482,34 @@ export class TerminalManager {
    * Register a WebSocket connection for terminal session
    */
   registerWebSocketConnection(ws: any, sessionId: string, sandboxId: string): void {
+    // ✅ FIX: Verify PTY connection exists first
+    if (!this.hasPtyConnection(sessionId)) {
+      log.warn(`Attempted to register WebSocket without PTY: ${sessionId}`)
+      throw new Error('Cannot register WebSocket without PTY connection')
+    }
+
+    // ✅ FIX: Check connection limit before adding
+    if (websocketConnections.size >= MAX_WEBSOCKET_CONNECTIONS) {
+      log.warn(`WebSocket connection limit reached (${MAX_WEBSOCKET_CONNECTIONS}), closing oldest`)
+      // Close oldest connection
+      let oldestId: string | null = null
+      let oldestTime = Infinity
+      for (const [id, conn] of websocketConnections.entries()) {
+        if (conn.lastActive < oldestTime) {
+          oldestTime = conn.lastActive
+          oldestId = id
+        }
+      }
+      if (oldestId) {
+        const oldestConn = websocketConnections.get(oldestId)
+        if (oldestConn?.ws?.readyState === 1) { // WebSocket.OPEN
+          oldestConn.ws.close(4009, 'Connection limit reached')
+        }
+        websocketConnections.delete(oldestId)
+        log.info(`Evicted oldest WebSocket connection: ${oldestId}`)
+      }
+    }
+
     websocketConnections.set(sessionId, {
       ws,
       sandboxId,
@@ -427,11 +548,14 @@ export class TerminalManager {
    * - Event emission
    */
   async disconnectTerminal(sessionId: string): Promise<void> {
+    log.debug(`Disconnecting terminal session: ${sessionId}`)
+    
     const conn = activePtyConnections.get(sessionId)
     if (conn) {
       try {
+        log.debug(`Disconnecting PTY handle for ${sessionId}`)
         await conn.ptyHandle.disconnect()
-        
+
         // Emit disconnect event
         emitEvent(conn.sandboxId, 'disconnected', {
           sessionId,
@@ -439,10 +563,12 @@ export class TerminalManager {
         })
       } finally {
         activePtyConnections.delete(sessionId)
+        log.debug(`PTY connection removed for ${sessionId}`)
       }
-      
+
       // Update session status
       deleteTerminalSession(sessionId)
+      log.info(`Terminal session disconnected: ${sessionId}`)
     }
 
     const cmdConn = commandModeConnections.get(sessionId)
@@ -452,9 +578,10 @@ export class TerminalManager {
         sessionId,
         reason: 'user_requested',
       })
-      
+
       commandModeConnections.delete(sessionId)
       deleteTerminalSession(sessionId)
+      log.info(`Command-mode session disconnected: ${sessionId}`)
     }
   }
 

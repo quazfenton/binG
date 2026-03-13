@@ -11,7 +11,7 @@
  * - Inter-agent communication
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { simulatedOrchestrator } from '../agent/simulated-orchestration';
 
 /**

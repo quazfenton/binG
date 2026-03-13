@@ -7,7 +7,7 @@
  * @see https://docs.crewai.com/en/concepts/collaboration.md
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { modelRouter } from '../runtime/model-router';
 import type { Crew } from '../crew/crew';
 import type { CrewOutput, CrewConfig } from '../crew/crew';

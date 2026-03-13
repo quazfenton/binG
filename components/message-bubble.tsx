@@ -6,8 +6,8 @@ import remarkGfm from "remark-gfm"
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism"
 import { Button } from "@/components/ui/button"
-import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal, ExternalLink } from "lucide-react"
-import type { Message } from "@/types"
+import { Copy, Check, ChevronDown, ChevronUp, Brain, Loader2, SkipForward, Pause, Play, Terminal, ExternalLink, FileCode, Plus, Minus, Eye, Download, CheckCircle, XCircle } from "lucide-react"
+import type { Message, CodeArtifact } from "@/types"
 import { useEnhancedStreamingDisplay } from "@/hooks/use-enhanced-streaming-display"
 import { useResponsiveLayout, calculateDynamicWidth, getOverflowStrategy } from "@/hooks/use-responsive-layout"
 import { analyzeMessageContent, getContentBasedStyling, shouldUseCompactLayout } from "@/lib/message-content-analyzer"
@@ -16,7 +16,10 @@ import IntegrationAuthPrompt from "@/components/integrations/IntegrationAuthProm
 import { isEmbeddableUrl, transformToEmbed, getSuggestedPlugin } from "@/lib/utils/iframe-helper"
 import { ReasoningDisplay, ReasoningSummary } from "@/components/reasoning-display"
 import { ToolInvocationsList } from "@/components/tool-invocation-card"
+import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
+import { toast } from "sonner"
+import { buildApiHeaders } from "@/lib/utils"
 
 interface MessageBubbleProps {
   message: Message
@@ -29,20 +32,6 @@ interface MessageBubbleProps {
   onAuthPromptDismiss?: () => void
   userId?: string
 }
-
-const inferProviderFromTool = (toolName?: string): string => {
-  if (!toolName) return 'unknown';
-  const normalized = toolName.toLowerCase();
-  if (normalized.startsWith('gmail.') || normalized.startsWith('google')) return 'google';
-  if (normalized.startsWith('github.')) return 'github';
-  if (normalized.startsWith('slack.')) return 'slack';
-  if (normalized.startsWith('notion.')) return 'notion';
-  if (normalized.startsWith('discord.')) return 'discord';
-  if (normalized.startsWith('twitter.') || normalized.startsWith('x.')) return 'twitter';
-  if (normalized.startsWith('spotify.')) return 'spotify';
-  if (normalized.startsWith('twilio.')) return 'twilio';
-  return normalized.split('.')[0] || 'unknown';
-};
 
 /**
  * Get authorization URL for provider, mirroring backend routing logic
@@ -95,6 +84,8 @@ export default function MessageBubble({
   const [authDismissed, setAuthDismissed] = useState(false)
   const [isApplyingEditAction, setIsApplyingEditAction] = useState(false)
   const [fileEditDecision, setFileEditDecision] = useState<"auto_applied" | "accepted" | "denied" | "reverted_with_conflicts" | null>(null)
+  const [expandedArtifacts, setExpandedArtifacts] = useState<Set<string>>(new Set())
+  const [applyingArtifact, setApplyingArtifact] = useState<string | null>(null)
 
   const isUser = message.role === "user"
 
@@ -132,23 +123,7 @@ export default function MessageBubble({
   }, [fileEditInfo?.status]);
 
   const buildRequestHeaders = useCallback((): HeadersInit => {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-
-    if (typeof window !== "undefined") {
-      const token = localStorage.getItem("token");
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-
-      const anonymousSessionId = localStorage.getItem("anonymous_session_id");
-      if (anonymousSessionId) {
-        headers["x-anonymous-session-id"] = anonymousSessionId;
-      }
-    }
-
-    return headers;
+    return buildApiHeaders();
   }, []);
 
   const handleAcceptEdits = useCallback(async () => {
@@ -165,9 +140,17 @@ export default function MessageBubble({
         throw new Error(payload?.error || `Failed to accept edits (${response.status})`);
       }
       setFileEditDecision("accepted");
+      toast.success("File edits accepted", {
+        description: "Changes are now permanent",
+        duration: 2000,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to accept edits";
       console.error(message);
+      toast.error("Failed to accept edits", {
+        description: message,
+        duration: 4000,
+      });
     } finally {
       setIsApplyingEditAction(false);
     }
@@ -190,12 +173,31 @@ export default function MessageBubble({
         throw new Error(payload?.error || `Failed to deny edits (${response.status})`);
       }
       const txStatus = payload?.data?.transaction?.status;
-      setFileEditDecision(
-        txStatus === "reverted_with_conflicts" ? "reverted_with_conflicts" : "denied",
-      );
+      const conflicts = payload?.data?.conflicts || [];
+      const revertedPaths = payload?.data?.revertedPaths || [];
+      
+      if (txStatus === "reverted_with_conflicts") {
+        setFileEditDecision("reverted_with_conflicts");
+        toast.error("Reverted with conflicts", {
+          description: conflicts.length > 0 
+            ? `${revertedPaths.length} files reverted, ${conflicts.length} conflicts detected`
+            : "Some files could not be fully reverted",
+          duration: 5000,
+        });
+      } else {
+        setFileEditDecision("denied");
+        toast.success("File edits reverted", {
+          description: `${revertedPaths.length} file(s) restored to previous state`,
+          duration: 3000,
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to deny edits";
       console.error(message);
+      toast.error("Failed to revert edits", {
+        description: message,
+        duration: 5000,
+      });
     } finally {
       setIsApplyingEditAction(false);
     }
@@ -254,9 +256,29 @@ export default function MessageBubble({
 
   const handleCopy = async () => {
     const contentToCopy = isUser ? message.content : streamingDisplay.displayContent
-    await navigator.clipboard.writeText(contentToCopy)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    try {
+      await navigator.clipboard.writeText(contentToCopy)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (error) {
+      // Fallback for when document is not focused or clipboard API is unavailable
+      // This commonly happens when the tab is in the background or focus is elsewhere
+      console.warn('Clipboard copy failed, using fallback:', error)
+      const textArea = document.createElement('textarea')
+      textArea.value = contentToCopy
+      textArea.style.position = 'fixed'
+      textArea.style.left = '-999999px'
+      document.body.appendChild(textArea)
+      textArea.select()
+      try {
+        document.execCommand('copy')
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      } catch (fallbackError) {
+        console.error('Fallback copy also failed:', fallbackError)
+      }
+      document.body.removeChild(textArea)
+    }
   }
 
   const { touchHandlers } = useTouchHandler({
@@ -274,42 +296,42 @@ export default function MessageBubble({
     const thinkingRegex = /<think>([\s\S]*?)<\/think>/g
     const reasoningRegex = /\*\*Reasoning:\*\*([\s\S]*?)(?=\*\*|$)/g
     const thoughtRegex = /\*\*Thought:\*\*([\s\S]*?)(?=\*\*|$)/g
-    
+
     let reasoning = ""
     let mainContent = content
-    
+
     let match
     while ((match = thinkingRegex.exec(content)) !== null) {
       reasoning += match[1].trim() + "\n\n"
       mainContent = mainContent.replace(match[0], "")
     }
-    
+
     while ((match = reasoningRegex.exec(content)) !== null) {
       reasoning += "**Reasoning:**" + match[1].trim() + "\n\n"
       mainContent = mainContent.replace(match[0], "")
     }
-    
+
     while ((match = thoughtRegex.exec(content)) !== null) {
       reasoning += "**Thought:**" + match[1].trim() + "\n\n"
       mainContent = mainContent.replace(match[0], "")
     }
-    
+
     return {
       reasoning: reasoning.trim(),
       mainContent: mainContent.trim()
     }
   }
 
-  // Check for auth_required in message metadata
+  // Check for integration OAuth auth_required in message metadata
+  // Only show IntegrationAuthPrompt for real 3rd-party integrations (Arcade/Composio/Nango),
+  // NOT for generic site login auth (which has requiresAuth=false, loginRequired=true)
   const authInfo = useMemo(() => {
-    if ((message as any).metadata?.requiresAuth) {
-      const toolName = (message as any).metadata.toolName || 'unknown';
-      const provider = (message as any).metadata.provider || inferProviderFromTool(toolName);
-      // Use provided authUrl or generate correct one based on provider routing
-      const authUrl = (message as any).metadata.authUrl || getAuthUrlForProvider(provider);
+    const meta = (message as any).metadata;
+    if (meta?.requiresAuth && meta.toolName && meta.provider && meta.provider !== 'unknown') {
+      const authUrl = meta.authUrl || getAuthUrlForProvider(meta.provider);
       return {
-        toolName,
-        provider,
+        toolName: meta.toolName,
+        provider: meta.provider,
         authUrl
       }
     }
@@ -335,15 +357,81 @@ export default function MessageBubble({
     ? (message as any).metadata.reasoning
     : ''
   const combinedReasoning = [reasoning, metadataReasoning].filter(Boolean).join('\n\n')
-  const toolInvocations = Array.isArray((message as any).metadata?.toolInvocations)
-    ? (message as any).metadata.toolInvocations
-    : []
+  const toolInvocations = normalizeToolInvocations((message as any).metadata?.toolInvocations)
 
   // Use reasoning from hook if available, otherwise fall back to metadata
   const activeReasoningChunks = reasoningStream.reasoningChunks.length > 0
     ? reasoningStream.reasoningChunks
     : (message.metadata?.reasoningChunks || []);
   const activeFullReasoning = reasoningStream.fullReasoning || combinedReasoning;
+
+  // Code artifacts from V2 agent execution
+  const codeArtifacts = useMemo(() => {
+    const artifacts = message.metadata?.codeArtifacts as CodeArtifact[] | undefined;
+    if (!artifacts || !Array.isArray(artifacts)) return [];
+    return artifacts.filter(a => a && a.path);
+  }, [message.metadata?.codeArtifacts]);
+
+  // Generate unified diff between two contents
+  const generateDiff = useCallback((oldContent: string | undefined, newContent: string | undefined, path: string) => {
+    const oldLines = oldContent?.split('\n') || [];
+    const newLines = newContent?.split('\n') || [];
+    const result: string[] = [`--- a/${path}`, `+++ b/${path}`];
+    const maxLen = Math.max(oldLines.length, newLines.length);
+    for (let i = 0; i < maxLen; i++) {
+      const oldLine = oldLines[i];
+      const newLine = newLines[i];
+      if (oldLine === newLine) {
+        result.push(` ${oldLine || ''}`);
+      } else if (oldLine === undefined) {
+        result.push(`+${newLine}`);
+      } else if (newLine === undefined) {
+        result.push(`-${oldLine}`);
+      } else {
+        result.push(`-${oldLine}`);
+        result.push(`+${newLine}`);
+      }
+    }
+    return result.join('\n');
+  }, []);
+
+  // Toggle artifact expansion
+  const toggleArtifact = useCallback((path: string) => {
+    setExpandedArtifacts(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  // Apply artifact to filesystem
+  const handleApplyArtifact = useCallback(async (artifact: CodeArtifact) => {
+    if (applyingArtifact) return;
+    if (artifact.operation !== 'delete' && artifact.content == null) return;
+    setApplyingArtifact(artifact.path);
+    try {
+      const isDelete = artifact.operation === 'delete';
+      const response = await fetch(isDelete ? '/api/filesystem/delete' : '/api/filesystem/write', {
+        method: 'POST',
+        headers: buildRequestHeaders(),
+        body: JSON.stringify({
+          path: artifact.path,
+          content: isDelete ? undefined : artifact.content ?? '',
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.error || `Failed to apply (${response.status})`);
+      }
+      toast.success(isDelete ? 'File deleted' : 'File applied', { description: artifact.path, duration: 2000 });
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : 'Failed to apply';
+      toast.error('Failed to apply file', { description: errMsg, duration: 4000 });
+    } finally {
+      setApplyingArtifact(null);
+    }
+  }, [buildRequestHeaders, applyingArtifact]);
 
   const handleAuthDismiss = () => {
     setAuthDismissed(true)
@@ -381,7 +469,7 @@ export default function MessageBubble({
           ${layout.isPortrait ? 'portrait-layout' : 'landscape-layout'}
         `}
         style={{
-          maxWidth: layout.isMobile ? 'calc(100vw - 2.25rem)' : dynamicStyles.maxWidth,
+          maxWidth: layout.isMobile ? 'min(calc(100vw - 2.25rem), 600px)' : dynamicStyles.maxWidth,
           padding: dynamicStyles.padding,
           fontSize: dynamicStyles.fontSize,
           backgroundColor: isUser ? 'var(--user-bubble-bg)' : 'var(--assistant-bubble-bg)',
@@ -389,7 +477,11 @@ export default function MessageBubble({
           borderColor: isUser ? 'transparent' : 'var(--assistant-bubble-border)',
           wordBreak: dynamicStyles.overflowStrategy === 'wrap' ? 'break-word' : 'normal',
           overflowWrap: dynamicStyles.overflowStrategy === 'wrap' ? 'break-word' : 'normal',
-          whiteSpace: contentAnalysis.hasCodeBlocks && layout.isMobile ? 'pre' : 'pre-wrap'
+          whiteSpace: contentAnalysis.hasCodeBlocks && layout.isMobile ? 'pre' : 'pre-wrap',
+          // Mobile scrolling: allow touch scrolling on message bubbles
+          touchAction: 'auto',
+          // Prevent text from breaking out of bubble
+          overflowX: layout.isMobile ? 'hidden' : 'visible',
         }}
         onMouseEnter={() => !layout.isMobile && setShowStreamingControls(true)}
         onMouseLeave={() => {
@@ -433,16 +525,18 @@ export default function MessageBubble({
                       {isShellLang && (
                         <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/code:opacity-100 transition-opacity">
                           <button
-                            className="flex items-center gap-1 bg-green-600/80 hover:bg-green-500 text-white text-[10px] px-2 py-1 rounded"
-                            title="Run in Terminal"
+                            className="flex items-center gap-1 bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-[10px] px-2 py-1 rounded border border-white/20"
+                            title="Open in Preview Panel"
                             onClick={() => {
-                              window.dispatchEvent(new CustomEvent('terminal-run-command', {
-                                detail: { command: codeStr }
+                              // Open code preview panel with this code
+                              window.dispatchEvent(new CustomEvent('open-code-preview', {
+                                detail: { code: codeStr, language: match[1] }
                               }));
+                              toast.success('Opening preview panel');
                             }}
                           >
-                            <Terminal className="w-3 h-3" />
-                            Run
+                            <Eye className="w-3 h-3" />
+                            Preview
                           </button>
                         </div>
                       )}
@@ -501,7 +595,7 @@ export default function MessageBubble({
                   <hr className={`${useCompactLayout ? 'my-2' : 'my-4'} border-t border-white/20`} />
                 ),
                 blockquote: ({ children }) => (
-                  <blockquote className={`border-l-4 border-purple-500 ${
+                  <blockquote className={`border-l-4 border-white/30 ${
                     layout.isMobile ? 'pl-2' : 'pl-4'
                   } italic ${useCompactLayout ? 'mb-2' : 'mb-4'}`}>
                     {children}
@@ -518,7 +612,7 @@ export default function MessageBubble({
                     : '#';
 
                   return (
-                    <div className="inline-flex flex-col items-start gap-1">
+                    <span className="inline-flex flex-col items-start gap-1">
                       <a
                         href={safeHref}
                         rel="noopener noreferrer"
@@ -552,7 +646,7 @@ export default function MessageBubble({
                           </span>
                         )}
                       </a>
-                    </div>
+                    </span>
                   );
                 },
                 table: ({ children }) => (
@@ -588,12 +682,12 @@ export default function MessageBubble({
                   </td>
                 ),
                 h1: ({ children }) => (
-                  <h1 className="text-2xl font-bold mb-4 pb-2 border-b border-purple-500/30">
+                  <h1 className="text-2xl font-bold mb-4 pb-2 border-b border-white/10">
                     {children}
                   </h1>
                 ),
                 h2: ({ children }) => (
-                  <h2 className="text-xl font-semibold mb-3 pb-1 border-b border-purple-500/20">
+                  <h2 className="text-xl font-semibold mb-3 pb-1 border-b border-white/10">
                     {children}
                   </h2>
                 ),
@@ -634,6 +728,119 @@ export default function MessageBubble({
         {/* Tool Invocations Display - Enhanced with new component */}
         {!isUser && toolInvocations.length > 0 && (
           <ToolInvocationsList toolInvocations={toolInvocations} />
+        )}
+
+        {/* Code Artifacts Display - V2 Agent Generated Files */}
+        {!isUser && codeArtifacts.length > 0 && (
+          <div className="mt-3 rounded-lg border border-white/15 bg-black/25 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-white/80">
+                <FileCode className="w-4 h-4" />
+                <span className="text-sm font-medium">Generated Files</span>
+                <span className="text-xs text-white/50">({codeArtifacts.length})</span>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {codeArtifacts.map((artifact) => {
+                const isExpanded = expandedArtifacts.has(artifact.path);
+                const isApplying = applyingArtifact === artifact.path;
+                const diff = artifact.previousContent 
+                  ? generateDiff(artifact.previousContent, artifact.content, artifact.path)
+                  : null;
+                const additions = diff ? diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length : 0;
+                const deletions = diff ? diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length : 0;
+                
+                return (
+                  <div key={artifact.path} className="rounded border border-white/10 overflow-hidden">
+                    <div 
+                      className="flex items-center justify-between px-3 py-2 bg-white/5 cursor-pointer hover:bg-white/10 transition-colors"
+                      onClick={() => toggleArtifact(artifact.path)}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {artifact.operation === 'write' && <Plus className="w-3.5 h-3.5 text-green-400 shrink-0" />}
+                        {artifact.operation === 'patch' && <FileCode className="w-3.5 h-3.4 text-blue-400 shrink-0" />}
+                        {artifact.operation === 'delete' && <Minus className="w-3.5 h-3.5 text-red-400 shrink-0" />}
+                        <code className="text-xs text-white/80 truncate">{artifact.path}</code>
+                        {artifact.language && (
+                          <span className="text-[10px] text-white/40 px-1.5 py-0.5 bg-white/10 rounded">
+                            {artifact.language}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {additions > 0 && <span className="text-xs text-green-400">+{additions}</span>}
+                        {deletions > 0 && <span className="text-xs text-red-400">-{deletions}</span>}
+                        {isExpanded ? <ChevronUp className="w-4 h-4 text-white/50" /> : <ChevronDown className="w-4 h-4 text-white/50" />}
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div className="border-t border-white/10">
+                        {diff && diff.length > 100 ? (
+                          <div className="max-h-64 overflow-y-auto bg-black/30 p-2">
+                            <pre className="text-xs font-mono text-white/70 whitespace-pre-wrap">
+                              {diff.split('\n').slice(0, 50).join('\n')}
+                              {diff.split('\n').length > 50 && '\n... (truncated)'}
+                            </pre>
+                          </div>
+                        ) : artifact.content ? (
+                          <div className="max-h-64 overflow-y-auto bg-black/30 p-2">
+                            <SyntaxHighlighter
+                              style={vscDarkPlus as any}
+                              language={artifact.language || 'typescript'}
+                              customStyle={{
+                                fontSize: '11px',
+                                padding: '8px',
+                                borderRadius: '4px',
+                                margin: 0,
+                                background: 'transparent',
+                              }}
+                            >
+                              {artifact.content.slice(0, 2000)}
+                              {artifact.content.length > 2000 && '\n// ... truncated'}
+                            </SyntaxHighlighter>
+                          </div>
+                        ) : (
+                          <div className="p-3 text-xs text-white/50">No content available</div>
+                        )}
+                        <div className="flex items-center justify-end gap-2 px-3 py-2 border-t border-white/10 bg-white/5">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 text-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigator.clipboard.writeText(artifact.content || '');
+                              toast.success('Copied', { duration: 1500 });
+                            }}
+                          >
+                            <Copy className="w-3 h-3 mr-1" />
+                            Copy
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="h-7 text-xs bg-green-600 hover:bg-green-500"
+                            disabled={isApplying || !artifact.content}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleApplyArtifact(artifact);
+                            }}
+                          >
+                            {isApplying ? (
+                              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                            ) : (
+                              <CheckCircle className="w-3 h-3 mr-1" />
+                            )}
+                            Apply
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         )}
 
         {!isUser && fileEditInfo && (

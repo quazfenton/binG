@@ -361,3 +361,4 @@ describe('MessageBubble - Performance', () => {
     expect(screen.getByTestId('code-block')).toBeInTheDocument();
   });
 });
+

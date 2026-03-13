@@ -6,7 +6,7 @@
  * METRICS WIRED: All operations emit metrics
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { createReadStream, createWriteStream, mkdirSync, existsSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { pipeline } from 'stream/promises';

@@ -15,6 +15,7 @@ import {
 } from '../../enhanced-code-system/core/error-types'
 
 import { initializeComposioService, getComposioService, type ComposioService } from './composio-service'
+import { chatLogger } from './chat-logger'
 
 export interface LLMProvider {
   id: string
@@ -105,7 +106,7 @@ export interface ProviderConfig {
     apiKey?: string
     baseURL?: string
   }
-  opencode?: {
+  zen?: {
     apiKey?: string
     baseURL?: string
   }
@@ -151,7 +152,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     name: 'Chutes',
     models: ['deepseek-ai/DeepSeek-R1-0528', 'deepseek-ai/DeepSeek-Chat-V3-0324', 'tngtech/DeepSeek-TNG-R1T2-Chimera', 'gemma-3-27b-it', 'meta-llama/Llama-4-Maverick', 'meta-llama/Llama-3.3-70B-Instruct'],
     supportsStreaming: true,
-    maxTokens: 10096,
+    maxTokens: 100000,
     description: 'Chutes AI with high-performance models'
   },
   anthropic: {
@@ -323,9 +324,9 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     maxTokens: 128000,
     description: 'GitHub Models - Access to GPT-4, Llama, Mistral, Phi, and more via GitHub Azure'
   },
-  opencode: {
-    id: 'opencode',
-    name: 'OpenCode API',
+  zen: {
+    id: 'zen',
+    name: 'zen API',
     models: [
       'zen',
       'zen-32k',
@@ -337,7 +338,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     ],
     supportsStreaming: true,
     maxTokens: 128000,
-    description: 'OpenCode API - Access to Zen and Kimi 2.5 models with extended context windows'
+    description: 'zen API - Access to Zen and Kimi 2.5 models with extended context windows'
   }
 }
 
@@ -350,7 +351,7 @@ class LLMService {
   private replicate: Replicate | null = null
   private portkey: Portkey | null = null
   private mistral: Mistral | null = null
-  private opencodeClient: OpenAI | null = null
+  private zenClient: OpenAI | null = null
   private composioService: ComposioService | null = null
 
   constructor(config: ProviderConfig = {}) {
@@ -404,11 +405,11 @@ class LLMService {
       })
     }
 
-    if (config.opencode?.apiKey) {
-      // OpenCode API is OpenAI-compatible
-      this.opencodeClient = new OpenAI({
-        apiKey: config.opencode.apiKey,
-        baseURL: config.opencode.baseURL || 'https://api.opencode.ai/v1'
+    if (config.zen?.apiKey) {
+      // zen API is OpenAI-compatible
+      this.zenClient = new OpenAI({
+        apiKey: config.zen.apiKey,
+        baseURL: config.zen.baseURL || 'https://api.zen.ai/v1'
       })
     }
   }
@@ -469,34 +470,56 @@ class LLMService {
   }
 
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
-    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000 } = request
+    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId } = request
+    const requestStartTime = Date.now();
+
+    chatLogger.debug('LLM generateResponse called', { requestId, provider, model }, {
+      messageCount: messages.length,
+      temperature,
+      maxTokens,
+    });
 
     try {
+      const responseStartTime = Date.now();
+      let response: LLMResponse;
+
       switch (provider) {
         case 'openai':
-          return await this.generateOpenAIResponse(model, messages, temperature, maxTokens)
+          response = await this.generateOpenAIResponse(model, messages, temperature, maxTokens)
+          break;
         case 'anthropic':
-          return await this.generateAnthropicResponse(model, messages, temperature, maxTokens)
+          response = await this.generateAnthropicResponse(model, messages, temperature, maxTokens)
+          break;
         case 'google':
-          return await this.generateGoogleResponse(model, messages, temperature, maxTokens)
+          response = await this.generateGoogleResponse(model, messages, temperature, maxTokens)
+          break;
         case 'cohere':
-          return await this.generateCohereResponse(model, messages, temperature, maxTokens)
+          response = await this.generateCohereResponse(model, messages, temperature, maxTokens)
+          break;
         case 'together':
-          return await this.generateTogetherResponse(model, messages, temperature, maxTokens)
+          response = await this.generateTogetherResponse(model, messages, temperature, maxTokens)
+          break;
         case 'replicate':
-          return await this.generateReplicateResponse(model, messages, temperature, maxTokens)
+          response = await this.generateReplicateResponse(model, messages, temperature, maxTokens)
+          break;
         case 'portkey':
-          return await this.generatePortkeyResponse(model, messages, temperature, maxTokens)
+          response = await this.generatePortkeyResponse(model, messages, temperature, maxTokens)
+          break;
         case 'openrouter':
-          return await this.generateOpenRouterResponse(model, messages, temperature, maxTokens)
+          response = await this.generateOpenRouterResponse(model, messages, temperature, maxTokens)
+          break;
         case 'chutes':
-          return await this.generateChutesResponse(model, messages, temperature, maxTokens)
+          response = await this.generateChutesResponse(model, messages, temperature, maxTokens)
+          break;
         case 'mistral':
-          return await this.generateMistralResponse(model, messages, temperature, maxTokens)
+          response = await this.generateMistralResponse(model, messages, temperature, maxTokens)
+          break;
         case 'github':
-          return await this.generateGitHubResponse(model, messages, temperature, maxTokens)
-        case 'opencode':
-          return await this.generateOpenCodeResponse(model, messages, temperature, maxTokens)
+          response = await this.generateGitHubResponse(model, messages, temperature, maxTokens)
+          break;
+        case 'zen':
+          response = await this.generatezenResponse(model, messages, temperature, maxTokens)
+          break;
         default:
           throw createLLMError(`Unsupported provider: ${provider}`, {
             code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
@@ -505,7 +528,26 @@ class LLMService {
             context: { provider }
           });
       }
+
+      const responseLatency = Date.now() - responseStartTime;
+      response.provider = provider;
+      response.timestamp = new Date();
+
+      chatLogger.info('LLM provider response generated', { requestId, provider, model }, {
+        latencyMs: responseLatency,
+        tokensUsed: response.tokensUsed,
+        finishReason: response.finishReason,
+        contentLength: response.content.length,
+      });
+
+      return response;
     } catch (error) {
+      const requestLatency = Date.now() - requestStartTime;
+      chatLogger.error('LLM provider request failed', { requestId, provider, model }, {
+        latencyMs: requestLatency,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
       // If it's already an LLMError, re-throw it instead of wrapping it again
       if (error instanceof LLMError) {
         throw error;
@@ -521,47 +563,101 @@ class LLMService {
   }
 
   async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingResponse> {
-    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000 } = request
+    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId } = request
+    const streamStartTime = Date.now();
+    let chunkCount = 0;
+
+    chatLogger.debug('LLM streaming request started', { requestId, provider, model }, {
+      messageCount: messages.length,
+      temperature,
+      maxTokens,
+    });
 
     try {
       switch (provider) {
         case 'openai':
-          yield* this.streamOpenAIResponse(model, messages, temperature, maxTokens)
+          for await (const chunk of this.streamOpenAIResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
           break
         case 'anthropic':
-          yield* this.streamAnthropicResponse(model, messages, temperature, maxTokens)
+          for await (const chunk of this.streamAnthropicResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
           break
         case 'google':
-          yield* this.streamGoogleResponse(model, messages, temperature, maxTokens)
+          for await (const chunk of this.streamGoogleResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
           break
         case 'cohere':
-          yield* this.streamCohereResponse(model, messages, temperature, maxTokens)
+          for await (const chunk of this.streamCohereResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
           break
         case 'together':
-          yield* this.streamTogetherResponse(model, messages, temperature, maxTokens)
+          for await (const chunk of this.streamTogetherResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
           break
         case 'portkey':
-          yield* this.streamPortkey(model, messages, temperature, maxTokens)
+          for await (const chunk of this.streamPortkey(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
           break
         case 'openrouter':
-          yield* this.streamOpenRouterResponse(model, messages, temperature, maxTokens)
+          for await (const chunk of this.streamOpenRouterResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
           break
         case 'chutes':
-          yield* this.streamChutesResponse(model, messages, temperature, maxTokens)
+          for await (const chunk of this.streamChutesResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
           break
         case 'mistral':
-          yield* this.streamMistralResponse(model, messages, temperature, maxTokens)
+          for await (const chunk of this.streamMistralResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
           break
         case 'github':
-          yield* this.streamGitHubResponse(model, messages, temperature, maxTokens)
+          for await (const chunk of this.streamGitHubResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
           break
-        case 'opencode':
-          yield* this.streamOpenCodeResponse(model, messages, temperature, maxTokens)
+        case 'zen':
+          for await (const chunk of this.streamzenResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
           break
         default:
           throw new Error(`Streaming is not supported for provider: ${provider}`);
       }
+
+      const streamLatency = Date.now() - streamStartTime;
+      chatLogger.info('LLM streaming completed', { requestId, provider, model }, {
+        latencyMs: streamLatency,
+        chunkCount,
+      });
     } catch (error) {
+      const streamLatency = Date.now() - streamStartTime;
+      chatLogger.error('LLM streaming failed', { requestId, provider, model }, {
+        latencyMs: streamLatency,
+        chunkCount,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
       throw createStreamError(`Streaming LLM request failed: ${error instanceof Error ? error.message : String(error)}`, {
         code: ERROR_CODES.STREAMING.REQUEST_FAILED,
         severity: 'high',
@@ -919,15 +1015,15 @@ class LLMService {
     }
   }
 
-  private async generateOpenCodeResponse(
+  private async generatezenResponse(
     model: string,
     messages: LLMMessage[],
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    if (!this.opencodeClient) throw new Error('OpenCode API not initialized');
+    if (!this.zenClient) throw new Error('zen API not initialized');
 
-    const response = await this.opencodeClient.chat.completions.create({
+    const response = await this.zenClient.chat.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -1057,15 +1153,15 @@ class LLMService {
     yield { content: '', isComplete: true }
   }
 
-  private async *streamOpenCodeResponse(
+  private async *streamzenResponse(
     model: string,
     messages: LLMMessage[],
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    if (!this.opencodeClient) throw new Error('OpenCode API not initialized');
+    if (!this.zenClient) throw new Error('zen API not initialized');
 
-    const stream = await this.opencodeClient.chat.completions.create({
+    const stream = await this.zenClient.chat.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -1280,8 +1376,8 @@ class LLMService {
           return !!process.env.PORTKEY_API_KEY;
         case 'mistral':
           return !!process.env.MISTRAL_API_KEY;
-        case 'opencode':
-          return !!process.env.OPENCODE_API_KEY;
+        case 'zen':
+          return !!process.env.zen_API_KEY;
         case 'openrouter':
           return !!process.env.OPENROUTER_API_KEY;
         case 'chutes':
@@ -1342,9 +1438,9 @@ export const llmService = new LLMService({
     apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY,
     baseURL: process.env.GITHUB_MODELS_BASE_URL
   },
-  opencode: {
-    apiKey: process.env.OPENCODE_API_KEY,
-    baseURL: process.env.OPENCODE_BASE_URL
+  zen: {
+    apiKey: process.env.zen_API_KEY,
+    baseURL: process.env.zen_BASE_URL
   }
 })
 

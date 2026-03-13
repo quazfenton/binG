@@ -4,7 +4,7 @@
  * Based on ephemeral/serverless_workers_sdk/container_runtime.py
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { spawn, ChildProcess } from 'child_process';
 import { mkdirSync, existsSync, writeFileSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';

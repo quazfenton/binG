@@ -7,6 +7,7 @@ import {
   type UnifiedAgentConfig,
 } from '@/lib/api/unified-agent-service';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
+import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300; // 5 minutes for agent tasks
@@ -152,12 +153,10 @@ async function jsonResponse(
  * Send response as SSE stream
  */
 function streamResponse(config: UnifiedAgentConfig, userId: string) {
-  const encoder = new TextEncoder();
-  
   const stream = new ReadableStream({
     async start(controller) {
+      const emit = createSSEEmitter(controller);
       try {
-        // Set up tool execution with user isolation
         const { executeToolWithIsolation } = await import('@/lib/sandbox/sandbox-service-bridge');
         
         config.executeTool = async (name: string, args: Record<string, any>) => {
@@ -165,57 +164,46 @@ function streamResponse(config: UnifiedAgentConfig, userId: string) {
         };
         
         config.onToolExecution = (name: string, args: any, result: any) => {
-          const event = JSON.stringify({
-            type: 'tool_execution',
+          emit(SSE_EVENT_TYPES.TOOL_INVOCATION, {
+            toolCallId: `${name}-${Date.now()}`,
             toolName: name,
+            state: 'result',
             args,
             result,
+            timestamp: Date.now(),
           });
-          controller.enqueue(encoder.encode(`data: ${event}\n\n`));
         };
         
         config.onStreamChunk = (chunk: string) => {
-          const event = JSON.stringify({
-            type: 'stream',
-            text: chunk,
+          emit(SSE_EVENT_TYPES.TOKEN, {
+            content: chunk,
+            timestamp: Date.now(),
           });
-          controller.enqueue(encoder.encode(`data: ${event}\n\n`));
         };
 
-        // Process the request
         const result = await processUnifiedAgentRequest(config);
 
-        // Send completion event
-        const finalEvent = JSON.stringify({
-          type: 'complete',
-          response: result.response,
-          totalSteps: result.totalSteps,
-          steps: result.steps,
-          mode: result.mode,
-          metadata: result.metadata,
+        emit(SSE_EVENT_TYPES.DONE, {
+          success: true,
+          content: result.response,
+          messageMetadata: {
+            agent: 'unified',
+            mode: result.mode,
+            totalSteps: result.totalSteps,
+          },
+          data: result,
         });
-        controller.enqueue(encoder.encode(`data: ${finalEvent}\n\n`));
         controller.close();
       } catch (error: any) {
         console.error('[Unified Agent] Stream error:', error);
-        
-        const errorEvent = JSON.stringify({
-          type: 'error',
+        emit(SSE_EVENT_TYPES.ERROR, {
           message: 'Agent execution failed',
           details: process.env.NODE_ENV === 'development' ? error.message : undefined,
         });
-        controller.enqueue(encoder.encode(`data: ${errorEvent}\n\n`));
         controller.close();
       }
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no', // Disable nginx buffering
-    },
-  });
+  return new Response(stream, { headers: SSE_RESPONSE_HEADERS });
 }

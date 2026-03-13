@@ -5,6 +5,9 @@ import { setupCacheVolumes } from './dep-cache'
 import { provisionBaseImage, warmPool } from './base-image'
 import { randomUUID } from 'crypto'
 import { quotaManager } from '../services/quota-manager'
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('SandboxService')
 
 export class SandboxService {
    private _provider: SandboxProvider | null = null
@@ -13,11 +16,14 @@ export class SandboxService {
 
    constructor() {
      this.primaryProviderType = (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona'
+     log.debug(`SandboxService initialized with primary provider: ${this.primaryProviderType}`)
    }
 
    private async getProvider(): Promise<SandboxProvider> {
      if (!this._provider) {
+       log.debug(`Initializing primary provider: ${this.primaryProviderType}`)
        this._provider = await getSandboxProvider(this.primaryProviderType)
+       log.debug(`Primary provider ${this.primaryProviderType} initialized successfully`)
      }
      return this._provider
    }
@@ -34,6 +40,7 @@ export class SandboxService {
   }
 
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
+    if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent'
     if (sandboxId.startsWith('mistral-')) return 'mistral'
     // Check specific blaxel-mcp prefix BEFORE the general blaxel- prefix
     if (sandboxId.startsWith('blaxel-mcp-')) return 'blaxel-mcp'
@@ -50,19 +57,24 @@ export class SandboxService {
   }
 
   private async getCandidateProviderTypes(primary: SandboxProviderType): Promise<SandboxProviderType[]> {
+    log.debug(`Getting candidate provider types, primary: ${primary}`)
     const quotaChain = quotaManager.getSandboxProviderChain(primary) as SandboxProviderType[];
     const preferred = Array.from(new Set(quotaChain.length ? quotaChain : [primary]));
     const supported: SandboxProviderType[] = [];
 
     for (const providerType of preferred) {
       try {
+        log.debug(`Checking provider availability: ${providerType}`)
         await getSandboxProvider(providerType);
+        log.debug(`Provider ${providerType} is available`)
          supported.push(providerType);
-      } catch {
+      } catch (error: any) {
+        log.debug(`Provider ${providerType} not available: ${error.message}`)
         // Provider not integrated in this build, skip.
       }
     }
 
+    log.debug(`Candidate providers: ${supported.join(', ')}`)
     return supported.length ? supported : [primary];
   }
 
@@ -71,7 +83,10 @@ export class SandboxService {
     userId: string,
     config?: SandboxConfig
   ): Promise<SandboxHandle> {
+    log.debug(`Creating sandbox with provider ${providerType} for user ${userId}`)
     const provider = await getSandboxProvider(providerType)
+    log.debug(`Provider ${providerType} instance obtained, creating sandbox...`)
+    
      const handle = await provider.createSandbox({
       language: config?.language ?? 'typescript',
       autoStopInterval: config?.autoStopInterval ?? 60,
@@ -84,18 +99,20 @@ export class SandboxService {
       labels: { userId },
     })
 
+    log.debug(`Sandbox created successfully with ID: ${handle.id}`)
+
     // Cache volume / preloaded packages are best-effort and provider-dependent.
     try {
       await setupCacheVolumes(handle)
-    } catch (error) {
-      console.warn(`[sandbox-service] Cache volume setup skipped for provider=${provider.name}: ${(error as Error).message}`)
+    } catch (error: any) {
+      log.warn(`Cache volume setup skipped for provider=${provider.name}: ${error.message}`)
     }
 
     if (process.env.SANDBOX_PRELOAD_PACKAGES !== 'false') {
       try {
         await provisionBaseImage(handle)
-      } catch (error) {
-        console.warn(`[sandbox-service] Base image provisioning failed for provider=${provider.name}: ${(error as Error).message}`)
+      } catch (error: any) {
+        log.warn(`Base image provisioning failed for provider=${provider.name}: ${error.message}`)
       }
     }
 
@@ -147,7 +164,8 @@ export class SandboxService {
       'opensandbox-agent',
       'microsandbox',
       'e2b',
-      'mistral'
+      'mistral',
+      'vercel-sandbox'
     ]
     const configuredProviders: SandboxProviderType[] = []
     
@@ -181,53 +199,75 @@ export class SandboxService {
   }
 
   async createWorkspace(userId: string, config?: SandboxConfig): Promise<WorkspaceSession> {
+    log.info(`Creating workspace for user ${userId}${config ? ' with custom config' : ''}`)
     let handle: SandboxHandle | null = null
-    const preferredType = (quotaManager.pickAvailableSandboxProvider(this.primaryProviderType) as SandboxProviderType | null)
+    
+    // P1 FIX: Honor explicit provider in config if provided
+    const explicitProvider = config?.provider as SandboxProviderType | undefined;
+    const preferredType = explicitProvider 
+      || (quotaManager.pickAvailableSandboxProvider(this.primaryProviderType) as SandboxProviderType | null)
       || this.primaryProviderType
+    log.debug(`Preferred provider type: ${preferredType}`)
     const candidateTypes = await this.getCandidateProviderTypes(preferredType)
+    log.debug(`Candidate types for workspace creation: ${candidateTypes.join(', ')}`)
 
     // Only use warm pool when no custom config is specified
     // Custom configs (language, resources, env vars) require fresh sandbox
     if (process.env.SANDBOX_WARM_POOL === 'true' && !config && preferredType === this.primaryProviderType) {
+      log.debug('Attempting to acquire sandbox from warm pool')
       try {
         handle = await warmPool.acquire(userId)
+        log.info(`Acquired sandbox from warm pool: ${handle.id}`)
         this.sandboxProviderById.set(handle.id, await this.getProvider())
-      } catch (error) {
-        console.warn('[sandbox-service] Warm pool unavailable; falling back to provider chain')
+      } catch (error: any) {
+        log.warn(`Warm pool unavailable; falling back to provider chain: ${error.message}`)
         let lastError: unknown = error
         for (const providerType of candidateTypes) {
           try {
+            log.debug(`Attempting to create sandbox with provider: ${providerType}`)
             handle = await this.createSandboxWithProvider(providerType, userId, config)
+            log.info(`Successfully created sandbox with provider ${providerType}: ${handle.id}`)
             lastError = null
             break
-          } catch (providerError) {
+          } catch (providerError: any) {
             lastError = providerError
             const message = providerError instanceof Error ? providerError.message : String(providerError)
-            console.warn(`[sandbox-service] Provider failed (${providerType}): ${message}; trying next fallback`)
+            log.warn(`Provider failed (${providerType}): ${message}; trying next fallback`)
           }
         }
-        if (lastError) throw lastError
+        if (lastError) {
+          log.error(`All providers failed for workspace creation`, lastError as Error)
+          throw lastError
+        }
       }
     } else {
+      log.debug('Using direct provider chain (warm pool disabled or custom config)')
       let lastError: unknown = null
       for (const providerType of candidateTypes) {
         try {
+          log.debug(`Attempting to create sandbox with provider: ${providerType}`)
           handle = await this.createSandboxWithProvider(providerType, userId, config)
+          log.info(`Successfully created sandbox with provider ${providerType}: ${handle.id}`)
           lastError = null
           break
-        } catch (providerError) {
+        } catch (providerError: any) {
           lastError = providerError
           const message = providerError instanceof Error ? providerError.message : String(providerError)
-          console.warn(`[sandbox-service] Provider failed (${providerType}): ${message}; trying next fallback`)
+          log.warn(`Provider failed (${providerType}): ${message}; trying next fallback`)
         }
       }
-      if (lastError) throw lastError
+      if (lastError) {
+        log.error(`All providers failed for workspace creation`, lastError as Error)
+        throw lastError
+      }
     }
 
     if (!handle) {
+      log.error('No sandbox handle obtained from any provider')
       throw new Error('Failed to create sandbox with all available providers')
     }
 
+    // Create session object
     const session: WorkspaceSession = {
       sessionId: randomUUID(),
       sandboxId: handle.id,
@@ -238,7 +278,24 @@ export class SandboxService {
       status: 'active',
     }
 
-    saveSession(session)
+    log.info(`Workspace session created: ${session.sessionId} (sandbox: ${handle.id})`)
+    
+    // Save session to store
+    try {
+      saveSession(session)
+    } catch (saveError: any) {
+      // If session save fails, clean up the sandbox to avoid orphaned resources
+      log.error(`Failed to save session, cleaning up sandbox: ${saveError.message}`)
+      try {
+        const provider = await this.resolveProviderForSandbox(handle.id)
+        await provider.destroySandbox(handle.id)
+        this.sandboxProviderById.delete(handle.id)
+      } catch (cleanupError: any) {
+        log.error(`Failed to cleanup sandbox after session save failure: ${cleanupError.message}`)
+      }
+      throw new Error(`Failed to save session: ${saveError.message}`)
+    }
+    
     return session
   }
 

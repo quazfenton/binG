@@ -4,7 +4,7 @@
  * Migrated from ephemeral/agent_api.py
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { randomUUID } from 'crypto';
 
 export interface AgentWorkspace {

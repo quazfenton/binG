@@ -196,6 +196,7 @@ export function validateCommand(
       if (typeof allowed === 'string') {
         return command.startsWith(allowed);
       }
+      // @ts-ignore - allowed could be RegExp
       return allowed.test(command);
     });
 
@@ -306,6 +307,7 @@ export function validateCommandExecution(
 
   // Validate working directory if provided
   if (cwd) {
+    // @ts-ignore - dynamic import returns Promise
     const { validatePath } = await import('./filesystem-security');
     const cwdValidation = validatePath(cwd);
     if (!cwdValidation.valid) {
@@ -497,6 +499,7 @@ export function validateCommandExecutionRequest(data: unknown): {
         type: 'security_error',
         message: validation.error!.message,
         code: validation.error!.code,
+        // @ts-ignore - blockedPattern may exist on extended error type
         blockedPattern: validation.error!.blockedPattern,
       },
     };

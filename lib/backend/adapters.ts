@@ -5,7 +5,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 // ===========================================
 // Flask Adapter (WSGI)

@@ -397,7 +397,15 @@ export class MCPClient extends EventEmitter {
 
       const client = new Client(
         { name: 'bing-client', version: '1.0.0' },
-        { capabilities: { tools: {}, resources: {}, prompts: {} } }
+        {
+          capabilities: {
+            experimental: {},
+            sampling: {},
+            elicitation: {},
+            roots: {},
+            tasks: {},
+          } as any,
+        }
       );
 
       try {

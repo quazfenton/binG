@@ -26,8 +26,14 @@ export class DaytonaProvider implements SandboxProvider {
   private client: Daytona
 
   constructor() {
+    const rawApiKey = process.env.DAYTONA_API_KEY || process.env.DAYTONA_API_TOKEN || ''
+    const apiKey = rawApiKey.trim().replace(/^['"]+|['"]+$/g, '')
+    if (apiKey) {
+      process.env.DAYTONA_API_KEY = apiKey
+    }
+
     this.client = new Daytona({
-      apiKey: process.env.DAYTONA_API_KEY!,
+      apiKey,
     })
   }
 
@@ -173,18 +179,23 @@ class DaytonaSandboxHandle implements SandboxHandle {
    * Get Computer Use Service for this sandbox
    * Requires DAYTONA_API_KEY environment variable
    */
-  getComputerUseService(): ComputerUseService | null {
+  getComputerUseService(): { takeRegion?(config: { x?: number; y?: number; width?: number; height?: number }): Promise<{ image: string }>; startRecording?(): Promise<{ recordingId: string }>; stopRecording?(recordingId: string): Promise<{ video: string }> } | undefined {
     const apiKey = process.env.DAYTONA_API_KEY
     if (!apiKey) {
       console.warn('[Daytona] DAYTONA_API_KEY not set, Computer Use Service unavailable')
-      return null
+      return undefined
     }
-    
+
     if (!this.computerUseService) {
       this.computerUseService = createComputerUseService(this.id, apiKey)
     }
-    
-    return this.computerUseService
+
+    // Return compatible interface for SandboxHandle
+    return {
+      takeRegion: (config) => this.computerUseService!.takeRegionImage(config || {}),
+      startRecording: () => this.computerUseService!.startRecording(),
+      stopRecording: (recordingId) => this.computerUseService!.stopRecording(recordingId),
+    }
   }
 
   /**
@@ -226,28 +237,31 @@ class DaytonaSandboxHandle implements SandboxHandle {
    * Start screen recording
    * @see https://www.daytona.io/docs/en/computer-use.md#start-recording
    */
-  async startRecording(options?: ScreenRecordingRequest): Promise<ToolResult> {
+  async startRecording(options?: ScreenRecordingRequest): Promise<{ recordingId: string }> {
     const service = this.getComputerUseService()
     if (!service) throw new Error('Computer Use Service not available')
-    return service.startRecording(options)
+    const result = await service.startRecording()
+    return { recordingId: result.output }
   }
 
   /**
    * Stop screen recording
    */
-  async stopRecording(recordingId: string): Promise<ToolResult> {
+  async stopRecording(recordingId: string): Promise<{ video: string }> {
     const service = this.getComputerUseService()
     if (!service) throw new Error('Computer Use Service not available')
-    return service.stopRecording(recordingId)
+    const result = await service.stopRecording(recordingId)
+    return { video: result.output }
   }
 
   /**
    * Take regional screenshot
    */
-  async takeRegionScreenshot(x: number, y: number, width: number, height: number): Promise<ToolResult> {
+  async takeRegionScreenshot(x: number, y: number, width: number, height: number): Promise<{ image: string }> {
     const service = this.getComputerUseService()
     if (!service) throw new Error('Computer Use Service not available')
-    return service.takeRegion({ x, y, width, height })
+    const result = await service.takeRegion({ x, y, width, height })
+    return { image: result.binary ? Buffer.from(result.binary).toString('base64') : result.output }
   }
 
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {

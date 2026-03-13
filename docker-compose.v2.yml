@@ -1,0 +1,121 @@
+# Docker Compose for V2 Agent Development
+# Includes: Main app + Nullclaw container
+# Uses pnpm for package management
+# Optimized with persistent caching for Python, Node, and CLI tools
+
+services:
+  # Main binG application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5555:5555"
+      - "8080:8080"
+    volumes:
+      - type: bind
+        source: .
+        target: /app
+        consistency: cached
+        bind:
+          create_host_path: true
+          propagation: cached
+      - type: volume
+        source: next_cache
+        target: /app/.next
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+      - workspace_data:/workspace
+      - pnpm_store:/root/.local/share/pnpm/store
+      - pip_cache:/root/.cache/pip
+      - npm_global:/root/.npm
+      - opencode_data:/root/.opencode
+      - nullclaw_data:/root/.nullclaw
+    environment:
+      - NODE_ENV=development
+      - PORT=5555
+      - OPENCODE_CONTAINERIZED=true
+      - V2_AGENT_ENABLED=true
+      - MCP_ENABLED=true
+      - MCP_CLI_PORT=8888
+      
+      # Nullclaw Integration
+      # Set NULLCLAW_URL to use external service (URL mode)
+      # Leave empty to use container mode (app spawns containers)
+      - NULLCLAW_ENABLED=${NULLCLAW_ENABLED:-true}
+      - NULLCLAW_URL=${NULLCLAW_URL:-http://nullclaw:3000}
+      - NULLCLAW_API_KEY=${NULLCLAW_API_KEY:-}
+      - NULLCLAW_MODE=${NULLCLAW_MODE:-shared}  # shared | per-session
+      - NULLCLAW_POOL_SIZE=${NULLCLAW_POOL_SIZE:-2}
+      - NULLCLAW_MAX_CONTAINERS=${NULLCLAW_MAX_CONTAINERS:-4}
+      - NULLCLAW_PORT=${NULLCLAW_PORT:-3001}
+      - NULLCLAW_NETWORK=bing-network
+      - NULLCLAW_TIMEOUT=300000
+      - NULLCLAW_ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
+      - NULLCLAW_HEALTH_TIMEOUT=30000
+      
+      - CHAT_AGENTIC_PIPELINE=auto
+      - WORKFORCE_ENABLED=true
+      - WORKFORCE_MAX_CONCURRENCY=4
+      - PIP_CACHE_DIR=/root/.cache/pip
+      - NPM_CONFIG_CACHE=/root/.npm
+    depends_on:
+      nullclaw:
+        condition: service_healthy
+        required: false  # App can run without Nullclaw
+    networks:
+      - bing-network
+
+  # Nullclaw task assistant
+  nullclaw:
+    image: ghcr.io/nullclaw/nullclaw:latest
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./nullclaw.config.yml:/app/config.yml:ro  # Mount config file
+      - nullclaw_config:/root/.nullclaw  # Persist Nullclaw config
+    environment:
+      - NULLCLAW_TIMEOUT=3600
+      - ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
+      # Provider API keys (set in .env)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=false"  # Not directly accessible
+
+networks:
+  bing-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  workspace_data:
+    driver: local
+  pnpm_store:
+    driver: local
+  pip_cache:
+    driver: local
+  npm_global:
+    driver: local
+  opencode_data:
+    driver: local
+  nullclaw_data:
+    driver: local
+  nullclaw_config:
+    driver: local
+  next_cache:
+    driver: local

@@ -4,7 +4,7 @@
  * Migrated from ephemeral/serverless_workers_sdk/quota.py
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 export interface QuotaConfig {
   maxExecutionsPerHour: number;

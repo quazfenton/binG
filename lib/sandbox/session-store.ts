@@ -1,5 +1,8 @@
 import type { WorkspaceSession } from './types'
 import type BetterSqlite3 from 'better-sqlite3'
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('SessionStore')
 
 // ---------------------------------------------------------------------------
 // Fallback: in-memory Map (used when better-sqlite3 is unavailable)
@@ -110,6 +113,7 @@ cleanupTimer.unref?.()
 // ---------------------------------------------------------------------------
 
 export function saveSession(session: WorkspaceSession): void {
+  log.debug(`Saving session: ${session.sessionId} (sandbox: ${session.sandboxId}, user: ${session.userId})`)
   session.lastActive = new Date().toISOString()
 
   if (useSqlite && stmtInsert) {
@@ -123,43 +127,70 @@ export function saveSession(session: WorkspaceSession): void {
       lastActive: session.lastActive,
       status: session.status,
     })
+    log.debug(`Session ${session.sessionId} saved to SQLite`)
   } else {
     memSessions.set(session.sessionId, session)
+    log.debug(`Session ${session.sessionId} saved to memory (${memSessions.size} total)`)
   }
 }
 
 export function getSession(sessionId: string): WorkspaceSession | undefined {
+  log.debug(`Getting session: ${sessionId}`)
+  
   if (useSqlite && stmtGet) {
     const row = stmtGet.get(sessionId) as WorkspaceSession | undefined
-    return row || undefined
+    if (row) {
+      log.debug(`Session ${sessionId} found in SQLite`)
+      return row || undefined
+    }
+    log.debug(`Session ${sessionId} not found in SQLite`)
+    return undefined
   }
 
   const session = memSessions.get(sessionId)
-  if (!session) return undefined
+  if (!session) {
+    log.debug(`Session ${sessionId} not found in memory`)
+    return undefined
+  }
   if (Date.now() - new Date(session.lastActive).getTime() > SESSION_TTL_MS) {
+    log.debug(`Session ${sessionId} expired, removing from memory`)
     memSessions.delete(sessionId)
     return undefined
   }
+  log.debug(`Session ${sessionId} found in memory`)
   return session
 }
 
 export function getSessionByUserId(userId: string): WorkspaceSession | undefined {
+  log.debug(`Getting active session for user: ${userId}`)
+  
   if (useSqlite && stmtGetByUser) {
     const row = stmtGetByUser.get(userId) as WorkspaceSession | undefined
-    return row || undefined
+    if (row) {
+      log.debug(`Active session found for user ${userId}: ${row.sessionId}`)
+      return row || undefined
+    }
+    log.debug(`No active session found for user ${userId}`)
+    return undefined
   }
 
   for (const session of memSessions.values()) {
     if (session.userId === userId && session.status === 'active') {
-      if (Date.now() - new Date(session.lastActive).getTime() <= SESSION_TTL_MS) return session
+      if (Date.now() - new Date(session.lastActive).getTime() <= SESSION_TTL_MS) {
+        log.debug(`Active session found for user ${userId}: ${session.sessionId}`)
+        return session
+      }
+      log.debug(`Session ${session.sessionId} expired, removing`)
       memSessions.delete(session.sessionId)
     }
   }
+  log.debug(`No active session found for user ${userId}`)
   return undefined
 }
 
 export function updateSession(sessionId: string, updates: Partial<WorkspaceSession>): void {
   const now = new Date().toISOString()
+  log.debug(`Updating session ${sessionId}: ${JSON.stringify(updates)}`)
 
   // Whitelist of allowed column names to prevent SQL injection
   const ALLOWED_COLUMNS = new Set(['sandboxId', 'userId', 'ptySessionId', 'cwd', 'createdAt', 'lastActive', 'status'])
@@ -171,44 +202,128 @@ export function updateSession(sessionId: string, updates: Partial<WorkspaceSessi
     for (const [key, value] of Object.entries(updates)) {
       if (key === 'sessionId') continue // never update PK
       if (!ALLOWED_COLUMNS.has(key)) {
-        console.warn(`[session-store] Ignoring unknown update key: ${key}`)
+        log.warn(`Ignoring unknown update key: ${key}`)
         continue
       }
       setClauses.push(`${key} = @${key}`)
       params[key] = value ?? null
     }
 
-    db.prepare(
+    const result = db.prepare(
       `UPDATE sandbox_sessions SET ${setClauses.join(', ')} WHERE sessionId = @sessionId`
     ).run(params)
+    log.debug(`Session ${sessionId} updated in SQLite (${result.changes} rows changed)`)
   } else {
     const session = memSessions.get(sessionId)
     if (session) {
       Object.assign(session, updates, { lastActive: now })
+      log.debug(`Session ${sessionId} updated in memory`)
+    } else {
+      log.warn(`Session ${sessionId} not found for update`)
     }
   }
 }
 
 export function deleteSession(sessionId: string): void {
+  log.debug(`Deleting session: ${sessionId}`)
+
   if (useSqlite && stmtDelete) {
-    stmtDelete.run(sessionId)
+    const result = stmtDelete.run(sessionId)
+    log.debug(`Session ${sessionId} deleted from SQLite (${result.changes} rows affected)`)
   } else {
     memSessions.delete(sessionId)
+    log.debug(`Session ${sessionId} deleted from memory`)
   }
+}
+
+/**
+ * Clear all sessions for a specific user
+ * Useful for recovering from sandbox creation failures
+ */
+export function clearUserSessions(userId: string): void {
+  log.info(`Clearing all sessions for user: ${userId}`)
+  
+  if (useSqlite && db) {
+    try {
+      const result = db.prepare('DELETE FROM sandbox_sessions WHERE userId = ?').run(userId)
+      log.info(`Deleted ${result.changes} sessions from SQLite for user ${userId}`)
+    } catch (err: any) {
+      log.warn(`Failed to clear user sessions from SQLite: ${err.message}`)
+    }
+  }
+  
+  // Clear from memory store
+  let clearedCount = 0
+  for (const [id, session] of memSessions.entries()) {
+    if (session.userId === userId) {
+      memSessions.delete(id)
+      clearedCount++
+    }
+  }
+  log.info(`Cleared ${clearedCount} sessions from memory for user ${userId}`)
+}
+
+/**
+ * Clear stale sessions (older than TTL or with 'creating' status for > 5 minutes)
+ */
+export function clearStaleSessions(): void {
+  log.info('Clearing stale sessions')
+  const now = Date.now()
+  const staleThreshold = 5 * 60 * 1000 // 5 minutes for 'creating' status
+  
+  if (useSqlite && db) {
+    try {
+      // Delete sessions older than TTL
+      const ttlStmt = db.prepare("DELETE FROM sandbox_sessions WHERE lastActive <= datetime('now', '-4 hours')")
+      const ttlResult = ttlStmt.run()
+      log.info(`Deleted ${ttlResult.changes} TTL-expired sessions`)
+      
+      // Delete stuck 'creating' sessions
+      const creatingStmt = db.prepare(`
+        DELETE FROM sandbox_sessions 
+        WHERE status = 'creating' 
+        AND createdAt <= datetime('now', '-5 minutes')
+      `)
+      const creatingResult = creatingStmt.run()
+      log.info(`Deleted ${creatingResult.changes} stuck 'creating' sessions`)
+    } catch (err: any) {
+      log.warn(`Failed to clear stale sessions from SQLite: ${err.message}`)
+    }
+  }
+  
+  // Clear from memory store
+  let clearedCount = 0
+  for (const [id, session] of memSessions.entries()) {
+    const sessionAge = now - new Date(session.lastActive).getTime()
+    const isCreatingTooLong = session.status === 'creating' && 
+      (now - new Date(session.createdAt).getTime()) > staleThreshold
+    
+    if (sessionAge > SESSION_TTL_MS || isCreatingTooLong) {
+      memSessions.delete(id)
+      clearedCount++
+    }
+  }
+  log.info(`Cleared ${clearedCount} stale sessions from memory`)
 }
 
 /**
  * Delete all sessions for a user (e.g., on logout)
  */
 export function deleteSessionsByUserId(userId: string): void {
+  log.debug(`Deleting all sessions for user: ${userId}`)
+  
   if (useSqlite && db) {
-    db.prepare('DELETE FROM sandbox_sessions WHERE userId = ?').run(userId)
+    const result = db.prepare('DELETE FROM sandbox_sessions WHERE userId = ?').run(userId)
+    log.debug(`Deleted ${result.changes} sessions for user ${userId}`)
   } else {
+    let deleted = 0
     for (const [id, session] of memSessions.entries()) {
       if (session.userId === userId) {
         memSessions.delete(id)
+        deleted++
       }
     }
+    log.debug(`Deleted ${deleted} memory sessions for user ${userId}`)
   }
 }
 

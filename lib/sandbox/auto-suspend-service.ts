@@ -15,7 +15,7 @@
  * @see https://docs.blaxel.ai/Agents/Asynchronous-triggers
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import type { SandboxHandle, SandboxProvider } from './types';
 import { sandboxBridge } from './sandbox-service-bridge';
 

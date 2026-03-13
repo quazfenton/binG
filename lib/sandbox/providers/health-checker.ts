@@ -14,7 +14,7 @@
  * ```
  */
 
-import { EventEmitter } from 'events'
+import { EventEmitter } from 'node:events'
 import type { SandboxProviderType } from './index'
 import { getSandboxProvider } from './index'
 import { sandboxMetrics } from '@/lib/backend/metrics'
@@ -291,7 +291,12 @@ export const providerHealthChecker = new ProviderHealthChecker()
 /**
  * Start health checking with default configuration
  */
-export function startProviderHealthCheck(config?: Partial<HealthCheckerConfig>): ProviderHealthChecker {
+export async function startProviderHealthCheck(config?: Partial<HealthCheckerConfig>): Promise<ProviderHealthChecker> {
+  // Get all enabled providers from the registry
+  const { getEnabledProviders } = await import('./index');
+  const enabledProviders = getEnabledProviders();
+  providerHealthChecker.setEnabledProviders(enabledProviders);
+  
   providerHealthChecker.start()
   if (config) {
     providerHealthChecker.config = { ...DEFAULT_CONFIG, ...config }

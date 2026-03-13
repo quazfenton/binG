@@ -3,14 +3,17 @@
  * providers when monthly quotas are reached to prevent overages.
  *
  * Uses SQLite database for persistent storage across server restarts.
- * 
- * NOTE: Quotas ONLY apply to tool and sandbox providers (composio, arcade, nango, 
+ *
+ * NOTE: Quotas ONLY apply to tool and sandbox providers (composio, arcade, nango,
  * daytona, runloop, microsandbox, e2b, mistral). Regular LLM chat requests are NOT tracked.
  */
 
 import { getDatabase } from '@/lib/database/connection';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { dirname, join } from 'path';
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('QuotaManager')
 
 export interface ProviderQuota {
   provider: string;
@@ -371,24 +374,25 @@ class QuotaManager {
    */
   recordUsage(provider: string, count: number = 1, userId?: string): boolean {
     this.ensureInitialized();
-    
+
     // Check quota first and enforce
     const check = this.checkQuota(provider, userId);
     if (!check.allowed) {
       const quota = this.quotas.get(provider);
+      log.warn(`Quota exceeded for ${provider}: ${check.remaining} remaining`)
       throw new Error(
         `Quota exceeded for ${provider}. ` +
         `Monthly limit reached (${quota?.monthlyLimit}). Remaining: ${check.remaining}. ` +
         `Quota resets on ${quota?.resetDate || 'unknown date'}`
       );
     }
-    
+
     const quota = this.quotas.get(provider);
     if (!quota) return true; // Unknown provider, allow
 
     // Reject negative counts to prevent quota bypass
     if (count < 0) {
-      console.warn(`[QuotaManager] Attempted to record negative usage for provider '${provider}': ${count}`);
+      log.warn(`Attempted to record negative usage for provider '${provider}': ${count}`)
       return true;
     }
 
@@ -398,8 +402,8 @@ class QuotaManager {
 
     if (quota.currentUsage >= quota.monthlyLimit) {
       quota.isDisabled = true;
-      console.warn(
-        `[QuotaManager] Provider '${provider}' has reached its monthly limit ` +
+      log.warn(
+        `Provider '${provider}' has reached its monthly limit ` +
         `(${quota.currentUsage}/${quota.monthlyLimit}). Disabled until ${quota.resetDate}.`
       );
     }

@@ -87,6 +87,28 @@ async function initializeBackend() {
   }
 }
 
+// POST /api/backend - Initialize backend and WebSocket server
+export async function POST(request: NextRequest) {
+  try {
+    await initializeBackend();
+    
+    const wsServer = await getWebSocketTerminalServer();
+    const result = {
+      success: true,
+      initialized: true,
+      websocket: !!wsServer,
+      activeSessions: wsServer ? wsServer.getActiveSessions() : 0,
+      timestamp: new Date().toISOString(),
+    };
+    
+    sandboxMetrics.httpRequestsTotal.inc({ method: 'POST', path: '/api/backend', status: '200' });
+    return NextResponse.json(result);
+  } catch (error: any) {
+    sandboxMetrics.httpRequestsTotal.inc({ method: 'POST', path: '/api/backend', status: '500' });
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  }
+}
+
 // GET /api/backend/health - Health check endpoint
 export async function GET(request: NextRequest) {
   try {

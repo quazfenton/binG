@@ -13,6 +13,15 @@ import { codeAgentWorkflow } from './workflows/code-agent-workflow';
 import { hitlWorkflow } from './workflows/hitl-workflow';
 import { parallelWorkflow } from './workflows/parallel-workflow';
 
+// PostgreSQL storage for Mastra 1.x
+// @ts-ignore - PostgreSQLStorage type may vary across Mastra versions
+let PostgreSQLStorage: any;
+try {
+  PostgreSQLStorage = require('@mastra/pg').PostgreSQLStorage;
+} catch {
+  console.warn('PostgreSQLStorage not available, Mastra will use default storage');
+}
+
 /**
  * Mastra instance configuration
  *
@@ -25,20 +34,18 @@ import { parallelWorkflow } from './workflows/parallel-workflow';
  *   pnpm add @mastra/pg
  */
 export const mastra = new Mastra({
-  // Mastra 1.x uses composite storage pattern
-  // Each domain can have its own storage backend
-  storage: {
-    // Simple PostgreSQL configuration for all domains
-    type: 'postgresql',
-    uri: process.env.DATABASE_URL || 'postgresql://localhost:5432/bing',
-    // Connection pool settings
-    connectionConfig: {
-      max: 20, // Connection pool size
-      idleTimeoutMillis: 30000,
-    },
-    // Schema for multi-tenant isolation
-    schema: process.env.MASTRA_SCHEMA || 'mastra',
-  },
+  // Mastra 1.x uses composite storage
+  // @ts-ignore - storage configuration is version-specific
+  storage: PostgreSQLStorage
+    ? new PostgreSQLStorage({
+        connectionString: process.env.DATABASE_URL || 'postgresql://localhost:5432/bing',
+        connectionConfig: {
+          max: 20,
+          idleTimeoutMillis: 30000,
+        },
+        schema: process.env.MASTRA_SCHEMA || 'mastra',
+      })
+    : undefined,
   telemetry: {
     enabled: process.env.MASTRA_TELEMETRY_ENABLED === 'true',
     serviceName: 'bing-agent',
