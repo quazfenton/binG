@@ -667,6 +667,36 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
         sanitizedResponseContent,
       );
 
+      if (filesystemEdits && filesystemEdits.applied.length > 0) {
+        const codeArtifacts = filesystemEdits.applied
+          .filter((edit) => edit.operation !== 'delete')
+          .map((edit) => {
+            const requestedFile = filesystemEdits.requestedFiles.find(f => f.path === edit.path);
+            return {
+              path: edit.path,
+              operation: edit.operation,
+              content: requestedFile?.content || '',
+              language: requestedFile?.language || (
+                edit.path.endsWith('.ts') || edit.path.endsWith('.tsx') ? 'typescript' :
+                edit.path.endsWith('.js') || edit.path.endsWith('.jsx') ? 'javascript' :
+                edit.path.endsWith('.json') ? 'json' :
+                edit.path.endsWith('.css') ? 'css' :
+                edit.path.endsWith('.html') ? 'html' : 'text'
+              ),
+              previousContent: undefined,
+              newVersion: edit.version,
+              previousVersion: edit.previousVersion,
+            };
+          });
+        
+        if (codeArtifacts.length > 0) {
+          clientResponse.metadata = {
+            ...clientResponse.metadata,
+            codeArtifacts,
+          };
+        }
+      }
+
       // Handle streaming response
       if (stream && selectedProvider.supportsStreaming) {
         const streamRequestId = requestId || generateSecureId('stream');
@@ -1074,7 +1104,8 @@ function sanitizeAssistantDisplayContent(content: string): string {
   next = next.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
 
   // Remove raw WRITE/PATCH/APPLY_DIFF heredoc command blocks that leak into visible output
-  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+\n\s*<<<\s*\n[\s\S]*?\n\s*>>>(?=\n|$)/g, '\n');
+  // Handle variations: blank lines between path and <<<, different whitespace
+  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){1,2}<<<[\s\S]*?>>>(?=\n|$)/g, '\n');
   next = next.replace(/(?:^|\n)\s*DELETE\s+[^\n]+(?=\n|$)/g, '\n');
   // Remove <apply_diff> XML tags
   next = next.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
@@ -1560,6 +1591,59 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
   return writes;
 }
 
+function extractTopLevelWrites(content: string): Array<{ path: string; content: string }> {
+  const writes: Array<{ path: string; content: string }> = [];
+
+  const topLevelWriteRegex = /^WRITE\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  let match: RegExpExecArray | null;
+  while ((match = topLevelWriteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!path) continue;
+    writes.push({ path, content: fileContent });
+  }
+
+  const altWriteRegex = /^WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)>>>/gim;
+  while ((match = altWriteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!path) continue;
+    if (!writes.some(w => w.path === path && w.content === fileContent)) {
+      writes.push({ path, content: fileContent });
+    }
+  }
+
+  return writes;
+}
+
+function extractTopLevelDeletes(content: string): string[] {
+  const deletes: string[] = [];
+
+  const deleteRegex = /^DELETE\s+([^\n]+)/gim;
+  let match: RegExpExecArray | null;
+  while ((match = deleteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path) deletes.push(path);
+  }
+
+  return deletes;
+}
+
+function extractTopLevelPatches(content: string): Array<{ path: string; diff: string }> {
+  const patches: Array<{ path: string; diff: string }> = [];
+
+  const patchRegex = /^PATCH\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  let match: RegExpExecArray | null;
+  while ((match = patchRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const diff = match[2] ?? '';
+    if (!path) continue;
+    patches.push({ path, diff });
+  }
+
+  return patches;
+}
+
 function extractFsActionDeletes(content: string): string[] {
   const deletes: string[] = [];
 
@@ -1938,6 +2022,7 @@ async function applyFilesystemEditsFromResponse(input: {
   const combinedWriteEdits = [
     ...extractTaggedFileEdits(input.responseContent || ''),
     ...extractFsActionWrites(input.responseContent || ''),
+    ...extractTopLevelWrites(input.responseContent || ''),
     ...extractBashHereDocWrites(input.responseContent || ''),
     ...extractFilenameHintCodeBlocks(input.responseContent || ''),
     ...fileWriteFolderCreateOps.writes.map(w => ({ path: w.path, content: w.content })),
@@ -1945,10 +2030,14 @@ async function applyFilesystemEditsFromResponse(input: {
   const combinedDiffOperations = [
     ...extractFencedDiffEdits(input.responseContent || ''),
     ...extractFsActionPatches(input.responseContent || ''),
+    ...extractTopLevelPatches(input.responseContent || ''),
     ...(input.commands?.write_diffs || []),
   ];
   const applyDiffOperations = extractApplyDiffOperations(input.responseContent || '');
-  const deleteTargets = extractFsActionDeletes(input.responseContent || '');
+  const deleteTargets = [
+    ...extractFsActionDeletes(input.responseContent || ''),
+    ...extractTopLevelDeletes(input.responseContent || ''),
+  ];
   const folderCreateTargets = fileWriteFolderCreateOps.folders; // Separate folder creation targets
   const requestFiles = input.commands?.request_files || [];
 

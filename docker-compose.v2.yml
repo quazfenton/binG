@@ -9,6 +9,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+      args:
+        - ENCRYPTION_KEY=${ENCRYPTION_KEY:-build-temp-key-change-in-production}
+        - JWT_SECRET=${JWT_SECRET:-build-temp-secret-change-in-production}
+        - BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY:-build-temp-blaxel-key-change}
+        - NANGO_SECRET_KEY=${NANGO_SECRET_KEY:-build-temp-nango-key}
+        - DATABASE_URL=${DATABASE_URL:-postgresql://build:build@localhost:5432/build}
     ports:
       - "5555:5555"
       - "8080:8080"

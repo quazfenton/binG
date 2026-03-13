@@ -260,31 +260,57 @@ jobs:
         shell: bash
         run: |
           FIX_BRANCH="jarvis-fixes-${{ steps.pr.outputs.head_ref }}"
+          PR_HEAD_SHA="${{ steps.pr.outputs.head_sha }}"
           git config user.name "jarvis"
           git config user.email "fullmetal@solo-dev.internal"
 
           MERGE_RESULT="none"
 
-          # If the fix branch exists remotely, merge latest PR HEAD into it (preserve fixes!)
+          # Fetch the latest PR HEAD first (always needed)
+          git fetch origin "$PR_HEAD_SHA"
+
+          # If the fix branch exists remotely, rebase unmerged commits onto latest PR HEAD
           if git ls-remote --heads origin "$FIX_BRANCH" | grep -q "$FIX_BRANCH"; then
-            echo "Shadow branch exists. Fetching and merging PR HEAD..."
+            echo "Shadow branch exists. Fetching and rebasing onto PR HEAD..."
             git fetch origin "$FIX_BRANCH"
+
+            # Get the commit range: commits on fix branch not in PR HEAD
+            # These are the agent-generated commits we want to preserve
             git checkout "$FIX_BRANCH"
 
-            # Fetch the latest PR HEAD
-            git fetch origin ${{ steps.pr.outputs.head_sha }}
+            # Find commits on fix branch that are not in PR HEAD (our agent fixes)
+            # Store them for potential cherry-pick if rebase fails
+            FIX_COMMITS=$(git rev-list "$PR_HEAD_SHA".."$FIX_BRANCH" 2>/dev/null | tac || echo "")
 
-            # Merge PR HEAD into fix branch (preserves previous fixes)
-            if git merge -X theirs ${{ steps.pr.outputs.head_sha }} --no-commit; then
-              # If merge succeeded with conflicts auto-resolved, commit
-              git commit -m "🔄 Merge PR HEAD (${{ steps.pr.outputs.head_sha }})" || echo "Nothing to commit"
-              MERGE_RESULT="merged"
+            if [ -n "$FIX_COMMITS" ]; then
+              echo "Found $(echo "$FIX_COMMITS" | wc -l | tr -d ' ') agent commits to preserve"
+            fi
+
+            # Try to rebase fix commits onto latest PR HEAD
+            if git rebase --onto "$PR_HEAD_SHA" "$PR_HEAD_SHA" "$FIX_BRANCH" 2>/dev/null; then
+              echo "✓ Rebased fix commits onto latest PR HEAD"
+              MERGE_RESULT="rebased"
             else
-              # If merge has conflicts, abort and just reset (agent will reapply)
-              git merge --abort
-              echo "Merge had conflicts, resetting to PR HEAD..."
-              git reset --hard ${{ steps.pr.outputs.head_sha }}
-              MERGE_RESULT="reset"
+              # Rebase failed (conflicts). Cherry-pick commits one by one with --skip on conflicts
+              echo "Rebase had conflicts, cherry-picking individual commits..."
+              git checkout "$PR_HEAD_SHA"
+              git checkout -B "$FIX_BRANCH"
+
+              CHERRY_PICK_SUCCESS=true
+              for commit in $FIX_COMMITS; do
+                if ! git cherry-pick "$commit" --no-commit 2>/dev/null; then
+                  echo "⚠️ Cherry-pick failed for $commit, skipping..."
+                  CHERRY_PICK_SUCCESS=false
+                fi
+              done
+
+              if [ "$CHERRY_PICK_SUCCESS" = "true" ] && [ -n "$FIX_COMMITS" ]; then
+                git commit -m "🔄 Reapplied fixes onto updated PR HEAD" || echo "Nothing to commit"
+                MERGE_RESULT="cherry_picked"
+              else
+                echo "⚠️ Could not preserve previous fixes, starting fresh from PR HEAD"
+                MERGE_RESULT="reset"
+              fi
             fi
           else
             echo "Creating new shadow branch from PR HEAD..."
@@ -373,7 +399,49 @@ jobs:
             # Build commit message with all comment references
             git commit -m "🤖 Agent: Batch applied fixes from $COMMENT_COUNT review comments"
 
-            git push origin HEAD --force
+            # Graceful push with retry logic (handles remote updates without losing work)
+            FIX_BRANCH="jarvis-fixes-${{ steps.pr.outputs.head_ref }}"
+            MAX_RETRIES=3
+            RETRY_COUNT=0
+            PUSH_SUCCESS=false
+
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$PUSH_SUCCESS" = "false" ]; do
+              # Try to push first
+              if git push origin "$FIX_BRANCH" 2>/dev/null; then
+                echo "✓ Push succeeded"
+                PUSH_SUCCESS=true
+              else
+                # Push failed - fetch remote and try to rebase
+                echo "Push failed (possible remote update). Fetching and rebasing..."
+                git fetch origin "$FIX_BRANCH"
+
+                # Rebase local commits on top of remote branch
+                if git rebase "origin/$FIX_BRANCH" "$FIX_BRANCH" 2>/dev/null; then
+                  echo "✓ Rebased onto remote, retrying push..."
+                  RETRY_COUNT=$((RETRY_COUNT + 1))
+                else
+                  # Rebase failed - reset to remote and re-apply changes
+                  echo "⚠️ Rebase failed, resetting to remote and re-applying changes..."
+                  git checkout "$FIX_BRANCH"
+                  git reset --hard "origin/$FIX_BRANCH"
+                  
+                  # Re-stage and re-commit the agent changes
+                  git add .
+                  if ! git diff --cached --quiet; then
+                    git commit -m "🤖 Agent: Batch applied fixes (re-applied after conflict)"
+                    RETRY_COUNT=$((RETRY_COUNT + 1))
+                  else
+                    echo "⚠️ No changes to commit after reset"
+                    RETRY_COUNT=$MAX_RETRIES
+                  fi
+                fi
+              fi
+            done
+
+            if [ "$PUSH_SUCCESS" = "false" ]; then
+              echo "❌ Push failed after $MAX_RETRIES attempts"
+              exit 1
+            fi
 
             # Write changed files to output using unique delimiter
             echo "changed_files<<CHANGED_FILES_EOF" >> "$GITHUB_OUTPUT"
@@ -419,8 +487,10 @@ jobs:
 
           # Determine previous fixes status
           case "$MERGE_RESULT" in
+            "rebased") PREV_FIXES="✅ Preserved (rebased onto PR HEAD)" ;;
+            "cherry_picked") PREV_FIXES="✅ Preserved (cherry-picked onto PR HEAD)" ;;
             "merged") PREV_FIXES="✅ Preserved (merged PR HEAD)" ;;
-            "reset") PREV_FIXES="⚠️ Reset (merge conflicts)" ;;
+            "reset") PREV_FIXES="⚠️ Reset (merge/rebase conflicts)" ;;
             *) PREV_FIXES="🆕 New branch" ;;
           esac
 

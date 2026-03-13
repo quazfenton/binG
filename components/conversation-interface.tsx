@@ -8,6 +8,7 @@ import InteractionPanel from "@/components/interaction-panel";
 import Settings from "@/components/settings";
 import ChatHistoryModal from "@/components/chat-history-modal";
 import { ChatPanel } from "@/components/chat-panel";
+import { HorizontalSpaceFiller } from "@/components/horizontal-space-filler";
 import CodePreviewPanel from "@/components/code-preview-panel";
 import TerminalPanel from "@/components/terminal/TerminalPanel";
 // import { useConversation } from "@/hooks/use-conversation"; // No longer needed
@@ -119,7 +120,11 @@ function applyUnifiedDiffToContent(currentContent: string, path: string, diffBod
 }
 
 function applySimpleLineDiff(currentContent: string, diffBody: string): string | null {
-  if (currentContent && currentContent.trim().length > 0) return null;
+  // For new files (empty content), still try to apply the diff as it may contain the full file content
+  // Only skip if there's existing content that would be overwritten
+  if (currentContent && currentContent.trim().length > 0) {
+    // Still try to apply - the diff might be for modifying existing content
+  }
   const lines = diffBody
     .split("\n")
     .filter((l) => /^(\+\s|\-\s|\s\s)/.test(l.trimStart()))
@@ -1253,6 +1258,9 @@ export default function ConversationInterface() {
         </div>
       </div>
       <div className="flex flex-col md:flex-row h-full min-h-0">
+        {/* Horizontal space filler - allows ChatPanel to expand on desktop */}
+        <HorizontalSpaceFiller />
+        
         {/* Main content area - hidden on mobile when chat is active */}
         <div className="hidden md:flex flex-1 flex-col">
           <div className="flex-1 relative">
