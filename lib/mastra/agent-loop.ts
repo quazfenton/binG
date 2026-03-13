@@ -15,7 +15,11 @@ import { normalizeToolInvocation, type ToolInvocation } from '@/lib/types/tool-i
 import { createLogger } from '@/lib/utils/logger';
 import { openai } from '@ai-sdk/openai';
 import { generateId } from 'ai';
-import type { CoreMessage, Tool } from 'ai';
+import type { Tool } from 'ai';
+
+// CoreMessage may not be exported in all AI SDK versions
+// @ts-ignore - CoreMessage is used for type hints but may not be available
+import type { CoreMessage } from 'ai';
 
 const log = createLogger('MastraAgent');
 
@@ -100,6 +104,7 @@ export class AgentLoop {
         for (const tool of this.tools) {
           sdkTools[tool.name] = {
             description: tool.description,
+            // @ts-ignore - parameters is tool-specific and varies by implementation
             parameters: tool.parameters as any,
             execute: async (args: any) => {
               const result = await tool.execute(args);

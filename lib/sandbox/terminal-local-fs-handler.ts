@@ -30,6 +30,7 @@ export interface TerminalLocalFSConfig {
   syncToVFS?: (filePath: string, content: string) => Promise<void>
   getLocalFileSystem?: () => Record<string, LocalFilesystemEntry>
   setLocalFileSystem?: (fs: Record<string, LocalFilesystemEntry>) => void
+  onOpenEditor?: (filePath: string, editorType: 'nano' | 'vim' | 'vi') => void
 }
 
 /**
@@ -42,12 +43,14 @@ export class TerminalLocalFSHandler {
   private getLocalFileSystem?: () => Record<string, LocalFilesystemEntry>
   private setLocalFileSystem?: (fs: Record<string, LocalFilesystemEntry>) => void
   private syncToVFS?: (filePath: string, content: string) => Promise<void>
+  private onOpenEditor?: (filePath: string, editorType: 'nano' | 'vim' | 'vi') => void
 
   constructor(config: TerminalLocalFSConfig) {
     this.filesystemScopePath = config.filesystemScopePath
     this.getLocalFileSystem = config.getLocalFileSystem
     this.setLocalFileSystem = config.setLocalFileSystem
     this.syncToVFS = config.syncToVFS
+    this.onOpenEditor = config.onOpenEditor
 
     // Create executor with TerminalPanel's write callbacks and filesystem access
     this.executor = new LocalCommandExecutor({
@@ -63,6 +66,7 @@ export class TerminalLocalFSHandler {
       },
       getFileSystem: config.getLocalFileSystem,
       setFileSystem: config.setLocalFileSystem,
+      onOpenEditor: config.onOpenEditor,
     })
   }
 
