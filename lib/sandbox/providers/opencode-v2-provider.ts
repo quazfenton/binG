@@ -194,32 +194,31 @@ export class OpencodeV2Provider implements LLMProvider {
               const { name: toolName, args: toolArgs } = toolInvocation;
 
               // Check if it's a Nullclaw tool
+              const toolStartTime = Date.now();
+              const safeArgs = toolArgs ?? {};
+              let toolResult: ToolResult;
               if (toolName.startsWith('nullclaw_')) {
                 const nullclawResult = await nullclawMCPBridge.executeTool(
                   toolName,
-                  toolArgs,
+                  safeArgs,
                   this.currentSession.id
                 );
-                
+
                 nullclawTasks.push({
                   tool: toolName,
                   status: nullclawResult.success ? 'completed' : 'failed',
                   result: nullclawResult,
                 });
 
-                const toolResult: ToolResult = {
+                toolResult = {
                   success: nullclawResult.success,
                   output: nullclawResult.output,
                   exitCode: nullclawResult.success ? 0 : 1,
                 };
-
-                steps.push({ toolName, args: toolArgs, result: toolResult });
-                onToolExecution?.(toolName, toolArgs, toolResult);
               } else {
                 // Standard tool execution
-                let toolResult: ToolResult;
                 try {
-                  toolResult = await executeTool(toolName, toolArgs ?? {});
+                  toolResult = await executeTool(toolName, safeArgs);
                 } catch (err) {
                   toolResult = {
                     success: false,
@@ -227,19 +226,21 @@ export class OpencodeV2Provider implements LLMProvider {
                     exitCode: 1,
                   };
                 }
-
-                steps.push({ toolName, args: toolArgs ?? {}, result: toolResult });
-                onToolExecution?.(toolName, toolArgs ?? {}, toolResult);
-
-                // Record metrics
-                openCodeV2SessionManager.recordMetrics(
-                  this.currentSession.id,
-                  1,
-                  0,
-                  0,
-                  Date.now() - startTime
-                );
               }
+
+              steps.push({ toolName, args: safeArgs, result: toolResult });
+              onToolExecution?.(toolName, safeArgs, toolResult);
+
+              // Record metrics
+              openCodeV2SessionManager.recordMetrics(
+                this.currentSession.id,
+                1,
+                0,
+                0,
+                Date.now() - toolStartTime,
+                0,
+                1
+              );
             }
 
             // Completion

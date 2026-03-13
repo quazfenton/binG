@@ -148,10 +148,10 @@ describe('CrewAI Integration', () => {
       });
 
       // Execute first task
-      await task1.execute({ input: 'test' });
+      await task1.execute({ inputs: { input: 'test' } });
 
       // Second task should have context from first
-      const result = await task2.execute({ input: 'test2' });
+      const result = await task2.execute({ inputs: { input: 'test2' } });
 
       expect(result.raw).toBeDefined();
     });
@@ -194,7 +194,7 @@ describe('CrewAI Integration', () => {
         callback,
       });
 
-      await task.execute({ input: 'test' });
+      await task.execute({ inputs: { input: 'test' } });
 
       expect(callback).toHaveBeenCalled();
     });
@@ -267,7 +267,7 @@ describe('CrewAI Integration', () => {
         process: 'sequential',
       });
 
-      const result = await crew.kickoff({ input: 'test' });
+      const result = await crew.kickoff({ inputs: { input: 'test' } });
 
       expect(result.raw).toBeDefined();
       expect(result.tasks_output.length).toBe(2);
@@ -300,7 +300,7 @@ describe('CrewAI Integration', () => {
         verbose: true,
       });
 
-      const result = await crew.kickoff({ input: 'test' });
+      const result = await crew.kickoff({ inputs: { input: 'test' } });
 
       expect(result.raw).toBeDefined();
     });
@@ -324,7 +324,7 @@ describe('CrewAI Integration', () => {
       });
 
       const chunks: any[] = [];
-      for await (const chunk of crew.kickoffStream({ input: 'test' })) {
+      for await (const chunk of crew.kickoffStream({ inputs: { input: 'test' } })) {
         chunks.push(chunk);
       }
 
@@ -353,7 +353,7 @@ describe('CrewAI Integration', () => {
         task_callback: taskCallback,
       });
 
-      await crew.kickoff({ input: 'test' });
+      await crew.kickoff({ inputs: { input: 'test' } });
 
       expect(taskCallback).toHaveBeenCalled();
     });
@@ -406,7 +406,7 @@ describe('CrewAI Integration', () => {
       const startCallback = vi.fn();
       crew.events.on('crew:start', startCallback);
 
-      await crew.kickoff({ input: 'test' });
+      await crew.kickoff({ inputs: { input: 'test' } });
 
       expect(startCallback).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -436,9 +436,10 @@ describe('CrewAI Integration', () => {
       const completeCallback = vi.fn();
       crew.events.on('crew:complete', completeCallback);
 
-      await crew.kickoff({ input: 'test' });
+      await crew.kickoff({ inputs: { input: 'test' } });
 
       expect(completeCallback).toHaveBeenCalled();
     });
   });
 });
+

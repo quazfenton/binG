@@ -1,8 +1,6 @@
 import type { Metadata } from 'next'
 import type { Viewport } from 'next'
 import './globals.css'
-import { AuthProvider } from '@/contexts/auth-context';
-import { TamboContextProvider } from '@/contexts/tambo-context';
 
 export const metadata: Metadata = {
   title: 'binG0 - AI Assistant',
@@ -52,13 +50,9 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
-      <body>
-        <AuthProvider>
-          <TamboContextProvider>
-            {children}
-          </TamboContextProvider>
-        </AuthProvider>
+    <html lang="en" suppressHydrationWarning>
+      <body suppressHydrationWarning>
+        {children}
       </body>
     </html>
   )

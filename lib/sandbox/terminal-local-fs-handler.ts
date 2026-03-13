@@ -49,7 +49,7 @@ export class TerminalLocalFSHandler {
     this.setLocalFileSystem = config.setLocalFileSystem
     this.syncToVFS = config.syncToVFS
 
-    // Create executor with TerminalPanel's write callbacks
+    // Create executor with TerminalPanel's write callbacks and filesystem access
     this.executor = new LocalCommandExecutor({
       terminalId: config.terminalId,
       onWrite: config.onWrite,
@@ -61,6 +61,8 @@ export class TerminalLocalFSHandler {
           await this.syncToVFS(path, content)
         }
       },
+      getFileSystem: config.getLocalFileSystem,
+      setFileSystem: config.setLocalFileSystem,
     })
   }
 
@@ -299,6 +301,13 @@ export class TerminalLocalFSHandler {
       logger.error('Failed to restore snapshot', error);
       throw error;
     }
+  }
+
+  /**
+   * Sync external filesystem to executor
+   */
+  syncFileSystem(fs: Record<string, LocalFilesystemEntry>): void {
+    this.executor.setFileSystem(fs)
   }
 }
 

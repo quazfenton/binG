@@ -4,7 +4,7 @@
  * End-to-end tests for JWT authentication across API routes
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { generateToken, verifyToken, extractTokenFromHeader } from '@/lib/security/jwt-auth';
 import { createServer, Server } from 'http';
 import { NextRequest } from 'next/server';
@@ -15,10 +15,10 @@ describe('JWT Auth Flow Integration', () => {
 
   beforeAll(async () => {
     // Set test environment
-    process.env.JWT_SECRET = 'test-secret-key-for-integration-testing-min-16-chars';
-    process.env.NODE_ENV = 'test';
-    process.env.JWT_ISSUER = 'test-bing';
-    process.env.JWT_AUDIENCE = 'test-bing-app';
+    vi.stubEnv('JWT_SECRET', 'test-secret-key-for-integration-testing-min-16-chars');
+    vi.stubEnv('NODE_ENV', 'test');
+    vi.stubEnv('JWT_ISSUER', 'test-bing');
+    vi.stubEnv('JWT_AUDIENCE', 'test-bing-app');
   });
 
   afterAll(async () => {
@@ -26,6 +26,7 @@ describe('JWT Auth Flow Integration', () => {
     if (testServer) {
       await new Promise(resolve => testServer.close(resolve));
     }
+    vi.unstubAllEnvs();
   });
 
   describe('Token Generation and Validation', () => {
@@ -224,8 +225,8 @@ describe('JWT Auth Flow Integration', () => {
       const originalSecret = process.env.JWT_SECRET;
 
       try {
-        process.env.NODE_ENV = 'production';
-        delete process.env.JWT_SECRET;
+        vi.stubEnv('NODE_ENV', 'production');
+        vi.stubEnv('JWT_SECRET', undefined);
 
         // Clear module cache to force re-import
         const modulePath = '@/lib/security/jwt-auth';
@@ -235,8 +236,8 @@ describe('JWT Auth Flow Integration', () => {
         // For testing, we just verify the check exists
         expect(process.env.JWT_SECRET).toBeUndefined();
       } finally {
-        process.env.NODE_ENV = originalEnv;
-        process.env.JWT_SECRET = originalSecret;
+        vi.stubEnv('NODE_ENV', originalEnv);
+        vi.stubEnv('JWT_SECRET', originalSecret);
       }
     });
 
@@ -244,7 +245,7 @@ describe('JWT Auth Flow Integration', () => {
       const originalSecret = process.env.JWT_SECRET;
 
       try {
-        process.env.JWT_SECRET = 'weak'; // Too short
+        vi.stubEnv('JWT_SECRET', 'weak'); // Too short
 
         // The getSecretKey function should throw
         expect(() => {
@@ -254,8 +255,9 @@ describe('JWT Auth Flow Integration', () => {
           }
         }).toThrow();
       } finally {
-        process.env.JWT_SECRET = originalSecret;
+        vi.stubEnv('JWT_SECRET', originalSecret);
       }
     });
   });
 });
+

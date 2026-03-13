@@ -296,35 +296,58 @@ export async function POST(request: NextRequest) {
 
       const context = buildAgenticContext(contextualMessages);
 
-      if (stream) {
-        const streamBody = executeV2TaskStreaming({
+      // Try V2 execution with fallback to v1/regular LLM chat on failure
+      try {
+        if (stream) {
+          const streamBody = executeV2TaskStreaming({
+            userId: authenticatedUserId,
+            conversationId: resolvedConversationId,
+            task,
+            context,
+            stream: true,
+          });
+
+          return new Response(streamBody, {
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              Pragma: 'no-cache',
+              Expires: '0',
+              Connection: 'keep-alive',
+              'X-Accel-Buffering': 'no',
+            },
+          });
+        }
+
+        const v2Result = await executeV2Task({
           userId: authenticatedUserId,
           conversationId: resolvedConversationId,
           task,
           context,
-          stream: true,
         });
 
-        return new Response(streamBody, {
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            Pragma: 'no-cache',
-            Expires: '0',
-            Connection: 'keep-alive',
-            'X-Accel-Buffering': 'no',
-          },
+        // If V2 explicitly signals fallback needed (session creation failed)
+        if (v2Result.fallbackToV1) {
+          chatLogger.warn('V2 execution failed, falling back to v1/regular LLM chat', { requestId }, {
+            error: v2Result.error,
+            errorCode: v2Result.errorCode,
+          });
+          // Continue to fallback code below
+        } else {
+          return NextResponse.json(v2Result);
+        }
+      } catch (v2Error: any) {
+        // V2 execution failed - log and fall through to v1 fallback
+        chatLogger.error('V2 execution failed, falling back to v1', { requestId }, {
+          error: v2Error.message,
+          stack: v2Error.stack,
         });
+        // Continue to fallback path below
       }
-
-      const v2Result = await executeV2Task({
-        userId: authenticatedUserId,
-        conversationId: resolvedConversationId,
-        task,
-        context,
-      });
-
-      return NextResponse.json(v2Result);
+      
+      // FALLBACK: V2 failed, use regular v1/priority router chat path
+      chatLogger.info('Using v1 fallback path after V2 failure', { requestId, provider, model });
+      // This continues to the regular priority router path below
     }
 
     // Agentic pipeline (non-V2) for code-centric requests

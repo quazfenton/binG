@@ -2,6 +2,7 @@ import { agentSessionManager } from './agent-session-manager';
 import { agentFSBridge } from './agent-fs-bridge';
 import { taskRouter } from './task-router';
 import { createLogger } from '../utils/logger';
+import { normalizeToolInvocation, type ToolInvocation } from '@/lib/types/tool-invocation';
 
 const logger = createLogger('Agent:V2Executor');
 
@@ -128,7 +129,7 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
         })));
 
         let accumulatedContent = '';
-        let toolInvocations: any[] = [];
+        let toolInvocations: ToolInvocation[] = [];
 
         emitStep('Execute task', 'started');
         const resultPromise = taskRouter.executeTask({
@@ -145,27 +146,23 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           },
           onToolExecution: (toolName, args, result) => {
             const toolCallId = `${toolName}-${Date.now()}`;
-            toolInvocations.push({
+            const invocation = normalizeToolInvocation({
               toolCallId,
               toolName,
               state: 'result',
               args,
               result,
               timestamp: Date.now(),
+              sourceSystem: 'v2-executor',
+              sourceAgent: 'v2',
             });
+            toolInvocations.push(invocation);
             emitStep(`Tool ${toolName}`, result?.success === false ? 'failed' : 'completed', {
               toolName,
               toolCallId,
               result,
             });
-            controller.enqueue(encoder.encode(formatEvent('tool_invocation', {
-              toolCallId,
-              toolName,
-              state: 'result',
-              args,
-              result,
-              timestamp: Date.now(),
-            })));
+            controller.enqueue(encoder.encode(formatEvent('tool_invocation', invocation)));
           },
         });
 
@@ -247,8 +244,16 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           agentSessionManager.setSessionState(options.userId, options.conversationId, 'ready');
           agentSessionManager.updateActivity(options.userId, options.conversationId);
         } catch { /* ignore cleanup errors */ }
+        
+        // Check if this is a session creation failure that should trigger fallback
+        const isSessionError = error.message?.includes('Session creation failed') || 
+                               error.message?.includes('Failed to create session') ||
+                               error.message?.includes('sandbox');
+        
         controller.enqueue(encoder.encode(formatEvent('error', {
           message: error.message || 'Execution failed',
+          fallbackToV1: isSessionError, // Signal to client that fallback should happen
+          errorCode: isSessionError ? 'SESSION_FAILED' : 'EXECUTION_FAILED',
         })));
       } finally {
         controller.close();

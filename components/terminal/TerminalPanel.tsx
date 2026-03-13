@@ -296,11 +296,19 @@ export default function TerminalPanel({
          }
        }
 
-       localFileSystemRef.current = fs;
-       setVfsFileCount(files.length);
-       console.log('[TerminalPanel] Synced VFS files:', Object.keys(fs).length, 'entries');
-       console.log('[TerminalPanel] Sample paths:', Object.keys(fs).slice(0, 10));
-       setIsVfsSynced(true);
+        localFileSystemRef.current = fs;
+        setVfsFileCount(files.length);
+        console.log('[TerminalPanel] Synced VFS files:', Object.keys(fs).length, 'entries');
+        console.log('[TerminalPanel] Sample paths:', Object.keys(fs).slice(0, 10));
+        
+        // Sync VFS to all terminal executors
+        Object.values(terminalHandlersRef.current).forEach(handlers => {
+          if (handlers?.localFS) {
+            handlers.localFS.syncFileSystem(fs);
+          }
+        });
+        
+        setIsVfsSynced(true);
      } catch (error) {
        console.error('[TerminalPanel] Failed to sync VFS:', error);
        setIsVfsSynced(true); // Still mark as synced to avoid blocking
@@ -425,6 +433,13 @@ export default function TerminalPanel({
 
         localFileSystemRef.current = fs;
         log(`[filesystem-updated] synced VFS to local: ${fileCount} files, ${dirCount} directories`);
+        
+        // Sync VFS to all terminal executors
+        Object.values(terminalHandlersRef.current).forEach(handlers => {
+          if (handlers?.localFS) {
+            handlers.localFS.syncFileSystem(fs);
+          }
+        });
       } catch (error) {
         logError('[filesystem-updated] re-sync failed', error);
         console.error('[Terminal] Event re-sync error:', error);
