@@ -48,6 +48,9 @@ import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp'
 import type { PreviewInfo } from '@/lib/sandbox/types'
 import type { DesktopHandle } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
 import { GitManager, type GitStatusResult } from './git-manager'
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('UnifiedAgent')
 
 // ==================== Types ====================
 
@@ -158,24 +161,30 @@ export class UnifiedAgent {
 
   /**
    * Initialize the agent session with real sandbox
-   * 
+   *
    * ERROR HANDLING: Each capability initialization is wrapped in try-catch
    * CAPABILITY TRACKING: Tracks which capabilities were successfully initialized
    */
   async initialize(): Promise<AgentSession> {
     const userId = this.config.userId || 'anonymous-agent'
     const initStartTime = Date.now()
-    console.log(`[UnifiedAgent] Initializing session for ${userId}...`)
+    log.info(`Initializing agent session for user ${userId} with provider ${this.config.provider}`)
+    log.debug(`Requested capabilities: ${this.config.capabilities?.join(', ') || 'terminal'}`)
 
     try {
-      // Create real sandbox session via bridge with error handling
+      // P1 FIX: Pass provider to bridge and use correct env key
       let workspaceSession
       try {
+        log.debug(`Creating workspace for user ${userId} with provider ${this.config.provider}...`)
         workspaceSession = await sandboxBridge.createWorkspace(userId, {
-          env: this.config.env,
+          // P1 FIX: Pass provider to ensure sandbox is created on the correct backend
+          provider: this.config.provider,
+          // P1 FIX: Use envVars key instead of env
+          envVars: this.config.env,
         } as any)
+        log.info(`Workspace created: ${workspaceSession.sandboxId} on provider ${workspaceSession.provider || this.config.provider}`)
       } catch (error: any) {
-        console.error('[UnifiedAgent] Failed to create sandbox session:', error.message)
+        log.error(`Failed to create sandbox session: ${error.message}`)
         throw new Error(
           `Failed to initialize sandbox: ${error.message}. ` +
           `Check that provider "${this.config.provider}" is properly configured.`
@@ -198,6 +207,7 @@ export class UnifiedAgent {
 
       for (const capability of capabilities) {
         try {
+          log.debug(`Initializing capability: ${capability}`)
           switch (capability) {
             case 'terminal':
               await this.initializeTerminal()
@@ -312,25 +322,26 @@ export class UnifiedAgent {
    */
   async cleanup(): Promise<void> {
     if (!this.session) {
-      console.log('[UnifiedAgent] No session to cleanup')
+      log.debug('No session to cleanup')
       return
     }
 
-    console.log(`[UnifiedAgent] Cleaning up session ${this.session.sessionId}...`)
+    log.info(`Cleaning up session ${this.session.sessionId}...`)
     const cleanupErrors: Error[] = []
 
     try {
       // Stop session timeout checker
       this.stopSessionTimeoutChecker()
-      
+
       this.mcpInitialized = false
 
       // Disconnect terminal but keep sandbox alive unless explicitly requested
       try {
         await enhancedTerminalManager.disconnectTerminal(this.session.sessionId)
         this.initializedCapabilities.delete('terminal')
+        log.debug('Terminal disconnected')
       } catch (error: any) {
-        console.error('[UnifiedAgent] Terminal disconnect failed:', error.message)
+        log.error(`Terminal disconnect failed: ${error.message}`)
         cleanupErrors.push(error)
       }
 
@@ -340,8 +351,9 @@ export class UnifiedAgent {
           await (this.desktopHandle as any).cleanup()
           this.desktopHandle = null
           this.initializedCapabilities.delete('desktop')
+          log.debug('Desktop cleaned up')
         } catch (error: any) {
-          console.error('[UnifiedAgent] Desktop cleanup failed:', error.message)
+          log.error(`Desktop cleanup failed: ${error.message}`)
           cleanupErrors.push(error)
         }
       }
@@ -359,16 +371,13 @@ export class UnifiedAgent {
       this.session = null
 
       if (cleanupErrors.length > 0) {
-        console.warn(
-          `[UnifiedAgent] Cleanup completed with ${cleanupErrors.length} error(s)`,
-          cleanupErrors.map(e => e.message)
-        )
+        log.warn(`Cleanup completed with ${cleanupErrors.length} error(s)`)
       } else {
-        console.log('[UnifiedAgent] Cleanup complete')
+        log.info('Cleanup complete')
       }
 
     } catch (error: any) {
-      console.error('[UnifiedAgent] Cleanup failed:', error.message)
+      log.error(`Cleanup failed: ${error.message}`)
       throw error
     }
   }
@@ -382,12 +391,13 @@ export class UnifiedAgent {
     }
 
     try {
+      log.debug('Initializing Git manager...')
       const provider = await getSandboxProvider(this.config.provider as any)
       const handle = await provider.getSandbox(this.session.sandboxId)
       this.gitManager = new GitManager(handle)
-      console.log('[UnifiedAgent] Git manager initialized')
+      log.info('Git manager initialized')
     } catch (error: any) {
-      console.error('[UnifiedAgent] Git initialization failed:', error.message)
+      log.error(`Git initialization failed: ${error.message}`)
       throw new Error(`Failed to initialize Git: ${error.message}`)
     }
   }
@@ -445,15 +455,18 @@ export class UnifiedAgent {
   private async initializeTerminal(): Promise<void> {
     if (!this.session) return
 
+    log.debug('Creating terminal session...')
     await enhancedTerminalManager.createTerminalSessionWithDesktop(
       this.session.sessionId,
       this.session.sandboxId,
       (data) => this.handleTerminalOutput(data),
       (preview) => this.handlePortDetected(preview),
     )
+    log.info('Terminal session created')
 
     // Enable auto-resume if configured
     if (this.config.session?.autoResume) {
+      log.debug('Enabling auto-resume for terminal')
       enhancedTerminalManager.enableAutoResume(
         this.session.sessionId,
         this.config.session.timeout || 300000
@@ -469,7 +482,7 @@ export class UnifiedAgent {
     }
 
     this.terminalOutput.push(output)
-    
+
     // Prevent unbounded growth - keep only last N entries
     if (this.terminalOutput.length > this.MAX_OUTPUT_LENGTH) {
       this.terminalOutput = this.terminalOutput.slice(-this.MAX_OUTPUT_LENGTH)
@@ -481,6 +494,7 @@ export class UnifiedAgent {
   }
 
   private handlePortDetected(preview: PreviewInfo): void {
+    log.info(`Port detected: ${preview.port} → ${preview.url}`)
     const output: TerminalOutput = {
       type: 'system',
       data: `Port detected: ${preview.port} → ${preview.url}`,
@@ -506,14 +520,15 @@ export class UnifiedAgent {
   private startSessionTimeoutChecker(): void {
     const timeout = this.config.session?.timeout || 300000 // Default 5 minutes
     const checkInterval = Math.min(timeout / 2, 60000) // Check every 30s or half timeout
+    log.debug(`Starting session timeout checker (timeout: ${timeout}ms, check interval: ${checkInterval}ms)`)
 
     this.sessionCheckInterval = setInterval(() => {
       if (this.session) {
         const idleTime = Date.now() - this.session.lastActive
         if (idleTime > timeout) {
-          console.warn(`[UnifiedAgent] Session idle timeout (${timeout}ms). Cleaning up...`)
+          log.warn(`Session idle timeout (${timeout}ms). Cleaning up...`)
           this.cleanup().catch((error) => {
-            console.error('[UnifiedAgent] Cleanup after timeout failed:', error)
+            log.error(`Cleanup after timeout failed: ${error.message}`)
           })
         }
       }
@@ -609,22 +624,25 @@ export class UnifiedAgent {
     if (!this.session) return
 
     try {
+      log.debug('Initializing desktop...')
       const provider = await getSandboxProvider(this.config.provider as any)
        const handle = await provider.getSandbox(this.session.sandboxId)
-      
+
        if ('getComputerUseService' in handle) {
          // Specialized service (Daytona)
          this.desktopHandle = (handle as any).getComputerUseService()
+         log.debug('Desktop initialized with specialized service (Daytona)')
       } else if ('screenshot' in handle) {
          // Direct handle (E2B)
          this.desktopHandle = handle as any
+         log.debug('Desktop initialized with direct handle (E2B)')
       }
 
       if (this.desktopHandle) {
-        console.log('[UnifiedAgent] Desktop initialized')
+        log.info('Desktop initialized')
       }
-    } catch (error) {
-      console.warn('[UnifiedAgent] Desktop initialization failed:', error)
+    } catch (error: any) {
+      log.warn(`Desktop initialization failed: ${error.message}`)
     }
   }
 
@@ -638,6 +656,7 @@ export class UnifiedAgent {
       throw new Error('MCP not initialized')
     }
 
+    log.debug(`Calling MCP tool: ${toolName}`)
     const userId = this.config.userId || 'anonymous-agent'
     return callMCPToolFromAI_SDK(toolName, args, userId)
   }
@@ -650,7 +669,9 @@ export class UnifiedAgent {
       throw new Error('MCP not initialized')
     }
 
+    log.debug('Listing MCP tools...')
     const tools = await getMCPToolsForAI_SDK()
+    log.debug(`Found ${tools.length} MCP tools`)
     return tools.map(t => ({ name: t.function.name, description: t.function.description }))
   }
 
@@ -658,11 +679,12 @@ export class UnifiedAgent {
     if (!this.config.mcp) return
 
     try {
+      log.debug('Initializing MCP...')
       const tools = await getMCPToolsForAI_SDK()
       this.mcpInitialized = true
-      console.log(`[UnifiedAgent] MCP initialized with ${tools.length} tools`)
-    } catch (error) {
-      console.warn('[UnifiedAgent] MCP initialization failed:', error)
+      log.info(`MCP initialized with ${tools.length} tools`)
+    } catch (error: any) {
+      log.warn(`MCP initialization failed: ${error.message}`)
     }
   }
 

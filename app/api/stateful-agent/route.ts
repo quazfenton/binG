@@ -56,10 +56,10 @@ export async function POST(request: NextRequest) {
       messages,
       sessionId,
       sandboxId,
-      provider = 'openai',
-      model = 'gpt-4o',
+      provider = 'mistral',
+      model = 'mistral-small-latest',
       temperature = 0.7,
-      maxTokens = 4000,
+      maxTokens = 100000,
       stream = false,
       useStateful = USE_STATEFUL_AGENT,
       useCrewAI = USE_CREWAI,
@@ -130,8 +130,8 @@ export async function POST(request: NextRequest) {
 
     // AI SDK streaming mode with tool calling
     if (stream || body.useAI_SDK === true) {
-      const preferredProvider = (provider as 'openai' | 'anthropic' | 'google') || 'openai';
-      const modelId = model.replace(`${provider}:`, '') || 'gpt-4o';
+      const preferredProvider = (provider as 'openai' | 'anthropic' | 'google') || 'mistral';
+      const modelId = model.replace(`${provider}:`, '') || 'mistral-small-latest';
 
       const { model: aiModel, provider: actualProvider } = await createModelWithFallback(
         preferredProvider,
@@ -183,11 +183,63 @@ export async function POST(request: NextRequest) {
       let sandboxHandle;
 
       if (sandboxId) {
-        const sandboxProvider = await getSandboxProvider(DEFAULT_SANDBOX_PROVIDER);
-         sandboxHandle = await sandboxProvider.getSandbox(sandboxId);
+        // P0 FIX: Verify sandbox ownership before allowing access
+        // Get session by sandboxId to verify ownership
+        const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
+        const session = sandboxBridge.getSessionBySandboxId(sandboxId);
+        
+        if (!session) {
+          return NextResponse.json(
+            { error: 'Sandbox not found or has been terminated' },
+            { status: 404 }
+          );
+        }
+        
+        // Verify the authenticated user owns this sandbox
+        if (session.userId !== userId) {
+          console.warn(`[StatefulAgent API] Unauthorized sandbox access attempt: user ${userId} tried to access sandbox ${sandboxId} owned by ${session.userId}`);
+          return NextResponse.json(
+            { error: 'You do not have access to this sandbox' },
+            { status: 403 }
+          );
+        }
+        
+        // Resolve provider type from session or sandbox ID
+        const rawProvider = (session as any).provider as string | undefined;
+        const inferredProvider =
+          rawProvider && rawProvider.trim()
+            ? rawProvider.trim()
+            : sandboxBridge.inferProviderFromSandboxId(sandboxId);
+
+        if (!inferredProvider) {
+          console.warn(`[StatefulAgent API] Unable to determine provider for sandbox ${sandboxId}`);
+          return NextResponse.json(
+            { error: 'Sandbox provider not recognized' },
+            { status: 400 }
+          );
         }
 
-        const result = await runStatefulAgent(userMessage, {
+        let sandboxProvider;
+        try {
+          sandboxProvider = await getSandboxProvider(inferredProvider as SandboxProviderType);
+        } catch (error: any) {
+          // Differentiate between "unknown provider" errors and other initialization failures
+          const isUnknown = error?.message?.includes('Unknown sandbox provider') || 
+                           error?.message?.includes('not supported') ||
+                           error?.message?.includes('not recognized');
+          console.warn(
+            `[StatefulAgent API] Failed to initialize provider ${inferredProvider} for sandbox ${sandboxId}: ${error?.message || error}`,
+          );
+          return NextResponse.json(
+            { error: isUnknown ? 'Sandbox provider not recognized' : 'Failed to initialize sandbox provider' },
+            { status: isUnknown ? 400 : 500 }
+          );
+        }
+
+        sandboxHandle = await sandboxProvider.getSandbox(sandboxId);
+      }
+
+      const result = await runStatefulAgent(userMessage, {
         sessionId,
         sandboxHandle,
         enforcePlanActVerify,

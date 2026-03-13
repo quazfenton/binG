@@ -52,7 +52,6 @@ export const enhancedPluginRegistry: EnhancedPlugin[] = [
     defaultSize: { width: 800, height: 600 },
     minSize: { width: 600, height: 400 },
     maxSize: { width: 1200, height: 900 },
-    enhanced: true,
     resourceLimits: {
       maxMemoryMB: 200,
       maxCpuPercent: 40,

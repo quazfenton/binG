@@ -1,11 +1,11 @@
 /**
  * Docker Security Utilities
- * 
+ *
  * Provides security helpers for Docker API routes including
  * container ownership verification and access control.
  */
 
-import { Dockerode } from 'dockerode';
+import Dockerode from 'dockerode';
 
 /**
  * Verify that a container is owned by the authenticated user

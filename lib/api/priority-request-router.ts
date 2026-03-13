@@ -18,6 +18,7 @@ import { toolAuthManager } from '../services/tool-authorization-manager';
 import { sandboxBridge } from '../sandbox';
 import type { LLMMessage } from './llm-providers';
 import { detectRequestType } from '../utils/request-type-detector';
+import { normalizeToolInvocations } from '@/lib/types/tool-invocation';
 import { initializeComposioService, getComposioService, type ComposioToolRequest } from './composio-service';
 import { quotaManager } from '../services/quota-manager';
 
@@ -77,6 +78,38 @@ class CircuitBreaker {
 
   constructor(config?: Partial<CircuitBreakerConfig>) {
     this.config = { ...DEFAULT_CIRCUIT_BREAKER_CONFIG, ...config };
+  }
+
+  private buildCanonicalToolInvocations(params: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+    provider?: string;
+    sourceSystem: string;
+    requestId?: string;
+    conversationId?: string;
+  }) {
+    return normalizeToolInvocations([this.buildCanonicalToolInvocationRecord(params)]);
+  }
+
+  private buildCanonicalToolInvocationRecord(params: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+    provider?: string;
+    sourceSystem: string;
+    requestId?: string;
+    conversationId?: string;
+  }): Record<string, unknown> {
+    return {
+      toolName: params.toolName,
+      args: params.args ?? {},
+      result: params.result,
+      provider: params.provider,
+      sourceSystem: params.sourceSystem,
+      requestId: params.requestId,
+      conversationId: params.conversationId,
+    };
   }
 
   /**
@@ -610,7 +643,7 @@ class PriorityRequestRouter {
 
     // All endpoints failed - this should be extremely rare with proper fallback configuration
     const duration = Date.now() - startTime;
-    
+
     // Only log full error details if there were actual errors (not just "not configured")
     const actualErrors = errors.filter(e => !e.error.message.includes('not configured'));
     if (actualErrors.length > 0) {
@@ -618,7 +651,7 @@ class PriorityRequestRouter {
     } else {
       console.log('[Router] No configured providers available');
     }
-    
+
     // Return a final emergency response
     return {
       success: false,
@@ -714,12 +747,26 @@ class PriorityRequestRouter {
       }
 
       // Success response
+      const canonicalToolInvocations = Array.isArray(result.toolCalls)
+        ? normalizeToolInvocations(
+            result.toolCalls.map((toolCall: any, index: number) => this.buildCanonicalToolInvocationRecord({
+              toolName: toolCall?.name ?? toolCall?.toolName ?? `composio-tool-${index + 1}`,
+              args: toolCall?.arguments ?? toolCall?.args ?? toolCall?.input ?? {},
+              result: toolCall?.result ?? toolCall?.output,
+              provider: 'composio',
+              sourceSystem: 'priority-router',
+              requestId: request.requestId,
+              conversationId: result.metadata?.sessionId ?? request.requestId,
+            }))
+          )
+        : [];
       return {
         content: result.content || 'Tool request completed.',
         data: {
           source: 'composio-tools',
           type: 'composio_execution',
           toolCalls: result.toolCalls,
+          toolInvocations: canonicalToolInvocations,
           connectedAccounts: result.connectedAccounts,
           composioSessionId: result.metadata?.sessionId,
           composioMcp: result.metadata?.mcp,
@@ -1012,6 +1059,15 @@ class PriorityRequestRouter {
             source: 'tool-execution',
             toolCalls: [{ name: detectionResult.detectedTool, arguments: detectionResult.toolInput }],
             toolResults: [{ name: detectionResult.detectedTool, result: result.output }],
+            toolInvocations: this.buildCanonicalToolInvocations({
+              toolName: detectionResult.detectedTool,
+              args: detectionResult.toolInput,
+              result: result.output,
+              provider: result.provider ?? toolAuthManager.getRequiredProvider(detectionResult.detectedTool) ?? 'unknown',
+              sourceSystem: 'priority-router',
+              requestId: request.requestId,
+              conversationId: request.requestId,
+            }),
             type: 'tool_execution'
           }
         };

@@ -75,6 +75,11 @@ async function startup() {
 
     logger.info('Backend initialized successfully', backendStatus);
 
+    // Start provider health checking
+    const { startProviderHealthCheck } = await import('@/lib/sandbox/providers/health-checker');
+    await startProviderHealthCheck();
+    logger.info('Provider health checker started');
+
     // Log backend status
     if (!backendStatus.websocket.running) {
       logger.warn('WebSocket server failed to start', backendStatus.websocket.error);
@@ -269,6 +274,18 @@ app.prepare().then(startup).then(() => {
       try {
         const msg = JSON.parse(message.toString());
 
+        // ✅ FIX: Validate message size (max 10KB per message)
+        const messageSize = message.toString().length
+        const MAX_MESSAGE_SIZE = 10240 // 10KB
+        if (messageSize > MAX_MESSAGE_SIZE) {
+          console.warn(`[WebSocket] Message too large: ${messageSize} bytes (max: ${MAX_MESSAGE_SIZE})`)
+          ws.send(JSON.stringify({
+            type: 'error',
+            error: `Message too large (max ${MAX_MESSAGE_SIZE / 1024}KB)`
+          }))
+          return
+        }
+
         switch (msg.type) {
           case 'input':
             // Forward input to sandbox terminal via terminalManager
@@ -296,7 +313,11 @@ app.prepare().then(startup).then(() => {
             break;
 
           case 'pong':
-            // Client responded to our keepalive ping - no action needed
+            // ✅ FIX: Reset pong timeout when client responds
+            if (pongTimeout) {
+              clearTimeout(pongTimeout);
+              pongTimeout = null;
+            }
             break;
 
           default:
@@ -307,10 +328,21 @@ app.prepare().then(startup).then(() => {
       }
     });
 
-    // Keep-alive ping
+    // ✅ FIX: Keep-alive ping with pong timeout (detect dead connections)
+    let pongTimeout: NodeJS.Timeout | null = null;
+    
+    // Ping interval - sends ping every 30s, expects pong within 60s
     const pingInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'ping' }));
+        // Set timeout for pong response - close if no pong within 60s
+        if (pongTimeout) {
+          clearTimeout(pongTimeout);
+        }
+        pongTimeout = setTimeout(() => {
+          console.warn(`[WebSocket] Pong timeout for ${sessionKey}, closing dead connection`);
+          ws.close(4008, 'Pong timeout');
+        }, 60000);
       }
     }, 30000);
 
@@ -319,6 +351,10 @@ app.prepare().then(startup).then(() => {
       terminalSessions.delete(sessionKey);
       terminalManager.unregisterWebSocketConnection(sessionId);
       clearInterval(pingInterval);
+      // ✅ FIX: Clear pong timeout on close
+      if (pongTimeout) {
+        clearTimeout(pongTimeout);
+      }
     });
 
     ws.on('error', (err) => {
@@ -326,6 +362,10 @@ app.prepare().then(startup).then(() => {
       terminalSessions.delete(sessionKey);
       terminalManager.unregisterWebSocketConnection(sessionId);
       clearInterval(pingInterval);
+      // ✅ FIX: Clear pong timeout on error
+      if (pongTimeout) {
+        clearTimeout(pongTimeout);
+      }
     });
   });
 

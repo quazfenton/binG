@@ -1,14 +1,14 @@
 /**
  * WebSocket Terminal Server
  * Provides xterm.js-compatible WebSocket terminal access
- * 
+ *
  * SECURITY ENHANCED: JWT authentication required for all connections
  * Migrated from ephemeral/sandbox_api.py WebSocket endpoint
  */
 
 import WebSocket, { WebSocketServer } from 'ws';
 import { spawn, ChildProcess } from 'child_process';
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { join } from 'path';
 import { createLogger } from '@/lib/utils/logger';
 import { verifyToken } from '@/lib/security/jwt-auth';
@@ -53,7 +53,7 @@ export class WebSocketTerminalServer extends EventEmitter {
         });
 
         this.wss.on('connection', (ws, req) => {
-          this.handleConnection(ws, req);
+          void this.handleConnection(ws, req);
         });
 
         this.wss.on('error', (error: any) => {
@@ -92,13 +92,16 @@ export class WebSocketTerminalServer extends EventEmitter {
     });
   }
 
-  private handleConnection(ws: WebSocket, req: any): void {
+  private async handleConnection(ws: WebSocket, req: any): Promise<void> {
     // Extract sandboxId from URL path
     const url = new URL(req.url || '', `http://localhost:${this.port}`);
     const pathParts = url.pathname.split('/');
     const sandboxId = pathParts[pathParts.indexOf('sandboxes') + 1];
 
+    logger.debug(`WebSocket connection request for sandbox: ${sandboxId || 'unknown'}`)
+
     if (!sandboxId) {
+      logger.warn('WebSocket connection rejected: Sandbox ID required')
       ws.close(4000, 'Sandbox ID required');
       return
     }
@@ -114,17 +117,20 @@ export class WebSocketTerminalServer extends EventEmitter {
     const queryToken = url.searchParams.get('token');
     if (queryToken) {
       token = queryToken;
+      logger.debug('Token received via query param (less secure)')
     }
-    
+
     // Try Authorization header
     const authHeader = req.headers['authorization'];
     if (authHeader && authHeader.startsWith('Bearer ')) {
       token = authHeader.substring(7);
+      logger.debug('Token received via Authorization header')
     }
-    
+
     // Try subprotocol
     if (!token && req.protocol && req.protocol.startsWith('Bearer ')) {
       token = req.protocol.substring(7);
+      logger.debug('Token received via WebSocket subprotocol')
     }
 
     if (!token) {
@@ -142,12 +148,28 @@ export class WebSocketTerminalServer extends EventEmitter {
       // In production, add sandbox ownership verification
       const userId = (payload as any).userId || (payload as any).sub;
       if (!userId) {
+        logger.warn('WebSocket authentication failed: missing user ID')
         ws.close(4002, 'Invalid token: missing user ID');
         return;
       }
 
-      logger.info(`WebSocket authenticated for user ${userId}, sandbox ${sandboxId}`);
-      
+      // SECURITY: Verify sandbox ownership before allowing access
+      try {
+        const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
+        const session = sandboxBridge.getSessionBySandboxId(sandboxId);
+        if (!session || session.userId !== userId) {
+          logger.warn(`WebSocket authorization failed: user=${userId}, sandbox=${sandboxId}`);
+          ws.close(4005, 'Unauthorized: sandbox not owned by user');
+          return;
+        }
+      } catch (error: any) {
+        logger.warn(`WebSocket authorization check failed: ${error.message || 'unknown error'}`);
+        ws.close(4005, 'Unauthorized: sandbox ownership check failed');
+        return;
+      }
+
+      logger.info(`WebSocket connection authenticated: user=${userId}, sandbox=${sandboxId}`);
+
     } catch (error: any) {
       logger.warn(`WebSocket authentication failed: ${error.message}`);
       ws.close(4003, `Authentication failed: ${error.message}`);
@@ -156,78 +178,103 @@ export class WebSocketTerminalServer extends EventEmitter {
 
     // Check session limit
     if (this.sessions.size >= this.maxSessions) {
+      logger.warn(`WebSocket connection rejected: Too many active sessions (${this.sessions.size}/${this.maxSessions})`)
       ws.close(4004, 'Too many active sessions');
       return;
     }
 
+    logger.debug(`Creating terminal session for sandbox ${sandboxId}`)
     this.createTerminalSession(ws, sandboxId);
   }
 
   private async createTerminalSession(ws: WebSocket, sandboxId: string): Promise<void> {
     const sessionId = `term_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    const workspace = join('/tmp/workspaces', sandboxId);
-
+    
+    // SECURITY FIX: Do NOT spawn shell on host - route through sandbox provider PTY
+    // This prevents authenticated RCE on the host server
     try {
-      // Spawn bash process in sandbox workspace
-      const proc = spawn('/bin/bash', {
-        cwd: workspace,
-        env: {
-          ...process.env,
-          TERM: 'xterm-256color',
-          LANG: 'en_US.UTF-8',
-        },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      // Get sandbox handle to access provider PTY
+      const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
+      const session = sandboxBridge.getSessionBySandboxId(sandboxId);
+      
+      if (!session || !session.sandboxHandle) {
+        logger.warn(`Sandbox session not found for ${sandboxId}`);
+        ws.close(4006, 'Sandbox not found');
+        return;
+      }
+      
+      const workspace = session.workspacePath || `/tmp/workspaces/${sandboxId}`;
+      logger.debug(`Creating terminal session ${sessionId} for sandbox ${sandboxId}`);
 
-      const session: TerminalSession = {
+      // Try to get PTY from sandbox handle (provider-specific)
+      const pty = await session.sandboxHandle.getPty?.();
+      
+      if (!pty) {
+        // Fallback: Provider doesn't support PTY - send error to client
+        logger.warn(`Sandbox provider does not support PTY for ${sandboxId}`);
+        ws.send('\r\n\x1b[31mTerminal not available: sandbox provider does not support PTY.\x1b[0m\r\n');
+        ws.send('\x1b[90mUse the sandbox terminal UI or connect command instead.\x1b[0m\r\n');
+        // Keep connection open but don't spawn shell
+        ws.send(`\x1b[1;32m${sandboxId}@binG\x1b[0m:\x1b[1;34m${workspace}\x1b[0m$ `);
+        
+        // Handle only resize and basic commands
+        ws.on('message', (data: Buffer) => {
+          const message = data.toString();
+          const resizeMatch = message.match(/\x1b\[8;(\d+);(\d+)t/);
+          if (resizeMatch) {
+            logger.debug(`Terminal resize requested: ${resizeMatch[1]}x${resizeMatch[2]}`);
+          }
+        });
+        
+        return;
+      }
+
+      const terminalSession: TerminalSession = {
         sessionId,
         sandboxId,
         workspace,
-        process: proc,
+        process: pty as any, // PTY implements similar interface to ChildProcess
         createdAt: new Date(),
         lastActive: new Date(),
-        cols: 80,
-        rows: 24,
+        cols: pty.cols || 80,
+        rows: pty.rows || 24,
       };
 
-      this.sessions.set(sessionId, session);
-      this.emit('session_created', session);
+      this.sessions.set(sessionId, terminalSession);
+      this.emit('session_created', terminalSession);
+      logger.info(`Terminal session ${sessionId} established via provider PTY`);
 
-      // Handle process stdout
-      proc.stdout?.on('data', (data: Buffer) => {
+      // Handle PTY output
+      pty.onData?.((data: string) => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(data);
         }
-        session.lastActive = new Date();
+        terminalSession.lastActive = new Date();
       });
 
-      // Handle process stderr
-      proc.stderr?.on('data', (data: Buffer) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(data);
-        }
-        session.lastActive = new Date();
-      });
-
-      // Handle process exit
-      proc.on('exit', (code, signal) => {
-        this.emit('session_exit', { sessionId, code, signal });
+      // Handle PTY exit
+      pty.onExit?.(() => {
+        logger.debug(`Terminal session ${sessionId} PTY exit`);
+        this.emit('session_exit', { sessionId, code: 0, signal: undefined });
         this.closeSession(sessionId);
       });
 
-      // Handle WebSocket messages
+      // Handle WebSocket messages - forward to PTY
       ws.on('message', (data: Buffer) => {
-        this.handleMessage(session, data);
+        logger.debug(`WebSocket message received for session ${sessionId}: ${data.length} bytes`);
+        this.handleMessage(terminalSession, data);
       });
 
       // Handle WebSocket close
       ws.on('close', (code, reason) => {
+        logger.info(`WebSocket connection closed for session ${sessionId}: code=${code}`);
         this.emit('session_closed', { sessionId, code, reason });
         this.closeSession(sessionId);
       });
 
       // Handle WebSocket errors
       ws.on('error', (error) => {
+        logger.error(`WebSocket error for session ${sessionId}: ${error.message}`);
         this.emit('session_error', { sessionId, error });
         this.closeSession(sessionId);
       });
@@ -236,6 +283,7 @@ export class WebSocketTerminalServer extends EventEmitter {
       ws.send(`\x1b[1;32m${sandboxId}@binG\x1b[0m:\x1b[1;34m${workspace}\x1b[0m$ `);
 
     } catch (error: any) {
+      logger.error(`Failed to create terminal session: ${error.message}`);
       ws.close(4002, `Failed to create terminal: ${error.message}`);
       this.emit('session_create_error', { sandboxId, error });
     }
@@ -251,16 +299,16 @@ export class WebSocketTerminalServer extends EventEmitter {
       const [, rows, cols] = resizeMatch;
       session.rows = parseInt(rows, 10);
       session.cols = parseInt(cols, 10);
-      
-      // Send SIGWINCH signal to notify process of resize
-      if (session.process.pid) {
+
+      // Resize PTY if method exists
+      if ((session.process as any).resize) {
         try {
-          process.kill(session.process.pid, 'SIGWINCH');
+          (session.process as any).resize({ cols, rows });
         } catch (e) {
-          // Process may have exited
+          logger.debug(`Failed to resize PTY: ${e}`);
         }
       }
-      
+
       logger.debug(`Terminal resized to ${cols}x${rows}`);
       return;
     }
@@ -271,27 +319,35 @@ export class WebSocketTerminalServer extends EventEmitter {
       if (parsed.type === 'resize') {
         session.rows = parsed.rows || 24;
         session.cols = parsed.cols || 80;
-        
-        // Send SIGWINCH signal
-        if (session.process.pid) {
+
+        // Resize PTY if method exists
+        if ((session.process as any).resize) {
           try {
-            process.kill(session.process.pid, 'SIGWINCH');
+            (session.process as any).resize({ cols: session.cols, rows: session.rows });
           } catch (e) {
-            // Process may have exited
+            logger.debug(`Failed to resize PTY: ${e}`);
           }
         }
-        
+
         logger.debug(`Terminal resized to ${session.cols}x${session.rows}`);
         return;
       }
+      
+      // Handle input via PTY
+      if (parsed.type === 'input' && (session.process as any).write) {
+        (session.process as any).write(parsed.data);
+        return;
+      }
     } catch (e) {
-      // Not JSON, continue with normal handling
+      // Not JSON, treat as raw input for PTY
     }
 
     // Handle special commands
     if (message.startsWith('\x03')) {
       // Ctrl+C - send interrupt signal
-      session.process.kill('SIGINT');
+      if ((session.process as any).kill) {
+        (session.process as any).kill('SIGINT');
+      }
       return;
     }
 
@@ -301,9 +357,9 @@ export class WebSocketTerminalServer extends EventEmitter {
       return;
     }
 
-    // Forward input to process stdin
-    if (session.process.stdin?.writable) {
-      session.process.stdin.write(message);
+    // Forward input to PTY
+    if ((session.process as any).write) {
+      (session.process as any).write(message);
     }
 
     session.lastActive = new Date();
@@ -311,35 +367,50 @@ export class WebSocketTerminalServer extends EventEmitter {
 
   private closeSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
-    if (!session) return;
+    if (!session) {
+      logger.debug(`Session ${sessionId} not found for cleanup`);
+      return;
+    }
 
-    // Terminate process
-    if (session.process.pid) {
-      try {
-        process.kill(-session.process.pid, 'SIGTERM');
-      } catch (error) {
-        // Process already dead
+    logger.info(`Closing terminal session ${sessionId}`);
+
+    // Terminate PTY process
+    try {
+      if ((session.process as any).kill) {
+        (session.process as any).kill();
+        logger.debug(`PTY terminated for session ${sessionId}`);
       }
+    } catch (error: any) {
+      logger.debug(`PTY already terminated for session ${sessionId}: ${error.message}`);
     }
 
     this.sessions.delete(sessionId);
+    logger.info(`Terminal session ${sessionId} closed. Active sessions: ${this.sessions.size}`);
     this.emit('session_terminated', session);
   }
 
   private startIdleCleanup(): void {
     setInterval(() => {
       const now = Date.now();
+      let closedCount = 0;
       for (const [sessionId, session] of this.sessions.entries()) {
         const idleTime = now - session.lastActive.getTime();
         if (idleTime > this.idleTimeout) {
+          logger.info(`Session ${sessionId} idle timeout (${Math.round(idleTime/1000)}s > ${this.idleTimeout/1000}s)`)
           this.emit('session_idle_timeout', session);
           this.closeSession(sessionId);
+          closedCount++;
         }
+      }
+      if (closedCount > 0) {
+        logger.info(`Idle cleanup: closed ${closedCount} session(s)`)
       }
     }, 60 * 1000); // Check every minute
   }
 
   async stop(): Promise<void> {
+    logger.info(`Stopping WebSocket terminal server, closing ${this.sessions.size} active session(s)`)
+    
     // Close all sessions
     for (const sessionId of this.sessions.keys()) {
       this.closeSession(sessionId);
@@ -350,8 +421,10 @@ export class WebSocketTerminalServer extends EventEmitter {
       if (this.wss) {
         this.wss.close((error) => {
           if (error) {
+            logger.error(`WebSocket server stop failed: ${error.message}`)
             reject(error);
           } else {
+            logger.info('WebSocket server stopped')
             this.emit('stopped');
             resolve();
           }

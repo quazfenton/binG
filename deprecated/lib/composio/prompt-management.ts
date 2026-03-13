@@ -11,7 +11,7 @@
  * - Performance tracking
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 /**
  * Prompt template

@@ -31,9 +31,11 @@ export const AgentState = Annotation.Root({
   transactionLog: Annotation<Array<{
     path: string;
     type: 'UPDATE' | 'CREATE' | 'DELETE';
-    timestamp: number;
+    timestamp: string;
     originalContent?: string;
     newContent?: string;
+    search?: string;
+    replace?: string;
   }>>({
     reducer: (left: any[], right: any[]) => [...left, ...right],
     default: () => [],
@@ -47,7 +49,7 @@ export const AgentState = Annotation.Root({
     message: string;
     path?: string;
     step?: number | string;
-    timestamp?: number;
+    timestamp?: string;
     operation?: string;
     parameters?: any;
     stack?: string;
@@ -104,9 +106,15 @@ export type AgentStateType = typeof AgentState.State;
 export function vfsStateToAgentState(vfsState: VfsState, sessionId: string): AgentStateType {
   return {
     vfs: vfsState.vfs || {},
-    transactionLog: vfsState.transactionLog || [],
+    transactionLog: vfsState.transactionLog?.map(entry => ({
+      ...entry,
+      timestamp: entry.timestamp || new Date().toISOString(),
+    })) || [],
     currentPlan: vfsState.currentPlan,
-    errors: vfsState.errors || [],
+    errors: vfsState.errors?.map(e => ({
+      ...e,
+      timestamp: typeof e.timestamp === 'number' ? new Date(e.timestamp).toISOString() : (e.timestamp || new Date().toISOString()),
+    })) || [],
     retryCount: vfsState.retryCount || 0,
     messages: [],
     next: undefined,
@@ -123,7 +131,13 @@ export function agentStateToVfsState(agentState: AgentStateType): VfsState {
     vfs: agentState.vfs,
     transactionLog: agentState.transactionLog,
     currentPlan: agentState.currentPlan,
-    errors: agentState.errors,
+    // @ts-ignore - error type conversion between string and number timestamp
+    errors: agentState.errors.map(e => ({
+      step: typeof e.step === 'string' ? parseInt(e.step, 10) || 0 : (e.step || 0),
+      path: e.path,
+      message: e.message,
+      timestamp: e.timestamp || new Date().toISOString(),
+    })),
     retryCount: agentState.retryCount,
   };
 }

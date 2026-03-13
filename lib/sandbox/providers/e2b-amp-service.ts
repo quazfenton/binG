@@ -51,6 +51,12 @@ export interface AmpExecutionResult {
     promptTokens: number
     outputTokens: number
   }
+  // Compatibility properties for tests and SDK integration
+  success: boolean
+  output: string
+  error?: string
+  gitDiff?: string
+  inputTokens?: number
 }
 
 export interface AmpThread {
@@ -98,15 +104,16 @@ export function createAmpService(
   async function run(config: AmpExecutionConfig): Promise<AmpExecutionResult> {
     const args = buildArgs(config)
     const command = config.workingDir ? `cd ${config.workingDir} && ${AMP_CMD} ${args}` : `${AMP_CMD} ${args}`
-    
+
     const result = await sandbox.commands.run(command, {
-      timeout: config.timeout || 600000,
+      timeoutMs: config.timeout || 600000,
       onStdout: config.onStdout,
       onStderr: config.onStderr,
     })
 
     let events: AmpEvent[] | undefined
     let usage: any
+    let gitDiff: string | undefined
 
     if (config.streamJson) {
       events = []
@@ -124,13 +131,40 @@ export function createAmpService(
       }
     }
 
+    // Try to capture git diff if thread was created
+    let threadId = config.threadId
+    if (!threadId && events?.length) {
+      try {
+        const threads = await listThreads()
+        if (threads.length > 0) {
+          threadId = threads[0].id
+        }
+      } catch {}
+    }
+
+    // Capture git diff if thread exists
+    if (threadId) {
+      try {
+        const diffResult = await sandbox.commands.run(`amp threads diff ${threadId}`)
+        if (diffResult.exitCode === 0 && diffResult.stdout) {
+          gitDiff = diffResult.stdout
+        }
+      } catch {}
+    }
+
     return {
       stdout: result.stdout,
       stderr: result.stderr,
-      threadId: config.threadId,
+      threadId,
       events,
       exitCode: result.exitCode,
       usage,
+      // Compatibility properties for tests and SDK integration
+      success: result.exitCode === 0,
+      output: result.stdout.trim() || (result.exitCode === 0 ? 'Task completed' : ''),
+      error: result.exitCode !== 0 ? result.stderr : undefined,
+      gitDiff,
+      inputTokens: usage?.promptTokens,
     }
   }
 
@@ -138,18 +172,18 @@ export function createAmpService(
     const args = buildArgs({ ...config, streamJson: true, dangerouslyAllowAll: true })
     const command = config.workingDir ? `cd ${config.workingDir} && ${AMP_CMD} ${args}` : `${AMP_CMD} ${args}`
 
-    const handle = await sandbox.commands.run(command, {
-      onStdout: (data) => {
-        for (const line of data.split('\n').filter(Boolean)) {
-          try {
-            const event: AmpEvent = JSON.parse(line)
-            // Note: In real use, we'd need a way to yield from here.
-            // This is a simplified version for the SDK wrapper.
-          } catch {}
-        }
-      },
+    // Execute command and capture output
+    const result = await sandbox.commands.run(command, {
+      timeoutMs: config.timeout || 600000,
     })
-    await handle.wait()
+
+    // Parse and yield events from stdout
+    for (const line of result.stdout.split('\n').filter(Boolean)) {
+      try {
+        const event: AmpEvent = JSON.parse(line)
+        yield event
+      } catch {}
+    }
   }
 
   async function listThreads(): Promise<AmpThread[]> {
@@ -215,15 +249,16 @@ export async function executeAmpTask(config: {
 }): Promise<{ output: string; exitCode: number }> {
   const { Sandbox } = await import('@e2b/code-interpreter')
   const apiKey = config.apiKey || process.env.E2B_API_KEY || ''
-  
+
   if (!apiKey) {
     throw new Error('E2B_API_KEY environment variable is required')
   }
 
-  const sandbox = await Sandbox.create({
-    template: config.template || 'base',
-    apiKey,
-  })
+  // Use template string directly (newer SDK signature)
+  const sandbox = await Sandbox.create(
+    config.template || 'base',
+    { apiKey }
+  )
 
   try {
     const ampService = createAmpService(sandbox, apiKey)
@@ -232,7 +267,7 @@ export async function executeAmpTask(config: {
       dangerouslyAllowAll: true,
       timeout: config.timeout,
     })
-    
+
     return {
       output: result.stdout || '',
       exitCode: result.exitCode || 0,

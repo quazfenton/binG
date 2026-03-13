@@ -3,13 +3,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp, Terminal, CheckCircle, XCircle, Loader2, AlertCircle } from 'lucide-react';
 
-interface ToolInvocation {
-  toolCallId: string;
-  toolName: string;
-  state: 'partial-call' | 'call' | 'result';
-  args?: Record<string, any>;
-  result?: any;
-}
+import type { ToolInvocation } from '@/lib/types/tool-invocation';
 
 interface ToolInvocationCardProps {
   tool: ToolInvocation;
