@@ -3,7 +3,7 @@
  * Centralizes error handling to reduce code duplication
  */
 
-export async function parseJsonResponse<T = Record<string, unknown>>(
+export async function parseJsonResponse<T = any>(
   response: Response
 ): Promise<T> {
   try {
@@ -12,5 +12,3 @@ export async function parseJsonResponse<T = Record<string, unknown>>(
     return {} as T;
   }
 }
-
-
