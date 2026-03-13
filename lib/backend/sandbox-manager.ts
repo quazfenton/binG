@@ -17,6 +17,7 @@ import * as zlib from 'zlib';
 import { pack as createTarWriteStream, extract as createTarReadStream } from 'tar-stream';
 import { safeJoin, isValidResourceId, validateRelativePath, commandSchema } from '@/lib/security/security-utils';
 import { sandboxMetrics } from './metrics';
+import { generateSecureId, generateUUID } from '@/lib/utils';
 
 export interface SandboxConfig {
   sandboxId?: string;
@@ -70,7 +71,7 @@ export class SandboxManager extends EventEmitter {
 
   async createSandbox(config?: SandboxConfig): Promise<Sandbox> {
     const startTime = Date.now();
-    const sandboxId = config?.sandboxId || `sandbox_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    const sandboxId = config?.sandboxId || `sandbox_${Date.now()}_${generateSecureId('sb').split('_')[2]}`;
 
     // SECURITY: Validate sandboxId format
     if (!isValidResourceId(sandboxId)) {

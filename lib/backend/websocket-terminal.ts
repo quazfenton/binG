@@ -12,6 +12,7 @@ import { EventEmitter } from 'events';
 import { join } from 'path';
 import { createLogger } from '@/lib/utils/logger';
 import { verifyToken } from '@/lib/security/jwt-auth';
+import { generateSecureId } from '@/lib/utils';
 
 const logger = createLogger('WebSocketTerminal');
 
@@ -164,7 +165,7 @@ export class WebSocketTerminalServer extends EventEmitter {
   }
 
   private async createTerminalSession(ws: WebSocket, sandboxId: string): Promise<void> {
-    const sessionId = `term_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    const sessionId = `term_${Date.now()}_${generateSecureId('term').split('_')[2]}`;
     const workspace = join('/tmp/workspaces', sandboxId);
 
     try {

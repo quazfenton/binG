@@ -6,6 +6,7 @@ import type {
   SandboxCreateConfig,
 } from './sandbox-provider'
 import { SandboxSecurityManager } from '../security-manager'
+import { generateSecureId } from '@/lib/utils'
 
 const WORKSPACE_DIR = '/workspace'
 
@@ -89,7 +90,7 @@ export class WebContainerProvider implements SandboxProvider {
 
   async createSandbox(_config: SandboxCreateConfig): Promise<SandboxHandle> {
     const instance = await this.bootWebContainer()
-    const id = `webcontainer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const id = `webcontainer-${Date.now()}-${generateSecureId('wc').split('_')[2]}`
     const handle = new WebContainerSandboxHandle(id, instance)
     webContainerHandles.set(id, handle)
     return handle

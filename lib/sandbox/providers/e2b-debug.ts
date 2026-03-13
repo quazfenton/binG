@@ -12,6 +12,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Debug log entry
@@ -193,7 +194,7 @@ export class E2BDebugManager extends EventEmitter {
     operation: string,
     input?: any
   ): string {
-    const traceId = `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const traceId = `trace_${Date.now()}_${generateSecureId('trace').split('_')[2]}`;
     
     const trace: ExecutionTrace = {
       id: traceId,

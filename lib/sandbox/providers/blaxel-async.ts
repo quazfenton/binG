@@ -15,6 +15,7 @@
  */
 
 import { createHmac } from 'crypto';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * Async trigger configuration
@@ -412,7 +413,7 @@ export class BlaxelAsyncManager {
  * In production, Blaxel generates this. This is a placeholder.
  */
 function generateCallbackSecret(): string {
-  return `blaxel_cb_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  return `blaxel_cb_${Date.now()}_${generateSecureId('cb').split('_')[2]}`;
 }
 
 /**
