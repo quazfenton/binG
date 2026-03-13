@@ -1,39 +1,38 @@
-'use client';
+import Link from 'next/link';
 
 // Prevent static prerendering
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export default function NotFound() {
   return (
     <div style={{
-      padding: '40px',
-      textAlign: 'center',
+      margin: 0,
+      padding: 0,
+      background: '#0a0a0a',
+      color: '#fff',
       minHeight: '100vh',
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
-      background: '#0a0a0a',
-      color: '#fff',
-      margin: 0,
+      textAlign: 'center'
     }}>
-      <h1 style={{ fontSize: '24px', marginBottom: '16px' }}>Page Not Found</h1>
-      <p style={{ marginBottom: '24px', color: '#888' }}>The page you're looking for doesn't exist.</p>
-      <a
+      <h1 style={{ fontSize: '48px', marginBottom: '16px' }}>404</h1>
+      <p style={{ marginBottom: '24px', color: '#888' }}>Page not found</p>
+      <Link 
         href="/"
         style={{
           padding: '12px 24px',
           background: '#3B82F6',
           color: 'white',
-          border: 'none',
+          textDecoration: 'none',
           borderRadius: '8px',
-          cursor: 'pointer',
-          fontSize: '14px',
-          textDecoration: 'none'
+          fontSize: '14px'
         }}
       >
-        Go back home
-      </a>
+        Go Home
+      </Link>
     </div>
   );
 }

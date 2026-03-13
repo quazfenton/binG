@@ -709,6 +709,13 @@ export default function CodePreviewPanel({
         const hasSvelte = filePaths.some(f => f.endsWith('.svelte'));
         const hasPython = filePaths.some(f => f.endsWith('.py'));
         const hasNodeServer = filePaths.some(f => ['server.js', 'app.js', 'index.js'].includes(f));
+        const hasNextJS = filePaths.some(f => 
+          f.startsWith('pages/') || 
+          f.startsWith('app/') ||
+          f.includes('next.config') ||
+          f.includes('/_app.') ||
+          f.includes('/_document.')
+        );
         const hasPackageJson = filePaths.includes('package.json');
         const hasSimplePython = hasPython && !filePaths.some(f => f.includes('flask') || f.includes('django'));
         const hasViteConfig = filePaths.some(f => f.includes('vite.config'));
@@ -736,7 +743,14 @@ export default function CodePreviewPanel({
         }
 
         // Select preview mode with enhanced bundler detection and fallback hierarchy
-        if (hasViteProject) {
+        // Check for Next.js first (before generic node server detection)
+        const nextJsInPackageJson = packageJsonContent && packageJsonContent.includes('"next"');
+        const nextJsConfig = filePaths.some(f => f.includes('next.config'));
+        const nextJsPagesOrApp = filePaths.some(f => f.startsWith('pages/') || f.startsWith('app/'));
+        
+        if (nextJsConfig || nextJsInPackageJson || nextJsPagesOrApp) {
+          selectedMode = 'nextjs';
+        } else if (hasViteProject) {
           selectedMode = 'vite';
         } else if (hasWebpackProject) {
           selectedMode = 'webpack';
@@ -1362,7 +1376,8 @@ export default function CodePreviewPanel({
       || (filePaths.some((p) => p.includes('vite.config')) || packageJsonContent.includes('"vite"') ? 'vite'
         : filePaths.some((p) => p.includes('webpack.config')) || packageJsonContent.includes('"webpack"') ? 'webpack'
           : filePaths.some((p) => p.includes('parcel') || p.endsWith('.parcelrc')) || packageJsonContent.includes('"parcel"') ? 'parcel'
-            : undefined);
+            : filePaths.some((p) => p.includes('next.config')) || packageJsonContent.includes('"next"') || filePaths.some((p) => p.startsWith('pages/') || p.startsWith('app/')) ? 'nextjs'
+              : undefined);
 
     // Detect entry file from common patterns
     const entryCandidates = [

@@ -11,7 +11,7 @@
 
 import React, { useEffect, useState, useCallback } from "react";
 import Head from "next/head";
-import { VisualEditorMain } from "../../components/visual_editor";
+import { VisualEditorMain } from "../../../components/visual_editor";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

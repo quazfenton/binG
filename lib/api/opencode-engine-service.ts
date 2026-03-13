@@ -16,6 +16,7 @@ import { writeFile, readFile, mkdir } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { normalizeToolInvocation, type ToolInvocation } from '@/lib/types/tool-invocation';
 
 export interface OpenCodeEngineConfig {
   // Core
@@ -53,6 +54,7 @@ export interface OpenCodeEngineResult {
   }>;
   steps?: number;
   reasoning?: string;
+  toolInvocations?: ToolInvocation[];
   error?: string;
   metadata?: {
     model: string;
@@ -165,7 +167,7 @@ export class OpenCodeEngineService {
         return {
           success: false,
           response: '',
-          error: 'OpenCode CLI not found. Install with: npm install -g opencode',
+          error: 'OpenCode CLI not found. Install with: npm install -g opencode-ai',
           metadata: {
             model: this.config.model!,
             duration: Date.now() - startTime,
@@ -195,6 +197,7 @@ export class OpenCodeEngineService {
         bashCommands: parsed.bashCommands,
         fileChanges: parsed.fileChanges,
         steps: parsed.steps,
+        toolInvocations: parsed.toolInvocations,
         metadata: {
           model: this.config.model!,
           duration: Date.now() - startTime,
@@ -478,9 +481,11 @@ export class OpenCodeEngineService {
     steps: number;
     tokensUsed?: number;
     reasoning?: string;
+    toolInvocations: ToolInvocation[];
   } {
     const bashCommands: any[] = [];
     const fileChanges: any[] = [];
+    const toolInvocations: ToolInvocation[] = [];
     let response = '';
     let steps = 0;
     let tokensUsed = 0;
@@ -504,6 +509,12 @@ export class OpenCodeEngineService {
             output: parsed.bash_output || '',
             exitCode: parsed.exit_code || 0,
           });
+          toolInvocations.push(normalizeToolInvocation({
+            toolName: 'bash',
+            args: { command: parsed.bash_command },
+            result: { output: parsed.bash_output || '', exitCode: parsed.exit_code || 0 },
+            sourceSystem: 'opencode-engine',
+          }));
           steps++;
         }
 
@@ -517,11 +528,23 @@ export class OpenCodeEngineService {
               : 'modify' as const,
             content: parsed.file_operation.content,
           });
+          toolInvocations.push(normalizeToolInvocation({
+            toolName: 'file_operation',
+            args: { path: parsed.file_operation.path, action },
+            result: { content: parsed.file_operation.content },
+            sourceSystem: 'opencode-engine',
+          }));
           steps++;
         }
 
         // Tool calls
         if (parsed.tool_call) {
+          toolInvocations.push(normalizeToolInvocation({
+            toolName: parsed.tool_call.name || parsed.tool_call.tool || 'unknown',
+            args: parsed.tool_call.arguments || parsed.tool_call.args || parsed.tool_call.input,
+            result: parsed.tool_call.result || parsed.tool_call.output,
+            sourceSystem: 'opencode-engine',
+          }));
           steps++;
         }
 
@@ -554,6 +577,7 @@ export class OpenCodeEngineService {
       steps,
       tokensUsed,
       reasoning: reasoning.trim() || undefined,
+      toolInvocations,
     };
   }
 

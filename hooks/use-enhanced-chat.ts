@@ -424,8 +424,21 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
                   return;
 
-                case 'error':
+                case 'error': {
+                  // Check if this is a V2 session failure that should trigger fallback to v1
+                  if (eventData.fallbackToV1) {
+                    console.warn('V2 execution failed, will retry with v1 mode:', eventData);
+                    
+                    // Clear timeout from failed V2 stream
+                    clearTimeout(timeoutId);
+                    
+                    // Reuse handleStreamingResponse for v1 fallback
+                    await handleV1Fallback(assistantMessage, abortController);
+                    return;
+                  }
+                  
                   throw new Error(eventData.message || 'Streaming error');
+                  }
 
                 case 'filesystem':
                   setMessages(prev => prev.map(msg =>
@@ -648,6 +661,192 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     } finally {
       reader.releaseLock();
       abortControllerRef.current = null;
+    }
+  };
+
+  // Helper function to retry with v1 mode, reusing handleStreamingResponse
+  const handleV1Fallback = async (
+    assistantMessage: Message,
+    abortController: AbortController
+  ) => {
+    // Get current messages for retry - filter out the current assistant message
+    // and reconstruct the request as it was originally built
+    const filteredMessages = [...messagesRef.current].filter(m => m.id !== assistantMessage.id);
+    const resolvedBody = typeof options.body === 'function'
+      ? options.body()
+      : (options.body || {});
+    
+    // Retry with agentMode: v1 - reconstruct request like handleSubmit does
+    const v1RequestBody = {
+      messages: filteredMessages,
+      ...resolvedBody,
+      agentMode: 'v1',
+    };
+    
+    // Log fallback attempt
+    console.log('[Chat] Attempting V1 fallback with messages:', {
+      messageCount: filteredMessages.length,
+      api: options.api,
+      hasBody: !!resolvedBody,
+    });
+    
+    let v1Response: Response;
+    try {
+      v1Response = await fetch(options.api, {
+        method: 'POST',
+        headers: buildRequestHeaders(),
+        body: JSON.stringify(v1RequestBody),
+        signal: abortController.signal,
+      });
+    } catch (fetchError) {
+      // Handle network errors gracefully
+      const errorMessage = fetchError instanceof Error ? fetchError.message : 'Network error during V1 fallback';
+      console.error('[Chat] V1 fallback fetch failed:', errorMessage);
+      
+      // If fetch failed, show a user-friendly error but preserve any accumulated content
+      setError(new Error('Connection failed. Please check your network and try again.'));
+      if (options.onError) {
+        options.onError(new Error(errorMessage));
+      }
+      setIsLoading(false);
+      return;
+    }
+    
+    if (!v1Response.ok) {
+      const errorText = await v1Response.text().catch(() => 'Unable to read error');
+      console.error('[Chat] V1 fallback HTTP error:', { status: v1Response.status, body: errorText });
+      
+      // Handle HTTP errors gracefully
+      setError(new Error(`Server error: ${v1Response.status}`));
+      if (options.onError) {
+        options.onError(new Error(`Server error: ${v1Response.status}`));
+      }
+      setIsLoading(false);
+      return;
+    }
+    
+    if (!v1Response.body) {
+      console.error('[Chat] V1 fallback returned empty response body');
+      throw new Error('No response body from v1 fallback');
+    }
+    
+    console.log('[Chat] V1 fallback request successful, processing stream...');
+    
+    // Wrap onFinish to add fallback metadata
+    const originalOnFinish = options.onFinish;
+    const fallbackOnFinish = (message: Message) => {
+      console.log('[Chat] V1 fallback completed successfully', {
+        contentLength: message.content?.length,
+        hasMetadata: !!message.metadata,
+      });
+      if (originalOnFinish) {
+        originalOnFinish({
+          ...message,
+          metadata: { ...(message.metadata || {}), fallbackFromV2: true },
+        });
+      }
+    };
+    
+    // Process v1 response stream
+    try {
+      await processV1Stream(v1Response.body, assistantMessage, abortController, fallbackOnFinish);
+    } catch (streamError) {
+      console.error('[Chat] V1 fallback stream processing error:', streamError);
+      throw streamError;
+    }
+  };
+  
+  // Process v1 stream - extracted to avoid code duplication
+  const processV1Stream = async (
+    body: ReadableStream<Uint8Array>,
+    assistantMessage: Message,
+    abortController: AbortController,
+    onFinish?: (message: Message) => void
+  ) => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let accumulatedContent = '';
+    
+    // Set up a timeout
+    const timeoutId = setTimeout(() => {
+      if (accumulatedContent.trim()) {
+        setMessages(prev => prev.map(msg => 
+          msg.id === assistantMessage.id 
+            ? { ...msg, content: accumulatedContent }
+            : msg
+        ));
+        setIsLoading(false);
+        if (onFinish && currentMessageRef.current) {
+          onFinish({
+            ...currentMessageRef.current,
+            content: accumulatedContent,
+          });
+        }
+      }
+    }, 30000);
+    
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done || abortController.signal.aborted) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        
+        for (const line of lines) {
+          if (!line.trim() || !line.startsWith('data: ')) continue;
+          
+          const dataString = line.slice(6).trim();
+          if (dataString === '[DONE]') {
+            clearTimeout(timeoutId);
+            setIsLoading(false);
+            if (onFinish && currentMessageRef.current) {
+              onFinish({
+                ...currentMessageRef.current,
+                content: accumulatedContent,
+              });
+            }
+            return;
+          }
+          
+          try {
+            const parsed = JSON.parse(dataString);
+            // Handle OpenAI-compatible streaming format (v1)
+            if (parsed.choices?.[0]?.delta?.content) {
+              accumulatedContent += parsed.choices[0].delta.content;
+              setMessages(prev => prev.map(msg => 
+                msg.id === assistantMessage.id 
+                  ? { ...msg, content: accumulatedContent }
+                  : msg
+              ));
+            } else if (parsed.content) {
+              // Non-streaming content
+              accumulatedContent += parsed.content;
+              setMessages(prev => prev.map(msg => 
+                msg.id === assistantMessage.id 
+                  ? { ...msg, content: accumulatedContent }
+                  : msg
+              ));
+            }
+          } catch {
+            // Skip non-JSON lines
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    
+    // If we reach here without a 'done' event
+    clearTimeout(timeoutId);
+    setIsLoading(false);
+    if (onFinish && currentMessageRef.current) {
+      onFinish({
+        ...currentMessageRef.current,
+        content: accumulatedContent,
+      });
     }
   };
 

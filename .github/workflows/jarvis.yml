@@ -563,7 +563,7 @@ jobs:
   # Job 5: Persist pending queue on failure (save unprocessed comments for next run)
   persist-queue-on-failure:
     needs: [collect-comments, multi-iteration-fix]
-    if: always() && needs.collect-comments.outputs.comment_ids != '' && needs.multi-iteration-fix.result != 'success' && needs.collect-comments.outputs.skip != 'true'
+    if: always() && needs.collect-comments.outputs.comment_ids != '' && needs.multi-iteration-fix.result == 'failure' && needs.collect-comments.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write

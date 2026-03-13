@@ -11,6 +11,7 @@
  */
 
 import { createFilesystemTools, type FilesystemTool } from './tools/filesystem-tools';
+import { normalizeToolInvocation, type ToolInvocation } from '@/lib/types/tool-invocation';
 import { createLogger } from '@/lib/utils/logger';
 import { openai } from '@ai-sdk/openai';
 import { generateId } from 'ai';
@@ -49,13 +50,7 @@ export interface AgentResult {
   message?: string;
   error?: string;
   // New fields for ToolLoopAgent integration
-  toolInvocations?: Array<{
-    toolCallId: string;
-    toolName: string;
-    state: 'partial-call' | 'call' | 'result';
-    args?: Record<string, any>;
-    result?: any;
-  }>;
+  toolInvocations?: ToolInvocation[];
   reasoning?: string;
 }
 
@@ -205,12 +200,14 @@ export class AgentLoop {
         results,
         iterations: results.length,
         message: finalResult.text,
-        toolInvocations: toolInvocations.map(inv => ({
+        toolInvocations: toolInvocations.map((inv: any) => normalizeToolInvocation({
           toolCallId: inv.toolInvocation.toolCallId,
           toolName: inv.toolInvocation.toolName,
-          state: inv.toolInvocation.state as 'partial-call' | 'call' | 'result',
+          state: inv.toolInvocation.state,
           args: inv.toolInvocation.args,
           result: inv.toolInvocation.result,
+          sourceSystem: 'mastra',
+          sourceAgent: 'tool-loop-agent',
         })),
         reasoning: reasoningChunks.join('\n\n'),
       };
@@ -281,12 +278,14 @@ export class AgentLoop {
         results,
         iterations: toolInvocations.length,
         message: result.text,
-        toolInvocations: toolInvocations.map((inv: any) => ({
+        toolInvocations: toolInvocations.map((inv: any) => normalizeToolInvocation({
           toolCallId: inv.toolCallId,
           toolName: inv.toolName,
-          state: inv.state as 'partial-call' | 'call' | 'result',
+          state: inv.state,
           args: inv.args,
           result: inv.result,
+          sourceSystem: 'mastra',
+          sourceAgent: 'tool-loop-agent',
         })),
         reasoning: result.reasoning,
       };
@@ -331,6 +330,13 @@ export class AgentLoop {
             results,
             iterations,
             message: llmResponse.message || 'Task completed successfully',
+            toolInvocations: results.filter(r => r.tool).map(r => normalizeToolInvocation({
+              toolName: r.tool!,
+              args: r.arguments,
+              result: r.result,
+              sourceSystem: 'mastra',
+              sourceAgent: 'manual-loop',
+            })),
           };
         }
 
@@ -392,6 +398,13 @@ export class AgentLoop {
       results,
       iterations,
       error: 'Max iterations reached',
+      toolInvocations: results.filter(r => r.tool).map(r => normalizeToolInvocation({
+        toolName: r.tool!,
+        args: r.arguments,
+        result: r.result,
+        sourceSystem: 'mastra',
+        sourceAgent: 'manual-loop',
+      })),
     };
   }
 

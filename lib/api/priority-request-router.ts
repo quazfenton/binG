@@ -750,13 +750,13 @@ class PriorityRequestRouter {
       const canonicalToolInvocations = Array.isArray(result.toolCalls)
         ? normalizeToolInvocations(
             result.toolCalls.map((toolCall: any, index: number) => this.buildCanonicalToolInvocationRecord({
-              toolName: toolCall?.name || toolCall?.toolName || `composio-tool-${index + 1}`,
-              args: toolCall?.arguments || toolCall?.args || toolCall?.input || {},
-              result: toolCall?.result || toolCall?.output,
+              toolName: toolCall?.name ?? toolCall?.toolName ?? `composio-tool-${index + 1}`,
+              args: toolCall?.arguments ?? toolCall?.args ?? toolCall?.input ?? {},
+              result: toolCall?.result ?? toolCall?.output,
               provider: 'composio',
               sourceSystem: 'priority-router',
               requestId: request.requestId,
-              conversationId: result.metadata?.sessionId || request.requestId,
+              conversationId: result.metadata?.sessionId ?? request.requestId,
             }))
           )
         : [];
@@ -1063,7 +1063,7 @@ class PriorityRequestRouter {
               toolName: detectionResult.detectedTool,
               args: detectionResult.toolInput,
               result: result.output,
-              provider: result.provider || toolAuthManager.getRequiredProvider(detectionResult.detectedTool) || 'unknown',
+              provider: result.provider ?? toolAuthManager.getRequiredProvider(detectionResult.detectedTool) ?? 'unknown',
               sourceSystem: 'priority-router',
               requestId: request.requestId,
               conversationId: request.requestId,

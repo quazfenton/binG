@@ -16,6 +16,7 @@ import IntegrationAuthPrompt from "@/components/integrations/IntegrationAuthProm
 import { isEmbeddableUrl, transformToEmbed, getSuggestedPlugin } from "@/lib/utils/iframe-helper"
 import { ReasoningDisplay, ReasoningSummary } from "@/components/reasoning-display"
 import { ToolInvocationsList } from "@/components/tool-invocation-card"
+import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
 import { buildApiHeaders } from "@/lib/utils"
@@ -356,9 +357,7 @@ export default function MessageBubble({
     ? (message as any).metadata.reasoning
     : ''
   const combinedReasoning = [reasoning, metadataReasoning].filter(Boolean).join('\n\n')
-  const toolInvocations = Array.isArray((message as any).metadata?.toolInvocations)
-    ? (message as any).metadata.toolInvocations
-    : []
+  const toolInvocations = normalizeToolInvocations((message as any).metadata?.toolInvocations)
 
   // Use reasoning from hook if available, otherwise fall back to metadata
   const activeReasoningChunks = reasoningStream.reasoningChunks.length > 0
@@ -611,7 +610,7 @@ export default function MessageBubble({
                     : '#';
 
                   return (
-                    <div className="inline-flex flex-col items-start gap-1">
+                    <span className="inline-flex flex-col items-start gap-1">
                       <a
                         href={safeHref}
                         rel="noopener noreferrer"
@@ -645,7 +644,7 @@ export default function MessageBubble({
                           </span>
                         )}
                       </a>
-                    </div>
+                    </span>
                   );
                 },
                 table: ({ children }) => (

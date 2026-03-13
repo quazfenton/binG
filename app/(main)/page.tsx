@@ -1,15 +1,15 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { ThemeProvider } from "../components/theme-provider"
-import FallbackUI from "../components/fallback-ui"
-import { startCacheCleanup } from "../lib/cache"
+import { ThemeProvider } from "../../components/theme-provider"
+import FallbackUI from "../../components/fallback-ui"
+import { startCacheCleanup } from "../../lib/cache"
 import dynamic from "next/dynamic"
 
 // Dynamically import components to avoid build-time SSR errors
 // These components will only load on the client side
 const TamboWrapper = dynamic(
-  () => import("../components/tambo/tambo-wrapper").then(mod => mod.TamboWrapper),
+  () => import("../../components/tambo/tambo-wrapper").then(mod => mod.TamboWrapper),
   { 
     ssr: false,
     loading: () => <FallbackUI message="Loading Tambo..." />
@@ -17,7 +17,7 @@ const TamboWrapper = dynamic(
 )
 
 const PWAInstallPrompt = dynamic(
-  () => import("../components/pwa-install-prompt").then(mod => mod.PWAInstallPrompt),
+  () => import("../../components/pwa-install-prompt").then(mod => mod.PWAInstallPrompt),
   { 
     ssr: false,
     loading: () => null
@@ -25,7 +25,7 @@ const PWAInstallPrompt = dynamic(
 )
 
 const ConversationInterface = dynamic(
-  () => import("../components/conversation-interface"),
+  () => import("../../components/conversation-interface"),
   { 
     ssr: false,
     loading: () => <FallbackUI message="Loading interface..." />

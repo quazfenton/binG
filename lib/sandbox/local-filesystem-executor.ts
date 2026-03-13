@@ -38,6 +38,8 @@ export interface LocalCommandExecutorConfig {
   onWriteLine?: (text: string) => void
   onWriteError?: (text: string) => void
   syncToVFS?: (filePath: string, content: string) => Promise<void>
+  getFileSystem?: () => Record<string, LocalFilesystemEntry>
+  setFileSystem?: (fs: Record<string, LocalFilesystemEntry>) => void
 }
 
 export class LocalCommandExecutor {
@@ -49,6 +51,8 @@ export class LocalCommandExecutor {
   private onWriteLine?: (text: string) => void
   private onWriteError?: (text: string) => void
   private syncToVFS?: (filePath: string, content: string) => Promise<void>
+  private getExtFileSystem?: () => Record<string, LocalFilesystemEntry>
+  private setExtFileSystem?: (fs: Record<string, LocalFilesystemEntry>) => void
 
   constructor(config: LocalCommandExecutorConfig | string) {
     if (typeof config === 'string') {
@@ -59,12 +63,26 @@ export class LocalCommandExecutor {
       this.onWriteLine = config.onWriteLine
       this.onWriteError = config.onWriteError
       this.syncToVFS = config.syncToVFS
+      this.getExtFileSystem = config.getFileSystem
+      this.setExtFileSystem = config.setFileSystem
+      
+      // If external filesystem provided, load initial state from it
+      if (this.getExtFileSystem) {
+        const extFs = this.getExtFileSystem()
+        if (extFs && Object.keys(extFs).length > 0) {
+          this.fileSystem = extFs
+        }
+      }
+    }
+
+    // Ensure project root exists
+    if (!this.fileSystem['project']) {
+      this.fileSystem = {
+        'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+      }
     }
 
     this.cwd[this.terminalId] = '~/project'
-    this.fileSystem = {
-      'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
-    }
   }
 
   /**
@@ -817,6 +835,10 @@ export class LocalCommandExecutor {
   // ==================== Getters ====================
 
   getFileSystem(): Record<string, LocalFilesystemEntry> {
+    // If external filesystem provided, use it
+    if (this.getExtFileSystem) {
+      return this.getExtFileSystem()
+    }
     return this.fileSystem
   }
 
@@ -829,6 +851,11 @@ export class LocalCommandExecutor {
   }
 
   setFileSystem(fs: Record<string, LocalFilesystemEntry>): void {
-    this.fileSystem = fs
+    // If external filesystem provided, sync to it
+    if (this.setExtFileSystem) {
+      this.setExtFileSystem(fs)
+    } else {
+      this.fileSystem = fs
+    }
   }
 }

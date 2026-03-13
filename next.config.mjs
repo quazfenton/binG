@@ -8,9 +8,29 @@ const projectRoot = resolve(__dirname);
 const nextConfig = {
   turbopack: {
     root: projectRoot,
-    // Turbopack doesn't support boolean aliases like webpack
-    // Node.js built-ins are automatically externalized for server
-    // For client, we rely on tree-shaking and serverExternalPackages
+    // Map node: protocol imports to unprefixed equivalents so Turbopack
+    // resolves them as native builtins instead of creating [externals]_node:*
+    // chunk files (filenames with ":" are invalid on Windows NTFS).
+    resolveAlias: {
+      'node:crypto': 'crypto',
+      'node:fs': 'fs',
+      'node:fs/promises': 'fs/promises',
+      'node:path': 'path',
+      'node:os': 'os',
+      'node:url': 'url',
+      'node:buffer': 'buffer',
+      'node:stream': 'stream',
+      'node:util': 'util',
+      'node:events': 'events',
+      'node:http': 'http',
+      'node:https': 'https',
+      'node:net': 'net',
+      'node:tls': 'tls',
+      'node:zlib': 'zlib',
+      'node:assert': 'assert',
+      'node:module': 'module',
+      'node:child_process': 'child_process',
+    },
   },
   typescript: {
     ignoreBuildErrors: true,
@@ -47,8 +67,8 @@ const nextConfig = {
       exclude: ['error', 'warn'],
     } : false,
   },
-  // Output optimization
-  output: 'standalone',
+  // Output optimization - disabled temporarily due to Next.js 15 bug with error pages
+  // output: 'standalone',
   env: {
     DEFAULT_LLM_PROVIDER: process.env.DEFAULT_LLM_PROVIDER,
     DEFAULT_MODEL: process.env.DEFAULT_MODEL,
@@ -131,6 +151,33 @@ const nextConfig = {
 
     // Explicitly define main fields for ESM/CJS resolution
     config.resolve.mainFields = ['module', 'main'];
+
+    // Server-side: alias node: protocol imports to unprefixed equivalents
+    // so webpack resolves them as native builtins instead of creating
+    // [externals]_node:* chunk files (which contain ":" — invalid on Windows NTFS).
+    if (isServer) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        'node:crypto': 'crypto',
+        'node:fs': 'fs',
+        'node:fs/promises': 'fs/promises',
+        'node:path': 'path',
+        'node:os': 'os',
+        'node:url': 'url',
+        'node:buffer': 'buffer',
+        'node:stream': 'stream',
+        'node:util': 'util',
+        'node:events': 'events',
+        'node:http': 'http',
+        'node:https': 'https',
+        'node:net': 'net',
+        'node:tls': 'tls',
+        'node:zlib': 'zlib',
+        'node:assert': 'assert',
+        'node:module': 'module',
+        'node:child_process': 'child_process',
+      };
+    }
 
     // Fix for canvas and other node-specific modules
     if (!isServer) {

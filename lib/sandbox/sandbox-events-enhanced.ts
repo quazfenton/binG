@@ -7,7 +7,7 @@
  * @see lib/sandbox/sandbox-events.ts - Basic event system
  */
 
-import { EventEmitter } from 'node:events'
+import { UniversalEventEmitter } from '@/lib/utils/universal-event-emitter'
 
 export type EnhancedSandboxEventType =
   | 'agent:tool_start'
@@ -68,7 +68,7 @@ const EVENT_TTL_MS = parseInt(process.env.EVENT_TTL_MS || (4 * 60 * 60 * 1000).t
 /**
  * Enhanced sandbox event emitter with persistence and replay
  */
-export class EnhancedSandboxEventEmitter extends EventEmitter {
+export class EnhancedSandboxEventEmitter extends UniversalEventEmitter {
   /**
    * Emit event with persistence
    * 

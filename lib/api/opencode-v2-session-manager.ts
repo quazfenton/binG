@@ -308,7 +308,7 @@ class OpenCodeV2SessionManager {
   /**
    * Update session state
    */
-  updateState(sessionId: string, state: V2Session['status']): void {
+  updateState(sessionId: string, state: OpenCodeV2Session['status']): void {
     const session = this.sessions.get(sessionId);
     if (session) {
       session.status = state;
@@ -321,7 +321,7 @@ class OpenCodeV2SessionManager {
   /**
    * Get session by ID
    */
-  getSessionById(sessionId: string): V2Session | undefined {
+  getSessionById(sessionId: string): OpenCodeV2Session | undefined {
     return this.sessions.get(sessionId);
   }
 
@@ -334,7 +334,8 @@ class OpenCodeV2SessionManager {
     bashCommands: number = 0, 
     fileChanges: number = 0,
     computeTimeMs: number = 0,
-    storageBytes: number = 0
+    storageBytes: number = 0,
+    apiCalls: number = 0
   ): void {
     const metrics = this.sessionMetrics.get(sessionId);
     const session = this.sessions.get(sessionId);
@@ -345,6 +346,7 @@ class OpenCodeV2SessionManager {
       metrics.fileChanges += fileChanges;
       metrics.computeTimeMs += computeTimeMs;
       metrics.storageBytes += storageBytes;
+      metrics.apiCalls += apiCalls;
     }
     
     if (session) {
@@ -354,8 +356,10 @@ class OpenCodeV2SessionManager {
       const computeDeltaMinutes = computeTimeMs / 60000; // Convert to minutes
       session.quota.computeUsed += computeDeltaMinutes;
       session.quota.storageUsed += storageBytes;
+      session.quota.apiCallsUsed += apiCalls;
       this.globalQuota.computeUsed += computeDeltaMinutes;
       this.globalQuota.storageUsed += storageBytes;
+      this.globalQuota.apiCallsUsed += apiCalls;
       this.updateActivity(sessionId);
     }
   }
@@ -510,3 +514,4 @@ class OpenCodeV2SessionManager {
 }
 
 export const openCodeV2SessionManager = new OpenCodeV2SessionManager();
+
