@@ -177,13 +177,22 @@ export async function verifyToken(
       };
     }
     
+    // Validate required userId claim
+    if (!payload.userId) {
+      return {
+        valid: false,
+        error: 'Token missing required userId claim',
+      };
+    }
+    
     return {
       valid: true,
       payload: payload as TokenPayload,
     };
-  } catch (error) {
+  } catch (error: unknown) {
     if (error instanceof Error) {
-      if (error.message.includes('expired')) {
+      const err = error as { code?: string; message: string };
+      if (err.message.includes('expired') || err.code === 'ERR_JWT_EXPIRED' || err.message.includes('"exp" claim')) {
         return {
           valid: false,
           error: 'Token has expired',
