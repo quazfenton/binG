@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod';
+import { parseJsonResponse } from '@/lib/utils/response-parser';
 
 export interface SmitheryConfig {
   apiKey: string;
@@ -235,7 +236,7 @@ export class SmitheryClient {
       );
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await parseJsonResponse(response);
         return {
           success: false,
           error: errorData.message || `HTTP ${response.status}: ${response.statusText}`,
@@ -334,7 +335,7 @@ export class SmitheryClient {
       );
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await parseJsonResponse(response);
         return {
           success: false,
           error: errorData.message || `HTTP ${response.status}: ${response.statusText}`,
@@ -644,7 +645,7 @@ export class SmitheryClient {
       );
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await parseJsonResponse(response);
         return {
           success: false,
           error: errorData.message || `HTTP ${response.status}: ${response.statusText}`,
@@ -773,7 +774,7 @@ export class SmitheryClient {
       );
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await parseJsonResponse(response);
         return {
           success: false,
           error: errorData.message || `HTTP ${response.status}: ${response.statusText}`,

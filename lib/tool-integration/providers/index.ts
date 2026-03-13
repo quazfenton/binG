@@ -3,6 +3,7 @@ import { Nango } from '@nangohq/node';
 import { Composio } from '@composio/core';
 
 import { authService } from '@/lib/auth/auth-service';
+import { parseJsonResponse } from '@/lib/utils/response-parser';
 
 import type {
   IntegrationConfig,
@@ -515,7 +516,7 @@ export class MCPGatewayToolProvider implements ToolProvider {
         signal: AbortSignal.timeout(this.config.mcp?.timeoutMs || Number(process.env.MCP_GATEWAY_TIMEOUT_MS || 15000)),
       });
 
-      const payload = await response.json().catch(() => ({}));
+      const payload = await parseJsonResponse(response);
       if (!response.ok || payload?.error) {
         return {
           success: false,

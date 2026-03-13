@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod';
+import { parseJsonResponse } from '@/lib/utils/response-parser';
 
 export interface ArcadeConfig {
   apiKey: string;
@@ -414,7 +415,7 @@ export class ArcadeService {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await parseJsonResponse(response);
         
         // Check if auth error
         if (response.status === 401 || errorData.code === 'AUTH_REQUIRED') {

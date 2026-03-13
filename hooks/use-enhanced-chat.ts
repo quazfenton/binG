@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { streamingErrorHandler } from '@/lib/streaming/streaming-error-handler';
+import { parseJsonResponse } from '@/lib/utils/response-parser';
 import type { Message } from '@/types';
 
 export interface UseChatOptions {
@@ -188,7 +189,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       // Some auth-required responses are returned as JSON, not SSE.
       const contentType = response.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
-        const payload = await response.json().catch(() => ({} as any));
+        const payload = await parseJsonResponse<Record<string, unknown>>(response);
         const authRequired =
           payload?.status === 'auth_required' ||
           payload?.data?.requiresAuth === true ||

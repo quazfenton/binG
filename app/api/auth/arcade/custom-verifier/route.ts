@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Arcade from '@arcadeai/arcadejs';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { authService } from '@/lib/auth/auth-service';
+import { parseJsonResponse } from '@/lib/utils/response-parser';
 
 const arcade = new Arcade({
   apiKey: process.env.ARCADE_API_KEY || '',
@@ -45,7 +46,7 @@ async function confirmUserWithArcade(flowId: string, userId: string): Promise<an
     }),
   });
 
-  const data = await response.json().catch(() => ({}));
+  const data = await parseJsonResponse(response);
   if (!response.ok) {
     const message = data?.error?.message || data?.message || `Arcade confirm_user failed (${response.status})`;
     throw new Error(message);

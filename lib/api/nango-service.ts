@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod';
+import { parseJsonResponse } from '@/lib/utils/response-parser';
 
 export interface NangoConfig {
   secretKey: string;
@@ -653,7 +654,7 @@ export class NangoService {
       );
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await parseJsonResponse(response);
         return {
           success: false,
           error: errorData.message || `HTTP ${response.status}: ${response.statusText}`,
@@ -798,7 +799,7 @@ export class NangoService {
       );
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await parseJsonResponse(response);
         return {
           success: false,
           error: errorData.message || `HTTP ${response.status}: ${response.statusText}`,
@@ -924,7 +925,7 @@ export class NangoService {
       );
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await parseJsonResponse(response);
         return {
           success: false,
           error: errorData.message || `HTTP ${response.status}: ${response.statusText}`,

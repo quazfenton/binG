@@ -16,6 +16,7 @@
 
 import { z } from 'zod';
 import type { ToolProvider, ProviderExecutionRequest, ToolExecutionResult } from '../tool-integration/types';
+import { parseJsonResponse } from '@/lib/utils/response-parser';
 
 export interface SmitheryServerConfig {
   id: string;
@@ -549,7 +550,7 @@ export class SmitheryProvider implements ToolProvider {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await parseJsonResponse(response);
         return {
           success: false,
           error: errorData.message || `HTTP ${response.status}: ${response.statusText}`,

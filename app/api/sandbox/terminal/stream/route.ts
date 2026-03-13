@@ -4,6 +4,7 @@ import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { terminalManager } from '@/lib/sandbox/terminal-manager';
 import { sandboxEvents } from '@/lib/sandbox/sandbox-events';
 import { randomUUID } from 'crypto';
+import { parseJsonResponse } from '@/lib/utils/response-parser';
 
 export const runtime = 'nodejs';
 
