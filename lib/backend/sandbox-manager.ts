@@ -7,7 +7,7 @@
  * METRICS WIRED: All operations emit metrics
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { spawn, ChildProcess } from 'child_process';
 import { createWriteStream, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
 import { join, resolve, normalize } from 'path';

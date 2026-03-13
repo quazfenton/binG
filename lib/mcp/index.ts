@@ -85,7 +85,16 @@ export {
 // Smithery Service (separate from registry)
 export {
   SmitheryService,
-  SmitheryServer as SmitheryServerInfo,
-  SmitheryConnection as SmitheryConnectionInfo,
+  getSmitheryService,
+} from './smithery-service'
+
+export type {
+  SmitheryServiceServer,
+  SmitheryServiceConnection,
   SmitheryToken,
+} from './smithery-service'
+
+export {
+  SmitheryServerSchema,
+  SmitheryConnectionSchema,
 } from './smithery-service'

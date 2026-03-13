@@ -3,6 +3,8 @@
  * Provides structured response format, commands extraction, and quality metrics
  */
 
+import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation';
+
 export interface UnifiedResponse {
   success: boolean;
   content: string;
@@ -18,7 +20,7 @@ export interface UnifiedResponse {
     model?: string;
     provider?: string;
     toolCalls?: any[];
-    toolInvocations?: any[];
+    toolInvocations?: ToolInvocation[];
     files?: any[];
     reasoning?: string;
     chainedAgents?: string[];
@@ -64,6 +66,7 @@ export class UnifiedResponseHandler {
   processResponse(response: any, requestId?: string): UnifiedResponse {
     const content = this.extractContent(response);
     const commands = this.extractCommands(content);
+    const toolInvocations = this.extractToolInvocations(response);
     const toolName = response.data?.toolName;
     const authProvider =
       response.data?.provider ||
@@ -90,7 +93,7 @@ export class UnifiedResponseHandler {
         model: response.metadata?.actualModel || response.data?.model || response.model,
         provider: response.metadata?.actualProvider || response.data?.provider || response.provider,
         toolCalls: response.data?.toolCalls,
-        toolInvocations: response.data?.toolInvocations || response.metadata?.toolInvocations,
+        toolInvocations,
         files: response.data?.files,
         chainedAgents: response.data?.chainedAgents,
         qualityScore: response.data?.qualityScore,
@@ -122,6 +125,15 @@ export class UnifiedResponseHandler {
         messageMetadata,
       }
     };
+  }
+
+  private extractToolInvocations(response: any): ReturnType<typeof normalizeToolInvocations> {
+    return normalizeToolInvocations(
+      response.data?.toolInvocations ||
+      response.messageMetadata?.toolInvocations ||
+      response.metadata?.toolInvocations ||
+      response.data?.toolResults
+    );
   }
 
   private extractReasoning(response: any): string | undefined {
@@ -195,7 +207,7 @@ export class UnifiedResponseHandler {
       // Parse request_files
       const reqMatch = block.match(/request_files:\s*\[(.*?)\]/s);
       const request_files = reqMatch
-        ? JSON.parse(`[${reqMatch[1]}]`.replace(/([a-zA-Z0-9_\-\/\.]+)(?=\s*[\],])/g, '"$1"'))
+        ? JSON.parse(`[${reqMatch[1]}]`.replace(/([a-zA-Z0-9_./-]+)(?=\s*[\],])/g, '"$1"'))
         : [];
 
       // Parse write_diffs

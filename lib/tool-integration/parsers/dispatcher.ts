@@ -10,6 +10,18 @@ export interface DispatcherResult {
   mode: ToolCallingMode;
 }
 
+/**
+ * @compatibility-boundary
+ *
+ * Content-based tool-call detection (grammar and XML parsers) is a legacy
+ * fallback. Canonical tool invocations are now emitted directly by agent
+ * producers. This dispatcher is only invoked when:
+ *  1. `TOOL_CALLING_ALLOW_CONTENT_PARSING=true`, AND
+ *  2. The native parser found no structured tool calls.
+ *
+ * New integrations should emit canonical ToolInvocation records instead of
+ * embedding tool calls as text patterns in assistant content.
+ */
 export class AdvancedToolCallDispatcher {
   private readonly nativeParser = new NativeToolCallParser();
   private readonly grammarParser = new GrammarToolCallParser();

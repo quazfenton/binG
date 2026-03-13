@@ -34,6 +34,8 @@ export interface SandboxConfig {
     memory?: number
   }
   envVars?: Record<string, string>
+  // P1 FIX: Added provider field to allow explicit provider selection
+  provider?: string
 }
 
 export interface PreviewInfo {
@@ -41,3 +43,6 @@ export interface PreviewInfo {
   url: string
   token?: string
 }
+
+// Re-export from providers for convenience
+export type { SandboxHandle, SandboxProvider } from './providers/sandbox-provider';

@@ -101,6 +101,14 @@ const PYTHON_DANGEROUS_PATTERNS: DangerPattern[] = [
   { pattern: /import\s+sys|from\s+sys\s+import/, reason: 'System module access', severity: 'medium' },
   { pattern: /__import__\s*\(\s*['"]os['"]\)/, reason: 'Dynamic os import', severity: 'high' },
   
+  // ✅ FIX: Additional Python escape patterns
+  { pattern: /os\.popen|os\.system/, reason: 'OS command execution', severity: 'critical' },
+  { pattern: /subprocess\.(call|run|Popen|check_output)/, reason: 'Subprocess execution', severity: 'critical' },
+  { pattern: /import\s+ctypes|from\s+ctypes\s+import/, reason: 'Native code execution via ctypes', severity: 'critical' },
+  { pattern: /pickle\.loads?|pickle\.dumps?/, reason: 'Pickle serialization (code execution risk)', severity: 'critical' },
+  { pattern: /marshal\.loads?|marshal\.dumps?/, reason: 'Marshal serialization', severity: 'high' },
+  { pattern: /exec\s*\(\s*compile/, reason: 'Compile and exec', severity: 'critical' },
+  
   // Environment/secrets
   { pattern: /os\.environ|os\.getenv|os\.environ\.get/, reason: 'Environment variable access', severity: 'medium' },
   { pattern: /getattr\s*\(\s*os\s*,/, reason: 'os attribute access via getattr', severity: 'high' },

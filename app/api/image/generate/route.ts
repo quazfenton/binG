@@ -154,7 +154,8 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    const hasInitializedProvider = registry.getAvailableProviders().length > 0;
+    const availableProviders = await registry.getAvailableProviders();
+    const hasInitializedProvider = availableProviders.length > 0;
 
     if (!hasInitializedProvider) {
       clearTimeout(timeoutId)

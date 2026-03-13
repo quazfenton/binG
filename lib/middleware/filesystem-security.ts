@@ -443,6 +443,7 @@ export function validateFilesystemRequest(data: unknown): {
     return {
       valid: false,
       error: {
+        // @ts-ignore - security_error is a valid error type for filesystem validation
         type: 'security_error',
         message: validation.error!.message,
         code: validation.error!.code,

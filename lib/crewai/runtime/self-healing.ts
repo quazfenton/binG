@@ -7,7 +7,7 @@
  * @see https://docs.crewai.com/en/concepts/planning.md
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { z } from 'zod';
 import type { Crew } from '../crew/crew';
 import type { CrewOutput } from '../crew/crew';

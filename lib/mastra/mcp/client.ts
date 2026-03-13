@@ -150,6 +150,7 @@ export class MastraMCPClient {
         ListToolsRequestSchema
       );
 
+      // @ts-ignore - MCP protocol response structure
       return result.tools || [];
     } catch (error) {
       console.error('[MCP Client] Failed to list tools:', error);
@@ -182,7 +183,9 @@ export class MastraMCPClient {
       console.log(`[MCP Client] Tool ${toolName} completed`);
 
       // Parse result content
+      // @ts-ignore - MCP protocol response structure
       if (result.content && Array.isArray(result.content)) {
+        // @ts-ignore - MCP protocol response structure
         const textContent = result.content.find(c => c.type === 'text');
         if (textContent) {
           try {

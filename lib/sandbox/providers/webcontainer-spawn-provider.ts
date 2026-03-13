@@ -6,6 +6,7 @@ import type {
   SandboxCreateConfig,
   PtyHandle,
   PtyOptions,
+  PtyConnectOptions,
 } from './sandbox-provider'
 import { SandboxSecurityManager } from '../security-manager'
 

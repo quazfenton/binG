@@ -26,6 +26,7 @@ import {
   Settings as SettingsIcon,
   Mail,
   Trophy,
+  Check,
 } from "lucide-react";
 import ModalLoginForm from "@/components/auth/modal-login-form";
 import ModalSignupForm from "@/components/auth/modal-signup-form";
@@ -105,11 +106,80 @@ export default function Settings({
   const [speechVolume, setSpeechVolume] = useState(0.8);
   const [isListening, setIsListening] = useState(false);
   const [customBgUrl, setCustomBgUrl] = useState("");
-  const [userBubbleBg, setUserBubbleBg] = useState("#7c3aed");
+  const [userBubbleBg, setUserBubbleBg] = useState("rgba(0, 0, 0, 0.85)");
   const [userBubbleText, setUserBubbleText] = useState("#ffffff");
   const [assistantBubbleBg, setAssistantBubbleBg] = useState("#000000");
   const [assistantBubbleText, setAssistantBubbleText] = useState("#ffffff");
   const [assistantBubbleBorder, setAssistantBubbleBorder] = useState("#ffffff");
+  
+  // Color picker state
+  const [openColorPicker, setOpenColorPicker] = useState<string | null>(null);
+  const [selectedColorType, setSelectedColorType] = useState<'bg' | 'text' | 'border'>('bg');
+  
+  // Background URL selector state
+  const [showBgSelector, setShowBgSelector] = useState(false);
+  const [bgUrlName, setBgUrlName] = useState("");
+  
+  // Preset background URLs
+  const PRESET_BACKGROUNDS = [
+    { id: 'default', name: 'Default', url: process.env.NEXT_PUBLIC_BG_MEDIA_URL || '' },
+    { id: 'sky', name: 'Sky', url: 'https://media.tenor.com/CWaT-F5vNb8AAAAM/sky-gif.gif' },
+    { id: 'aurora', name: 'Aurora', url: 'https://i.pinimg.com/originals/64/ce/9f/64ce9f3c2463b528dfba90720fed9ea5.gif' },
+    { id: 'none', name: 'None', url: '' },
+  ];
+  
+  // Get saved backgrounds from localStorage
+  const getSavedBackgrounds = (): Array<{ name: string; url: string }> => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const saved = localStorage.getItem('custom_bg_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  };
+  
+  const [savedBackgrounds, setSavedBackgrounds] = useState<Array<{ name: string; url: string }>>([]);
+  
+  useEffect(() => {
+    setSavedBackgrounds(getSavedBackgrounds());
+  }, []);
+  
+  const saveToBackgroundHistory = (url: string, name?: string) => {
+    if (!url) return;
+    const extractedName = name || extractUrlTitle(url);
+    const newEntry = { name: extractedName, url };
+    
+    const existing = getSavedBackgrounds();
+    const filtered = existing.filter(bg => bg.url !== url);
+    const updated = [newEntry, ...filtered].slice(0, 10); // Keep last 10
+    
+    localStorage.setItem('custom_bg_history', JSON.stringify(updated));
+    setSavedBackgrounds(updated);
+  };
+  
+  const extractUrlTitle = (url: string): string => {
+    try {
+      const urlObj = new URL(url);
+      const pathname = urlObj.pathname;
+      const lastSegment = pathname.split('/').pop() || '';
+      const name = lastSegment
+        .replace(/\.[^/.]+$/, '') // Remove extension
+        .replace(/[-_]/g, ' ') // Replace dashes/underscores with spaces
+        .replace(/\b\w/g, l => l.toUpperCase()); // Title case
+      return name || urlObj.hostname;
+    } catch {
+      return 'Custom Background';
+    }
+  };
+
+  // Preset color swatches
+  const COLOR_SWATCHES = [
+    '#ea580c', '#c2410c', '#9a3412', '#7c2d12', '#431407', '#2c0d00',
+    '#16a34a', '#15803d', '#166534', '#14532d', '#052e16', '#022c22',
+    '#2563eb', '#1d4ed8', '#1e40af', '#1e3a8a', '#172554', '#0c0a09',
+    '#9333ea', '#7e22ce', '#6b21a8', '#581c87', '#3b0764', '#271038',
+  ];
 
   // State for managing auth modal visibility and mode
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -291,9 +361,13 @@ export default function Settings({
     }
     try {
       new URL(trimmed);
-      if (typeof window !== "undefined") localStorage.setItem(CUSTOM_BG_MEDIA_KEY, trimmed);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(CUSTOM_BG_MEDIA_KEY, trimmed);
+        saveToBackgroundHistory(trimmed, bgUrlName || undefined);
+      }
       applyCustomBackgroundMedia(trimmed);
       toast.success("Custom ambient background applied");
+      setBgUrlName("");
     } catch {
       toast.error("Invalid background media URL");
     }
@@ -301,8 +375,25 @@ export default function Settings({
 
   const handleClearCustomBg = () => {
     setCustomBgUrl("");
+    setBgUrlName("");
     if (typeof window !== "undefined") localStorage.removeItem(CUSTOM_BG_MEDIA_KEY);
     applyCustomBackgroundMedia("");
+  };
+  
+  const handleSelectBackground = (url: string, name?: string) => {
+    setCustomBgUrl(url);
+    if (url) {
+      if (typeof window !== "undefined") {
+        localStorage.setItem(CUSTOM_BG_MEDIA_KEY, url);
+        if (name) saveToBackgroundHistory(url, name);
+      }
+      applyCustomBackgroundMedia(url);
+      toast.success(`${name || 'Background'} applied`);
+    } else {
+      handleClearCustomBg();
+      toast.success("Background cleared");
+    }
+    setShowBgSelector(false);
   };
 
   const handleApplyBubbleColors = () => {
@@ -399,23 +490,18 @@ export default function Settings({
           {isAuthenticated ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
-                    <User className="h-4 w-4 text-white" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate" title={user?.email}>
-                      {user?.email || 'N/A'}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate" title={user?.email}>
+                    {user?.email || 'N/A'}
+                  </p>
+                  {user?.username && (
+                    <p className="text-xs text-gray-400 truncate" title={user.username}>
+                      @{user.username}
                     </p>
-                    {user?.username && (
-                      <p className="text-xs text-gray-400 truncate" title={user.username}>
-                        @{user.username}
-                      </p>
-                    )}
-                    <div className="flex items-center gap-1">
-                      <div className="w-2 h-2 bg-green-400 rounded-full"></div>
-                      <span className="text-xs text-green-400">Online</span>
-                    </div>
+                  )}
+                  <div className="flex items-center gap-1">
+                    <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                    <span className="text-xs text-green-400">Online</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
@@ -507,23 +593,30 @@ export default function Settings({
             <h3 className="font-medium">Theme</h3>
           </div>
 
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {THEME_OPTIONS.map((option) => {
               const isActive = theme === option.id;
               return (
                 <button
                   key={option.id}
                   onClick={() => setTheme(option.id)}
-                  className={`flex flex-col items-center gap-1.5 p-2.5 rounded-lg border transition-all ${
+                  className={`relative overflow-hidden flex flex-col items-center gap-2 p-3 rounded-xl border transition-all duration-200 ${
                     isActive
-                      ? 'border-white/30 bg-white/10'
-                      : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+                      ? 'border-white/40 bg-white/15 shadow-lg shadow-white/5'
+                      : 'border-white/10 hover:border-white/25 hover:bg-white/8'
                   }`}
                 >
-                  <span className={`w-5 h-5 rounded-full ${option.swatch}`} />
-                  <span className="text-xs font-medium">{option.label}</span>
+                  {/* Theme preview gradient */}
+                  <div className={`w-full h-10 rounded-lg ${option.swatch} shadow-inner`} />
+                  
+                  {/* Theme name */}
+                  <span className="text-xs font-medium text-white/90">{option.label}</span>
+                  
+                  {/* Active indicator */}
                   {isActive && (
-                    <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                    <div className="absolute top-2 right-2 w-5 h-5 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center">
+                      <Check className="w-3 h-3 text-white" />
+                    </div>
                   )}
                 </button>
               );
@@ -531,14 +624,12 @@ export default function Settings({
           </div>
 
           <div className="mt-3 text-xs text-gray-400 text-center">
-            Current: <span className="text-white font-medium capitalize">{resolvedTheme || theme}</span>
-            <span className="mx-2">•</span>
-            Available: <span className="text-white font-medium">{themes.length}</span>
+            Active: <span className="text-white font-medium capitalize">{resolvedTheme || theme}</span>
           </div>
 
           <div className="mt-4 space-y-2">
             <Label htmlFor="custom-bg-url" className="text-xs text-white/70">
-              Custom Ambient GIF/Image URL
+              Custom: Background URL
             </Label>
             <Input
               id="custom-bg-url"
@@ -547,39 +638,200 @@ export default function Settings({
               placeholder="https://.../background.gif"
               className="bg-black/30 border-white/20 text-xs"
             />
+            <Input
+              value={bgUrlName}
+              onChange={(e) => setBgUrlName(e.target.value)}
+              placeholder="Save as (optional, e.g. 'Sunset Sky')"
+              className="bg-black/30 border-white/20 text-xs"
+            />
             <div className="flex gap-2">
               <Button size="sm" className="flex-1" onClick={handleApplyCustomBg}>
                 Apply
               </Button>
-              <Button size="sm" variant="outline" className="flex-1" onClick={handleClearCustomBg}>
-                Clear
+              <Button size="sm" variant="outline" onClick={() => setShowBgSelector(!showBgSelector)}>
+                {showBgSelector ? 'Close' : 'Select'}
               </Button>
             </div>
+            
+            {/* Background URL Selector */}
+            {showBgSelector && (
+              <div className="space-y-3 mt-2 p-3 bg-black/30 rounded-lg border border-white/10">
+                <div className="text-xs text-gray-400 font-medium">Preset Backgrounds</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {PRESET_BACKGROUNDS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      onClick={() => handleSelectBackground(preset.url, preset.name)}
+                      className="relative overflow-hidden h-16 rounded-lg border border-white/10 hover:border-white/30 transition-all group"
+                    >
+                      {preset.url ? (
+                        <img
+                          src={preset.url}
+                          alt={preset.name}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                          <X className="w-6 h-6 text-gray-500" />
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                        <span className="text-xs text-white font-medium">{preset.name}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                
+                {savedBackgrounds.length > 0 && (
+                  <>
+                    <div className="text-xs text-gray-400 font-medium mt-3">Saved Backgrounds</div>
+                    <div className="space-y-1 max-h-32 overflow-auto">
+                      {savedBackgrounds.map((bg, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => handleSelectBackground(bg.url, bg.name)}
+                          className="w-full flex items-center gap-2 p-2 rounded bg-black/20 hover:bg-white/10 transition-all text-left"
+                        >
+                          <div className="w-8 h-6 rounded overflow-hidden flex-shrink-0 bg-gray-800">
+                            <img src={bg.url} alt={bg.name} className="w-full h-full object-cover" />
+                          </div>
+                          <span className="text-xs text-white/80 truncate flex-1">{bg.name}</span>
+                          <span className="text-[10px] text-gray-500 truncate max-w-[100px]">{bg.url}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="mt-4 space-y-2">
             <Label className="text-xs text-white/70">Message Bubble Colors</Label>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <Label htmlFor="user-bubble-bg" className="text-[11px] text-white/60">Your Bubble</Label>
-                <Input id="user-bubble-bg" type="color" value={userBubbleBg} onChange={(e) => setUserBubbleBg(e.target.value)} className="h-8 p-1 bg-black/30 border-white/20" />
+            
+            {/* Color Picker Popover */}
+            {openColorPicker && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={() => setOpenColorPicker(null)}>
+                <div className="bg-neutral-900 border border-white/20 rounded-xl p-4 max-w-sm w-full mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="text-sm font-medium text-white">
+                      Select {selectedColorType === 'bg' ? 'Background' : selectedColorType === 'text' ? 'Text' : 'Border'} Color
+                    </h4>
+                    <button onClick={() => setOpenColorPicker(null)} className="text-white/50 hover:text-white">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-8 gap-1.5 mb-3">
+                    {COLOR_SWATCHES.map((color) => (
+                      <button
+                        key={color}
+                        onClick={() => {
+                          if (openColorPicker === 'user-bg') setUserBubbleBg(color);
+                          else if (openColorPicker === 'user-text') setUserBubbleText(color);
+                          else if (openColorPicker === 'assistant-bg') setAssistantBubbleBg(color);
+                          else if (openColorPicker === 'assistant-text') setAssistantBubbleText(color);
+                          else if (openColorPicker === 'assistant-border') setAssistantBubbleBorder(color);
+                          setOpenColorPicker(null);
+                        }}
+                        className={`w-7 h-7 rounded-md border-2 transition-all hover:scale-110 ${
+                          ((openColorPicker === 'user-bg' && userBubbleBg === color) ||
+                           (openColorPicker === 'user-text' && userBubbleText === color) ||
+                           (openColorPicker === 'assistant-bg' && assistantBubbleBg === color) ||
+                           (openColorPicker === 'assistant-text' && assistantBubbleText === color) ||
+                           (openColorPicker === 'assistant-border' && assistantBubbleBorder === color))
+                            ? 'border-white scale-110'
+                            : 'border-transparent'
+                        }`}
+                        style={{ backgroundColor: color }}
+                        title={color}
+                      />
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="text"
+                      placeholder="#000000"
+                      className="flex-1 bg-black/30 border-white/20 text-xs font-mono"
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (openColorPicker === 'user-bg') setUserBubbleBg(val);
+                        else if (openColorPicker === 'user-text') setUserBubbleText(val);
+                        else if (openColorPicker === 'assistant-bg') setAssistantBubbleBg(val);
+                        else if (openColorPicker === 'assistant-text') setAssistantBubbleText(val);
+                        else if (openColorPicker === 'assistant-border') setAssistantBubbleBorder(val);
+                      }}
+                    />
+                    <Button size="sm" onClick={() => setOpenColorPicker(null)}>Done</Button>
+                  </div>
+                </div>
               </div>
-              <div className="space-y-1">
-                <Label htmlFor="user-bubble-text" className="text-[11px] text-white/60">Your Text</Label>
-                <Input id="user-bubble-text" type="color" value={userBubbleText} onChange={(e) => setUserBubbleText(e.target.value)} className="h-8 p-1 bg-black/30 border-white/20" />
+            )}
+            
+            <div className="flex items-center justify-center gap-6 py-3">
+              {/* User Bubble */}
+              <div className="flex flex-col items-center gap-2">
+                <div className="relative">
+                  <div
+                    className="w-16 h-16 rounded-full border-2 border-white/30 hover:border-white/60 transition-all cursor-pointer shadow-lg"
+                    style={{ backgroundColor: userBubbleBg }}
+                    onClick={() => { setSelectedColorType('bg'); setOpenColorPicker('user-bg'); }}
+                    title="Your Bubble Background"
+                  />
+                  <div
+                    className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full border-2 border-white/30 hover:border-white/60 transition-all cursor-pointer shadow-md"
+                    style={{ backgroundColor: userBubbleText }}
+                    onClick={() => { setSelectedColorType('text'); setOpenColorPicker('user-text'); }}
+                    title="Your Text Color"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: userBubbleBg }} />
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: userBubbleText }} />
+                  <span className="text-[11px] text-white/70 font-medium">You</span>
+                </div>
               </div>
-              <div className="space-y-1">
-                <Label htmlFor="assistant-bubble-bg" className="text-[11px] text-white/60">Assistant Bubble</Label>
-                <Input id="assistant-bubble-bg" type="color" value={assistantBubbleBg} onChange={(e) => setAssistantBubbleBg(e.target.value)} className="h-8 p-1 bg-black/30 border-white/20" />
+
+              {/* Assistant Bubble */}
+              <div className="flex flex-col items-center gap-2">
+                <div className="relative">
+                  <div
+                    className="w-16 h-16 rounded-full border-2 border-white/30 hover:border-white/60 transition-all cursor-pointer shadow-lg"
+                    style={{ backgroundColor: assistantBubbleBg }}
+                    onClick={() => { setSelectedColorType('bg'); setOpenColorPicker('assistant-bg'); }}
+                    title="Assistant Bubble Background"
+                  />
+                  <div
+                    className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full border-2 border-white/30 hover:border-white/60 transition-all cursor-pointer shadow-md"
+                    style={{ backgroundColor: assistantBubbleText }}
+                    onClick={() => { setSelectedColorType('text'); setOpenColorPicker('assistant-text'); }}
+                    title="Assistant Text Color"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: assistantBubbleBg }} />
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: assistantBubbleText }} />
+                  <span className="text-[11px] text-white/70 font-medium">Assistant</span>
+                </div>
               </div>
-              <div className="space-y-1">
-                <Label htmlFor="assistant-bubble-text" className="text-[11px] text-white/60">Assistant Text</Label>
-                <Input id="assistant-bubble-text" type="color" value={assistantBubbleText} onChange={(e) => setAssistantBubbleText(e.target.value)} className="h-8 p-1 bg-black/30 border-white/20" />
+
+              {/* Border Color */}
+              <div className="flex flex-col items-center gap-2">
+                <div
+                  className="w-12 h-12 rounded-full border-4 hover:border-opacity-60 transition-all cursor-pointer shadow-lg flex items-center justify-center"
+                  style={{ borderColor: assistantBubbleBorder }}
+                  onClick={() => { setSelectedColorType('border'); setOpenColorPicker('assistant-border'); }}
+                  title="Assistant Border Color"
+                >
+                  <div
+                    className="w-6 h-6 rounded-full shadow-inner"
+                    style={{ backgroundColor: assistantBubbleBorder }}
+                  />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-full border-2" style={{ borderColor: assistantBubbleBorder, backgroundColor: 'transparent' }} />
+                  <span className="text-[11px] text-white/70 font-medium">Border</span>
+                </div>
               </div>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="assistant-bubble-border" className="text-[11px] text-white/60">Assistant Border</Label>
-              <Input id="assistant-bubble-border" type="color" value={assistantBubbleBorder} onChange={(e) => setAssistantBubbleBorder(e.target.value)} className="h-8 p-1 bg-black/30 border-white/20" />
             </div>
             <Button size="sm" className="w-full" onClick={handleApplyBubbleColors}>
               Apply Bubble Colors

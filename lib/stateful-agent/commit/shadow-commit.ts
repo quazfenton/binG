@@ -18,6 +18,9 @@ export interface ShadowCommitOptions {
   message: string;
   author?: string;
   autoApprove?: boolean;
+  source?: string;
+  integration?: string;
+  workspaceVersion?: number;
 }
 
 export interface CommitResult {
@@ -223,34 +226,55 @@ export class ShadowCommitManager {
   ): Promise<CommitResult> {
     const commitDir = path.join(process.cwd(), '.agent-commits', options.sessionId);
     const commitFile = path.join(commitDir, `${commitId}.json`);
+    const actionLogFile = path.join(commitDir, 'actions.jsonl');
 
     try {
       if (!fs.existsSync(commitDir)) {
         fs.mkdirSync(commitDir, { recursive: true });
       }
 
-      const commitData = {
-        id: commitId,
-        message: options.message,
-        author: options.author || 'agent',
-        timestamp,
-        transactions: transactions.map(t => ({
-          path: t.path,
-          type: t.type,
-          originalContent: t.originalContent?.slice(0, 1000),
-          newContent: vfs[t.path]?.slice(0, 1000),
-        })),
-      };
-
-      fs.writeFileSync(commitFile, JSON.stringify(commitData, null, 2));
-
       const diff = transactions
         .map(t => generateUnifiedDiff(
-          t.originalContent, 
-          vfs[t.path], 
+          t.originalContent,
+          vfs[t.path],
           t.path
         ))
         .join('\n');
+
+      const serializedTransactions = transactions.map(t => ({
+        path: t.path,
+        type: t.type,
+        originalContent: t.originalContent,
+        newContent: vfs[t.path] ?? t.newContent,
+      }));
+
+      const commitData = {
+        id: commitId,
+        sessionId: options.sessionId,
+        message: options.message,
+        author: options.author || 'agent',
+        timestamp,
+        source: options.source || 'unknown',
+        integration: options.integration || options.source || 'filesystem',
+        workspaceVersion: options.workspaceVersion ?? null,
+        diff,
+        transactions: serializedTransactions,
+      };
+
+      fs.writeFileSync(commitFile, JSON.stringify(commitData, null, 2));
+      fs.appendFileSync(actionLogFile, `${JSON.stringify({
+        type: 'commit',
+        commitId,
+        sessionId: options.sessionId,
+        message: options.message,
+        author: options.author || 'agent',
+        source: options.source || 'unknown',
+        integration: options.integration || options.source || 'filesystem',
+        workspaceVersion: options.workspaceVersion ?? null,
+        timestamp,
+        filesChanged: serializedTransactions.length,
+        paths: serializedTransactions.map((entry) => entry.path),
+      })}\n`);
 
       return {
         success: true,

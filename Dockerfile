@@ -84,7 +84,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/init-backend.js ./scripts
 USER nextjs
 
 # Expose ports
-EXPOSE 3000 8080
+EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
@@ -92,12 +92,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Set environment variables
 ENV PORT=3000
-ENV WEBSOCKET_PORT=8080
 ENV STORAGE_TYPE=local
 ENV LOCAL_SNAPSHOT_DIR=/tmp/snapshots
 ENV WORKSPACE_DIR=/tmp/workspaces
 ENV RUNTIME_TYPE=process
 
 # Start application
-# Note: Backend services (WebSocket, etc.) are initialized lazily on first API call
+# Note: WebSocket server runs on same port as HTTP (port 3000)
+# WebSocket connections upgrade from HTTP at ws://localhost:3000
 CMD ["node", "server.js"]

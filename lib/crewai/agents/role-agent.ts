@@ -7,7 +7,7 @@
 
 import * as fs from 'fs/promises';
 import * as yaml from 'js-yaml';
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { StatefulAgent, type StatefulAgentOptions } from '@/lib/stateful-agent/agents/stateful-agent';
 
 export interface RoleAgentConfig {
@@ -256,7 +256,12 @@ ${this.backstory}
 
   async kickoff(input: string): Promise<RoleAgentOutput> {
     const startTime = Date.now();
-    const finalInput = injectCurrentDate(input, this.mutableConfig);
+    // P1 FIX: Inject role-specific system prompt into the input
+    // Truncate to prevent context window overflow
+    const MAX_ROLE_CONTEXT_LENGTH = 2000;
+    const truncatedSystemPrompt = this.systemPrompt.slice(0, MAX_ROLE_CONTEXT_LENGTH);
+    const roleContext = `## Your Role Context\n${truncatedSystemPrompt}\n\n---\n\n`;
+    const finalInput = injectCurrentDate(roleContext + input, this.mutableConfig);
 
     this.events.emit('kickoff:start', { input: finalInput, role: this.role });
     if (this.mutableConfig.step_callback) {
@@ -269,6 +274,7 @@ ${this.backstory}
     }
 
     try {
+      // P1 FIX: Now the role context is included in the input sent to run()
       const result = await this.run(finalInput);
       
       // Extract usage metrics if available from the stateful agent result

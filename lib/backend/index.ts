@@ -6,6 +6,7 @@
 // Backend Service (NEW - centralized initialization)
 export {
   backendService,
+  BackendService,
   initializeBackend,
   getBackendStatus,
   type BackendConfig,
