@@ -44,7 +44,7 @@ export interface UserTerminalSession extends TerminalSessionState {
     /** Auto-snapshot enabled for this session */
     autoSnapshotEnabled?: boolean;
     /** Reason for last snapshot */
-    lastSnapshotReason?: 'user_request' | 'auto_disconnect' | 'idle_timeout' | 'manual';
+    lastSnapshotReason?: 'user_request' | 'auto_disconnect' | 'idle_timeout' | 'manual' | 'error';
   };
 }
 

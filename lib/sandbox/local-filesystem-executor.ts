@@ -307,16 +307,22 @@ export class LocalCommandExecutor {
 
   private resolvePath(cwd: string, target: string): string {
     if (!target) return cwd
-    if (target.startsWith('~/')) return target.replace('~/', 'project/')
+    // Handle ~ first (with or without trailing slash)
+    if (target === '~' || target.startsWith('~/')) return target.replace('~/', 'project/').replace('~', 'project')
+    // Absolute path
     if (target.startsWith('/')) return target.slice(1)
-    if (target === '~') return 'project'
     
     // Relative path
     if (target === '.') return cwd
-    if (target === '..') {
+    if (target === '..' || target.startsWith('../')) {
       const parts = cwd.split('/')
       parts.pop()
-      return parts.join('/') || 'project'
+      let result = parts.join('/') || 'project'
+      // Handle remaining path after ../
+      if (target.startsWith('../')) {
+        result = result + '/' + target.slice(3)
+      }
+      return result.replace(/\/+/g, '/')
     }
     
     return `${cwd}/${target}`.replace(/\/+/g, '/')
@@ -329,12 +335,14 @@ export class LocalCommandExecutor {
   }
 
   private ensureProjectRootExists() {
-    if (!this.fileSystem['project']) {
-      this.fileSystem['project'] = { 
+    const fs = this.getFileSystem()
+    if (!fs['project']) {
+      fs['project'] = { 
         type: 'directory', 
         createdAt: Date.now(), 
         modifiedAt: Date.now() 
       }
+      this.setFileSystem(fs)
     }
   }
 

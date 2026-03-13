@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
       provider = 'openrouter',
       model = 'deepseek/deepseek-r1',
       temperature = 0.7,
-      maxTokens = 4000,
+      maxTokens = 100000,
       stream = false,
       apiKeys = {},
       requestId = generateSecureId('agent')

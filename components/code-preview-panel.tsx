@@ -34,6 +34,7 @@ import {
   X,
   CheckCircle,
   Play,
+  Zap,
 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -859,10 +860,33 @@ export default function CodePreviewPanel({
       const { directory } = e.detail || {};
       handleManualPreview(directory);
     };
-    
+
     window.addEventListener('code-preview-manual' as any, handleTerminalPreview);
     return () => window.removeEventListener('code-preview-manual' as any, handleTerminalPreview);
   }, [handleManualPreview]);
+
+  // Listen for open-code-preview events from message bubbles
+  useEffect(() => {
+    const handleOpenCodePreview = (e: CustomEvent) => {
+      const { code, language } = e.detail || {};
+      
+      // Open the panel if not already open
+      if (!isOpen) {
+        toast.info('Opening code preview panel');
+      }
+      
+      // Switch to preview tab
+      setSelectedTab('preview');
+      
+      // For now, just show a toast - the code is available in the message
+      if (code) {
+        log(`[open-code-preview] Received code (${language || 'unknown'}): ${code.length} chars`);
+      }
+    };
+
+    window.addEventListener('open-code-preview' as any, handleOpenCodePreview);
+    return () => window.removeEventListener('open-code-preview' as any, handleOpenCodePreview);
+  }, [isOpen]);
 
   // Listen for VFS save events from visual editor
   useEffect(() => {
@@ -1868,6 +1892,37 @@ Generated on: ${new Date().toLocaleString()}
           framework: 'react' as const,
         }
       : (projectStructureWithScopedFiles || projectStructure);
+
+    // Detect if project has Vue Router configured
+    const hasVueRouter = useStructure?.files && Object.keys(useStructure.files).some(path => {
+      const lowerPath = path.toLowerCase();
+      return lowerPath.includes('router/') || 
+             lowerPath.includes('router.') ||
+             lowerPath.endsWith('router.js') ||
+             lowerPath.endsWith('router.ts') ||
+             lowerPath.endsWith('router/index.js') ||
+             lowerPath.endsWith('router/index.ts');
+    });
+
+    // Get dependencies, adding vue-router if needed
+    const getDependencies = (): Record<string, string> => {
+      const deps = useStructure?.dependencies?.reduce(
+        (acc, dep) => {
+          acc[dep] = "latest";
+          return acc;
+        },
+        {} as Record<string, string>,
+      ) || getPopularDependencies(
+        Object.values(useStructure?.files || {}).join("\n"),
+        useStructure?.framework || 'vanilla',
+      );
+
+      // Add vue-router if project has router files but doesn't include it
+      if (hasVueRouter && !deps['vue-router']) {
+        deps['vue-router'] = 'latest';
+      }
+      return deps;
+    };
     
     if (
       useStructure &&
@@ -1928,42 +1983,75 @@ Generated on: ${new Date().toLocaleString()}
           {} as Record<string, { code: string }>,
         );
 
-        // Framework-specific entry file handling
+        // Framework-specific entry file detection and handling
         const addEntryFileIfMissing = () => {
-          const hasEntryFile = Object.keys(sandpackFiles).some(
-            (path) =>
-              path.includes("index.") ||
-              path.includes("main.") ||
-              path.includes("App."),
+          // Define framework-specific entry file priorities
+          const entryPriorityMap: Record<string, string[]> = {
+            react: ['/src/main.tsx', '/src/main.jsx', '/src/index.tsx', '/src/index.jsx', '/src/App.tsx', '/src/App.jsx', '/index.tsx', '/index.jsx', '/App.tsx', '/App.jsx'],
+            next: ['/src/app/page.tsx', '/src/app/page.jsx', '/pages/index.tsx', '/pages/index.jsx', '/src/pages/index.tsx', '/src/pages/index.jsx', '/src/index.tsx'],
+            vue: ['/src/main.ts', '/src/main.js', '/src/App.vue', '/main.ts', '/main.js', '/index.ts', '/index.js'],
+            nuxt: ['/src/main.ts', '/src/main.js', '/src/App.vue', '/app.vue', '/pages/index.ts', '/pages/index.js'],
+            svelte: ['/src/main.ts', '/src/main.js', '/src/App.svelte', '/App.svelte', '/main.ts', '/main.js'],
+            angular: ['/src/main.ts', '/src/main.js', '/src/app/app.component.ts', '/src/app/app.component.js'],
+            solid: ['/src/index.tsx', '/src/index.jsx', '/src/App.tsx', '/src/App.jsx', '/index.tsx', '/index.jsx'],
+            astro: ['/src/pages/index.astro', '/pages/index.astro', '/index.astro'],
+            remix: ['/app/routes/_index.tsx', '/app/routes/_index.jsx', '/app/root.tsx', '/app/root.jsx'],
+            gatsby: ['/src/pages/index.js', '/src/pages/index.tsx', '/pages/index.js'],
+          };
+
+          const framework = useStructure.framework;
+          const priorities = entryPriorityMap[framework] || [];
+          
+          // Check if any of the priority entry files exist
+          const existingEntryFile = priorities.find(p => 
+            Object.keys(sandpackFiles).some(path => path === p || path.endsWith(p))
           );
 
-          if (!hasEntryFile) {
-            switch (useStructure.framework) {
-              case "react":
-              case "next":
-              case "gatsby":
-                sandpackFiles["/src/App.jsx"] = {
-                  code: `import React from 'react';
+          if (existingEntryFile) {
+            log(`[addEntryFileIfMissing] Found existing entry file: ${existingEntryFile}`);
+            return; // Entry file exists, don't add stub
+          }
 
-export default function App() {
+          // Check for any existing entry-like files (more permissive for user projects)
+          const hasRealEntryFile = Object.keys(sandpackFiles).some(path => {
+            const fileName = path.split('/').pop() || '';
+            return /^index\.(js|jsx|ts|tsx|mjs|cjs)$/.test(fileName) ||
+                   /^main\.(js|jsx|ts|tsx|mjs|cjs)$/.test(fileName) ||
+                   /^App\.(js|jsx|ts|tsx)$/.test(fileName) ||
+                   /^page\.(js|jsx|ts|tsx)$/.test(fileName);
+          });
+
+          if (hasRealEntryFile) {
+            log(`[addEntryFileIfMissing] Found entry-like file, not adding stub`);
+            return;
+          }
+
+          // No entry file found - add framework-specific stub
+          log(`[addEntryFileIfMissing] No entry file found, adding stub for ${framework}`);
+          
+          switch (framework) {
+            case "react":
+            case "next":
+            case "gatsby":
+              // Use index.tsx as entry for React/Next.js projects
+              sandpackFiles["/src/index.tsx"] = {
+                code: `import React from 'react';
+import ReactDOM from 'react-dom/client';
+
+function App() {
   return (
     <div className="App">
       <h1>Hello React!</h1>
       <p>This is a generated React application.</p>
     </div>
   );
-}`,
-                };
-                sandpackFiles["/src/index.js"] = {
-                  code: `import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App';
+}
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);`,
-                };
-                sandpackFiles["/index.html"] = {
-                  code: `<!doctype html>
+              };
+              sandpackFiles["/index.html"] = {
+                code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -1972,15 +2060,15 @@ root.render(<App />);`,
   </head>
   <body>
     <div id="root"></div>
-    <script src="/src/index.js"></script>
+    <script type="module" src="/src/index.tsx"></script>
   </body>
 </html>`,
-                };
-                break;
-              case "vue":
-              case "nuxt":
-                sandpackFiles["/src/App.vue"] = {
-                  code: `<template>
+              };
+              break;
+            case "vue":
+            case "nuxt":
+              sandpackFiles["/src/App.vue"] = {
+                code: `<template>
   <div id="app">
     <h1>Hello Vue!</h1>
     <p>This is a generated Vue application.</p>
@@ -2001,14 +2089,14 @@ export default {
   margin-top: 60px;
 }
 </style>`,
-                };
-                sandpackFiles["/src/main.js"] = {
-                  code: `import { createApp } from 'vue';
+              };
+              sandpackFiles["/src/main.ts"] = {
+                code: `import { createApp } from 'vue';
 import App from './App.vue';
 createApp(App).mount('#app');`,
-                };
-                sandpackFiles["/index.html"] = {
-                  code: `<!doctype html>
+              };
+              sandpackFiles["/index.html"] = {
+                code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -2017,14 +2105,14 @@ createApp(App).mount('#app');`,
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>`,
-                };
-                break;
-              case "svelte":
-                sandpackFiles["/src/App.svelte"] = {
-                  code: `<script>
+              };
+              break;
+            case "svelte":
+              sandpackFiles["/src/App.svelte"] = {
+                code: `<script>
   let name = 'Svelte';
 </script>
 
@@ -2041,14 +2129,14 @@ createApp(App).mount('#app');`,
     margin: 0 auto;
   }
 </style>`,
-                };
-                sandpackFiles["/src/main.js"] = {
-                  code: `import App from './App.svelte';
+              };
+              sandpackFiles["/src/main.ts"] = {
+                code: `import App from './App.svelte';
 const app = new App({ target: document.getElementById('app') });
 export default app;`,
-                };
-                sandpackFiles["/index.html"] = {
-                  code: `<!doctype html>
+              };
+              sandpackFiles["/index.html"] = {
+                code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -2057,17 +2145,18 @@ export default app;`,
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>`,
-                };
-                break;
-              default:
-                sandpackFiles["/src/index.js"] = {
-                  code: `console.log('Hello from ${useStructure.framework}!');`,
-                };
-                sandpackFiles["/index.html"] = {
-                  code: `<!doctype html>
+              };
+              break;
+            default:
+              // vanilla or unknown framework - use index.js
+              sandpackFiles["/src/index.js"] = {
+                code: `console.log('Hello from ${framework}!');`,
+              };
+              sandpackFiles["/index.html"] = {
+                code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -2079,12 +2168,119 @@ export default app;`,
     <script src="/src/index.js"></script>
   </body>
 </html>`,
-                };
-            }
+              };
           }
         };
 
+        // Handle build output directories (dist, build, .next, etc.)
+        const normalizeFilesForSandpack = (files: Record<string, { code: string }>) => {
+          const normalized: Record<string, { code: string }> = {};
+          const buildDirs = ['dist', 'build', '.next', '.nuxt', '.output', 'public'];
+          
+          for (const [path, fileObj] of Object.entries(files)) {
+            const content = fileObj?.code || '';
+            
+            // Skip build output files - they shouldn't be in source
+            const isBuildOutput = buildDirs.some(dir => path.startsWith(dir + '/') || path.startsWith('/' + dir + '/'));
+            if (isBuildOutput) continue;
+            
+            // Skip node_modules
+            if (path.includes('node_modules/')) continue;
+            
+            // Skip map files and source maps
+            if (path.endsWith('.map') || path.includes('.map')) continue;
+            
+            // Skip cache directories
+            if (path.includes('.cache/') || path.includes('__pycache__/')) continue;
+            
+            if (typeof content === 'string' && content.trim()) {
+              const sandpackPath = path.startsWith('/') ? path : `/${path}`;
+              normalized[sandpackPath] = { code: content };
+            }
+          }
+          return normalized;
+        };
+
+        // Enhanced entry file detection with comprehensive patterns
+        const detectBestEntryFile = (
+          files: Record<string, { code: string }>,
+          framework: string
+        ): string | null => {
+          // Framework-specific entry file patterns
+          const entryPatterns: Record<string, RegExp[]> = {
+            react: [
+              /\/src\/index\.(tsx|jsx|ts|js)$/,
+              /\/src\/main\.(tsx|jsx|ts|js)$/,
+              /\/src\/App\.(tsx|jsx)$/,
+              /\/index\.(tsx|jsx)$/,
+              /\/main\.(tsx|jsx)$/,
+            ],
+            next: [
+              /\/src\/app\/page\.(tsx|jsx|ts|js)$/,
+              /\/src\/app\/layout\.(tsx|jsx|ts|js)$/,
+              /\/pages\/index\.(tsx|jsx|ts|js)$/,
+              /\/src\/pages\/index\.(tsx|jsx|ts|js)$/,
+            ],
+            vue: [
+              /\/src\/main\.(ts|js)$/,
+              /\/src\/App\.vue$/,
+              /\/main\.(ts|js)$/,
+              /\/App\.vue$/,
+            ],
+            nuxt: [
+              /\/src\/main\.(ts|js)$/,
+              /\/app\.vue$/,
+              /\/pages\/index\.(ts|js)$/,
+            ],
+            svelte: [
+              /\/src\/main\.(ts|js)$/,
+              /\/src\/App\.svelte$/,
+              /\/main\.(ts|js)$/,
+            ],
+            angular: [
+              /\/src\/main\.(ts|js)$/,
+              /\/src\/app\/app\.component\.(ts|js)$/,
+            ],
+            solid: [
+              /\/src\/index\.(tsx|jsx)$/,
+              /\/src\/App\.(tsx|jsx)$/,
+            ],
+            astro: [
+              /\/src\/pages\/index\.astro$/,
+              /\/pages\/index\.astro$/,
+              /\/index\.astro$/,
+            ],
+            vite: [
+              /\/src\/main\.(ts|js|tsx|jsx)$/,
+              /\/src\/index\.(ts|js|tsx|jsx)$/,
+              /\/main\.(ts|js)$/,
+            ],
+          };
+
+          const patterns = entryPatterns[framework] || entryPatterns.react;
+          
+          for (const pattern of patterns) {
+            const match = Object.keys(files).find(path => pattern.test(path));
+            if (match) return match;
+          }
+          
+          return null;
+        };
+
+        // Apply normalization to filter build outputs and cache files
+        const normalizedSandpackFiles = normalizeFilesForSandpack(sandpackFiles);
+        
+        // Detect best entry file and log for debugging
+        const detectedEntryFile = detectBestEntryFile(normalizedSandpackFiles, useStructure.framework);
+        if (detectedEntryFile) {
+          log(`[Sandpack] Detected entry file: ${detectedEntryFile}`);
+        }
+
+        // Add entry file to normalized files (not the original sandpackFiles)
         addEntryFileIfMissing();
+        
+        // Update normalized files with any added entry files
+        const finalSandpackFiles = normalizeFilesForSandpack(sandpackFiles);
 
         const template = getSandpackTemplate(useStructure.framework);
 
@@ -2154,7 +2350,7 @@ export default app;`,
                         recompileMode: "delayed",
                         recompileDelay: 300,
                       }}
-                      files={sandpackFiles}
+                      files={finalSandpackFiles}
                       customSetup={{ dependencies: {} }}
                     />
                   </div>
@@ -2281,7 +2477,7 @@ export default app;`,
           );
         }
 
-        // CodeSandbox DevBox preview mode (for backend/full-stack apps)
+        // CodeSandbox DevBox preview mode (for backend/full-stack apps) - Pending state
         if (isManualPreviewActive && previewMode === 'devbox') {
           const packageJson = Object.entries(useStructure.files).find(
             ([path]) => path === 'package.json' || path.endsWith('/package.json')
@@ -2292,100 +2488,43 @@ export default app;`,
           const nodeFiles = Object.entries(useStructure.files).filter(
             ([path]) => path.endsWith('.js') || path.endsWith('.ts')
           );
-          
+
           // Detect runtime
           let runtime = 'node';
-          let startCommand = 'npm start';
-          
           if (pythonFiles.length > 0) {
             runtime = 'python';
-            const hasFlask = pythonFiles.some(([_, code]) => code.includes('flask'));
-            const hasDjango = pythonFiles.some(([_, code]) => code.includes('django'));
-            if (hasFlask) startCommand = 'python app.py';
-            else if (hasDjango) startCommand = 'python manage.py runserver';
-            else startCommand = 'python main.py';
-          } else if (packageJson) {
-            try {
-              const pkg = JSON.parse(packageJson[1]);
-              if (pkg.scripts?.start) startCommand = `npm start`;
-              else if (pkg.scripts?.dev) startCommand = `npm run dev`;
-            } catch (e) {
-              startCommand = 'node index.js';
-            }
           }
 
           return (
-            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
-              <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-white text-sm font-medium">🔵 DevBox Runtime</span>
-                  <span className="text-blue-300 text-xs">Full-stack environment</span>
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex items-center justify-center p-8">
+              <div className="text-center max-w-md">
+                <div className="w-20 h-20 mx-auto mb-6 bg-blue-500/20 rounded-full flex items-center justify-center">
+                  <Zap className="w-10 h-10 text-blue-400" />
                 </div>
-                <div className="flex gap-2">
+                <h3 className="text-white text-xl font-medium mb-2">DevBox Environment</h3>
+                <p className="text-gray-400 text-sm mb-2">
+                  Full-stack {runtime} environment for backend applications
+                </p>
+                <p className="text-gray-500 text-xs mb-6">
+                  Starts a cloud development container with your project files
+                </p>
+                <div className="flex gap-3 justify-center">
                   <Button
-                    size="sm"
-                    variant="outline"
                     onClick={() => {
-                      setIsDevBoxRunning(!isDevBoxRunning);
-                      if (!isDevBoxRunning) {
-                        setDevBoxOutput([
-                          `> Starting ${runtime} environment...`,
-                          `> Running: ${startCommand}`,
-                          `> Environment ready.`,
-                        ]);
-                      }
+                      // TODO: Integrate CodeSandbox API to start real DevBox
+                      toast.info('DevBox integration coming soon');
                     }}
-                    className={`text-xs ${isDevBoxRunning ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'} text-white`}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-6"
                   >
-                    {isDevBoxRunning ? '⏹ Stop' : '▶ Run'}
+                    ▶ Start DevBox
                   </Button>
                   <Button
-                    size="sm"
                     variant="outline"
                     onClick={() => setPreviewMode('sandpack')}
-                    className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                    className="border-gray-600 text-gray-300 hover:bg-gray-800"
                   >
-                    Sandpack
+                    Use Sandpack
                   </Button>
-                </div>
-              </div>
-              
-              {/* Terminal-like output */}
-              <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
-                <div className="text-gray-400 mb-2">
-                  <p>📦 Runtime: {runtime}</p>
-                  <p>🚀 Command: {startCommand}</p>
-                  <p>📁 Files: {Object.keys(useStructure.files).length}</p>
-                </div>
-                
-                {isDevBoxRunning ? (
-                  <div className="space-y-1">
-                    {devBoxOutput.map((line, i) => (
-                      <p key={i} className="text-green-400">{line}</p>
-                    ))}
-                    <p className="text-blue-400 animate-pulse">▊</p>
-                  </div>
-                ) : (
-                  <div className="text-yellow-400">
-                    <p>⚠️  DevBox is stopped</p>
-                    <p className="text-gray-500 mt-2">
-                      Click "▶ Run" to start the {runtime} environment.<br/>
-                      This will simulate running your backend code.
-                    </p>
-                  </div>
-                )}
-                
-                {/* File tree */}
-                <div className="mt-4 pt-4 border-t border-gray-800">
-                  <p className="text-gray-400 mb-2">📁 Project Structure:</p>
-                  <div className="text-gray-500 text-xs space-y-1">
-                    {Object.keys(useStructure.files).slice(0, 20).map((path) => (
-                      <p key={path}>  {path}</p>
-                    ))}
-                    {Object.keys(useStructure.files).length > 20 && (
-                      <p className="text-gray-600">  ... and {Object.keys(useStructure.files).length - 20} more files</p>
-                    )}
-                  </div>
                 </div>
               </div>
             </div>
@@ -2609,225 +2748,43 @@ export default app;`,
           );
         }
 
-        // Vite build preview mode
+        // Vite build preview mode - removed fake build simulation, use Sandpack instead
         if (isManualPreviewActive && previewMode === 'vite') {
-          const viteConfig = Object.entries(useStructure.files).find(
-            ([path]) => path.includes('vite.config')
-          );
-          const packageJson = Object.entries(useStructure.files).find(
-            ([path]) => path === 'package.json'
-          );
-          const indexHtml = Object.entries(useStructure.files).find(
-            ([path]) => path === 'index.html' || path.endsWith('/index.html')
-          );
-          const srcFiles = Object.entries(useStructure.files).filter(
-            ([path]) => path.startsWith('src/')
-          );
-          
-          // Simulate Vite build (no hooks inside render)
-          const runViteBuild = async () => {
-            setIsViteBuilding(true);
-            setViteOutput('');
-            
-            const logs = [
-              '> vite build',
-              `vite v5.0.0 building for production...`,
-              `✓ ${srcFiles.length} modules transformed.`,
-            ];
-            
-            // Simulate build output
-            for (const log of logs) {
-              await new Promise(resolve => setTimeout(resolve, 300));
-              setViteOutput(prev => prev + log + '\n');
-            }
-            
-            // Show built files
-            const distFiles = srcFiles.map(([path]) => path.replace('src/', 'dist/assets/'));
-            await new Promise(resolve => setTimeout(resolve, 500));
-            setViteOutput(prev => prev + `\n✓ built in ${Math.random() * 500 + 200 | 0}ms\n`);
-            setViteOutput(prev => prev + `\n📁 dist/\n` + distFiles.slice(0, 5).map(f => `  ${f}`).join('\n') + '\n');
-            
-            setIsViteBuilding(false);
-          };
-
           return (
-            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
-              <div className="bg-cyan-900 px-4 py-2 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-white text-sm font-medium">⚡ Vite Build</span>
-                  <span className="text-cyan-300 text-xs">Next-gen frontend tooling</span>
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      void runViteBuild();
-                    }}
-                    className="text-xs bg-green-600 hover:bg-green-700 text-white"
-                    disabled={isViteBuilding}
-                  >
-                    {isViteBuilding ? '⏳ Building...' : '🔁 Rebuild'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setPreviewMode('sandpack')}
-                    className="text-xs bg-cyan-800 hover:bg-cyan-700 text-white"
-                  >
-                    Sandpack
-                  </Button>
-                </div>
-              </div>
-              
-              <div className="flex-1 flex flex-col">
-                {/* Config info */}
-                <div className="p-2 bg-gray-900 border-b border-gray-800">
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <p className="text-gray-400">⚙️ Vite Config:</p>
-                      <p className="text-cyan-400">{viteConfig ? '✓ Found' : '⚠ Not found'}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-400">📄 index.html:</p>
-                      <p className="text-cyan-400">{indexHtml ? '✓ Found' : '⚠ Not found'}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-400">📦 package.json:</p>
-                      <p className="text-cyan-400">{packageJson ? '✓ Found' : '⚠ Not found'}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-400">📁 src/ files:</p>
-                      <p className="text-cyan-400">{srcFiles.length} files</p>
-                    </div>
-                  </div>
-                </div>
-                
-                {/* Build output */}
-                <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
-                  {isViteBuilding ? (
-                    <div className="flex items-center gap-2 text-cyan-400">
-                      <div className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                      <span>Building with Vite...</span>
-                    </div>
-                  ) : (
-                    <div className="space-y-1">
-                      <pre className="text-green-400 whitespace-pre-wrap">{viteOutput || 'Build complete!'}</pre>
-                      <p className="text-blue-400 animate-pulse">▊</p>
-                    </div>
-                  )}
-                </div>
-                
-                {/* File tree */}
-                <div className="p-2 bg-gray-900 border-t border-gray-800">
-                  <p className="text-gray-400 text-xs mb-1">📁 Project Structure:</p>
-                  <div className="text-gray-500 text-xs space-y-1 max-h-32 overflow-auto">
-                    {Object.keys(useStructure.files).slice(0, 15).map((path) => (
-                      <p key={path}>  {path}</p>
-                    ))}
-                    {Object.keys(useStructure.files).length > 15 && (
-                      <p className="text-gray-600">  ... and {Object.keys(useStructure.files).length - 15} more files</p>
-                    )}
-                  </div>
-                </div>
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex items-center justify-center p-8">
+              <div className="text-center max-w-md">
+                <Zap className="w-16 h-16 mx-auto mb-4 text-cyan-500" />
+                <h3 className="text-white text-lg font-medium mb-2">Vite Preview</h3>
+                <p className="text-gray-400 text-sm mb-4">
+                  Use Sandpack for instant Vite-compatible preview
+                </p>
+                <Button
+                  onClick={() => setPreviewMode('sandpack')}
+                  className="bg-cyan-600 hover:bg-cyan-700 text-white"
+                >
+                  Open Sandpack
+                </Button>
               </div>
             </div>
           );
         }
 
-        // Webpack build preview mode
+        // Webpack build preview mode - removed fake build simulation, use Sandpack instead
         if (isManualPreviewActive && previewMode === 'webpack') {
-          const webpackConfig = Object.entries(useStructure.files).find(
-            ([path]) => path.includes('webpack.config')
-          );
-          const packageJson = Object.entries(useStructure.files).find(
-            ([path]) => path === 'package.json'
-          );
-          const srcFiles = Object.entries(useStructure.files).filter(
-            ([path]) => path.startsWith('src/')
-          );
-
-          const runWebpackBuild = async () => {
-            setIsWebpackBuilding(true);
-            setWebpackOutput('');
-
-            const logs = [
-              '> webpack --mode production',
-              'asset main.js 96.2 KiB [emitted] [minimized] (name: main)',
-              `modules by path ./src/ ${srcFiles.length}`,
-            ];
-
-            for (const log of logs) {
-              await new Promise(resolve => setTimeout(resolve, 300));
-              setWebpackOutput(prev => prev + log + '\n');
-            }
-
-            await new Promise(resolve => setTimeout(resolve, 500));
-            setWebpackOutput(prev => prev + `\nwebpack 5.0.0 compiled successfully in ${Math.random() * 600 + 250 | 0}ms\n`);
-            setIsWebpackBuilding(false);
-          };
-
           return (
-            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
-              <div className="bg-indigo-900 px-4 py-2 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-white text-sm font-medium">📦 Webpack Build</span>
-                  <span className="text-indigo-300 text-xs">Module bundling pipeline</span>
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      void runWebpackBuild();
-                    }}
-                    className="text-xs bg-green-600 hover:bg-green-700 text-white"
-                    disabled={isWebpackBuilding}
-                  >
-                    {isWebpackBuilding ? '⏳ Building...' : '🔁 Rebuild'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setPreviewMode('sandpack')}
-                    className="text-xs bg-indigo-800 hover:bg-indigo-700 text-white"
-                  >
-                    Sandpack
-                  </Button>
-                </div>
-              </div>
-
-              <div className="flex-1 flex flex-col">
-                <div className="p-2 bg-gray-900 border-b border-gray-800">
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <p className="text-gray-400">⚙️ webpack.config:</p>
-                      <p className="text-indigo-300">{webpackConfig ? '✓ Found' : '⚠ Not found'}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-400">📦 package.json:</p>
-                      <p className="text-indigo-300">{packageJson ? '✓ Found' : '⚠ Not found'}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-400">📁 src/ files:</p>
-                      <p className="text-indigo-300">{srcFiles.length} files</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
-                  {isWebpackBuilding ? (
-                    <div className="flex items-center gap-2 text-indigo-300">
-                      <div className="w-4 h-4 border-2 border-indigo-300 border-t-transparent rounded-full animate-spin" />
-                      <span>Building with Webpack...</span>
-                    </div>
-                  ) : (
-                    <div className="space-y-1">
-                      <pre className="text-green-400 whitespace-pre-wrap">{webpackOutput || 'Build complete!'}</pre>
-                      <p className="text-blue-400 animate-pulse">▊</p>
-                    </div>
-                  )}
-                </div>
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex items-center justify-center p-8">
+              <div className="text-center max-w-md">
+                <Package className="w-16 h-16 mx-auto mb-4 text-indigo-500" />
+                <h3 className="text-white text-lg font-medium mb-2">Webpack Preview</h3>
+                <p className="text-gray-400 text-sm mb-4">
+                  Use Sandpack for instant bundling preview
+                </p>
+                <Button
+                  onClick={() => setPreviewMode('sandpack')}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                >
+                  Open Sandpack
+                </Button>
               </div>
             </div>
           );
@@ -3537,28 +3494,16 @@ export default app;`,
                   recompileMode: "delayed",
                   recompileDelay: 300,
                 }}
-                files={sandpackFiles}
+                files={finalSandpackFiles}
                 customSetup={{
-                  dependencies:
-                    useStructure.dependencies?.reduce(
-                      (acc, dep) => {
-                        acc[dep] = "latest";
-                        return acc;
-                      },
-                      {} as Record<string, string>,
-                    ) ||
-                    getPopularDependencies(
-                      Object.values(useStructure.files).join("\n"),
-                      useStructure.framework,
-                    ),
-                  devDependencies:
-                    useStructure.devDependencies?.reduce(
-                      (acc, dep) => {
-                        acc[dep] = "latest";
-                        return acc;
-                      },
-                      {} as Record<string, string>,
-                    ) || {},
+                  dependencies: getDependencies(),
+                  devDependencies: useStructure.devDependencies?.reduce(
+                    (acc, dep) => {
+                      acc[dep] = "latest";
+                      return acc;
+                    },
+                    {} as Record<string, string>,
+                  ) || {},
                 }}
               />
             </div>
@@ -3707,7 +3652,7 @@ export default app;`,
                   recompileMode: "delayed",
                   recompileDelay: 300,
                 }}
-                files={sandpackFiles}
+                files={finalSandpackFiles}
                 customSetup={{
                   dependencies: {},
                 }}
@@ -4137,19 +4082,6 @@ export default app;`,
                     <Eye className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
                     <span className="hidden sm:inline">Live Preview</span>
                     <span className="sm:hidden">Preview</span>
-                    {/* Manual preview indicator + stale state */}
-                    {isManualPreviewActive && (
-                      <span
-                        className={`absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full ${
-                          manualPreviewMayBeStale 
-                            ? 'bg-yellow-500 animate-pulse' 
-                            : 'bg-green-500'
-                        }`}
-                        title={manualPreviewMayBeStale 
-                          ? 'Files changed while in preview - click refresh to update' 
-                          : 'Manual preview active'}
-                      />
-                    )}
                   </TabsTrigger>
                   <TabsTrigger
                     value="files"

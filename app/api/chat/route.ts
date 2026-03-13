@@ -53,7 +53,7 @@ const chatRequestSchema = z.object({
   provider: z.string().min(1, 'Provider is required'),
   model: z.string().min(1, 'Model is required'),
   temperature: z.number().min(0).refine((val) => val <= 2, 'Temperature must be at most 2').optional().default(0.7),
-  maxTokens: z.number().int().min(1).refine((val) => val <= 200000, 'Max tokens must be at most 200000').optional().default(10096),
+  maxTokens: z.number().int().min(1).refine((val) => val <= 200000, 'Max tokens must be at most 200000').optional().default(100096),
   stream: z.boolean().optional().default(true),
   apiKeys: z.record(z.string()).optional().default({}),
   requestId: z.string().optional(),
@@ -2386,7 +2386,7 @@ export async function GET() {
         defaultTemperature: parseFloat(
           process.env.DEFAULT_TEMPERATURE || "0.7",
         ),
-        defaultMaxTokens: Number.parseInt(process.env.DEFAULT_MAX_TOKENS || "80000"),
+        defaultMaxTokens: Number.parseInt(process.env.DEFAULT_MAX_TOKENS || "100000"),
         features: {
           voiceEnabled: process.env.ENABLE_VOICE_FEATURES === "true",
           imageGeneration: process.env.ENABLE_IMAGE_GENERATION === "true",

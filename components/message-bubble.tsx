@@ -525,16 +525,18 @@ export default function MessageBubble({
                       {isShellLang && (
                         <div className="absolute top-2 right-2 z-10 opacity-0 group-hover/code:opacity-100 transition-opacity">
                           <button
-                            className="flex items-center gap-1 bg-green-600/80 hover:bg-green-500 text-white text-[10px] px-2 py-1 rounded"
-                            title="Run in Terminal"
+                            className="flex items-center gap-1 bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white text-[10px] px-2 py-1 rounded border border-white/20"
+                            title="Open in Preview Panel"
                             onClick={() => {
-                              window.dispatchEvent(new CustomEvent('terminal-run-command', {
-                                detail: { command: codeStr }
+                              // Open code preview panel with this code
+                              window.dispatchEvent(new CustomEvent('open-code-preview', {
+                                detail: { code: codeStr, language: match[1] }
                               }));
+                              toast.success('Opening preview panel');
                             }}
                           >
-                            <Terminal className="w-3 h-3" />
-                            Run
+                            <Eye className="w-3 h-3" />
+                            Preview
                           </button>
                         </div>
                       )}
@@ -593,7 +595,7 @@ export default function MessageBubble({
                   <hr className={`${useCompactLayout ? 'my-2' : 'my-4'} border-t border-white/20`} />
                 ),
                 blockquote: ({ children }) => (
-                  <blockquote className={`border-l-4 border-purple-500 ${
+                  <blockquote className={`border-l-4 border-white/30 ${
                     layout.isMobile ? 'pl-2' : 'pl-4'
                   } italic ${useCompactLayout ? 'mb-2' : 'mb-4'}`}>
                     {children}
@@ -680,12 +682,12 @@ export default function MessageBubble({
                   </td>
                 ),
                 h1: ({ children }) => (
-                  <h1 className="text-2xl font-bold mb-4 pb-2 border-b border-purple-500/30">
+                  <h1 className="text-2xl font-bold mb-4 pb-2 border-b border-white/10">
                     {children}
                   </h1>
                 ),
                 h2: ({ children }) => (
-                  <h2 className="text-xl font-semibold mb-3 pb-1 border-b border-purple-500/20">
+                  <h2 className="text-xl font-semibold mb-3 pb-1 border-b border-white/10">
                     {children}
                   </h2>
                 ),

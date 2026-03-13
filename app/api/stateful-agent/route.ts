@@ -56,10 +56,10 @@ export async function POST(request: NextRequest) {
       messages,
       sessionId,
       sandboxId,
-      provider = 'openai',
-      model = 'gpt-4o',
+      provider = 'mistral',
+      model = 'mistral-small-latest',
       temperature = 0.7,
-      maxTokens = 4000,
+      maxTokens = 100000,
       stream = false,
       useStateful = USE_STATEFUL_AGENT,
       useCrewAI = USE_CREWAI,
@@ -130,8 +130,8 @@ export async function POST(request: NextRequest) {
 
     // AI SDK streaming mode with tool calling
     if (stream || body.useAI_SDK === true) {
-      const preferredProvider = (provider as 'openai' | 'anthropic' | 'google') || 'openai';
-      const modelId = model.replace(`${provider}:`, '') || 'gpt-4o';
+      const preferredProvider = (provider as 'openai' | 'anthropic' | 'google') || 'mistral';
+      const modelId = model.replace(`${provider}:`, '') || 'mistral-small-latest';
 
       const { model: aiModel, provider: actualProvider } = await createModelWithFallback(
         preferredProvider,

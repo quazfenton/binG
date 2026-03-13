@@ -989,9 +989,18 @@ export default function TerminalPanel({
     try {
       const normalizedScope = normalizeScopePath(filesystemScopePathRef.current);
       const normalizedInput = (filePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
-      const scopedFilePath = normalizedInput.startsWith(normalizedScope)
-        ? normalizedInput
-        : `${normalizedScope}/${normalizedInput.replace(/^project\/?/, '')}`.replace(/\/+/g, '/');
+      
+      // Fix: Only add scope prefix if path is truly relative (not starting with project/)
+      // If path already starts with project/, it's already project-relative, don't add scope
+      let scopedFilePath: string;
+      if (normalizedInput.startsWith('project/') || normalizedInput.startsWith(normalizedScope)) {
+        scopedFilePath = normalizedInput;
+      } else if (normalizedInput === 'project') {
+        scopedFilePath = 'project';
+      } else {
+        // Truly relative path - prepend project/ prefix
+        scopedFilePath = `project/${normalizedInput}`.replace(/\/+/g, '/');
+      }
 
       log(`syncFileToVFS: normalized paths - scope="${normalizedScope}", input="${normalizedInput}", scoped="${scopedFilePath}"`);
 

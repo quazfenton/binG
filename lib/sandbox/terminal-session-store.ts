@@ -44,6 +44,9 @@ export interface TerminalSessionState {
   /** Last snapshot ID (for auto-snapshot service) */
   lastSnapshotId?: string
 
+  /** Last snapshot timestamp (for auto-snapshot service) */
+  lastSnapshotAt?: number
+
   /** Additional metadata */
   metadata?: Record<string, any>
 }
