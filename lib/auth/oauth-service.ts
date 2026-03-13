@@ -1,5 +1,6 @@
 import { randomUUID, createCipheriv, createDecipheriv, randomBytes, createHash } from 'crypto';
 import { getDatabase } from '../database/connection';
+import { parseJsonResponse } from '@/lib/utils/response-parser';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // 96-bit IV per NIST SP 800-38D (standard for GCM)
@@ -338,7 +339,7 @@ export class OAuthService {
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
+      const errorData = await parseJsonResponse(response);
       throw new Error(`Token exchange failed: ${errorData.error_description || response.statusText}`);
     }
 

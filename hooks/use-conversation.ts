@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { v4 as uuidv4 } from 'uuid';
+import { parseJsonResponse } from '@/lib/utils/response-parser';
 
 export interface Message {
   id: string;
@@ -112,7 +113,7 @@ export function useConversation() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await parseJsonResponse(response);
         throw new Error(
           errorData.message || `HTTP error! status: ${response.status}`
         );
@@ -255,7 +256,7 @@ export function useConversation() {
       });
       
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        const errorData = await parseJsonResponse(response);
         throw new Error(
           errorData.message || `HTTP error! status: ${response.status}`
         );
