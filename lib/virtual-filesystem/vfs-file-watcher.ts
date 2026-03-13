@@ -10,6 +10,7 @@
 import { EventEmitter } from 'events';
 import type { VirtualFile } from './filesystem-types';
 import { virtualFilesystem } from './virtual-filesystem-service';
+import { generateSecureId } from '@/lib/utils';
 
 /**
  * File event types
@@ -110,7 +111,7 @@ export class VFSFileWatcher extends EventEmitter {
       debounceMs: 100,
       ...config,
     };
-    this.id = `watcher_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.id = generateSecureId('watcher');
   }
 
   /**

@@ -6,6 +6,7 @@ import {
 } from '@/lib/image-generation'
 import { RateLimiter } from '@/lib/utils/rate-limiter'
 import { authenticateRequest } from '@/lib/security/jwt-auth'
+import { secureRandomInt } from '@/lib/utils'
 
 export interface GenerateBody {
   prompt: string
@@ -172,7 +173,7 @@ export async function POST(req: NextRequest) {
       height,
       steps,
       guidance,
-      seed: seed === 'random' ? Math.floor(Math.random() * 2147483647) : seed,
+      seed: seed === 'random' ? secureRandomInt(0, 2147483646) : seed,
       numImages,
       aspectRatio,
       quality,

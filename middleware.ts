@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { blockSensitiveFiles } from './lib/security/file-access-blocker';
 import { generateAndStoreNonces, generateCspHeader } from './lib/security/nonce-generator';
+import { generateSecureId } from './lib/utils';
 
 /**
  * Next.js Middleware
@@ -22,7 +23,7 @@ export function middleware(request: NextRequest) {
   // Generate unique nonces for this request
   const requestId = request.headers.get('x-request-id') || 
                     request.headers.get('x-correlation-id') ||
-                    `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+                    generateSecureId('req');
   
   const nonces = generateAndStoreNonces(requestId);
 
