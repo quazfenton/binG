@@ -106,8 +106,10 @@ import {
   PanelRight,
 } from "lucide-react";
 
-import type { VFSProject } from "../app/visual-editor/page";
 import { createDebugLogger } from "@/config/features";
+
+// Use any for VFSProject type since the import path doesn't work well with TypeScript
+type VFSProject = any;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CRAFT COMPONENT PROPS & TYPES

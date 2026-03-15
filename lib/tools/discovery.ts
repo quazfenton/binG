@@ -12,7 +12,6 @@
  */
 
 import { z } from 'zod';
-import { getUnifiedToolRegistry, type ToolInfo } from './registry';
 import { getToolManager } from './index';
 import { getArcadeService } from '../api/arcade-service';
 import { getNangoService } from '../api/nango-service';
@@ -41,7 +40,19 @@ export interface ToolUsageStats {
   lastUsed?: number;
 }
 
-export interface DiscoveredTool extends ToolInfo {
+export interface DiscoveredTool {
+  /** Tool name/identifier */
+  name: string;
+  /** Tool description */
+  description: string;
+  /** Provider (arcade, nango, composio, etc.) */
+  provider: string;
+  /** Tool category */
+  category?: string;
+  /** Whether tool requires authentication */
+  requiresAuth: boolean;
+  /** Input schema */
+  inputSchema?: z.ZodSchema;
   /** Provider-specific tool ID */
   providerToolId?: string;
   /** Example usage */
@@ -58,7 +69,7 @@ export interface DiscoveredTool extends ToolInfo {
 export class ToolDiscoveryService {
   private static instance: ToolDiscoveryService;
   private usageStats = new Map<string, ToolUsageStats>();
-  private registry = getUnifiedToolRegistry();
+  private toolManager = getToolManager();
 
   static getInstance(): ToolDiscoveryService {
     if (!ToolDiscoveryService.instance) {
@@ -82,37 +93,35 @@ export class ToolDiscoveryService {
 
     let results: DiscoveredTool[] = [];
 
-    // Search unified registry
-    if (query) {
-      const registryResults = await this.registry.searchTools(query, userId);
-      results = registryResults.map(tool => ({
-        ...tool,
-        providerToolId: `${tool.provider}:${tool.name}`,
-      }));
-    } else {
-      // Get all available tools
-      const allTools = await this.registry.getAvailableTools(userId);
-      results = allTools.map(tool => ({
-        ...tool,
-        providerToolId: `${tool.provider}:${tool.name}`,
-      }));
-    }
+    // Use consolidated ToolIntegrationManager for tool search
+    const tools = this.toolManager.searchTools(query || '');
+    
+    // Convert to DiscoveredTool format
+    results = tools.map(tool => ({
+      name: tool.toolName,
+      description: tool.description,
+      provider: tool.provider,
+      category: tool.category,
+      requiresAuth: tool.requiresAuth,
+      inputSchema: tool.inputSchema,
+      providerToolId: `${tool.provider}:${tool.toolName}`,
+    }));
 
     // Apply filters
     if (category) {
-      results = results.filter(tool => 
+      results = results.filter(tool =>
         tool.category?.toLowerCase() === category.toLowerCase()
       );
     }
 
     if (provider) {
-      results = results.filter(tool => 
+      results = results.filter(tool =>
         tool.provider.toLowerCase() === provider.toLowerCase()
       );
     }
 
     if (requiresAuth !== undefined) {
-      results = results.filter(tool => 
+      results = results.filter(tool =>
         tool.requiresAuth === requiresAuth
       );
     }

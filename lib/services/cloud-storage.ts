@@ -688,5 +688,8 @@ export function createCloudStorageService(): CloudStorageService {
   }
 }
 
+// Default instance - lazy initialized  
+export const cloudStorage = createCloudStorageService();
+
 // Export individual services for testing
 export { NextcloudStorageService, S3StorageService, MinIOStorageService, GCPStorageService };

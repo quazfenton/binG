@@ -1382,8 +1382,10 @@ export default function CodePreviewPanel({
         framework: 'react',
         bundler: 'vite',
         packageManager: 'npm',
-        filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath)
-      };
+        filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath),
+        dependencies: [],
+        devDependencies: [],
+      } as ProjectStructure;
     }
 
     if (projectStructure) {
