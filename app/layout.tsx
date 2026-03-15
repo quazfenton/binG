@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import type { Viewport } from 'next'
+import { Providers } from '@/components/providers'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -15,20 +16,8 @@ export const metadata: Metadata = {
     telephone: false,
   },
   icons: {
-    icon: [
-      { url: '/icons/icon-72x72.png', sizes: '72x72' },
-      { url: '/icons/icon-96x96.png', sizes: '96x96' },
-      { url: '/icons/icon-128x128.png', sizes: '128x128' },
-      { url: '/icons/icon-144x144.png', sizes: '144x144' },
-      { url: '/icons/icon-152x152.png', sizes: '152x152' },
-      { url: '/icons/icon-192x192.png', sizes: '192x192' },
-      { url: '/icons/icon-384x384.png', sizes: '384x384' },
-      { url: '/icons/icon-512x512.png', sizes: '512x512' },
-    ],
-    apple: [
-      { url: '/icons/icon-152x152.png', sizes: '152x152' },
-      { url: '/icons/icon-180x180.png', sizes: '180x180' },
-    ],
+    icon: '/icons/icon-192x192.png',
+    apple: '/icons/icon-180x180.png',
   },
 }
 
@@ -49,7 +38,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body suppressHydrationWarning>
-        {children}
+        <Providers>
+          {children}
+        </Providers>
       </body>
     </html>
   )

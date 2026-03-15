@@ -131,12 +131,7 @@ export class OpencodeV2Provider implements LLMProvider {
       }
 
       if (!this.sandboxHandle) {
-        return {
-          response: 'Failed to initialize sandbox',
-          steps,
-          totalSteps: steps.length,
-          sessionId: this.currentSession.id,
-        };
+        throw new Error('Failed to initialize sandbox - no sandbox handle available');
       }
 
       // Ensure MCP is available
@@ -157,6 +152,13 @@ export class OpencodeV2Provider implements LLMProvider {
         mcpServerUrl: this.currentSession.mcpServerUrl,
       });
 
+      // Debug: Log what we're sending to OpenCode
+      console.log('[OpencodeV2Provider] === SENDING TO OPENCODE ===');
+      console.log('[OpencodeV2Provider] Prompt:', userMessage.substring(0, 200) + (userMessage.length > 200 ? '...' : ''));
+      console.log('[OpencodeV2Provider] Tools available:', tools.map(t => t.name).join(', '));
+      console.log('[OpencodeV2Provider] System prompt:', systemPrompt?.substring(0, 100) + '...');
+      console.log('[OpencodeV2Provider] ==============================');
+
       const promptFile = `/tmp/opencode-v2-prompt-${Date.now()}.json`;
       await this.sandboxHandle.writeFile(promptFile, promptPayload);
 
@@ -165,12 +167,27 @@ export class OpencodeV2Provider implements LLMProvider {
       const modelFlag = model ? `--model '${model.replace(/'/g, "'\\''")}'` : '';
       
       const escapedSystemPrompt = (systemPrompt || '').replace(/'/g, "'\\''");
+      
+      // Ensure workspace directory exists in sandbox
+      const workspaceDir = this.currentSession.workspaceDir;
+      await this.sandboxHandle.executeCommand(`mkdir -p "${workspaceDir}"`, workspaceDir, 30);
+      
       const command = `OPENCODE_SYSTEM_PROMPT='${escapedSystemPrompt}' opencode chat --json ${modelFlag} < ${promptFile}`.trim();
+      console.log('[OpencodeV2Provider] Executing command:', command.substring(0, 300) + '...');
+      
       const result = await this.sandboxHandle.executeCommand(
         command,
         this.currentSession.workspaceDir,
         PROCESS_TIMEOUT_MS / 1000,
       );
+
+      // Debug: Log raw output from OpenCode
+      console.log('[OpencodeV2Provider] === OPENCODE OUTPUT ===');
+      console.log('[OpencodeV2Provider] Exit code:', result.exitCode);
+      console.log('[OpencodeV2Provider] Success:', result.success);
+      console.log('[OpencodeV2Provider] Output length:', result.output?.length || 0);
+      console.log('[OpencodeV2Provider] Output preview:', result.output?.substring(0, 500));
+      console.log('[OpencodeV2Provider] =========================');
 
       const nullclawTasks: Array<{ tool: string; status: string; result?: any }> = [];
 
@@ -178,12 +195,18 @@ export class OpencodeV2Provider implements LLMProvider {
         // Parse output and execute tools
         const lines = result.output.split('\n').filter(Boolean);
         
+        console.log('[OpencodeV2Provider] Parsed', lines.length, 'lines from output');
+        
         for (const line of lines) {
           try {
             const parsed = JSON.parse(line);
             
+            // Debug: Log each parsed line
+            console.log('[OpencodeV2Provider] JSON line keys:', Object.keys(parsed).join(', '));
+            
             // Text response
             if (parsed.text) {
+              console.log('[OpencodeV2Provider] Got text response:', parsed.text.substring(0, 100) + '...');
               finalResponse += parsed.text;
               onStreamChunk?.(parsed.text);
             }
@@ -192,6 +215,9 @@ export class OpencodeV2Provider implements LLMProvider {
             const toolInvocation = this.extractToolInvocation(parsed);
             if (toolInvocation && steps.length < maxSteps) {
               const { name: toolName, args: toolArgs } = toolInvocation;
+              console.log('[OpencodeV2Provider] === TOOL CALL ===');
+              console.log('[OpencodeV2Provider] Tool:', toolName);
+              console.log('[OpencodeV2Provider] Args:', JSON.stringify(toolArgs).substring(0, 200));
 
               // Check if it's a Nullclaw tool
               const toolStartTime = Date.now();
@@ -230,6 +256,12 @@ export class OpencodeV2Provider implements LLMProvider {
 
               steps.push({ toolName, args: safeArgs, result: toolResult });
               onToolExecution?.(toolName, safeArgs, toolResult);
+
+              console.log('[OpencodeV2Provider] === TOOL RESULT ===');
+              console.log('[OpencodeV2Provider] Tool:', toolName, '- Success:', toolResult.success);
+              console.log('[OpencodeV2Provider] Output:', toolResult.output?.substring(0, 200));
+              console.log('[OpencodeV2Provider] Exit code:', toolResult.exitCode);
+              console.log('[OpencodeV2Provider] ===================');
 
               // Record metrics
               openCodeV2SessionManager.recordMetrics(

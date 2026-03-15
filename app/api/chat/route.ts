@@ -278,17 +278,25 @@ export async function POST(request: NextRequest) {
       ));
 
     if (wantsV2) {
-      if (!authenticatedUserId) {
+      // Allow unauthenticated users to send up to 3 messages before requiring login
+      const userMessageCount = messages.filter((m) => m.role === 'user').length;
+      const MAX_GUEST_MESSAGES = 3;
+
+      if (!authenticatedUserId && userMessageCount > MAX_GUEST_MESSAGES) {
         return NextResponse.json({
           success: false,
           status: 'auth_required',
-          loginRequired: true, // Explicitly mark as site login, not OAuth
+          loginRequired: true,
           error: {
             type: 'auth_required',
-            message: 'Agent V2 requires authentication. Please log in first.',
+            message: `You've reached the ${MAX_GUEST_MESSAGES}-message limit for V2 Agent. Please create an account or log in to continue.`,
           },
         }, { status: 401 });
       }
+
+        // For unauthenticated users, use "guest" as the userId
+        // Don't include conversationId in userId as it causes duplicate paths in workspace
+        const effectiveUserId = authenticatedUserId || 'guest';
 
       const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content;
       const task = typeof lastUserMessage === 'string'
@@ -301,7 +309,7 @@ export async function POST(request: NextRequest) {
       try {
         if (stream) {
           const streamBody = executeV2TaskStreaming({
-            userId: authenticatedUserId,
+            userId: effectiveUserId,
             conversationId: resolvedConversationId,
             task,
             context,
@@ -321,7 +329,7 @@ export async function POST(request: NextRequest) {
         }
 
         const v2Result = await executeV2Task({
-          userId: authenticatedUserId,
+          userId: effectiveUserId,
           conversationId: resolvedConversationId,
           task,
           context,

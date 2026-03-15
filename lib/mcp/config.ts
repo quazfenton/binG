@@ -285,19 +285,6 @@ export const MCPServerPresets = {
   }),
 
   /**
-   * Git server for git operations
-   */
-  git: (repositoryPath: string): MCPServerConfig => ({
-    id: 'git',
-    name: 'Git',
-    transport: {
-      type: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-git', repositoryPath],
-    },
-  }),
-
-  /**
    * GitHub server for GitHub API access
    */
   github: (token: string): MCPServerConfig => ({
@@ -352,18 +339,6 @@ export const MCPServerPresets = {
     },
   }),
 
-  /**
-   * Fetch server for web content retrieval
-   */
-  fetch: (): MCPServerConfig => ({
-    id: 'fetch',
-    name: 'Fetch',
-    transport: {
-      type: 'stdio',
-      command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-fetch'],
-    },
-  }),
 
   /**
    * Memory server for persistent memory
