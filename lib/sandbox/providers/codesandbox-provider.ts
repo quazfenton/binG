@@ -91,17 +91,20 @@ export class CodeSandboxProvider implements SandboxProvider {
     const { CodeSandbox, VMTier } = mod
 
     try {
+      console.log('[CodeSandbox] Creating SDK instance with API key length:', this.apiKey.length)
       const sdk: CodeSandboxSDK = new CodeSandbox(this.apiKey)
 
       const createOpts: Record<string, any> = {}
       if (this.defaultTemplate) {
         createOpts.id = this.defaultTemplate
+        console.log('[CodeSandbox] Using template:', this.defaultTemplate)
       }
       if (config.labels?.userId) {
         createOpts.tags = ['sdk', `user:${config.labels.userId}`]
       }
       if (this.privacy) {
         createOpts.privacy = this.privacy
+        console.log('[CodeSandbox] Privacy:', this.privacy)
       }
       if (this.hibernationTimeout) {
         createOpts.hibernationTimeoutSeconds = this.hibernationTimeout
@@ -116,7 +119,9 @@ export class CodeSandboxProvider implements SandboxProvider {
         createOpts.vmTier = VMTier[this.vmTier as keyof typeof VMTier] || VMTier.Micro
       }
 
+      console.log('[CodeSandbox] Creating sandbox with options:', JSON.stringify(createOpts, null, 2))
       const sandbox: CSBSandbox = await sdk.sandboxes.create(createOpts)
+      console.log('[CodeSandbox] Sandbox created:', sandbox.id)
       const client: CSBClient = await sandbox.connect()
 
       // Set up environment variables inside the sandbox
@@ -139,6 +144,11 @@ export class CodeSandboxProvider implements SandboxProvider {
       })
     } catch (error: any) {
       console.error('[CodeSandbox] Failed to create sandbox:', error)
+      console.error('[CodeSandbox] Error details:', JSON.stringify({
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+      }, null, 2))
       throw error
     }
   }
@@ -153,28 +163,29 @@ export class CodeSandboxProvider implements SandboxProvider {
 
     try {
       const sdk: CodeSandboxSDK = new CodeSandbox(this.apiKey)
-      
+
       // First try to resume (handles hibernated sandboxes)
       let sandbox: CSBSandbox
       let wasHibernated = false
-      
+
       try {
         sandbox = await sdk.sandboxes.resume(sandboxId)
         wasHibernated = true
         console.log(`[CodeSandbox] Resumed hibernated sandbox ${sandboxId}`)
       } catch (resumeError: any) {
         // If resume fails because it's already running, get the sandbox directly
-        if (resumeError.message?.includes('already running') || 
+        if (resumeError.message?.includes('already running') ||
             resumeError.message?.includes('not hibernated')) {
           sandbox = await sdk.sandboxes.get(sandboxId)
           console.log(`[CodeSandbox] Connected to running sandbox ${sandboxId}`)
         } else {
+          // Re-throw the error - let the outer catch block handle it
           throw resumeError
         }
       }
-      
+
       const client: CSBClient = await sandbox.connect()
-      
+
       // Wait for sandbox to be fully ready after resume
       if (wasHibernated) {
         await this.waitForSandboxReady(client)
@@ -198,7 +209,7 @@ export class CodeSandboxProvider implements SandboxProvider {
           console.error(`[CodeSandbox] Wake failed:`, wakeError.message)
         }
       }
-      
+
       console.error(`[CodeSandbox] Failed to get sandbox ${sandboxId}:`, error)
       throw error
     }

@@ -88,9 +88,9 @@ export async function POST(req: NextRequest) {
       template: template === 'docker' ? 'docker' : 'node',
     });
 
-    logger.info('Sandbox created', { 
-      sandboxId: session.sandboxId, 
-      sessionId: session.sessionId 
+    logger.info('Sandbox created', {
+      sandboxId: session.sandboxId,
+      sessionId: session.sessionId
     });
 
     // Get the CodeSandbox provider to access SDK methods
@@ -127,9 +127,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     logger.error('Failed to create DevBox:', error);
-    
+
     return NextResponse.json(
-      { 
+      {
         error: 'Failed to create cloud development environment',
         details: error.message,
       },
