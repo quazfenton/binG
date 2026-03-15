@@ -23,16 +23,16 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
   const taskWithContext = options.context
     ? `${options.context}\n\nTASK:\n${options.task}`
     : options.task;
-  const session = await agentSessionManager.getOrCreateSession(
-    options.userId,
-    options.conversationId,
-    { mode: options.preferredAgent === 'nullclaw' ? 'nullclaw' : 'hybrid', enableMCP: true, enableNullclaw: true },
-  );
 
-  // Sync VFS into sandbox before execution
-  await agentFSBridge.syncToSandbox(options.userId, options.conversationId);
+  // Don't create session/sandbox here - task-router will create it only if needed
+  // This avoids creating unnecessary cloud sandboxes when using local OpenCode engine
 
-  agentSessionManager.setSessionState(options.userId, options.conversationId, 'busy');
+  // Get session (created by task-router if needed)
+  let session = agentSessionManager.getSession(options.userId, options.conversationId);
+  if (session) {
+    agentSessionManager.setSessionState(options.userId, options.conversationId, 'busy');
+  }
+  
   let result: any;
   try {
     result = await taskRouter.executeTask({
@@ -44,22 +44,39 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
       preferredAgent: options.preferredAgent,
       cliCommand: options.cliCommand,
     });
+  } catch (error: any) {
+    // Propagate error so chat route can fallback to v1
+    console.error('[V2Executor] Task execution failed:', error.message);
+    throw error;
   } finally {
-    agentSessionManager.setSessionState(options.userId, options.conversationId, 'ready');
-    agentSessionManager.updateActivity(options.userId, options.conversationId);
+    // Update session state if it exists (created by task-router)
+    session = agentSessionManager.getSession(options.userId, options.conversationId);
+    if (session) {
+      agentSessionManager.setSessionState(options.userId, options.conversationId, 'ready');
+      agentSessionManager.updateActivity(options.userId, options.conversationId);
+    }
   }
 
-  // Sync back after agents that can mutate the sandbox workspace
+  // Only sync back from sandbox if the agent actually used it
+  // (task-router creates session only when needed, e.g., OpencodeV2Provider or CLI agent)
   if (result.agent === 'opencode' || result.agent === 'cli') {
-    await agentFSBridge.syncFromSandbox(options.userId, options.conversationId);
+    try {
+      await agentFSBridge.syncFromSandbox(options.userId, options.conversationId);
+    } catch (syncError) {
+      // Ignore sync errors - sandbox may not have been created
+      console.warn('[V2Executor] Sync from sandbox failed (sandbox may not exist):', syncError);
+    }
   }
 
+  // Get session info if it was created (task-router creates it when needed)
+  session = agentSessionManager.getSession(options.userId, options.conversationId);
+  
   return {
     success: result.success ?? true,
     data: result,
-    sessionId: session.id,
-    conversationId: session.conversationId,
-    workspacePath: session.workspacePath,
+    sessionId: session?.id,
+    conversationId: session?.conversationId,
+    workspacePath: session?.workspacePath,
   };
 }
 
@@ -102,31 +119,15 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
             ...detail,
           };
           processingSteps.push(payload);
-          controller.enqueue(encoder.encode(formatEvent('step', payload)));
+            controller.enqueue(encoder.encode(formatEvent('step', payload)));
         };
 
-        const session = await agentSessionManager.getOrCreateSession(
-          options.userId,
-          options.conversationId,
-          { mode: options.preferredAgent === 'nullclaw' ? 'nullclaw' : 'hybrid', enableMCP: true, enableNullclaw: true },
-        );
+        // Don't create session/sandbox here - task-router will create it only if needed
+        // Session will be created by task-router during executeTask
 
         emitStep('Initialize V2 session', 'completed', {
-          detail: `sessionId=${session.id}`,
+          detail: 'starting task execution',
         });
-
-        emitStep('Sync workspace to sandbox', 'started');
-        await agentFSBridge.syncToSandbox(options.userId, options.conversationId);
-        emitStep('Sync workspace to sandbox', 'completed');
-        agentSessionManager.setSessionState(options.userId, options.conversationId, 'busy');
-
-        // Send init event to signal V2 mode start
-        controller.enqueue(encoder.encode(formatEvent('init', {
-          agent: 'v2',
-          sessionId: session.id,
-          conversationId: session.conversationId,
-          timestamp: Date.now(),
-        })));
 
         let accumulatedContent = '';
         let toolInvocations: ToolInvocation[] = [];
@@ -166,8 +167,33 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           },
         });
 
-        const result = await resultPromise;
+        // Send init event to signal V2 mode start (session will be created by task-router)
+        controller.enqueue(encoder.encode(formatEvent('init', {
+          agent: 'v2',
+          conversationId: options.conversationId,
+          timestamp: Date.now(),
+        })));
+
+        let result: any;
+        try {
+          result = await resultPromise;
+        } catch (taskError: any) {
+          // Task execution failed - emit error event and trigger fallback to v1
+          console.error('[V2Executor] Task execution failed:', taskError.message);
+          controller.enqueue(encoder.encode(formatEvent('error', {
+            error: taskError.message,
+            fallback: true,
+          })));
+          controller.close();
+          
+          // Throw to trigger fallback in chat route
+          throw taskError;
+        }
+        
         emitStep('Execute task', 'completed');
+
+        // Get session after task execution (created by task-router if needed)
+        const session = agentSessionManager.getSession(options.userId, options.conversationId);
 
         if (result.agent === 'opencode' || result.agent === 'cli') {
           emitStep('Sync workspace from sandbox', 'started');

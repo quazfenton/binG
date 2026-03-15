@@ -457,7 +457,15 @@ class E2BSandboxHandle implements SandboxHandle {
       // ✅ ENHANCED: Use centralized security validation
       const sanitized = SandboxSecurityManager.validateAndSanitizeCommand(command)
       
-      const workingDir = cwd || this.workspaceDir
+      // Validate and resolve working directory
+      let workingDir = cwd || this.workspaceDir;
+      if (workingDir) {
+        // Handle Windows paths that may slip through
+        workingDir = workingDir.replace(/\\/g, '/');
+        // Resolve to ensure it's within workspace
+        workingDir = SandboxSecurityManager.resolvePath(this.workspaceDir, workingDir);
+      }
+      
       const cmdTimeout = Math.min(timeout || E2B_MAX_COMMAND_TIMEOUT, E2B_MAX_COMMAND_TIMEOUT)
 
       // Run command via sandbox.commands

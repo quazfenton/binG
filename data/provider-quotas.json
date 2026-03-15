@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-03-15T04:44:50.259Z",
+  "updatedAt": "2026-03-15T09:52:48.067Z",
   "quotas": {
     "composio": {
       "monthlyLimit": 20000,
@@ -33,25 +33,25 @@
       "isDisabled": false
     },
     "microsandbox": {
-      "monthlyLimit": 10000,
-      "currentUsage": 148,
+      "monthlyLimit": 1000000,
+      "currentUsage": 150,
       "resetDate": "2026-04-01T04:00:00.000Z",
       "isDisabled": false
     },
     "e2b": {
-      "monthlyLimit": 1000,
-      "currentUsage": 6,
+      "monthlyLimit": 10000,
+      "currentUsage": 11,
       "resetDate": "2026-04-01T04:00:00.000Z",
       "isDisabled": false
     },
     "mistral": {
-      "monthlyLimit": 2000,
+      "monthlyLimit": 20000,
       "currentUsage": 1,
       "resetDate": "2026-04-01T04:00:00.000Z",
       "isDisabled": false
     },
     "blaxel": {
-      "monthlyLimit": 5000,
+      "monthlyLimit": 50000,
       "currentUsage": 0,
       "resetDate": "2026-04-01T04:00:00.000Z",
       "isDisabled": false
