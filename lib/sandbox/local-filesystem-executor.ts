@@ -85,7 +85,7 @@ export class LocalCommandExecutor {
       }
     }
 
-    this.cwd[this.terminalId] = '~/project'
+    this.cwd[this.terminalId] = 'project'
   }
 
   /**
@@ -143,7 +143,7 @@ export class LocalCommandExecutor {
     const allArgs = args.slice(1).join(' ')
 
     // Get current working directory
-    const cwd = this.cwd[this.terminalId] || '~/project'
+    const cwd = this.cwd[this.terminalId] || 'project'
 
     // Execute command
     switch (cmd) {
@@ -307,25 +307,36 @@ export class LocalCommandExecutor {
 
   private resolvePath(cwd: string, target: string): string {
     if (!target) return cwd
-    // Handle ~ first (with or without trailing slash)
-    if (target === '~' || target.startsWith('~/')) return target.replace('~/', 'project/').replace('~', 'project')
+    // Handle ~ first
+    if (target === '~' || target === '~/') return 'project'
+    if (target.startsWith('~/')) {
+      target = 'project/' + target.slice(2)
+    }
     // Absolute path
-    if (target.startsWith('/')) return target.slice(1)
-    
-    // Relative path
-    if (target === '.') return cwd
-    if (target === '..' || target.startsWith('../')) {
-      const parts = cwd.split('/')
-      parts.pop()
-      let result = parts.join('/') || 'project'
-      // Handle remaining path after ../
-      if (target.startsWith('../')) {
-        result = result + '/' + target.slice(3)
-      }
-      return result.replace(/\/+/g, '/')
+    if (target.startsWith('/')) {
+      target = target.slice(1)
+    } else {
+      // Relative path - prepend cwd
+      target = `${cwd}/${target}`
     }
     
-    return `${cwd}/${target}`.replace(/\/+/g, '/')
+    // Normalize: resolve . and .. segments, remove trailing slashes
+    const parts = target.split('/').filter(Boolean)
+    const stack: string[] = []
+    for (const part of parts) {
+      if (part === '.') continue
+      if (part === '..') {
+        // Don't pop below project root
+        if (stack.length > 1) stack.pop()
+        else if (stack.length === 1 && stack[0] !== 'project') stack.pop()
+        continue
+      }
+      stack.push(part)
+    }
+    
+    const result = stack.join('/')
+    // Ensure we always have at least 'project'
+    return result || 'project'
   }
 
   private getParentPath(path: string): string {
@@ -400,8 +411,9 @@ export class LocalCommandExecutor {
   }
 
   private executeCd(args: string[], writeError: (text: string) => void): string {
-    const target = args.slice(1).join(' ') || 'project'
-    const nextPath = this.resolvePath(this.cwd[this.terminalId], target)
+    const target = args.slice(1).join(' ')
+    // No argument = go to project root directly (don't resolve 'project' against cwd)
+    const nextPath = target ? this.resolvePath(this.cwd[this.terminalId], target) : 'project'
     const fs = this.getFileSystem() // Use external filesystem if available
     
     this.ensureProjectRootExists()
@@ -418,8 +430,12 @@ export class LocalCommandExecutor {
 
   private executeLs(args: string[], writeLine: (text: string) => void, writeError: (text: string) => void): string {
     const showLong = args[1] === '-l' || args[1] === '-la' || args[1] === '-al'
-    const target = showLong ? (args[1].startsWith('-') ? args[2] : args[1]) : (args[1] || this.cwd[this.terminalId])
-    const targetPath = this.resolvePath(this.cwd[this.terminalId], target)
+    const explicitTarget = showLong ? (args[1].startsWith('-') ? args[2] : undefined) : args[1]
+    // When no explicit target, use cwd directly (don't resolve cwd against itself)
+    const targetPath = explicitTarget
+      ? this.resolvePath(this.cwd[this.terminalId], explicitTarget)
+      : this.cwd[this.terminalId]
+    const target = explicitTarget || this.cwd[this.terminalId]
     const fs = this.getFileSystem() // Use external filesystem if available
 
     this.ensureProjectRootExists()

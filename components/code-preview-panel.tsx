@@ -282,6 +282,9 @@ export default function CodePreviewPanel({
   const webcontainerProcessRef = useRef<any>(null);
   const webcontainerUrlRef = useRef<string | null>(null);
 
+  // Track Sandpack normalization to avoid logging on every render
+  const lastNormalizationRef = useRef<string>('');
+
   // Context menu state for file operations
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -309,7 +312,7 @@ export default function CodePreviewPanel({
     const originalPath = path;
     const cleanPath = stripWorkspacePrefixes(path || 'project');
     const normalized = normalizeScopePath(cleanPath);
-    log(`normalizeProjectPath: "${originalPath}" -> "${normalized}"`);
+    // Removed verbose logging - called too frequently
     return normalized;
   }, []);
 
@@ -1335,24 +1338,17 @@ export default function CodePreviewPanel({
         const structure = analyzeProjectStructure(codeBlocks);
         setProjectStructure(structure);
       }
-    } else if (
-      (projectFiles && Object.keys(projectFiles).length > 0) ||
-      Object.keys(scopedPreviewFiles).length > 0
-    ) {
-      const files = {
-        ...(projectFiles || {}),
-        ...scopedPreviewFiles,
-      };
+    } else if (projectFiles && Object.keys(projectFiles).length > 0) {
       const structure: ProjectStructure = {
         name: 'filesystem-project',
-        files,
+        files: projectFiles,
         framework: 'react',
         bundler: 'vite',
         packageManager: 'npm'
       };
       setProjectStructure(structure);
     }
-  }, [codeBlocks, scopedPreviewFiles, projectFiles]);
+  }, [codeBlocks, projectFiles]);
 
   const projectStructureWithScopedFiles = useMemo(() => {
     const scopedRelativeFiles = Object.entries(scopedPreviewFiles).reduce(
@@ -1472,7 +1468,7 @@ export default function CodePreviewPanel({
       entryFile,
       previewModeHint,
     };
-  }, [filesystemScopePath, normalizeProjectPath, normalizedFilesystemPath, projectStructure, projectStructureWithScopedFiles]);
+  }, [filesystemScopePath, normalizeProjectPath, normalizedFilesystemPath, projectFiles, projectStructure, projectStructureWithScopedFiles, scopedPreviewFiles]);
 
   const applySimpleLineDiff = (
     originalContent: string,
@@ -2400,61 +2396,81 @@ root.render(<App />);` };
             }
           }
           
-          // Normalize and strip the filesystem scope prefix from all paths
+          // Step 1: Normalize (filter build outputs, cache files, etc.)
           const normalized = normalizeFilesForSandpack(filesCopy);
-          
-          // Get the scope path to strip - this is the full VFS path like "project/sessions/draft-chat_xxx"
-          const scopePath = filesystemScopePath || '';
-          const scopePathParts = scopePath.split('/').filter(Boolean);
-          
-          // Build a regex to strip the scope path prefix from file paths
-          // Scope path could be: "project/sessions/draft-chat_xxx" or "project/sessions/draft-chat_xxx/my-vue-app"
-          // Files paths are like: "/project/sessions/draft-chat_xxx/src/main.js" or "/my-vue-app/src/main.js"
-          let prefixToStrip = '';
-          
-          // Try to build a stripping pattern from the scope path
-          if (scopePathParts.length > 0) {
-            // The scope path comes from filesystemScopePath which is like "project/sessions/draft-chat_xxx"
-            // We need to strip this prefix from file paths
-            // Files from VFS may have full paths like "/project/sessions/draft-chat_xxx/src/main.js"
-            // or relative paths like "src/main.js" depending on how they were loaded
-            
-            // Escape special regex characters in the scope path
-            const escapedScope = scopePath.replace(/[.+*?^${}()|[\]\\]/g, '\\$&');
-            prefixToStrip = `^/?${escapedScope}/`;
-          }
-          
+
+          // Step 2: Strip any leading project folder to get paths relative to project root
+          // Files at this point are like: "/my-vue-app/src/main.js" or "/src/main.js" or "/index.html"
+          // We need them to be: "/src/main.js" or "/index.html" (relative to project root for Sandpack)
           const stripped: Record<string, { code: string }> = {};
+
+          // Common project subfolder names that indicate the preceding folder is a project root
+          const projectSubfolderPatterns = [
+            /^\/([^/]+)\/src\//,      // /my-app/src/...
+            /^\/([^/]+)\/pages\//,    // /my-app/pages/...
+            /^\/([^/]+)\/app\//,      // /my-app/app/...
+            /^\/([^/]+)\/public\//,   // /my-app/public/...
+            /^\/([^/]+)\/lib\//,      // /my-app/lib/...
+            /^\/([^/]+)\/components\//, // /my-app/components/...
+            /^\/([^/]+)\/styles\//,   // /my-app/styles/...
+            /^\/([^/]+)\/assets\//,   // /my-app/assets/...
+          ];
+
+          // Also strip VFS scope prefix (e.g. /project/sessions/draft-chat_xxx/)
+          const scopePrefix = normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath);
+
           for (const [path, fileObj] of Object.entries(normalized)) {
-            // Try to strip the scope prefix first
             let relativePath = path;
-            
-            if (prefixToStrip) {
-              relativePath = path.replace(new RegExp(prefixToStrip), '/');
-            }
-            
-            // Also handle case where files have path with project root folder like "my-vue-app/src/main.js"
-            // If we have a valid project folder name, try stripping that too
-            if (scopePathParts.length >= 2) {
-              // Get the last meaningful segment (could be project folder or session ID)
-              const lastSegment = scopePathParts[scopePathParts.length - 1];
-              if (lastSegment && !lastSegment.startsWith('draft-chat_')) {
-                // This is likely the project folder (e.g., "my-vue-app")
-                const escapedLast = lastSegment.replace(/[.+*?^${}()|[\]\\]/g, '\\$&');
-                relativePath = relativePath.replace(new RegExp(`^/?${escapedLast}/`), '/');
+
+            // Strip VFS scope prefix first (e.g. /project/sessions/draft-chat_xxx/my-vue-app/src/main.js -> /my-vue-app/src/main.js)
+            const prefixVariants = [
+              `/${scopePrefix}/`,
+              `${scopePrefix}/`,
+              `/project/sessions/`,
+            ];
+            for (const prefix of prefixVariants) {
+              if (relativePath.startsWith(prefix)) {
+                relativePath = '/' + relativePath.slice(prefix.length);
+                // If we stripped a sessions prefix, also strip the session ID folder
+                if (prefix === '/project/sessions/' || prefix === 'project/sessions/') {
+                  const slashIdx = relativePath.indexOf('/', 1);
+                  if (slashIdx > 0) {
+                    relativePath = relativePath.slice(slashIdx);
+                  }
+                }
+                break;
               }
             }
-            
+
+            // Try to strip leading project folder if path contains a known subfolder pattern
+            for (const pattern of projectSubfolderPatterns) {
+              const match = relativePath.match(pattern);
+              if (match) {
+                const projectFolder = match[1];
+                // Don't strip if the "project folder" is actually a standard folder name
+                if (!['src', 'pages', 'app', 'public', 'lib', 'components', 'styles', 'assets'].includes(projectFolder)) {
+                  relativePath = relativePath.replace(`/${projectFolder}/`, '/');
+                  break;
+                }
+              }
+            }
+
             // Ensure path starts with /
             if (!relativePath.startsWith('/')) {
               relativePath = '/' + relativePath;
             }
-            
+
             stripped[relativePath] = fileObj;
           }
-          
-          log(`[Sandpack] Normalized ${Object.keys(normalized).length} files to ${Object.keys(stripped).length} relative paths`);
-          return stripped;
+
+          const result = stripped;
+          // Only log once when files actually change (not on every render)
+          const resultKey = `${Object.keys(result).length}-${Object.keys(result).sort().join('|').slice(0, 50)}`;
+          if (resultKey !== lastNormalizationRef.current) {
+            log(`[Sandpack] Normalized ${Object.keys(filesCopy).length} -> ${Object.keys(normalized).length} (filtered) -> ${Object.keys(result).length} (scope strip)`);
+            lastNormalizationRef.current = resultKey;
+          }
+          return result;
         })();
 
         const template = getSandpackTemplate(useStructure.framework);
@@ -2984,8 +3000,32 @@ root.render(<App />);` };
               
               // Write all files to the virtual filesystem
               const files = useStructure.files;
+              
+              // Collect unique parent directories and create them first
+              const dirs = new Set<string>();
+              for (const filePath of Object.keys(files)) {
+                const parts = filePath.split('/').filter(Boolean);
+                for (let i = 1; i < parts.length; i++) {
+                  dirs.add('/' + parts.slice(0, i).join('/'));
+                }
+              }
+              // Create directories shallowest-first
+              const sortedDirs = Array.from(dirs).sort((a, b) => a.split('/').length - b.split('/').length);
+              for (const dir of sortedDirs) {
+                try {
+                  await webcontainer.fs.mkdir(dir, { recursive: true });
+                } catch {
+                  // Directory may already exist
+                }
+              }
+              
+              // Now write files
               for (const [filePath, content] of Object.entries(files)) {
-                await webcontainer.fs.writeFile(filePath, content);
+                try {
+                  await webcontainer.fs.writeFile(filePath, content);
+                } catch (writeErr: any) {
+                  logWarn(`[WebContainer] Failed to write ${filePath}:`, writeErr.message);
+                }
               }
               
               log('[WebContainer] Files written, installing dependencies...');
@@ -3004,44 +3044,121 @@ root.render(<App />);` };
               }
               
               log('[WebContainer] Starting server...');
+
+              // Determine start command - check for Next.js first
+              const packageJsonContent = hasPackageJson ? files['package.json'] : '';
+              const hasNextJs = packageJsonContent.includes('next') || files['next.config.js'] || files['next.config.ts'];
+              const hasStartScript = hasPackageJson && packageJsonContent.includes('"start"');
+              const hasDevScript = hasPackageJson && packageJsonContent.includes('"dev"');
               
-              // Determine start command
-              const hasStartScript = hasPackageJson && files['package.json'].includes('"start"');
-              const startCommand = hasStartScript ? 'npm start' : 'node server.js';
-              
+              // Next.js should use 'npm run dev', otherwise use start script or node server.js
+              const startCommand = hasNextJs && hasDevScript 
+                ? 'npm run dev' 
+                : hasStartScript 
+                  ? 'npm start' 
+                  : 'node server.js';
+
+              log(`[WebContainer] Using start command: ${startCommand}`);
+
               // Start the development server
               const process = await webcontainer.spawn('sh', {
                 args: ['-c', startCommand],
               });
               webcontainerProcessRef.current = process;
+
+              // Monitor process exit
+              const exitPromise = process.exit.then((exitCode: number) => {
+                logError(`[WebContainer] Process exited with code ${exitCode}`);
+                if (exitCode !== 0 && !webcontainerUrlRef.current) {
+                  setWebcontainerUrl(`Error: Server exited with code ${exitCode}. Check output for details.`);
+                  setIsWebcontainerBooting(false);
+                }
+              });
               
               // Listen for server-ready event
+              let serverReadyCalled = false;
               webcontainer.on('server-ready', (port: number, url: string) => {
-                log(`[WebContainer] Server ready: ${url}`);
+                serverReadyCalled = true;
+                log(`[WebContainer] Server ready: ${url} (port ${port})`);
                 setWebcontainerUrl(url);
                 setIsWebcontainerBooting(false);
               });
               
               // Also watch for output to detect server start
               let serverOutput = '';
+              let outputWithoutAnsi = '';
+              
+              // ANSI escape code regex for stripping terminal formatting
+              const ansiRegex = /\x1b\[[0-9;]*[a-zA-Z]/g;
+              
               process.output.pipeTo(new WritableStream({
                 write(data) {
                   serverOutput += data;
-                  // Look for port in output
-                  const portMatch = serverOutput.match(/listening on.*?:(\d+)/) || serverOutput.match(/port.*?(\d+)/);
-                  if (portMatch && !webcontainerUrlRef.current) {
-                    const port = parseInt(portMatch[1], 10);
-                    // WebContainer typically exposes on localhost
-                    setWebcontainerUrl(`http://localhost:${port}`);
+                  // Strip ANSI codes for readable output and pattern matching
+                  const cleanData = data.replace(ansiRegex, '');
+                  outputWithoutAnsi += cleanData;
+                  log(`[WebContainer] Server output: ${cleanData.trim()}`);
+                  
+                  // Look for port in output - multiple patterns
+                  const patterns = [
+                    /listening on.*?:(\d+)/i,
+                    /server.*?running.*?:(\d+)/i,
+                    /port.*?(\d+)/i,
+                    /http:\/\/localhost:(\d+)/i,
+                    /http:\/\/0\.0\.0\.0:(\d+)/i,
+                    /ready in.*?(\d+)/i,  // Next.js pattern
+                    /:(\d{4,5})/  // generic 4-5 digit port
+                  ];
+                  
+                  for (const pattern of patterns) {
+                    const portMatch = outputWithoutAnsi.match(pattern);
+                    if (portMatch && !webcontainerUrlRef.current) {
+                      const port = parseInt(portMatch[1], 10);
+                      if (port > 0 && port < 65536) {
+                        log(`[WebContainer] Detected port ${port} from output`);
+                        setWebcontainerUrl(`http://localhost:${port}`);
+                        break;
+                      }
+                    }
                   }
                 }
               }));
               
+              process.error?.pipeTo(new WritableStream({
+                write(data) {
+                  logError(`[WebContainer] Server error: ${data}`);
+                  outputWithoutAnsi += data;
+                }
+              }));
+
               // Set a fallback URL after timeout if no server-ready event
+              // Increased timeout to 45s for slower boots, only set URL if we have a valid one
               setTimeout(() => {
-                setWebcontainerUrl(prev => prev || 'http://localhost:3000');
+                // Only show timeout message if server-ready wasn't called and we don't have a URL
+                if (!serverReadyCalled && !webcontainerUrlRef.current) {
+                  log('[WebContainer] Timeout waiting for server-ready event, checking output...');
+                  // Try to extract port from server output as last resort (use ANSI-stripped output)
+                  const portMatch = outputWithoutAnsi.match(/listening on.*?:(\d+)/i) || outputWithoutAnsi.match(/port.*?(\d+)/i) || outputWithoutAnsi.match(/http:\/\/localhost:(\d+)/i) || outputWithoutAnsi.match(/ready in.*?(\d+)/i);
+                  if (portMatch) {
+                    const port = parseInt(portMatch[1], 10);
+                    log(`[WebContainer] Extracted port ${port} from output after timeout`);
+                    setWebcontainerUrl(`http://localhost:${port}`);
+                  } else {
+                    // Check if this might be a Next.js project (known WebContainer limitation)
+                    const cleanOutput = outputWithoutAnsi.slice(-300).replace(/\n/g, ' ').trim();
+                    const isNextJs = files['next.config.js'] || files['next.config.ts'] || (files['package.json'] && files['package.json'].includes('next'));
+                    const nextJsHint = isNextJs 
+                      ? ' Note: Next.js dev server has limited WebContainer support. Try Sandpack mode for frontend preview instead.' 
+                      : '';
+                    setWebcontainerUrl(`Timeout: Server did not start.${nextJsHint} Output: "${cleanOutput || 'None'}"`);
+                  }
+                } else if (!webcontainerUrlRef.current && serverReadyCalled) {
+                  // server-ready was called but URL wasn't set (shouldn't happen, but handle it)
+                  log('[WebContainer] server-ready event fired but URL not set - using fallback');
+                  setWebcontainerUrl('http://localhost:3000');
+                }
                 setIsWebcontainerBooting(false);
-              }, 15000);
+              }, 45000);
               
             } catch (err: any) {
               logError('[WebContainer] Boot error:', err);
@@ -3145,6 +3262,7 @@ root.render(<App />);` };
         }
 
         // Next.js preview mode - Optimized for Next.js apps
+        // Uses WebContainer directly in browser (same as webcontainer mode but with Next.js-specific config)
         if (isManualPreviewActive && previewMode === 'nextjs') {
           const packageJson = Object.entries(useStructure.files).find(
             ([path]) => path === 'package.json'
@@ -3160,32 +3278,91 @@ root.render(<App />);` };
           const startNextJS = async () => {
             setIsNextjsBuilding(true);
             setNextjsUrl(null);
-            
+            webcontainerUrlRef.current = null;
+
             try {
-              log('[Next.js] Starting Next.js dev server...');
-              
-              // Use WebContainer to run Next.js
-              const response = await fetch('/api/sandbox/webcontainer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  files: useStructure.files,
-                  startCommand: 'npm run dev',
-                  waitForPort: 3000,
-                }),
-              });
-              
-              if (!response.ok) {
-                throw new Error('Failed to start Next.js server');
+              log('[Next.js] Booting WebContainer for Next.js...');
+
+              // Dynamically import WebContainer API (browser-only)
+              const { WebContainer } = await import('@webcontainer/api');
+
+              // Boot the WebContainer instance
+              const webcontainer = await WebContainer.boot();
+              webcontainerInstanceRef.current = webcontainer;
+
+              log('[Next.js] Writing files to virtual filesystem...');
+
+              // Write all files
+              const files = useStructure.files;
+              for (const [filePath, content] of Object.entries(files)) {
+                try {
+                  const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+                  if (dir) {
+                    await webcontainer.fs.mkdir(dir, { recursive: true });
+                  }
+                  await webcontainer.fs.writeFile(filePath, content);
+                } catch (writeErr: any) {
+                  logWarn(`[Next.js] Failed to write ${filePath}:`, writeErr.message);
+                }
               }
+
+              log('[Next.js] Installing dependencies...');
+              await webcontainer.spawn('npm', ['install']);
+
+              log('[Next.js] Starting Next.js dev server...');
+              const process = await webcontainer.spawn('npm', ['run', 'dev']);
+              webcontainerProcessRef.current = process;
+
+              let serverOutput = '';
+              let outputWithoutAnsi = '';
+              const ansiRegex = /\x1b\[[0-9;]*[a-zA-Z]/g;
               
-              const data = await response.json();
-              // Next.js runs on port 3000 by default
-              const devUrl = data.url || 'http://localhost:3000';
-              
-              setNextjsUrl(devUrl);
-              log(`[Next.js] Dev server ready: ${devUrl}`);
-              setIsNextjsBuilding(false);
+              process.output.pipeTo(new WritableStream({
+                write(data) {
+                  serverOutput += data;
+                  const cleanData = data.replace(ansiRegex, '');
+                  outputWithoutAnsi += cleanData;
+                  log(`[Next.js] Output: ${cleanData.trim()}`);
+                  
+                  // Next.js typically outputs "Ready in X.Xs" or "started on port"
+                  const patterns = [
+                    /ready in.*?(\d+)/i,
+                    /started on.*?:(\d+)/i,
+                    /localhost:(\d+)/i,
+                    /:(\d{4,5})/
+                  ];
+                  
+                  for (const pattern of patterns) {
+                    const match = outputWithoutAnsi.match(pattern);
+                    if (match && !webcontainerUrlRef.current) {
+                      const port = parseInt(match[1], 10);
+                      if (port > 0 && port < 65536) {
+                        const url = `http://localhost:${port}`;
+                        log(`[Next.js] Server ready: ${url}`);
+                        setNextjsUrl(url);
+                        setIsNextjsBuilding(false);
+                        break;
+                      }
+                    }
+                  }
+                }
+              }));
+
+              // Fallback timeout
+              setTimeout(() => {
+                if (!webcontainerUrlRef.current) {
+                  const portMatch = outputWithoutAnsi.match(/:(\d{4,5})/);
+                  if (portMatch) {
+                    const port = parseInt(portMatch[1], 10);
+                    setNextjsUrl(`http://localhost:${port}`);
+                  } else {
+                    const cleanOutput = outputWithoutAnsi.slice(-300).replace(/\n/g, ' ').trim();
+                    setNextjsUrl(`Timeout: "${cleanOutput || 'No output'}"`);
+                  }
+                }
+                setIsNextjsBuilding(false);
+              }, 45000);
+
             } catch (err: any) {
               logError('[Next.js] Start error:', err);
               setNextjsUrl(`Error: ${err.message}`);
