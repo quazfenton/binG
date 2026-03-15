@@ -750,13 +750,20 @@ export default function CodePreviewPanel({
         }
 
         // Select preview mode with enhanced bundler detection and fallback hierarchy
-        // Check for Next.js first (before generic node server detection)
+        // IMPORTANT: Check for frameworks that work with Sandpack FIRST before bundler modes
+        // Vue/React/Svelte projects with vite.config.js etc should use Sandpack, not vite/webpack mode
+        
+        // Check for Next.js first
         const nextJsInPackageJson = packageJsonContent && packageJsonContent.includes('"next"');
         const nextJsConfig = filePaths.some(f => f.includes('next.config'));
         const nextJsPagesOrApp = filePaths.some(f => f.startsWith('pages/') || f.startsWith('app/'));
         
+        // Prioritize frameworks that work with Sandpack - check BEFORE bundler detection
         if (nextJsConfig || nextJsInPackageJson || nextJsPagesOrApp) {
           selectedMode = 'nextjs';
+        } else if (hasJsx || hasVue || hasSvelte) {
+          // Framework projects work best with Sandpack bundler - use this regardless of bundler config
+          selectedMode = 'sandpack';
         } else if (hasViteProject) {
           selectedMode = 'vite';
         } else if (hasWebpackProject) {
@@ -798,8 +805,6 @@ export default function CodePreviewPanel({
           }
         } else if (hasHtml && !hasJsx && !hasVue && !hasSvelte) {
           selectedMode = 'iframe';
-        } else if (hasJsx || hasVue || hasSvelte) {
-          selectedMode = 'sandpack';
         }
       }
 
@@ -1327,7 +1332,11 @@ export default function CodePreviewPanel({
 
   // Generate project structure for complex projects
   // Also merge virtual filesystem files for live preview
+  // NOTE: Commented out legacy codeBlock parsing - use VFS (scopedPreviewFiles) as primary source instead
   useEffect(() => {
+    // Use scopedPreviewFiles from VFS as the primary source - this has real project files
+    // Legacy codeBlocks parsing creates file-0.sh, file-1.js etc which pollutes the project
+    /*
     if (codeBlocks.length > 0) {
       // Use the centralized parser to get project structure
       const parsedData = parseCodeBlocksFromMessages(messages);
@@ -1339,6 +1348,8 @@ export default function CodePreviewPanel({
         setProjectStructure(structure);
       }
     } else if (projectFiles && Object.keys(projectFiles).length > 0) {
+    */
+    if (projectFiles && Object.keys(projectFiles).length > 0) {
       const structure: ProjectStructure = {
         name: 'filesystem-project',
         files: projectFiles,
@@ -1362,28 +1373,25 @@ export default function CodePreviewPanel({
       {} as Record<string, string>,
     );
 
-    if (projectStructure) {
+    // VFS files should take priority over legacy projectStructure
+    // Only use projectStructure as fallback if VFS is empty
+    if (Object.keys(scopedRelativeFiles).length > 0) {
       return {
-        ...projectStructure,
-        files: {
-          ...projectStructure.files,
-          ...scopedRelativeFiles,
-        },
+        name: 'filesystem-project',
+        files: scopedRelativeFiles,
+        framework: 'react',
+        bundler: 'vite',
+        packageManager: 'npm',
+        filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath)
       };
     }
 
-    if (Object.keys(scopedRelativeFiles).length > 0) {
-      return {
-        name: 'scoped-filesystem-project',
-        files: scopedRelativeFiles,
-        framework: 'react' as const,
-        bundler: 'vite' as const,
-        packageManager: 'npm' as const,
-      };
+    if (projectStructure) {
+      return projectStructure;
     }
 
     return null;
-  }, [filesystemScopePath, projectStructure, scopedPreviewFiles]);
+  }, [filesystemScopePath, normalizedFilesystemPath, scopedPreviewFiles, projectStructure, normalizeProjectPath]);
 
   const visualEditorProjectData = useMemo(() => {
     let structure = projectStructureWithScopedFiles || projectStructure;
@@ -1435,6 +1443,7 @@ export default function CodePreviewPanel({
       'app.tsx', 'app.jsx', 'page.tsx', 'index.tsx', 'index.jsx', 'index.ts', 'index.js', 'index.html',
       'main.py', 'app.py', 'manage.py', 'server.js', 'app.js', 'index.js'
     ];
+    
     const entryFile =
       entryCandidates.find((candidate) => filePaths.includes(candidate))
       || filePaths.find((path) => path.endsWith('/index.html'))
@@ -2541,7 +2550,7 @@ root.render(<App />);` };
                         recompileMode: "delayed",
                         recompileDelay: 300,
                       }}
-                      files={finalSandpackFiles}
+                files={sandpackFiles}
                       customSetup={{ dependencies: {} }}
                     />
                   </div>
@@ -3061,9 +3070,7 @@ root.render(<App />);` };
               log(`[WebContainer] Using start command: ${startCommand}`);
 
               // Start the development server
-              const process = await webcontainer.spawn('sh', {
-                args: ['-c', startCommand],
-              });
+              const process = await webcontainer.spawn('sh', ['-c', startCommand]);
               webcontainerProcessRef.current = process;
 
               // Monitor process exit
@@ -3121,13 +3128,6 @@ root.render(<App />);` };
                       }
                     }
                   }
-                }
-              }));
-              
-              process.error?.pipeTo(new WritableStream({
-                write(data) {
-                  logError(`[WebContainer] Server error: ${data}`);
-                  outputWithoutAnsi += data;
                 }
               }));
 
@@ -4043,7 +4043,7 @@ root.render(<App />);` };
                   recompileMode: "delayed",
                   recompileDelay: 300,
                 }}
-                files={finalSandpackFiles}
+                files={sandpackFiles}
                 customSetup={{
                   dependencies: {},
                 }}

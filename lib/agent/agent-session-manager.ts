@@ -37,6 +37,7 @@ export interface AgentSessionConfig {
   enableCloudOffload?: boolean;
   enableMCP?: boolean;
   timeout?: number; // seconds
+  noSandbox?: boolean; // Skip cloud sandbox creation - for local V2 execution
 }
 
 class AgentSessionManager {
@@ -330,55 +331,66 @@ class AgentSessionManager {
     conversationId: string,
     config: AgentSessionConfig,
   ): Promise<AgentSession> {
-    const workspacePath = `/workspace/users/${userId}/sessions/${conversationId}`;
-    
     try {
-      const provider = await getSandboxProvider();
-      
-      // Create sandbox with user isolation
-      const sandbox = await provider.createSandbox({
-        language: 'typescript',
-        envVars: {
-          USER_ID: userId,
-          CONVERSATION_ID: conversationId,
-          WORKSPACE_DIR: workspacePath,
-          OPENCODE_MODEL: process.env.OPENCODE_MODEL || 'claude-3-5-sonnet',
-          OPENCODE_SYSTEM_PROMPT: config.mode === 'nullclaw' 
-            ? 'You are a helpful task assistant with access to messaging, internet, and automation tools.'
-            : 'You are an expert software engineer. Use bash commands and file operations to complete tasks efficiently.',
-          MCP_ENABLED: config.enableMCP ? 'true' : 'false',
-          NULLCLAW_ENABLED: config.enableNullclaw ? 'true' : 'false',
-        },
-        labels: {
-          userId,
-          conversationId,
-          mode: config.mode || 'opencode',
-          createdBy: 'agent-session-manager',
-        },
-        resources: {
-          cpu: 2,
-          memory: 4,
-        },
-        autoStopInterval: config.timeout || 3600,
-      } as SandboxCreateConfig);
+      const workspacePath = `/workspace/users/${userId}/sessions/${conversationId}`;
 
-      // Ensure workspace directory exists
-      // SECURITY: Escape all shell metacharacters to prevent command injection
-      const safeWorkspacePath = workspacePath.replace(/(["\\$`])/g, '\\$1');
-      await sandbox.executeCommand(`mkdir -p "${safeWorkspacePath}"`);
+      let sandbox: SandboxHandle | undefined;
 
-      const sessionId = uuidv4();
-      
-      // Create V2 session first (source of truth for quotas/state)
-      const v2Session = await openCodeV2SessionManager.createSession({
-        userId,
-        conversationId,
-        enableNullclaw: config.enableNullclaw,
-        enableMcp: config.enableMCP,
-        workspaceDir: workspacePath,
-      });
+      // Only create cloud sandbox if explicitly requested
+      // V2/OpenCode runs locally - cloud sandbox is only for user terminal or risky execution
+      if (!config.noSandbox) {
+      try {
+        const provider = await getSandboxProvider();
+        
+        // Create sandbox with user isolation
+        sandbox = await provider.createSandbox({
+          language: 'typescript',
+          envVars: {
+            USER_ID: userId,
+            CONVERSATION_ID: conversationId,
+            WORKSPACE_DIR: workspacePath,
+            OPENCODE_MODEL: process.env.OPENCODE_MODEL || 'claude-3-5-sonnet',
+            OPENCODE_SYSTEM_PROMPT: config.mode === 'nullclaw' 
+              ? 'You are a helpful task assistant with access to messaging, internet, and automation tools.'
+              : 'You are an expert software engineer. Use bash commands and file operations to complete tasks efficiently.',
+            MCP_ENABLED: config.enableMCP ? 'true' : 'false',
+            NULLCLAW_ENABLED: config.enableNullclaw ? 'true' : 'false',
+          },
+          labels: {
+            userId,
+            conversationId,
+            mode: config.mode || 'opencode',
+            createdBy: 'agent-session-manager',
+          },
+          resources: {
+            cpu: 2,
+            memory: 4,
+          },
+          autoStopInterval: config.timeout || 3600,
+        } as SandboxCreateConfig);
 
-      const session: AgentSession = {
+        // Ensure workspace directory exists
+        // SECURITY: Escape all shell metacharacters to prevent command injection
+        const safeWorkspacePath = workspacePath.replace(/(["\\$`])/g, '\\$1');
+        await sandbox.executeCommand(`mkdir -p "${safeWorkspacePath}"`);
+      } catch (sandboxError) {
+        // Log but continue - V2 can run without cloud sandbox
+        logger.warn(`Failed to create sandbox for session (continuing without sandbox): ${sandboxError}`);
+      }
+    }
+    
+    const sessionId = uuidv4();
+    
+    // Create V2 session first (source of truth for quotas/state)
+    const v2Session = await openCodeV2SessionManager.createSession({
+      userId,
+      conversationId,
+      enableNullclaw: config.enableNullclaw,
+      enableMcp: config.enableMCP,
+      workspaceDir: workspacePath,
+    });
+
+    const session: AgentSession = {
         id: sessionId,
         userId,
         conversationId,
@@ -399,7 +411,6 @@ class AgentSessionManager {
       logger.info(`Created session ${session.id} for ${userId}:${conversationId} (V2: ${v2Session.id})`);
       this.sessionsById.set(session.id, session);
       return session;
-
     } catch (error: any) {
       logger.error(`Failed to create session for ${userId}:${conversationId}`, error);
       throw new Error(`Session creation failed: ${error.message}`);
@@ -419,7 +430,14 @@ class AgentSessionManager {
   private async destroySessionByKeys(key: string): Promise<void> {
     const session = this.sessions.get(key);
     if (session) {
-      await session.sandboxHandle.executeCommand('echo "Session cleanup"');
+      // Only cleanup sandbox if it exists
+      if (session.sandboxHandle) {
+        try {
+          await session.sandboxHandle.executeCommand('echo "Session cleanup"');
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      }
       if (session.v2SessionId) {
         await openCodeV2SessionManager.stopSession(session.v2SessionId);
       }

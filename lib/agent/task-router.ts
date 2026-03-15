@@ -210,10 +210,12 @@ class TaskRouter {
     const { agentSessionManager } = await import('./agent-session-manager');
     const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('../mcp');
 
+    // V2 runs locally - cloud sandbox is only created by OpencodeV2Provider if needed
+    // Pass noSandbox: true to skip cloud sandbox creation in agent-session-manager
     const session = await agentSessionManager.getOrCreateSession(
       request.userId,
       request.conversationId,
-      { enableMCP: true, enableNullclaw: true, mode: 'hybrid' },
+      { enableMCP: true, enableNullclaw: true, mode: 'hybrid', noSandbox: true },
     );
 
     const provider = new OpencodeV2Provider({
@@ -302,35 +304,45 @@ class TaskRouter {
   private async executeWithNullclaw(request: TaskRequest, taskType: TaskType): Promise<any> {
     const { executeNullclawTask, isNullclawAvailable, initializeNullclaw } = await import('./nullclaw-integration');
 
-    // Initialize Nullclaw if needed
-    if (!isNullclawAvailable()) {
-      await initializeNullclaw();
+    try {
+      // Initialize Nullclaw if needed
+      if (!isNullclawAvailable()) {
+        await initializeNullclaw();
+      }
+
+      // Build Nullclaw task based on type
+      const nullclawType: 'message' | 'browse' | 'automate' = 
+        taskType === 'messaging' ? 'message' : 
+        taskType === 'browsing' ? 'browse' : 
+        'automate';
+      const task = {
+        id: request.id,
+        type: nullclawType,
+        description: request.task,
+        params: this.extractParams(request.task, taskType),
+      };
+
+      const result = await executeNullclawTask(
+        task.type,
+        task.description,
+        task.params,
+        request.userId,
+        request.conversationId,
+      );
+
+      request.onToolExecution?.('nullclaw_task', task.params, result);
+
+      return {
+        success: result.status === 'completed',
+        response: result.result,
+        error: result.error,
+        agent: 'nullclaw',
+      };
+    } catch (error: any) {
+      // Log and re-throw to trigger fallback to v1
+      console.error('[TaskRouter] Nullclaw execution failed:', error.message);
+      throw error;
     }
-
-    // Build Nullclaw task based on type
-    const task = {
-      id: request.id,
-      type: taskType === 'messaging' ? 'message' : taskType === 'browsing' ? 'browse' : 'automate',
-      description: request.task,
-      params: this.extractParams(request.task, taskType),
-    };
-
-    const result = await executeNullclawTask(
-      task.type,
-      task.description,
-      task.params,
-      request.userId,
-      request.conversationId,
-    );
-
-    request.onToolExecution?.('nullclaw_task', task.params, result);
-
-    return {
-      success: result.status === 'completed',
-      response: result.result,
-      error: result.error,
-      agent: 'nullclaw',
-    };
   }
 
   /**

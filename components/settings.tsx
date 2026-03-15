@@ -133,12 +133,12 @@ export default function Settings({
     { id: 'default', name: 'Default', url: process.env.NEXT_PUBLIC_BG_MEDIA_URL || '' },
     { id: 'sky', name: 'Sky', url: 'https://media.tenor.com/CWaT-F5vNb8AAAAM/sky-gif.gif' },
     { id: 'aurora', name: 'Aurora', url: 'https://i.pinimg.com/originals/64/ce/9f/64ce9f3c2463b528dfba90720fed9ea5.gif' },
-    { id: 'stars', name: 'Stars', url: 'https://i.pinimg.com/originals/24/11/b6/2411b65b604795493f5f62239f44b7a7.gif' },
+    { id: 'stars', name: 'Stars', url: 'https://i.imgur.com/DtHvUjb.gif' },
     { id: 'neon', name: 'Neon', url: 'https://64.media.tumblr.com/5d0e893e84a5116a7f9e424fc2f378ef/tumblr_n4suq4tHbE1tq9q5vo1_r1_500.gif' },
     { id: 'fire', name: 'Fire', url: 'https://i.imgur.com/9uxEl57.gif' },
     { id: 'energy', name: 'Energy', url: 'https://media0.giphy.com/media/v1.Y2lkPTZjMDliOTUyenh5Nmx4NzV4djJuYWF0am93MGRycGE2cDJiOW5wZmpibzV0c2M0NiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/nk0a5GWGrnAx55339K/200w.gif' },
     { id: 'cosmic', name: 'Cosmic', url: 'https://64.media.tumblr.com/0411acaf933ca0d247a7e115cd761608/e85d08b8418d3bbd-0f/s500x750/cebc4e249625c0222eeb5d9e2cc703fcb9283ef5.gif' },
-    { id: 'abstract', name: 'Abstract', url: 'https://mir-s3-cdn-cf.behance.net/project_modules/max_1200/29e0fe35096329.56e975e499241.gif' },
+    { id: 'natura', name: 'Natura', url: 'https://64.media.tumblr.com/54f8f2ac56a71691c4d6e5c7fe290e68/tumblr_pgrkl8nswk1r7rste_500.gif' },
     { id: 'none', name: 'None', url: '' },
   ];
   
@@ -558,8 +558,8 @@ export default function Settings({
               </div>
               <div className="text-xs text-gray-500">
                 {user?.subscriptionTier === 'premium' 
-                  ? 'Unlimited prompts • Custom themes • Priority support'
-                  : 'Limited prompts • Basic features'
+                  ? 'Premium • Priority support'
+                  : 'Unimited prompts • Basic features'
                 }
               </div>
             </div>
