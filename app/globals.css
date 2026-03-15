@@ -681,7 +681,7 @@
     --app-orb-brightness: 0.92;
     --app-noise-opacity: 0.02;
     --app-bg-media: none;
-    --app-bg-media-opacity: 0;
+    --app-bg-media-opacity: 10;
     /* Lavender-tinted chat bubbles */
     --user-bubble-bg: linear-gradient(135deg, rgba(196, 181, 253, 0.4), rgba(139, 92, 246, 0.3));
     --user-bubble-text: #5b21b6;
@@ -787,9 +787,9 @@ body::after {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
 }
-
+/* Themes whitish panel opacity changed from 0.6 to be more transparent */
 :where(.light, .ocean, .forest, .sepia, .rose, .desert, .lavender, .slate) [class*="bg-black"] {
-    background-color: hsl(var(--background) / 0.6) !important;
+    background-color: hsl(var(--background) / 0.3) !important;
     backdrop-filter: blur(12px);
 }
 

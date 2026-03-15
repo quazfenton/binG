@@ -38,18 +38,21 @@ export class MicrosandboxProvider implements SandboxProvider {
 
   constructor() {
     // Microsandbox daemon is auto-started by provider when needed.
+    console.log('[Microsandbox] Provider initialized')
   }
 
   /**
    * Create Microsandbox instance
-   * 
+   *
    * SECURITY: Local fallback is DISABLED in production to prevent
    * command execution without sandbox isolation.
-   * 
+   *
    * In development, local fallback is allowed but shows security warning.
    */
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
     try {
+      console.log(`[Microsandbox] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Language: ${config.language || 'default'}`)
+      
       await ensureMicrosandboxDaemonRunning()
       const { NodeSandbox } = require('microsandbox')
 
@@ -85,9 +88,17 @@ export class MicrosandboxProvider implements SandboxProvider {
         lastActive: now,
       })
 
+      console.log(`[Microsandbox] ✓ Created sandbox ${sandboxId}`)
+
       const handle = new MicrosandboxSandboxHandle(sb)
       return handle
     } catch (error: any) {
+      console.error(`[Microsandbox] ✗ Failed to create sandbox:`, error.message)
+      console.error(`[Microsandbox] Error details:`, {
+        name: error.name,
+        message: error.message,
+      })
+      
       // SECURITY: NEVER allow local fallback in production
       // Local fallback executes commands on host system without isolation
       if (process.env.NODE_ENV === 'production') {
