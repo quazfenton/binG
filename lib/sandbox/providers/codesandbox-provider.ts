@@ -91,7 +91,6 @@ export class CodeSandboxProvider implements SandboxProvider {
     const { CodeSandbox, VMTier } = mod
 
     try {
-      console.log('[CodeSandbox] Creating SDK instance with API key length:', this.apiKey.length)
       const sdk: CodeSandboxSDK = new CodeSandbox(this.apiKey)
 
       const createOpts: Record<string, any> = {}
@@ -104,7 +103,6 @@ export class CodeSandboxProvider implements SandboxProvider {
       }
       if (this.privacy) {
         createOpts.privacy = this.privacy
-        console.log('[CodeSandbox] Privacy:', this.privacy)
       }
       if (this.hibernationTimeout) {
         createOpts.hibernationTimeoutSeconds = this.hibernationTimeout
@@ -119,9 +117,12 @@ export class CodeSandboxProvider implements SandboxProvider {
         createOpts.vmTier = VMTier[this.vmTier as keyof typeof VMTier] || VMTier.Micro
       }
 
-      console.log('[CodeSandbox] Creating sandbox with options:', JSON.stringify(createOpts, null, 2))
+      console.log(`[CodeSandbox] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Template: ${this.defaultTemplate || 'default'}, Privacy: ${this.privacy || 'default'}`)
+      console.log('[CodeSandbox] Create options:', JSON.stringify(createOpts, null, 2))
+      
       const sandbox: CSBSandbox = await sdk.sandboxes.create(createOpts)
-      console.log('[CodeSandbox] Sandbox created:', sandbox.id)
+      console.log(`[CodeSandbox] ✓ Created sandbox ${sandbox.id}`)
+      
       const client: CSBClient = await sandbox.connect()
 
       // Set up environment variables inside the sandbox
