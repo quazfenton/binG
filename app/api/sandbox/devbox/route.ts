@@ -84,13 +84,12 @@ export async function POST(req: NextRequest) {
     // Get CodeSandbox provider directly - DevBox is specifically for CodeSandbox
     const provider = await sandboxBridge.getProvider('codesandbox');
     
-    // Create a new CodeSandbox sandbox (not using the generic session store)
+    // Create a new CodeSandbox sandbox
     const sandboxHandle = await provider.createSandbox({
       language: template === 'docker' ? 'docker' : 'typescript',
-      template: template === 'docker' ? 'docker' : 'node',
     });
 
-    const sandboxId = sandboxHandle.sandboxId;
+    const sandboxId = (sandboxHandle as any).sandboxId || sandboxHandle.id;
 
     logger.info('CodeSandbox created', {
       sandboxId,

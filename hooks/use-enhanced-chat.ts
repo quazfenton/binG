@@ -463,6 +463,51 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   });
                   break;
 
+                case 'diffs': {
+                  // Handle git-style diffs for client sync
+                  // eventData contains: { files: [{ path, diff, changeType }], count, requestId }
+                  const diffFiles = eventData.files as Array<{ path: string; diff: string; changeType: string }> || [];
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === assistantMessage.id
+                      ? {
+                          ...msg,
+                          metadata: {
+                            ...(msg.metadata || {}),
+                            diffs: diffFiles,
+                            diffsCount: eventData.count,
+                            diffsRequestId: eventData.requestId,
+                          },
+                        }
+                      : msg
+                  ));
+                  // Also emit filesystem updated event so VFS listeners get notified
+                  emitFilesystemUpdated({
+                    scopePath: undefined,
+                    sessionId: undefined,
+                    applied: diffFiles.map(f => ({ path: f.path, operation: f.changeType === 'delete' ? 'delete' : 'write' })),
+                    errors: undefined,
+                    source: 'diffs',
+                  });
+                  // Emit custom event for any listeners interested in diff updates
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('agent-diffs', {
+                      detail: {
+                        files: diffFiles,
+                        count: eventData.count,
+                        requestId: eventData.requestId,
+                        timestamp: Date.now(),
+                      }
+                    }));
+                  }
+                  if (process.env.NODE_ENV === 'development') {
+                    console.log('[Chat] Received diffs event:', {
+                      count: eventData.count,
+                      files: diffFiles.map(f => f.path),
+                    });
+                  }
+                  break;
+                }
+
                 case 'reasoning':
                   if (eventData.reasoning) {
                     setMessages(prev => prev.map(msg =>

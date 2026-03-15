@@ -293,7 +293,7 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                 placeholder="owner/repo or full URL"
                 className="bg-zinc-900 border-zinc-700 text-white"
               />
-              <Button onClick={fetchRepoData} disabled={!repoUrl || isLoading} className="bg-emerald-600 hover:bg-emerald-500 text-black">
+              <Button onClick={() => fetchRepoData()} disabled={!repoUrl || isLoading} className="bg-emerald-600 hover:bg-emerald-500 text-black">
                 {isLoading ? <Loader2 className="w-4 h-4 thinking-spinner" /> : 'Explore'}
               </Button>
             </div>

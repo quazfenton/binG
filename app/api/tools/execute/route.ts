@@ -44,10 +44,11 @@ export async function POST(req: NextRequest) {
     // Validate request body
     const validation = validateToolExecutionRequest(body);
     if (!validation.valid) {
+      const validationError = (validation as { valid: false; error: { type: 'validation_error'; message: string; details: any } }).error;
       return NextResponse.json(
         {
           success: false,
-          error: validation.error,
+          error: validationError,
           requestId,
         },
         { status: 400 }

@@ -1338,7 +1338,7 @@ export default function ConversationInterface() {
         onProviderChange={handleProviderChange}
         hasCodeBlocks={hasCodeBlocks}
         activeTab={activeTab}
-        onActiveTabChange={setActiveTab}
+        onActiveTabChange={setActiveTab as any}
         userId={user?.id?.toString() || getStableSessionId()} // Use stable user ID or session ID
         onAttachedFilesChange={handleAttachedFilesChange}
         filesystemScopePath={filesystemScopePath}

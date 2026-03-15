@@ -130,11 +130,12 @@ export async function POST(request: NextRequest) {
 
     // AI SDK streaming mode with tool calling
     if (stream || body.useAI_SDK === true) {
-      const preferredProvider = (provider as 'openai' | 'anthropic' | 'google') || 'mistral';
-      const modelId = model.replace(`${provider}:`, '') || 'mistral-small-latest';
+      const validProviders = ['openai', 'anthropic', 'google'] as const;
+      const preferredProvider = validProviders.includes(provider as any) ? provider : 'openai';
+      const modelId = model.replace(`${provider}:`, '') || 'gpt-4o';
 
       const { model: aiModel, provider: actualProvider } = await createModelWithFallback(
-        preferredProvider,
+        preferredProvider as 'openai' | 'anthropic' | 'google',
         modelId
       );
 
@@ -145,9 +146,7 @@ export async function POST(request: NextRequest) {
           content: typeof m.content === 'string' ? m.content : m.content[0]?.text || '',
         })),
         tools: combinedTools,
-        maxSteps,
         temperature,
-        maxTokens,
         onError: ({ error }) => {
           console.error('[StatefulAgent AI SDK] Stream error:', error);
         },
@@ -170,12 +169,7 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      return result.toDataStreamResponse({
-        sendReasoning: true,
-        getErrorMessage: (error) => {
-          return error instanceof Error ? error.message : 'Unknown error';
-        },
-      });
+      return result.toTextStreamResponse();
     }
 
     // Stateful agent mode (existing behavior)

@@ -88,12 +88,18 @@ export interface UseAgentReturn {
   
   /** Reconnect agent */
   reconnect: () => Promise<void>
-  
+
   /** Disconnect and cleanup */
   disconnect: () => Promise<void>
-  
+
   /** Last error */
   error: Error | null
+
+  /** Desktop click (if desktop capability enabled) */
+  desktopClick?: (position: { x: number; y: number }) => Promise<void>
+
+  /** Desktop type (if desktop capability enabled) */
+  desktopType?: (text: string) => Promise<void>
 }
 
 /**

@@ -230,7 +230,7 @@ const popOutPlugins: Plugin[] = [
     description: "Build and test API requests",
     icon: Globe,
     component: NetworkRequestBuilderPlugin,
-    category: "developer",
+    category: "code",
     defaultSize: { width: 800, height: 600 },
     minSize: { width: 600, height: 400 },
   },
@@ -240,7 +240,7 @@ const popOutPlugins: Plugin[] = [
     description: "Take and organize notes during conversations",
     icon: FileText,
     component: NoteTakerPlugin,
-    category: "productivity",
+    category: "utility",
     defaultSize: { width: 600, height: 500 },
     minSize: { width: 400, height: 300 },
   },
@@ -250,7 +250,7 @@ const popOutPlugins: Plugin[] = [
     description: "Create diagrams and flowcharts",
     icon: CheckCircle,
     component: InteractiveDiagrammingPlugin,
-    category: "productivity",
+    category: "utility",
     defaultSize: { width: 900, height: 700 },
     minSize: { width: 700, height: 500 },
   },
@@ -260,7 +260,7 @@ const popOutPlugins: Plugin[] = [
     description: "Manage deployments and infrastructure",
     icon: Server,
     component: DevOpsCommandCenterPlugin,
-    category: "developer",
+    category: "code",
     defaultSize: { width: 1000, height: 800 },
     minSize: { width: 800, height: 600 },
   },
@@ -623,7 +623,7 @@ export default function InteractionPanel({
       description: "Manage deployments and infrastructure",
       icon: Server,
       component: DevOpsCommandCenterPlugin,
-      category: "developer",
+      category: "code",
       defaultSize: { width: 1000, height: 800 },
       minSize: { width: 800, height: 600 },
     },
@@ -654,7 +654,7 @@ export default function InteractionPanel({
       description: "Advanced API testing with collections and automation",
       icon: Globe,
       component: APIPlaygroundProPlugin,
-      category: "developer",
+      category: "code",
       defaultSize: { width: 900, height: 700 },
       minSize: { width: 700, height: 500 },
     },
@@ -1600,7 +1600,7 @@ export default function InteractionPanel({
                   <SelectContent>
                     {/* Only show available providers (with API keys configured) */}
                     {availableProviders
-                      .filter(p => p.isAvailable !== false)
+                      .filter(p => (p as any).isAvailable !== false)
                       .map((provider) => (
                         <SelectGroup key={provider.id}>
                           <SelectLabel>{provider.name}</SelectLabel>
@@ -1612,7 +1612,7 @@ export default function InteractionPanel({
                         </SelectGroup>
                       ))}
                     {/* Show message if no providers configured */}
-                    {availableProviders.filter(p => p.isAvailable !== false).length === 0 && (
+                    {availableProviders.filter(p => (p as any).isAvailable !== false).length === 0 && (
                       <SelectItem value="none" disabled>
                         No providers configured - add API keys to .env
                       </SelectItem>
@@ -1937,7 +1937,7 @@ export default function InteractionPanel({
                             <button
                               key={extra.id}
                               onClick={() => {
-                                extra.action(setInput, onActiveTabChange, setPluginToOpen);
+                                extra.action();
                                 toast.success(
                                   `${extra.name} prompt loaded! Check the chat input.`,
                                 );

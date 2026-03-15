@@ -1,15 +1,12 @@
 /**
- * Unified Tool Registry
- *
- * Central registry for all tool providers.
- * Provides unified interface for tool discovery and execution.
- *
- * Features:
- * - Multi-provider support
- * - Automatic provider selection
- * - Fallback chain execution
- * - Centralized error handling
- * - Tool discovery across providers
+ * Unified Tool Registry (Simplified)
+ * 
+ * This file has been simplified to reduce duplication.
+ * The main tool integration logic is now in:
+ * - lib/tool-integration/ (provider layer)
+ * - lib/tools/tool-integration-system.ts (ToolIntegrationManager)
+ * 
+ * This file provides backwards compatibility and some additional registry features.
  */
 
 import { z } from 'zod';
@@ -18,7 +15,7 @@ import { SmitheryProvider } from '../tool-integration/providers/smithery';
 import { getArcadeService } from '../api/arcade-service';
 import { getNangoService } from '../api/nango-service';
 import { getTamboService } from '../tambo/tambo-service';
-import { getToolManager } from '../tools';
+import { getToolManager } from './index';
 
 export interface ToolInfo {
   name: string;
@@ -39,6 +36,9 @@ export interface UnifiedToolRegistryConfig {
 
 /**
  * Unified Tool Registry Class
+ * 
+ * @deprecated Use ToolIntegrationManager (getToolManager()) instead.
+ * This class is kept for backwards compatibility.
  */
 export class UnifiedToolRegistry {
   private providers = new Map<string, ToolProvider>();
@@ -64,6 +64,7 @@ export class UnifiedToolRegistry {
 
   /**
    * Initialize registry with all available providers
+   * @deprecated Use getToolManager() instead
    */
   async initialize(): Promise<void> {
     if (this.initialized) {
@@ -111,7 +112,7 @@ export class UnifiedToolRegistry {
         execute: async (request) => {
           const [providerConfigKey, ...endpointParts] = request.toolKey.replace('nango:', '').split(':');
           const endpoint = endpointParts.join(':');
-          
+
           const result = await nangoService.executeTool(
             providerConfigKey,
             endpoint,
@@ -167,11 +168,11 @@ export class UnifiedToolRegistry {
       },
     });
 
-    // Register Composio if available
+    // Register Composio if available (default fallback)
     this.registerProvider({
       name: 'composio',
       isAvailable: () => true,
-      supports: () => true, // Composio is default fallback
+      supports: () => true,
       execute: async (request) => {
         const toolManager = getToolManager();
         const result = await toolManager.executeTool(
@@ -211,6 +212,7 @@ export class UnifiedToolRegistry {
 
   /**
    * Execute a tool
+   * @deprecated Use getToolManager().executeTool() instead
    */
   async executeTool(
     toolName: string,
@@ -265,7 +267,6 @@ export class UnifiedToolRegistry {
       }
     }
 
-    // All providers failed
     return {
       success: false,
       error: errors.length > 0 ? errors.join('; ') : 'No provider could execute this tool',
@@ -274,6 +275,7 @@ export class UnifiedToolRegistry {
 
   /**
    * Search for tools
+   * @deprecated Use getToolManager().searchTools() instead
    */
   async searchTools(query: string, userId?: string): Promise<ToolInfo[]> {
     await this.initialize();
@@ -337,6 +339,7 @@ export class UnifiedToolRegistry {
 
   /**
    * Get available tools
+   * @deprecated Use getToolManager().getAllTools() instead
    */
   async getAvailableTools(userId?: string): Promise<ToolInfo[]> {
     await this.initialize();
@@ -428,11 +431,13 @@ export class UnifiedToolRegistry {
 
 /**
  * Singleton instance
+ * @deprecated Use getToolManager() instead
  */
 let unifiedToolRegistryInstance: UnifiedToolRegistry | null = null;
 
 /**
  * Get or create unified tool registry instance
+ * @deprecated Use getToolManager() instead
  */
 export function getUnifiedToolRegistry(): UnifiedToolRegistry {
   if (!unifiedToolRegistryInstance) {
@@ -443,6 +448,7 @@ export function getUnifiedToolRegistry(): UnifiedToolRegistry {
 
 /**
  * Initialize unified tool registry
+ * @deprecated Use getToolManager() instead
  */
 export function initializeUnifiedToolRegistry(config?: UnifiedToolRegistryConfig): UnifiedToolRegistry {
   if (unifiedToolRegistryInstance) {

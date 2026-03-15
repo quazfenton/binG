@@ -1,10 +1,31 @@
-# Docker Compose for V2 Agent Development
-# Includes: Main app + Nullclaw container
-# Uses pnpm for package management
-# Optimized with persistent caching for Python, Node, and CLI tools
+# Docker Compose for V2 Agent Architecture
+# 
+# Architecture:
+# ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+# │   NextJS    │────▶│Agent Gateway │────▶│Agent Worker │
+# │   (app)    │     │  (gateway)   │     │  (worker)   │
+# └─────────────┘     └──────────────┘     └─────────────┘
+#                           │                    │
+#                           │                    ▼
+#                           │              ┌─────────────┐
+#                           │              │MCP Server   │
+#                           │              │(filesystem) │
+#                           │              └─────────────┘
+#                           │
+#                           ▼
+#                    ┌──────────────┐
+#                    │    Redis     │
+#                    │(queue/pubsub)│
+#                    └──────────────┘
+#                           ▲
+#                           │
+#                    ┌──────────────┐
+#                    │  Nullclaw   │
+#                    │ (automation) │
+#                    └──────────────┘
 
 services:
-  # Main binG application
+  # Main NextJS application
   app:
     build:
       context: .
@@ -23,9 +44,6 @@ services:
         source: .
         target: /app
         consistency: cached
-        bind:
-          create_host_path: true
-          propagation: cached
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
@@ -38,50 +56,120 @@ services:
     environment:
       - NODE_ENV=development
       - PORT=5555
-      - OPENCODE_CONTAINERIZED=true
+      
+      # V2 Agent Configuration
       - V2_AGENT_ENABLED=true
+      - V2_GATEWAY_URL=http://gateway:3002
+      - V2_WORKER_URL=http://worker:3003
+      
+      # MCP Configuration
       - MCP_ENABLED=true
       - MCP_CLI_PORT=8888
       
+      # Redis for job queue
+      - REDIS_URL=redis://redis:6379
+      
       # Nullclaw Integration
-      # Set NULLCLAW_URL to use external service (URL mode)
-      # Leave empty to use container mode (app spawns containers)
       - NULLCLAW_ENABLED=${NULLCLAW_ENABLED:-true}
       - NULLCLAW_URL=${NULLCLAW_URL:-http://nullclaw:3000}
       - NULLCLAW_API_KEY=${NULLCLAW_API_KEY:-}
-      - NULLCLAW_MODE=${NULLCLAW_MODE:-shared}  # shared | per-session
-      - NULLCLAW_POOL_SIZE=${NULLCLAW_POOL_SIZE:-2}
-      - NULLCLAW_MAX_CONTAINERS=${NULLCLAW_MAX_CONTAINERS:-4}
-      - NULLCLAW_PORT=${NULLCLAW_PORT:-3001}
-      - NULLCLAW_NETWORK=bing-network
-      - NULLCLAW_TIMEOUT=300000
-      - NULLCLAW_ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
-      - NULLCLAW_HEALTH_TIMEOUT=30000
+      - NULLCLAW_MODE=${NULLCLAW_MODE:-shared}
       
       - CHAT_AGENTIC_PIPELINE=auto
       - WORKFORCE_ENABLED=true
-      - WORKFORCE_MAX_CONCURRENCY=4
-      - PIP_CACHE_DIR=/root/.cache/pip
-      - NPM_CONFIG_CACHE=/root/.npm
     depends_on:
-      nullclaw:
+      redis:
         condition: service_healthy
-        required: false  # App can run without Nullclaw
+      gateway:
+        condition: service_started
     networks:
       - bing-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.rule=Host(`localhost`)"
+      - "traefik.http.routers.app.entrypoints=web"
 
-  # Nullclaw task assistant
+  # Agent Gateway - Session management + SSE + job creation
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=development
+      - PORT=3002
+      - REDIS_URL=redis://redis:6379
+      - WORKER_URL=http://worker:3003
+      - MAX_CONCURRENT_JOBS=10
+      - JOB_TIMEOUT_MS=300000
+      - SESSION_TIMEOUT_MS=3600000
+    volumes:
+      - workspace_data:/workspace
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - bing-network
+    restart: unless-stopped
+
+  # Agent Worker - Runs OpenCode engine loop
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    ports:
+      - "3003:3003"
+    environment:
+      - NODE_ENV=development
+      - PORT=3003
+      - REDIS_URL=redis://redis:6379
+      - MCP_SERVER_URL=http://mcp:8888
+      - NULLCLAW_URL=http://nullclaw:3000
+      - OPENCODE_MODEL=${OPENCODE_MODEL:-opencode/minimax-m2.5-free}
+      - OPENCODE_MAX_STEPS=15
+      - WORKER_CONCURRENCY=4
+    volumes:
+      - workspace_data:/workspace
+      - opencode_data:/root/.opencode
+    depends_on:
+      redis:
+        condition: service_healthy
+      mcp:
+        condition: service_started
+    networks:
+      - bing-network
+    restart: unless-stopped
+
+  # MCP Tool Server - Filesystem, memory, and other tools
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    ports:
+      - "8888:8888"
+    environment:
+      - NODE_ENV=development
+      - MCP_PORT=8888
+      - WORKSPACE_ROOT=/workspace
+      - VFS_ROOT=/workspace/vfs
+    volumes:
+      - workspace_data:/workspace
+    networks:
+      - bing-network
+    restart: unless-stopped
+
+  # Nullclaw - Automation tools (Discord, Telegram, browse)
   nullclaw:
     image: ghcr.io/nullclaw/nullclaw:latest
     ports:
       - "3001:3000"
     volumes:
-      - ./nullclaw.config.yml:/app/config.yml:ro  # Mount config file
-      - nullclaw_config:/root/.nullclaw  # Persist Nullclaw config
+      - ./nullclaw.config.yml:/app/config.yml:ro
+      - nullclaw_config:/root/.nullclaw
     environment:
       - NULLCLAW_TIMEOUT=3600
       - ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
-      # Provider API keys (set in .env)
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
       - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID:-}
@@ -95,8 +183,23 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped
-    labels:
-      - "traefik.enable=false"  # Not directly accessible
+
+  # Redis - Job queue + PubSub for event streaming
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
 
 networks:
   bing-network:
@@ -119,4 +222,6 @@ volumes:
   nullclaw_data:
     driver: local
   nullclaw_config:
+    driver: local
+  redis_data:
     driver: local

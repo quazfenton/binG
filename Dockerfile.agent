@@ -1,0 +1,29 @@
+# Dockerfile for Agent Gateway and Worker services
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+# Copy package files from new location
+COPY lib/agent/services/agent-gateway/package.json lib/agent/services/agent-gateway/pnpm-lock.yaml* ./lib/agent/services/agent-gateway/
+COPY lib/agent/services/agent-worker/package.json lib/agent/services/agent-worker/pnpm-lock.yaml* ./lib/agent/services/agent-worker/
+
+# Install dependencies
+WORKDIR /app/lib/agent/services/agent-gateway
+RUN pnpm install --frozen-lockfile
+
+WORKDIR /app/lib/agent/services/agent-worker
+RUN pnpm install --frozen-lockfile
+
+# Copy source
+COPY lib/agent/services/agent-gateway ./lib/agent/services/agent-gateway
+COPY lib/agent/services/agent-worker ./lib/agent/services/agent-worker
+COPY lib ./lib
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+
+CMD ["node", "lib/agent/services/agent-gateway/dist/index.js"]

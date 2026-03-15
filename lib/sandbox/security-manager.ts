@@ -81,6 +81,20 @@ export class SandboxSecurityManager {
       normalized = normalized.slice(2);
     }
 
+    // Handle paths that start with /workspace/ - convert to workspace-relative paths
+    // This handles our internal /workspace/users/... paths for cloud sandboxes
+    if (normalized.startsWith('/workspace/')) {
+      // Convert /workspace/users/... to /home/user/workspace/...
+      normalized = normalized.replace(/^\/workspace\//, '/home/user/workspace/');
+    }
+
+    // Also handle any remaining Windows-style paths that got concatenated incorrectly
+    // e.g., "/home/user/C:\home\user" -> "/home/user"
+    const weirdWindowsPath = normalized.match(/^(.+?):\\(.+)$/);
+    if (weirdWindowsPath) {
+      normalized = weirdWindowsPath[1];
+    }
+
     // Check for obvious traversal attempts
     if (normalized.includes('..') || normalized.includes('\0')) {
       throw new Error(`Security Exception: Path traversal attempt detected in '${inputPath}'`);

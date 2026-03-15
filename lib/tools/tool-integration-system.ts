@@ -585,6 +585,7 @@ export class ToolIntegrationManager {
   private readonly config: IntegrationConfig;
   private readonly providerRegistry: ToolProviderRegistry;
   private readonly providerRouter: ToolProviderRouter;
+  private readonly tools = new Map<string, ToolConfig>();
 
   constructor(config: IntegrationConfig) {
     this.config = config;
@@ -592,6 +593,11 @@ export class ToolIntegrationManager {
     const providers = createDefaultProviders(config);
     providers.forEach((provider) => this.providerRegistry.register(provider));
     this.providerRouter = new ToolProviderRouter(this.providerRegistry.list());
+    
+    // Initialize tools cache from registry
+    Object.entries(TOOL_REGISTRY).forEach(([key, config]) => {
+      this.tools.set(key, config);
+    });
   }
 
   /**
@@ -666,6 +672,50 @@ export class ToolIntegrationManager {
       categories.add(config.category);
     });
     return Array.from(categories).sort();
+  }
+
+  /**
+   * Get all registered tools (for discovery)
+   */
+  getAllTools(): ToolConfig[] {
+    return Array.from(this.tools.values());
+  }
+
+  /**
+   * Get tool by key
+   */
+  getTool(toolKey: string): ToolConfig | undefined {
+    return this.tools.get(toolKey);
+  }
+
+  /**
+   * Get registered providers
+   */
+  getProviders(): IntegrationProvider[] {
+    return this.providerRegistry.list().map(p => p.name);
+  }
+
+  /**
+   * Check if a provider is available
+   */
+  isProviderAvailable(provider: IntegrationProvider): boolean {
+    const p = this.providerRegistry.get(provider);
+    return p?.isAvailable() ?? false;
+  }
+
+  /**
+   * Get tool schema (for AI SDK integration)
+   */
+  getToolSchema(toolKey: string): z.ZodSchema | undefined {
+    return this.tools.get(toolKey)?.inputSchema;
+  }
+
+  /**
+   * Register a custom tool at runtime
+   */
+  registerTool(key: string, config: ToolConfig): void {
+    this.tools.set(key, config);
+    TOOL_REGISTRY[key] = config;
   }
 }
 

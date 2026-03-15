@@ -275,15 +275,15 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
         case 'double_click':
           return await desktop.doubleClick(action.x, action.y)
         case 'middle_click':
-          return await desktop.middleClick(action.x, action.y)
+          return await (desktop as any).middleClick(action.x, action.y)
         case 'drag':
           return await desktop.drag(action.startX, action.startY, action.endX, action.endY)
         case 'scroll':
-          return await desktop.scroll(action.direction, action.ticks)
+          return await (desktop as any).scroll(action.direction, action.ticks)
         case 'type':
           return await desktop.type(action.text)
         case 'press':
-          return await desktop.press(action.keys)
+          return await (desktop as any).press(action.keys)
         case 'screenshot':
           const base64 = await desktop.screenshotBase64()
           return { success: true, output: `Screenshot taken (${base64.length} bytes)` }

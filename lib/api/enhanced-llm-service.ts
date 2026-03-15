@@ -593,7 +593,7 @@ export class EnhancedLLMService {
     userId: string,
     conversationId: string
   ): Promise<LLMResponse> {
-    const toolCalls = await this.extractToolCallsFromLLMResponse(response);
+    const toolCalls = await this.extractToolCallsFromLLMResponse(response, userId);
     if (toolCalls.length === 0) {
       return response;
     }
@@ -612,7 +612,7 @@ export class EnhancedLLMService {
 
     for (const call of toolCalls) {
       const resolvedTool = this.resolveToolKey(call.name);
-      const resolvedMCPTool = resolvedTool ? null : await this.resolveMCPToolName(call.name);
+      const resolvedMCPTool = resolvedTool ? null : await this.resolveMCPToolName(call.name, userId);
       const selectedTool = resolvedTool || resolvedMCPTool;
 
       if (!selectedTool) {
@@ -729,10 +729,10 @@ export class EnhancedLLMService {
     return match || null;
   }
 
-  private async resolveMCPToolName(rawName: string): Promise<string | null> {
+  private async resolveMCPToolName(rawName: string, userId?: string): Promise<string | null> {
     if (!rawName) return null;
 
-    const mcpToolNames = (await getMCPToolsForAI_SDK()).map((tool) => tool.function.name);
+    const mcpToolNames = (await getMCPToolsForAI_SDK(userId)).map((tool) => tool.function.name);
     if (mcpToolNames.includes(rawName)) return rawName;
 
     const normalized = rawName.toLowerCase().replace(/[\s_/-]+/g, '.');
@@ -744,7 +744,7 @@ export class EnhancedLLMService {
     return compactMatch || null;
   }
 
-  private async extractToolCallsFromLLMResponse(response: LLMResponse): Promise<Array<{ name: string; arguments: Record<string, any> }>> {
+  private async extractToolCallsFromLLMResponse(response: LLMResponse, userId?: string): Promise<Array<{ name: string; arguments: Record<string, any> }>> {
     // Prefer canonical tool calls from provider response (native tool_use blocks)
     const nativeToolCalls = (response as any)?.toolCalls || (response as any)?.tool_calls;
     if (Array.isArray(nativeToolCalls) && nativeToolCalls.length > 0) {
@@ -758,7 +758,7 @@ export class EnhancedLLMService {
       name,
       inputSchema: cfg.inputSchema as any,
     }));
-    const mcpTools = (await getMCPToolsForAI_SDK()).map((tool) => ({
+    const mcpTools = (await getMCPToolsForAI_SDK(userId)).map((tool) => ({
       name: tool.function.name,
       inputSchema: tool.function.parameters as any,
     }));

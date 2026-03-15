@@ -182,7 +182,6 @@ export async function DELETE(req: NextRequest) {
   } catch (error) {
     const err = error as Error;
     logger.error('Failed to kill terminal session', {
-      sessionId: req.body?.sessionId,
       error: err.message,
       stack: err.stack,
     });

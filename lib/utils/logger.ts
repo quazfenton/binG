@@ -1,5 +1,5 @@
 /**
- * Structured Logging Utility
+ * Unified Logger with Secure Redaction
  *
  * Provides consistent logging across the application with:
  * - Log levels (debug, info, warn, error)
@@ -7,9 +7,30 @@
  * - Structured output for log aggregation
  * - Source identification
  * - Optional file export (server-side only)
+ * - Automatic sensitive data redaction
+ *
+ * Merges functionality from:
+ * - lib/utils/logger.ts (base logging)
+ * - lib/utils/secure-logger.ts (API key redaction)
+ *
+ * @example
+ * ```typescript
+ * // Basic logging
+ * const logger = createLogger('MyService');
+ * logger.info('User logged in', { userId: 123 });
+ *
+ * // Secure logging (auto-redacts API keys, tokens, etc.)
+ * const secureLogger = createLogger('AuthService', { secure: true });
+ * secureLogger.info('API call with key:', process.env.API_KEY);
+ * // Output: API call with key: [REDACTED]
+ * ```
  */
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent';
 
 export interface LogEntry {
   timestamp: string;
@@ -25,17 +46,63 @@ export interface LoggerConfig {
   showTimestamp: boolean;
   showSource: boolean;
   includeStack: boolean;
+  secure?: boolean;  // Enable automatic redaction
+  redactPatterns?: RegExp[];  // Additional redaction patterns
   logToFile?: boolean;
   logFilePath?: string;
-  maxFileSize?: number; // in MB
+  maxFileSize?: number;
   maxFiles?: number;
 }
+
+// ============================================================================
+// SENSITIVE DATA PATTERNS (from secure-logger.ts)
+// ============================================================================
+
+const SENSITIVE_PATTERNS: RegExp[] = [
+  // API Keys (various formats)
+  /sk-[a-zA-Z0-9]{20,}/g,
+  /api[_-]?key[=:]\s*['"]?[a-zA-Z0-9]{16,}/gi,
+  /apikey[=:]\s*['"]?[a-zA-Z0-9]{16,}/gi,
+
+  // Tokens
+  /token[=:]\s*['"]?[a-zA-Z0-9\-_.]{20,}/gi,
+  /bearer\s+[a-zA-Z0-9\-_.]{20,}/gi,
+  /access[_-]?token[=:]\s*['"]?[a-zA-Z0-9\-_.]{20,}/gi,
+
+  // Secrets
+  /secret[=:]\s*['"]?[a-zA-Z0-9\-_]{16,}/gi,
+  /password[=:]\s*['"]?[^\s'"]{4,}/gi,
+
+  // AWS
+  /AKIA[0-9A-Z]{16}/g,
+  /aws[_-]?secret[=:]\s*['"]?[a-zA-Z0-9\/+=]{40}/gi,
+
+  // GitHub
+  /ghp_[a-zA-Z0-9]{36}/g,
+  /gho_[a-zA-Z0-9]{36}/g,
+  /ghu_[a-zA-Z0-9]{36}/g,
+  /ghs_[a-zA-Z0-9]{36}/g,
+  /ghr_[a-zA-Z0-9]{36}/g,
+
+  // Google
+  /ya29\.[a-zA-Z0-9\-_]{20,}/g,
+
+  // Generic
+  /[a-zA-Z0-9]{32,}/g,
+];
+
+const REDACTED = '[REDACTED]';
+
+// ============================================================================
+// DEFAULT CONFIGURATION
+// ============================================================================
 
 const LOG_LEVELS: Record<LogLevel, number> = {
   debug: 0,
   info: 1,
   warn: 2,
   error: 3,
+  silent: 4,
 };
 
 const DEFAULT_CONFIG: LoggerConfig = {
@@ -43,17 +110,17 @@ const DEFAULT_CONFIG: LoggerConfig = {
   showTimestamp: true,
   showSource: true,
   includeStack: false,
+  secure: false,
+  redactPatterns: [],
   logToFile: typeof window === 'undefined' && process.env.LOG_TO_FILE === 'true',
-  logFilePath: '/tmp/app.log', // Will be set in initializeFileLogging
-  maxFileSize: 10, // 10 MB - will be set properly in initializeFileLogging
-  maxFiles: 5, // 5 files - will be set properly in initializeFileLogging
+  logFilePath: '',
+  maxFileSize: 10,
+  maxFiles: 5,
 };
 
 // Override with env vars on server-side only
-// Use dynamic import to avoid bundler issues
 if (typeof window === 'undefined' && typeof process !== 'undefined') {
   try {
-    // Dynamic import for path module (server-side only)
     const pathModule = require('path');
     DEFAULT_CONFIG.logFilePath = process.env.LOG_FILE_PATH || pathModule.join(process.cwd(), 'logs', 'app.log');
     DEFAULT_CONFIG.maxFileSize = parseInt(process.env.LOG_MAX_FILE_SIZE || '10', 10);
@@ -63,27 +130,26 @@ if (typeof window === 'undefined' && typeof process !== 'undefined') {
   }
 }
 
-// Server-side file stream (only initialized on server)
-let writeStream: any = null;
-let fsModule: any = null;
-let pathModule: any = null;
+// ============================================================================
+// FILE LOGGING SETUP
+// ============================================================================
 
-// Initialize file logging on server-side only
-function initializeFileLogging() {
-  if (typeof window !== 'undefined' || !DEFAULT_CONFIG.logToFile) return;
+let writeStream: any = null;
+
+function initializeFileLogging(config: LoggerConfig) {
+  if (typeof window !== 'undefined' || !config.logToFile) return;
 
   try {
-    // Dynamic require only on server-side
-    fsModule = require('fs');
-    pathModule = require('path');
+    const fs = require('fs');
+    const path = require('path');
 
-    const logDir = pathModule.dirname(DEFAULT_CONFIG.logFilePath);
-    if (!fsModule.existsSync(logDir)) {
-      fsModule.mkdirSync(logDir, { recursive: true });
+    const logDir = path.dirname(config.logFilePath!);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
       console.log('[Logger] Created logs directory:', logDir);
     }
 
-    writeStream = fsModule.createWriteStream(DEFAULT_CONFIG.logFilePath, {
+    writeStream = fs.createWriteStream(config.logFilePath, {
       flags: 'a',
       encoding: 'utf8',
       autoClose: true,
@@ -94,10 +160,8 @@ function initializeFileLogging() {
     });
 
     writeStream.on('open', () => {
-      console.log('[Logger] File logging enabled:', DEFAULT_CONFIG.logFilePath);
+      console.log('[Logger] File logging enabled:', config.logFilePath);
     });
-
-    // Log file is auto-flushed on write, no manual flush needed
   } catch (error: any) {
     console.error('[Logger] Failed to initialize file logging:', error.message);
   }
@@ -106,22 +170,89 @@ function initializeFileLogging() {
 // Initialize on module load (server-side only)
 if (typeof window === 'undefined') {
   try {
-    initializeFileLogging();
+    initializeFileLogging(DEFAULT_CONFIG);
   } catch (error) {
     // Silent fail - console logging still works
   }
 }
 
-class Logger {
-  private config: LoggerConfig;
-  private source: string;
+// ============================================================================
+// LOGGER CLASS
+// ============================================================================
+
+export class Logger {
+  protected config: LoggerConfig;
+  protected source: string;
+  protected patterns: RegExp[];
 
   constructor(source: string, config: Partial<LoggerConfig> = {}) {
     this.source = source;
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.patterns = [
+      ...SENSITIVE_PATTERNS,
+      ...(config.redactPatterns || []),
+    ];
+
+    if (this.config.logToFile && !writeStream) {
+      initializeFileLogging(this.config);
+    }
   }
 
+  // ============================================================================
+  // REDACTION (from secure-logger.ts)
+  // ============================================================================
+
+  /**
+   * Redact sensitive information from a string
+   */
+  protected redact(text: string): string {
+    if (!this.config.secure) {
+      return text;
+    }
+
+    let redacted = text;
+
+    for (const pattern of this.patterns) {
+      redacted = redacted.replace(pattern, REDACTED);
+    }
+
+    return redacted;
+  }
+
+  /**
+   * Redact sensitive information from an object
+   */
+  protected sanitizeObject(obj: any): any {
+    if (!this.config.secure || !obj || typeof obj !== 'object') {
+      return obj;
+    }
+
+    if (Array.isArray(obj)) {
+      return obj.map(item => this.sanitizeObject(item));
+    }
+
+    const sanitized: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      // Redact sensitive keys
+      if (['password', 'secret', 'apiKey', 'api_key', 'token', 'authorization', 'auth'].includes(key.toLowerCase())) {
+        sanitized[key] = REDACTED;
+      } else if (typeof value === 'string') {
+        sanitized[key] = this.redact(value);
+      } else if (typeof value === 'object') {
+        sanitized[key] = this.sanitizeObject(value);
+      } else {
+        sanitized[key] = value;
+      }
+    }
+    return sanitized;
+  }
+
+  // ============================================================================
+  // LOGGING CORE
+  // ============================================================================
+
   private shouldLog(level: LogLevel): boolean {
+    if (level === 'silent') return false;
     return LOG_LEVELS[level] >= LOG_LEVELS[this.config.minLevel];
   }
 
@@ -130,9 +261,13 @@ class Logger {
       timestamp: new Date().toISOString(),
       level,
       source: this.source,
-      message,
-      ...(data !== undefined && { data }),
-      ...(error && { error: { name: error.name, message: error.message, stack: error.stack } }),
+      message: this.config.secure ? this.redact(message) : message,
+      ...(data !== undefined && { data: this.config.secure ? this.sanitizeObject(data) : data }),
+      ...(error && { error: { 
+        name: error.name, 
+        message: this.config.secure ? this.redact(error.message) : error.message, 
+        stack: this.config.includeStack ? error.stack : undefined 
+      }}),
     };
   }
 
@@ -157,8 +292,7 @@ class Logger {
 
     // Write to file if enabled (server-side only)
     if (writeStream) {
-      const jsonLine = JSON.stringify(entry);
-      writeStream.write(jsonLine + '\n');
+      writeStream.write(JSON.stringify(entry) + '\n');
     }
 
     // Also output to console
@@ -193,6 +327,10 @@ class Logger {
     }
   }
 
+  // ============================================================================
+  // PUBLIC LOGGING METHODS
+  // ============================================================================
+
   debug(message: string, data?: any) {
     this.output('debug', this.formatEntry('debug', message, data));
   }
@@ -225,6 +363,13 @@ class Logger {
   }
 
   /**
+   * Get current configuration
+   */
+  getConfig(): LoggerConfig {
+    return { ...this.config };
+  }
+
+  /**
    * Flush and close file streams (call before process exit)
    */
   destroy() {
@@ -234,11 +379,29 @@ class Logger {
   }
 }
 
+// ============================================================================
+// FACTORY FUNCTIONS
+// ============================================================================
+
 /**
  * Create a logger instance for a specific source
+ * 
+ * @param source - Logger source name
+ * @param options - Logger options
+ * @param options.secure - Enable automatic redaction of sensitive data
+ * @param options.redactPatterns - Additional redaction patterns
+ * 
+ * @example
+ * ```typescript
+ * // Basic logger
+ * const logger = createLogger('API');
+ * 
+ * // Secure logger (auto-redacts API keys, tokens, etc.)
+ * const logger = createLogger('Auth', { secure: true });
+ * ```
  */
-export function createLogger(source: string, config?: Partial<LoggerConfig>): Logger {
-  return new Logger(source, config);
+export function createLogger(source: string, options: { secure?: boolean; redactPatterns?: RegExp[] } = {}): Logger {
+  return new Logger(source, options);
 }
 
 /**
@@ -253,7 +416,6 @@ export function configureLogger(config: Partial<LoggerConfig>) {
  */
 export function flushLogs(): Promise<void> {
   return new Promise((resolve) => {
-    // Give streams time to flush
     setTimeout(() => {
       if (writeStream) {
         writeStream.end();
@@ -263,7 +425,25 @@ export function flushLogs(): Promise<void> {
   });
 }
 
-// Register cleanup handlers (server-side only)
+// ============================================================================
+// PRE-CONFIGURED LOGGERS
+// ============================================================================
+
+export const loggers = {
+  app: createLogger('App'),
+  api: createLogger('API'),
+  terminal: createLogger('Terminal'),
+  sandbox: createLogger('Sandbox'),
+  auth: createLogger('Auth', { secure: true }),  // Secure by default
+  mcp: createLogger('MCP', { secure: true }),    // Secure by default
+  tool: createLogger('Tool', { secure: true }),  // Secure by default
+  oauth: createLogger('OAuth', { secure: true }), // Secure by default
+};
+
+// ============================================================================
+// REGISTER CLEANUP HANDLERS (server-side only)
+// ============================================================================
+
 if (typeof process !== 'undefined' && typeof window === 'undefined') {
   process.on('exit', () => {
     if (writeStream) {
@@ -294,14 +474,20 @@ if (typeof process !== 'undefined' && typeof window === 'undefined') {
   });
 }
 
-// Pre-configured loggers for common modules
-export const loggers = {
-  app: createLogger('App'),
-  api: createLogger('API'),
-  terminal: createLogger('Terminal'),
-  sandbox: createLogger('Sandbox'),
-  auth: createLogger('Auth'),
-  mcp: createLogger('MCP'),
-};
+// ============================================================================
+// BACKWARDS COMPATIBILITY
+// ============================================================================
+
+// Re-export for backwards compatibility with secure-logger.ts
+export { Logger as SecureLogger };
+export function createSecureLogger(source: string, config?: Partial<LoggerConfig>): Logger {
+  return createLogger(source, { ...config, secure: true });
+}
+
+// Export sanitize function for standalone use
+export function sanitizeForLogging(data: any): any {
+  const logger = createLogger('sanitize', { secure: true });
+  return (logger as any).sanitizeObject(data);
+}
 
 export default Logger;

@@ -126,7 +126,7 @@ export class ArcadeService {
 
   /**
    * Get available tools for a toolkit
-   * 
+   *
    * @param filters - Optional filters (toolkit, tags, limit)
    */
   async getTools(filters?: {
@@ -137,6 +137,13 @@ export class ArcadeService {
     await this.initialize();
 
     try {
+      // Check cache first if no filters
+      if (!filters && this.tools.size > 0) {
+        return Array.from(this.tools.values());
+      }
+
+      const cacheKey = filters?.toolkit ? `toolkit:${filters.toolkit}` : 'all';
+      
       if (this.client?.tools) {
         const options = {
           toolkit: filters?.toolkit,
@@ -144,13 +151,27 @@ export class ArcadeService {
           limit: filters?.limit,
         };
         const tools = await this.client.tools.list(options);
-        return tools.map((t: any) => ({
+        const mappedTools = tools.map((t: any) => ({
           name: t.name,
           description: t.description,
           toolkit: t.toolkit,
           inputSchema: t.input_schema || {},
           requiresAuth: t.requires_auth || false,
         }));
+        
+        // Populate cache
+        if (!filters) {
+          this.tools.clear();
+          for (const tool of mappedTools) {
+            this.tools.set(tool.name, tool);
+          }
+        } else if (filters?.toolkit) {
+          for (const tool of mappedTools) {
+            this.tools.set(tool.name, tool);
+          }
+        }
+        
+        return mappedTools;
       }
 
       // HTTP fallback
@@ -176,13 +197,27 @@ export class ArcadeService {
       }
 
       const data = await response.json();
-      return data.tools?.map((t: any) => ({
+      const mappedTools = data.tools?.map((t: any) => ({
         name: t.name,
         description: t.description,
         toolkit: t.toolkit,
         inputSchema: t.input_schema || {},
         requiresAuth: t.requires_auth || false,
       })) || [];
+      
+      // Populate cache
+      if (!filters) {
+        this.tools.clear();
+        for (const tool of mappedTools) {
+          this.tools.set(tool.name, tool);
+        }
+      } else if (filters?.toolkit) {
+        for (const tool of mappedTools) {
+          this.tools.set(tool.name, tool);
+        }
+      }
+      
+      return mappedTools;
     } catch (error: any) {
       console.error('[ArcadeService] getTools failed:', error.message);
       return [];
@@ -574,15 +609,33 @@ export class ArcadeService {
     try {
       await this.initialize();
 
+      // Check cache first
+      const userConnections: ArcadeConnection[] = [];
+      for (const conn of this.connections.values()) {
+        if (conn.userId === userId && conn.status === 'active') {
+          userConnections.push(conn);
+        }
+      }
+      if (userConnections.length > 0) {
+        return userConnections;
+      }
+
       if (this.client?.connections) {
         const connections = await this.client.connections.list({ userId });
-        return connections.map((c: any) => ({
+        const mappedConnections = connections.map((c: any) => ({
           id: c.id,
           provider: c.provider,
           userId: c.user_id,
           status: c.status,
           createdAt: new Date(c.created_at).getTime(),
         }));
+        
+        // Populate cache
+        for (const conn of mappedConnections) {
+          this.connections.set(`${userId}:${conn.provider}`, conn);
+        }
+        
+        return mappedConnections;
       }
 
       // HTTP fallback
@@ -600,13 +653,20 @@ export class ArcadeService {
       }
 
       const data = await response.json();
-      return data.connections?.map((c: any) => ({
+      const mappedConnections = data.connections?.map((c: any) => ({
         id: c.id,
         provider: c.provider,
         userId: c.user_id,
         status: c.status,
         createdAt: new Date(c.created_at).getTime(),
       })) || [];
+      
+      // Populate cache
+      for (const conn of mappedConnections) {
+        this.connections.set(`${userId}:${conn.provider}`, conn);
+      }
+      
+      return mappedConnections;
     } catch (error: any) {
       console.error('[ArcadeService] getConnections failed:', error.message);
       return [];
@@ -623,15 +683,51 @@ export class ArcadeService {
   }
 
   /**
+   * Invalidate cached connections
+   * @param userId - Optional user ID to invalidate specific user's connections
+   * @param provider - Optional provider to invalidate specific provider connection
+   */
+  invalidateConnectionsCache(userId?: string, provider?: string): void {
+    if (!userId) {
+      // Clear all connections
+      this.connections.clear();
+      console.log('[ArcadeService] Cleared all connections cache');
+      return;
+    }
+
+    // Clear specific user's connections
+    const keysToRemove: string[] = [];
+    for (const key of this.connections.keys()) {
+      if (key.startsWith(`${userId}:`)) {
+        keysToRemove.push(key);
+      }
+    }
+    for (const key of keysToRemove) {
+      this.connections.delete(key);
+    }
+    console.log(`[ArcadeService] Cleared connections cache for user ${userId}`);
+  }
+
+  /**
+   * Invalidate cached tools
+   */
+  invalidateToolsCache(): void {
+    this.tools.clear();
+    console.log('[ArcadeService] Cleared tools cache');
+  }
+
+  /**
    * Get service status
    */
   getStatus(): {
     initialized: boolean;
     connectionsCount: number;
+    toolsCount: number;
   } {
     return {
       initialized: this.initialized,
       connectionsCount: this.connections.size,
+      toolsCount: this.tools.size,
     };
   }
 }
