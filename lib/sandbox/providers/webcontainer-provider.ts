@@ -78,6 +78,8 @@ export class WebContainerProvider implements SandboxProvider {
     const clientId = (process.env.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID || 'wc_api_____').trim()
     const scope = (process.env.NEXT_PUBLIC_WEBCONTAINER_SCOPE || '').trim()
 
+    console.log(`[WebContainer] Booting - Client ID configured: ${!!clientId}, Scope: "${scope || 'default'}"`)
+
     if (mod.auth?.init) {
       mod.auth.init({ clientId, scope })
     }
@@ -88,10 +90,15 @@ export class WebContainerProvider implements SandboxProvider {
   }
 
   async createSandbox(_config: SandboxCreateConfig): Promise<SandboxHandle> {
+    console.log(`[WebContainer] Creating sandbox - User: ${_config.labels?.userId || 'unknown'}, Language: ${_config.language || 'default'}`)
+    
     const instance = await this.bootWebContainer()
     const id = `webcontainer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const handle = new WebContainerSandboxHandle(id, instance)
     webContainerHandles.set(id, handle)
+    
+    console.log(`[WebContainer] ✓ Created sandbox ${id}`)
+    
     return handle
   }
 

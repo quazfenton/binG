@@ -1331,10 +1331,11 @@ export default function InteractionPanel({
   // Calculate bottom position based on panel state
   const bottomPosition = "env(safe-area-inset-bottom, 0px)";
 
+  /* Main panel opacity changed from 60% to be more transparent */
   return (
-    <>
+    <> 
       <div
-        className={`fixed bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 border-t`}
+        className={`fixed bg-black/10 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 border-t`}
         style={{
           bottom: bottomPosition,
           height: isMinimized
@@ -1344,7 +1345,7 @@ export default function InteractionPanel({
               : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
           maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)",
         }}
-        onClick={(e) => {
+          onClick={(e) => {
           if (
             window.innerWidth <= 768 &&
             textareaRef.current &&
@@ -1508,7 +1509,7 @@ export default function InteractionPanel({
             >
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2 sticky top-0 z-20 py-1">
                 <div className="w-full sm:w-auto overflow-x-auto no-scrollbar">
-                  <TabsList className="bg-black/40 w-max min-w-full sm:min-w-0 sm:w-auto">
+                  <TabsList className="w-max min-w-full sm:min-w-0 sm:w-auto" style={{ backgroundColor: 'transparent' }}>
                     <TabsTrigger value="chat" className="text-xs sm:text-sm">
                       <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                       <span className="hidden sm:inline">Chat</span>
@@ -1590,7 +1591,10 @@ export default function InteractionPanel({
                     onProviderChange(provider, model);
                   }}
                 >
-                  <SelectTrigger className="w-full sm:w-[280px] bg-black/40 border-white/20">
+                  <SelectTrigger 
+                    className="w-full sm:w-[280px] border-white/20"
+                    style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}
+                  >
                     <SelectValue placeholder="Select a model" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1626,7 +1630,14 @@ export default function InteractionPanel({
                       key={index}
                       variant="secondary"
                       size="sm"
-                      className="text-xs bg-black/20 hover:bg-black/40 transition-all duration-200 shrink-0"
+                      className="text-xs transition-all duration-200 shrink-0"
+                      style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)', border: '1px solid rgba(255, 255, 255, 0.1)' }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)';
+                      }}
                       onClick={() => {
                         setInput(suggestion);
                         textareaRef.current?.focus();

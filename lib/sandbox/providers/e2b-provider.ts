@@ -104,14 +104,14 @@ export class E2BProvider implements SandboxProvider {
     this.apiKey = normalizedApiKey || undefined
     if (this.apiKey) {
       process.env.E2B_API_KEY = this.apiKey
+    } else {
+      console.warn('[E2BProvider] E2B_API_KEY not set. E2B sandboxes will not be available.')
     }
 
     this.defaultTemplate = process.env.E2B_DEFAULT_TEMPLATE || 'base'
     this.defaultTimeout = parseInt(process.env.E2B_DEFAULT_TIMEOUT || E2B_DEFAULT_TIMEOUT.toString())
-
-    if (!this.apiKey) {
-      console.warn('[E2BProvider] E2B_API_KEY not set. E2B sandboxes will not be available.')
-    }
+    
+    console.log(`[E2BProvider] Initialized - Template: "${this.defaultTemplate}", Timeout: ${this.defaultTimeout}ms`)
   }
 
   /**
@@ -169,9 +169,11 @@ export class E2BProvider implements SandboxProvider {
       const Sandbox = this.e2bModule.Sandbox
 
       // Map language to E2B template
-      const template = config.language 
+      const template = config.language
         ? (E2B_TEMPLATE_MAP[config.language] || this.defaultTemplate)
         : this.defaultTemplate
+
+      console.log(`[E2BProvider] Creating sandbox - Language: "${config.language || 'default'}", Template: "${template}", User: ${config.labels?.userId || 'unknown'}`)
 
       // Build sandbox options
       const sandboxOpts: E2BSandboxOpts = {
@@ -185,25 +187,32 @@ export class E2BProvider implements SandboxProvider {
         },
       }
 
+      console.log(`[E2BProvider] Sandbox options:`, JSON.stringify({ template, timeout: this.defaultTimeout, hasMetadata: !!config.labels, hasEnvVars: !!config.envVars }, null, 2))
+
       // Create sandbox
       const sandbox: E2BSandboxType = await Sandbox.create(sandboxOpts)
 
       // Record sandbox creation in quota (count as 1 session)
       quotaManager.recordUsage('e2b', 1)
 
-      console.log(`[E2BProvider] Created sandbox ${sandbox.sandboxId} with template: ${template}`)
+      console.log(`[E2BProvider] ✓ Created sandbox ${sandbox.sandboxId} (template: ${template}, timeout: ${this.defaultTimeout}ms)`)
 
       return new E2BSandboxHandle(sandbox, config, this.e2bModule)
     } catch (error: any) {
-      console.error('[E2BProvider] Failed to create sandbox:', error)
-      
+      console.error(`[E2BProvider] ✗ Failed to create sandbox:`, error.message)
+      console.error(`[E2BProvider] Error details:`, {
+        name: error.name,
+        message: error.message,
+        stack: error.stack?.split('\n').slice(0, 3).join('\n'),
+      })
+
       // Disable provider on authentication/template errors
-      if (error.message?.includes('authentication') || 
+      if (error.message?.includes('authentication') ||
           error.message?.includes('template') ||
           error.message?.includes('unauthorized')) {
         quotaManager.findAlternative('sandbox', 'e2b')
       }
-      
+
       throw error
     }
   }

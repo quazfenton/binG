@@ -125,7 +125,7 @@ export default function Settings({
   const [selectedColorType, setSelectedColorType] = useState<'bg' | 'text' | 'border'>('bg');
   
   // Background URL selector state
-  const [showBgSelector, setShowBgSelector] = useState(false);
+  const [showBgSelector, setShowBgSelector] = useState(true);
   const [bgUrlName, setBgUrlName] = useState("");
   
   // Preset background URLs
@@ -133,6 +133,12 @@ export default function Settings({
     { id: 'default', name: 'Default', url: process.env.NEXT_PUBLIC_BG_MEDIA_URL || '' },
     { id: 'sky', name: 'Sky', url: 'https://media.tenor.com/CWaT-F5vNb8AAAAM/sky-gif.gif' },
     { id: 'aurora', name: 'Aurora', url: 'https://i.pinimg.com/originals/64/ce/9f/64ce9f3c2463b528dfba90720fed9ea5.gif' },
+    { id: 'stars', name: 'Stars', url: 'https://i.pinimg.com/originals/24/11/b6/2411b65b604795493f5f62239f44b7a7.gif' },
+    { id: 'neon', name: 'Neon', url: 'https://64.media.tumblr.com/5d0e893e84a5116a7f9e424fc2f378ef/tumblr_n4suq4tHbE1tq9q5vo1_r1_500.gif' },
+    { id: 'fire', name: 'Fire', url: 'https://i.imgur.com/9uxEl57.gif' },
+    { id: 'energy', name: 'Energy', url: 'https://media0.giphy.com/media/v1.Y2lkPTZjMDliOTUyenh5Nmx4NzV4djJuYWF0am93MGRycGE2cDJiOW5wZmpibzV0c2M0NiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/nk0a5GWGrnAx55339K/200w.gif' },
+    { id: 'cosmic', name: 'Cosmic', url: 'https://64.media.tumblr.com/0411acaf933ca0d247a7e115cd761608/e85d08b8418d3bbd-0f/s500x750/cebc4e249625c0222eeb5d9e2cc703fcb9283ef5.gif' },
+    { id: 'abstract', name: 'Abstract', url: 'https://mir-s3-cdn-cf.behance.net/project_modules/max_1200/29e0fe35096329.56e975e499241.gif' },
     { id: 'none', name: 'None', url: '' },
   ];
   
@@ -401,7 +407,8 @@ export default function Settings({
       handleClearCustomBg();
       toast.success("Background cleared");
     }
-    setShowBgSelector(false);
+    // Keep selector open for easy switching
+    // setShowBgSelector(false);
   };
 
   const handleApplyBubbleColors = () => {
@@ -594,48 +601,14 @@ export default function Settings({
           )}
         </div>
 
-        {/* Themes Section */}
+        {/* Custom Background URL Section */}
         <div className="bg-black/30 rounded-lg p-4 border border-white/10">
           <div className="flex items-center gap-2 mb-4">
             <Palette className="h-4 w-4" />
-            <h3 className="font-medium">Theme</h3>
+            <h3 className="font-medium">Background</h3>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            {THEME_OPTIONS.map((option) => {
-              const isActive = theme === option.id;
-              return (
-                <button
-                  key={option.id}
-                  onClick={() => setTheme(option.id)}
-                  className={`relative overflow-hidden flex flex-col items-center gap-2 p-3 rounded-xl border transition-all duration-200 ${
-                    isActive
-                      ? 'border-white/40 bg-white/15 shadow-lg shadow-white/5'
-                      : 'border-white/10 hover:border-white/25 hover:bg-white/8'
-                  }`}
-                >
-                  {/* Theme preview gradient */}
-                  <div className={`w-full h-10 rounded-lg ${option.swatch} shadow-inner`} />
-                  
-                  {/* Theme name */}
-                  <span className="text-xs font-medium text-white/90">{option.label}</span>
-                  
-                  {/* Active indicator */}
-                  {isActive && (
-                    <div className="absolute top-2 right-2 w-5 h-5 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center">
-                      <Check className="w-3 h-3 text-white" />
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-3 text-xs text-gray-400 text-center">
-            Active: <span className="text-white font-medium capitalize">{resolvedTheme || theme}</span>
-          </div>
-
-          <div className="mt-4 space-y-2">
+          <div className="space-y-2">
             <Label htmlFor="custom-bg-url" className="text-xs text-white/70">
               Custom: Background URL
             </Label>
@@ -660,7 +633,7 @@ export default function Settings({
                 {showBgSelector ? 'Close' : 'Select'}
               </Button>
             </div>
-            
+
             {/* Background URL Selector */}
             {showBgSelector && (
               <div className="space-y-3 mt-2 p-3 bg-black/30 rounded-lg border border-white/10">
@@ -691,7 +664,7 @@ export default function Settings({
                     </button>
                   ))}
                 </div>
-                
+
                 {savedBackgrounds.length > 0 && (
                   <>
                     <div className="text-xs text-gray-400 font-medium mt-3">Saved Backgrounds</div>
@@ -721,8 +694,51 @@ export default function Settings({
               </div>
             )}
           </div>
+        </div>
 
-          <div className="mt-4 space-y-2">
+        {/* Themes Section */}
+        <div className="bg-black/30 rounded-lg p-4 border border-white/10">
+          <div className="flex items-center gap-2 mb-4">
+            <Palette className="h-4 w-4" />
+            <h3 className="font-medium">Theme</h3>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {THEME_OPTIONS.map((option) => {
+              const isActive = theme === option.id;
+              return (
+                <button
+                  key={option.id}
+                  onClick={() => setTheme(option.id)}
+                  className={`relative overflow-hidden flex flex-col items-center gap-2 p-3 rounded-xl border transition-all duration-200 ${
+                    isActive
+                      ? 'border-white/40 bg-white/15 shadow-lg shadow-white/5'
+                      : 'border-white/10 hover:border-white/25 hover:bg-white/8'
+                  }`}
+                >
+                  {/* Theme preview gradient */}
+                  <div className={`w-full h-10 rounded-lg ${option.swatch} shadow-inner`} />
+
+                  {/* Theme name */}
+                  <span className="text-xs font-medium text-white/90">{option.label}</span>
+
+                  {/* Active indicator */}
+                  {isActive && (
+                    <div className="absolute top-2 right-2 w-5 h-5 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center">
+                      <Check className="w-3 h-3 text-white" />
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-3 text-xs text-gray-400 text-center">
+            Active: <span className="text-white font-medium capitalize">{resolvedTheme || theme}</span>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-2">
             <Label className="text-xs text-white/70">Message Bubble Colors</Label>
             
             {/* Color Picker Popover */}
@@ -1131,7 +1147,6 @@ export default function Settings({
             )}
           </div>
         </div>
-      </div>
 
       {/* Auth Modal */}
       {showAuthModal && (

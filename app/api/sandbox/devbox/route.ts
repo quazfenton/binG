@@ -81,21 +81,23 @@ export async function POST(req: NextRequest) {
 
     logger.info('Creating DevBox', { userId, template, fileCount: Object.keys(files).length, rateLimitRemaining: rateLimit.remaining });
 
-    // Create sandbox via sandbox bridge (uses CodeSandbox provider)
-    // The provider internally uses: createSandbox({ template, ephemeral: true })
-    const session = await sandboxBridge.getOrCreateSession(userId, {
+    // Get CodeSandbox provider directly - DevBox is specifically for CodeSandbox
+    const provider = await sandboxBridge.getProvider('codesandbox');
+    
+    // Create a new CodeSandbox sandbox (not using the generic session store)
+    const sandboxHandle = await provider.createSandbox({
       language: template === 'docker' ? 'docker' : 'typescript',
       template: template === 'docker' ? 'docker' : 'node',
     });
 
-    logger.info('Sandbox created', {
-      sandboxId: session.sandboxId,
-      sessionId: session.sessionId
+    const sandboxId = sandboxHandle.sandboxId;
+
+    logger.info('CodeSandbox created', {
+      sandboxId,
     });
 
-    // Get the CodeSandbox provider to access SDK methods
-    const provider = await sandboxBridge.getProvider('codesandbox');
-    const sandbox = await provider.getSandbox(session.sandboxId);
+    // Get the sandbox instance for file operations
+    const sandbox = await provider.getSandbox(sandboxId);
 
     // Write all files to sandbox workspace using SDK's fs API
     logger.info('Writing files to sandbox...');
@@ -110,17 +112,16 @@ export async function POST(req: NextRequest) {
 
     // Get preview URL using SDK's getPreviewUrl or hosts.getUrl
     // Format: https://{sandboxId}.csb.app
-    const previewUrl = `https://${session.sandboxId}.csb.app`;
+    const previewUrl = `https://${sandboxId}.csb.app`;
 
     logger.info('DevBox created successfully', {
-      sandboxId: session.sandboxId,
+      sandboxId,
       url: previewUrl,
     });
 
     return NextResponse.json({
       success: true,
-      sandboxId: session.sandboxId,
-      sessionId: session.sessionId,
+      sandboxId,
       url: previewUrl,
       template,
       provider: 'codesandbox',
