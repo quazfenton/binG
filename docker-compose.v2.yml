@@ -26,9 +26,6 @@ services:
         bind:
           create_host_path: true
           propagation: cached
-      - type: volume
-        source: next_cache
-        target: /app/.next
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
@@ -122,6 +119,4 @@ volumes:
   nullclaw_data:
     driver: local
   nullclaw_config:
-    driver: local
-  next_cache:
     driver: local

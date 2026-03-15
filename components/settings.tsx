@@ -33,6 +33,7 @@ import ModalSignupForm from "@/components/auth/modal-signup-form";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
+import Image from "next/image";
 
 interface SettingsProps {
   onClose: () => void;
@@ -59,7 +60,10 @@ const applyCustomBackgroundMedia = (value: string) => {
     root.style.setProperty("--app-bg-media-opacity", "0");
     return;
   }
-  root.style.setProperty("--app-bg-media", `url("${value}")`);
+  
+  // Use image proxy for external URLs to bypass CORS/hotlinking restrictions
+  const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(value)}`;
+  root.style.setProperty("--app-bg-media", `url("${proxiedUrl}")`);
   root.style.setProperty("--app-bg-media-opacity", "0.12");
 };
 
@@ -86,6 +90,10 @@ const THEME_OPTIONS = [
   { id: "forest", label: "Forest", swatch: "bg-emerald-600" },
   { id: "sepia", label: "Sepia", swatch: "bg-amber-700" },
   { id: "midnight", label: "Midnight", swatch: "bg-indigo-800" },
+  { id: "rose", label: "Rose", swatch: "bg-rose-500" },
+  { id: "desert", label: "Desert", swatch: "bg-orange-600" },
+  { id: "lavender", label: "Lavender", swatch: "bg-violet-500" },
+  { id: "slate", label: "Slate", swatch: "bg-slate-600" },
 ] as const;
 
 export default function Settings({
@@ -665,10 +673,12 @@ export default function Settings({
                       className="relative overflow-hidden h-16 rounded-lg border border-white/10 hover:border-white/30 transition-all group"
                     >
                       {preset.url ? (
-                        <img
+                        <Image
                           src={preset.url}
                           alt={preset.name}
-                          className="w-full h-full object-cover"
+                          fill
+                          className="object-cover"
+                          sizes="64px"
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center bg-gray-800">
@@ -692,8 +702,14 @@ export default function Settings({
                           onClick={() => handleSelectBackground(bg.url, bg.name)}
                           className="w-full flex items-center gap-2 p-2 rounded bg-black/20 hover:bg-white/10 transition-all text-left"
                         >
-                          <div className="w-8 h-6 rounded overflow-hidden flex-shrink-0 bg-gray-800">
-                            <img src={bg.url} alt={bg.name} className="w-full h-full object-cover" />
+                          <div className="w-8 h-6 rounded overflow-hidden flex-shrink-0 bg-gray-800 relative">
+                            <Image
+                              src={bg.url}
+                              alt={bg.name}
+                              fill
+                              className="object-cover"
+                              sizes="32px"
+                            />
                           </div>
                           <span className="text-xs text-white/80 truncate flex-1">{bg.name}</span>
                           <span className="text-[10px] text-gray-500 truncate max-w-[100px]">{bg.url}</span>

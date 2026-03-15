@@ -591,20 +591,22 @@ class E2BSandboxHandle implements SandboxHandle {
       // ✅ ENHANCED: Validate path before listing
       const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath)
 
-      // Use ls command for directory listing with shell-escaped path
-      const escapedPath = resolved.replace(/'/g, "'\\''")
-      const result = await this.sandbox.commands.run(`ls -la '${escapedPath}'`)
+      // Use native E2B files.list() API
+      const files = await this.sandbox.files.list(resolved)
 
-      if (result.exitCode !== 0) {
-        return {
-          success: false,
-          output: result.stderr || 'Failed to list directory',
-        }
-      }
+      // Format output similar to ls -la
+      const formatted = files
+        .map((f: any) => {
+          const type = f.type === 'directory' ? 'd' : '-'
+          const size = f.size?.toString() || '0'
+          const name = f.name || f.split('/').pop() || f
+          return `${type}  ${size}  ${name}`
+        })
+        .join('\n')
 
       return {
         success: true,
-        output: result.stdout || '(empty directory)',
+        output: formatted || '(empty directory)',
       }
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
@@ -615,7 +617,7 @@ class E2BSandboxHandle implements SandboxHandle {
           output: 'Security validation failed',
         }
       }
-      
+
       console.error('[E2B] List directory error:', error)
       return {
         success: false,
