@@ -305,58 +305,87 @@ export async function POST(request: NextRequest) {
 
       const context = buildAgenticContext(contextualMessages);
 
+      // Check if we should use the agent gateway
+      const gatewayUrl = process.env.V2_GATEWAY_URL;
+
       // Try V2 execution with fallback to v1/regular LLM chat on failure
       try {
-        if (stream) {
-          const streamBody = executeV2TaskStreaming({
+        if (stream && gatewayUrl) {
+          // Use agent gateway for streaming
+          return await handleGatewayStreaming({
+            gatewayUrl,
             userId: effectiveUserId,
             conversationId: resolvedConversationId,
             task,
             context,
-            stream: true,
-          });
-
-          return new Response(streamBody, {
-            headers: {
-              'Content-Type': 'text/event-stream',
-              'Cache-Control': 'no-cache, no-store, must-revalidate',
-              Pragma: 'no-cache',
-              Expires: '0',
-              Connection: 'keep-alive',
-              'X-Accel-Buffering': 'no',
-            },
+            requestId,
           });
         }
 
-        const v2Result = await executeV2Task({
-          userId: effectiveUserId,
-          conversationId: resolvedConversationId,
-          task,
-          context,
-        });
-
-        // If V2 explicitly signals fallback needed (session creation failed)
-        if (v2Result.fallbackToV1) {
-          chatLogger.warn('V2 execution failed, falling back to v1/regular LLM chat', { requestId }, {
-            error: v2Result.error,
-            errorCode: v2Result.errorCode,
+        if (gatewayUrl) {
+          // Use agent gateway for non-streaming
+          const gatewayResult = await handleGatewayRequest({
+            gatewayUrl,
+            userId: effectiveUserId,
+            conversationId: resolvedConversationId,
+            task,
+            context,
+            model,
           });
-          // Continue to fallback code below
+
+          if (gatewayResult.success) {
+            return NextResponse.json(gatewayResult);
+          }
+          // Fall through to v1 if gateway failed
+          chatLogger.warn('Gateway execution failed, falling back to v1', { requestId });
         } else {
-          return NextResponse.json(v2Result);
+          // Fallback to local V2 execution (no gateway configured)
+          if (stream) {
+            const streamBody = executeV2TaskStreaming({
+              userId: effectiveUserId,
+              conversationId: resolvedConversationId,
+              task,
+              context,
+              stream: true,
+            });
+
+            return new Response(streamBody, {
+              headers: {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                Pragma: 'no-cache',
+                Expires: '0',
+                Connection: 'keep-alive',
+                'X-Accel-Buffering': 'no',
+              },
+            });
+          }
+
+          const v2Result = await executeV2Task({
+            userId: effectiveUserId,
+            conversationId: resolvedConversationId,
+            task,
+            context,
+          });
+
+          if (v2Result.fallbackToV1) {
+            chatLogger.warn('V2 execution failed, falling back to v1/regular LLM chat', { requestId }, {
+              error: v2Result.error,
+              errorCode: v2Result.errorCode,
+            });
+          } else {
+            return NextResponse.json(v2Result);
+          }
         }
       } catch (v2Error: any) {
-        // V2 execution failed - log and fall through to v1 fallback
         chatLogger.error('V2 execution failed, falling back to v1', { requestId }, {
           error: v2Error.message,
           stack: v2Error.stack,
         });
-        // Continue to fallback path below
       }
       
       // FALLBACK: V2 failed, use regular v1/priority router chat path
       chatLogger.info('Using v1 fallback path after V2 failure', { requestId, provider, model });
-      // This continues to the regular priority router path below
     }
 
     // Agentic pipeline (non-V2) for code-centric requests
@@ -415,7 +444,7 @@ export async function POST(request: NextRequest) {
         mode: 'auto',
       };
 
-      const tools = await getMCPToolsForAI_SDK();
+      const tools = await getMCPToolsForAI_SDK(authenticatedUserId);
       config.tools = tools.map(t => ({
         name: t.function.name,
         description: t.function.description,
@@ -1254,6 +1283,154 @@ function shouldUseContextPack(messages: LLMMessage[]): boolean {
 
   const pattern = new RegExp(contextPackKeywords.join('|'), 'i');
   return pattern.test(lastUserMessage);
+}
+
+/**
+ * Handle non-streaming request via agent gateway
+ */
+async function handleGatewayRequest(params: {
+  gatewayUrl: string;
+  userId: string;
+  conversationId: string;
+  task: string;
+  context?: string;
+  model?: string;
+}): Promise<any> {
+  const { gatewayUrl, userId, conversationId, task, context, model } = params;
+
+  try {
+    // Create job via gateway
+    const jobResponse = await fetch(`${gatewayUrl}/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        conversationId,
+        prompt: task,
+        context,
+        model,
+      }),
+    });
+
+    if (!jobResponse.ok) {
+      throw new Error(`Gateway error: ${jobResponse.statusText}`);
+    }
+
+    const { jobId, sessionId } = await jobResponse.json();
+
+    // Poll for completion
+    const maxWaitMs = 120000; // 2 minutes
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitMs) {
+      const statusResponse = await fetch(`${gatewayUrl}/jobs/${jobId}`);
+      
+      if (!statusResponse.ok) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+
+      const jobStatus = await statusResponse.json();
+
+      if (jobStatus.status === 'completed') {
+        return {
+          success: true,
+          data: jobStatus,
+          sessionId,
+          jobId,
+        };
+      }
+
+      if (jobStatus.status === 'failed') {
+        throw new Error(jobStatus.error || 'Job failed');
+      }
+
+      // Still processing, wait a bit
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    throw new Error('Job timed out');
+  } catch (error: any) {
+    chatLogger.error('Gateway request failed', {}, { error: error.message });
+    throw error;
+  }
+}
+
+/**
+ * Handle streaming request via agent gateway
+ */
+async function handleGatewayStreaming(params: {
+  gatewayUrl: string;
+  userId: string;
+  conversationId: string;
+  task: string;
+  context?: string;
+  requestId: string;
+}): Promise<Response> {
+  const { gatewayUrl, userId, conversationId, task, context, requestId } = params;
+
+  // Create job first
+  const jobResponse = await fetch(`${gatewayUrl}/jobs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId,
+      conversationId,
+      prompt: task,
+      context,
+    }),
+  });
+
+  if (!jobResponse.ok) {
+    throw new Error(`Gateway error: ${jobResponse.statusText}`);
+  }
+
+  const { sessionId } = await jobResponse.json();
+  chatLogger.info('Created gateway job', { requestId, sessionId });
+
+  // Stream events from gateway
+  const streamResponse = await fetch(`${gatewayUrl}/stream/${sessionId}`);
+
+  if (!streamResponse.ok || !streamResponse.body) {
+    throw new Error(`Gateway stream error: ${streamResponse.statusText}`);
+  }
+
+  // Transform gateway events to our SSE format
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  const readableStream = new ReadableStream({
+    async start(controller) {
+      const reader = streamResponse.body.getReader();
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done) break;
+
+          const text = decoder.decode(value);
+          
+          // Gateway sends: event: type\ndata: {...}\n\n
+          // We pass through as-is for now
+          controller.enqueue(value);
+        }
+      } catch (error) {
+        chatLogger.error('Stream error', { requestId }, { error: String(error) });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(readableStream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
 }
 
 async function buildWorkspaceSessionContext(

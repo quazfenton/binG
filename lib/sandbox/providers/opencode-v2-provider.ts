@@ -125,21 +125,41 @@ export class OpencodeV2Provider implements LLMProvider {
     let finalResponse = '';
 
     try {
-      // Ensure sandbox is ready
-      if (!this.sandboxHandle) {
-        await this.initializeSandbox();
-      }
+      // OpenCode runs LOCALLY without cloud sandbox by default
+      // Cloud sandbox is only created for risky code execution when explicitly needed
+      // Skip sandbox initialization - run locally
 
-      if (!this.sandboxHandle) {
-        throw new Error('Failed to initialize sandbox - no sandbox handle available');
-      }
-
-      // Ensure MCP is available
+      // Ensure MCP is available (local MCP server still needed)
       if (this.currentSession.mcpEnabled && !this.currentSession.mcpServerUrl) {
         await this.initializeMCP();
       }
+      
+      // Get workspace directory - use local path compatible with OS
+      const workspaceDir = this.currentSession.workspaceDir;
+      const isWindows = process.platform === 'win32';
+      let localWorkspaceDir: string;
+      
+      if (isWindows) {
+        // On Windows, use a temp directory or app data folder
+        const tempDir = process.env.TEMP || process.env.TMP || 'C:\\temp';
+        const userId = this.currentSession.userId || 'guest';
+        const convId = this.currentSession.conversationId || 'default';
+        localWorkspaceDir = `${tempDir}\\opencode-workspace\\users\\${userId}\\sessions\\${convId}`;
+      } else {
+        // On Linux, convert /workspace/... to /home/user/workspace/...
+        localWorkspaceDir = workspaceDir.startsWith('/workspace/') 
+          ? workspaceDir.replace('/workspace/', '/home/user/workspace/')
+          : workspaceDir;
+      }
 
-      // Write the prompt to a temp file
+      // Write the prompt to a temp file (use OS-appropriate temp directory)
+      const tempDir = isWindows 
+        ? (process.env.TEMP || process.env.TMP || 'C:\\temp')
+        : '/tmp';
+      const promptFile = isWindows
+        ? `${tempDir}\\opencode-v2-prompt-${Date.now()}.json`
+        : `/tmp/opencode-v2-prompt-${Date.now()}.json`;
+
       const promptPayload = JSON.stringify({
         prompt: userMessage,
         tools: tools.map((t) => ({
@@ -153,31 +173,44 @@ export class OpencodeV2Provider implements LLMProvider {
       });
 
       // Debug: Log what we're sending to OpenCode
-      console.log('[OpencodeV2Provider] === SENDING TO OPENCODE ===');
+      console.log('[OpencodeV2Provider] === SENDING TO OPENCODE (LOCAL) ===');
       console.log('[OpencodeV2Provider] Prompt:', userMessage.substring(0, 200) + (userMessage.length > 200 ? '...' : ''));
       console.log('[OpencodeV2Provider] Tools available:', tools.map(t => t.name).join(', '));
-      console.log('[OpencodeV2Provider] System prompt:', systemPrompt?.substring(0, 100) + '...');
+      console.log('[OpencodeV2Provider] Workspace:', localWorkspaceDir);
+      console.log('[OpencodeV2Provider] Temp file:', promptFile);
       console.log('[OpencodeV2Provider] ==============================');
 
-      const promptFile = `/tmp/opencode-v2-prompt-${Date.now()}.json`;
-      await this.sandboxHandle.writeFile(promptFile, promptPayload);
+      await this.writeLocalFile(promptFile, promptPayload);
 
-      // Execute opencode in the sandbox
+      // Execute opencode LOCALLY (no sandbox)
       const model = process.env.OPENCODE_MODEL || 'claude-3-5-sonnet';
       const modelFlag = model ? `--model '${model.replace(/'/g, "'\\''")}'` : '';
       
       const escapedSystemPrompt = (systemPrompt || '').replace(/'/g, "'\\''");
       
-      // Ensure workspace directory exists in sandbox
-      const workspaceDir = this.currentSession.workspaceDir;
-      await this.sandboxHandle.executeCommand(`mkdir -p "${workspaceDir}"`, workspaceDir, 30);
+      // Ensure workspace directory exists locally (using OS-appropriate command)
+      const mkdirCmd = isWindows 
+        ? `if not exist "${localWorkspaceDir}" mkdir "${localWorkspaceDir}"`
+        : `mkdir -p "${localWorkspaceDir}"`;
+      await this.execLocalCommand(mkdirCmd);
       
-      const command = `OPENCODE_SYSTEM_PROMPT='${escapedSystemPrompt}' opencode chat --json ${modelFlag} < ${promptFile}`.trim();
+      // Build command - pass prompt file via stdin differently based on OS
+      let command: string;
+      
+      if (isWindows) {
+        // On Windows, use cmd /c with type to pipe file content
+        command = `cmd /c "type ${promptFile} | npx opencode chat --json ${modelFlag}"`;
+      } else {
+        // On Linux, use stdin redirect
+        command = `OPENCODE_SYSTEM_PROMPT='${escapedSystemPrompt}' opencode chat --json ${modelFlag} < ${promptFile}`;
+      }
+      
       console.log('[OpencodeV2Provider] Executing command:', command.substring(0, 300) + '...');
       
-      const result = await this.sandboxHandle.executeCommand(
+      // Execute locally without sandbox
+      const result = await this.executeLocalCommand(
         command,
-        this.currentSession.workspaceDir,
+        localWorkspaceDir,
         PROCESS_TIMEOUT_MS / 1000,
       );
 
@@ -475,6 +508,113 @@ export class OpencodeV2Provider implements LLMProvider {
     }
 
     return openCodeV2SessionManager.createCheckpoint(this.currentSession.id, label);
+  }
+
+  /**
+   * Write file locally (no sandbox)
+   */
+  private async writeLocalFile(filePath: string, content: string): Promise<void> {
+    const fs = await import('fs/promises');
+    await fs.writeFile(filePath, content, 'utf-8');
+  }
+
+  /**
+   * Execute command locally without sandbox (for OpenCode execution)
+   */
+  private async executeLocalCommand(
+    command: string,
+    cwd: string,
+    timeoutSeconds: number,
+  ): Promise<ToolResult> {
+    // On Windows, we need to handle the command differently
+    // opencode might need to be run via npx or have full path
+    const isWindows = process.platform === 'win32';
+    
+    let finalCommand = command;
+    
+    if (isWindows) {
+      // On Windows, wrap command to handle stdin redirect properly
+      // Also try npx opencode-ai first
+      const opencodeCmd = command.replace(/^OPENCODE_SYSTEM_PROMPT='[^']*'\s+/, 'OPENCODE_SYSTEM_PROMPT="$OPENCODE_SYSTEM_PROMPT" ');
+      
+      // Try using npx to run opencode
+      finalCommand = opencodeCmd;
+      
+      console.log('[OpencodeV2Provider] Windows detected, command:', finalCommand.substring(0, 100));
+    }
+    
+    return this.executeCommandDirect(finalCommand, cwd, timeoutSeconds);
+  }
+
+  /**
+   * Direct command execution
+   */
+  private async executeCommandDirect(
+    command: string,
+    cwd: string,
+    timeoutSeconds: number,
+  ): Promise<ToolResult> {
+    return new Promise((resolve) => {
+      const timeoutMs = timeoutSeconds * 1000;
+      const startTime = Date.now();
+      
+      let output = '';
+      let errorOutput = '';
+
+      const child = spawn(command, [], {
+        shell: true,
+        cwd,
+        env: {
+          ...process.env,
+          OPENCODE_MODEL: process.env.OPENCODE_MODEL,
+          OPENCODE_SYSTEM_PROMPT: process.env.OPENCODE_SYSTEM_PROMPT,
+        },
+      });
+
+      child.stdout?.on('data', (data) => {
+        output += data.toString();
+      });
+
+      child.stderr?.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+
+      const timeout = setTimeout(() => {
+        child.kill('SIGTERM');
+        resolve({
+          success: false,
+          output: output + '\n[TIMEOUT]',
+          exitCode: 124,
+        });
+      }, timeoutMs);
+
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        const duration = Date.now() - startTime;
+        console.log(`[OpencodeV2Provider] Local command completed in ${duration}ms, exit code: ${code}`);
+        resolve({
+          success: code === 0,
+          output: output || errorOutput,
+          exitCode: code || 0,
+        });
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timeout);
+        resolve({
+          success: false,
+          output: err.message,
+          exitCode: 1,
+        });
+      });
+    });
+  }
+
+  /**
+   * Execute local shell command
+   */
+  private async execLocalCommand(command: string): Promise<ToolResult> {
+    return this.executeLocalCommand(command, process.cwd(), 30);
   }
 
   /**

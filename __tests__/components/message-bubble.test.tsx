@@ -23,7 +23,7 @@ vi.mock('react-syntax-highlighter', () => ({
 }));
 
 describe('MessageBubble', () => {
-  const defaultProps: Message = {
+  const baseMessage: Message = {
     id: 'test-1',
     role: 'assistant',
     content: 'Hello, how can I help you?',
@@ -32,7 +32,7 @@ describe('MessageBubble', () => {
 
   it('renders user message correctly', () => {
     const userMessage: Message = {
-      ...defaultProps,
+      ...baseMessage,
       role: 'user',
       content: 'Hi there!',
     };
@@ -44,7 +44,7 @@ describe('MessageBubble', () => {
   });
 
   it('renders assistant message correctly', () => {
-    render(<MessageBubble message={defaultProps} />);
+    render(<MessageBubble message={baseMessage} />);
 
     expect(screen.getByText('Hello, how can I help you?')).toBeInTheDocument();
     expect(screen.getByTestId('message-bubble')).toHaveClass('assistant');
@@ -52,7 +52,7 @@ describe('MessageBubble', () => {
 
   it('renders system message with correct styling', () => {
     const systemMessage: Message = {
-      ...defaultProps,
+      ...baseMessage,
       role: 'system',
       content: 'System notification',
     };
@@ -65,7 +65,7 @@ describe('MessageBubble', () => {
 
   it('displays timestamp when provided', () => {
     const messageWithTime: Message = {
-      ...defaultProps,
+      ...baseMessage,
       timestamp: '2026-02-27T10:00:00Z',
     };
 
@@ -75,7 +75,7 @@ describe('MessageBubble', () => {
   });
 
   it('shows copy button for assistant messages', async () => {
-    render(<MessageBubble message={defaultProps} />);
+    render(<MessageBubble message={baseMessage} />);
 
     const copyButton = screen.getByTestId('copy-button');
     expect(copyButton).toBeInTheDocument();
@@ -91,7 +91,7 @@ describe('MessageBubble', () => {
 
   it('hides copy button for user messages', () => {
     const userMessage: Message = {
-      ...defaultProps,
+      ...baseMessage,
       role: 'user',
     };
 
@@ -102,7 +102,7 @@ describe('MessageBubble', () => {
 
   it('renders markdown content correctly', () => {
     const markdownMessage: Message = {
-      ...defaultProps,
+      ...baseMessage,
       content: '# Heading\n\n**Bold** and *italic*\n\n- List item',
     };
 
@@ -115,7 +115,7 @@ describe('MessageBubble', () => {
 
   it('renders code blocks with syntax highlighting', () => {
     const codeMessage: Message = {
-      ...defaultProps,
+      ...baseMessage,
       content: '```typescript\nconst x = 1;\n```',
     };
 
@@ -127,7 +127,7 @@ describe('MessageBubble', () => {
 
   it('displays reasoning content when provided', () => {
     const messageWithReasoning: Message = {
-      ...defaultProps,
+      ...baseMessage,
       metadata: {
         reasoning: 'Let me think about this step by step...',
       },
@@ -141,7 +141,7 @@ describe('MessageBubble', () => {
 
   it('toggles reasoning visibility', async () => {
     const messageWithReasoning: Message = {
-      ...defaultProps,
+      ...baseMessage,
       metadata: {
         reasoning: 'Hidden reasoning',
       },
@@ -170,7 +170,7 @@ describe('MessageBubble', () => {
 
   it('displays tool invocations when provided', () => {
     const messageWithTools: Message = {
-      ...defaultProps,
+      ...baseMessage,
       metadata: {
         toolInvocations: [
           {
@@ -192,7 +192,7 @@ describe('MessageBubble', () => {
   it('shows loading state when streaming', () => {
     render(
       <MessageBubble 
-        message={defaultProps} 
+        message={baseMessage} 
         isStreaming={true}
         streamingContent="Streaming..."
       />
@@ -206,7 +206,7 @@ describe('MessageBubble', () => {
     
     render(
       <MessageBubble 
-        message={defaultProps}
+        message={baseMessage}
         isStreaming={true}
         onStreamingComplete={onStreamingComplete}
       />
@@ -221,7 +221,7 @@ describe('MessageBubble', () => {
   });
 
   it('applies custom maxWidth when provided', () => {
-    render(<MessageBubble message={defaultProps} maxWidth={500} />);
+    render(<MessageBubble message={baseMessage} maxWidth={500} />);
 
     const bubble = screen.getByTestId('message-bubble');
     expect(bubble).toHaveStyle('max-width: 500px');
@@ -229,7 +229,7 @@ describe('MessageBubble', () => {
 
   it('handles error messages correctly', () => {
     const errorMessage: Message = {
-      ...defaultProps,
+      ...baseMessage,
       role: 'assistant',
       content: 'Error: Something went wrong',
       isError: true,
@@ -243,7 +243,7 @@ describe('MessageBubble', () => {
 
   it('renders data messages with correct format', () => {
     const dataMessage: Message = {
-      ...defaultProps,
+      ...baseMessage,
       role: 'data',
       content: '{"key": "value"}',
     };
@@ -255,7 +255,7 @@ describe('MessageBubble', () => {
 
   it('handles long content with scroll', () => {
     const longMessage: Message = {
-      ...defaultProps,
+      ...baseMessage,
       content: 'A'.repeat(5000),
     };
 
@@ -268,7 +268,7 @@ describe('MessageBubble', () => {
 
   it('displays auth prompt when auth is required', () => {
     const authMessage: Message = {
-      ...defaultProps,
+      ...baseMessage,
       metadata: {
         requiresAuth: true,
         authUrl: '/auth',
@@ -283,7 +283,7 @@ describe('MessageBubble', () => {
   });
 
   it('handles keyboard navigation', () => {
-    render(<MessageBubble message={defaultProps} />);
+    render(<MessageBubble message={baseMessage} />);
 
     const bubble = screen.getByTestId('message-bubble');
     
@@ -335,11 +335,18 @@ describe('MessageBubble - Accessibility', () => {
 });
 
 describe('MessageBubble - Performance', () => {
+  const baseMessage: Message = {
+    id: 'test-1',
+    role: 'assistant',
+    content: 'Hello, how can I help you?',
+    timestamp: new Date().toISOString(),
+  };
+
   it('memoizes content rendering', () => {
-    const { rerender } = render(<MessageBubble message={defaultProps} />);
+    const { rerender } = render(<MessageBubble message={baseMessage} />);
     
     // Rerender with same props
-    rerender(<MessageBubble message={defaultProps} />);
+    rerender(<MessageBubble message={baseMessage} />);
     
     // Should not re-render content unnecessarily
     expect(screen.getByText('Hello, how can I help you?')).toBeInTheDocument();
@@ -347,7 +354,7 @@ describe('MessageBubble - Performance', () => {
 
   it('handles large code blocks efficiently', () => {
     const largeCodeMessage: Message = {
-      ...defaultProps,
+      ...baseMessage,
       content: '```typescript\n' + 'const x = 1;\n'.repeat(100) + '```',
     };
 

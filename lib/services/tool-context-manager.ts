@@ -1,8 +1,8 @@
-import { getToolManager, getToolErrorHandler } from '@/lib/tools';
-import { toolAuthManager as toolAuthorizationManager } from '@/lib/services/tool-authorization-manager';
-import type { LLMMessage } from '@/lib/api/llm-providers';
-import type { ToolExecutionContext } from '@/lib/tools';
-import { authService } from '@/lib/auth/auth-service';
+import { getToolManager, getToolErrorHandler } from '../tools';
+import { toolAuthManager as toolAuthorizationManager } from './tool-authorization-manager';
+import type { LLMMessage } from '../api/llm-providers';
+import type { ToolExecutionContext } from '../tools';
+import { authService } from '../auth/auth-service';
 
 export interface ToolDetectionResult {
   detectedTool: string | null;
@@ -28,6 +28,18 @@ export interface ToolProcessingResult {
   };
 }
 
+export interface OAuthCapabilityResult {
+  success: boolean;
+  action: 'connect' | 'list' | 'revoke' | 'execute';
+  authUrl?: string;
+  connections?: any[];
+  providers?: string[];
+  output?: any;
+  error?: string;
+  message?: string;
+  requiresAuth?: boolean;
+}
+
 export class ToolContextManager {
   private errorHandler = getToolErrorHandler();
 
@@ -50,6 +62,12 @@ export class ToolContextManager {
     userId: string,
     conversationId: string
   ): Promise<ToolProcessingResult> {
+    // Check for OAuth integration capability requests first
+    const oauthCapabilityResult = await this.checkOAuthCapabilityRequest(messages, userId, conversationId);
+    if (oauthCapabilityResult) {
+      return oauthCapabilityResult;
+    }
+
     // Detect tool intent from messages
     const detectionResult = this.detectToolIntent(messages);
 
@@ -172,6 +190,119 @@ export class ToolContextManager {
   }
 
   /**
+   * Check if request is for OAuth integration capability
+   * 
+   * Detects patterns like:
+   * - "connect my gmail account"
+   * - "list my connections"
+   * - "revoke github access"
+   * - "show available tools"
+   */
+  private async checkOAuthCapabilityRequest(
+    messages: LLMMessage[],
+    userId: string,
+    conversationId: string
+  ): Promise<ToolProcessingResult | null> {
+    const userMessages = messages.filter(m => m.role === 'user').map(m => m.content).filter((c): c is string => typeof c === 'string');
+    const lastUserMsg = userMessages[userMessages.length - 1];
+    if (!lastUserMsg) return null;
+
+    const text = lastUserMsg.toLowerCase();
+
+    // Detect OAuth capability patterns
+    let capability: string | null = null;
+    let params: any = {};
+
+    // Pattern: "connect [provider]" or "authorize [provider]"
+    const connectMatch = text.match(/(?:connect|authorize|link)\s+(?:my\s+)?(\w+)/i);
+    if (connectMatch) {
+      capability = 'integration.connect';
+      params.provider = connectMatch[1];
+    }
+
+    // Pattern: "list connections" or "show connections" or "my connections"
+    if (text.includes('list connections') || text.includes('show connections') || text.includes('my connections')) {
+      capability = 'integration.list_connections';
+      const providerMatch = text.match(/(?:for|from)\s+(\w+)/i);
+      if (providerMatch) {
+        params.provider = providerMatch[1];
+      }
+    }
+
+    // Pattern: "revoke [provider]" or "disconnect [provider]"
+    const revokeMatch = text.match(/(?:revoke|disconnect|remove)\s+(?:my\s+)?(\w+)/i);
+    if (revokeMatch) {
+      capability = 'integration.revoke';
+      params.provider = revokeMatch[1];
+    }
+
+    // Pattern: "what tools" or "available tools" or "show tools"
+    if (text.includes('what tools') || text.includes('available tools') || text.includes('show tools')) {
+      capability = 'integration.search_tools';
+    }
+
+    if (!capability) return null;
+
+    // Process OAuth capability
+    const result = await this.processOAuthCapability(capability, params, userId, conversationId);
+
+    // Convert OAuthCapabilityResult to ToolProcessingResult
+    if (result.success) {
+      return {
+        requiresAuth: false,
+        toolCalls: [{ name: capability, arguments: params }],
+        toolResults: [{ name: capability, result: result }],
+        content: this.formatOAuthResult(result),
+      };
+    } else {
+      return {
+        requiresAuth: result.requiresAuth || false,
+        authUrl: result.authUrl,
+        toolName: capability,
+        toolCalls: [{ name: capability, arguments: params }],
+        toolResults: [],
+        content: result.error || 'OAuth operation failed',
+        error: {
+          type: result.requiresAuth ? 'auth' : 'execution',
+          message: result.error || 'Operation failed',
+          parameters: params,
+        }
+      };
+    }
+  }
+
+  /**
+   * Format OAuth capability result as user-friendly message
+   */
+  private formatOAuthResult(result: OAuthCapabilityResult): string {
+    switch (result.action) {
+      case 'connect':
+        if (result.authUrl) {
+          return `To connect your account, please visit: ${result.authUrl}`;
+        }
+        return result.message || 'Connection initiated';
+
+      case 'list':
+        if (result.providers && result.providers.length > 0) {
+          return `Connected providers: ${result.providers.join(', ')}`;
+        }
+        return 'No connected providers found';
+
+      case 'revoke':
+        return result.message || 'Connection revoked';
+
+      case 'execute':
+        if (result.output) {
+          return typeof result.output === 'string' ? result.output : JSON.stringify(result.output);
+        }
+        return 'Tool executed successfully';
+
+      default:
+        return result.message || 'Operation completed';
+    }
+  }
+
+  /**
    * Detect tool intent from messages
    */
   private detectToolIntent(messages: LLMMessage[]): ToolDetectionResult {
@@ -284,6 +415,164 @@ export class ToolContextManager {
       toolInput,
       requiresAuth: false // Authorization check happens separately
     };
+  }
+
+  /**
+   * Process OAuth integration capability requests
+   * 
+   * Handles:
+   * - integration.connect: Initiate OAuth connection
+   * - integration.list_connections: List user connections
+   * - integration.revoke: Revoke connection
+   * - integration.execute: Execute tool with auth check
+   * 
+   * @param capability - OAuth capability name (e.g., 'integration.connect')
+   * @param params - Capability parameters
+   * @param userId - User identifier
+   * @param conversationId - Conversation ID for context
+   * @returns OAuth capability result
+   */
+  async processOAuthCapability(
+    capability: string,
+    params: any,
+    userId: string,
+    conversationId: string
+  ): Promise<OAuthCapabilityResult> {
+    try {
+      // Parse capability name
+      const capabilityType = capability.replace('integration.', '');
+
+      switch (capabilityType) {
+        case 'connect': {
+          // Initiate OAuth connection
+          const provider = params.provider;
+          if (!provider) {
+            return {
+              success: false,
+              action: 'connect',
+              error: 'Missing provider parameter',
+            };
+          }
+
+          const result = await toolAuthorizationManager.initiateConnection(userId, provider);
+          return {
+            success: result.success,
+            action: 'connect',
+            authUrl: result.authUrl,
+            message: result.message,
+          };
+        }
+
+        case 'list_connections': {
+          // List user connections
+          const provider = params.provider;
+          const result = await toolAuthorizationManager.listConnections(userId, provider);
+          return {
+            success: result.success,
+            action: 'list',
+            connections: result.connections,
+            providers: result.providers,
+          };
+        }
+
+        case 'revoke': {
+          // Revoke connection
+          const provider = params.provider;
+          const connectionId = params.connectionId;
+          if (!provider) {
+            return {
+              success: false,
+              action: 'revoke',
+              error: 'Missing provider parameter',
+            };
+          }
+
+          const result = await toolAuthorizationManager.revokeConnection(userId, provider, connectionId);
+          return {
+            success: result.success,
+            action: 'revoke',
+            message: result.message,
+          };
+        }
+
+        case 'execute': {
+          // Execute tool with authorization check
+          const provider = params.provider;
+          const action = params.action;
+          const toolParams = params.params || {};
+
+          if (!provider || !action) {
+            return {
+              success: false,
+              action: 'execute',
+              error: 'Missing provider or action parameter',
+            };
+          }
+
+          // Check authorization first
+          const toolName = `${provider}.${action}`;
+          const isAuthorized = await toolAuthorizationManager.isAuthorized(userId, toolName);
+
+          if (!isAuthorized) {
+            const authUrl = toolAuthorizationManager.getAuthorizationUrl(provider);
+            return {
+              success: false,
+              action: 'execute',
+              requiresAuth: true,
+              authUrl,
+              error: `Authorization required for ${provider}.${action}`,
+            };
+          }
+
+          // Execute via tool manager
+          const toolManager = getToolManager();
+          const toolResult = await toolManager.executeTool(toolName, toolParams, {
+            userId,
+            conversationId,
+          });
+
+          if (toolResult.success) {
+            return {
+              success: true,
+              action: 'execute',
+              output: toolResult.output,
+            };
+          } else {
+            return {
+              success: false,
+              action: 'execute',
+              error: toolResult.error,
+              requiresAuth: toolResult.authRequired,
+              authUrl: toolResult.authUrl,
+            };
+          }
+        }
+
+        case 'search_tools': {
+          // Search available tools
+          const result = await toolAuthorizationManager.getAvailableTools(userId);
+          return {
+            success: true,
+            action: 'list',
+            output: result.map(tool => ({ name: tool })),
+          };
+        }
+
+        default:
+          return {
+            success: false,
+            action: 'execute',
+            error: `Unknown OAuth capability: ${capability}`,
+          };
+      }
+    } catch (error: any) {
+      console.error('[ToolContext] processOAuthCapability failed:', error);
+      return {
+        success: false,
+        action: 'execute',
+        error: error.message,
+      };
+    }
   }
 
   /**
