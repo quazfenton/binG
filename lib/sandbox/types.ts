@@ -6,6 +6,48 @@
  */
 
 /**
+ * Tool execution result
+ */
+export interface ToolResult {
+  /** Whether tool execution was successful */
+  success: boolean;
+  /** Tool output */
+  output?: string;
+  /** Error message if failed */
+  error?: string;
+  /** Tool name */
+  toolName?: string;
+  /** Execution time in milliseconds */
+  executionTime?: number;
+  /** Exit code (0 for success, non-zero for failure) */
+  exitCode?: number;
+}
+
+/**
+ * Preview link information
+ */
+export interface PreviewInfo {
+  /** Port number */
+  port: number;
+  /** Preview URL */
+  url: string;
+  /** Access token (if required) */
+  token?: string;
+  /** When preview was opened */
+  openedAt?: number;
+}
+
+/**
+ * Agent message for communication
+ */
+export interface AgentMessage {
+  type: 'text' | 'tool' | 'error' | 'status';
+  content: string;
+  timestamp?: number;
+  metadata?: Record<string, any>;
+}
+
+/**
  * Execution policy determines sandbox requirements and provider selection
  */
 export type ExecutionPolicy =
@@ -49,7 +91,14 @@ export type ExecutionPolicy =
    * Use for: GUI apps, browser automation, computer use
    * Provider: daytona (computer use support)
    */
-  | 'desktop-required';
+  | 'desktop-required'
+
+  /**
+   * Cloud sandbox with auto-scaling for resource-intensive tasks
+   * Use for: ML training, large builds, production deployments
+   * Provider: e2b or daytona with high resources
+   */
+  | 'cloud-sandbox';
 
 /**
  * Execution policy configuration
@@ -133,6 +182,15 @@ export const EXECUTION_POLICY_CONFIGS: Record<ExecutionPolicy, ExecutionPolicyCo
     requiredCapabilities: ['pty', 'desktop', 'computer-use'],
     preferredProviders: ['daytona'],
     resources: { cpu: 2, memory: 4 },
+  },
+
+  'cloud-sandbox': {
+    policy: 'cloud-sandbox',
+    allowLocalFallback: false,
+    maxWaitTime: 120,
+    requiredCapabilities: ['pty', 'preview', 'high-resources'],
+    preferredProviders: ['e2b', 'daytona'],
+    resources: { cpu: 4, memory: 8, disk: 50 },
   },
 };
 
@@ -264,4 +322,222 @@ export function allowsLocalFallback(policy: ExecutionPolicy): boolean {
  */
 export function getPreferredProviders(policy: ExecutionPolicy): string[] {
   return EXECUTION_POLICY_CONFIGS[policy].preferredProviders || [];
+}
+
+// ============================================================================
+// Risk Assessment
+// ============================================================================
+
+/**
+ * Risk level for command/code execution
+ */
+export type RiskLevel = 'safe' | 'low' | 'medium' | 'high' | 'critical';
+
+/**
+ * Individual risk factor
+ */
+export interface RiskFactor {
+  /** Factor name */
+  name: string;
+  /** Risk contribution (0-100) */
+  severity: number;
+  /** Description of the risk */
+  description: string;
+  /** Pattern that matched */
+  pattern?: string;
+}
+
+/**
+ * Risk assessment result
+ */
+export interface RiskAssessment {
+  /** Overall risk level */
+  level: RiskLevel;
+  /** Risk score (0-100) */
+  score: number;
+  /** Detected risk factors */
+  factors: RiskFactor[];
+  /** Recommended execution policy */
+  recommendedPolicy: ExecutionPolicy;
+  /** Whether execution should be blocked */
+  shouldBlock: boolean;
+  /** Reason for blocking (if applicable) */
+  blockReason?: string;
+}
+
+/**
+ * Risk detection patterns
+ */
+export const RISK_PATTERNS: Record<string, { pattern: RegExp; severity: number; description: string }> = {
+  // Critical - Block immediately
+  'fork-bomb': {
+    pattern: /:\(\)\{\s*:\|:\s*&\s*\};\s*:/,
+    severity: 100,
+    description: 'Fork bomb detected',
+  },
+  'rm-root': {
+    pattern: /rm\s+(-[rf]+\s+)?\/(\s|$)/,
+    severity: 100,
+    description: 'Attempt to delete root filesystem',
+  },
+  'sudo-rm': {
+    pattern: /sudo\s+rm\s+(-[rf]+\s+)?\/?$/,
+    severity: 100,
+    description: 'Sudo delete root',
+  },
+  'crypto-miner': {
+    pattern: /xmrig|cryptonight|monero|minerd/i,
+    severity: 100,
+    description: 'Cryptocurrency miner detected',
+  },
+
+  // High - Require sandbox-heavy
+  'network-curl': {
+    pattern: /curl\s+.*\|.*(?:sh|bash)/,
+    severity: 80,
+    description: 'Curl pipe to shell (potential supply chain attack)',
+  },
+  'network-wget': {
+    pattern: /wget\s+.*\|.*(?:sh|bash)/,
+    severity: 80,
+    description: 'Wget pipe to shell',
+  },
+  'env-access': {
+    pattern: /process\.env|os\.environ|getenv/i,
+    severity: 70,
+    description: 'Environment variable access',
+  },
+  'file-delete': {
+    pattern: /rm\s+-rf|unlink|rmdir\s+-p/i,
+    severity: 75,
+    description: 'Recursive delete operation',
+  },
+  'chmod-recursive': {
+    pattern: /chmod\s+-R\s+777/i,
+    severity: 80,
+    description: 'Recursive chmod 777 (security risk)',
+  },
+
+  // Medium - Require sandbox-preferred
+  'npm-install': {
+    pattern: /npm\s+install|yarn\s+add|pnpm\s+add/i,
+    severity: 50,
+    description: 'Package installation (network + script execution)',
+  },
+  'pip-install': {
+    pattern: /pip\s+install|pip3\s+install/i,
+    severity: 50,
+    description: 'Python package installation',
+  },
+  'docker-command': {
+    pattern: /docker\s+(build|run|exec)/i,
+    severity: 60,
+    description: 'Docker command (container escape risk)',
+  },
+  'git-clone': {
+    pattern: /git\s+clone/i,
+    severity: 40,
+    description: 'Git clone (network + disk usage)',
+  },
+  'database-access': {
+    pattern: /mysql|postgres|mongodb|redis/i,
+    severity: 55,
+    description: 'Database connection',
+  },
+
+  // Low - Can use local-safe with monitoring
+  'file-read': {
+    pattern: /fs\.readFile|open\(|\.read\(/i,
+    severity: 20,
+    description: 'File read operation',
+  },
+  'file-write': {
+    pattern: /fs\.writeFile|\.write\(/i,
+    severity: 30,
+    description: 'File write operation',
+  },
+  'child-process': {
+    pattern: /child_process|exec\(|spawn\(/i,
+    severity: 45,
+    description: 'Child process execution',
+  },
+};
+
+/**
+ * Risk thresholds for policy selection
+ */
+export const RISK_THRESHOLDS: Record<RiskLevel, { min: number; max: number; policy: ExecutionPolicy }> = {
+  'safe': { min: 0, max: 20, policy: 'local-safe' },
+  'low': { min: 21, max: 40, policy: 'sandbox-preferred' },
+  'medium': { min: 41, max: 60, policy: 'sandbox-required' },
+  'high': { min: 61, max: 80, policy: 'sandbox-heavy' },
+  'critical': { min: 81, max: 100, policy: 'cloud-sandbox' },
+};
+
+/**
+ * Assess risk of a command or code snippet
+ */
+export function assessRisk(input: string, context?: {
+  userId?: string;
+  source?: 'llm' | 'user' | 'automated';
+  previousCommands?: string[];
+}): RiskAssessment {
+  const factors: RiskFactor[] = [];
+  let totalScore = 0;
+
+  // Check against all risk patterns
+  for (const [name, { pattern, severity, description }] of Object.entries(RISK_PATTERNS)) {
+    if (pattern.test(input)) {
+      factors.push({
+        name,
+        severity,
+        description,
+        pattern: pattern.source,
+      });
+      totalScore = Math.max(totalScore, severity);
+    }
+  }
+
+  // Context-based risk adjustments
+  if (context?.source === 'user') {
+    // User-entered commands get slight trust boost
+    totalScore = Math.floor(totalScore * 0.9);
+  }
+
+  // Check for command chaining (increases risk)
+  if (/[;&|]|\|\||&&/.test(input) && factors.length > 1) {
+    totalScore = Math.min(100, totalScore + 10);
+    factors.push({
+      name: 'command-chaining',
+      severity: 10,
+      description: 'Multiple commands chained together',
+    });
+  }
+
+  // Determine risk level
+  let level: RiskLevel = 'safe';
+  for (const [riskLevel, threshold] of Object.entries(RISK_THRESHOLDS)) {
+    if (totalScore >= threshold.min && totalScore <= threshold.max) {
+      level = riskLevel as RiskLevel;
+      break;
+    }
+  }
+
+  // Critical risks should be blocked
+  const shouldBlock = level === 'critical' && factors.some(f => f.severity >= 100);
+  const blockReason = shouldBlock
+    ? `Blocked: ${factors.filter(f => f.severity >= 100).map(f => f.description).join(', ')}`
+    : undefined;
+
+  // Get recommended policy
+  const recommendedPolicy = RISK_THRESHOLDS[level].policy;
+
+  return {
+    level,
+    score: totalScore,
+    factors,
+    recommendedPolicy,
+    shouldBlock,
+    blockReason,
+  };
 }

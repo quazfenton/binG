@@ -204,7 +204,20 @@ export const SANDBOX_EXECUTE_CAPABILITY: CapabilityDefinition = {
     exitCode: z.number(),
     duration: z.number(),
   }),
-  providerPriority: ['opencode-v2', 'e2b', 'daytona', 'codesandbox'],
+  // Provider priority aligned with provider-router.ts profiles
+  // Best for: code-interpreter, agent, ml-training
+  providerPriority: [
+    'opencode-v2',      // Local OpenCode (primary)
+    'e2b',              // Best for code-interpreter, agent
+    'daytona',          // Full-stack with LSP
+    'codesandbox',      // Batch execution
+    'blaxel',           // Agent support
+    'microsandbox',     // Lightweight code execution
+    'opensandbox',      // General code-interpreter
+    'mistral',          // Code-interpreter
+    'sprites',          // Persistent service
+    'webcontainer',     // Frontend-focused
+  ],
   tags: ['sandbox', 'execute', 'code', 'run', 'eval'],
 };
 
@@ -225,7 +238,20 @@ export const SANDBOX_SHELL_CAPABILITY: CapabilityDefinition = {
     stderr: z.string(),
     exitCode: z.number(),
   }),
-  providerPriority: ['opencode-v2', 'e2b', 'daytona', 'mcp-terminal'],
+  // Provider priority aligned with provider-router.ts profiles
+  // Best for: fullstack-app, computer-use, general
+  providerPriority: [
+    'opencode-v2',      // Local OpenCode (primary)
+    'daytona',          // Best for fullstack, computer-use
+    'e2b',              // Desktop support
+    'sprites',          // Persistent with services
+    'codesandbox',      // Full-stack support
+    'microsandbox',     // General purpose
+    'opensandbox',      // General purpose
+    'mistral',          // General purpose
+    'blaxel',           // Batch/agent
+    'webcontainer',     // Limited shell
+  ],
   tags: ['sandbox', 'shell', 'bash', 'terminal', 'exec'],
 };
 
@@ -248,7 +274,21 @@ export const SANDBOX_SESSION_CAPABILITY: CapabilityDefinition = {
     status: z.string(),
     created: z.boolean(),
   }),
-  providerPriority: ['opencode-v2', 'e2b', 'daytona'],
+  // Provider priority aligned with provider-router.ts profiles
+  // Best for: persistent-service (sprites), full-stack (daytona, codesandbox)
+  providerPriority: [
+    'opencode-v2',      // Local OpenCode (primary)
+    'sprites',          // Best for persistent-service, auto-suspend
+    'codesandbox',      // Persistent with snapshots
+    'daytona',          // Full-stack persistent
+    'e2b',              // Agent sessions
+    'blaxel',           // Agent support
+    'opensandbox-nullclaw', // Agent support
+    'microsandbox',     // Lightweight sessions
+    'opensandbox',      // General sessions
+    'mistral',          // General sessions
+    'webcontainer',     // Browser-based sessions
+  ],
   tags: ['sandbox', 'session', 'container', 'workspace'],
 };
 

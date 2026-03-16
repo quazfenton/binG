@@ -142,17 +142,30 @@ export class DaytonaProvider implements SandboxProvider {
       useCache: USE_PERSISTENT_CACHE,
     }, null, 2))
 
-    // Add persistent cache volume if enabled
-    if (USE_PERSISTENT_CACHE) {
+    // Add persistent cache volume if enabled.
+    // IMPORTANT: volumeId must be a real Daytona volume UUID, NOT a human-readable name.
+    // Passing an invalid/non-existent ID causes the Daytona API to return
+    // "An unexpected error occurred". We validate the value looks like a UUID
+    // (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) before attaching the volume.
+    const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    const cacheVolumeId = process.env.SANDBOX_CACHE_VOLUME_ID || ''
+    if (USE_PERSISTENT_CACHE && UUID_PATTERN.test(cacheVolumeId)) {
       createParams.volumes = [
         {
-          volumeId: CACHE_VOLUME_NAME,
+          volumeId: cacheVolumeId,
           mountPath: '/opt/cache',
           readOnly: false,
         }
       ]
       createParams.envVars.SANDBOX_CACHE_ENABLED = 'true'
-      console.log(`[Daytona] Persistent cache volume enabled: ${CACHE_VOLUME_NAME}`)
+      console.log(`[Daytona] Persistent cache volume enabled: ${cacheVolumeId}`)
+    } else if (USE_PERSISTENT_CACHE) {
+      console.warn(
+        `[Daytona] Persistent cache requested but SANDBOX_CACHE_VOLUME_ID is missing or not a valid UUID ` +
+        `(got: "${cacheVolumeId || CACHE_VOLUME_NAME}"). ` +
+        `Skipping volume mount to avoid sandbox creation failure. ` +
+        `Set SANDBOX_CACHE_VOLUME_ID to the UUID shown in your Daytona dashboard.`
+      )
     }
 
     try {

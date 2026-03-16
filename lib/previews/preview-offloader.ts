@@ -1,12 +1,22 @@
 /**
  * Preview Offloader
- * 
+ *
  * Routes heavy preview requests to cloud providers:
  * - Daytona: Full desktop, GUI apps, recordings
- * - CodeSandbox: Batch jobs, parallel testing
+ * - CodeSandbox: Batch jobs, parallel testing, framework-specific templates
  * - Vercel: Production deployments
  * - Local Sandpack: Default for lightweight apps
- * 
+ *
+ * CodeSandbox Configuration:
+ * - CSB_API_KEY: Required - Get from https://codesandbox.io/t/api
+ * - CSB_PRIVACY: Optional - 'public' | 'private' | 'public-hosts' (default: 'public-hosts')
+ * - CSB_DEFAULT_TEMPLATE: Optional - Default template if auto-detection fails
+ * - CSB_HIBERNATION_TIMEOUT: Optional - Seconds before hibernation (default: 86400)
+ *
+ * Preview URL Format:
+ * - Public: https://<sandbox-id>-<port>.csb.app
+ * - Private: Requires host tokens for custom domains
+ *
  * Decision Tree:
  * - Framework: Next.js, Nuxt, Django, Flask → Daytona/Vercel
  * - Size: >50 files or >5MB node_modules → Daytona
@@ -221,30 +231,58 @@ class PreviewOffloader {
 
   /**
    * Execute preview on CodeSandbox
+   * 
+   * Features:
+   * - CodeSandbox template mapping based on framework detection
+   * - Port waiting with waitForPort() for reliable preview URLs
+   * - Privacy configuration via CSB_PRIVACY environment variable
    */
   private async executeCodeSandbox(request: PreviewRequest, startTime: number): Promise<PreviewResult> {
     try {
       const { getSandboxProvider } = await import('../sandbox/providers');
       const provider = await getSandboxProvider('codesandbox');
-      
+
+      // Detect framework for template mapping
+      const detection = this.detectFramework(request.files);
+      const template = this.getCodeSandboxTemplate(detection.framework);
+
+      logger.info(`CodeSandbox: Using template "${template}" for framework "${detection.framework}"`);
+
+      // Create sandbox with detected template
       const handle = await provider.createSandbox({
-        language: 'typescript',
+        language: detection.language || 'typescript',
+        template,
       });
 
-      // Write files
+      // Write files to sandbox
       for (const [path, content] of Object.entries(request.files)) {
         await handle.writeFile(path, content);
       }
 
-      const previewInfo = await handle.getPreviewLink?.(3000);
+      // Detect port from package.json or use default
+      const port = this.detectPort(request.files);
+      logger.info(`CodeSandbox: Waiting for port ${port} to become available...`);
+
+      // Wait for port to open (more reliable than getPreviewLink)
+      const previewInfo = await handle.waitForPort?.(port, 60000) 
+        || await handle.getPreviewLink?.(port);
+
+      if (!previewInfo?.url) {
+        throw new Error(`Port ${port} did not become available within timeout`);
+      }
+
+      logger.info(`CodeSandbox: Preview ready at ${previewInfo.url}`);
 
       return {
         success: true,
         provider: 'codesandbox',
-        url: previewInfo?.url,
+        url: previewInfo.url,
         metadata: {
           sandboxId: handle.id,
+          port,
+          template,
           duration: Date.now() - startTime,
+          privacy: process.env.CSB_PRIVACY || 'public-hosts',
         },
       };
     } catch (error: any) {
@@ -255,9 +293,132 @@ class PreviewOffloader {
         error: error.message,
         metadata: {
           duration: Date.now() - startTime,
+          privacy: process.env.CSB_PRIVACY || 'public-hosts',
         },
       };
     }
+  }
+
+  /**
+   * Detect framework from files
+   */
+  private detectFramework(files: Record<string, string>): { framework: string; language?: string } {
+    const fileNames = Object.keys(files);
+    
+    // Check for Python frameworks
+    if (fileNames.some(f => f.endsWith('.py'))) {
+      if (fileNames.some(f => f.includes('streamlit'))) return { framework: 'streamlit', language: 'python' };
+      if (fileNames.some(f => f.includes('gradio'))) return { framework: 'gradio', language: 'python' };
+      if (fileNames.some(f => f.includes('flask'))) return { framework: 'flask', language: 'python' };
+      return { framework: 'python', language: 'python' };
+    }
+
+    // Check for Node.js frameworks
+    const packageJson = files['package.json'] || files['/package.json'];
+    if (packageJson) {
+      try {
+        const pkg = JSON.parse(packageJson);
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        
+        if (deps.next) return { framework: 'nextjs', language: 'typescript' };
+        if (deps.nuxt) return { framework: 'nuxt', language: 'typescript' };
+        if (deps.vite) return { framework: 'vite', language: 'typescript' };
+        if (deps.react) return { framework: 'react', language: 'typescript' };
+        if (deps.vue) return { framework: 'vue', language: 'typescript' };
+        if (deps.svelte) return { framework: 'svelte', language: 'typescript' };
+      } catch (e) {
+        // Invalid package.json
+      }
+    }
+
+    return { framework: 'node', language: 'typescript' };
+  }
+
+  /**
+   * Get CodeSandbox template for framework
+   * 
+   * Maps detected frameworks to CodeSandbox templates:
+   * @see https://codesandbox.io/docs/sdk/templates
+   */
+  private getCodeSandboxTemplate(framework: string): string {
+    const templateMap: Record<string, string> = {
+      // JavaScript/TypeScript
+      'react': 'react',
+      'react-ts': 'react-ts',
+      'vue': 'vue',
+      'vue-ts': 'vue-ts',
+      'svelte': 'svelte',
+      'svelte-ts': 'svelte-ts',
+      'vanilla': 'vanilla',
+      'vanilla-ts': 'vanilla-ts',
+      
+      // Meta-frameworks
+      'nextjs': 'nextjs',
+      'nuxt': 'nuxt',
+      'remix': 'remix',
+      'astro': 'astro',
+      
+      // Backend
+      'node': 'node',
+      'express': 'node',
+      'python': 'python',
+      'flask': 'python',
+      'django': 'python',
+      'fastapi': 'python',
+      
+      // ML/Data
+      'streamlit': 'python',
+      'gradio': 'python',
+      'jupyter': 'python',
+      
+      // Other
+      'vite': 'vanilla-vite',
+      'webpack': 'node',
+      'parcel': 'node',
+    };
+
+    return templateMap[framework] || 'node';
+  }
+
+  /**
+   * Detect port from files
+   */
+  private detectPort(files: Record<string, string>): number {
+    const packageJson = files['package.json'] || files['/package.json'];
+    if (packageJson) {
+      try {
+        const pkg = JSON.parse(packageJson);
+        const scripts = pkg.scripts || {};
+        const startScript = scripts.dev || scripts.start || '';
+        
+        // Extract port from start script
+        const portMatch = startScript.match(/-p\s+(\d+)|--port\s+(\d+)|PORT=(\d+)/);
+        if (portMatch) {
+          return parseInt(portMatch[1] || portMatch[2] || portMatch[3], 10);
+        }
+        
+        // Framework defaults
+        if (pkg.dependencies?.next) return 3000;
+        if (pkg.dependencies?.nuxt) return 3000;
+        if (pkg.dependencies?.vite) return 5173;
+        if (pkg.dependencies?.react) return 3000;
+      } catch (e) {
+        // Invalid package.json
+      }
+    }
+
+    // Check Python files for port
+    for (const [path, content] of Object.entries(files)) {
+      if (path.endsWith('.py')) {
+        const portMatch = content.match(/run\(.*port\s*=\s*(\d+)|app\.run\(.*(\d+)/);
+        if (portMatch) {
+          return parseInt(portMatch[1] || portMatch[2], 10);
+        }
+      }
+    }
+
+    // Default port
+    return 3000;
   }
 
   /**
