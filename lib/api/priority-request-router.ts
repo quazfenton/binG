@@ -9,10 +9,10 @@
  * - Quota management
  */
 
-import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from './fast-agent-service';
-import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from './n8n-agent-service';
-import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from './custom-fallback-service';
-import { enhancedLLMService, type EnhancedLLMRequest } from './enhanced-llm-service';
+import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from '../chat/fast-agent-service';
+import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from '../chat/n8n-agent-service';
+import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from '../chat/custom-fallback-service';
+import { enhancedLLMService, type EnhancedLLMRequest } from '../chat/enhanced-llm-service';
 import { getToolManager, getUnifiedToolRegistry, getToolDiscoveryService, getToolErrorHandler } from '../tools';
 import { toolAuthManager } from '../tools/tool-authorization-manager';
 import { sandboxBridge } from '../sandbox';
