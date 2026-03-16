@@ -16,6 +16,8 @@ import IntegrationAuthPrompt from "@/components/integrations/IntegrationAuthProm
 import { isEmbeddableUrl, transformToEmbed, getSuggestedPlugin } from "@/lib/utils/iframe-helper"
 import { ReasoningDisplay, ReasoningSummary } from "@/components/reasoning-display"
 import { ToolInvocationsList } from "@/components/tool-invocation-card"
+import { VersionHistoryPanel, VersionIndicator } from "@/components/version-history-panel"
+import { AgentStatusDisplay, MultiAgentStatusDisplay } from "@/components/agent-status-display"
 import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
@@ -728,6 +730,31 @@ export default function MessageBubble({
         {/* Tool Invocations Display - Enhanced with new component */}
         {!isUser && toolInvocations.length > 0 && (
           <ToolInvocationsList toolInvocations={toolInvocations} />
+        )}
+
+        {/* Agent Status Display - Shows agent type and current state */}
+        {!isUser && (message.metadata as any)?.processingSteps && (
+          <div className="mt-3">
+            <AgentStatusDisplay
+              agentType={(message.metadata as any)?.agentType || 'single'}
+              status={isStreaming ? 'executing' : 'completed'}
+              currentAction={(message.metadata as any)?.currentAction}
+              toolInvocations={toolInvocations}
+              processingSteps={(message.metadata as any)?.processingSteps}
+              isVisible={true}
+            />
+          </div>
+        )}
+
+        {/* Version History Panel - Git-backed VFS versions */}
+        {!isUser && message.metadata?.sessionId && (
+          <div className="mt-3">
+            <VersionHistoryPanel
+              sessionId={message.metadata.sessionId}
+              currentVersion={(message.metadata as any)?.version}
+              compact
+            />
+          </div>
         )}
 
         {/* Code Artifacts Display - V2 Agent Generated Files */}

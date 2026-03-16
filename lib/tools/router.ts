@@ -571,8 +571,8 @@ class BlaxelProvider implements CapabilityProvider {
   readonly capabilities = ['repo.search', 'repo.analyze'];
 
   async isAvailable(): Promise<boolean> {
-    const { getBlaxelService } = await import('../blaxel');
-    return !!getBlaxelService();
+    // Blaxel service not currently available
+    return false;
   }
 
   async execute(
@@ -580,43 +580,8 @@ class BlaxelProvider implements CapabilityProvider {
     input: any,
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
-    const { getBlaxelService } = await import('../blaxel');
-    const blaxel = getBlaxelService();
-
-    if (!blaxel) {
-      return { success: false, error: 'Blaxel service not available' };
-    }
-
-    try {
-      if (capabilityId === 'repo.search') {
-        // Input validation
-        if (!input.query) {
-          return { success: false, error: 'Missing required field: query' };
-        }
-        const results = await blaxel.searchCode(input.query, {
-          path: input.path,
-          type: input.type,
-          limit: input.limit,
-        });
-        return { success: true, output: results };
-      }
-
-      if (capabilityId === 'repo.analyze') {
-        // Input validation
-        if (!input.path) {
-          return { success: false, error: 'Missing required field: path' };
-        }
-        const results = await blaxel.analyzeRepository(input.path, {
-          depth: input.depth,
-          includeStats: input.includeStats,
-        });
-        return { success: true, output: results };
-      }
-
-      return { success: false, error: `Unknown capability: ${capabilityId}` };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
+    // Blaxel service not currently available
+    return { success: false, error: 'Blaxel service not currently available' };
   }
 }
 
@@ -706,26 +671,26 @@ class EmbeddingSearchProvider implements CapabilityProvider {
     try {
       // Try CrewAI knowledge base first
       const { KnowledgeBase } = await import('../crewai/knowledge');
-      const kb = new KnowledgeBase({
-        storageDir: process.env.KNOWLEDGE_BASE_DIR || './knowledge',
-      });
+      const kb = new KnowledgeBase();
 
       if (capabilityId === 'repo.semantic-search' || input.semantic) {
         // Use semantic search via knowledge base
-        const results = await kb.search(input.query, {
-          limit: input.limit || 10,
-          threshold: input.similarityThreshold || 0.7,
-        });
+        const limit = input.limit || 10;
+        const results = await kb.search(input.query, limit);
+
+        // Filter by threshold if specified
+        const threshold = input.similarityThreshold || 0.7;
+        const filteredResults = results.filter((r: any) => r.score >= threshold);
 
         return {
           success: true,
           output: {
-            results: results.map(r => ({
+            results: filteredResults.map((r: any) => ({
               content: r.content,
               score: r.score,
               source: r.metadata?.source,
             })),
-            total: results.length,
+            total: filteredResults.length,
             type: 'semantic',
           },
         };
@@ -733,31 +698,7 @@ class EmbeddingSearchProvider implements CapabilityProvider {
 
       return { success: false, error: 'Embedding search requires semantic=true' };
     } catch (error: any) {
-      // Fallback to Blaxel semantic search
-      const { getBlaxelService } = await import('../blaxel');
-      const blaxel = getBlaxelService();
-
-      if (!blaxel) {
-        return { success: false, error: 'No embedding search provider available' };
-      }
-
-      try {
-        const results = await blaxel.searchCode(input.query, {
-          path: input.path,
-          limit: input.limit || 10,
-          type: input.type,
-        });
-
-        return {
-          success: true,
-          output: {
-            results,
-            type: 'blaxel-semantic',
-          },
-        };
-      } catch (blaxelError: any) {
-        return { success: false, error: blaxelError.message };
-      }
+      return { success: false, error: `Embedding search failed: ${error.message}` };
     }
   }
 }
@@ -892,29 +833,25 @@ class GitHelperProvider implements CapabilityProvider {
 
 /**
  * Memory Service Provider - key-value storage with TTL and namespaces
+ * Uses KV store for persistent storage (Redis/SQLite/in-memory)
  */
 class MemoryServiceProvider implements CapabilityProvider {
   readonly id = 'memory-service';
   readonly name = 'Memory Service';
   readonly capabilities = ['memory.store', 'memory.retrieve'];
 
-  // In-memory store with namespace support
-  private store = new Map<string, Map<string, { value: any; expiresAt?: number }>>();
+  // KV store instance (initialized on first use)
+  private kvStore: any = null;
 
-  isAvailable(): boolean {
-    // Always available - uses in-memory storage
-    return true;
-  }
-
-  private getNamespace(ns: string): Map<string, { value: any; expiresAt?: number }> {
-    if (!this.store.has(ns)) {
-      this.store.set(ns, new Map());
+  async isAvailable(): Promise<boolean> {
+    try {
+      const { getKVStore } = await import('../utils/kv-store');
+      this.kvStore = getKVStore();
+      return true;
+    } catch (error: any) {
+      logger.warn('KV store not available', error.message);
+      return true; // Still available with fallback
     }
-    return this.store.get(ns)!;
-  }
-
-  private isExpired(entry: { value: any; expiresAt?: number }): boolean {
-    return entry.expiresAt !== undefined && Date.now() > entry.expiresAt;
   }
 
   async execute(
@@ -922,8 +859,9 @@ class MemoryServiceProvider implements CapabilityProvider {
     input: any,
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
-    const namespace = input.namespace || 'default';
-    const nsStore = this.getNamespace(namespace);
+    if (!this.kvStore) {
+      return { success: false, error: 'KV store not initialized' };
+    }
 
     try {
       switch (capabilityId) {
@@ -935,21 +873,18 @@ class MemoryServiceProvider implements CapabilityProvider {
             return { success: false, error: 'Missing required field: value' };
           }
 
-          const ttlMs = input.ttl ? input.ttl * 1000 : undefined;
-          const expiresAt = ttlMs ? Date.now() + ttlMs : undefined;
-
-          nsStore.set(input.key, {
-            value: input.value,
-            expiresAt,
+          await this.kvStore.set(input.key, input.value, {
+            ttl: input.ttl,
+            namespace: input.namespace,
           });
 
           return {
             success: true,
             output: {
               key: input.key,
-              namespace,
+              namespace: input.namespace || 'default',
               stored: true,
-              expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+              expiresAt: input.ttl ? new Date(Date.now() + input.ttl * 1000).toISOString() : null,
             },
           };
         }
@@ -957,29 +892,16 @@ class MemoryServiceProvider implements CapabilityProvider {
         case 'memory.retrieve': {
           // If key is provided, retrieve specific key; otherwise search by query
           if (input.key) {
-            const entry = nsStore.get(input.key);
-            
-            if (!entry) {
+            const value = await this.kvStore.get(input.key, { namespace: input.namespace });
+
+            if (value === null || value === undefined) {
               return {
                 success: true,
                 output: {
                   key: input.key,
-                  namespace,
+                  namespace: input.namespace || 'default',
                   found: false,
                   value: null,
-                },
-              };
-            }
-
-            if (this.isExpired(entry)) {
-              nsStore.delete(input.key);
-              return {
-                success: true,
-                output: {
-                  key: input.key,
-                  namespace,
-                  found: false,
-                  expired: true,
                 },
               };
             }
@@ -988,95 +910,45 @@ class MemoryServiceProvider implements CapabilityProvider {
               success: true,
               output: {
                 key: input.key,
-                namespace,
+                namespace: input.namespace || 'default',
                 found: true,
-                value: entry.value,
+                value,
+                timestamp: new Date().toISOString(),
               },
             };
           }
 
-          // Search mode - find keys matching query
+          // Search by query
           if (input.query) {
-            const query = input.query.toLowerCase();
-            const limit = input.limit || 10;
-            const results: Array<{ key: string; value: any; score: number }> = [];
-
-            for (const [key, entry] of nsStore.entries()) {
-              if (this.isExpired(entry)) {
-                nsStore.delete(key);
-                continue;
-              }
-
-              // Simple string matching - check key and JSON-stringified value
-              const keyMatch = key.toLowerCase().includes(query);
-              const valueMatch = JSON.stringify(entry.value).toLowerCase().includes(query);
-              const score = keyMatch ? 2 : valueMatch ? 1 : 0;
-
-              if (score > 0) {
-                results.push({ key, value: entry.value, score });
-              }
-            }
-
-            results.sort((a, b) => b.score - a.score);
-            const limited = results.slice(0, limit);
+            const results = await this.kvStore.search(input.query, {
+              namespace: input.namespace,
+              limit: input.limit || 10,
+            });
 
             return {
               success: true,
-              output: {
-                results: limited,
-                total: results.length,
-                namespace,
-              },
+              output: results,
             };
           }
 
-          // List all keys in namespace
-          const keys: string[] = [];
-          for (const [key, entry] of nsStore.entries()) {
-            if (this.isExpired(entry)) {
-              nsStore.delete(key);
-              continue;
-            }
-            keys.push(key);
-          }
-
           return {
-            success: true,
-            output: {
-              keys,
-              count: keys.length,
-              namespace,
-            },
+            success: false,
+            error: 'Either key or query must be provided',
           };
         }
 
         default:
-          return { success: false, error: `Unknown capability: ${capabilityId}` };
+          return {
+            success: false,
+            error: `Unknown memory capability: ${capabilityId}`,
+          };
       }
     } catch (error: any) {
-      return { success: false, error: error.message };
+      return {
+        success: false,
+        error: `Memory operation failed: ${error.message}`,
+      };
     }
-  }
-
-  /**
-   * Clear namespace (for testing/cleanup)
-   */
-  clearNamespace(namespace: string): void {
-    this.store.delete(namespace);
-  }
-
-  /**
-   * Get store stats
-   */
-  getStats(): { namespaces: number; totalKeys: number } {
-    let totalKeys = 0;
-    for (const ns of this.store.values()) {
-      totalKeys += ns.size;
-    }
-    return {
-      namespaces: this.store.size,
-      totalKeys,
-    };
   }
 }
 
@@ -1284,7 +1156,7 @@ class OAuthIntegrationProvider implements CapabilityProvider {
 
           // Use consolidated ToolIntegrationManager for tool search
           const toolManager = getToolManager();
-          const tools = toolManager.searchTools(query);
+          const tools = await toolManager.searchTools(query);
 
           // Filter by provider if specified
           let filtered = tools;
@@ -1518,10 +1390,6 @@ class CapabilityRouter {
           return {
             ...result,
             provider: provider.id as any,
-            metadata: {
-              providerScore: score,
-              providerId: provider.id,
-            },
           };
         }
 
@@ -1542,7 +1410,7 @@ class CapabilityRouter {
     return {
       success: false,
       error: `All providers failed for ${capabilityId}: ${errors.join('; ')}`,
-      fallbackChain: capability.providerPriority,
+      fallbackChain: capability.providerPriority as any,  // string[] → IntegrationProvider[]
     };
   }
 
@@ -1659,6 +1527,3 @@ export async function executeCapabilityByName(
   // Convert name to capability ID (e.g., 'file.read' -> 'file.read')
   return executeCapability(name, input, context);
 }
-
-// Re-export types
-export type { CapabilityProvider };

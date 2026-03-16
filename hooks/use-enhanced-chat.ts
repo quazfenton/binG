@@ -5,6 +5,7 @@ import { streamingErrorHandler } from '@/lib/streaming/streaming-error-handler';
 import type { Message } from '@/types';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { buildApiHeaders } from '@/lib/utils';
+import type { AgentType, AgentStatus } from '@/components/agent-status-display';
 
 export interface UseChatOptions {
   api: string;
@@ -24,6 +25,14 @@ export interface UseChatReturn {
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   stop: () => void;
   setInput: (input: string) => void;
+  // Agent status for multi-agent display
+  agentStatus: {
+    type: AgentType;
+    status: AgentStatus;
+    currentAction?: string;
+  };
+  // Version tracking
+  currentVersion?: number;
 }
 
 /**
@@ -35,6 +44,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | undefined>();
   
+  // Agent status state
+  const [agentType, setAgentType] = useState<AgentType>('single');
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>('idle');
+  const [currentAction, setCurrentAction] = useState<string | undefined>();
+  
+  // Version tracking
+  const [currentVersion, setCurrentVersion] = useState<number | undefined>();
+
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentMessageRef = useRef<Message | null>(null);
   const messagesRef = useRef<Message[]>([]);
@@ -52,6 +69,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
       setIsLoading(false);
+      setAgentStatus('idle');
     }
   }, []);
 
@@ -385,21 +403,33 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
               switch (eventType) {
                 case 'init':
-                  // Initialization event - just log for debugging
+                  // Initialization event - update agent status
                   console.log('Chat stream initialized:', eventData);
+                  if (eventData.agent === 'planner') {
+                    setAgentType('planner');
+                  } else if (eventData.agent === 'executor') {
+                    setAgentType('executor');
+                  } else if (eventData.agent === 'background') {
+                    setAgentType('background');
+                  }
+                  setAgentStatus('thinking');
                   break;
 
                 case 'token':
                 case 'data':
                   if (eventData.content) {
                     accumulatedContent += eventData.content;
-                    
+
                     // Update the assistant message in real-time
-                    setMessages(prev => prev.map(msg => 
-                      msg.id === assistantMessage.id 
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
                         ? { ...msg, content: accumulatedContent }
                         : msg
                     ));
+                  }
+                  // Update agent status to executing if we're receiving tokens
+                  if (agentStatus === 'thinking') {
+                    setAgentStatus('executing');
                   }
                   break;
 
@@ -412,9 +442,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         : msg
                     ));
                   }
+                  // Update version if provided
+                  if (eventData.version) {
+                    setCurrentVersion(eventData.version);
+                  }
                   // Streaming complete
                   clearTimeout(timeoutId);
                   setIsLoading(false);
+                  setAgentStatus('completed');
                   if (options.onFinish && currentMessageRef.current) {
                     options.onFinish({
                       ...currentMessageRef.current,
@@ -622,6 +657,41 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       },
                     };
                   }));
+                  // Update agent status based on step
+                  if (eventData.status === 'started') {
+                    setAgentStatus('executing');
+                    setCurrentAction(eventData.step);
+                  } else if (eventData.status === 'completed') {
+                    setCurrentAction(undefined);
+                  }
+                  break;
+
+                case 'git:commit':
+                  // Git commit event - update version
+                  if (eventData.version) {
+                    setCurrentVersion(eventData.version);
+                  }
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id !== assistantMessage.id) return msg;
+                    return {
+                      ...msg,
+                      metadata: {
+                        ...(msg.metadata || {}),
+                        gitCommit: {
+                          filesChanged: eventData.filesChanged,
+                          paths: eventData.paths,
+                          version: eventData.version,
+                        },
+                      },
+                    };
+                  }));
+                  break;
+
+                case 'git:rollback':
+                  // Git rollback event
+                  if (eventData.version) {
+                    setCurrentVersion(eventData.version);
+                  }
                   break;
 
                 case 'step_metric':
@@ -905,5 +975,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     setMessages,
     stop,
     setInput,
+    // Agent status for multi-agent display
+    agentStatus: {
+      type: agentType,
+      status: agentStatus,
+      currentAction,
+    },
+    // Version tracking
+    currentVersion,
   };
 }

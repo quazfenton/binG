@@ -288,6 +288,12 @@ interface InteractionPanelProps {
   userId?: string;
   onAttachedFilesChange?: (files: Record<string, AttachedVirtualFile>) => void;
   filesystemScopePath?: string;
+  // Diffs poller controls
+  isPollingDiffs?: boolean;
+  pollCount?: number;
+  onStartPollingDiffs?: () => void;
+  onStopPollingDiffs?: () => void;
+  onPollDiffsNow?: () => void;
 }
 
 export default function InteractionPanel({
@@ -311,6 +317,11 @@ export default function InteractionPanel({
   onActiveTabChange,
   onAttachedFilesChange,
   filesystemScopePath,
+  isPollingDiffs,
+  pollCount,
+  onStartPollingDiffs,
+  onStopPollingDiffs,
+  onPollDiffsNow,
 }: InteractionPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragHandleRef = useRef<HTMLDivElement>(null);
@@ -1533,7 +1544,7 @@ export default function InteractionPanel({
                   </TabsList>
                 </div>
 
-                <div className="grid grid-cols-4 gap-1 w-full sm:w-auto sm:flex sm:space-x-2 flex-shrink-0">
+                <div className="grid grid-cols-5 gap-1 w-full sm:w-auto sm:flex sm:space-x-2 flex-shrink-0">
                   <Button
                     variant="outline"
                     size="sm"
@@ -1578,6 +1589,17 @@ export default function InteractionPanel({
                       }`}
                     />
                   </Button>
+                  {onPollDiffsNow && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={onPollDiffsNow}
+                      title={`Refresh file changes (${pollCount || 0} polls)`}
+                      className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                    >
+                      <RefreshCw className="h-3 w-3 sm:h-4 sm:w-4" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
