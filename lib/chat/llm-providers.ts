@@ -110,6 +110,12 @@ export interface ProviderConfig {
     apiKey?: string
     baseURL?: string
   }
+  opencode?: {
+    hostname?: string
+    port?: number
+    baseUrl?: string
+    model?: string
+  }
 }
 
 export const PROVIDERS: Record<string, LLMProvider> = {
@@ -339,6 +345,14 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: true,
     maxTokens: 128000,
     description: 'zen API - Access to Zen and Kimi 2.5 models with extended context windows'
+  },
+  opencode: {
+    id: 'opencode',
+    name: 'OpenCode SDK',
+    models: ['opencode/local'],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Local OpenCode instance via SDK - Full agentic capabilities with tool calling'
   }
 }
 
@@ -353,6 +367,7 @@ class LLMService {
   private mistral: Mistral | null = null
   private zenClient: OpenAI | null = null
   private composioService: ComposioService | null = null
+  private opencodeClient: any = null
 
   constructor(config: ProviderConfig = {}) {
     // Initialize providers with API keys
@@ -412,6 +427,36 @@ class LLMService {
         baseURL: config.zen.baseURL || 'https://api.zen.ai/v1'
       })
     }
+
+    // OpenCode SDK configuration (initialized lazily)
+    if (config.opencode) {
+      // Store config for lazy initialization
+      this.opencodeClient = { config: config.opencode, initialized: false }
+    }
+  }
+
+  /**
+   * Initialize OpenCode SDK client lazily
+   */
+  private async initOpencodeClient(): Promise<void> {
+    if (!this.opencodeClient) {
+      throw new Error('OpenCode SDK not configured')
+    }
+
+    if (this.opencodeClient.initialized) {
+      return
+    }
+
+    const { createOpenCodeSDKProvider } = await import('./opencode-sdk-provider')
+    const provider = createOpenCodeSDKProvider(this.opencodeClient.config)
+    await provider.initialize()
+    
+    this.opencodeClient = {
+      provider,
+      initialized: true,
+    }
+
+    chatLogger.info('OpenCode SDK client initialized')
   }
 
   private normalizeOpenAIToolCalls(toolCalls: any[] | undefined): Array<{ id?: string; name: string; arguments: Record<string, any> }> {
@@ -519,6 +564,10 @@ class LLMService {
           break;
         case 'zen':
           response = await this.generatezenResponse(model, messages, temperature, maxTokens)
+          break;
+        case 'opencode':
+          await this.initOpencodeClient()
+          response = await this.opencodeClient.provider.generateResponse(request)
           break;
         default:
           throw createLLMError(`Unsupported provider: ${provider}`, {
@@ -637,6 +686,13 @@ class LLMService {
           break
         case 'zen':
           for await (const chunk of this.streamzenResponse(model, messages, temperature, maxTokens)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
+        case 'opencode':
+          await this.initOpencodeClient()
+          for await (const chunk of this.opencodeClient.provider.generateStreamingResponse(request)) {
             chunkCount++;
             yield chunk;
           }
@@ -1386,6 +1442,9 @@ class LLMService {
           return !!process.env.GITHUB_MODELS_API_KEY || !!process.env.AZURE_OPENAI_API_KEY;
         case 'composio':
           return !!process.env.COMPOSIO_API_KEY;
+        case 'opencode':
+          // OpenCode SDK - check if binary is available or server is running
+          return true; // Always available as it's local
         default:
           return false;
       }
@@ -1441,6 +1500,11 @@ export const llmService = new LLMService({
   zen: {
     apiKey: process.env.zen_API_KEY,
     baseURL: process.env.zen_BASE_URL
+  },
+  opencode: {
+    hostname: process.env.OPENCODE_HOSTNAME || '127.0.0.1',
+    port: parseInt(process.env.OPENCODE_PORT || '4096'),
+    model: process.env.OPENCODE_MODEL || 'anthropic/claude-3-5-sonnet-20241022',
   }
 })
 

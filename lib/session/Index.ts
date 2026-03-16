@@ -10,7 +10,6 @@
  *   sessionManager,
  *   sessionStateBridge,
  *   type Session,
- *   type UnifiedAgentState,
  * } from '@/lib/session'
  * ```
  */
@@ -48,8 +47,14 @@ export {
 } from './state-bridge'
 
 export type {
-  UnifiedAgentState,
   StateStorageEntry,
   PersistStateResult,
   RestoreStateResult,
 } from './state-bridge'
+
+// Re-export UnifiedAgentState from orchestra for convenience
+export type {
+  UnifiedAgentState,
+  AgentStateType,
+  Message,
+} from '../orchestra/unified-agent-state'

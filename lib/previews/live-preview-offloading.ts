@@ -56,47 +56,58 @@ const logger = createLogger('Previews:LivePreview');
 
 /**
  * Preview mode types
+ * Local/Client-side: sandpack, webcontainer, pyodide, parcel, iframe, raw, vite, webpack, nextjs, node
+ * Cloud providers: devbox, codesandbox, opensandbox
+ * Hybrid: local, cloud (auto-detect based on project requirements)
  */
 export type PreviewMode = 
-  | 'sandpack' 
-  | 'iframe' 
-  | 'raw' 
-  | 'parcel' 
-  | 'devbox' 
-  | 'pyodide' 
-  | 'vite' 
-  | 'webpack' 
-  | 'webcontainer' 
-  | 'nextjs' 
-  | 'codesandbox' 
-  | 'opensandbox'
-  | 'local' 
-  | 'cloud';
+  | 'sandpack'     // Local: In-browser bundling (React, Vue, Svelte, etc.)
+  | 'iframe'       // Local: Raw HTML preview
+  | 'raw'          // Local: Raw code view
+  | 'parcel'       // Local: Zero-config bundler (inline HTML/CSS/JS)
+  | 'devbox'       // Cloud: CodeSandbox DevBox cloud environment
+  | 'pyodide'      // Local: In-browser Python runtime
+  | 'vite'         // Local: Vite bundler (redirects to Sandpack)
+  | 'webpack'      // Local: Webpack bundler (redirects to Sandpack)
+  | 'webcontainer' // Local: In-browser Node.js runtime
+  | 'nextjs'       // Local: Next.js via WebContainer
+  | 'codesandbox'  // Cloud: CodeSandbox cloud environment
+  | 'opensandbox'  // Cloud: OpenSandbox container (self-hosted)
+  | 'node'         // Local: Node.js execution (via WebContainer)
+  | 'local'        // Auto: Prefer local execution
+  | 'cloud';       // Auto: Require cloud execution
 
 /**
  * Supported frameworks
+ * JavaScript/TypeScript: react, vue, angular, svelte, solid, vanilla, next, nuxt, gatsby, vite, astro, remix, qwik
+ * Python: gradio, streamlit, flask, fastapi, django
+ * Special: vite-react (Vite with React), unknown
  */
 export type AppFramework = 
-  | 'react' 
-  | 'vue' 
-  | 'angular' 
-  | 'svelte' 
-  | 'solid' 
-  | 'vanilla' 
-  | 'next' 
-  | 'nuxt' 
-  | 'gatsby' 
-  | 'vite' 
-  | 'astro' 
-  | 'remix' 
-  | 'qwik' 
-  | 'gradio' 
-  | 'streamlit' 
-  | 'flask' 
-  | 'fastapi' 
-  | 'django' 
-  | 'vite-react'
-  | 'unknown';
+  // JavaScript/TypeScript Frameworks
+  | 'react'        // React (CRA, manual setup)
+  | 'vue'          // Vue 2/3
+  | 'angular'      // Angular
+  | 'svelte'       // Svelte 3/4/5
+  | 'solid'        // SolidJS
+  | 'vanilla'      // Plain HTML/CSS/JS
+  | 'next'         // Next.js (App Router or Pages Router)
+  | 'nuxt'         // Nuxt 2/3
+  | 'gatsby'       // Gatsby
+  | 'vite'         // Vite (non-React)
+  | 'astro'        // Astro
+  | 'remix'        // Remix
+  | 'qwik'         // Qwik
+  // Python Frameworks
+  | 'gradio'       // Gradio (ML UI)
+  | 'streamlit'    // Streamlit
+  | 'flask'        // Flask
+  | 'fastapi'      // FastAPI
+  | 'django'       // Django
+  // Special
+  | 'vite-react'   // Vite with React
+  | 'node'         // Node.js backend (Express, etc.)
+  | 'unknown';     // Unable to detect
 
 /**
  * Bundler types
@@ -190,48 +201,122 @@ export interface PreviewRequest {
 
 /**
  * Framework to Sandpack template mapping
+ * Maps our AppFramework to CodeSandbox Sandpack templates
  */
 const FRAMEWORK_TO_TEMPLATE: Record<AppFramework, string> = {
+  // React-based
   react: 'react',
   'vite-react': 'react',
   next: 'nextjs',
-  nuxt: 'nuxt',
+  gatsby: 'react',
+  remix: 'remix',
+  // Vue-based
   vue: 'vue',
+  nuxt: 'nuxt',
+  // Other frameworks
   svelte: 'svelte',
   angular: 'angular',
   solid: 'solid',
   astro: 'astro',
-  remix: 'remix',
-  gatsby: 'gatsby',
+  // Non-framework
+  vite: 'vanilla',
   vanilla: 'vanilla',
-  vite: 'react', // Vite projects use React template for frontend
+  node: 'vanilla',  // Node.js -> use vanilla template (WebContainer handles runtime)
   unknown: 'vanilla',
+  // Python - use vanilla (Pyodide handles these separately)
+  gradio: 'vanilla',
+  streamlit: 'vanilla',
+  flask: 'vanilla',
+  fastapi: 'vanilla',
+  django: 'vanilla',
+  qwik: 'vanilla',  // Qwik uses different template in Sandpack
 };
 
 /**
  * Framework default entry points
+ * Prioritized list of entry files for each framework
  */
 const FRAMEWORK_ENTRY_POINTS: Record<AppFramework, string[]> = {
-  react: ['/src/main.tsx', '/src/main.jsx', '/src/index.tsx', '/src/index.jsx', '/src/App.tsx', '/src/App.jsx', '/index.tsx', '/index.jsx'],
-  'vite-react': ['/src/main.tsx', '/src/main.jsx', '/src/index.tsx', '/src/index.jsx'],
-  next: ['/src/app/page.tsx', '/src/app/page.jsx', '/pages/index.tsx', '/pages/index.jsx', '/src/pages/index.tsx', '/src/pages/index.jsx'],
-  nuxt: ['/src/main.ts', '/src/main.js', '/src/App.vue', '/app.vue'],
-  vue: ['/src/main.ts', '/src/main.js', '/src/App.vue', '/main.ts', '/main.js'],
-  svelte: ['/src/main.ts', '/src/main.js', '/src/App.svelte', '/App.svelte'],
-  angular: ['/src/main.ts', '/src/main.js', '/src/app/app.component.ts'],
-  solid: ['/src/index.tsx', '/src/index.jsx', '/src/App.tsx'],
-  astro: ['/src/pages/index.astro', '/pages/index.astro', '/index.astro'],
-  remix: ['/app/routes/_index.tsx', '/app/routes/_index.jsx', '/app/root.tsx'],
-  gatsby: ['/src/pages/index.js', '/src/pages/index.tsx', '/pages/index.js'],
-  vite: ['/src/main.ts', '/src/main.js', '/src/index.ts', '/src/index.js'],
-  vanilla: ['/index.html', '/index.js', '/main.js', '/app.js'],
-  unknown: ['/index.html', '/index.js'],
-  gradio: ['/main.py', '/app.py'],
-  streamlit: ['/main.py', '/app.py'],
-  flask: ['/main.py', '/app.py'],
-  fastapi: ['/main.py', '/app.py'],
-  django: ['/manage.py', '/main.py'],
-  qwik: ['/src/root.tsx', '/src/index.tsx'],
+  // React-based
+  react: [
+    '/src/main.tsx', '/src/main.jsx', '/src/index.tsx', '/src/index.jsx',
+    '/src/App.tsx', '/src/App.jsx', '/index.tsx', '/index.jsx',
+    '/main.tsx', '/main.jsx'
+  ],
+  'vite-react': [
+    '/src/main.tsx', '/src/main.jsx', '/src/index.tsx', '/src/index.jsx',
+    '/src/App.tsx', '/src/App.jsx'
+  ],
+  next: [
+    '/src/app/page.tsx', '/src/app/page.jsx', '/src/app/layout.tsx', '/src/app/layout.jsx',
+    '/pages/index.tsx', '/pages/index.jsx', '/src/pages/index.tsx', '/src/pages/index.jsx',
+    '/src/index.tsx', '/src/index.jsx'
+  ],
+  gatsby: [
+    '/src/pages/index.js', '/src/pages/index.tsx', '/pages/index.js', '/src/index.js'
+  ],
+  remix: [
+    '/app/routes/_index.tsx', '/app/routes/_index.jsx', '/app/root.tsx', '/app/root.jsx',
+    '/app/routes/index.tsx', '/app/routes/index.jsx'
+  ],
+  // Vue-based
+  nuxt: [
+    '/src/main.ts', '/src/main.js', '/src/App.vue', '/app.vue',
+    '/pages/index.ts', '/pages/index.js', '/nuxt.config.ts'
+  ],
+  vue: [
+    '/src/main.ts', '/src/main.js', '/src/App.vue', '/main.ts', '/main.js',
+    '/src/index.ts', '/src/index.js', '/index.html'
+  ],
+  // Other frameworks
+  svelte: [
+    '/src/main.ts', '/src/main.js', '/src/App.svelte', '/App.svelte',
+    '/main.ts', '/main.js', '/src/index.ts', '/src/index.js'
+  ],
+  angular: [
+    '/src/main.ts', '/src/main.js', '/src/app/app.component.ts', '/src/app/app.component.js',
+    '/main.ts', '/main.js', '/angular.json'
+  ],
+  solid: [
+    '/src/index.tsx', '/src/index.jsx', '/src/App.tsx', '/src/App.jsx',
+    '/index.tsx', '/index.jsx', '/src/root.tsx', '/src/root.jsx'
+  ],
+  astro: [
+    '/src/pages/index.astro', '/pages/index.astro', '/index.astro',
+    '/src/layouts/index.astro', '/layouts/index.astro'
+  ],
+  qwik: [
+    '/src/root.tsx', '/src/index.tsx', '/src/routes/index.tsx',
+    '/root.tsx', '/index.tsx', '/src/root.jsx'
+  ],
+  // Non-framework
+  vite: [
+    '/src/main.ts', '/src/main.js', '/src/index.ts', '/src/index.js',
+    '/main.ts', '/main.js', '/vite.config.ts', '/vite.config.js'
+  ],
+  vanilla: [
+    '/index.html', '/index.js', '/main.js', '/app.js', '/script.js', '/main.ts'
+  ],
+  node: [
+    '/server.js', '/app.js', '/index.js', '/main.js', '/src/index.js', '/src/server.js'
+  ],
+  // Python
+  gradio: [
+    '/main.py', '/app.py', '/demo.py', '/serve.py'
+  ],
+  streamlit: [
+    '/main.py', '/app.py', '/streamlit_app.py'
+  ],
+  flask: [
+    '/main.py', '/app.py', '/application.py', '/run.py'
+  ],
+  fastapi: [
+    '/main.py', '/app.py', '/application.py', '/api.py', '/server.py'
+  ],
+  django: [
+    '/manage.py', '/main.py', '/app/__init__.py'
+  ],
+  unknown: ['/index.html', '/index.js', '/main.py'],
 };
 
 /**
@@ -250,9 +335,16 @@ const CONFIG_FILES = {
 };
 
 /**
- * Server file patterns
+ * Server file patterns - used to detect backend/runtime
  */
-const SERVER_FILES = ['server.js', 'app.js', 'index.js', 'main.js', 'main.py', 'app.py', 'manage.py'];
+const SERVER_FILES = [
+  // Node.js
+  'server.js', 'app.js', 'index.js', 'main.js', 'index.mjs', 'server.mjs',
+  // Python
+  'main.py', 'app.py', 'manage.py', 'application.py', 'api.py', 'serve.py',
+  // Special
+  'Dockerfile', 'docker-compose.yml', 'docker-compose.yaml'
+];
 
 /**
  * Heavy computation patterns
@@ -374,76 +466,123 @@ export class LivePreviewOffloading {
 
   /**
    * Detect framework from project files
+   * Comprehensive detection using package.json, file patterns, and code content
    */
   detectFramework(
     filePaths: string[], 
     files: Record<string, string>,
     packageJson: Record<string, any> | null
   ): AppFramework {
-    // Check package.json dependencies first
+    // Check package.json dependencies first (most reliable)
     const deps = packageJson ? { ...packageJson.dependencies, ...packageJson.devDependencies } : {};
+    const devDeps = packageJson?.devDependencies || {};
+    const prodDeps = packageJson?.dependencies || {};
+
+    // Check for Node.js/Express backend - but NOT if there's a frontend framework
+    // Must check ALL frontend frameworks to avoid misdetecting Next.js + Express as 'node'
+    const hasExpress = deps.express || deps['express'] || deps['koa'] || deps['koa'] || deps['fastify'] || deps['fastify'];
+    const hasServerFiles = filePaths.some(p => SERVER_FILES.slice(0, 4).includes(p));
+    const hasFrontend = deps.react || deps['react'] || deps.vue || deps['@vue/core'] || deps.svelte || 
+      deps['@sveltejs/kit'] || deps.next || deps['next'] || deps['@angular/core'] || deps['solid-js'] || 
+      deps.astro || deps.gatsby || deps['@remix-run/react'] || deps['@builder.io/qwik'];
     
+    // Only detect as 'node' if there's no frontend framework
+    if ((hasExpress || hasServerFiles) && !hasFrontend) {
+      return 'node';
+    }
+    
+    // React-based frameworks (check before other JS frameworks)
     if (deps.next || deps['next']) return 'next';
-    if (deps.nuxt || deps['@nuxt/core'] || deps.nuxt3) return 'nuxt';
-    if (deps.gatsby) return 'gatsby';
-    if (deps.astro) return 'astro';
     if (deps['@remix-run/react']) return 'remix';
-    if (deps.svelte || deps['@sveltejs/kit']) return 'svelte';
+    if (deps.gatsby) return 'gatsby';
+    if (deps.react) return 'react';
+
+    // Vue-based frameworks
+    if (deps.nuxt || deps['@nuxt/core'] || deps.nuxt3) return 'nuxt';
+    if (deps.vue || deps['@vue/core'] || deps['vue-loader']) return 'vue';
+
+    // Other JavaScript frameworks
+    if (deps.astro) return 'astro';
+    if (deps.svelte || deps['@sveltejs/kit'] || devDeps['@sveltejs/kit']) return 'svelte';
     if (deps['solid-js']) return 'solid';
-    if (deps['@builder.io/qwik']) return 'qwik';
+    if (deps['@builder.io/qwik'] || deps['@builder.io/qwik-city']) return 'qwik';
     if (deps['@angular/core']) return 'angular';
-    if (deps.gradio) return 'gradio';
+
+    // Vite detection (after framework detection)
+    const hasViteConfig = filePaths.some(p => p.includes('vite.config'));
+    const hasReactDeps = prodDeps['react'] || prodDeps['react-dom'];
+    if (hasViteConfig && hasReactDeps) return 'vite-react';
+    if (hasViteConfig) return 'vite';
+
+    // Python frameworks
+    if (deps.gradio || deps['gradio-client']) return 'gradio';
     if (deps.streamlit) return 'streamlit';
     if (deps.flask || deps.Flask) return 'flask';
-    if (deps.fastapi || deps.fastapi) return 'fastapi';
+    if (deps.fastapi || deps['fastapi']) return 'fastapi';
     if (deps.django || deps.Django) return 'django';
-    if (deps.react) return 'react';
-    if (deps.vue || deps['@vue/core']) return 'vue';
 
-    // Check file extensions and patterns
-    const hasJsx = filePaths.some(p => p.endsWith('.jsx') || p.endsWith('.tsx'));
+    // Check file extensions for additional detection
     const hasVue = filePaths.some(p => p.endsWith('.vue'));
     const hasSvelte = filePaths.some(p => p.endsWith('.svelte'));
     const hasPython = filePaths.some(p => p.endsWith('.py'));
+    const hasJsx = filePaths.some(p => p.endsWith('.jsx') || p.endsWith('.tsx'));
     const hasTsx = filePaths.some(p => p.endsWith('.tsx'));
-    
+    const hasAngularFiles = filePaths.some(p => p.includes('.component.') || p.includes('.module.'));
+
     // Check for config files
-    const hasViteConfig = filePaths.some(p => p.includes('vite.config'));
     const hasNextConfig = filePaths.some(p => p.includes('next.config'));
     const hasNuxtConfig = filePaths.some(p => p.includes('nuxt.config'));
+    const hasGatsbyConfig = filePaths.some(p => p.includes('gatsby-config'));
 
-    // Python frameworks
+    // Python frameworks detection by code content
     if (hasPython) {
       const pythonContent = Object.entries(files)
         .filter(([p]) => p.endsWith('.py'))
         .map(([, c]) => c)
         .join('\n');
       
-      if (pythonContent.includes('import gradio')) return 'gradio';
-      if (pythonContent.includes('import streamlit')) return 'streamlit';
-      if (pythonContent.includes('from flask import') || pythonContent.includes('Flask(')) return 'flask';
-      if (pythonContent.includes('from fastapi import') || pythonContent.includes('FastAPI(')) return 'fastapi';
-      if (pythonContent.includes('from django import') || pythonContent.includes('django.setup()')) return 'django';
+      if (pythonContent.includes('import gradio') || pythonContent.includes('gradio.Blocks')) return 'gradio';
+      if (pythonContent.includes('import streamlit') || pythonContent.includes('st.')) return 'streamlit';
+      if (pythonContent.includes('from flask import') || pythonContent.includes('Flask(') || pythonContent.includes('flask.')) return 'flask';
+      if (pythonContent.includes('from fastapi import') || pythonContent.includes('FastAPI(') || pythonContent.includes('app = FastAPI')) return 'fastapi';
+      if (pythonContent.includes('from django import') || pythonContent.includes('django.setup()') || pythonContent.includes('DJANGO_')) return 'django';
+      
+      // Default to flask if Python but no specific framework detected
+      if (hasServerFiles) return 'node';  // Mixed Node + Python
     }
 
-    // JavaScript frameworks
-    if (hasNextConfig || filePaths.some(p => p.startsWith('pages/') || p.startsWith('app/'))) return 'next';
+    // JavaScript/TypeScript frameworks by file patterns
+    if (hasNextConfig || filePaths.some(p => p.startsWith('pages/') || p.startsWith('src/app/'))) return 'next';
     if (hasNuxtConfig) return 'nuxt';
-    if (hasViteConfig && hasJsx) return 'vite-react';
-    if (hasViteConfig) return 'vite';
+    if (hasGatsbyConfig || filePaths.some(p => p.startsWith('src/pages/') && p.endsWith('.js'))) return 'gatsby';
     if (hasVue) return 'vue';
     if (hasSvelte) return 'svelte';
+    if (hasAngularFiles) return 'angular';
     if (hasTsx && hasJsx) return 'react';
-
+    
     // Check code content for imports
     const jsContent = Object.entries(files)
       .filter(([p]) => p.endsWith('.js') || p.endsWith('.jsx') || p.endsWith('.ts') || p.endsWith('.tsx'))
       .map(([, c]) => c)
       .join('\n');
 
-    if (jsContent.includes('from "react"') || jsContent.includes('from \'react\'')) return 'react';
-    if (jsContent.includes('from "vue"') || jsContent.includes('from \'vue\'')) return 'vue';
-    if (jsContent.includes('from "@sveltejs/')) return 'svelte';
+    if (jsContent.includes('from "react"') || jsContent.includes('from \'react\'') || jsContent.includes('React.')) return 'react';
+    if (jsContent.includes('from "vue"') || jsContent.includes('from \'vue\'') || jsContent.includes('createApp(')) return 'vue';
+    if (jsContent.includes('from "@sveltejs/') || jsContent.includes('svelte/store')) return 'svelte';
+    if (jsContent.includes('from "@angular/') || jsContent.includes('@Component(')) return 'angular';
+    
+    // Node.js/Express detection from code
+    if (jsContent.includes('express()') || jsContent.includes('express.') || jsContent.includes('app.get(') || jsContent.includes('app.post(')) return 'node';
+
+    // Check for HTML files - vanilla project
+    if (filePaths.some(p => p.endsWith('.html'))) return 'vanilla';
+
+    // Node.js detection from code content (fallback)
+    if (hasServerFiles || jsContent.includes('express()') || jsContent.includes('app.get(')) {
+      if (!hasVue && !hasSvelte && !hasAngular && !hasJsx) {
+        return 'node';
+      }
+    }
 
     return 'unknown';
   }
@@ -636,6 +775,7 @@ export class LivePreviewOffloading {
 
   /**
    * Detect preview mode based on project characteristics
+   * Priority: Local first (Sandpack -> WebContainer -> Pyodide), then cloud fallback
    */
   detectPreviewMode(
     filePaths: string[],
@@ -653,77 +793,152 @@ export class LivePreviewOffloading {
     const hasJsx = filePaths.some(p => p.endsWith('.jsx') || p.endsWith('.tsx'));
     const hasVue = filePaths.some(p => p.endsWith('.vue'));
     const hasSvelte = filePaths.some(p => p.endsWith('.svelte'));
-    const hasSimplePython = hasPython && !filePaths.some(f => f.includes('flask') || f.includes('django'));
+    const hasAngular = filePaths.some(p => p.includes('.component.') || p.includes('.module.'));
+    const hasAstro = filePaths.some(p => p.endsWith('.astro'));
+    
+    // Docker detection for cloud fallback decision
+    const hasDocker = filePaths.some(f => 
+      f === 'Dockerfile' || 
+      f === 'docker-compose.yml' || 
+      f === 'docker-compose.yaml'
+    );
+    
+    // Complex dependencies that need cloud
+    const hasComplexDeps = packageJson && (
+      packageJson.dependencies?.prisma ||
+      packageJson.dependencies?.sequelize ||
+      packageJson.dependencies?.typeorm ||
+      packageJson.dependencies?.mongodb ||
+      packageJson.dependencies?.redis ||
+      packageJson.dependencies?.mysql ||
+      packageJson.dependencies?.postgres ||
+      packageJson.dependencies?.dockerode
+    );
 
-    // Python with simple setup -> Pyodide
-    if (hasSimplePython && !hasPackageJson) {
-      return 'pyodide';
+    // ========================================
+    // LOCAL PREVIEW MODES (Preferred)
+    // ========================================
+
+    // Python frameworks -> Pyodide (local)
+    if (framework === 'gradio' || framework === 'streamlit' || framework === 'flask') {
+      if (hasDocker || hasComplexDeps || hasHeavyComputation || hasAPIKeys) {
+        return 'devbox';  // Cloud fallback for complex Python
+      }
+      return 'pyodide';  // Local Python execution
+    }
+    
+    // FastAPI/Django -> DevBox (usually need server)
+    if (framework === 'fastapi' || framework === 'django') {
+      return 'devbox';   // Cloud - these need running server
     }
 
-    // HTML without framework -> Iframe
-    if (hasHtml && !hasJsx && !hasVue && !hasSvelte) {
-      return 'iframe';
-    }
-
-    // Next.js -> Next.js mode (WebContainer)
-    if (hasNextJS || framework === 'next') {
+    // Next.js -> Next.js mode (local via WebContainer)
+    if (framework === 'next' || hasNextJS) {
+      if (hasDocker) return 'devbox';  // Docker needs cloud
       return 'nextjs';
     }
 
-    // Framework projects (React/Vue/Svelte) -> Sandpack
-    if (hasJsx || hasVue || hasSvelte) {
+    // Node.js/Express backend -> WebContainer
+    if (framework === 'node') {
+      if (hasDocker || hasComplexDeps) return 'devbox';  // Cloud for Docker/complex
+      return 'webcontainer';  // Local Node.js
+    }
+
+    // Vue, Nuxt -> Sandpack
+    if (framework === 'vue' || framework === 'nuxt') {
       return 'sandpack';
     }
 
-    // Vite project with package.json -> Vite mode (redirects to Sandpack)
-    if (bundler === 'vite' || (packageJson && packageJson.devDependencies?.vite)) {
+    // Svelte -> Sandpack
+    if (framework === 'svelte') {
+      return 'sandpack';
+    }
+
+    // Angular -> Sandpack
+    if (framework === 'angular') {
+      return 'sandpack';
+    }
+
+    // Astro -> Iframe (Astro builds to static HTML)
+    if (framework === 'astro' || hasAstro) {
+      return 'iframe';
+    }
+
+    // Remix -> Sandpack
+    if (framework === 'remix') {
+      return 'sandpack';
+    }
+
+    // Gatsby -> Iframe (static site generator)
+    if (framework === 'gatsby') {
+      return 'iframe';
+    }
+
+    // React/Vite-React -> Sandpack
+    if (framework === 'react' || framework === 'vite-react' || hasJsx) {
+      return 'sandpack';
+    }
+
+    // SolidJS -> Sandpack
+    if (framework === 'solid') {
+      return 'sandpack';
+    }
+
+    // Qwik -> Sandpack
+    if (framework === 'qwik') {
+      return 'sandpack';
+    }
+
+    // ========================================
+    // BUNDLER DETECTION
+    // ========================================
+
+    // Vite bundler -> Vite mode (redirects to Sandpack)
+    if (bundler === 'vite') {
       return 'vite';
     }
 
-    // Webpack project -> Webpack mode (redirects to Sandpack)
-    if (bundler === 'webpack' || (packageJson && packageJson.devDependencies?.webpack)) {
+    // Webpack bundler -> Webpack mode (redirects to Sandpack)
+    if (bundler === 'webpack') {
       return 'webpack';
     }
 
-    // Parcel project -> Parcel mode
-    if (bundler === 'parcel' || (packageJson && packageJson.devDependencies?.parcel)) {
+    // Parcel bundler -> Parcel mode
+    if (bundler === 'parcel') {
       return 'parcel';
     }
 
-    // Node.js server with package.json -> WebContainer
+    // ========================================
+    // FALLBACKS
+    // ========================================
+
+    // HTML without framework -> Iframe
+    if (hasHtml && !hasJsx && !hasVue && !hasSvelte && !hasAngular) {
+      return 'iframe';
+    }
+
+    // Simple Python (no package.json) -> Pyodide
+    if (hasPython && !hasPackageJson) {
+      return 'pyodide';
+    }
+
+    // Node.js server detected but framework unknown -> WebContainer
     if (hasNodeServer && hasPackageJson) {
-      // Check for Docker or complex deps -> Cloud fallback
-      const hasDocker = filePaths.some(f => f === 'Dockerfile' || f === 'docker-compose.yml');
-      const hasComplexDeps = packageJson && (
-        packageJson.dependencies?.prisma ||
-        packageJson.dependencies?.sequelize ||
-        packageJson.dependencies?.typeorm ||
-        packageJson.dependencies?.mongodb ||
-        packageJson.dependencies?.redis
-      );
-      
-      if (hasDocker || hasComplexDeps) {
-        return 'devbox'; // Cloud for complex apps
-      }
+      if (hasDocker || hasComplexDeps) return 'devbox';
       return 'webcontainer';
     }
 
-    // Python or Node without simple setup -> DevBox (cloud)
-    if (hasPython || hasNodeServer) {
-      const hasDocker = filePaths.some(f => f === 'Dockerfile' || f === 'docker-compose.yml');
-      const hasComplexDeps = packageJson && (
-        packageJson.dependencies?.prisma ||
-        packageJson.dependencies?.sequelize ||
-        packageJson.dependencies?.mongodb
-      );
-      
-      if (hasDocker || hasComplexDeps) {
-        return 'codesandbox';
-      }
+    // Heavy computation or API keys -> Cloud required
+    if (hasHeavyComputation || hasAPIKeys) {
       return 'devbox';
     }
 
-    // Default to Sandpack
+    // Docker projects -> Cloud
+    if (hasDocker) {
+      return 'devbox';
+    }
+
+    // Default: Sandpack for frontend projects
     return 'sandpack';
   }
 
@@ -939,16 +1154,16 @@ root.render(<App />);`,
       case 'webpack':
       case 'vite':
         return 'opensandbox'; // OpenSandbox container (self-hosted first)
-      case 'webcontainer':
+      case 'codesandbox':
       case 'nextjs':
-        return 'opensandbox'; // OpenSandbox for Node.js backends
+        return 'devbox'; // OpenSandbox for Node.js backends
       case 'pyodide':
         return 'opensandbox'; // OpenSandbox for Python
       case 'parcel':
       case 'iframe':
         return 'opensandbox';
       default:
-        return 'opensandbox';
+        return 'devbox';
     }
   }
 

@@ -39,7 +39,7 @@ import {
   stateToJSON,
   stateFromJSON,
   validateState,
-} from '../orchestra/state/unified-agent-state'
+} from '../orchestra/unified-agent-state'
 import type { SandboxHandle } from '../../sandbox/providers/sandbox-provider'
 
 const logger = createLogger('Session:StateBridge')

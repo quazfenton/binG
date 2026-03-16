@@ -9,7 +9,7 @@ import InteractionPanel from "@/components/interaction-panel";
 import Settings from "@/components/settings";
 import ChatHistoryModal from "@/components/chat-history-modal";
 import { ChatPanel } from "@/components/chat-panel";
-import { HorizontalSpaceFiller } from "@/components/horizontal-space-filler";
+import { HorizontalSpaceFiller } from "@/components/space-filler";
 import CodePreviewPanel from "@/components/code-preview-panel";
 import TerminalPanel from "@/components/terminal/TerminalPanel";
 // import { useConversation } from "@/hooks/use-conversation"; // No longer needed

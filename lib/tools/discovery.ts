@@ -17,6 +17,9 @@ import type { ToolInfo } from './registry';
 import { getArcadeService } from '../platforms/arcade-service';
 import { getNangoService } from '../platforms/nango-service';
 import { getTamboService } from '../tambo/tambo-service';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('Tools:Discovery');
 
 export interface DiscoveryOptions {
   /** Search query */
@@ -92,11 +95,21 @@ export class ToolDiscoveryService {
       userId,
     } = options;
 
+    logger.debug('Tool search started', {
+      query: query || '(all tools)',
+      category,
+      provider,
+      requiresAuth,
+      limit,
+      userId,
+    });
+
     let results: DiscoveredTool[] = [];
 
     // Use consolidated ToolIntegrationManager for tool search
     const tools = this.toolManager.searchTools(query || '');
-    
+    logger.debug(`Found ${tools.length} tools from tool manager`, { query });
+
     // Convert to DiscoveredTool format
     results = tools.map(tool => ({
       name: tool.toolName,
@@ -110,21 +123,36 @@ export class ToolDiscoveryService {
 
     // Apply filters
     if (category) {
+      const beforeCount = results.length;
       results = results.filter(tool =>
         tool.category?.toLowerCase() === category.toLowerCase()
       );
+      logger.debug(`Category filter applied: ${category}`, {
+        before: beforeCount,
+        after: results.length,
+      });
     }
 
     if (provider) {
+      const beforeCount = results.length;
       results = results.filter(tool =>
         tool.provider.toLowerCase() === provider.toLowerCase()
       );
+      logger.debug(`Provider filter applied: ${provider}`, {
+        before: beforeCount,
+        after: results.length,
+      });
     }
 
     if (requiresAuth !== undefined) {
+      const beforeCount = results.length;
       results = results.filter(tool =>
         tool.requiresAuth === requiresAuth
       );
+      logger.debug(`Auth filter applied: ${requiresAuth ? 'requires auth' : 'no auth required'}`, {
+        before: beforeCount,
+        after: results.length,
+      });
     }
 
     // Add usage stats
@@ -137,7 +165,16 @@ export class ToolDiscoveryService {
     results = this.sortResults(results, query);
 
     // Apply limit
-    return results.slice(0, limit);
+    const finalResults = results.slice(0, limit);
+    
+    logger.info('Tool search completed', {
+      query,
+      totalFound: results.length,
+      returned: finalResults.length,
+      limited: results.length > limit,
+    });
+
+    return finalResults;
   }
 
   /**

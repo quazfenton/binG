@@ -21,7 +21,7 @@
  * ```
  */
 
-import type { PlanJSON, FileModificationIntent, TransactionLogEntry, ApprovalRequest } from '../stateful-agent/schemas'
+import type { PlanJSON, FileModificationIntent, TransactionLogEntry, ApprovalRequest } from './stateful-agent/schemas'
 
 // ============================================================================
 // Core State Types (from orchestra/stateful-agent/state/Index.ts)

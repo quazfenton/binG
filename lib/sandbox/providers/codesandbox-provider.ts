@@ -94,10 +94,30 @@ export class CodeSandboxProvider implements SandboxProvider {
       const sdk: CodeSandboxSDK = new CodeSandbox(this.apiKey)
 
       const createOpts: Record<string, any> = {}
-      if (this.defaultTemplate) {
+      
+      // Map language to CodeSandbox template
+      if (config.language) {
+        const templateMap: Record<string, string> = {
+          'typescript': 'node',
+          'javascript': 'node',
+          'python': 'python',
+          'docker': 'docker',
+          'react': 'react',
+          'nextjs': 'nextjs',
+          'vue': 'vue',
+          'svelte': 'svelte',
+        }
+        createOpts.id = templateMap[config.language] || this.defaultTemplate || 'node'
+        console.log('[CodeSandbox] Using template:', createOpts.id, 'for language:', config.language)
+      } else if (this.defaultTemplate) {
         createOpts.id = this.defaultTemplate
-        console.log('[CodeSandbox] Using template:', this.defaultTemplate)
+        console.log('[CodeSandbox] Using default template:', this.defaultTemplate)
+      } else {
+        // Default to node template if nothing specified
+        createOpts.id = 'node'
+        console.log('[CodeSandbox] Using fallback template: node')
       }
+      
       if (config.labels?.userId) {
         createOpts.tags = ['sdk', `user:${config.labels.userId}`]
       }
@@ -117,12 +137,12 @@ export class CodeSandboxProvider implements SandboxProvider {
         createOpts.vmTier = VMTier[this.vmTier as keyof typeof VMTier] || VMTier.Micro
       }
 
-      console.log(`[CodeSandbox] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Template: ${this.defaultTemplate || 'default'}, Privacy: ${this.privacy || 'default'}`)
+      console.log(`[CodeSandbox] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Template: ${createOpts.id}, Privacy: ${this.privacy || 'default'}`)
       console.log('[CodeSandbox] Create options:', JSON.stringify(createOpts, null, 2))
-      
+
       const sandbox: CSBSandbox = await sdk.sandboxes.create(createOpts)
       console.log(`[CodeSandbox] ✓ Created sandbox ${sandbox.id}`)
-      
+
       const client: CSBClient = await sandbox.connect()
 
       // Set up environment variables inside the sandbox

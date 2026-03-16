@@ -14,4 +14,4 @@
  * ```
  */
 
-export * from './unified-agent-state'
+export * from '../unified-agent-state'

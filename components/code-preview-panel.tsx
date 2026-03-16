@@ -640,7 +640,7 @@ export default function CodePreviewPanel({
   
   const handleManualPreview = useCallback(async (
     directoryPath?: string,
-    mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'local' | 'cloud',
+    mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'local' | 'cloud',
     options?: { silent?: boolean; preserveTab?: boolean },
   ) => {
     // Prevent multiple concurrent calls
@@ -3006,11 +3006,13 @@ root.render(<App />);` };
               const entryDir = entryFile.includes('/') ? entryFile.substring(0, entryFile.lastIndexOf('/')) : '.';
               
               // Next.js should use 'npm run dev', otherwise use start script or node with correct path
+              // cdPrefix is empty when entryDir is '.' so we don't emit a bare 'cd <command>'
+              const cdPrefix = entryDir !== '.' ? `cd ${entryDir} && ` : '';
               const startCommand = hasNextJs && hasDevScript 
-                ? 'cd ' + (entryDir !== '.' ? entryDir + ' && ' : '') + 'npm run dev' 
+                ? cdPrefix + 'npm run dev' 
                 : hasStartScript 
-                  ? 'cd ' + (entryDir !== '.' ? entryDir + ' && ' : '') + 'npm start' 
-                  : 'cd ' + (entryDir !== '.' ? entryDir + ' && ' : '') + 'node ' + entryFile.split('/').pop();
+                  ? cdPrefix + 'npm start' 
+                  : cdPrefix + 'node ' + entryFile.split('/').pop();
 
               log(`[WebContainer] Using start command: ${startCommand} (entry dir: ${entryDir})`);
 

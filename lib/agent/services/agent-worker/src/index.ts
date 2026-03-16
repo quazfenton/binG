@@ -8,6 +8,7 @@
  * - Checkpoint/resume for crash recovery
  * - Tool execution via ToolIntegrationManager
  * - Git-backed VFS for automatic commits and rollbacks
+ * - Integration with task-router and provider-router for optimal execution
  */
 
 import Redis from 'ioredis';
@@ -16,6 +17,10 @@ import fetch from 'node-fetch';
 import * as fs from 'fs/promises';
 import { getOpenCodeEngine, OpenCodeEngine, type OpenCodeEvent } from './opencode-engine';
 import { checkpointManager, type AgentCheckpoint } from './checkpoint-manager';
+import { taskRouter } from '../../../../task-router';
+import { executeV2Task } from '../../../../v2-executor';
+import { providerRouter, latencyTracker } from '../../../../sandbox/provider-router';
+import { determineExecutionPolicy } from '../../../../sandbox/types';
 
 const logger = createLogger('Agent:Worker');
 
@@ -146,11 +151,12 @@ async function executeTool(
   }
 }
 
-// Run OpenCode with persistent engine
+// Run OpenCode with persistent engine and task routing
 async function runOpenCode(job: AgentJob): Promise<void> {
   const { id: jobId, sessionId, userId, conversationId, prompt, context, model } = job;
-  
-  logger.info('Starting job with persistent engine', { jobId, sessionId, userId });
+  const startTime = Date.now();
+
+  logger.info('Starting job with task routing', { jobId, sessionId, userId });
 
   // Update job status
   job.status = 'processing';
@@ -161,183 +167,124 @@ async function runOpenCode(job: AgentJob): Promise<void> {
   await fs.mkdir(workspaceDir, { recursive: true }).catch(() => {});
 
   try {
+    // Step 1: Analyze task and determine execution policy
+    const executionPolicy = determineExecutionPolicy({
+      task: prompt,
+      requiresBash: /bash|shell|command|execute|run\s+\w+/i.test(prompt),
+      requiresFileWrite: /write|create|save|edit|modify|delete\s+(file|\w+\.\w+)/i.test(prompt),
+      requiresBackend: /server|api|database|backend|express|fastapi|flask|django/i.test(prompt),
+      requiresGUI: /gui|desktop|browser|electron|tauri/i.test(prompt),
+      isLongRunning: /server|daemon|service|long-running|persistent/i.test(prompt),
+    });
+
+    logger.info('Execution policy determined', { policy: executionPolicy, jobId });
+
+    // Step 2: Select optimal provider using provider-router
+    const providerSelection = await providerRouter.selectOptimalProvider({
+      type: 'agent',
+      duration: executionPolicy === 'local-safe' ? 'short' : 'medium',
+      requiresPersistence: executionPolicy === 'persistent-sandbox',
+      needsServices: executionPolicy === 'desktop-required' ? ['desktop'] : ['pty'],
+      performancePriority: 'latency',
+    });
+
+    logger.info('Provider selected', {
+      provider: providerSelection.provider,
+      confidence: providerSelection.confidence,
+      reason: providerSelection.reason,
+      jobId,
+    });
+
     // Emit start events
     await publishEvent({
       type: 'job:started',
       sessionId,
-      data: { jobId, prompt: prompt.substring(0, 100) },
+      data: {
+        jobId,
+        prompt: prompt.substring(0, 100),
+        executionPolicy,
+        selectedProvider: providerSelection.provider,
+      },
       timestamp: Date.now(),
     });
 
     await publishEvent({
       type: 'init',
       sessionId,
-      data: { 
-        agent: 'opencode', 
-        sessionId, 
+      data: {
+        agent: 'opencode',
+        sessionId,
         timestamp: Date.now(),
         gitVfsEnabled: GIT_VFS_AUTO_COMMIT,
+        executionPolicy,
+        provider: providerSelection.provider,
       },
       timestamp: Date.now(),
     });
 
-    // Initialize git-backed VFS for this session
-    let gitVFS: any = null;
-    if (GIT_VFS_AUTO_COMMIT) {
-      try {
-        // Dynamic import to avoid circular dependencies
-        const { virtualFilesystem } = await import('../../../../../lib/virtual-filesystem/virtual-filesystem-service');
-        gitVFS = virtualFilesystem.getGitBackedVFS(userId, {
-          autoCommit: true,
+    // Step 3: Execute task using task-router or direct V2 execution
+    const result = await taskRouter.executeTask({
+      id: jobId,
+      userId,
+      conversationId,
+      task: prompt,
+      stream: false,
+      onStreamChunk: (chunk) => {
+        publishEvent({
+          type: 'token',
           sessionId,
-          enableShadowCommits: true,
-        });
-        logger.info('Git-backed VFS initialized', { sessionId, userId });
-      } catch (vfsError: any) {
-        logger.warn('Failed to initialize git-backed VFS, continuing without', { error: vfsError.message });
-      }
-    }
-
-    // Track file changes for git commit
-    const fileChanges: Array<{ path: string; content: string; operation: string }> = [];
-
-    // Run with persistent engine (no CLI spawn!)
-    await opencodeEngine.run({
-      sessionId,
-      prompt,
-      context,
-      onEvent: async (event) => {
-        // Transform and publish events
-        switch (event.type) {
-          case 'text':
-            await publishEvent({
-              type: 'token',
-              sessionId,
-              data: { content: event.data.text, timestamp: Date.now() },
-              timestamp: Date.now(),
-            });
-            break;
-
-          case 'tool':
-            const toolName = event.data.tool;
-            const toolArgs = event.data.args;
-
-            await publishEvent({
-              type: 'tool:start',
-              sessionId,
-              data: { tool: toolName, args: toolArgs, timestamp: Date.now() },
-              timestamp: Date.now(),
-            });
-
-            // Execute tool via ToolIntegrationManager (with MCP fallback)
-            const toolResult = await executeTool(toolName, toolArgs, userId, conversationId, sessionId);
-
-            // Track file changes for git commit
-            if (gitVFS && toolName && (toolName.includes('write') || toolName.includes('edit') || toolName.includes('create'))) {
-              const filePath = toolArgs.path || toolArgs.file;
-              const content = toolArgs.content;
-              if (filePath && content) {
-                fileChanges.push({ path: filePath, content, operation: toolName });
-                // Write to git-backed VFS (auto-commits)
-                try {
-                  await gitVFS.writeFile(userId, filePath, content);
-                  logger.debug('File written to git-backed VFS', { path: filePath, sessionId });
-                } catch (vfsError: any) {
-                  logger.warn('Failed to write to git-backed VFS', { path: filePath, error: vfsError.message });
-                }
-              }
-            }
-
-            await publishEvent({
-              type: 'tool:result',
-              sessionId,
-              data: { tool: toolName, args: toolArgs, result: toolResult, timestamp: Date.now() },
-              timestamp: Date.now(),
-            });
-            break;
-
-          case 'done':
-            // Commit all file changes as single commit
-            if (gitVFS && fileChanges.length > 0) {
-              try {
-                await gitVFS.commitChanges(userId, `Agent completed: ${prompt.substring(0, 50)}...`);
-                logger.info('Git commit created for file changes', { count: fileChanges.length, sessionId });
-                
-                await publishEvent({
-                  type: 'git:commit',
-                  sessionId,
-                  data: { 
-                    filesChanged: fileChanges.length,
-                    paths: fileChanges.map(fc => fc.path),
-                    timestamp: Date.now(),
-                  },
-                  timestamp: Date.now(),
-                });
-              } catch (commitError: any) {
-                logger.warn('Failed to commit changes to git', { error: commitError.message });
-              }
-            }
-
-            await publishEvent({
-              type: 'done',
-              sessionId,
-              data: { 
-                response: event.data.response, 
-                timestamp: Date.now(),
-                filesChanged: fileChanges.length,
-              },
-              timestamp: Date.now(),
-            });
-            break;
-
-          case 'error':
-            // Rollback on error if git VFS enabled
-            if (gitVFS && GIT_VFS_AUTO_COMMIT) {
-              try {
-                const state = await gitVFS.getState(userId);
-                if (state.version > 0) {
-                  await gitVFS.rollback(userId, state.version - 1);
-                  logger.info('Rolled back changes due to error', { sessionId, version: state.version });
-                }
-              } catch (rollbackError: any) {
-                logger.warn('Failed to rollback', { error: rollbackError.message });
-              }
-            }
-
-            await publishEvent({
-              type: 'error',
-              sessionId,
-              data: { error: event.data.error, timestamp: Date.now() },
-              timestamp: Date.now(),
-            });
-            break;
-        }
+          data: { content: chunk, timestamp: Date.now() },
+          timestamp: Date.now(),
+        }).catch(() => {});
+      },
+      onToolExecution: (toolName, args, result) => {
+        publishEvent({
+          type: 'tool:result',
+          sessionId,
+          data: { tool: toolName, args, result, timestamp: Date.now() },
+          timestamp: Date.now(),
+        }).catch(() => {});
       },
     });
 
-    // Update job status
-    job.status = 'completed';
-    await redis.set(`agent:job:${jobId}`, JSON.stringify(job), 'EX', 3600);
+    // Record latency for provider router
+    const latency = Date.now() - startTime;
+    latencyTracker.record(providerSelection.provider, latency, result.success !== false);
 
+    // Emit completion
     await publishEvent({
-      type: 'job:completed',
+      type: 'done',
       sessionId,
-      data: { jobId, status: 'completed' },
+      data: {
+        response: result.response,
+        timestamp: Date.now(),
+        latency,
+        provider: providerSelection.provider,
+        executionPolicy,
+      },
       timestamp: Date.now(),
     });
 
-    logger.info('Job completed', { jobId });
+    logger.info('Job completed', {
+      jobId,
+      latency,
+      success: result.success,
+      provider: providerSelection.provider,
+    });
 
   } catch (error: any) {
+    const latency = Date.now() - startTime;
     logger.error('Job failed', { jobId, error: error.message });
 
-    job.status = 'failed';
-    await redis.set(`agent:job:${jobId}`, JSON.stringify(job), 'EX', 3600);
+    // Record failed latency
+    try {
+      latencyTracker.record('daytona' as any, latency, false);
+    } catch {}
 
     await publishEvent({
       type: 'error',
       sessionId,
-      data: { jobId, error: error.message, timestamp: Date.now() },
+      data: { error: error.message, timestamp: Date.now() },
       timestamp: Date.now(),
     });
   }

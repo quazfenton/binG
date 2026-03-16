@@ -157,7 +157,7 @@ export class SessionManager {
   async getOrCreateSession(
     userId: string,
     conversationId: string,
-    config: SessionConfig = {},
+    config: SessionConfig = {} as SessionConfig,
   ): Promise<Session> {
     const key = this.getSessionKey(userId, conversationId);
 
@@ -674,7 +674,7 @@ export class SessionManager {
         lastActivity: Date.now(),
         status: 'starting',
         state: 'ready',
-        workspaceDir,
+        workspaceDir: workspacePath,
         workspacePath,
         sandboxHandle,
         nullclawEnabled: config.enableNullclaw ?? false,
