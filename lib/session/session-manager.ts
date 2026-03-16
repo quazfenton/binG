@@ -1,11 +1,18 @@
 /**
- * Consolidated Session Manager
- * 
+ * Consolidated Session Manager with OpenCode Integration
+ *
  * Merges OpenCodeV2SessionManager and AgentSessionManager into unified interface.
- * This is the single source of truth for all session management.
- * 
- * @see lib/api/opencode-v2-session-manager.ts - DEPRECATED (re-exported for backward compatibility)
- * @see lib/agent/agent-session-manager.ts - DEPRECATED (re-exported for backward compatibility)
+ * Uses OpenCode SDK as primary session backend with local session tracking for persistence.
+ *
+ * Architecture:
+ * - OpenCode SDK for AI session management (primary)
+ * - Local SQLite for persistence and fallback
+ * - Automatic sync between OpenCode and local sessions
+ * - Background tracking of session state
+ *
+ * @see lib/api/opencode-v2-session-manager.ts - DEPRECATED (OpenCode SDK now primary)
+ * @see lib/agent/agent-session-manager.ts - DEPRECATED (merged into this)
+ * @see lib/opencode/opencode-session-manager.ts - OpenCode SDK integration
  */
 
 import { v4 as uuidv4 } from 'uuid';
@@ -19,6 +26,7 @@ import {
 } from '../sandbox/types';
 import { getSandboxProvider, getSandboxProviderWithFallback } from '../sandbox/providers';
 import type { SandboxHandle, SandboxCreateConfig } from '../sandbox/providers/sandbox-provider';
+import { createOpencodeSessionManager, type OpencodeSessionManager } from '@/lib/opencode';
 
 const logger = createLogger('Session:Manager');
 

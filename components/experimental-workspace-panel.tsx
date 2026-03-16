@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   FolderOpen,
   FileText,
@@ -41,6 +42,43 @@ import {
   Edit,
   Copy,
   Download,
+  Bot,
+  Workflow,
+  Database,
+  Mail,
+  Video,
+  BookOpen,
+  GraduationCap,
+  MessageCircle,
+  FileSpreadsheet,
+  Cloud,
+  Music2,
+  Mic,
+  Share2,
+  LineChart,
+  Search,
+  FileText as FileDoc,
+  Clock,
+  Youtube,
+  Maximize2,
+  Minimize2,
+  SwipeRight,
+  Users,
+  Heart,
+  MessageCircle as MessageComment,
+  Send,
+  User,
+  LogIn,
+  Cpu,
+  Terminal,
+  GitCommit,
+  FileDiff,
+  Activity,
+  Clock3,
+  CheckCircle2,
+  AlertCircle,
+  ChevronUp,
+  ChevronDown as ChevronDownIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
@@ -80,6 +118,118 @@ export function ExperimentalWorkspacePanel() {
   const [volume, setVolume] = useState(0.7);
   const [isMuted, setIsMuted] = useState(false);
   
+  // YouTube state
+  const [youtubePlaylistId, setYoutubePlaylistId] = useState("PLKV7EJNZDttTn70dbzbv07JS1Y2HScVJ0");
+  const [isYoutubeFullscreen, setIsYoutubeFullscreen] = useState(false);
+  
+  // Agent status display state
+  const [showAgentStatus, setShowAgentStatus] = useState(false);
+  
+  // Forum state
+  interface ForumPost {
+    id: string;
+    author: string;
+    content: string;
+    timestamp: number;
+    likes: number;
+    comments: ForumComment[];
+    isAnonymous: boolean;
+  }
+  
+  interface ForumComment {
+    id: string;
+    author: string;
+    content: string;
+    timestamp: number;
+    isAnonymous: boolean;
+  }
+  
+  const [forumPosts, setForumPosts] = useState<ForumPost[]>([
+    {
+      id: "1",
+      author: "TechEnthusiast",
+      content: "Welcome to the global forum! Share your thoughts, ideas, and notes here.",
+      timestamp: Date.now() - 3600000,
+      likes: 5,
+      comments: [
+        {
+          id: "c1",
+          author: "Anonymous",
+          content: "Great idea! Love this feature.",
+          timestamp: Date.now() - 1800000,
+          isAnonymous: true,
+        },
+      ],
+      isAnonymous: false,
+    },
+  ]);
+  const [newPostContent, setNewPostContent] = useState("");
+  const [isAnonymousPost, setIsAnonymousPost] = useState(true);
+  const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
+  const [newCommentContent, setNewCommentContent] = useState<{[key: string]: string}>({});
+  
+  // Agent Activity state
+  interface ToolInvocation {
+    id: string;
+    toolName: string;
+    state: 'partial-call' | 'call' | 'result';
+    args?: Record<string, any>;
+    result?: any;
+    timestamp: number;
+  }
+  
+  interface ReasoningChunk {
+    id: string;
+    type: 'thought' | 'plan' | 'reasoning' | 'reflection';
+    content: string;
+    timestamp: number;
+  }
+  
+  interface ProcessingStep {
+    id: string;
+    step: string;
+    status: 'pending' | 'started' | 'completed' | 'failed';
+    stepIndex: number;
+    timestamp: number;
+  }
+  
+  interface GitCommit {
+    version: number;
+    filesChanged: number;
+    paths: string[];
+    timestamp: number;
+  }
+  
+  interface AgentActivity {
+    status: 'idle' | 'thinking' | 'executing' | 'completed';
+    currentAction: string;
+    toolInvocations: ToolInvocation[];
+    reasoningChunks: ReasoningChunk[];
+    processingSteps: ProcessingStep[];
+    gitCommits: GitCommit[];
+    diffs: Array<{ path: string; diff: string; changeType: string }>;
+    tokenUsage?: { prompt: number; completion: number; total: number };
+  }
+  
+  const [agentActivity, setAgentActivity] = useState<AgentActivity>({
+    status: 'idle',
+    currentAction: '',
+    toolInvocations: [],
+    reasoningChunks: [],
+    processingSteps: [],
+    gitCommits: [],
+    diffs: [],
+  });
+  
+  const [expandedToolId, setExpandedToolId] = useState<string | null>(null);
+  const [showReasoning, setShowReasoning] = useState(true);
+  const [showSteps, setShowSteps] = useState(true);
+  
+  // Get agent activity from hook (will be wired later)
+  // For now, using local state that can be updated by parent component via props
+  const { agentActivity: externalAgentActivity, setAgentActivity: setExternalAgentActivity } = 
+    (window as any).__agentActivity || { agentActivity: undefined, setAgentActivity: undefined };
+
   const { filesystem } = useVirtualFilesystem();
   const chatEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -324,19 +474,148 @@ export function ExperimentalWorkspacePanel() {
                     Experimental Workspace
                   </span>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={closePanel}
-                  className="h-6 w-6 hover:bg-white/10"
-                >
-                  <X className="h-3 w-3" />
-                </Button>
+                <div className="flex gap-2">
+                  {/* Agent Status Toggle */}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowAgentStatus(!showAgentStatus)}
+                    className={`h-6 w-6 p-0 hover:bg-white/10 transition-all duration-300 ${
+                      showAgentStatus ? "text-cyan-400 bg-cyan-500/20" : "text-white/60"
+                    }`}
+                    title="Toggle agent status display"
+                  >
+                    <Brain className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={closePanel}
+                    className="h-6 w-6 hover:bg-white/10"
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
               </div>
+
+              {/* Agent Status Display - Slides in from left */}
+              <AnimatePresence>
+                {showAgentStatus && (
+                  <motion.div
+                    initial={{ x: "-100%", opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={{ x: "-100%", opacity: 0 }}
+                    transition={{ type: "spring", damping: 25, stiffness: 200 }}
+                    className="absolute left-0 top-0 bottom-0 w-64 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 backdrop-blur-xl border-r border-cyan-500/30 z-20 overflow-hidden"
+                  >
+                    <div className="p-4 h-full overflow-y-auto">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <Brain className="h-4 w-4 text-cyan-400" />
+                          <span className="text-sm font-semibold text-white/90">Agent Status</span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setShowAgentStatus(false)}
+                          className="h-6 w-6 hover:bg-white/10"
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+
+                      {/* Status Cards */}
+                      <div className="space-y-3">
+                        {/* Current State */}
+                        <Card className="bg-cyan-500/10 border-cyan-500/30">
+                          <CardContent className="p-3">
+                            <p className="text-[10px] text-cyan-300 mb-1">Current State</p>
+                            <div className="flex items-center gap-2">
+                              <div className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
+                              <p className="text-sm text-white/90">Active</p>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Session Info */}
+                        <Card className="bg-blue-500/10 border-blue-500/30">
+                          <CardContent className="p-3">
+                            <p className="text-[10px] text-blue-300 mb-1">Session</p>
+                            <p className="text-xs text-white/80 font-mono">
+                              #{filesystem?.sessionId?.slice(0, 8) || "N/A"}
+                            </p>
+                          </CardContent>
+                        </Card>
+
+                        {/* Progress */}
+                        <Card className="bg-purple-500/10 border-purple-500/30">
+                          <CardContent className="p-3">
+                            <p className="text-[10px] text-purple-300 mb-2">Current Task</p>
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2">
+                                <CheckCircle className="h-3 w-3 text-green-400" />
+                                <span className="text-xs text-white/70">Initialize</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Loader2 className="h-3 w-3 text-cyan-400 animate-spin" />
+                                <span className="text-xs text-white/90">Processing</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <div className="h-3 w-3 rounded-full border border-white/30" />
+                                <span className="text-xs text-white/40">Complete</span>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Metrics */}
+                        <Card className="bg-green-500/10 border-green-500/30">
+                          <CardContent className="p-3">
+                            <p className="text-[10px] text-green-300 mb-2">Metrics</p>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <p className="text-[9px] text-white/50">Steps</p>
+                                <p className="text-sm text-white/90">{filesystem?.version || 0}</p>
+                              </div>
+                              <div>
+                                <p className="text-[9px] text-white/50">Files</p>
+                                <p className="text-sm text-white/90">{filesystem?.files?.length || 0}</p>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Thinking Notes Preview */}
+                        {thinkingNotes.length > 0 && (
+                          <Card className="bg-purple-500/10 border-purple-500/30">
+                            <CardContent className="p-3">
+                              <p className="text-[10px] text-purple-300 mb-2">Recent Thoughts</p>
+                              <div className="space-y-1 max-h-32 overflow-y-auto">
+                                {thinkingNotes.slice(-3).map((note, i) => (
+                                  <div key={i} className="text-xs text-white/70 bg-purple-500/20 p-1.5 rounded">
+                                    {note.slice(0, 50)}{note.length > 50 ? '...' : ''}
+                                  </div>
+                                ))}
+                              </div>
+                            </CardContent>
+                          </Card>
+                        )}
+                      </div>
+
+                      {/* Footer */}
+                      <div className="mt-4 pt-4 border-t border-white/10">
+                        <p className="text-[10px] text-white/40 text-center">
+                          Real-time agent monitoring
+                        </p>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               {/* Tabs */}
               <Tabs value={activeTab} onValueChange={(v) => setTab(v as PanelTab)} className="flex-1 flex flex-col">
-                <TabsList className="grid grid-cols-4 gap-1 mx-4 mt-4 bg-white/5 border border-white/10 p-1">
+                <TabsList className="grid grid-cols-8 gap-1 mx-4 mt-4 bg-white/5 border border-white/10 p-1">
                   <TabsTrigger
                     value="explorer"
                     className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
@@ -364,6 +643,34 @@ export function ExperimentalWorkspacePanel() {
                   >
                     <Music className="h-3 w-3 mr-1" />
                     Music
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="automations"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                  >
+                    <Workflow className="h-3 w-3 mr-1" />
+                    Automate
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="youtube"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                  >
+                    <Youtube className="h-3 w-3 mr-1" />
+                    Videos
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="forum"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                  >
+                    <Users className="h-3 w-3 mr-1" />
+                    Forum
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="agent"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                  >
+                    <Cpu className="h-3 w-3 mr-1" />
+                    Agent
                   </TabsTrigger>
                 </TabsList>
 
@@ -701,6 +1008,1009 @@ export function ExperimentalWorkspacePanel() {
                             </div>
                           ))
                         )}
+                      </div>
+                    </div>
+                  </ScrollArea>
+                </TabsContent>
+
+                {/* Automations Tab */}
+                <TabsContent value="automations" className="flex-1 mt-0 overflow-hidden">
+                  <ScrollArea className="h-full">
+                    <div className="p-4 space-y-4">
+                      <div className="flex items-center gap-2 mb-4">
+                        <Workflow className="h-4 w-4 text-cyan-400" />
+                        <span className="text-sm font-medium text-white/90">Automation Templates</span>
+                        <Badge variant="secondary" className="text-[10px] bg-cyan-500/20 text-cyan-300">
+                          Coming Soon
+                        </Badge>
+                      </div>
+
+                      {/* Automation Cards Grid */}
+                      <div className="grid grid-cols-1 gap-3">
+                        {/* Personal Life Manager */}
+                        <Card 
+                          className="bg-gradient-to-br from-purple-500/10 to-blue-500/10 border-purple-500/30 hover:border-purple-500/50 cursor-pointer transition-all duration-300"
+                          onClick={() => toast.info("Coming Soon", { description: "Personal life manager with Telegram, Google services & voice-enabled AI" })}
+                        >
+                          <CardContent className="p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <Bot className="h-4 w-4 text-purple-400" />
+                                <div>
+                                  <p className="text-sm font-medium text-white/90">Personal Life Manager</p>
+                                  <p className="text-xs text-white/50">Telegram, Google services & voice-enabled AI</p>
+                                </div>
+                              </div>
+                              <ExternalLink className="h-3 w-3 text-white/40" />
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              <Badge variant="secondary" className="text-[9px] bg-purple-500/20">Telegram</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-blue-500/20">Google</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-green-500/20">Voice AI</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Viral Video Generator */}
+                        <Card 
+                          className="bg-gradient-to-br from-pink-500/10 to-orange-500/10 border-pink-500/30 hover:border-pink-500/50 cursor-pointer transition-all duration-300"
+                          onClick={() => toast.info("Coming Soon", { description: "Generate AI viral videos with VEO 3 and upload to TikTok" })}
+                        >
+                          <CardContent className="p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <Video className="h-4 w-4 text-pink-400" />
+                                <div>
+                                  <p className="text-sm font-medium text-white/90">AI Viral Video Generator</p>
+                                  <p className="text-xs text-white/50">VEO 3 → TikTok automation</p>
+                                </div>
+                              </div>
+                              <ExternalLink className="h-3 w-3 text-white/40" />
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              <Badge variant="secondary" className="text-[9px] bg-pink-500/20">VEO 3</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-black/40">TikTok</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* JSON Tutorial */}
+                        <Card 
+                          className="bg-gradient-to-br from-yellow-500/10 to-amber-500/10 border-yellow-500/30 hover:border-yellow-500/50 cursor-pointer transition-all duration-300"
+                          onClick={() => toast.info("Coming Soon", { description: "Learn JSON basics with an interactive step-by-step tutorial" })}
+                        >
+                          <CardContent className="p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <GraduationCap className="h-4 w-4 text-yellow-400" />
+                                <div>
+                                  <p className="text-sm font-medium text-white/90">Learn JSON Basics</p>
+                                  <p className="text-xs text-white/50">Interactive step-by-step tutorial</p>
+                                </div>
+                              </div>
+                              <ExternalLink className="h-3 w-3 text-white/40" />
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              <Badge variant="secondary" className="text-[9px] bg-yellow-500/20">Education</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-blue-500/20">JSON</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Code Tutorial */}
+                        <Card 
+                          className="bg-gradient-to-br from-green-500/10 to-emerald-500/10 border-green-500/30 hover:border-green-500/50 cursor-pointer transition-all duration-300"
+                          onClick={() => toast.info("Coming Soon", { description: "Learn Code Node (JavaScript) with an Interactive Hands-On Tutorial" })}
+                        >
+                          <CardContent className="p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <Code className="h-4 w-4 text-green-400" />
+                                <div>
+                                  <p className="text-sm font-medium text-white/90">Learn JavaScript</p>
+                                  <p className="text-xs text-white/50">Interactive hands-on tutorial</p>
+                                </div>
+                              </div>
+                              <ExternalLink className="h-3 w-3 text-white/40" />
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              <Badge variant="secondary" className="text-[9px] bg-green-500/20">Code</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-yellow-500/20">JavaScript</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Angie AI Assistant */}
+                        <Card 
+                          className="bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border-indigo-500/30 hover:border-indigo-500/50 cursor-pointer transition-all duration-300"
+                          onClick={() => toast.info("Coming Soon", { description: "Angie, personal AI assistant with Telegram voice and text" })}
+                        >
+                          <CardContent className="p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <MessageCircle className="h-4 w-4 text-indigo-400" />
+                                <div>
+                                  <p className="text-sm font-medium text-white/90">Angie AI Assistant</p>
+                                  <p className="text-xs text-white/50">Telegram voice & text AI</p>
+                                </div>
+                              </div>
+                              <ExternalLink className="h-3 w-3 text-white/40" />
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              <Badge variant="secondary" className="text-[9px] bg-indigo-500/20">Telegram</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-purple-500/20">Voice</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-cyan-500/20">AI</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* NanoBanana Video */}
+                        <Card 
+                          className="bg-gradient-to-br from-red-500/10 to-pink-500/10 border-red-500/30 hover:border-red-500/50 cursor-pointer transition-all duration-300"
+                          onClick={() => toast.info("Coming Soon", { description: "Generate AI viral videos with NanoBanana & VEO3, shared on socials via Blotato" })}
+                        >
+                          <CardContent className="p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <Share2 className="h-4 w-4 text-red-400" />
+                                <div>
+                                  <p className="text-sm font-medium text-white/90">NanoBanana Video Gen</p>
+                                  <p className="text-xs text-white/50">Auto-share to socials via Blotato</p>
+                                </div>
+                              </div>
+                              <ExternalLink className="h-3 w-3 text-white/40" />
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              <Badge variant="secondary" className="text-[9px] bg-red-500/20">NanoBanana</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-pink-500/20">VEO3</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-blue-500/20">Blotato</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Database Chat */}
+                        <Card 
+                          className="bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border-cyan-500/30 hover:border-cyan-500/50 cursor-pointer transition-all duration-300"
+                          onClick={() => toast.info("Coming Soon", { description: "Chat with a database using AI" })}
+                        >
+                          <CardContent className="p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <Database className="h-4 w-4 text-cyan-400" />
+                                <div>
+                                  <p className="text-sm font-medium text-white/90">Database Chat</p>
+                                  <p className="text-xs text-white/50">Natural language database queries</p>
+                                </div>
+                              </div>
+                              <ExternalLink className="h-3 w-3 text-white/40" />
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              <Badge variant="secondary" className="text-[9px] bg-cyan-500/20">Database</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-purple-500/20">AI</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* RAG Chatbot */}
+                        <Card 
+                          className="bg-gradient-to-br from-orange-500/10 to-yellow-500/10 border-orange-500/30 hover:border-orange-500/50 cursor-pointer transition-all duration-300"
+                          onClick={() => toast.info("Coming Soon", { description: "RAG chatbot for company documents using Google Drive and Gemini" })}
+                        >
+                          <CardContent className="p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <BookOpen className="h-4 w-4 text-orange-400" />
+                                <div>
+                                  <p className="text-sm font-medium text-white/90">RAG Company Chatbot</p>
+                                  <p className="text-xs text-white/50">Google Drive + Gemini</p>
+                                </div>
+                              </div>
+                              <ExternalLink className="h-3 w-3 text-white/40" />
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              <Badge variant="secondary" className="text-[9px] bg-orange-500/20">RAG</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-blue-500/20">Drive</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-green-500/20">Gemini</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Gmail Labeling */}
+                        <Card 
+                          className="bg-gradient-to-br from-red-500/10 to-orange-500/10 border-red-500/30 hover:border-red-500/50 cursor-pointer transition-all duration-300"
+                          onClick={() => toast.info("Coming Soon", { description: "Basic automatic Gmail email labelling with OpenAI and Gmail API" })}
+                        >
+                          <CardContent className="p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <Mail className="h-4 w-4 text-red-400" />
+                                <div>
+                                  <p className="text-sm font-medium text-white/90">Gmail Auto-Label</p>
+                                  <p className="text-xs text-white/50">OpenAI + Gmail API</p>
+                                </div>
+                              </div>
+                              <ExternalLink className="h-3 w-3 text-white/40" />
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              <Badge variant="secondary" className="text-[9px] bg-red-500/20">Gmail</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-green-500/20">OpenAI</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* AI Music Generation */}
+                        <Card 
+                          className="bg-gradient-to-br from-purple-500/10 to-pink-500/10 border-purple-500/30 hover:border-purple-500/50 cursor-pointer transition-all duration-300"
+                          onClick={() => toast.info("Coming Soon", { description: "Automated 🤖🎵 AI music generation with ElevenLabs, Google Sheets & Drive" })}
+                        >
+                          <CardContent className="p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <Music2 className="h-4 w-4 text-purple-400" />
+                                <div>
+                                  <p className="text-sm font-medium text-white/90">AI Music Generator</p>
+                                  <p className="text-xs text-white/50">ElevenLabs + Sheets + Drive</p>
+                                </div>
+                              </div>
+                              <ExternalLink className="h-3 w-3 text-white/40" />
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              <Badge variant="secondary" className="text-[9px] bg-purple-500/20">ElevenLabs</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-green-500/20">Sheets</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        {/* Voice Cloning */}
+                        <Card 
+                          className="bg-gradient-to-br from-blue-500/10 to-cyan-500/10 border-blue-500/30 hover:border-blue-500/50 cursor-pointer transition-all duration-300"
+                          onClick={() => toast.info("Coming Soon", { description: "Automated AI voice cloning 🤖🎤 from YouTube videos to ElevenLab" })}
+                        >
+                          <CardContent className="p-3">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-center gap-2">
+                                <Mic className="h-4 w-4 text-blue-400" />
+                                <div>
+                                  <p className="text-sm font-medium text-white/90">AI Voice Cloning</p>
+                                  <p className="text-xs text-white/50">YouTube → ElevenLabs</p>
+                                </div>
+                              </div>
+                              <ExternalLink className="h-3 w-3 text-white/40" />
+                            </div>
+                            <div className="flex gap-1 mt-2">
+                              <Badge variant="secondary" className="text-[9px] bg-red-500/20">YouTube</Badge>
+                              <Badge variant="secondary" className="text-[9px] bg-purple-500/20">ElevenLabs</Badge>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </div>
+
+                      {/* Info Footer */}
+                      <div className="mt-6 p-4 bg-white/5 rounded-lg border border-white/10">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Clock className="h-3 w-3 text-white/40" />
+                          <span className="text-xs text-white/60">Coming Soon</span>
+                        </div>
+                        <p className="text-xs text-white/40">
+                          These automation templates are currently in development. Click on any card to learn more about what's coming.
+                        </p>
+                      </div>
+                    </div>
+                  </ScrollArea>
+                </TabsContent>
+
+                {/* YouTube Playlist Tab */}
+                <TabsContent value="youtube" className="flex-1 mt-0 overflow-hidden relative">
+                  <div className="absolute inset-0 flex flex-col">
+                    {/* Header with controls */}
+                    <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/20">
+                      <div className="flex items-center gap-2">
+                        <Youtube className="h-4 w-4 text-red-400" />
+                        <span className="text-sm font-medium text-white/90">YouTube Playlist</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setIsYoutubeFullscreen(!isYoutubeFullscreen)}
+                          className="h-6 hover:bg-white/10"
+                          title={isYoutubeFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                        >
+                          {isYoutubeFullscreen ? (
+                            <Minimize2 className="h-3 w-3" />
+                          ) : (
+                            <Maximize2 className="h-3 w-3" />
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            const newId = prompt("Enter YouTube Playlist ID:", youtubePlaylistId);
+                            if (newId) setYoutubePlaylistId(newId);
+                          }}
+                          className="h-6 hover:bg-white/10"
+                          title="Customize playlist"
+                        >
+                          <Edit className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Video Container */}
+                    <div className={`flex-1 relative ${isYoutubeFullscreen ? 'fixed inset-0 z-50 bg-black' : ''}`}>
+                      <iframe
+                        className={`w-full ${isYoutubeFullscreen ? 'h-full' : 'h-full'}`}
+                        src={`https://www.youtube-nocookie.com/embed/videoseries?si=0VXapk-lUFoogvyx&controls=0&list=${youtubePlaylistId}&autoplay=1&loop=1&modestbranding=1&rel=0&iv_load_policy=3`}
+                        title="YouTube playlist player"
+                        frameBorder="0"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        referrerPolicy="strict-origin-when-cross-origin"
+                        allowFullScreen
+                        style={{
+                          // Hide YouTube branding and controls
+                          filter: isYoutubeFullscreen ? 'none' : 'none',
+                        }}
+                      />
+                      
+                      {/* Swipe hint overlay */}
+                      {!isYoutubeFullscreen && (
+                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 text-white/40 text-xs pointer-events-none">
+                          <SwipeRight className="h-3 w-3" />
+                          <span>Swipe or use player controls to navigate</span>
+                        </div>
+                      )}
+
+                      {/* Fullscreen exit button */}
+                      {isYoutubeFullscreen && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setIsYoutubeFullscreen(false)}
+                          className="absolute top-4 right-4 h-8 w-8 bg-black/50 hover:bg-black/70 text-white"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Info footer */}
+                    {!isYoutubeFullscreen && (
+                      <div className="px-4 py-2 border-t border-white/10 bg-black/20">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs text-white/40">
+                            Playlist ID: {youtubePlaylistId}
+                          </p>
+                          <p className="text-xs text-white/40">
+                            Autoplay enabled • Plays in background
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </TabsContent>
+
+                {/* Forum Tab */}
+                <TabsContent value="forum" className="flex-1 mt-0 overflow-hidden">
+                  <ScrollArea className="h-full">
+                    <div className="p-4 space-y-4">
+                      {/* Header */}
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <Users className="h-4 w-4 text-orange-400" />
+                          <span className="text-sm font-medium text-white/90">Global Forum</span>
+                          <Badge variant="secondary" className="text-[10px] bg-orange-500/20 text-orange-300">
+                            {forumPosts.length} posts
+                          </Badge>
+                        </div>
+                      </div>
+
+                      {/* New Post Form */}
+                      <Card className="bg-white/5 border-white/10">
+                        <CardContent className="p-3 space-y-2">
+                          <Textarea
+                            value={newPostContent}
+                            onChange={(e) => setNewPostContent(e.target.value)}
+                            placeholder="Share your thoughts, ideas, or notes..."
+                            className="min-h-[80px] bg-black/30 border-white/10 text-white/90 placeholder:text-white/40 text-sm resize-none"
+                          />
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant={isAnonymousPost ? "default" : "ghost"}
+                                size="sm"
+                                onClick={() => setIsAnonymousPost(!isAnonymousPost)}
+                                className={`h-6 text-xs ${isAnonymousPost ? 'bg-orange-500/20 hover:bg-orange-500/30' : ''}`}
+                              >
+                                <User className="h-3 w-3 mr-1" />
+                                Anonymous
+                              </Button>
+                            </div>
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                if (!newPostContent.trim()) return;
+                                const newPost: ForumPost = {
+                                  id: Date.now().toString(),
+                                  author: isAnonymousPost ? "Anonymous" : "You",
+                                  content: newPostContent.trim(),
+                                  timestamp: Date.now(),
+                                  likes: 0,
+                                  comments: [],
+                                  isAnonymous: isAnonymousPost,
+                                };
+                                setForumPosts([newPost, ...forumPosts]);
+                                setNewPostContent("");
+                                toast.success("Post published", { description: "Your post is now visible to everyone" });
+                              }}
+                              className="h-6 bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/30"
+                            >
+                              <Send className="h-3 w-3 mr-1" />
+                              Post
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      {/* Posts List */}
+                      <div className="space-y-3">
+                        {forumPosts.length === 0 ? (
+                          <div className="text-center text-white/40 text-sm py-8">
+                            <Users className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                            <p>No posts yet</p>
+                            <p className="text-xs mt-1">Be the first to share something!</p>
+                          </div>
+                        ) : (
+                          forumPosts.map((post) => (
+                            <Card key={post.id} className="bg-white/5 border-white/10">
+                              <CardContent className="p-3 space-y-2">
+                                {/* Post Header */}
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <div className={`h-6 w-6 rounded-full flex items-center justify-center ${
+                                      post.isAnonymous ? 'bg-gray-500/20' : 'bg-orange-500/20'
+                                    }`}>
+                                      <User className="h-3 w-3 text-white/60" />
+                                    </div>
+                                    <div>
+                                      <p className="text-xs font-medium text-white/80">{post.author}</p>
+                                      <p className="text-[9px] text-white/40">
+                                        {new Date(post.timestamp).toLocaleString()}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  {post.isAnonymous && (
+                                    <Badge variant="secondary" className="text-[8px] bg-gray-500/20">
+                                      Anonymous
+                                    </Badge>
+                                  )}
+                                </div>
+
+                                {/* Post Content */}
+                                <p className="text-sm text-white/80 whitespace-pre-wrap">{post.content}</p>
+
+                                {/* Post Actions */}
+                                <div className="flex items-center gap-4 pt-2 border-t border-white/10">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      setForumPosts(forumPosts.map(p => 
+                                        p.id === post.id ? { ...p, likes: p.likes + 1 } : p
+                                      ));
+                                    }}
+                                    className="h-6 text-xs hover:bg-red-500/20 hover:text-red-400"
+                                  >
+                                    <Heart className="h-3 w-3 mr-1" />
+                                    {post.likes}
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      setExpandedComments(prev => {
+                                        const next = new Set(prev);
+                                        if (next.has(post.id)) {
+                                          next.delete(post.id);
+                                        } else {
+                                          next.add(post.id);
+                                        }
+                                        return next;
+                                      });
+                                    }}
+                                    className="h-6 text-xs hover:bg-blue-500/20 hover:text-blue-400"
+                                  >
+                                    <MessageComment className="h-3 w-3 mr-1" />
+                                    {post.comments.length}
+                                  </Button>
+                                </div>
+
+                                {/* Comments Section */}
+                                {expandedComments.has(post.id) && (
+                                  <div className="space-y-2 pt-2 border-t border-white/10">
+                                    {/* Existing Comments */}
+                                    {post.comments.map((comment) => (
+                                      <div key={comment.id} className="flex gap-2 text-xs">
+                                        <div className={`h-5 w-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+                                          comment.isAnonymous ? 'bg-gray-500/20' : 'bg-blue-500/20'
+                                        }`}>
+                                          <User className="h-2 w-2 text-white/60" />
+                                        </div>
+                                        <div className="flex-1 bg-white/5 rounded p-2">
+                                          <div className="flex items-center gap-2 mb-1">
+                                            <span className="text-white/70">{comment.author}</span>
+                                            <span className="text-white/40 text-[9px]">
+                                              {new Date(comment.timestamp).toLocaleString()}
+                                            </span>
+                                          </div>
+                                          <p className="text-white/80">{comment.content}</p>
+                                        </div>
+                                      </div>
+                                    ))}
+
+                                    {/* Add Comment */}
+                                    <div className="flex gap-2">
+                                      <Input
+                                        value={newCommentContent[post.id] || ""}
+                                        onChange={(e) => setNewCommentContent({
+                                          ...newCommentContent,
+                                          [post.id]: e.target.value,
+                                        })}
+                                        placeholder="Write a comment..."
+                                        className="flex-1 h-7 bg-black/30 border-white/10 text-white/90 placeholder:text-white/40 text-xs"
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter" && newCommentContent[post.id]?.trim()) {
+                                            const newComment: ForumComment = {
+                                              id: Date.now().toString(),
+                                              author: "Anonymous",
+                                              content: newCommentContent[post.id]!.trim(),
+                                              timestamp: Date.now(),
+                                              isAnonymous: true,
+                                            };
+                                            setForumPosts(forumPosts.map(p =>
+                                              p.id === post.id ? { ...p, comments: [...p.comments, newComment] } : p
+                                            ));
+                                            setNewCommentContent({
+                                              ...newCommentContent,
+                                              [post.id]: "",
+                                            });
+                                          }
+                                        }}
+                                      />
+                                      <Button
+                                        size="sm"
+                                        onClick={() => {
+                                          if (!newCommentContent[post.id]?.trim()) return;
+                                          const newComment: ForumComment = {
+                                            id: Date.now().toString(),
+                                            author: "Anonymous",
+                                            content: newCommentContent[post.id]!.trim(),
+                                            timestamp: Date.now(),
+                                            isAnonymous: true,
+                                          };
+                                          setForumPosts(forumPosts.map(p =>
+                                            p.id === post.id ? { ...p, comments: [...p.comments, newComment] } : p
+                                          ));
+                                          setNewCommentContent({
+                                            ...newCommentContent,
+                                            [post.id]: "",
+                                          });
+                                        }}
+                                        className="h-7 bg-blue-500/20 hover:bg-blue-500/30"
+                                      >
+                                        <Send className="h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                  </div>
+                                )}
+                              </CardContent>
+                            </Card>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </ScrollArea>
+                </TabsContent>
+
+                {/* Agent Activity Tab */}
+                <TabsContent value="agent" className="flex-1 mt-0 overflow-hidden">
+                  <ScrollArea className="h-full">
+                    <div className="p-4 space-y-4">
+                      {/* Status Banner */}
+                      <div className={`p-4 rounded-lg border ${
+                        agentActivity.status === 'thinking' ? 'bg-purple-500/10 border-purple-500/30' :
+                        agentActivity.status === 'executing' ? 'bg-blue-500/10 border-blue-500/30' :
+                        agentActivity.status === 'completed' ? 'bg-green-500/10 border-green-500/30' :
+                        'bg-white/5 border-white/10'
+                      }`}>
+                        <div className="flex items-center gap-3">
+                          {agentActivity.status === 'thinking' && <Brain className="h-5 w-5 text-purple-400 animate-pulse" />}
+                          {agentActivity.status === 'executing' && <Terminal className="h-5 w-5 text-blue-400" />}
+                          {agentActivity.status === 'completed' && <CheckCircle2 className="h-5 w-5 text-green-400" />}
+                          {agentActivity.status === 'idle' && <Activity className="h-5 w-5 text-white/40" />}
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-white/90">
+                              {agentActivity.status === 'thinking' && 'Agent is thinking...'}
+                              {agentActivity.status === 'executing' && 'Executing tasks...'}
+                              {agentActivity.status === 'completed' && 'Task completed'}
+                              {agentActivity.status === 'idle' && 'Agent idle'}
+                            </p>
+                            {agentActivity.currentAction && (
+                              <p className="text-xs text-white/60 mt-1">{agentActivity.currentAction}</p>
+                            )}
+                          </div>
+                          {agentActivity.status === 'executing' && <Loader2 className="h-4 w-4 animate-spin text-blue-400" />}
+                        </div>
+                      </div>
+
+                      {/* Processing Steps */}
+                      {agentActivity.processingSteps.length > 0 && (
+                        <Card className="bg-white/5 border-white/10">
+                          <CardHeader className="pb-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Clock3 className="h-4 w-4 text-blue-400" />
+                                <span className="text-sm font-medium text-white/90">Processing Steps</span>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setShowSteps(!showSteps)}
+                                className="h-6 hover:bg-white/10"
+                              >
+                                {showSteps ? <ChevronUp className="h-3 w-3" /> : <ChevronDownIcon className="h-3 w-3" />}
+                              </Button>
+                            </div>
+                          </CardHeader>
+                          {showSteps && (
+                            <CardContent>
+                              <div className="space-y-2">
+                                {agentActivity.processingSteps.map((step) => (
+                                  <div key={step.id} className="flex items-center gap-3 text-sm">
+                                    {step.status === 'completed' && <CheckCircle className="h-4 w-4 text-green-400" />}
+                                    {step.status === 'started' && <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />}
+                                    {step.status === 'failed' && <AlertCircle className="h-4 w-4 text-red-400" />}
+                                    {step.status === 'pending' && <div className="h-4 w-4 rounded-full border border-white/30" />}
+                                    <span className={step.status === 'completed' ? 'text-white/70' : 'text-white/90'}>
+                                      {step.step}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </CardContent>
+                          )}
+                        </Card>
+                      )}
+
+                      {/* Tool Invocations */}
+                      {agentActivity.toolInvocations.length > 0 && (
+                        <Card className="bg-white/5 border-white/10">
+                          <CardHeader className="pb-2">
+                            <div className="flex items-center gap-2">
+                              <Terminal className="h-4 w-4 text-orange-400" />
+                              <span className="text-sm font-medium text-white/90">Tool Invocations</span>
+                              <Badge variant="secondary" className="text-[10px] bg-orange-500/20">
+                                {agentActivity.toolInvocations.length}
+                              </Badge>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="space-y-2">
+                            {agentActivity.toolInvocations.map((tool) => (
+                              <div
+                                key={tool.id}
+                                className={`p-3 rounded-lg border cursor-pointer transition-all ${
+                                  tool.state === 'result' ? 'bg-green-500/10 border-green-500/30' :
+                                  tool.state === 'call' ? 'bg-blue-500/10 border-blue-500/30' :
+                                  'bg-white/5 border-white/10'
+                                }`}
+                                onClick={() => setExpandedToolId(expandedToolId === tool.id ? null : tool.id)}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    {tool.state === 'result' && <CheckCircle className="h-4 w-4 text-green-400" />}
+                                    {tool.state === 'call' && <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />}
+                                    {tool.state === 'partial-call' && <Activity className="h-4 w-4 text-orange-400" />}
+                                    <span className="text-sm font-medium text-white/90">{tool.toolName}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs text-white/60">
+                                      {tool.state === 'partial-call' && 'Streaming...'}
+                                      {tool.state === 'call' && 'Executing...'}
+                                      {tool.state === 'result' && 'Completed'}
+                                    </span>
+                                    <ChevronDownIcon className={`h-3 w-3 transition-transform ${
+                                      expandedToolId === tool.id ? 'rotate-180' : ''
+                                    }`} />
+                                  </div>
+                                </div>
+                                
+                                {expandedToolId === tool.id && (
+                                  <div className="mt-3 space-y-2 text-xs">
+                                    {tool.args && (
+                                      <div>
+                                        <p className="text-white/60 mb-1">Arguments:</p>
+                                        <pre className="bg-black/30 rounded p-2 text-white/80 overflow-x-auto">
+                                          {JSON.stringify(tool.args, null, 2)}
+                                        </pre>
+                                      </div>
+                                    )}
+                                    {tool.result && (
+                                      <div>
+                                        <p className="text-white/60 mb-1">Result:</p>
+                                        <pre className="bg-black/30 rounded p-2 text-white/80 overflow-x-auto">
+                                          {typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2)}
+                                        </pre>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </CardContent>
+                        </Card>
+                      )}
+
+                      {/* Reasoning Chunks */}
+                      {agentActivity.reasoningChunks.length > 0 && (
+                        <Card className="bg-white/5 border-white/10">
+                          <CardHeader className="pb-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Brain className="h-4 w-4 text-purple-400" />
+                                <span className="text-sm font-medium text-white/90">Agent Reasoning</span>
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setShowReasoning(!showReasoning)}
+                                className="h-6 hover:bg-white/10"
+                              >
+                                {showReasoning ? <ChevronUp className="h-3 w-3" /> : <ChevronDownIcon className="h-3 w-3" />}
+                              </Button>
+                            </div>
+                          </CardHeader>
+                          {showReasoning && (
+                            <CardContent className="space-y-2">
+                              {agentActivity.reasoningChunks.map((chunk) => (
+                                <div
+                                  key={chunk.id}
+                                  className={`p-3 rounded-lg border ${
+                                    chunk.type === 'thought' ? 'bg-blue-500/10 border-blue-500/30' :
+                                    chunk.type === 'plan' ? 'bg-green-500/10 border-green-500/30' :
+                                    chunk.type === 'reasoning' ? 'bg-purple-500/10 border-purple-500/30' :
+                                    'bg-orange-500/10 border-orange-500/30'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2 mb-1">
+                                    {chunk.type === 'thought' && <MessageCircle className="h-3 w-3 text-blue-400" />}
+                                    {chunk.type === 'plan' && <FileText className="h-3 w-3 text-green-400" />}
+                                    {chunk.type === 'reasoning' && <Brain className="h-3 w-3 text-purple-400" />}
+                                    {chunk.type === 'reflection' && <RotateCcw className="h-3 w-3 text-orange-400" />}
+                                    <span className="text-xs font-medium text-white/70 capitalize">{chunk.type}</span>
+                                  </div>
+                                  <p className="text-sm text-white/80">{chunk.content}</p>
+                                </div>
+                              ))}
+                            </CardContent>
+                          )}
+                        </Card>
+                      )}
+
+                      {/* Git Commits */}
+                      {agentActivity.gitCommits.length > 0 && (
+                        <Card className="bg-white/5 border-white/10">
+                          <CardHeader className="pb-2">
+                            <div className="flex items-center gap-2">
+                              <GitCommit className="h-4 w-4 text-green-400" />
+                              <span className="text-sm font-medium text-white/90">Git Commits</span>
+                              <Badge variant="secondary" className="text-[10px] bg-green-500/20">
+                                {agentActivity.gitCommits.length}
+                              </Badge>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="space-y-2">
+                            {agentActivity.gitCommits.map((commit) => (
+                              <div key={commit.version} className="p-3 rounded-lg border bg-green-500/10 border-green-500/30">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <GitCommit className="h-3 w-3 text-green-400" />
+                                    <span className="text-sm font-medium text-white/90">Version {commit.version}</span>
+                                  </div>
+                                  <span className="text-xs text-white/60">
+                                    {new Date(commit.timestamp).toLocaleTimeString()}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-white/70 mb-2">
+                                  {commit.filesChanged} file{commit.filesChanged > 1 ? 's' : ''} changed
+                                </p>
+                                <div className="flex flex-wrap gap-1">
+                                  {commit.paths.slice(0, 5).map((path, i) => (
+                                    <Badge key={i} variant="secondary" className="text-[8px] bg-white/10">
+                                      {path.split('/').pop()}
+                                    </Badge>
+                                  ))}
+                                  {commit.paths.length > 5 && (
+                                    <Badge variant="secondary" className="text-[8px] bg-white/10">
+                                      +{commit.paths.length - 5} more
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </CardContent>
+                        </Card>
+                      )}
+
+                      {/* Diffs */}
+                      {agentActivity.diffs.length > 0 && (
+                        <Card className="bg-white/5 border-white/10">
+                          <CardHeader className="pb-2">
+                            <div className="flex items-center gap-2">
+                              <FileDiff className="h-4 w-4 text-yellow-400" />
+                              <span className="text-sm font-medium text-white/90">File Changes</span>
+                              <Badge variant="secondary" className="text-[10px] bg-yellow-500/20">
+                                {agentActivity.diffs.length}
+                              </Badge>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="space-y-2">
+                            {agentActivity.diffs.map((diff, i) => (
+                              <div key={i} className="p-3 rounded-lg border bg-yellow-500/10 border-yellow-500/30">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <FileCode className="h-3 w-3 text-yellow-400" />
+                                    <span className="text-sm font-medium text-white/90">{diff.path}</span>
+                                  </div>
+                                  <Badge variant="secondary" className="text-[8px] bg-yellow-500/20 capitalize">
+                                    {diff.changeType}
+                                  </Badge>
+                                </div>
+                                <pre className="bg-black/30 rounded p-2 text-[10px] text-white/70 overflow-x-auto max-h-32">
+                                  {diff.diff}
+                                </pre>
+                              </div>
+                            ))}
+                          </CardContent>
+                        </Card>
+                      )}
+
+                      {/* Token Usage */}
+                      {agentActivity.tokenUsage && (
+                        <Card className="bg-white/5 border-white/10">
+                          <CardContent className="p-3">
+                            <div className="grid grid-cols-3 gap-4 text-center">
+                              <div>
+                                <p className="text-[10px] text-white/50 mb-1">Prompt</p>
+                                <p className="text-sm font-medium text-white/90">{agentActivity.tokenUsage.prompt.toLocaleString()}</p>
+                              </div>
+                              <div>
+                                <p className="text-[10px] text-white/50 mb-1">Completion</p>
+                                <p className="text-sm font-medium text-white/90">{agentActivity.tokenUsage.completion.toLocaleString()}</p>
+                              </div>
+                              <div>
+                                <p className="text-[10px] text-white/50 mb-1">Total</p>
+                                <p className="text-sm font-medium text-green-400">{agentActivity.tokenUsage.total.toLocaleString()}</p>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )}
+
+                      {/* Empty State */}
+                      {agentActivity.status === 'idle' && agentActivity.toolInvocations.length === 0 && (
+                        <div className="text-center text-white/40 text-sm py-12">
+                          <Cpu className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                          <p>No agent activity yet</p>
+                          <p className="text-xs mt-1">Start a task to see real-time agent actions</p>
+                        </div>
+                      )}
+
+                      {/* Demo Controls */}
+                      <div className="pt-4 border-t border-white/10">
+                        <p className="text-xs text-white/40 mb-2">Demo Controls (for testing)</p>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setAgentActivity(prev => ({
+                                ...prev,
+                                status: 'thinking',
+                                currentAction: 'Analyzing request...',
+                                reasoningChunks: [...prev.reasoningChunks, {
+                                  id: Date.now().toString(),
+                                  type: 'thought',
+                                  content: 'Let me analyze this request carefully to understand what the user needs...',
+                                  timestamp: Date.now(),
+                                }],
+                              }));
+                              toast.info('Added reasoning chunk');
+                            }}
+                            className="h-6 text-xs"
+                          >
+                            Add Thought
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setAgentActivity(prev => ({
+                                ...prev,
+                                status: 'executing',
+                                currentAction: 'Writing file...',
+                                toolInvocations: [...prev.toolInvocations, {
+                                  id: Date.now().toString(),
+                                  toolName: 'write_file',
+                                  state: 'call',
+                                  args: { path: 'src/index.ts', content: 'console.log("Hello")' },
+                                  timestamp: Date.now(),
+                                }],
+                              }));
+                              toast.info('Added tool invocation');
+                            }}
+                            className="h-6 text-xs"
+                          >
+                            Add Tool
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setAgentActivity(prev => ({
+                                ...prev,
+                                gitCommits: [...prev.gitCommits, {
+                                  version: prev.gitCommits.length + 1,
+                                  filesChanged: 2,
+                                  paths: ['src/index.ts', 'src/utils.ts'],
+                                  timestamp: Date.now(),
+                                }],
+                              }));
+                              toast.info('Added git commit');
+                            }}
+                            className="h-6 text-xs"
+                          >
+                            Add Commit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setAgentActivity(prev => ({
+                                ...prev,
+                                status: 'completed',
+                                currentAction: 'Task completed successfully',
+                                tokenUsage: {
+                                  prompt: 1250,
+                                  completion: 850,
+                                  total: 2100,
+                                },
+                              }));
+                              toast.success('Marked as completed');
+                            }}
+                            className="h-6 text-xs"
+                          >
+                            Complete
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setAgentActivity({
+                                status: 'idle',
+                                currentAction: '',
+                                toolInvocations: [],
+                                reasoningChunks: [],
+                                processingSteps: [],
+                                gitCommits: [],
+                                diffs: [],
+                              });
+                              toast.info('Reset agent activity');
+                            }}
+                            className="h-6 text-xs"
+                          >
+                            Reset
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </ScrollArea>
