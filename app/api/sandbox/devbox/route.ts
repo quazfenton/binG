@@ -81,18 +81,40 @@ export async function POST(req: NextRequest) {
 
     logger.info('Creating DevBox', { userId, template, fileCount: Object.keys(files).length, rateLimitRemaining: rateLimit.remaining });
 
+    // Pre-flight: require CSB_API_KEY before attempting provider initialisation so
+    // the 500 carries a meaningful message rather than an opaque SDK error.
+    if (!process.env.CSB_API_KEY) {
+      logger.error('CSB_API_KEY is not set in the server environment');
+      return NextResponse.json(
+        { error: 'CodeSandbox is not configured. Set the CSB_API_KEY environment variable.' },
+        { status: 503 }
+      );
+    }
+
+    // Validate template
+    const validTemplates = ['node', 'typescript', 'javascript', 'python', 'docker', 'react', 'nextjs', 'vue', 'svelte'];
+    if (!validTemplates.includes(template)) {
+      return NextResponse.json(
+        { error: `Invalid template '${template}'. Valid templates: ${validTemplates.join(', ')}` },
+        { status: 400 }
+      );
+    }
+
     // Get CodeSandbox provider directly - DevBox is specifically for CodeSandbox
     const provider = await sandboxBridge.getProvider('codesandbox');
-    
-    // Create a new CodeSandbox sandbox
+
+    // Create a new CodeSandbox sandbox with proper config
     const sandboxHandle = await provider.createSandbox({
-      language: template === 'docker' ? 'docker' : 'typescript',
+      language: template,
+      labels: { userId: authResult.userId },  // Add user label for tracking
     });
 
     const sandboxId = (sandboxHandle as any).sandboxId || sandboxHandle.id;
 
     logger.info('CodeSandbox created', {
       sandboxId,
+      template,
+      userId: authResult.userId,
     });
 
     // Get the sandbox instance for file operations
@@ -128,10 +150,75 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     logger.error('Failed to create DevBox:', error);
 
+    // Surface the underlying SDK / provider error so the client can display a
+    // meaningful message rather than the generic "Failed to create..." string.
+    const detail = error?.message || String(error);
+    
+    // Map common error patterns to user-friendly messages
+    const errorMessages: Record<string, { message: string; status: number; code: string }> = {
+      'unauthorized': { 
+        message: 'CodeSandbox authentication failed. Check that CSB_API_KEY is correct.', 
+        status: 401, 
+        code: 'AUTH_FAILED' 
+      },
+      'forbidden': { 
+        message: 'API key lacks permissions. Check CSB_API_KEY scopes.', 
+        status: 403, 
+        code: 'PERMISSION_DENIED' 
+      },
+      'api key': { 
+        message: 'Invalid API key format. CSB_API_KEY should be a valid CodeSandbox API key.', 
+        status: 401, 
+        code: 'INVALID_API_KEY' 
+      },
+      'quota': { 
+        message: 'CodeSandbox quota exceeded. Try again later.', 
+        status: 429, 
+        code: 'QUOTA_EXCEEDED' 
+      },
+      'template': { 
+        message: `Invalid template '${template}'. Use: ${validTemplates.join(', ')}.`, 
+        status: 400, 
+        code: 'INVALID_TEMPLATE' 
+      },
+      'rate limit': { 
+        message: 'Too many requests. Please wait before creating another sandbox.', 
+        status: 429, 
+        code: 'RATE_LIMITED' 
+      },
+      'timeout': { 
+        message: 'Sandbox creation timed out. Please try again.', 
+        status: 504, 
+        code: 'TIMEOUT' 
+      },
+    };
+
+    // Find matching error pattern
+    const detailLower = detail.toLowerCase();
+    const matchedKey = Object.keys(errorMessages).find(k => detailLower.includes(k));
+    
+    if (matchedKey) {
+      const errorConfig = errorMessages[matchedKey];
+      logger.error(`DevBox error: ${errorConfig.code}`, { detail, userId: authResult.userId });
+      
+      return NextResponse.json(
+        {
+          error: errorConfig.message,
+          code: errorConfig.code,
+          details: process.env.NODE_ENV === 'development' ? detail : undefined,
+        },
+        { status: errorConfig.status }
+      );
+    }
+
+    // Generic error with detail for debugging
+    logger.error('DevBox creation failed', { detail, userId: authResult.userId });
+    
     return NextResponse.json(
       {
-        error: 'Failed to create cloud development environment',
-        details: error.message,
+        error: `Failed to create cloud development environment: ${detail}`,
+        code: 'SANDBOX_CREATE_FAILED',
+        details: process.env.NODE_ENV === 'development' ? detail : undefined,
       },
       { status: 500 }
     );

@@ -398,6 +398,27 @@ export class SandboxResourceMonitor extends EventEmitter {
   }
 
   /**
+   * Get current resource usage for a sandbox
+   */
+  async getResourceUsage(sandboxId: string): Promise<ResourceMetrics> {
+    const metricsArray = this.metrics.get(sandboxId);
+    if (metricsArray && metricsArray.length > 0) {
+      const latestMetrics = metricsArray[metricsArray.length - 1];
+      if (Date.now() - latestMetrics.timestamp < 10000) {
+        // Return cached metrics if less than 10 seconds old
+        return latestMetrics;
+      }
+    }
+
+    // Collect fresh metrics
+    await this.collectMetrics(sandboxId);
+    const freshMetrics = this.metrics.get(sandboxId);
+    return (freshMetrics && freshMetrics.length > 0) 
+      ? freshMetrics[freshMetrics.length - 1] 
+      : this.generateSimulatedMetrics(sandboxId);
+  }
+
+  /**
    * Check resource thresholds
    * 
    * @param metrics - Resource metrics
@@ -671,7 +692,7 @@ export async function quickMonitor(
     });
     
     monitor.startMonitoring(sandboxId);
-    
+
     setTimeout(() => {
       monitor.stopMonitoring(sandboxId);
       monitor.destroy();
@@ -679,3 +700,6 @@ export async function quickMonitor(
     }, durationMs);
   });
 }
+
+// Singleton instance
+export const resourceMonitor = createResourceMonitor();

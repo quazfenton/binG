@@ -106,8 +106,10 @@ import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
 import IntegrationPanel from "./integrations/IntegrationPanel";
 import { useVirtualFilesystem, type AttachedVirtualFile } from "../hooks/use-virtual-filesystem";
+import { usePanel } from "../contexts/panel-context";
 import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
 import { secureRandom } from "../lib/utils";
+import Layout from "lucide-react/dist/esm/icons/layout";
 import DevOpsCommandCenterPlugin from "./plugins/devops-command-center-plugin";
 import AIPromptLibraryPlugin from "./plugins/ai-prompt-library-plugin";
 import APIPlaygroundProPlugin from "./plugins/api-playground-pro-plugin";
@@ -121,6 +123,7 @@ import JsonValidatorPlugin from "./plugins/json-validator-plugin";
 import UrlUtilitiesPlugin from "./plugins/url-utilities-plugin";
 import WikiKnowledgeBasePlugin from "./plugins/wiki-knowledge-base-plugin";
 import ImageGenerationTab from "./image-generation-tab";
+import SquareSplitHorizontal from "lucide-react/dist/esm/icons/square-split-horizontal";
 
 // Pop-out plugin windows for Plugins tab
 const popOutPlugins: Plugin[] = [
@@ -323,6 +326,7 @@ export default function InteractionPanel({
   onStopPollingDiffs,
   onPollDiffsNow,
 }: InteractionPanelProps) {
+  const { togglePanel, isOpen: isPanelOpen } = usePanel();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragHandleRef = useRef<HTMLDivElement>(null);
 
@@ -1410,6 +1414,21 @@ export default function InteractionPanel({
         />
 
         <div className="p-2 sm:p-3 h-full flex flex-col relative" style={{ cursor: 'default' }}>
+          {/* Experimental Workspace Toggle Button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={togglePanel}
+            className={`absolute top-1 left-1 w-6 h-6 p-0 z-[60] transition-all duration-300 ${
+              isOpen
+                ? "text-yellow-400 hover:bg-yellow-500/20 hover:text-yellow-300"
+                : "text-gray-400 hover:text-white hover:bg-white/10"
+            }`}
+            title="Toggle experimental workspace panel"
+          >
+            <SquareSplitHorizontal className="w-3 h-3" />
+          </Button>
+
           {/* Minimize Button */}
           <Button
             variant="ghost"
@@ -1419,7 +1438,7 @@ export default function InteractionPanel({
             title={isMinimized ? "Reopen panel" : "Hide panel"}
           >
             {isMinimized ? (
-              <ArrowDownToLine className="w-3 h-3 rotate-180" />
+              <ArrowDownToLine className="w-3 w-3 rotate-180" />
             ) : (
               <ArrowDownToLine className="w-3 h-3" />
             )}
@@ -1544,7 +1563,18 @@ export default function InteractionPanel({
                   </TabsList>
                 </div>
 
-                <div className="grid grid-cols-5 gap-1 w-full sm:w-auto sm:flex sm:space-x-2 flex-shrink-0">
+                <div className="grid grid-cols-6 gap-1 w-full sm:w-auto sm:flex sm:space-x-2 flex-shrink-0">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={togglePanel}
+                    title="Toggle Multipurpose Panel"
+                    className={`h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
+                      isPanelOpen ? "ring-2 ring-blue-500/50" : ""
+                    }`}
+                  >
+                    <Layout className={`h-3 w-3 sm:h-4 sm:w-4 ${isPanelOpen ? "text-blue-400" : ""}`} />
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
