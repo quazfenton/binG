@@ -1374,8 +1374,10 @@ export default function InteractionPanel({
         {/* Drag Handle - Full width resize bar */}
         <div
           ref={dragHandleRef}
-          className={`w-full absolute top-0 left-0 right-0 h-[4px] transition-all duration-200 ${
-            isDragging ? 'bg-white/40 cursor-ns-resize' : 'bg-transparent cursor-default'
+          className={`w-full absolute top-0 left-0 right-0 h-[6px] transition-all duration-200 ${
+            isDragging 
+              ? 'bg-white/40 cursor-ns-resize' 
+              : 'bg-white/10 cursor-ns-resize sm:bg-transparent sm:cursor-default'
           }`}
           style={{ zIndex: 50 }}
           onDoubleClick={toggleMinimized}
@@ -1400,6 +1402,30 @@ export default function InteractionPanel({
 
             document.addEventListener("mousemove", handleMouseMove);
             document.addEventListener("mouseup", handleMouseUp);
+          }}
+          onTouchStart={(e) => {
+            // Mobile touch-and-hold drag support
+            setIsExpanded(false);
+            setIsDragging(true);
+            const startY = e.touches[0].clientY;
+            const startHeight = panelHeight;
+
+            const handleTouchMove = (e: TouchEvent) => {
+              e.preventDefault(); // Prevent page scroll while dragging
+              const delta = startY - e.touches[0].clientY;
+              setPanelHeight(
+                Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), startHeight + delta)),
+              );
+            };
+
+            const handleTouchEnd = () => {
+              setIsDragging(false);
+              document.removeEventListener("touchmove", handleTouchMove, { passive: false });
+              document.removeEventListener("touchend", handleTouchEnd);
+            };
+
+            document.addEventListener("touchmove", handleTouchMove, { passive: false });
+            document.addEventListener("touchend", handleTouchEnd);
           }}
           onMouseEnter={(e) => {
             if (!isDragging) {
