@@ -276,7 +276,7 @@ export default function CodePreviewPanel({
   const [projectDetection, setProjectDetection] = useState<ReturnType<typeof detectProject> | null>(null);
   const [isManualPreviewActive, setIsManualPreviewActive] = useState(false);
   const [manualPreviewMayBeStale, setManualPreviewMayBeStale] = useState(false); // Track if VFS changed while in manual preview
-  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'node' | 'local' | 'cloud'>('sandpack');
+  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'node' | 'local' | 'cloud'>('sandpack');
   const [devBoxOutput, setDevBoxOutput] = useState<string[]>([]);
   const [isDevBoxRunning, setIsDevBoxRunning] = useState(false);
   const [pyodideOutput, setPyodideOutput] = useState<string>('');
@@ -293,6 +293,10 @@ export default function CodePreviewPanel({
   const [isNextjsBuilding, setIsNextjsBuilding] = useState(false);
   const [codesandboxUrl, setCodesandboxUrl] = useState<string | null>(null);
   const [isCodesandboxLoading, setIsCodesandboxLoading] = useState(false);
+  const [opensandboxUrl, setOpensandboxUrl] = useState<string | null>(null);
+  const [opensandboxId, setOpensandboxId] = useState<string | null>(null);
+  const [isOpensandboxDeploying, setIsOpensandboxDeploying] = useState(false);
+  const [opensandboxLogs, setOpensandboxLogs] = useState<string[]>([]);
   const [localExecutionOutput, setLocalExecutionOutput] = useState<string>('');
   const [isLocalExecuting, setIsLocalExecuting] = useState(false);
   const [executionMode, setExecutionMode] = useState<'local' | 'cloud' | 'hybrid'>('local');

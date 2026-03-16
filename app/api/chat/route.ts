@@ -22,6 +22,7 @@ import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orche
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@/lib/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
+import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -1023,6 +1024,11 @@ export async function POST(request: NextRequest) {
         contentLength: clientResponse.content?.length || 0,
         success: clientResponse.success,
       });
+      
+      // Record successful latency for provider router
+      try {
+        llmProviderRouter.recordRequest(provider as LLMProviderType, responseLatency, clientResponse.success !== false);
+      } catch {}
 
       const responseStatus = clientResponse.success ? 200 : 500;
       return NextResponse.json(
@@ -1081,11 +1087,21 @@ export async function POST(request: NextRequest) {
         latencyMs: errorLatency,
         stack: error instanceof Error ? error.stack : undefined,
       });
+      
+      // Record error latency for provider router
+      try {
+        llmProviderRouter.recordRequest(provider as LLMProviderType, errorLatency, false);
+      } catch {}
     } else {
       chatLogger.warn('Provider not available', { requestId, provider, model }, {
         error: errorMessage,
         latencyMs: errorLatency,
       });
+      
+      // Record error latency for provider router
+      try {
+        llmProviderRouter.recordRequest(provider as LLMProviderType, errorLatency, false);
+      } catch {}
     }
 
     // Process error with enhanced error handler for logging
