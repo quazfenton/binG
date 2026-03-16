@@ -13,8 +13,9 @@
 
 import { z } from 'zod';
 import { getToolManager } from './index';
-import { getArcadeService } from '../api/arcade-service';
-import { getNangoService } from '../api/nango-service';
+import type { ToolInfo } from './registry';
+import { getArcadeService } from '../platforms/arcade-service';
+import { getNangoService } from '../platforms/nango-service';
 import { getTamboService } from '../tambo/tambo-service';
 
 export interface DiscoveryOptions {

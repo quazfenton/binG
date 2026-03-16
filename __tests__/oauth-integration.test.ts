@@ -172,18 +172,27 @@ describe('ToolAuthorizationManager', () => {
 
     it('should filter by provider when specified', async () => {
       // Mock oauthService to return connections
+      const mockOauthService = {
+        getUserConnections: vi.fn().mockResolvedValue([
+          {
+            id: 1,
+            userId: 123,
+            provider: 'gmail',
+            providerAccountId: 'test@gmail.com',
+            providerDisplayName: 'Gmail',
+            isActive: true,
+            createdAt: new Date(),
+          },
+        ]),
+      };
+      
+      vi.doMock('../auth/oauth-service', () => ({
+        oauthService: mockOauthService,
+      }));
+      
       const { oauthService } = await import('../auth/oauth-service');
-      vi.mocked(oauthService.getUserConnections).mockResolvedValue([
-        {
-          id: 1,
-          userId: 123,
-          provider: 'gmail',
-          providerAccountId: 'test@gmail.com',
-          providerDisplayName: 'Gmail',
-          isActive: true,
-          createdAt: new Date(),
-        },
-      ]);
+
+      expect(oauthService.getUserConnections).toBeDefined();
 
       const result = await toolAuthManager.listConnections(TEST_USER_ID, 'gmail');
 
@@ -203,8 +212,13 @@ describe('ToolAuthorizationManager', () => {
 
     it('should return success when no connection exists', async () => {
       // Mock oauthService to return no connections
-      const { oauthService } = await import('../auth/oauth-service');
-      vi.mocked(oauthService.getUserConnections).mockResolvedValue([]);
+      const mockOauthService = {
+        getUserConnections: vi.fn().mockResolvedValue([]),
+      };
+      
+      vi.doMock('../auth/oauth-service', () => ({
+        oauthService: mockOauthService,
+      }));
 
       const result = await toolAuthManager.revokeConnection(TEST_USER_ID, 'gmail');
 
@@ -215,18 +229,23 @@ describe('ToolAuthorizationManager', () => {
 
     it('should return success when connection exists', async () => {
       // Mock oauthService to return a connection
-      const { oauthService } = await import('../auth/oauth-service');
-      vi.mocked(oauthService.getUserConnections).mockResolvedValue([
-        {
-          id: 1,
-          userId: 123,
-          provider: 'gmail',
-          providerAccountId: 'test@gmail.com',
-          providerDisplayName: 'Gmail',
-          isActive: true,
-          createdAt: new Date(),
-        },
-      ]);
+      const mockOauthService = {
+        getUserConnections: vi.fn().mockResolvedValue([
+          {
+            id: 1,
+            userId: 123,
+            provider: 'gmail',
+            providerAccountId: 'test@gmail.com',
+            providerDisplayName: 'Gmail',
+            isActive: true,
+            createdAt: new Date(),
+          },
+        ]),
+      };
+      
+      vi.doMock('../auth/oauth-service', () => ({
+        oauthService: mockOauthService,
+      }));
 
       const result = await toolAuthManager.revokeConnection(TEST_USER_ID, 'gmail');
 

@@ -238,6 +238,88 @@ async function start() {
     return { checkpoints: checkpoints.sort((a: any, b: any) => a.step - b.step), sessionId };
   });
 
+  // Git-VFS endpoints for version control and rollbacks
+  fastify.get('/git/:sessionId/versions', async (request: any, reply: any) => {
+    const { sessionId } = request.params;
+    const { limit = 20 } = request.query as { limit?: number };
+    
+    try {
+      // Get checkpoint history as version history
+      const data = await redis.hgetall(`agent:checkpoint:${sessionId}`);
+      const versions = [];
+      for (const [field, value] of Object.entries(data || {})) {
+        if (field === 'current') continue;
+        try {
+          const checkpoint = JSON.parse(value);
+          versions.push({
+            version: checkpoint.step,
+            commitId: checkpoint.id,
+            message: checkpoint.message,
+            filesChanged: checkpoint.toolCalls?.length || 0,
+            createdAt: checkpoint.createdAt,
+          });
+        } catch {}
+      }
+      return { versions: versions.sort((a: any, b: any) => b.version - a.version).slice(0, limit) };
+    } catch (error: any) {
+      return reply.status(500).send({ error: `Failed to get versions: ${error.message}` });
+    }
+  });
+
+  fastify.post('/git/:sessionId/rollback', async (request: any, reply: any) => {
+    const { sessionId } = request.params;
+    const { version } = request.body as { version: number };
+    
+    if (!version || version < 0) {
+      return reply.status(400).send({ error: 'Invalid version number' });
+    }
+
+    try {
+      // Publish rollback event to worker
+      await publishEvent({
+        type: 'git:rollback',
+        sessionId,
+        data: { version, timestamp: Date.now() },
+        timestamp: Date.now(),
+      });
+
+      return { 
+        success: true, 
+        message: `Rollback to version ${version} initiated`,
+        version,
+      };
+    } catch (error: any) {
+      return reply.status(500).send({ error: `Failed to rollback: ${error.message}` });
+    }
+  });
+
+  fastify.get('/git/:sessionId/diff', async (request: any, reply: any) => {
+    const { sessionId } = request.params;
+    const { fromVersion, toVersion } = request.query as { fromVersion?: number; toVersion?: number };
+    
+    try {
+      // Get checkpoints for diff
+      const fromData = fromVersion !== undefined 
+        ? await redis.hget(`agent:checkpoint:${sessionId}`, `step_${fromVersion}`)
+        : null;
+      const toData = toVersion !== undefined
+        ? await redis.hget(`agent:checkpoint:${sessionId}`, `step_${toVersion}`)
+        : await redis.hget(`agent:checkpoint:${sessionId}`, 'current');
+
+      const fromCheckpoint = fromData ? JSON.parse(fromData) : null;
+      const toCheckpoint = toData ? JSON.parse(toData) : null;
+
+      return {
+        fromVersion: fromVersion || 0,
+        toVersion: toVersion || 'current',
+        fromToolCalls: fromCheckpoint?.toolCalls?.length || 0,
+        toToolCalls: toCheckpoint?.toolCalls?.length || 0,
+      };
+    } catch (error: any) {
+      return reply.status(500).send({ error: `Failed to get diff: ${error.message}` });
+    }
+  });
+
   fastify.delete('/checkpoints/:sessionId', async (request: any) => {
     const { sessionId } = request.params;
     await redis.del(`agent:checkpoint:${sessionId}`);

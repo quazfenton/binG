@@ -1,25 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from 'zod';
-import { llmService, PROVIDERS } from "@/lib/api/llm-providers";
-import { errorHandler } from "@/lib/api/error-handler";
-import { priorityRequestRouter } from "@/lib/api/priority-request-router";
-import { unifiedResponseHandler } from "@/lib/api/unified-response-handler";
+import { llmService, PROVIDERS } from "@/lib/chat/llm-providers";
+import { errorHandler } from "@/lib/chat/error-handler";
+import { responseRouter } from "@/lib/api/response-router";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
 import { generateSecureId } from '@/lib/utils';
-import { chatRequestLogger } from '@/lib/api/chat-request-logger';
-import { chatLogger } from '@/lib/api/chat-logger';
+import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
+import { chatLogger } from '@/lib/chat/chat-logger';
 import { parsePatch, applyPatch } from 'diff';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
-import { ShadowCommitManager } from '@/lib/stateful-agent/commit/shadow-commit';
+import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil } from '@/lib/virtual-filesystem/scope-utils';
-import type { LLMMessage } from "@/lib/api/llm-providers";
+import type { LLMMessage } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
-import { createFilesystemTools, createAgentLoop } from '@/lib/mastra';
+import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
 import { executeV2Task, executeV2TaskStreaming } from '@/lib/agent/v2-executor';
-import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/api/unified-agent-service';
+import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@/lib/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
@@ -575,32 +574,30 @@ export async function POST(request: NextRequest) {
       enableComposio: routerRequest.enableComposio,
     });
 
-    // Route through priority chain (Fast-Agent → n8n → Custom Fallback → Original System)
+    // Route through priority chain and format response using consolidated router
     try {
-      const routerResponse = await priorityRequestRouter.route(routerRequest);
+      const unifiedResponse = await responseRouter.routeAndFormat(routerRequest);
 
-      const actualProvider = routerResponse.metadata?.actualProvider || routerResponse.source;
-      const actualModel = routerResponse.metadata?.actualModel || routerRequest.model;
+      const actualProvider = unifiedResponse.metadata?.actualProvider || unifiedResponse.source;
+      const actualModel = unifiedResponse.metadata?.actualModel || routerRequest.model;
 
-      chatLogger.info('Request handled by priority router', { requestId, provider: actualProvider, model: actualModel }, {
-        source: routerResponse.source,
-        priority: routerResponse.priority,
-        fallbackChain: routerResponse.fallbackChain,
+      chatLogger.info('Request handled by response router', { requestId, provider: actualProvider, model: actualModel }, {
+        source: unifiedResponse.source,
+        priority: unifiedResponse.priority,
+        fallbackChain: unifiedResponse.metadata?.fallbackChain,
       });
-      
-// Check for auth_required in response
-if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
+
+      // Check for auth_required in response
+      if (unifiedResponse.data?.requiresAuth && unifiedResponse.data?.authUrl) {
         return NextResponse.json({
           status: 'auth_required',
-          authUrl: routerResponse.data.authUrl,
-          toolName: routerResponse.data.toolName,
-          provider: routerResponse.data.provider || 'unknown',
-          message: `Please authorize ${routerResponse.data.toolName} to continue`
+          authUrl: unifiedResponse.data.authUrl,
+          toolName: unifiedResponse.data.toolName,
+          provider: unifiedResponse.data.provider || 'unknown',
+          message: `Please authorize ${unifiedResponse.data.toolName} to continue`
         }, { status: 401 });
       }
-      
-      // Process response through unified handler
-      const unifiedResponse = unifiedResponseHandler.processResponse(routerResponse, requestId);
+
       let rawResponseContent = unifiedResponse.content || '';
 
       // LLM Agent Tools: Execute filesystem tools if enabled and user is authenticated
@@ -775,7 +772,7 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
                 // Stream from agent
                 const streamPromise = (async () => {
                   // First, send initial token events from base response
-                  const baseEvents = unifiedResponseHandler.createStreamingEvents(clientResponse, streamRequestId);
+                  const baseEvents = responseRouter.createStreamingEvents(clientResponse, streamRequestId);
                   for (const event of baseEvents) {
                     if (request.signal?.aborted) return;
                     controller.enqueue(encoderRef.encode(event));
@@ -892,7 +889,7 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
 
         // Fallback: Standard streaming (non-agent or ToolLoopAgent not available)
         // Create streaming events from unified response
-        const events = unifiedResponseHandler.createStreamingEvents(clientResponse, streamRequestId);
+        const events = responseRouter.createStreamingEvents(clientResponse, streamRequestId);
         const supplementalAgenticEvents = buildSupplementalAgenticEvents(clientResponse, streamRequestId, events);
         if (supplementalAgenticEvents.length > 0) {
           events.splice(Math.max(0, events.length - 1), 0, ...supplementalAgenticEvents);

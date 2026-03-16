@@ -38,7 +38,7 @@ export {
   type CreateSessionOptions,
   type DisconnectSessionOptions,
   type RestoreResult,
-} from './user-terminal-sessions';
+} from '../terminal/session/user-terminal-sessions';
 
 // ==================== Auto-Snapshot Service ====================
 export {
@@ -48,7 +48,7 @@ export {
   createSnapshot,
   type AutoSnapshotConfig,
   type SnapshotMetadata,
-} from './auto-snapshot-service';
+} from '../virtual-filesystem/sync/auto-snapshot-service';
 
 // ==================== VFS Sync-Back ====================
 export {
@@ -59,7 +59,7 @@ export {
   type VFSyncConfig,
   type VFSyncResult,
   type VFSyncStatus,
-} from './vfs-sync-back';
+} from '../virtual-filesystem/sync/vfs-sync-back';
 
 // ==================== Provider Advanced MCP Tools ====================
 export {
@@ -96,15 +96,15 @@ export {
   type PTYConnectOptions,
   type PTYDisconnectOptions,
   type PTYTerminalInstance,
-} from './enhanced-pty-terminal';
+} from '../terminal/enhanced-pty-terminal';
 
 // ==================== Convenience Integration Class ====================
 
-import { userTerminalSessionManager, type UserTerminalSession, type CreateSessionOptions } from './user-terminal-sessions';
-import { autoSnapshotService, type AutoSnapshotConfig } from './auto-snapshot-service';
-import { vfsSyncBackService, type VFSyncConfig, type VFSyncResult } from './vfs-sync-back';
+import { userTerminalSessionManager, type UserTerminalSession, type CreateSessionOptions } from '../terminal/session/user-terminal-sessions';
+import { autoSnapshotService, type AutoSnapshotConfig } from '../virtual-filesystem/sync/auto-snapshot-service';
+import { vfsSyncBackService, type VFSyncConfig, type VFSyncResult } from '../virtual-filesystem/sync/vfs-sync-back';
 import { getAllProviderAdvancedTools, callProviderTool } from '../mcp/provider-advanced-tools';
-import { enhancedPTYTerminalManager, type PTYConnectOptions, type PTYDisconnectOptions, type PTYTerminalConfig, type PTYTerminalInstance } from './enhanced-pty-terminal';
+import { enhancedPTYTerminalManager, type PTYConnectOptions, type PTYDisconnectOptions, type PTYTerminalConfig, type PTYTerminalInstance } from '../terminal/enhanced-pty-terminal';
 import type { ProviderToolDefinition } from '../mcp/provider-advanced-tools';
 import type { SandboxProviderType } from './providers';
 

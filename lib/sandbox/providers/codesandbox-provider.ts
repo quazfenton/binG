@@ -18,7 +18,7 @@
  */
 
 import { resolve, relative, dirname } from 'node:path'
-import { quotaManager } from '@/lib/services/quota-manager'
+import { quotaManager } from '@/lib/management/quota-manager'
 import { SandboxSecurityManager } from '../security-manager'
 import type { ToolResult, PreviewInfo } from '../types'
 import type {

@@ -23,7 +23,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { UniversalVfsSync, type VfsFile, type SyncOptions } from '@/lib/sandbox/providers/universal-vfs-sync';
+import { UniversalVfsSync, type VfsFile, type SyncOptions } from '@/lib/virtual-filesystem/sync/universal-vfs-sync';
 import { getSandboxProvider } from '@/lib/sandbox/providers';
 import type { SandboxProviderType } from '@/lib/sandbox/providers';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';

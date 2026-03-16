@@ -9,7 +9,7 @@
  */
 
 import { createServer, Server } from 'http'
-import { mcpToolRegistry } from './tool-registry'
+import { mcpToolRegistry } from './registry'
 import { createLogger } from '../utils/logger'
 
 const logger = createLogger('MCP:CLI-Server')

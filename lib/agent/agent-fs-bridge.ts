@@ -6,7 +6,7 @@
  */
 
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
-import { agentSessionManager } from './agent-session-manager';
+import { agentSessionManager } from '../session/agent/agent-session-manager';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Agent:FSBridge');

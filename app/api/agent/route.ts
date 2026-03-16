@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fastAgentService, type FastAgentRequest } from "@/lib/api/fast-agent-service";
-import type { LLMMessage } from "@/lib/api/llm-providers";
+import { fastAgentService, type FastAgentRequest } from "@/lib/chat/fast-agent-service";
+import type { LLMMessage } from "@/lib/chat/llm-providers";
 import { generateSecureId } from '@/lib/utils';
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 

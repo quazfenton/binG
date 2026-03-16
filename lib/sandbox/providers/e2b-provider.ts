@@ -21,23 +21,23 @@
 
 import { resolve, relative, join, dirname } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import { quotaManager } from '../../services/quota-manager'
+import { quotaManager } from '../../management/quota-manager'
 import { SandboxSecurityManager } from '../security-manager'
-import { E2BDesktopProvider, type DesktopSandboxHandle as DesktopHandle } from './e2b-desktop-provider-enhanced'
+import { E2BDesktopProvider, type DesktopSandboxHandle as DesktopHandle } from '../../computer/e2b-desktop-provider-enhanced'
 import {
   createAmpService,
   type E2BAmpService,
   type AmpExecutionConfig,
   type AmpExecutionResult,
   type AmpEvent,
-} from './e2b-amp-service'
+} from '../spawn/e2b-amp-service'
 import {
   createCodexService,
   type E2BCodexService,
   type CodexExecutionConfig,
   type CodexExecutionResult,
   type CodexEvent,
-} from './e2b-codex-service'
+} from '../spawn/e2b-codex-service'
 import type { ToolResult, PreviewInfo } from '../types'
 import type {
   SandboxProvider,

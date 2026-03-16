@@ -78,7 +78,7 @@ import ArrowUp from "lucide-react/dist/esm/icons/arrow-up";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import BookOpen from "lucide-react/dist/esm/icons/book-open";
 import Archive from "lucide-react/dist/esm/icons/archive";
-import type { LLMProvider } from "../lib/api/llm-providers";
+import type { LLMProvider } from "../lib/chat/llm-providers";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
 import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";

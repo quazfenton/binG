@@ -14,8 +14,8 @@ import {
   getProcessRuntime,
   sandboxMetrics,
 } from '@/lib/backend';
-import { quotaManager } from '@/lib/backend/quota';
-import { snapshotManager } from '@/lib/backend/snapshot-manager';
+import { quotaManager } from '@/lib/management/quota';
+import { snapshotManager } from '@/lib/virtual-filesystem/sync/snapshot-manager';
 import { initializeMCPForArchitecture2 } from '@/lib/mcp';
 
 const logger = createLogger('Backend:Init');
@@ -205,7 +205,7 @@ class BackendService {
         });
 
         // Wire S3 backend to snapshot manager
-        const { snapshotManager } = await import('./snapshot-manager');
+        const { snapshotManager } = await import('../virtual-filesystem/sync/snapshot-manager');
         (snapshotManager as any).storageBackend = s3Backend;
 
         this.status.storage = {
@@ -216,7 +216,7 @@ class BackendService {
         const localBackend = getLocalBackend(this.config.localSnapshotDir!);
 
         // Wire local backend to snapshot manager
-        const { snapshotManager } = await import('./snapshot-manager');
+        const { snapshotManager } = await import('../virtual-filesystem/sync/snapshot-manager');
         (snapshotManager as any).storageBackend = localBackend;
 
         this.status.storage = {

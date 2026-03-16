@@ -12,14 +12,14 @@
 import { z } from "zod";
 import {
   createDefaultProviders,
-} from "@/lib/tool-integration/providers";
-import { ToolProviderRegistry } from "@/lib/tool-integration/provider-registry";
-import { ToolProviderRouter } from "@/lib/tool-integration/router";
+} from "@/lib/tools/tool-integration/providers";
+import { ToolProviderRegistry } from "@/lib/tools/tool-integration/provider-registry";
+import { ToolProviderRouter } from "@/lib/tools/tool-integration/router";
 import type {
   IntegrationConfig as BaseIntegrationConfig,
   IntegrationProvider as BaseIntegrationProvider,
   ToolExecutionResult as BaseToolExecutionResult,
-} from "@/lib/tool-integration/types";
+} from "@/lib/tools/tool-integration/types";
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -651,16 +651,99 @@ export class ToolIntegrationManager {
 
   /**
    * Search for tools by description
+   * 
+   * Supports both cached tools and dynamic discovery from Smithery/Arcade APIs
+   * 
+   * @param query - Search query
+   * @param userId - Optional user ID for provider-specific searches
+   * @returns Array of matching tools
    */
-  searchTools(query: string): ToolConfig[] {
+  async searchTools(query: string, userId?: string): Promise<ToolConfig[]> {
     const lowercaseQuery = query.toLowerCase();
-    return Object.entries(TOOL_REGISTRY)
+    const results: ToolConfig[] = [];
+
+    // 1. Search cached TOOL_REGISTRY (always available)
+    const cachedTools = Object.entries(TOOL_REGISTRY)
       .filter(
         ([key, config]) =>
           key.toLowerCase().includes(lowercaseQuery) ||
           config.description.toLowerCase().includes(lowercaseQuery)
       )
       .map(([_, config]) => config);
+    
+    results.push(...cachedTools);
+
+    // 2. Dynamic discovery from Smithery (if available)
+    try {
+      const smitheryApiKey = process.env.SMITHERY_API_KEY;
+      if (smitheryApiKey) {
+        const { SmitheryProvider } = await import('./tool-integration/providers/smithery');
+        const smithery = new SmitheryProvider({ apiKey: smitheryApiKey });
+        
+        if (smithery.isAvailable()) {
+          const smitheryTools = await smithery.discoverAllTools();
+          const matchingTools = smitheryTools.filter(tool =>
+            tool.name.toLowerCase().includes(lowercaseQuery) ||
+            tool.description.toLowerCase().includes(lowercaseQuery)
+          );
+          
+          for (const tool of matchingTools) {
+            results.push({
+              provider: 'smithery',
+              toolName: tool.name,
+              description: tool.description,
+              category: 'integration',
+              requiresAuth: false,
+              inputSchema: tool.inputSchema,
+            });
+          }
+        }
+      }
+    } catch (error: any) {
+      // Silently fail - Smithery not available or error occurred
+      console.debug('[ToolIntegrationManager] Smithery discovery failed:', error.message);
+    }
+
+    // 3. Dynamic discovery from Arcade (if available)
+    // NOTE: Requires arcade-service.ts to exist in lib/api/
+    try {
+      const arcadeApiKey = process.env.ARCADE_API_KEY;
+      if (arcadeApiKey) {
+        // Use require for dynamic import to handle missing module gracefully
+        const arcadeModule = await import('../api/arcade-service');
+        const getArcadeService = arcadeModule.getArcadeService;
+        
+        if (getArcadeService) {
+          const arcadeService = getArcadeService();
+          
+          if (arcadeService) {
+            const arcadeTools = await arcadeService.searchTools(query);
+            for (const tool of arcadeTools) {
+              results.push({
+                provider: 'arcade',
+                toolName: tool.name,
+                description: tool.description,
+                category: tool.toolkit || 'integration',
+                requiresAuth: tool.requiresAuth,
+                inputSchema: tool.inputSchema,
+              });
+            }
+          }
+        }
+      }
+    } catch (error: any) {
+      // Silently fail - Arcade service not available or module not found
+      console.debug('[ToolIntegrationManager] Arcade discovery failed:', error.message);
+    }
+
+    // Remove duplicates (keep first occurrence)
+    const seen = new Set<string>();
+    return results.filter(tool => {
+      const key = `${tool.provider}:${tool.toolName}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   /**
@@ -675,10 +758,59 @@ export class ToolIntegrationManager {
   }
 
   /**
-   * Get all registered tools (for discovery)
+   * Get all available tools (for discovery)
+   * 
+   * Includes cached tools and dynamically discovers from Arcade API
+   * 
+   * @param userId - Optional user ID for provider-specific queries
+   * @returns Array of all available tools
    */
-  getAllTools(): ToolConfig[] {
-    return Array.from(this.tools.values());
+  async getAllTools(userId?: string): Promise<ToolConfig[]> {
+    const results: ToolConfig[] = [];
+
+    // 1. Get cached tools (always available)
+    const cachedTools = Array.from(this.tools.values());
+    results.push(...cachedTools);
+
+    // 2. Dynamic discovery from Arcade (if available)
+    // NOTE: Requires arcade-service.ts to exist in lib/api/
+    try {
+      const arcadeApiKey = process.env.ARCADE_API_KEY;
+      if (arcadeApiKey) {
+        const arcadeModule = await import('../api/arcade-service');
+        const getArcadeService = arcadeModule.getArcadeService;
+        
+        if (getArcadeService) {
+          const arcadeService = getArcadeService();
+          
+          if (arcadeService) {
+            const arcadeTools = await arcadeService.getTools();
+            for (const tool of arcadeTools) {
+              results.push({
+                provider: 'arcade',
+                toolName: tool.name,
+                description: tool.description,
+                category: tool.toolkit || 'integration',
+                requiresAuth: tool.requiresAuth,
+                inputSchema: tool.inputSchema,
+              });
+            }
+          }
+        }
+      }
+    } catch (error: any) {
+      // Silently fail - Arcade service not available or module not found
+      console.debug('[ToolIntegrationManager] Arcade discovery failed:', error.message);
+    }
+
+    // Remove duplicates (keep first occurrence)
+    const seen = new Set<string>();
+    return results.filter(tool => {
+      const key = `${tool.provider}:${tool.toolName}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   /**

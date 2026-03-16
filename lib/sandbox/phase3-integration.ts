@@ -78,7 +78,7 @@ export {
   type GPUTaskType,
   type GPURequirements,
   type GPUAvailability,
-} from './gpu-task-routing';
+} from '../management/gpu-task-routing';
 
 // ==================== Object Storage Integration ====================
 export {
@@ -93,14 +93,14 @@ export {
   type UploadResult,
   type DownloadResult,
   type StoredFile,
-} from './object-storage-integration';
+} from '../storage/object-storage-integration';
 
 // ==================== Unified Phase 3 Integration Class ====================
 
 import { snapshotPortability, type PortableSnapshot, type MigrationResult } from './snapshot-portability';
 import { lspIntegration, type Position, type CompletionItem, type Diagnostic, type Location, type Hover } from './lsp-integration';
-import { gpuTaskRouting, type GPUTaskType, type GPURequirements, type GPUAvailability } from './gpu-task-routing';
-import { objectStorageIntegration, type UploadResult, type DownloadResult, type StoredFile } from './object-storage-integration';
+import { gpuTaskRouting, type GPUTaskType, type GPURequirements, type GPUAvailability } from '../management/gpu-task-routing';
+import { objectStorageIntegration, type UploadResult, type DownloadResult, type StoredFile } from '../storage/object-storage-integration';
 import type { SandboxProviderType } from './providers';
 import { createLogger } from '../utils/logger';
 
