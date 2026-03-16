@@ -21,6 +21,9 @@ COPY package.json pnpm-lock.yaml ./
 # Install dependencies
 RUN pnpm install --frozen-lockfile
 
+# Install ts-node for TypeScript execution
+RUN pnpm add -g ts-node
+
 # Copy MCP library and service
 COPY lib/mcp/ ./lib/mcp/
 COPY services/mcp-server/ ./services/mcp-server/
@@ -38,5 +41,5 @@ EXPOSE 8888
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget -q --spider http://localhost:${MCP_PORT}/health || exit 1
 
-# Start MCP server
-CMD ["node", "services/mcp-server/index.js"]
+# Start MCP server (using ts-node for TypeScript)
+CMD ["ts-node", "services/mcp-server/index.ts"]

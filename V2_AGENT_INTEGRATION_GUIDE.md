@@ -225,8 +225,9 @@ export function useAgentStream(
     });
 
     eventSource.addEventListener('error', (event) => {
-      const data = JSON.parse(event.data);
-      onError(data.error || 'Stream error');
+      // EventSource error events don't carry a data payload
+      // Use a generic error message instead of parsing event.data
+      onError('Stream connection error');
       eventSource.close();
     });
 

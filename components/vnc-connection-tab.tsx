@@ -75,9 +75,11 @@ export default function VNCConnectionTab({ onConnectionChange }: VNCConnectionTa
     }
   }, []);
 
-  // Save connections to localStorage
+  // Save connections to localStorage (WITHOUT passwords for security)
   useEffect(() => {
-    localStorage.setItem("vnc-connections", JSON.stringify(connections));
+    // Strip passwords before saving to localStorage
+    const connectionsWithoutPasswords = connections.map(({ password, ...connection }) => connection);
+    localStorage.setItem("vnc-connections", JSON.stringify(connectionsWithoutPasswords));
   }, [connections]);
 
   // Notify parent of connection changes
@@ -380,7 +382,7 @@ export default function VNCConnectionTab({ onConnectionChange }: VNCConnectionTa
               </Button>
               <Button
                 onClick={handleConnect}
-                disabled={!newConnection.host || isConnecting}
+                disabled={!activeConnection || isConnecting}
                 className="flex-1 bg-green-600 hover:bg-green-700"
                 size="sm"
               >

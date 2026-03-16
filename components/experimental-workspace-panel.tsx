@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import {
   FolderOpen,
   FileText,
@@ -110,17 +110,81 @@ export function ExperimentalWorkspacePanel() {
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
+
+  // Load chat history from localStorage on mount
+  useEffect(() => {
+    const savedChat = localStorage.getItem('experimental-chat-history');
+    if (savedChat) {
+      try {
+        setChatMessages(JSON.parse(savedChat));
+      } catch (e) {
+        console.error('Failed to load chat history:', e);
+      }
+    }
+  }, []);
+
+  // Save chat history to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('experimental-chat-history', JSON.stringify(chatMessages));
+  }, [chatMessages]);
   const [thinkingNotes, setThinkingNotes] = useState<string[]>([]);
   const [newNote, setNewNote] = useState("");
+
+  // Load thinking notes from localStorage on mount
+  useEffect(() => {
+    const savedNotes = localStorage.getItem('experimental-thinking-notes');
+    if (savedNotes) {
+      try {
+        setThinkingNotes(JSON.parse(savedNotes));
+      } catch (e) {
+        console.error('Failed to load thinking notes:', e);
+      }
+    }
+  }, []);
+
+  // Save thinking notes to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('experimental-thinking-notes', JSON.stringify(thinkingNotes));
+  }, [thinkingNotes]);
   const [playlist, setPlaylist] = useState<Song[]>([]);
   const [currentSongIndex, setCurrentSongIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(0.7);
   const [isMuted, setIsMuted] = useState(false);
+
+  // Load playlist from localStorage on mount
+  useEffect(() => {
+    const savedPlaylist = localStorage.getItem('experimental-music-playlist');
+    if (savedPlaylist) {
+      try {
+        setPlaylist(JSON.parse(savedPlaylist));
+      } catch (e) {
+        console.error('Failed to load playlist:', e);
+      }
+    }
+  }, []);
+
+  // Save playlist to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('experimental-music-playlist', JSON.stringify(playlist));
+  }, [playlist]);
   
-  // YouTube state
-  const [youtubePlaylistId, setYoutubePlaylistId] = useState("PLKV7EJNZDttTn70dbzbv07JS1Y2HScVJ0");
-  const [isYoutubeFullscreen, setIsYoutubeFullscreen] = useState(false);
+  // YouTube state - Default: Lofi Hip Hop Radio
+  const [youtubeVideoId, setYoutubeVideoId] = useState("jfKfPfyJRdk");
+  const [isYoutubeFullscreen, setIsYoutubeFullscreen] = useState(true);
+
+  // Load YouTube video ID from localStorage
+  useEffect(() => {
+    const savedVideoId = localStorage.getItem('experimental-youtube-video');
+    if (savedVideoId) {
+      setYoutubeVideoId(savedVideoId);
+    }
+  }, []);
+
+  // Save YouTube video ID to localStorage
+  useEffect(() => {
+    localStorage.setItem('experimental-youtube-video', youtubeVideoId);
+  }, [youtubeVideoId]);
   
   // Agent status display state
   const [showAgentStatus, setShowAgentStatus] = useState(false);
@@ -167,6 +231,24 @@ export function ExperimentalWorkspacePanel() {
   const [isAnonymousPost, setIsAnonymousPost] = useState(true);
   const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
   const [newCommentContent, setNewCommentContent] = useState<{[key: string]: string}>({});
+
+  // Load forum posts from localStorage on mount
+  useEffect(() => {
+    const savedPosts = localStorage.getItem('experimental-forum-posts');
+    if (savedPosts) {
+      try {
+        const parsed = JSON.parse(savedPosts);
+        setForumPosts(parsed);
+      } catch (e) {
+        console.error('Failed to load forum posts:', e);
+      }
+    }
+  }, []);
+
+  // Save forum posts to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('experimental-forum-posts', JSON.stringify(forumPosts));
+  }, [forumPosts]);
   
   // Agent Activity state
   interface ToolInvocation {
@@ -231,8 +313,19 @@ export function ExperimentalWorkspacePanel() {
     (window as any).__agentActivity || { agentActivity: undefined, setAgentActivity: undefined };
 
   const { filesystem } = useVirtualFilesystem();
+  const { 
+    writeFile, 
+    listDirectory,
+    ownerId 
+  } = useVirtualFilesystem(filesystem?.scopePath || 'project');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // File creation state
+  const [isCreatingFile, setIsCreatingFile] = useState(false);
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [newItemName, setNewItemName] = useState("");
+  const [creatingParentPath, setCreatingParentPath] = useState("/");
 
   // Build file tree from filesystem
   const fileTree = React.useMemo(() => {
@@ -326,18 +419,106 @@ export function ExperimentalWorkspacePanel() {
     setChatInput("");
     setIsChatLoading(true);
 
-    // Simulate agent response (replace with actual API call)
-    setTimeout(() => {
-      const assistantMessage: Message = {
-        id: `exp-chat-${Date.now()}`,
-        role: "assistant",
-        content: "This is an experimental parallel chat. Integrate with your agent API for real responses.",
-        timestamp: Date.now(),
-      };
-      setChatMessages((prev) => [...prev, assistantMessage]);
+    // Try to call the actual chat API
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: chatInput.trim(),
+          conversationId: 'experimental-panel',
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const assistantMessage: Message = {
+          id: `exp-chat-${Date.now()}`,
+          role: "assistant",
+          content: data.response || data.content || "Response received",
+          timestamp: Date.now(),
+        };
+        setChatMessages((prev) => [...prev, assistantMessage]);
+      } else {
+        throw new Error('API request failed');
+      }
+    } catch (error) {
+      // Fallback to simulated response if API fails
+      setTimeout(() => {
+        const assistantMessage: Message = {
+          id: `exp-chat-${Date.now()}`,
+          role: "assistant",
+          content: "Thanks for your message! This is experimental chat with localStorage persistence.",
+          timestamp: Date.now(),
+        };
+        setChatMessages((prev) => [...prev, assistantMessage]);
+      }, 1000);
+    } finally {
       setIsChatLoading(false);
-    }, 1000);
+    }
   }, [chatInput, isChatLoading]);
+
+  // YouTube helper functions
+  const getYouTubeVideoId = useCallback((urlOrId: string): string => {
+    // If it's already a video ID (11 characters), return it
+    if (/^[a-zA-Z0-9_-]{11}$/.test(urlOrId)) {
+      return urlOrId;
+    }
+    
+    // Try to extract from various YouTube URL formats
+    const patterns = [
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+      /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/,
+      /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+    ];
+    
+    for (const pattern of patterns) {
+      const match = urlOrId.match(pattern);
+      if (match) {
+        return match[1];
+      }
+    }
+    
+    // Default fallback video (lofi hip hop radio)
+    return 'jfKfPfyJRdk';
+  }, []);
+
+  const extractYouTubeId = useCallback((urlOrId: string): string | null => {
+    // If it's already a video ID
+    if (/^[a-zA-Z0-9_-]{11}$/.test(urlOrId)) {
+      return urlOrId;
+    }
+    
+    // Try to extract from URL
+    const patterns = [
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+      /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/,
+      /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+      /youtube\.com\/playlist\?list=([a-zA-Z0-9_-]+)/,
+    ];
+    
+    for (const pattern of patterns) {
+      const match = urlOrId.match(pattern);
+      if (match) {
+        return match[1];
+      }
+    }
+    
+    return null;
+  }, []);
+
+  const clearChatHistory = useCallback(() => {
+    setChatMessages([]);
+    toast.success("Chat history cleared");
+  }, []);
+
+  const exportChatHistory = useCallback(() => {
+    const chatText = chatMessages.map((msg) => 
+      `[${new Date(msg.timestamp).toLocaleString()}] ${msg.role === 'user' ? 'You' : 'Assistant'}: ${msg.content}`
+    ).join('\n\n');
+    navigator.clipboard.writeText(chatText);
+    toast.success("Chat history copied to clipboard");
+  }, [chatMessages]);
 
   const addThinkingNote = useCallback(() => {
     if (!newNote.trim()) return;
@@ -348,6 +529,78 @@ export function ExperimentalWorkspacePanel() {
 
   const removeThinkingNote = useCallback((index: number) => {
     setThinkingNotes((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const clearAllNotes = useCallback(() => {
+    setThinkingNotes([]);
+    toast.success("All notes cleared");
+  }, []);
+
+  const exportNotes = useCallback(() => {
+    const notesText = thinkingNotes.map((note, i) => `${i + 1}. ${note}`).join('\n\n');
+    navigator.clipboard.writeText(notesText);
+    toast.success("Notes copied to clipboard");
+  }, [thinkingNotes]);
+
+  // Forum actions
+  const handleCreatePost = useCallback(() => {
+    if (!newPostContent.trim()) return;
+    
+    const newPost: ForumPost = {
+      id: Date.now().toString(),
+      author: isAnonymousPost ? "Anonymous" : "You",
+      content: newPostContent.trim(),
+      timestamp: Date.now(),
+      likes: 0,
+      comments: [],
+      isAnonymous: isAnonymousPost,
+    };
+    
+    setForumPosts((prev) => [newPost, ...prev]);
+    setNewPostContent("");
+    toast.success("Post published", { description: "Your post is now visible to everyone" });
+  }, [newPostContent, isAnonymousPost]);
+
+  const handleLikePost = useCallback((postId: string) => {
+    setForumPosts((prev) => prev.map(p =>
+      p.id === postId ? { ...p, likes: p.likes + 1 } : p
+    ));
+  }, []);
+
+  const handleAddComment = useCallback((postId: string, content: string) => {
+    if (!content.trim()) return;
+    
+    const newComment: ForumComment = {
+      id: Date.now().toString(),
+      author: "Anonymous",
+      content: content.trim(),
+      timestamp: Date.now(),
+      isAnonymous: true,
+    };
+    
+    setForumPosts((prev) => prev.map(p =>
+      p.id === postId ? { ...p, comments: [...p.comments, newComment] } : p
+    ));
+    
+    // Clear the comment input for this post
+    setNewCommentContent((prev) => ({
+      ...prev,
+      [postId]: "",
+    }));
+    
+    toast.success("Comment added");
+  }, []);
+
+  const handleToggleComments = useCallback((postId: string) => {
+    setExpandedComments((prev) => {
+      const next = new Set(prev);
+      if (next.has(postId)) {
+        next.delete(postId);
+      } else {
+        next.add(postId);
+      }
+      return next;
+    });
   }, []);
 
   const addSongToPlaylist = useCallback(() => {
@@ -365,8 +618,18 @@ export function ExperimentalWorkspacePanel() {
     setPlaylist((prev) => prev.filter((_, i) => i !== index));
     if (index === currentSongIndex) {
       setIsPlaying(false);
+      setCurrentSongIndex(0);
+    } else if (index < currentSongIndex) {
+      setCurrentSongIndex((prev) => prev - 1);
     }
   }, [currentSongIndex]);
+
+  const clearPlaylist = useCallback(() => {
+    setPlaylist([]);
+    setIsPlaying(false);
+    setCurrentSongIndex(0);
+    toast.success("Playlist cleared");
+  }, []);
 
   const playSong = useCallback((index: number) => {
     setCurrentSongIndex(index);
@@ -387,26 +650,129 @@ export function ExperimentalWorkspacePanel() {
     setIsPlaying(true);
   }, [playlist.length]);
 
+  const moveSongUp = useCallback((index: number) => {
+    if (index === 0) return;
+    setPlaylist((prev) => {
+      const newList = [...prev];
+      [newList[index - 1], newList[index]] = [newList[index], newList[index - 1]];
+      return newList;
+    });
+    if (index === currentSongIndex) {
+      setCurrentSongIndex(index - 1);
+    } else if (index - 1 === currentSongIndex) {
+      setCurrentSongIndex(index);
+    }
+  }, [currentSongIndex]);
+
+  const moveSongDown = useCallback((index: number) => {
+    setPlaylist((prev) => {
+      if (index >= prev.length - 1) return prev;
+      const newList = [...prev];
+      [newList[index], newList[index + 1]] = [newList[index + 1], newList[index]];
+      return newList;
+    });
+    if (index === currentSongIndex) {
+      setCurrentSongIndex(index + 1);
+    } else if (index + 1 === currentSongIndex) {
+      setCurrentSongIndex(index);
+    }
+  }, [currentSongIndex]);
+
+  // File creation handlers
+  const handleCreateFile = useCallback(async (parentPath: string) => {
+    setIsCreatingFile(true);
+    setCreatingParentPath(parentPath);
+    setNewItemName("");
+  }, []);
+
+  const handleCreateFolder = useCallback(async (parentPath: string) => {
+    setIsCreatingFolder(true);
+    setCreatingParentPath(parentPath);
+    setNewItemName("");
+  }, []);
+
+  const confirmCreateFile = useCallback(async () => {
+    if (!newItemName.trim()) {
+      setIsCreatingFile(false);
+      return;
+    }
+
+    const cleanParentPath = creatingParentPath.replace(/\/+$/, '');
+    const newPath = `${cleanParentPath}/${newItemName.trim()}`;
+
+    try {
+      await writeFile(newPath, '');
+      await listDirectory(creatingParentPath);
+      toast.success(`File created: ${newItemName.trim()}`);
+      setIsCreatingFile(false);
+      setNewItemName("");
+    } catch (err: any) {
+      toast.error(`Failed to create file: ${err.message}`);
+      setIsCreatingFile(false);
+    }
+  }, [newItemName, creatingParentPath, writeFile, listDirectory]);
+
+  const confirmCreateFolder = useCallback(async () => {
+    if (!newItemName.trim()) {
+      setIsCreatingFolder(false);
+      return;
+    }
+
+    const cleanParentPath = creatingParentPath.replace(/\/+$/, '');
+    const folderPath = `${cleanParentPath}/${newItemName.trim()}`;
+    const gitkeepPath = `${folderPath}/.gitkeep`;
+
+    try {
+      await writeFile(gitkeepPath, '');
+      await listDirectory(creatingParentPath);
+      toast.success(`Folder created: ${newItemName.trim()}`);
+      setIsCreatingFolder(false);
+      setNewItemName("");
+    } catch (err: any) {
+      toast.error(`Failed to create folder: ${err.message}`);
+      setIsCreatingFolder(false);
+    }
+  }, [newItemName, creatingParentPath, writeFile, listDirectory]);
+
+  const cancelCreate = useCallback(() => {
+    setIsCreatingFile(false);
+    setIsCreatingFolder(false);
+    setNewItemName("");
+  }, []);
+
   const renderFileTree = useCallback((node: FileNode, depth = 0) => {
     const isExpanded = expandedFolders.has(node.path);
     const indent = depth * 16;
 
     if (node.type === "directory") {
       return (
-        <div key={node.path}>
-          <button
-            onClick={() => toggleFolder(node.path)}
-            className="flex items-center gap-1 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors"
-            style={{ paddingLeft: indent + 8 }}
-          >
-            {isExpanded ? (
-              <ChevronDown className="h-3 w-3 text-white/60" />
-            ) : (
-              <ChevronRight className="h-3 w-3 text-white/60" />
-            )}
-            <Folder className="h-3 w-3 text-blue-400" />
-            <span className="text-white/80">{node.name}</span>
-          </button>
+        <div key={node.path} className="group">
+          <div className="flex items-center">
+            <button
+              onClick={() => toggleFolder(node.path)}
+              className="flex items-center gap-1 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors"
+              style={{ paddingLeft: indent + 8 }}
+            >
+              {isExpanded ? (
+                <ChevronDown className="h-3 w-3 text-white/60" />
+              ) : (
+                <ChevronRight className="h-3 w-3 text-white/60" />
+              )}
+              <Folder className="h-3 w-3 text-blue-400" />
+              <span className="text-white/80">{node.name}</span>
+            </button>
+            {/* Add file button for folders */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleCreateFile(node.path);
+              }}
+              className="p-1 hover:bg-white/10 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+              title="New File in Folder"
+            >
+              <Plus className="h-3 w-3 text-white/60" />
+            </button>
+          </div>
           <AnimatePresence>
             {isExpanded && node.children && (
               <motion.div
@@ -436,7 +802,7 @@ export function ExperimentalWorkspacePanel() {
         <span className="text-white/80 truncate">{node.name}</span>
       </button>
     );
-  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect]);
+  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile]);
 
   return (
     <>
@@ -680,10 +1046,63 @@ export function ExperimentalWorkspacePanel() {
                     <div className="p-4 space-y-2">
                       <div className="flex items-center justify-between mb-4">
                         <span className="text-xs text-white/60">File Explorer</span>
-                        <Badge variant="secondary" className="text-[10px] bg-white/10">
-                          {filesystem?.files?.length || 0} files
-                        </Badge>
+                        <div className="flex gap-1">
+                          <Badge variant="secondary" className="text-[10px] bg-white/10">
+                            {filesystem?.files?.length || 0} files
+                          </Badge>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleCreateFile("/")}
+                            className="h-6 w-6 hover:bg-white/10"
+                            title="New File"
+                          >
+                            <Plus className="h-3 w-3" />
+                          </Button>
+                        </div>
                       </div>
+                      
+                      {/* File creation input */}
+                      {(isCreatingFile || isCreatingFolder) && (
+                        <div className="mb-2 p-2 bg-white/10 rounded border border-white/20">
+                          <Input
+                            value={newItemName}
+                            onChange={(e) => setNewItemName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                if (isCreatingFile) {
+                                  confirmCreateFile();
+                                } else {
+                                  confirmCreateFolder();
+                                }
+                              } else if (e.key === 'Escape') {
+                                cancelCreate();
+                              }
+                            }}
+                            placeholder={isCreatingFile ? "filename.js" : "folder-name"}
+                            className="h-7 text-xs bg-black/50 border-white/20 mb-2"
+                            autoFocus
+                          />
+                          <div className="flex gap-1">
+                            <Button
+                              size="sm"
+                              onClick={isCreatingFile ? confirmCreateFile : confirmCreateFolder}
+                              className="h-6 text-xs bg-green-600/20 hover:bg-green-600/30 border border-green-500/30"
+                            >
+                              Create
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={cancelCreate}
+                              className="h-6 text-xs"
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                      
                       {renderFileTree(fileTree)}
                       
                       {selectedFile && (
@@ -732,6 +1151,39 @@ export function ExperimentalWorkspacePanel() {
 
                 {/* Parallel Chat Tab */}
                 <TabsContent value="chat" className="flex-1 mt-0 flex flex-col overflow-hidden">
+                  {/* Chat Header */}
+                  <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/20">
+                    <div className="flex items-center gap-2">
+                      <MessageSquare className="h-4 w-4 text-blue-400" />
+                      <span className="text-sm font-medium text-white/90">Parallel Chat</span>
+                      <Badge variant="secondary" className="text-[10px] bg-blue-500/20 text-blue-300">
+                        {chatMessages.length} messages
+                      </Badge>
+                    </div>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={exportChatHistory}
+                        disabled={chatMessages.length === 0}
+                        className="h-6 text-xs hover:bg-blue-500/20 disabled:opacity-50"
+                        title="Copy chat to clipboard"
+                      >
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={clearChatHistory}
+                        disabled={chatMessages.length === 0}
+                        className="h-6 text-xs hover:bg-red-500/20 disabled:opacity-50"
+                        title="Clear chat history"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                  
                   <div className="flex-1 overflow-y-auto p-4 space-y-4">
                     {chatMessages.length === 0 ? (
                       <div className="text-center text-white/40 text-sm mt-8">
@@ -803,9 +1255,33 @@ export function ExperimentalWorkspacePanel() {
                 <TabsContent value="thinking" className="flex-1 mt-0 overflow-hidden">
                   <ScrollArea className="h-full">
                     <div className="p-4 space-y-4">
-                      <div className="flex items-center gap-2 mb-4">
-                        <Brain className="h-4 w-4 text-purple-400" />
-                        <span className="text-sm font-medium text-white/90">Agent Thinking & State</span>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <Brain className="h-4 w-4 text-purple-400" />
+                          <span className="text-sm font-medium text-white/90">Agent Thinking & State</span>
+                        </div>
+                        <div className="flex gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={exportNotes}
+                            disabled={thinkingNotes.length === 0}
+                            className="h-6 text-xs hover:bg-purple-500/20 disabled:opacity-50"
+                            title="Copy all notes to clipboard"
+                          >
+                            <Copy className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={clearAllNotes}
+                            disabled={thinkingNotes.length === 0}
+                            className="h-6 text-xs hover:bg-red-500/20 disabled:opacity-50"
+                            title="Clear all notes"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
                       </div>
 
                       {/* Add Note */}
@@ -824,7 +1300,8 @@ export function ExperimentalWorkspacePanel() {
                         <Button
                           onClick={addThinkingNote}
                           size="sm"
-                          className="bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30"
+                          disabled={!newNote.trim()}
+                          className="bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 disabled:opacity-50"
                         >
                           <Plus className="h-3 w-3" />
                         </Button>
@@ -894,16 +1371,31 @@ export function ExperimentalWorkspacePanel() {
                         <div className="flex items-center gap-2">
                           <Music className="h-4 w-4 text-pink-400" />
                           <span className="text-sm font-medium text-white/90">Playlist</span>
+                          <Badge variant="secondary" className="text-[10px] bg-pink-500/20 text-pink-300">
+                            {playlist.length} songs
+                          </Badge>
                         </div>
-                        <Button
-                          onClick={addSongToPlaylist}
-                          size="sm"
-                          variant="ghost"
-                          className="h-6 hover:bg-white/10"
-                        >
-                          <Plus className="h-3 w-3 mr-1" />
-                          Add
-                        </Button>
+                        <div className="flex gap-1">
+                          <Button
+                            onClick={clearPlaylist}
+                            size="sm"
+                            variant="ghost"
+                            disabled={playlist.length === 0}
+                            className="h-6 text-xs hover:bg-red-500/20 disabled:opacity-50"
+                            title="Clear playlist"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            onClick={addSongToPlaylist}
+                            size="sm"
+                            variant="ghost"
+                            className="h-6 text-xs hover:bg-white/10"
+                          >
+                            <Plus className="h-3 w-3 mr-1" />
+                            Add
+                          </Button>
+                        </div>
                       </div>
 
                       {/* Current Song */}
@@ -984,16 +1476,41 @@ export function ExperimentalWorkspacePanel() {
                           playlist.map((song, index) => (
                             <div
                               key={song.id}
-                              className={`flex items-center justify-between p-2 rounded ${
+                              className={`flex items-center gap-2 p-2 rounded ${
                                 index === currentSongIndex
                                   ? "bg-pink-500/20 border border-pink-500/30"
                                   : "hover:bg-white/10"
                               }`}
                             >
+                              {/* Reorder buttons */}
+                              <div className="flex flex-col gap-0.5">
+                                <button
+                                  onClick={() => moveSongUp(index)}
+                                  disabled={index === 0}
+                                  className="p-0.5 hover:bg-white/10 rounded disabled:opacity-30"
+                                >
+                                  <ChevronUp className="h-3 w-3" />
+                                </button>
+                                <button
+                                  onClick={() => moveSongDown(index)}
+                                  disabled={index === playlist.length - 1}
+                                  className="p-0.5 hover:bg-white/10 rounded disabled:opacity-30"
+                                >
+                                  <ChevronDown className="h-3 w-3" />
+                                </button>
+                              </div>
+                              
                               <div
-                                className="flex-1 cursor-pointer"
+                                className="flex-1 cursor-pointer flex items-center gap-2"
                                 onClick={() => playSong(index)}
                               >
+                                {index === currentSongIndex && isPlaying && (
+                                  <div className="flex gap-0.5 items-end h-4">
+                                    <div className="w-0.5 bg-pink-400 animate-pulse" style={{ height: '60%' }} />
+                                    <div className="w-0.5 bg-pink-400 animate-pulse" style={{ height: '100%' }} />
+                                    <div className="w-0.5 bg-pink-400 animate-pulse" style={{ height: '40%' }} />
+                                  </div>
+                                )}
                                 <p className="text-sm text-white/90 truncate">{song.title}</p>
                                 <p className="text-xs text-white/50">{song.artist}</p>
                               </div>
@@ -1299,94 +1816,69 @@ export function ExperimentalWorkspacePanel() {
                   </ScrollArea>
                 </TabsContent>
 
-                {/* YouTube Playlist Tab */}
-                <TabsContent value="youtube" className="flex-1 mt-0 overflow-hidden relative">
+                {/* YouTube Playlist Tab - Auto fullscreen with faded background */}
+                <TabsContent value="youtube" className="flex-1 mt-0 overflow-hidden relative bg-black">
                   <div className="absolute inset-0 flex flex-col">
-                    {/* Header with controls */}
-                    <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/20">
-                      <div className="flex items-center gap-2">
-                        <Youtube className="h-4 w-4 text-red-400" />
-                        <span className="text-sm font-medium text-white/90">YouTube Playlist</span>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setIsYoutubeFullscreen(!isYoutubeFullscreen)}
-                          className="h-6 hover:bg-white/10"
-                          title={isYoutubeFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                        >
-                          {isYoutubeFullscreen ? (
-                            <Minimize2 className="h-3 w-3" />
-                          ) : (
-                            <Maximize2 className="h-3 w-3" />
-                          )}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            const newId = prompt("Enter YouTube Playlist ID:", youtubePlaylistId);
-                            if (newId) setYoutubePlaylistId(newId);
-                          }}
-                          className="h-6 hover:bg-white/10"
-                          title="Customize playlist"
-                        >
-                          <Edit className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Video Container */}
-                    <div className={`flex-1 relative ${isYoutubeFullscreen ? 'fixed inset-0 z-50 bg-black' : ''}`}>
+                    {/* Video Container - Always fullscreen style with faded overlay */}
+                    <div className="flex-1 relative w-full h-full bg-black">
+                      {/* Faded background overlay */}
+                      <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/40 to-black/80 pointer-events-none z-10" />
+                      
+                      {/* YouTube Iframe */}
                       <iframe
-                        className={`w-full ${isYoutubeFullscreen ? 'h-full' : 'h-full'}`}
-                        src={`https://www.youtube-nocookie.com/embed/videoseries?si=0VXapk-lUFoogvyx&controls=0&list=${youtubePlaylistId}&autoplay=1&loop=1&modestbranding=1&rel=0&iv_load_policy=3`}
-                        title="YouTube playlist player"
+                        className="absolute inset-0 w-full h-full"
+                        src={`https://www.youtube.com/embed/${getYouTubeVideoId(youtubeVideoId)}?autoplay=1&loop=1&modestbranding=1&rel=0&iv_load_policy=3&playlist=${getYouTubeVideoId(youtubeVideoId)}&controls=1`}
+                        title="YouTube video player"
                         frameBorder="0"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                         referrerPolicy="strict-origin-when-cross-origin"
                         allowFullScreen
-                        style={{
-                          // Hide YouTube branding and controls
-                          filter: isYoutubeFullscreen ? 'none' : 'none',
-                        }}
+                        style={{ zIndex: 0 }}
                       />
+
+                      {/* Fullscreen exit button - Always visible */}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          const newId = prompt("Enter YouTube Video ID or URL:", youtubeVideoId);
+                          if (newId) {
+                            const extractedId = extractYouTubeId(newId);
+                            if (extractedId) {
+                              setYoutubeVideoId(extractedId);
+                              toast.success("Video changed");
+                            } else {
+                              toast.error("Invalid YouTube URL or ID");
+                            }
+                          }
+                        }}
+                        className="absolute top-4 right-4 h-8 w-8 bg-black/70 hover:bg-black/90 text-white z-20 border border-white/20"
+                        title="Change video"
+                      >
+                        <Settings className="h-4 w-4" />
+                      </Button>
                       
-                      {/* Swipe hint overlay */}
-                      {!isYoutubeFullscreen && (
-                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 text-white/40 text-xs pointer-events-none">
-                          <SwipeRight className="h-3 w-3" />
-                          <span>Swipe or use player controls to navigate</span>
-                        </div>
-                      )}
+                      {/* Minimize button */}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setTab('explorer')}
+                        className="absolute top-4 left-4 h-8 w-8 bg-black/70 hover:bg-black/90 text-white z-20 border border-white/20"
+                        title="Close video"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
 
-                      {/* Fullscreen exit button */}
-                      {isYoutubeFullscreen && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setIsYoutubeFullscreen(false)}
-                          className="absolute top-4 right-4 h-8 w-8 bg-black/50 hover:bg-black/70 text-white"
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </div>
-
-                    {/* Info footer */}
-                    {!isYoutubeFullscreen && (
-                      <div className="px-4 py-2 border-t border-white/10 bg-black/20">
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs text-white/40">
-                            Playlist ID: {youtubePlaylistId}
-                          </p>
-                          <p className="text-xs text-white/40">
-                            Autoplay enabled • Plays in background
-                          </p>
+                      {/* Now playing indicator */}
+                      <div className="absolute bottom-4 left-4 flex items-center gap-2 text-white/80 text-xs z-20 pointer-events-none">
+                        <div className="flex gap-0.5 items-end h-4">
+                          <div className="w-1 bg-red-500 animate-pulse" style={{ height: '60%' }} />
+                          <div className="w-1 bg-red-500 animate-pulse" style={{ height: '100%' }} />
+                          <div className="w-1 bg-red-500 animate-pulse" style={{ height: '40%' }} />
                         </div>
+                        <span>Now Playing</span>
                       </div>
-                    )}
+                    </div>
                   </div>
                 </TabsContent>
 
@@ -1428,22 +1920,9 @@ export function ExperimentalWorkspacePanel() {
                             </div>
                             <Button
                               size="sm"
-                              onClick={() => {
-                                if (!newPostContent.trim()) return;
-                                const newPost: ForumPost = {
-                                  id: Date.now().toString(),
-                                  author: isAnonymousPost ? "Anonymous" : "You",
-                                  content: newPostContent.trim(),
-                                  timestamp: Date.now(),
-                                  likes: 0,
-                                  comments: [],
-                                  isAnonymous: isAnonymousPost,
-                                };
-                                setForumPosts([newPost, ...forumPosts]);
-                                setNewPostContent("");
-                                toast.success("Post published", { description: "Your post is now visible to everyone" });
-                              }}
-                              className="h-6 bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/30"
+                              onClick={handleCreatePost}
+                              disabled={!newPostContent.trim()}
+                              className="h-6 bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/30 disabled:opacity-50"
                             >
                               <Send className="h-3 w-3 mr-1" />
                               Post
@@ -1494,11 +1973,7 @@ export function ExperimentalWorkspacePanel() {
                                   <Button
                                     variant="ghost"
                                     size="sm"
-                                    onClick={() => {
-                                      setForumPosts(forumPosts.map(p => 
-                                        p.id === post.id ? { ...p, likes: p.likes + 1 } : p
-                                      ));
-                                    }}
+                                    onClick={() => handleLikePost(post.id)}
                                     className="h-6 text-xs hover:bg-red-500/20 hover:text-red-400"
                                   >
                                     <Heart className="h-3 w-3 mr-1" />
@@ -1507,17 +1982,7 @@ export function ExperimentalWorkspacePanel() {
                                   <Button
                                     variant="ghost"
                                     size="sm"
-                                    onClick={() => {
-                                      setExpandedComments(prev => {
-                                        const next = new Set(prev);
-                                        if (next.has(post.id)) {
-                                          next.delete(post.id);
-                                        } else {
-                                          next.add(post.id);
-                                        }
-                                        return next;
-                                      });
-                                    }}
+                                    onClick={() => handleToggleComments(post.id)}
                                     className="h-6 text-xs hover:bg-blue-500/20 hover:text-blue-400"
                                   >
                                     <MessageComment className="h-3 w-3 mr-1" />
@@ -1559,44 +2024,17 @@ export function ExperimentalWorkspacePanel() {
                                         placeholder="Write a comment..."
                                         className="flex-1 h-7 bg-black/30 border-white/10 text-white/90 placeholder:text-white/40 text-xs"
                                         onKeyDown={(e) => {
-                                          if (e.key === "Enter" && newCommentContent[post.id]?.trim()) {
-                                            const newComment: ForumComment = {
-                                              id: Date.now().toString(),
-                                              author: "Anonymous",
-                                              content: newCommentContent[post.id]!.trim(),
-                                              timestamp: Date.now(),
-                                              isAnonymous: true,
-                                            };
-                                            setForumPosts(forumPosts.map(p =>
-                                              p.id === post.id ? { ...p, comments: [...p.comments, newComment] } : p
-                                            ));
-                                            setNewCommentContent({
-                                              ...newCommentContent,
-                                              [post.id]: "",
-                                            });
+                                          if (e.key === "Enter") {
+                                            e.preventDefault();
+                                            handleAddComment(post.id, newCommentContent[post.id] || "");
                                           }
                                         }}
                                       />
                                       <Button
                                         size="sm"
-                                        onClick={() => {
-                                          if (!newCommentContent[post.id]?.trim()) return;
-                                          const newComment: ForumComment = {
-                                            id: Date.now().toString(),
-                                            author: "Anonymous",
-                                            content: newCommentContent[post.id]!.trim(),
-                                            timestamp: Date.now(),
-                                            isAnonymous: true,
-                                          };
-                                          setForumPosts(forumPosts.map(p =>
-                                            p.id === post.id ? { ...p, comments: [...p.comments, newComment] } : p
-                                          ));
-                                          setNewCommentContent({
-                                            ...newCommentContent,
-                                            [post.id]: "",
-                                          });
-                                        }}
-                                        className="h-7 bg-blue-500/20 hover:bg-blue-500/30"
+                                        onClick={() => handleAddComment(post.id, newCommentContent[post.id] || "")}
+                                        disabled={!newCommentContent[post.id]?.trim()}
+                                        className="h-7 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30 disabled:opacity-50"
                                       >
                                         <Send className="h-3 w-3" />
                                       </Button>

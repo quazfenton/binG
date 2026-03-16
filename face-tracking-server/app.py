@@ -75,9 +75,9 @@ def calculate_expressions(landmarks, face_rect):
     # Mouth open detection (upper lip to lower lip distance)
     upper_lip = landmarks[13]  # Top of upper lip
     lower_lip = landmarks[14]  # Bottom of lower lip
-    mouth_width = landmarks[61][0] - landmarks[291][0]  # Corner to corner
+    mouth_width = abs(landmarks[61][0] - landmarks[291][0])  # Corner to corner (absolute value)
     mouth_height = abs(upper_lip[1] - lower_lip[1])
-    
+
     if mouth_width > 0:
         expressions["mouth_open"] = min(1.0, mouth_height / (mouth_width * 0.3))
     
@@ -237,9 +237,11 @@ def stop_tracking():
 def toggle_camera():
     """Toggle camera on/off"""
     global camera
-    
-    action = request.json.get('action', 'toggle')
-    
+
+    # Guard against missing JSON - request.json can be None
+    payload = request.get_json(silent=True) or {}
+    action = payload.get('action', 'toggle')
+
     if action == 'on':
         if init_camera():
             return jsonify({"status": "camera_on"})

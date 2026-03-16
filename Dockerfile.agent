@@ -34,8 +34,8 @@ COPY services/ ./services/
 
 # Set default environment variables
 ENV NODE_ENV=production
-ENV SERVICE_NAME=worker
-ENV PORT=3003
+ENV SERVICE_NAME=sandbox-pool
+ENV PORT=3005
 
 # Expose ports for all services
 EXPOSE 3002 3003 3004 3005 3006
