@@ -8,6 +8,7 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { EventEmitter } from 'events';
 import { createLogger } from './logger';
+import { createNDJSONParser } from '../../../utils/ndjson-parser';
 
 const logger = createLogger('Agent:OpenCodeEngine');
 
@@ -87,23 +88,16 @@ class OpenCodeEngine extends EventEmitter {
 
       this.process.stdout?.on('data', (data) => {
         buffer += data.toString();
-        
-        // Process complete lines
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // Keep incomplete line in buffer
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          
-          try {
-            const parsed = JSON.parse(line);
-            this.handleOutput(parsed);
-          } catch {
-            // Non-JSON output - emit as text
-            if (line.trim()) {
-              this.emit('output', line);
-            }
-          }
+        // Use NDJSON parser for robust parsing
+        const parser = createNDJSONParser()
+        const parsedObjects = parser.parse(buffer)
+        
+        // Update buffer with any remaining incomplete data
+        buffer = parser.getBufferedLines() > 0 ? buffer : ''
+
+        for (const parsed of parsedObjects) {
+          this.handleOutput(parsed);
         }
       });
 

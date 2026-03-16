@@ -33,6 +33,9 @@ export interface UseChatReturn {
   };
   // Version tracking
   currentVersion?: number;
+  // Agent activity for experimental panel
+  agentActivity?: any;
+  setAgentActivity?: (activity: any) => void;
 }
 
 /**
@@ -51,6 +54,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   
   // Version tracking
   const [currentVersion, setCurrentVersion] = useState<number | undefined>();
+
+  // Agent activity for experimental panel
+  const [agentActivity, setAgentActivity] = useState<any>({
+    status: 'idle',
+    currentAction: '',
+    toolInvocations: [],
+    reasoningChunks: [],
+    processingSteps: [],
+    gitCommits: [],
+    diffs: [],
+  });
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentMessageRef = useRef<Message | null>(null);
@@ -413,6 +427,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     setAgentType('background');
                   }
                   setAgentStatus('thinking');
+                  // Update agent activity
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: 'thinking',
+                    currentAction: eventData.currentAction || 'Initializing...',
+                  }));
                   break;
 
                 case 'token':
@@ -515,6 +535,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         }
                       : msg
                   ));
+                  // Update agent activity
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    diffs: [...prev.diffs, ...diffFiles.map((f: any) => ({
+                      path: f.path,
+                      diff: f.diff,
+                      changeType: f.changeType,
+                    }))],
+                  }));
                   // Also emit filesystem updated event so VFS listeners get notified
                   emitFilesystemUpdated({
                     scopePath: undefined,
@@ -556,6 +585,18 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           }
                         : msg
                     ));
+                    // Update agent activity
+                    setAgentActivity(prev => ({
+                      ...prev,
+                      status: 'thinking',
+                      currentAction: 'Thinking...',
+                      reasoningChunks: [...prev.reasoningChunks, {
+                        id: Date.now().toString(),
+                        type: eventData.type || 'reasoning',
+                        content: eventData.reasoning,
+                        timestamp: Date.now(),
+                      }],
+                    }));
                   }
                   break;
 
@@ -565,12 +606,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     const existing = Array.isArray((msg.metadata as any)?.toolInvocations)
                       ? ([...(msg.metadata as any).toolInvocations] as any[])
                       : [];
-                    
+
                     // Find existing invocation with same toolCallId
-                    const idx = existing.findIndex((inv) => 
+                    const idx = existing.findIndex((inv) =>
                       inv.toolCallId === eventData.toolCallId
                     );
-                    
+
                     // Handle different states for real-time updates
                     if (eventData.state === 'partial-call') {
                       // Streaming arguments - update or create
@@ -603,6 +644,19 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           state: 'call',
                         };
                       }
+                      // Update agent activity
+                      setAgentActivity(prev => ({
+                        ...prev,
+                        status: 'executing',
+                        currentAction: `Executing ${eventData.toolName}...`,
+                        toolInvocations: [...prev.toolInvocations, {
+                          id: eventData.toolCallId || Date.now().toString(),
+                          toolName: eventData.toolName,
+                          state: 'call',
+                          args: eventData.args || {},
+                          timestamp: Date.now(),
+                        }],
+                      }));
                     } else if (eventData.state === 'result') {
                       // Tool completed
                       if (idx === -1) {
@@ -620,8 +674,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           result: eventData.result,
                         };
                       }
+                      // Update agent activity - update existing tool
+                      setAgentActivity(prev => ({
+                        ...prev,
+                        toolInvocations: prev.toolInvocations.map(t =>
+                          t.toolName === eventData.toolName
+                            ? { ...t, state: 'result', result: eventData.result }
+                            : t
+                        ),
+                      }));
                     }
-                    
+
                     return {
                       ...msg,
                       metadata: {
@@ -657,6 +720,20 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       },
                     };
                   }));
+                  // Update agent activity
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: eventData.status === 'started' ? 'executing' : 
+                            eventData.status === 'completed' ? 'completed' : prev.status,
+                    currentAction: eventData.status === 'started' ? eventData.step : prev.currentAction,
+                    processingSteps: [...prev.processingSteps, {
+                      id: Date.now().toString(),
+                      step: eventData.step,
+                      status: eventData.status,
+                      stepIndex: eventData.stepIndex || prev.processingSteps.length,
+                      timestamp: Date.now(),
+                    }],
+                  }));
                   // Update agent status based on step
                   if (eventData.status === 'started') {
                     setAgentStatus('executing');
@@ -684,6 +761,16 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         },
                       },
                     };
+                  }));
+                  // Update agent activity
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    gitCommits: [...prev.gitCommits, {
+                      version: eventData.version,
+                      filesChanged: eventData.filesChanged || eventData.paths?.length || 0,
+                      paths: eventData.paths || [],
+                      timestamp: Date.now(),
+                    }],
                   }));
                   break;
 
@@ -983,5 +1070,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     },
     // Version tracking
     currentVersion,
+    // Agent activity for experimental panel
+    agentActivity,
+    setAgentActivity,
   };
 }
