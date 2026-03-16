@@ -166,6 +166,21 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     }
   }
 
+  // Register MCP Gateway tools (if configured)
+  if (process.env.MCP_GATEWAY_URL) {
+    try {
+      const { registerGatewayTools } = await import('./bootstrap-gateway');
+      const count = await registerGatewayTools();
+      if (count > 0) {
+        toolCount += count;
+        logger.info(`Registered ${count} MCP gateway tools`);
+      }
+    } catch (error: any) {
+      logger.warn('MCP gateway tools not available', error.message);
+      errors.push(`MCP gateway: ${error.message}`);
+    }
+  }
+
   // Get router instance (auto-registers built-in providers)
   const router = getCapabilityRouter();
 
