@@ -584,16 +584,31 @@ export class ProviderRouter {
           score -= 5;
         }
       }
-      
-      // Performance priority adjustment
+
+      // Performance priority adjustment - Use DYNAMIC latency
       if (context.performancePriority === 'latency') {
-        if (profile.latencyTier === 'low') {
-          score += 5;
-        } else if (profile.latencyTier === 'high') {
-          score -= 5;
+        // Use real-time latency tier instead of static profile
+        const dynamicLatencyTier = latencyTracker.getLatencyTier(profile.type);
+        if (dynamicLatencyTier === 'low') {
+          score += 8; // Increased weight for dynamic data
+          reasons.push(`Excellent real-time latency (${latencyTracker.getMetrics(profile.type)?.avgLatencyMs.toFixed(0)}ms)`);
+        } else if (dynamicLatencyTier === 'medium') {
+          score += 3;
+        } else if (dynamicLatencyTier === 'high') {
+          score -= 8;
+          reasons.push(`High real-time latency (${latencyTracker.getMetrics(profile.type)?.avgLatencyMs.toFixed(0)}ms)`);
         }
       }
-      
+
+      // Dynamic latency bonus/penalty (always applied, not just for latency priority)
+      const currentLatencyTier = latencyTracker.getLatencyTier(profile.type);
+      if (currentLatencyTier === 'low' && latencyTracker.isLatencyAcceptable(profile.type, 1000)) {
+        score += 3; // Bonus for consistently fast providers
+      } else if (currentLatencyTier === 'high' && !latencyTracker.isLatencyAcceptable(profile.type, 10000)) {
+        score -= 5; // Penalty for very slow providers
+        reasons.push('Provider experiencing high latency');
+      }
+
       // Quota check (soft penalty, doesn't disqualify)
       const quotaCheck = quotaManager.checkQuota(profile.type);
       if (!quotaCheck.allowed) {

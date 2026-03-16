@@ -145,6 +145,20 @@ export function getExecutionPolicyConfig(policy: ExecutionPolicy): ExecutionPoli
 
 /**
  * Determine execution policy from task characteristics
+ * 
+ * KEY PRINCIPLE: Only trigger sandbox for ACTUAL CODE EXECUTION (bash commands),
+ * NOT for code writing/generation prompts.
+ * 
+ * Sandbox should be triggered when:
+ * - User explicitly asks to RUN/EXECUTE code
+ * - User asks to run bash/shell commands
+ * - User asks to install packages, run tests, start servers
+ * 
+ * Sandbox should NOT be triggered for:
+ * - Writing/generating code files
+ * - Explaining code
+ * - Planning architecture
+ * - Answering questions about code
  */
 export function determineExecutionPolicy(options: {
   task?: string;
@@ -169,32 +183,65 @@ export function determineExecutionPolicy(options: {
 
   const taskLower = task.toLowerCase();
 
-  // Desktop/GUI tasks
+  // Patterns that indicate ACTUAL EXECUTION (not just writing code)
+  const executionPatterns = [
+    // Explicit execution commands
+    /\b(run|execute|start|launch|deploy)\b.*\b(code|script|app|server|bot)\b/i,
+    /\b(run|execute|test)\b.*\b(python|node|npm|yarn|pnpm|bash|sh)\b/i,
+    /\b(install|npm install|pip install|yarn add|pnpm add)\b/i,
+    /\b(build|compile|bundle|webpack|vite)\b/i,
+    /\b(serve|dev|start)\b.*\b(server|app|localhost)\b/i,
+    // Bash/shell execution
+    /\b(bash|sh|shell|terminal|command line)\b/i,
+    /\b(execute|run)\b.*\b(command|script)\b/i,
+    // Database operations that require running
+    /\b(migrate|seed|psql|mysql|mongo)\b/i,
+  ];
+
+  // Patterns that indicate CODE WRITING (should NOT trigger sandbox)
+  const codeWritingPatterns = [
+    /\b(write|create|generate|make|build)\b.*\b(code|function|component|file|app)\b/i,
+    /\b(write|create|generate)\b.*\b(\.ts|\.js|\.py|\.tsx|\.jsx|\.json)\b/i,
+    /\b(show|display|give|provide)\b.*\b(code|example|snippet)\b/i,
+    /\b(help|how)\b.*\b(write|create|make|build)\b/i,
+    /\b(explain|describe|what|how)\b/i,
+  ];
+
+  // Desktop/GUI tasks - require sandbox with desktop
   if (requiresGUI || taskLower.includes('gui') || taskLower.includes('desktop') || taskLower.includes('browser')) {
     return 'desktop-required';
   }
 
-  // Long-running with persistence needs
+  // Check if this is clearly a code writing task (should NOT use sandbox)
+  const isCodeWriting = codeWritingPatterns.some(pattern => pattern.test(task));
+  if (isCodeWriting && !requiresBash) {
+    // Code writing without explicit bash execution = local-safe
+    return 'local-safe';
+  }
+
+  // Long-running with persistence needs - requires sandbox
   if (isLongRunning || taskLower.includes('server') || taskLower.includes('service') || taskLower.includes('daemon')) {
     return 'persistent-sandbox';
   }
 
-  // Heavy backend/database tasks
+  // Heavy backend/database tasks - requires sandbox
   if (requiresBackend || requiresDatabase || fileCount > 50) {
     return 'sandbox-heavy';
   }
 
-  // Bash or file write operations
-  if (requiresBash || requiresFileWrite) {
+  // Check for explicit execution patterns (bash commands, running code)
+  const isExecution = executionPatterns.some(pattern => pattern.test(task));
+  if (isExecution || requiresBash) {
+    // Actual code execution or bash = sandbox required
     return 'sandbox-required';
   }
 
-  // Prefer sandbox for moderate tasks
+  // Prefer sandbox for moderate tasks that might need execution
   if (taskLower.includes('install') || taskLower.includes('build') || taskLower.includes('test')) {
     return 'sandbox-preferred';
   }
 
-  // Default to local-safe for simple tasks
+  // Default to local-safe for simple tasks, code writing, explanations
   return 'local-safe';
 }
 

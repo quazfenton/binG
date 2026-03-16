@@ -69,6 +69,7 @@ export type PreviewMode =
   | 'webcontainer' 
   | 'nextjs' 
   | 'codesandbox' 
+  | 'opensandbox'
   | 'local' 
   | 'cloud';
 
@@ -898,7 +899,8 @@ root.render(<App />);`,
       'parcel',       // Local: Inline bundling
       'iframe',       // Local: Raw HTML
       'nextjs',       // Local via WebContainer
-      'devbox',       // Cloud: CodeSandbox DevBox (first cloud option)
+      'opensandbox',  // Cloud: OpenSandbox container (self-hosted)
+      'devbox',       // Cloud: CodeSandbox DevBox
       'codesandbox',  // Cloud: CodeSandbox
       'vite',         // Redirects to Sandpack
       'webpack',      // Redirects to Sandpack
@@ -936,17 +938,17 @@ root.render(<App />);`,
       case 'sandpack':
       case 'webpack':
       case 'vite':
-        return 'devbox'; // Cloud DevBox for complex frontend
+        return 'opensandbox'; // OpenSandbox container (self-hosted first)
       case 'webcontainer':
       case 'nextjs':
-        return 'codesandbox'; // CodeSandbox for Node.js backends
+        return 'opensandbox'; // OpenSandbox for Node.js backends
       case 'pyodide':
-        return 'devbox'; // DevBox for Python
+        return 'opensandbox'; // OpenSandbox for Python
       case 'parcel':
       case 'iframe':
-        return 'devbox';
+        return 'opensandbox';
       default:
-        return 'devbox';
+        return 'opensandbox';
     }
   }
 

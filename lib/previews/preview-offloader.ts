@@ -29,7 +29,7 @@ export interface PreviewRequest {
 
 export interface PreviewResult {
   success: boolean;
-  provider: 'local' | 'daytona' | 'codesandbox' | 'vercel';
+  provider: 'local' | 'daytona' | 'codesandbox' | 'vercel' | 'opensandbox';
   url?: string;
   error?: string;
   metadata?: {
@@ -40,7 +40,7 @@ export interface PreviewResult {
 }
 
 export interface PreviewDecision {
-  recommendedProvider: 'local' | 'daytona' | 'codesandbox' | 'vercel';
+  recommendedProvider: 'local' | 'daytona' | 'codesandbox' | 'vercel' | 'opensandbox';
   reason: string;
   estimatedCost?: number;
   estimatedDuration?: number;
