@@ -520,7 +520,29 @@ export class ResponseRouter {
         enabled: (req: RouterRequest) => !!this.composioService && process.env.COMPOSIO_ENABLED !== 'false' && !!req.userId,
         service: this.composioService,
         healthCheck: async () => this.composioService?.healthCheck() ?? false,
-        canHandle: (req: RouterRequest) => !!req.userId && req.enableComposio !== false,
+        canHandle: (req: RouterRequest) => {
+          // Composio should ONLY handle OAuth tool requests (gmail, github, slack, etc.)
+          // NOT general tool requests
+          if (!req.userId || req.enableComposio === false) return false
+          
+          // Check if request explicitly wants Composio
+          if (req.enableComposio === true) return true
+          
+          // Detect if message contains OAuth tool requests
+          const lastMessage = req.messages[req.messages.length - 1]
+          const content = typeof lastMessage?.content === 'string' ? lastMessage.content : ''
+          const contentLower = content.toLowerCase()
+          
+          // OAuth tools that should use Composio
+          const oauthTools = [
+            'gmail', 'google', 'github', 'slack', 'notion', 'discord',
+            'telegram', 'twitter', 'spotify', 'dropbox', 'salesforce',
+            'hubspot', 'zoom', 'teams', 'linear', 'jira', 'confluence',
+          ]
+          
+          // Check if message mentions OAuth tools
+          return oauthTools.some(tool => contentLower.includes(tool))
+        },
         processRequest: async (req: RouterRequest) => this.processComposioRequest(req),
       },
       {
