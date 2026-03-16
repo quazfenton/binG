@@ -29,25 +29,25 @@
  * ```
  */
 
-import { createLogger } from '../../utils/logger'
-import { normalizeToolInvocations, type ToolInvocation } from '../../types/tool-invocation'
-import { quotaManager } from '../../management/quota-manager'
-import { detectRequestType } from '../../utils/request-type-detector'
+import { createLogger } from '@/lib/utils/logger'
+import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation'
+import { quotaManager } from '@/lib/management/quota-manager'
+import { detectRequestType } from '@/lib/utils/request-type-detector'
 
 // Import router services
-import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from './fast-agent-service'
-import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from './n8n-agent-service'
-import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from './custom-fallback-service'
-import { enhancedLLMService, type EnhancedLLMRequest } from './enhanced-llm-service'
-import { initializeComposioService, getComposioService, type ComposioToolRequest } from '../../platforms/composio-service'
+import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from '@/lib/chat/fast-agent-service'
+import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from '@/lib/chat/n8n-agent-service'
+import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from '@/lib/chat/custom-fallback-service'
+import { enhancedLLMService, type EnhancedLLMRequest } from '@/lib/chat/enhanced-llm-service'
+import { initializeComposioService, getComposioService, type ComposioToolRequest } from '@/lib/platforms/composio-service'
 
 // Import tools
-import { getToolManager, getUnifiedToolRegistry, getToolDiscoveryService, getToolErrorHandler } from '../../tools'
-import { toolAuthManager } from '../../tools/tool-authorization-manager'
-import { sandboxBridge } from '../../sandbox'
+import { getToolManager, getUnifiedToolRegistry, getToolDiscoveryService, getToolErrorHandler } from '@/lib/tools'
+import { toolAuthManager } from '@/lib/tools/tool-authorization-manager'
+import { sandboxBridge } from '@/lib/sandbox'
 
 // Import state for session management
-import { sessionManager } from '../../session/session-manager'
+import { sessionManager } from '@/lib/session/session-manager'
 
 // Import V2 gateway client for containerized OpenCode
 import {
@@ -57,6 +57,18 @@ import {
   checkGatewayHealth,
   type V2JobRequest,
 } from './v2-gateway-client'
+
+// Import telemetry for observability
+import {
+  startSpan,
+  recordRequest,
+  recordEndpointUsage,
+  recordCircuitBreakerState,
+  recordV2JobSubmission,
+  recordV2JobCompletion,
+  recordQuotaUsage,
+  recordToolExecution,
+} from './response-router-telemetry'
 
 const logger = createLogger('API:ResponseRouter')
 
@@ -355,19 +367,39 @@ export class ResponseRouter {
     const startTime = Date.now()
     const requestId = request.requestId || `req_${Date.now()}`
 
+    // Start trace span
+    const span = startSpan('responseRouter.routeAndFormat', {
+      requestId,
+      userId: request.userId,
+      provider: request.provider,
+      model: request.model,
+    })
+
     try {
       // Route request
-      const routerResponse = await this.routeRequest(request)
+      const routerResponse = await this.routeRequest(request, span)
 
       // Format response
       const unifiedResponse = this.formatResponse(routerResponse, requestId)
 
-      // Add timing metadata
-      unifiedResponse.metadata.duration = Date.now() - startTime
+      // Record metrics
+      const duration = Date.now() - startTime
+      recordRequest(duration, unifiedResponse.success)
+      span.setAttribute('response.duration_ms', duration)
+      span.setAttribute('response.success', unifiedResponse.success)
 
+      // Add timing metadata
+      unifiedResponse.metadata.duration = duration
+
+      span.end()
       return unifiedResponse
     } catch (error: any) {
       logger.error('Request routing failed:', error.message)
+      span.recordError(error)
+      span.end()
+
+      const duration = Date.now() - startTime
+      recordRequest(duration, false)
 
       return {
         success: false,
@@ -378,7 +410,7 @@ export class ResponseRouter {
           content: error.message || 'Request failed',
         },
         metadata: {
-          duration: Date.now() - startTime,
+          duration,
           timestamp: new Date().toISOString(),
         },
       }
@@ -388,7 +420,7 @@ export class ResponseRouter {
   /**
    * Route request through priority chain
    */
-  private async routeRequest(request: RouterRequest): Promise<RouterResponse> {
+  private async routeRequest(request: RouterRequest, span?: any): Promise<RouterResponse> {
     const errors: Array<{ endpoint: string; error: Error }> = []
     const fallbackChain: string[] = []
     const requestType = detectRequestType(request.messages)
@@ -469,7 +501,7 @@ export class ResponseRouter {
       {
         name: 'tool-execution',
         priority: 4,
-        enabled: req.enableTools !== false && !!req.userId,
+        enabled: (req: RouterRequest) => req.enableTools !== false && !!req.userId,
         service: null,
         healthCheck: async () => {
           try {
@@ -485,7 +517,7 @@ export class ResponseRouter {
       {
         name: 'composio-tools',
         priority: 5,
-        enabled: !!this.composioService && process.env.COMPOSIO_ENABLED !== 'false' && !!req.userId,
+        enabled: (req: RouterRequest) => !!this.composioService && process.env.COMPOSIO_ENABLED !== 'false' && !!req.userId,
         service: this.composioService,
         healthCheck: async () => this.composioService?.healthCheck() ?? false,
         canHandle: (req: RouterRequest) => !!req.userId && req.enableComposio !== false,
@@ -494,7 +526,7 @@ export class ResponseRouter {
       {
         name: 'sandbox-agent',
         priority: 6,
-        enabled: req.enableSandbox !== false && !!req.userId,
+        enabled: (req: RouterRequest) => req.enableSandbox !== false && !!req.userId,
         service: sandboxBridge,
         healthCheck: async () => {
           const sandboxProvider = process.env.SANDBOX_PROVIDER || 'daytona'
@@ -506,7 +538,7 @@ export class ResponseRouter {
       {
         name: 'v2-opencode-gateway',
         priority: 7,
-        enabled: process.env.V2_AGENT_ENABLED === 'true' || process.env.OPENCODE_CONTAINERIZED === 'true',
+        enabled: (req: RouterRequest) => process.env.V2_AGENT_ENABLED === 'true' || process.env.OPENCODE_CONTAINERIZED === 'true',
         service: null,
         healthCheck: async () => {
           const health = await checkGatewayHealth()
@@ -534,6 +566,7 @@ export class ResponseRouter {
 
     // Route through priority chain
     for (const endpoint of enabledEndpoints) {
+      const endpointStartTime = Date.now()
 
       // Check circuit breaker
       if (this.circuitBreaker.shouldSkip(endpoint.name)) {
@@ -555,6 +588,13 @@ export class ResponseRouter {
         }
       }
 
+      // Create child span for endpoint
+      const endpointSpan = span?.startSpan?.(`endpoint.${endpoint.name}`) || null
+      endpointSpan?.setAttributes({
+        endpoint: endpoint.name,
+        priority: endpoint.priority,
+      })
+
       try {
         logger.debug(`Routing to ${endpoint.name}`)
         const response = await endpoint.processRequest(request)
@@ -562,13 +602,20 @@ export class ResponseRouter {
         // Record success
         this.circuitBreaker.recordSuccess(endpoint.name)
         this.updateStats(endpoint.name, true)
+        recordEndpointUsage(endpoint.name, Date.now() - endpointStartTime, true)
+        endpointSpan?.setAttribute('success', true)
+        endpointSpan?.setAttribute('duration_ms', Date.now() - endpointStartTime)
 
         // Record quota usage
         const quotaProvider = this.mapEndpointToProvider(endpoint.name)
         if (quotaProvider) {
-          quotaManager.recordUsage(quotaProvider)
+          const remaining = quotaManager.getRemainingCalls(quotaProvider)
+          recordQuotaUsage(quotaProvider, 1)
+          endpointSpan?.setAttribute('quota.provider', quotaProvider)
+          endpointSpan?.setAttribute('quota.remaining', remaining)
         }
 
+        endpointSpan?.end()
         return {
           success: true,
           ...response,
@@ -578,10 +625,17 @@ export class ResponseRouter {
         }
       } catch (error: any) {
         logger.error(`${endpoint.name} failed:`, error.message)
+        endpointSpan?.recordError(error)
+        endpointSpan?.end()
 
         // Record failure
         this.circuitBreaker.recordFailure(endpoint.name)
         this.updateStats(endpoint.name, false)
+        recordEndpointUsage(endpoint.name, Date.now() - endpointStartTime, false)
+
+        // Record circuit breaker state change
+        const cbStats = this.circuitBreaker.getStats(endpoint.name)
+        recordCircuitBreakerState(endpoint.name, cbStats.state)
 
         errors.push({ endpoint: endpoint.name, error })
         fallbackChain.push(`${endpoint.name} (error: ${error.message.substring(0, 50)})`)
@@ -1294,18 +1348,30 @@ export class ResponseRouter {
    * Process V2 Gateway request (containerized OpenCode)
    */
   private async processV2GatewayRequest(request: RouterRequest): Promise<any> {
-    if (!request.userId) {
-      return {
-        content: 'User authentication required for V2 agent',
-        data: {
-          source: 'v2-opencode-gateway',
-          requiresAuth: true,
-          error: 'User ID not provided',
-        },
-      }
-    }
+    const v2StartTime = Date.now()
+    const v2Span = startSpan('v2.gateway.process', {
+      userId: request.userId,
+      conversationId: request.conversationId,
+      model: request.model,
+    })
 
     try {
+      recordV2JobSubmission()
+      v2Span?.setAttribute('v2.submitted', true)
+
+      if (!request.userId) {
+        v2Span?.setAttribute('error', 'User ID not provided')
+        v2Span?.end()
+        return {
+          content: 'User authentication required for V2 agent',
+          data: {
+            source: 'v2-opencode-gateway',
+            requiresAuth: true,
+            error: 'User ID not provided',
+          },
+        }
+      }
+
       // Extract last user message as task
       const lastMessage = request.messages[request.messages.length - 1]
       const task = typeof lastMessage?.content === 'string' ? lastMessage.content : JSON.stringify(lastMessage?.content || '')
@@ -1333,6 +1399,7 @@ export class ResponseRouter {
           jobId: jobResponse.jobId,
           sessionId: jobResponse.sessionId,
         })
+        v2Span?.setAttribute('v2.method', 'gateway')
       } catch (gatewayError: any) {
         logger.warn('Gateway unavailable, falling back to Redis queue:', gatewayError.message)
         jobResponse = await submitJobToRedisQueue(v2Request)
@@ -1340,6 +1407,7 @@ export class ResponseRouter {
           jobId: jobResponse.jobId,
           sessionId: jobResponse.sessionId,
         })
+        v2Span?.setAttribute('v2.method', 'redis')
       }
 
       // Wait for job completion (with timeout)
@@ -1350,11 +1418,18 @@ export class ResponseRouter {
         timeoutMs
       )
 
+      // Record completion
+      const v2Duration = Date.now() - v2StartTime
+      recordV2JobCompletion(v2Duration, true)
+      v2Span?.setAttribute('v2.duration_ms', v2Duration)
+      v2Span?.setAttribute('v2.success', true)
+
       // Extract response from job result
       const content = result.result?.response || result.result?.content || 'Task completed'
       const toolInvocations = result.result?.toolInvocations || []
       const steps = result.result?.steps || []
 
+      v2Span?.end()
       return {
         content,
         data: {
@@ -1370,6 +1445,12 @@ export class ResponseRouter {
       }
     } catch (error: any) {
       logger.error('V2 gateway processing error:', error)
+      const v2Duration = Date.now() - v2StartTime
+      recordV2JobCompletion(v2Duration, false)
+      v2Span?.recordError(error)
+      v2Span?.setAttribute('v2.success', false)
+      v2Span?.end()
+
       return {
         content: `V2 agent execution failed: ${error.message}`,
         data: {

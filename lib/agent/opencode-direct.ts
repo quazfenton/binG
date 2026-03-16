@@ -14,6 +14,7 @@ import { createLogger } from '../utils/logger';
 import { agentSessionManager } from '../session/agent/agent-session-manager';
 import type { ExecutionPolicy } from '../sandbox/types';
 import { determineExecutionPolicy } from '../sandbox/types';
+import type { ToolIntegrationManager } from '@/lib/tools/tool-integration-system';
 
 const logger = createLogger('Agent:OpencodeDirect');
 
@@ -28,6 +29,11 @@ interface OpenCodeDirectOptions {
    * Auto-detected from task if not specified
    */
   executionPolicy?: ExecutionPolicy;
+  /**
+   * Tool integration manager for unified tool execution
+   * If provided, tools will be executed via ToolIntegrationManager
+   */
+  toolManager?: ToolIntegrationManager;
 }
 
 interface FileChange {
@@ -49,7 +55,7 @@ interface OpenCodeDirectResult {
  * Run OpenCode with execution policy-based sandbox selection
  */
 export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise<OpenCodeDirectResult> {
-  const { userId, conversationId, task, onChunk, onTool, executionPolicy: explicitPolicy } = options;
+  const { userId, conversationId, task, onChunk, onTool, executionPolicy: explicitPolicy, toolManager } = options;
 
   // Auto-detect execution policy from task if not explicitly specified
   const detectedPolicy = explicitPolicy || determineExecutionPolicy({
@@ -103,7 +109,35 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
     systemPrompt: process.env.OPENCODE_SYSTEM_PROMPT,
     maxSteps: parseInt(process.env.OPENCODE_MAX_STEPS || '15', 10),
     onStreamChunk: onChunk,
-    onToolExecution: (toolName, args, toolResult) => {
+    onToolExecution: async (toolName, args, toolResult) => {
+      // Use ToolIntegrationManager if provided for unified tool execution
+      if (toolManager) {
+        try {
+          const integratedResult = await toolManager.executeTool(
+            toolName,
+            args,
+            {
+              userId,
+              conversationId,
+              metadata: {
+                sessionId: session.id,
+                workspacePath: session.workspacePath,
+              }
+            }
+          );
+          
+          // Call original onTool callback if provided
+          if (onTool) {
+            onTool(toolName, args, integratedResult);
+          }
+          
+          return integratedResult.output;
+        } catch (error: any) {
+          logger.error('Tool execution via ToolIntegrationManager failed', { toolName, error: error.message });
+          // Fallback to original tool execution
+        }
+      }
+      
       // Track file changes
       if (toolName === 'write_file' || toolName === 'WriteFile' || toolName === 'write') {
         fileChanges.push({

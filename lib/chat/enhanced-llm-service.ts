@@ -144,8 +144,8 @@ export class EnhancedLLMService {
     const { enableTools, enableSandbox, userId, conversationId, requestId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, ...llmRequest } = request;
     const requestStartTime = Date.now();
 
-    // Use task-specific provider if specified
-    const actualProvider = task ? getProviderForTask(task) : (provider || getProviderForTask('chat'));
+    // Use explicitly passed provider first, then task-specific provider, then default
+    const actualProvider = provider || (task ? getProviderForTask(task) : getProviderForTask('chat'));
     const actualModel = task ? getModelForTask(task, llmRequest.model) : llmRequest.model;
 
     chatLogger.debug('Enhanced LLM service processing request', { requestId, provider: actualProvider, model: actualModel, userId }, {

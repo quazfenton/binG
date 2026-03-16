@@ -33,7 +33,7 @@
 
 // Import services for internal use
 import { oauthService } from '../auth/oauth-service';
-import { toolAuthManager } from '../tools/tool-authorization-manager';
+import { toolAuthManager, type OAuthInitiateResult, type OAuthListResult, type OAuthRevokeResult, type OAuthExecuteResult } from '../tools/tool-authorization-manager';
 import { toolContextManager, type OAuthCapabilityResult } from '../tools/tool-context-manager';
 
 // Re-export types and services for convenience

@@ -51,6 +51,16 @@ import {
 } from "../lib/code-parser";
 import { createDebugLogger } from "@/config/features";
 
+// Import live preview offloading functions
+import {
+  detectProject,
+  getSandpackConfig,
+  livePreviewOffloading,
+  type ProjectDetection,
+  type PreviewMode,
+  type AppFramework,
+} from "@/lib/previews/live-preview-offloading";
+
 // Lazy load Sandpack to avoid SSR issues
 // React.lazy requires default export, so we remap the named export
 const Sandpack = lazy(() =>
@@ -246,6 +256,7 @@ export default function CodePreviewPanel({
   
   // Manual Sandpack preview state - user-initiated explicit preview
   const [manualPreviewFiles, setManualPreviewFiles] = useState<Record<string, string> | null>(null);
+  const [projectDetection, setProjectDetection] = useState<ReturnType<typeof detectProject> | null>(null);
   const [isManualPreviewActive, setIsManualPreviewActive] = useState(false);
   const [manualPreviewMayBeStale, setManualPreviewMayBeStale] = useState(false); // Track if VFS changed while in manual preview
   const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'node' | 'local' | 'cloud'>('sandpack');
@@ -704,111 +715,35 @@ export default function CodePreviewPanel({
 
       log(`[handleManualPreview] detected root="${selectedRoot}", files normalized from ${Object.keys(files).length} to ${Object.keys(previewFiles).length}`);
 
-      // Auto-detect best preview mode AND execution mode
-      let selectedMode = mode || 'sandpack';
+      // Auto-detect best preview mode AND execution mode using centralized logic
+      let selectedMode: PreviewMode = mode as PreviewMode || 'sandpack';
       let detectedExecutionMode: 'local' | 'cloud' | 'hybrid' = 'local';
 
+      // Use centralized live preview offloading detection
+      const detection = livePreviewOffloading.detectProject({
+        files: previewFiles,
+        scopePath: normalizeProjectPath(targetPath),
+      });
+      
       if (!mode) {
-        const filePaths = Object.keys(previewFiles);
-        const hasHtml = filePaths.some(f => f.endsWith('.html'));
-        const hasJsx = filePaths.some(f => f.endsWith('.jsx') || f.endsWith('.tsx'));
-        const hasVue = filePaths.some(f => f.endsWith('.vue'));
-        const hasSvelte = filePaths.some(f => f.endsWith('.svelte'));
-        const hasPython = filePaths.some(f => f.endsWith('.py'));
-        const hasNodeServer = filePaths.some(f => ['server.js', 'app.js', 'index.js'].includes(f));
-        const hasNextJS = filePaths.some(f => 
-          f.startsWith('pages/') || 
-          f.startsWith('app/') ||
-          f.includes('next.config') ||
-          f.includes('/_app.') ||
-          f.includes('/_document.')
-        );
-        const hasPackageJson = filePaths.includes('package.json');
-        const hasSimplePython = hasPython && !filePaths.some(f => f.includes('flask') || f.includes('django'));
-        const hasViteConfig = filePaths.some(f => f.includes('vite.config'));
-        const hasWebpackConfig = filePaths.some(f => f.includes('webpack.config'));
-        const hasParcelConfig = filePaths.some(f => f.includes('parcel') || f.endsWith('.parcelrc'));
-        const packageJsonContent = hasPackageJson ? previewFiles['package.json'] : '';
-        const hasViteProject = hasViteConfig || packageJsonContent.includes('"vite"');
-        const hasWebpackProject = hasWebpackConfig || packageJsonContent.includes('"webpack"');
-        const hasParcelProject = hasParcelConfig || packageJsonContent.includes('"parcel"');
-        const hasHeavyComputation = Object.values(previewFiles).some((c: any) => {
-          if (typeof c !== 'string') return false;
-          return c.includes('tensorflow') || c.includes('pytorch') || c.includes('cuda') || c.includes('gpu');
-        });
-        const hasAPIKeys = Object.values(previewFiles).some((c: any) =>
-          typeof c === 'string' && (c.includes('OPENAI_API_KEY') || c.includes('process.env'))
-        );
-
-        // Determine execution mode based on requirements
-        if (hasHeavyComputation || hasAPIKeys) {
+        selectedMode = detection.previewMode;
+        
+        // Determine execution mode based on project requirements
+        if (detection.hasHeavyComputation || detection.hasAPIKeys) {
           detectedExecutionMode = 'cloud';
-        } else if (hasSimplePython || hasJsx || hasVue || hasSvelte || hasHtml) {
+        } else if (detection.hasPython || detection.hasNodeServer) {
+          detectedExecutionMode = detection.hasPython && !detection.hasBackend ? 'local' : 'hybrid';
+        } else {
           detectedExecutionMode = 'local';
-        } else if (hasPython || hasNodeServer) {
-          detectedExecutionMode = 'hybrid';
         }
-
-        // Select preview mode with enhanced bundler detection and fallback hierarchy
-        // IMPORTANT: Check for frameworks that work with Sandpack FIRST before bundler modes
-        // Vue/React/Svelte projects with vite.config.js etc should use Sandpack, not vite/webpack mode
         
-        // Check for Next.js first
-        const nextJsInPackageJson = packageJsonContent && packageJsonContent.includes('"next"');
-        const nextJsConfig = filePaths.some(f => f.includes('next.config'));
-        const nextJsPagesOrApp = filePaths.some(f => f.startsWith('pages/') || f.startsWith('app/'));
-        
-        // Prioritize frameworks that work with Sandpack - check BEFORE bundler detection
-        if (nextJsConfig || nextJsInPackageJson || nextJsPagesOrApp) {
-          selectedMode = 'nextjs';
-        } else if (hasJsx || hasVue || hasSvelte) {
-          // Framework projects work best with Sandpack bundler - use this regardless of bundler config
-          selectedMode = 'sandpack';
-        } else if (hasViteProject) {
-          selectedMode = 'vite';
-        } else if (hasWebpackProject) {
-          selectedMode = 'webpack';
-        } else if (hasParcelProject) {
-          selectedMode = 'parcel';
-        } else if (hasSimplePython && !hasPackageJson) {
-          selectedMode = 'pyodide';
-        } else if (hasNodeServer && hasPackageJson) {
-          // Check for Next.js first (highest priority for Node frameworks)
-          const hasNextJS = filePaths.some(f => 
-            f === 'next.config.js' || 
-            f === 'next.config.mjs' || 
-            f === 'next.config.ts'
-          ) || (packageJsonContent && packageJsonContent.includes('"next"'));
-          
-          if (hasNextJS) {
-            selectedMode = 'nextjs'; // Next.js gets its own optimized preview
-          } else {
-            // Node.js backend with package.json = WebContainer (preferred, runs in browser)
-            selectedMode = 'webcontainer';
-          }
-        } else if (hasPython || hasNodeServer) {
-          // Python or Node without simple setup = CodeSandbox (cloud fallback)
-          // Only use CodeSandbox if project is complex (has Docker, complex deps, etc.)
-          const hasDocker = filePaths.some(f => f === 'Dockerfile' || f === 'docker-compose.yml');
-          const hasComplexDeps = packageJsonContent && (
-            packageJsonContent.includes('prisma') ||
-            packageJsonContent.includes('sequelize') ||
-            packageJsonContent.includes('typeorm') ||
-            packageJsonContent.includes('mongodb') ||
-            packageJsonContent.includes('redis')
-          );
-          
-          if (hasDocker || hasComplexDeps) {
-            selectedMode = 'codesandbox'; // Cloud dev environment for complex apps
-          } else {
-            selectedMode = detectedExecutionMode === 'local' ? 'local' : 'devbox';
-          }
-        } else if (hasHtml && !hasJsx && !hasVue && !hasSvelte) {
-          selectedMode = 'iframe';
-        }
+        log(`[handleManualPreview] Detected via live-preview-offloading: framework=${detection.framework}, bundler=${detection.bundler}, mode=${selectedMode}, root="${detection.selectedRoot}"`);
       }
 
-      log(`[handleManualPreview] mode="${selectedMode}", execution="${detectedExecutionMode}", root="${selectedRoot}"`);
+      log(`[handleManualPreview] mode="${selectedMode}", execution="${detectedExecutionMode}", root="${detection.selectedRoot}"`);
+
+      // Store detection result for use in renderLivePreview
+      setProjectDetection(detection);
 
       // Set execution mode
       setExecutionMode(detectedExecutionMode);

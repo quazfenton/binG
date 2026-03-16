@@ -22,7 +22,7 @@
  * @see lib/agent/services/agent-worker/src/index.ts - Worker implementation
  */
 
-import { createLogger } from '../../utils/logger'
+import { createLogger } from '@/lib/utils/logger'
 import Redis from 'ioredis'
 
 const logger = createLogger('V2:GatewayClient')

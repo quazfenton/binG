@@ -1,4 +1,5 @@
 import { agentSessionManager } from '../session/agent/agent-session-manager';
+import { getToolManager } from '@/lib/tools';
 import { createLogger } from '../utils/logger';
 import { normalizeToolInvocation, type ToolInvocation } from '../types/tool-invocation';
 import type { ExecutionPolicy } from '../sandbox/types';
@@ -50,12 +51,24 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
         preferredAgent: 'nullclaw',
       });
     } else {
+      // Use ToolIntegrationManager for tool execution with OpenCode
+      const toolManager = getToolManager();
+      
+      // Get or create session first
+      const session = await agentSessionManager.getOrCreateSession(
+        options.userId,
+        options.conversationId,
+        { enableMCP: true, mode: 'opencode', executionPolicy }
+      );
+      
+      // Execute via OpenCode with tool integration
       const { runOpenCodeDirect } = await import('./opencode-direct');
       result = await runOpenCodeDirect({
         userId: options.userId,
         conversationId: options.conversationId,
         task: taskWithContext,
         executionPolicy,
+        toolManager,  // Pass tool manager for integrated tool execution
       });
     }
   } catch (error: any) {

@@ -6,7 +6,7 @@
  * - Persistent OpenCode engine (no CLI spawn)
  * - Redis PubSub + Streams for events
  * - Checkpoint/resume for crash recovery
- * - Tool execution via MCP server
+ * - Tool execution via ToolIntegrationManager
  * - Git-backed VFS for automatic commits and rollbacks
  */
 
@@ -82,36 +82,67 @@ async function publishEvent(event: AgentEvent): Promise<void> {
   }
 }
 
-// Execute tool via MCP server
-async function executeTool(toolName: string, args: Record<string, any>): Promise<ToolResult> {
+// Execute tool via ToolIntegrationManager (with MCP fallback)
+async function executeTool(
+  toolName: string,
+  args: Record<string, any>,
+  userId: string,
+  conversationId: string,
+  sessionId: string
+): Promise<ToolResult> {
   try {
-    const response = await fetch(`${MCP_SERVER_URL}/tools/execute`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool: toolName, args }),
-    });
-
-    if (!response.ok) {
-      return {
-        success: false,
-        output: `MCP error: ${response.statusText}`,
-        exitCode: 1,
-      };
-    }
-
-    const result: any = await response.json();
+    // Try ToolIntegrationManager first (unified tool execution)
+    const { getToolManager } = await import('@/lib/tools');
+    const toolManager = getToolManager();
+    
+    const result = await toolManager.executeTool(
+      toolName,
+      args,
+      {
+        userId,
+        conversationId,
+        metadata: { sessionId }
+      }
+    );
+    
     return {
       success: result.success ?? true,
       output: result.output ?? JSON.stringify(result),
       exitCode: result.success ? 0 : 1,
     };
-  } catch (error: any) {
-    logger.error('Tool execution failed', { toolName, error: error.message });
-    return {
-      success: false,
-      output: `Tool execution failed: ${error.message}`,
-      exitCode: 1,
-    };
+  } catch (managerError: any) {
+    logger.warn('ToolIntegrationManager failed, falling back to MCP', { toolName, error: managerError.message });
+    
+    // Fallback to direct MCP execution
+    try {
+      const response = await fetch(`${MCP_SERVER_URL}/tools/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool: toolName, args }),
+      });
+
+      if (!response.ok) {
+        return {
+          success: false,
+          output: `MCP error: ${response.statusText}`,
+          exitCode: 1,
+        };
+      }
+
+      const result: any = await response.json();
+      return {
+        success: result.success ?? true,
+        output: result.output ?? JSON.stringify(result),
+        exitCode: result.success ? 0 : 1,
+      };
+    } catch (error: any) {
+      logger.error('Tool execution failed', { toolName, error: error.message });
+      return {
+        success: false,
+        output: `Tool execution failed: ${error.message}`,
+        exitCode: 1,
+      };
+    }
   }
 }
 
@@ -198,8 +229,8 @@ async function runOpenCode(job: AgentJob): Promise<void> {
               timestamp: Date.now(),
             });
 
-            // Execute tool and get result
-            const toolResult = await executeTool(toolName, toolArgs);
+            // Execute tool via ToolIntegrationManager (with MCP fallback)
+            const toolResult = await executeTool(toolName, toolArgs, userId, conversationId, sessionId);
 
             // Track file changes for git commit
             if (gitVFS && toolName && (toolName.includes('write') || toolName.includes('edit') || toolName.includes('create'))) {

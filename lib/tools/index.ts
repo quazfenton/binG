@@ -41,6 +41,12 @@ export {
   type BootstrapResult,
 } from './bootstrap';
 
+// Gateway bootstrap
+export {
+  registerGatewayTools,
+  unregisterGatewayTools,
+} from './bootstrap-gateway';
+
 // ============================================================================
 // Unified Registry (Backwards Compatibility)
 // ============================================================================
