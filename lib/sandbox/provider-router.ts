@@ -46,6 +46,121 @@ import { createLogger } from '../utils/logger';
 const logger = createLogger('Phase2:ProviderRouter');
 
 /**
+ * Dynamic latency tracking for provider selection
+ * Tracks real-time response times for each provider
+ */
+interface LatencyMetrics {
+  provider: SandboxProviderType;
+  avgLatencyMs: number;
+  p95LatencyMs: number;
+  p99LatencyMs: number;
+  sampleCount: number;
+  lastUpdated: number;
+  recentLatencies: number[]; // Rolling window of last 100 requests
+}
+
+class LatencyTracker {
+  private metrics = new Map<SandboxProviderType, LatencyMetrics>();
+  private readonly MAX_SAMPLES = 100;
+  private readonly STALE_THRESHOLD_MS = 300000; // 5 minutes
+
+  constructor() {
+    // Initialize metrics for all providers
+    const providers: SandboxProviderType[] = [
+      'daytona', 'e2b', 'sprites', 'codesandbox', 'microsandbox',
+      'blaxel', 'opensandbox', 'mistral', 'vercel-sandbox'
+    ];
+    
+    for (const provider of providers) {
+      this.metrics.set(provider, {
+        provider,
+        avgLatencyMs: 0,
+        p95LatencyMs: 0,
+        p99LatencyMs: 0,
+        sampleCount: 0,
+        lastUpdated: Date.now(),
+        recentLatencies: [],
+      });
+    }
+  }
+
+  /**
+   * Record latency for a provider
+   */
+  record(provider: SandboxProviderType, latencyMs: number): void {
+    const metric = this.metrics.get(provider);
+    if (!metric) return;
+
+    // Add to rolling window
+    metric.recentLatencies.push(latencyMs);
+    if (metric.recentLatencies.length > this.MAX_SAMPLES) {
+      metric.recentLatencies.shift();
+    }
+
+    // Update statistics
+    metric.sampleCount++;
+    metric.lastUpdated = Date.now();
+    metric.avgLatencyMs = this.calculateAverage(metric.recentLatencies);
+    metric.p95LatencyMs = this.calculatePercentile(metric.recentLatencies, 95);
+    metric.p99LatencyMs = this.calculatePercentile(metric.recentLatencies, 99);
+  }
+
+  /**
+   * Get current latency metrics for provider
+   */
+  getMetrics(provider: SandboxProviderType): LatencyMetrics | null {
+    return this.metrics.get(provider) || null;
+  }
+
+  /**
+   * Get all providers sorted by latency (fastest first)
+   */
+  getProvidersByLatency(): SandboxProviderType[] {
+    return Array.from(this.metrics.values())
+      .filter(m => m.sampleCount > 0 && Date.now() - m.lastUpdated < this.STALE_THRESHOLD_MS)
+      .sort((a, b) => a.avgLatencyMs - b.avgLatencyMs)
+      .map(m => m.provider);
+  }
+
+  /**
+   * Check if provider latency is acceptable
+   */
+  isLatencyAcceptable(provider: SandboxProviderType, thresholdMs: number = 5000): boolean {
+    const metric = this.metrics.get(provider);
+    if (!metric || metric.sampleCount === 0) return true; // No data, assume OK
+    
+    return metric.avgLatencyMs < thresholdMs;
+  }
+
+  /**
+   * Get latency tier based on current metrics
+   */
+  getLatencyTier(provider: SandboxProviderType): 'low' | 'medium' | 'high' {
+    const metric = this.metrics.get(provider);
+    if (!metric || metric.sampleCount === 0) return 'medium'; // Default if no data
+
+    if (metric.avgLatencyMs < 1000) return 'low';      // < 1s
+    if (metric.avgLatencyMs < 5000) return 'medium';   // 1-5s
+    return 'high';                                      // > 5s
+  }
+
+  private calculateAverage(values: number[]): number {
+    if (values.length === 0) return 0;
+    return values.reduce((sum, val) => sum + val, 0) / values.length;
+  }
+
+  private calculatePercentile(values: number[], percentile: number): number {
+    if (values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const index = Math.ceil((percentile / 100) * sorted.length) - 1;
+    return sorted[Math.max(0, index)];
+  }
+}
+
+// Singleton instance
+export const latencyTracker = new LatencyTracker();
+
+/**
  * Task type for provider selection
  */
 export type TaskType =

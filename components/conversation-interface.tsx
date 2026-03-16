@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"; // Import useCallback, useMemo, and useRef
 import { useEnhancedChat } from "@/hooks/use-enhanced-chat"; // Import enhanced chat hook
+import { useDiffsPoller } from "@/hooks/use-diffs-poller";
 import type { ChatHistory } from "@/types";
 
 import InteractionPanel from "@/components/interaction-panel";
@@ -375,6 +376,20 @@ export default function ConversationInterface() {
       }
     }
   });
+
+  // Diffs poller - manual refresh option for file changes
+  const diffsPoller = useDiffsPoller({
+    pollInterval: 8000,
+    maxFiles: 50,
+    autoShowNotification: false, // We'll handle notifications ourselves
+    onDiffsFetched: (diffs) => {
+      if (diffs.length > 0) {
+        toast.info(`${diffs.length} new file change${diffs.length === 1 ? '' : 's'} from polling`);
+      }
+    },
+  });
+
+
 
   // Advertisement system
   const [, setPromptCount] = useState(0);
@@ -1032,6 +1047,26 @@ export default function ConversationInterface() {
     }
   }, [filesystemScopePath, filesystemSessionId]);
 
+  // Apply polled diffs to filesystem (defined after applyDiffsToFilesystem)
+  const applyPolledDiffs = useCallback(async (pathsToApply?: string[]) => {
+    const diffsToApply = pathsToApply
+      ? diffsPoller.diffs.filter(d => pathsToApply.includes(d.path))
+      : diffsPoller.diffs;
+
+    if (diffsToApply.length === 0) {
+      toast.info("No polled diffs to apply.");
+      return;
+    }
+
+    const entries = diffsToApply.map(d => ({ path: d.path, diff: d.diff }));
+    try {
+      await applyDiffsToFilesystem(entries);
+    } finally {
+      // Clear the applied diffs from the poller after apply completes
+      diffsPoller.clearDiffs();
+    }
+  }, [diffsPoller.diffs, applyDiffsToFilesystem, diffsPoller.clearDiffs]);
+
   // Handle chat submission - no login restrictions
   const refreshAttachedFiles = useCallback(async (
     files: Record<string, AttachedVirtualFile>,
@@ -1342,6 +1377,12 @@ export default function ConversationInterface() {
         userId={user?.id?.toString() || getStableSessionId()} // Use stable user ID or session ID
         onAttachedFilesChange={handleAttachedFilesChange}
         filesystemScopePath={filesystemScopePath}
+        // Diffs poller controls
+        isPollingDiffs={diffsPoller.isPolling}
+        pollCount={diffsPoller.pollCount}
+        onStartPollingDiffs={diffsPoller.startPolling}
+        onStopPollingDiffs={diffsPoller.stopPolling}
+        onPollDiffsNow={diffsPoller.pollNow}
       />
 
       {/* Chat History Modal */}
@@ -1379,6 +1420,10 @@ export default function ConversationInterface() {
           onClearAllCommandDiffs={clearAllCommandDiffs}
           onClearFileCommandDiffs={clearCommandDiffsForFile}
           onSquashFileCommandDiffs={squashCommandDiffsForFile}
+          // Polled diffs integration
+          polledDiffs={diffsPoller.diffs}
+          onApplyPolledDiffs={applyPolledDiffs}
+          onClearPolledDiffs={diffsPoller.clearDiffs}
         />
       )}
 

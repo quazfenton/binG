@@ -16,7 +16,7 @@ import { enhancedLLMService, type EnhancedLLMRequest } from '../chat/enhanced-ll
 import { getToolManager, getUnifiedToolRegistry, getToolDiscoveryService, getToolErrorHandler } from '../tools';
 import { toolAuthManager } from '../tools/tool-authorization-manager';
 import { sandboxBridge } from '../sandbox';
-import type { LLMMessage } from './llm-providers';
+import type { LLMMessage } from '../chat/llm-providers';
 import { detectRequestType } from '../utils/request-type-detector';
 import { normalizeToolInvocations } from '@/lib/types/tool-invocation';
 import { initializeComposioService, getComposioService, type ComposioToolRequest } from '../platforms/composio-service';
@@ -303,6 +303,44 @@ class PriorityRequestRouter {
     // Initialize Composio service if available
     this.composioService = initializeComposioService();
     this.endpoints = this.initializeEndpoints();
+  }
+
+  /**
+   * Build canonical tool invocation record
+   */
+  private buildCanonicalToolInvocationRecord(params: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+    provider?: string;
+    sourceSystem: string;
+    requestId?: string;
+    conversationId?: string;
+  }): Record<string, unknown> {
+    return {
+      toolName: params.toolName,
+      args: params.args ?? {},
+      result: params.result,
+      provider: params.provider,
+      sourceSystem: params.sourceSystem,
+      requestId: params.requestId,
+      conversationId: params.conversationId,
+    };
+  }
+
+  /**
+   * Build canonical tool invocations
+   */
+  private buildCanonicalToolInvocations(params: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+    provider?: string;
+    sourceSystem: string;
+    requestId?: string;
+    conversationId?: string;
+  }) {
+    return normalizeToolInvocations([this.buildCanonicalToolInvocationRecord(params)]);
   }
 
   /**
@@ -1171,9 +1209,10 @@ class PriorityRequestRouter {
       }
     }
     
-    // Check for function call patterns
-    if (lastMessage?.tool_calls?.length > 0) {
-      const toolCall = lastMessage.tool_calls[0];
+    // Check for function call patterns (OpenAI-style tool calls)
+    const messageWithToolCalls = lastMessage as any;
+    if (messageWithToolCalls?.tool_calls?.length > 0) {
+      const toolCall = messageWithToolCalls.tool_calls[0];
       return {
         detectedTool: toolCall.function?.name || null,
         toolInput: toolCall.function?.arguments ? JSON.parse(toolCall.function.arguments) : {},
