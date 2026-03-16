@@ -1567,17 +1567,6 @@ export default function InteractionPanel({
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={togglePanel}
-                    title="Toggle Multipurpose Panel"
-                    className={`h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
-                      isPanelOpen ? "ring-2 ring-blue-500/50" : ""
-                    }`}
-                  >
-                    <Layout className={`h-3 w-3 sm:h-4 sm:w-4 ${isPanelOpen ? "text-blue-400" : ""}`} />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
                     onClick={onNewChat}
                     title="New Chat"
                     className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"

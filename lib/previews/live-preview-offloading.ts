@@ -357,12 +357,296 @@ const HEAVY_COMPUTATION_PATTERNS = ['tensorflow', 'pytorch', 'cuda', 'gpu', 'tor
 const API_KEY_PATTERNS = ['OPENAI_API_KEY', 'process.env', 'API_KEY', 'SECRET_KEY', 'AWS_ACCESS_KEY'];
 
 // ============================================================================
+// Preview Offload Heuristics
+// ============================================================================
+
+/**
+ * Heuristics for auto-offload decision
+ */
+export interface OffloadHeuristics {
+  /** Estimated build time in seconds */
+  estimatedBuildTime: number;
+  /** Estimated memory usage in MB */
+  estimatedMemoryMB: number;
+  /** node_modules size in MB */
+  nodeModulesSizeMB: number;
+  /** Build log warnings count */
+  buildWarningsCount: number;
+  /** Build log errors count */
+  buildErrorsCount: number;
+  /** Should auto-offload to cloud */
+  shouldOffload: boolean;
+  /** Offload reason */
+  offloadReason?: string;
+}
+
+/**
+ * Thresholds for auto-offload
+ */
+export const OFFLOAD_THRESHOLDS = {
+  /** Build time > 20s triggers offload */
+  BUILD_TIME_SECONDS: 20,
+  /** Memory > 1GB triggers offload */
+  MEMORY_MB: 1024,
+  /** node_modules > 500MB triggers offload */
+  NODE_MODULES_MB: 500,
+  /** Build warnings > 10 triggers offload */
+  BUILD_WARNINGS: 10,
+  /** Build errors > 0 triggers offload */
+  BUILD_ERRORS: 0,
+};
+
+// ============================================================================
 // Live Preview Offloading Class
 // ============================================================================
 
 export class LivePreviewOffloading {
   /**
+   * Analyze project for offload heuristics
+   * 
+   * Detects:
+   * - node_modules size
+   * - Estimated build time
+   * - Memory requirements
+   * - Build log analysis
+   */
+  analyzeHeuristics(request: PreviewRequest): OffloadHeuristics {
+    const { files } = request;
+    const filePaths = Object.keys(files);
+    const fileContents = Object.values(files);
+
+    // Detect node_modules size
+    const nodeModulesSizeMB = this.estimateNodeModulesSize(files);
+
+    // Estimate build time based on project characteristics
+    const estimatedBuildTime = this.estimateBuildTime(filePaths, fileContents);
+
+    // Estimate memory usage
+    const estimatedMemoryMB = this.estimateMemoryUsage(filePaths, fileContents);
+
+    // Analyze build logs if available
+    const buildLogs = this.extractBuildLogs(files);
+    const buildWarningsCount = this.countBuildWarnings(buildLogs);
+    const buildErrorsCount = this.countBuildErrors(buildLogs);
+
+    // Determine if should offload
+    const { shouldOffload, offloadReason } = this.shouldOffloadBasedOnHeuristics({
+      nodeModulesSizeMB,
+      estimatedBuildTime,
+      estimatedMemoryMB,
+      buildWarningsCount,
+      buildErrorsCount,
+    });
+
+    return {
+      estimatedBuildTime,
+      estimatedMemoryMB,
+      nodeModulesSizeMB,
+      buildWarningsCount,
+      buildErrorsCount,
+      shouldOffload,
+      offloadReason,
+    };
+  }
+
+  /**
+   * Estimate node_modules size from package.json and lock files
+   */
+  private estimateNodeModulesSize(files: Record<string, string>): number {
+    const packageJson = this.parsePackageJson(files['package.json'] || files['/package.json']);
+    if (!packageJson) return 0;
+
+    const deps = {
+      ...packageJson.dependencies,
+      ...packageJson.devDependencies,
+    };
+
+    const depCount = Object.keys(deps).length;
+    
+    // Rough estimate: average package is ~200KB
+    // Heavy packages (typescript, react, etc.) can be 10-50MB each
+    const heavyDeps = Object.keys(deps).filter(dep => 
+      ['typescript', 'react', 'react-dom', '@angular/core', 'vue', 'next', 'nuxt'].includes(dep)
+    ).length;
+
+    const baseSize = depCount * 0.2; // 200KB per package
+    const heavySize = heavyDeps * 20; // 20MB per heavy package
+    
+    return Math.round(baseSize + heavySize);
+  }
+
+  /**
+   * Estimate build time based on project size and complexity
+   */
+  private estimateBuildTime(filePaths: string[], fileContents: string[]): number {
+    const fileCount = filePaths.length;
+    const totalSize = fileContents.reduce((sum, content) => sum + content.length, 0);
+    
+    // Base build time: 1 second per 100 files
+    const baseTime = fileCount / 100;
+    
+    // TypeScript projects take longer
+    const hasTypeScript = filePaths.some(p => p.endsWith('.ts') || p.endsWith('.tsx'));
+    const tsMultiplier = hasTypeScript ? 1.5 : 1;
+    
+    // Large projects take exponentially longer
+    const sizeMultiplier = totalSize > 1000000 ? 2 : 1; // >1MB
+    
+    // Heavy frameworks take longer
+    const hasHeavyFramework = filePaths.some(p => 
+      p.includes('next.config') || p.includes('nuxt.config') || p.includes('gatsby-config')
+    );
+    const frameworkMultiplier = hasHeavyFramework ? 2 : 1;
+    
+    return Math.round(baseTime * tsMultiplier * sizeMultiplier * frameworkMultiplier * 10); // seconds
+  }
+
+  /**
+   * Estimate memory usage based on project characteristics
+   */
+  private estimateMemoryUsage(filePaths: string[], fileContents: string[]): number {
+    const totalSize = fileContents.reduce((sum, content) => sum + content.length, 0);
+    
+    // Base memory: 100MB + 1MB per 100KB of code
+    const baseMemory = 100 + (totalSize / 100000);
+    
+    // TypeScript requires more memory
+    const hasTypeScript = filePaths.some(p => p.endsWith('.ts') || p.endsWith('.tsx'));
+    const tsMemory = hasTypeScript ? 200 : 0;
+    
+    // Heavy frameworks require more memory
+    const hasHeavyFramework = filePaths.some(p => 
+      p.includes('next.config') || p.includes('nuxt.config') || p.includes('gatsby-config')
+    );
+    const frameworkMemory = hasHeavyFramework ? 300 : 0;
+    
+    // node_modules in project indicates larger memory needs
+    const hasNodeModules = filePaths.some(p => p.includes('node_modules'));
+    const nodeModulesMemory = hasNodeModules ? 500 : 0;
+    
+    return Math.round(baseMemory + tsMemory + frameworkMemory + nodeModulesMemory);
+  }
+
+  /**
+   * Extract build logs from files
+   */
+  private extractBuildLogs(files: Record<string, string>): string {
+    const buildLogFiles = Object.entries(files)
+      .filter(([path]) => 
+        path.includes('build.log') || 
+        path.includes('npm-debug.log') || 
+        path.includes('yarn-error.log')
+      )
+      .map(([, content]) => content)
+      .join('\n');
+    
+    return buildLogFiles;
+  }
+
+  /**
+   * Count build warnings from logs
+   */
+  private countBuildWarnings(buildLogs: string): number {
+    if (!buildLogs) return 0;
+    
+    const warningPatterns = [
+      /warning:/gi,
+      /WARN/g,
+      /⚠️/g,
+      /deprecated/gi,
+    ];
+    
+    let count = 0;
+    for (const pattern of warningPatterns) {
+      count += (buildLogs.match(pattern) || []).length;
+    }
+    
+    return count;
+  }
+
+  /**
+   * Count build errors from logs
+   */
+  private countBuildErrors(buildLogs: string): number {
+    if (!buildLogs) return 0;
+    
+    const errorPatterns = [
+      /error:/gi,
+      /ERROR/g,
+      /❌/g,
+      /failed/gi,
+      /failure/gi,
+    ];
+    
+    let count = 0;
+    for (const pattern of errorPatterns) {
+      count += (buildLogs.match(pattern) || []).length;
+    }
+    
+    return count;
+  }
+
+  /**
+   * Determine if should offload based on heuristics
+   */
+  private shouldOffloadBasedOnHeuristics(heuristics: {
+    nodeModulesSizeMB: number;
+    estimatedBuildTime: number;
+    estimatedMemoryMB: number;
+    buildWarningsCount: number;
+    buildErrorsCount: number;
+  }): { shouldOffload: boolean; offloadReason?: string } {
+    const {
+      nodeModulesSizeMB,
+      estimatedBuildTime,
+      estimatedMemoryMB,
+      buildWarningsCount,
+      buildErrorsCount,
+    } = heuristics;
+
+    // Check each threshold
+    if (buildErrorsCount > OFFLOAD_THRESHOLDS.BUILD_ERRORS) {
+      return {
+        shouldOffload: true,
+        offloadReason: `Build errors detected (${buildErrorsCount}) - cloud environment recommended`,
+      };
+    }
+
+    if (estimatedBuildTime > OFFLOAD_THRESHOLDS.BUILD_TIME_SECONDS) {
+      return {
+        shouldOffload: true,
+        offloadReason: `Estimated build time (${estimatedBuildTime}s) exceeds threshold (${OFFLOAD_THRESHOLDS.BUILD_TIME_SECONDS}s)`,
+      };
+    }
+
+    if (estimatedMemoryMB > OFFLOAD_THRESHOLDS.MEMORY_MB) {
+      return {
+        shouldOffload: true,
+        offloadReason: `Estimated memory usage (${estimatedMemoryMB}MB) exceeds threshold (${OFFLOAD_THRESHOLDS.MEMORY_MB}MB)`,
+      };
+    }
+
+    if (nodeModulesSizeMB > OFFLOAD_THRESHOLDS.NODE_MODULES_MB) {
+      return {
+        shouldOffload: true,
+        offloadReason: `node_modules size (${nodeModulesSizeMB}MB) exceeds threshold (${OFFLOAD_THRESHOLDS.NODE_MODULES_MB}MB)`,
+      };
+    }
+
+    if (buildWarningsCount > OFFLOAD_THRESHOLDS.BUILD_WARNINGS) {
+      return {
+        shouldOffload: true,
+        offloadReason: `Excessive build warnings (${buildWarningsCount}) - cloud build recommended`,
+      };
+    }
+
+    return { shouldOffload: false };
+  }
+
+  /**
    * Detect project configuration from files
+   * 
+   * Enhanced with heuristics analysis for auto-offload decision
    * 
    * Analyzes project files to determine:
    * - Framework (React, Vue, Next.js, Flask, etc.)
@@ -370,8 +654,9 @@ export class LivePreviewOffloading {
    * - Entry point (main.tsx, app.py, etc.)
    * - Recommended preview mode
    * - Normalized file paths
+   * - Heuristics for offload decision
    */
-  detectProject(request: PreviewRequest): ProjectDetection {
+  detectProject(request: PreviewRequest): ProjectDetection & { heuristics?: OffloadHeuristics } {
     const { files, scopePath } = request;
     const filePaths = Object.keys(files);
     const fileCount = filePaths.length;
@@ -408,20 +693,24 @@ export class LivePreviewOffloading {
     const hasHeavyComputation = this.detectHeavyComputation(Object.values(files));
     const hasAPIKeys = this.detectAPIKeys(Object.values(files));
 
-    // Detect preview mode
+    // Analyze heuristics for offload decision
+    const heuristics = this.analyzeHeuristics(request);
+
+    // Detect preview mode (with heuristics influence)
     const previewMode = this.detectPreviewMode(
-      filePaths, 
-      framework, 
-      bundler, 
-      hasPython, 
-      hasNodeServer, 
+      filePaths,
+      framework,
+      bundler,
+      hasPython,
+      hasNodeServer,
       hasNextJS,
       packageJson,
       hasHeavyComputation,
-      hasAPIKeys
+      hasAPIKeys,
+      heuristics  // Pass heuristics for cloud offload decision
     );
 
-    logger.debug(`[detectProject] framework=${framework}, bundler=${bundler}, previewMode=${previewMode}, files=${fileCount}`);
+    logger.debug(`[detectProject] framework=${framework}, bundler=${bundler}, previewMode=${previewMode}, files=${fileCount}, shouldOffload=${heuristics.shouldOffload}`);
 
     return {
       framework,
@@ -439,6 +728,7 @@ export class LivePreviewOffloading {
       hasAPIKeys,
       fileCount,
       normalizedFiles,
+      heuristics,
     };
   }
 
@@ -775,6 +1065,7 @@ export class LivePreviewOffloading {
 
   /**
    * Detect preview mode based on project characteristics
+   * Enhanced with heuristics for auto-offload decision
    * Priority: Local first (Sandpack -> WebContainer -> Pyodide), then cloud fallback
    */
   detectPreviewMode(
@@ -786,7 +1077,8 @@ export class LivePreviewOffloading {
     hasNextJS: boolean,
     packageJson: Record<string, any> | null,
     hasHeavyComputation: boolean,
-    hasAPIKeys: boolean
+    hasAPIKeys: boolean,
+    heuristics?: OffloadHeuristics
   ): PreviewMode {
     const hasPackageJson = filePaths.some(p => p.endsWith('package.json'));
     const hasHtml = filePaths.some(p => p.endsWith('.html'));
@@ -795,14 +1087,14 @@ export class LivePreviewOffloading {
     const hasSvelte = filePaths.some(p => p.endsWith('.svelte'));
     const hasAngular = filePaths.some(p => p.includes('.component.') || p.includes('.module.'));
     const hasAstro = filePaths.some(p => p.endsWith('.astro'));
-    
+
     // Docker detection for cloud fallback decision
-    const hasDocker = filePaths.some(f => 
-      f === 'Dockerfile' || 
-      f === 'docker-compose.yml' || 
+    const hasDocker = filePaths.some(f =>
+      f === 'Dockerfile' ||
+      f === 'docker-compose.yml' ||
       f === 'docker-compose.yaml'
     );
-    
+
     // Complex dependencies that need cloud
     const hasComplexDeps = packageJson && (
       packageJson.dependencies?.prisma ||
@@ -815,6 +1107,35 @@ export class LivePreviewOffloading {
       packageJson.dependencies?.dockerode
     );
 
+    // Check heuristics for auto-offload
+    const shouldOffload = heuristics?.shouldOffload || false;
+    const offloadReason = heuristics?.offloadReason;
+
+    // ========================================
+    // AUTO-OFFLOAD BASED ON HEURISTICS
+    // ========================================
+    
+    // If heuristics indicate cloud offload, prioritize cloud providers
+    if (shouldOffload) {
+      logger.info(`[detectPreviewMode] Auto-offload triggered: ${offloadReason}`);
+      
+      // Determine best cloud provider based on project type
+      if (hasPython || framework === 'flask' || framework === 'fastapi' || framework === 'django') {
+        return 'devbox';  // Python needs full VM
+      }
+      
+      if (hasNodeServer || framework === 'next' || framework === 'nuxt') {
+        return 'devbox';  // Backend needs cloud
+      }
+      
+      if (hasDocker || hasComplexDeps) {
+        return 'devbox';  // Docker/complex needs cloud
+      }
+      
+      // Default to CodeSandbox for heavy frontend projects
+      return 'codesandbox';
+    }
+
     // ========================================
     // LOCAL PREVIEW MODES (Preferred)
     // ========================================
@@ -826,7 +1147,7 @@ export class LivePreviewOffloading {
       }
       return 'pyodide';  // Local Python execution
     }
-    
+
     // FastAPI/Django -> DevBox (usually need server)
     if (framework === 'fastapi' || framework === 'django') {
       return 'devbox';   // Cloud - these need running server
@@ -1195,10 +1516,10 @@ export const livePreviewOffloading = new LivePreviewOffloading();
 // Convenience Exports
 // ============================================================================
 
-export const detectProject = (request: PreviewRequest) => 
+export const detectProject = (request: PreviewRequest) =>
   livePreviewOffloading.detectProject(request);
 
-export const getSandpackConfig = (detection: ProjectDetection) => 
+export const getSandpackConfig = (detection: ProjectDetection) =>
   livePreviewOffloading.getSandpackConfig(detection);
 
 export const detectPreviewMode = (
@@ -1210,9 +1531,10 @@ export const detectPreviewMode = (
   hasNextJS: boolean,
   packageJson: Record<string, any> | null,
   hasHeavyComputation: boolean,
-  hasAPIKeys: boolean
+  hasAPIKeys: boolean,
+  heuristics?: OffloadHeuristics
 ) => livePreviewOffloading.detectPreviewMode(
-  filePaths, framework, bundler, hasPython, hasNodeServer, hasNextJS, packageJson, hasHeavyComputation, hasAPIKeys
+  filePaths, framework, bundler, hasPython, hasNodeServer, hasNextJS, packageJson, hasHeavyComputation, hasAPIKeys, heuristics
 );
 
 export const detectFramework = (
@@ -1221,8 +1543,27 @@ export const detectFramework = (
   packageJson: Record<string, any> | null
 ) => livePreviewOffloading.detectFramework(filePaths, files, packageJson);
 
-export const detectEntryPoint = (filePaths: string[], framework: AppFramework) => 
+export const detectEntryPoint = (filePaths: string[], framework: AppFramework) =>
   livePreviewOffloading.detectEntryPoint(filePaths, framework);
+
+/**
+ * Analyze project heuristics for auto-offload decision
+ * 
+ * @param request - Preview request with files
+ * @returns Heuristics analysis result
+ * 
+ * @example
+ * ```typescript
+ * import { analyzeHeuristics } from '@/lib/previews/live-preview-offloading';
+ * 
+ * const heuristics = analyzeHeuristics({ files });
+ * if (heuristics.shouldOffload) {
+ *   console.log(`Auto-offload recommended: ${heuristics.offloadReason}`);
+ * }
+ * ```
+ */
+export const analyzeHeuristics = (request: PreviewRequest): OffloadHeuristics =>
+  livePreviewOffloading.analyzeHeuristics(request);
 
 export const shouldUseLocalPreview = (detection: ProjectDetection) => 
   livePreviewOffloading.shouldUseLocalPreview(detection);
