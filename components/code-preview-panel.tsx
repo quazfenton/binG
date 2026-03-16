@@ -1859,8 +1859,9 @@ Generated on: ${new Date().toLocaleString()}
 
     // Use centralized framework detection from live-preview-offloading
     // If projectDetection exists (from handleManualPreview), use it; otherwise compute from structure
-    const effectiveFramework = projectDetection?.framework 
-      ? projectDetection.framework 
+    // CRITICAL: Only use projectDetection when manual preview is active to avoid stale framework detection
+    const effectiveFramework = isManualPreviewActive && projectDetection?.framework
+      ? projectDetection.framework
       : useStructure?.framework || 'vanilla';
     
     // Get template using centralized mapping

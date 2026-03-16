@@ -238,9 +238,15 @@ class CircuitBreaker {
     if (state.state === 'open') {
       if (now - state.lastFailureTime >= this.config.recoveryTimeoutMs) {
         state.state = 'half-open'
-        return false
+        return false  // Allow one test request
       }
-      return true
+      return true  // Circuit is open, skip
+    }
+
+    // CRITICAL: If already half-open, a probe is running; skip additional requests
+    // This prevents race condition where multiple concurrent requests all get through during half-open
+    if (state.state === 'half-open') {
+      return true  // Skip - probe already in progress
     }
 
     return false
@@ -430,10 +436,21 @@ export class ResponseRouter {
       {
         name: 'fast-agent',
         priority: 0,
+        // DISABLED by default - fast-agent has known issues with quality and routing
         enabled: process.env.FAST_AGENT_ENABLED === 'true',
         service: fastAgentService,
         healthCheck: () => fastAgentService.healthCheck(),
-        canHandle: (req: RouterRequest) => true,
+        // Use shouldHandle for proper provider support and complexity gating
+        canHandle: (req: RouterRequest) =>
+          fastAgentService.shouldHandle({
+            messages: req.messages,
+            provider: req.provider,
+            model: req.model,
+            temperature: req.temperature,
+            maxTokens: req.maxTokens,
+            requestId: req.requestId,
+            userId: req.userId,
+          } as FastAgentRequest),
         processRequest: async (req: RouterRequest) => {
           const response = await fastAgentService.processRequest({
             messages: req.messages,
@@ -454,14 +471,35 @@ export class ResponseRouter {
         enabled: true,
         service: enhancedLLMService,
         healthCheck: async () => true,
-        canHandle: () => true,
+        // Do not handle tool/sandbox requests - let specialized endpoints handle those
+        canHandle: (req: RouterRequest) => {
+          const detectedType = detectRequestType(req.messages)
+          // Skip if this is a tool request and tools are enabled
+          if (detectedType === 'tool' && (req.enableTools !== false || req.enableComposio !== false)) {
+            return false
+          }
+          // Skip if this is a sandbox request and sandbox is enabled
+          if (detectedType === 'sandbox' && req.enableSandbox !== false) {
+            return false
+          }
+          return true
+        },
         processRequest: async (req: RouterRequest) => {
+          // Pass all required fields including tool/sandbox flags
+          const detectedType = detectRequestType(req.messages)
           const response = await enhancedLLMService.generateResponse({
             messages: req.messages,
+            provider: req.provider,
             model: req.model,
             temperature: req.temperature,
             maxTokens: req.maxTokens,
             stream: req.stream,
+            userId: req.userId,
+            requestId: req.requestId,
+            conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
+            enableTools: req.enableTools ?? detectedType === 'tool',
+            enableSandbox: req.enableSandbox ?? detectedType === 'sandbox',
+            isSandboxCommand: detectedType === 'sandbox',
           } as EnhancedLLMRequest)
           return this.normalizeOriginalResponse(response)
         },
@@ -886,14 +924,14 @@ export class ResponseRouter {
   private mapEndpointToProvider(endpointName: string): string | null {
     switch (endpointName) {
       case 'fast-agent':
-        return process.env.SANDBOX_PROVIDER || 'daytona'
       case 'n8n-agents':
-        return 'nango'
       case 'custom-fallback':
       case 'original-system':
-        return 'microsandbox'
+        // Regular LLM routing should not consume tool/sandbox quotas
+        // This prevents exhausting unrelated quotas and disabling sandbox/tool routing
+        return null;
       default:
-        return null
+        return null;
     }
   }
 

@@ -13,9 +13,6 @@ RUN apk add --no-cache \
     build-base \
     linux-headers
 
-# Install Docker CLI for sandbox management
-RUN apk add --no-cache docker
-
 # Set working directory
 WORKDIR /app
 

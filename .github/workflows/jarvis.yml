@@ -300,6 +300,11 @@ jobs:
               for commit in $FIX_COMMITS; do
                 if ! git cherry-pick "$commit" --no-commit 2>/dev/null; then
                   echo "⚠️ Cherry-pick failed for $commit, skipping..."
+                  # CRITICAL: Abort or skip the failed cherry-pick to clear repo state
+                  # This prevents leaving the repo in a conflicted cherry-pick-in-progress state
+                  if git rev-parse --git-dir >/dev/null 2>&1 && [ -f ".git/CHERRY_PICK_HEAD" ]; then
+                    git cherry-pick --abort 2>/dev/null || git cherry-pick --skip 2>/dev/null || true
+                  fi
                   CHERRY_PICK_SUCCESS=false
                 fi
               done

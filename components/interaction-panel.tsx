@@ -1382,93 +1382,106 @@ export default function InteractionPanel({
         {/* Drag Handle - Full width resize bar (also touch area for mobile) */}
         <div
           ref={dragHandleRef}
-          className={`w-full absolute top-0 left-0 right-0 h-[20px] transition-all duration-200 touch-none ${
-            isDragging 
-              ? 'bg-white/40 cursor-ns-resize' 
-              : 'bg-white/10 cursor-ns-resize sm:bg-transparent sm:cursor-default'
+          className={`w-full absolute top-0 left-0 right-0 h-[40px] transition-all duration-200 pointer-events-none ${
+            isDragging
+              ? 'bg-white/40'
+              : 'bg-gradient-to-b from-white/10 to-transparent sm:from-transparent sm:bg-transparent'
           }`}
-          style={{ zIndex: 50 }}
+          style={{ zIndex: 40 }}
           onDoubleClick={toggleMinimized}
-          onMouseDown={(e) => {
-            setIsExpanded(false);
-            setIsDragging(true);
-            dragStartY.current = e.clientY;
-            dragStartHeight.current = panelHeight;
+        >
+          {/* Touch target for drag - only enabled when actively dragging or on mobile */}
+          <div
+            className="absolute inset-0 pointer-events-auto sm:pointer-events-none"
+            onMouseDown={(e) => {
+              // Only allow dragging from the very top area, not the button area
+              if (e.clientX < 64) return; // Skip left 64px where button is
+              
+              e.preventDefault();
+              setIsExpanded(false);
+              setIsDragging(true);
+              dragStartY.current = e.clientY;
+              dragStartHeight.current = panelHeight;
 
-            const handleMouseMove = (e: MouseEvent) => {
-              const delta = dragStartY.current - e.clientY;
-              setPanelHeight(
-                Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), dragStartHeight.current + delta)),
-              );
-            };
+              const handleMouseMove = (e: MouseEvent) => {
+                const delta = dragStartY.current - e.clientY;
+                setPanelHeight(
+                  Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), dragStartHeight.current + delta)),
+                );
+              };
 
-            const handleMouseUp = () => {
-              setIsDragging(false);
-              document.removeEventListener("mousemove", handleMouseMove);
-              document.removeEventListener("mouseup", handleMouseUp);
-            };
+              const handleMouseUp = () => {
+                setIsDragging(false);
+                document.removeEventListener("mousemove", handleMouseMove);
+                document.removeEventListener("mouseup", handleMouseUp);
+              };
 
-            document.addEventListener("mousemove", handleMouseMove);
-            document.addEventListener("mouseup", handleMouseUp);
-          }}
-          onTouchStart={(e) => {
-            // Mobile touch-and-hold drag support
-            setIsExpanded(false);
-            setIsDragging(true);
-            dragStartY.current = e.touches[0].clientY;
-            dragStartHeight.current = panelHeight;
+              document.addEventListener("mousemove", handleMouseMove);
+              document.addEventListener("mouseup", handleMouseUp);
+            }}
+            onTouchStart={(e) => {
+              // Prevent parent onClick from firing
+              e.stopPropagation();
+              // Mobile touch-and-hold drag support
+              e.preventDefault();
+              setIsExpanded(false);
+              setIsDragging(true);
+              dragStartY.current = e.touches[0].clientY;
+              dragStartHeight.current = panelHeight;
 
-            // Create touch move handler
-            touchMoveHandler.current = (e: TouchEvent) => {
-              e.preventDefault(); // Prevent page scroll while dragging
-              const delta = dragStartY.current - e.touches[0].clientY;
-              setPanelHeight(
-                Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), dragStartHeight.current + delta)),
-              );
-            };
-
-            // Create touch end handler
-            touchEndHandler.current = () => {
-              setIsDragging(false);
+              // CRITICAL: Remove any previously attached touch listeners first to prevent memory leaks
               if (touchMoveHandler.current) {
                 document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false });
               }
               if (touchEndHandler.current) {
                 document.removeEventListener("touchend", touchEndHandler.current);
               }
-              touchMoveHandler.current = null;
-              touchEndHandler.current = null;
-            };
 
-            document.addEventListener("touchmove", touchMoveHandler.current, { passive: false });
-            document.addEventListener("touchend", touchEndHandler.current);
-          }}
-          onMouseEnter={(e) => {
-            if (!isDragging) {
-              e.currentTarget.classList.add('bg-white/20');
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (!isDragging) {
-              e.currentTarget.classList.remove('bg-white/20');
-            }
-          }}
-        />
+              // Create touch move handler
+              touchMoveHandler.current = (e: TouchEvent) => {
+                e.preventDefault(); // Prevent page scroll while dragging
+                const delta = dragStartY.current - e.touches[0].clientY;
+                setPanelHeight(
+                  Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), dragStartHeight.current + delta)),
+                );
+              };
+
+              // Create touch end handler
+              touchEndHandler.current = () => {
+                setIsDragging(false);
+                if (touchMoveHandler.current) {
+                  document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false });
+                }
+                if (touchEndHandler.current) {
+                  document.removeEventListener("touchend", touchEndHandler.current);
+                }
+                touchMoveHandler.current = null;
+                touchEndHandler.current = null;
+              };
+
+              document.addEventListener("touchmove", touchMoveHandler.current, { passive: false });
+              document.addEventListener("touchend", touchEndHandler.current);
+            }}
+          >
+            {/* Visual indicator for mobile drag area */}
+            <div className="w-full h-[4px] bg-white/30 rounded-full mx-auto mt-1 sm:hidden" />
+          </div>
+        </div>
 
         <div className="p-2 sm:p-3 h-full flex flex-col relative" style={{ cursor: 'default' }}>
-          {/* Experimental Workspace Toggle Button */}
+          {/* Experimental Workspace Toggle Button - Higher z-index for mobile */}
           <Button
             variant="ghost"
             size="sm"
             onClick={togglePanel}
-            className={`absolute top-1 left-1 w-6 h-6 p-0 z-[60] transition-all duration-300 ${
+            className={`absolute top-2 left-2 w-8 h-8 p-0 z-[70] transition-all duration-300 sm:w-6 sm:h-6 ${
               isOpen
                 ? "text-yellow-400 hover:bg-yellow-500/20 hover:text-yellow-300"
                 : "text-gray-400 hover:text-white hover:bg-white/10"
             }`}
             title="Toggle experimental workspace panel"
           >
-            <SquareSplitHorizontal className="w-3 h-3" />
+            <SquareSplitHorizontal className="w-4 h-4 sm:w-3 sm:h-3" />
           </Button>
 
           {/* Minimize Button */}
@@ -1480,7 +1493,7 @@ export default function InteractionPanel({
             title={isMinimized ? "Reopen panel" : "Hide panel"}
           >
             {isMinimized ? (
-              <ArrowDownToLine className="w-3 w-3 rotate-180" />
+              <ArrowDownToLine className="w-3 h-3 rotate-180" />
             ) : (
               <ArrowDownToLine className="w-3 h-3" />
             )}
