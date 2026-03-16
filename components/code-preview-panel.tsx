@@ -61,6 +61,9 @@ import {
   type AppFramework,
 } from "@/lib/previews/live-preview-offloading";
 
+// Import Preview Error Boundary
+import { PreviewErrorBoundary } from "./preview-error-boundary";
+
 // Lazy load Sandpack to avoid SSR issues
 // React.lazy requires default export, so we remap the named export
 const Sandpack = lazy(() =>
@@ -90,6 +93,17 @@ interface CodePreviewPanelProps {
   onClearAllCommandDiffs?: () => void;
   onClearFileCommandDiffs?: (path: string) => void;
   onSquashFileCommandDiffs?: (path: string) => void;
+  // Polled diffs from useDiffsPoller hook
+  polledDiffs?: Array<{
+    id: string;
+    path: string;
+    diff: string;
+    changeType: 'create' | 'update' | 'delete';
+    timestamp: number;
+    source: 'poll';
+  }>;
+  onApplyPolledDiffs?: (pathsToApply?: string[]) => Promise<void>;
+  onClearPolledDiffs?: () => void;
 }
 
 // Use CodeBlock from the parser module
@@ -169,6 +183,9 @@ export default function CodePreviewPanel({
   onClearAllCommandDiffs,
   onClearFileCommandDiffs,
   onSquashFileCommandDiffs,
+  polledDiffs = [],
+  onApplyPolledDiffs,
+  onClearPolledDiffs,
 }: CodePreviewPanelProps) {
   const [detectedFramework] = useState<"react" | "vue" | "vanilla">("vanilla");
 
@@ -1827,37 +1844,7 @@ Generated on: ${new Date().toLocaleString()}
   };
 
   const renderLivePreview = () => {
-    // Enhanced framework support with better template mapping
-    const getSandpackTemplate = (framework: string) => {
-      switch (framework) {
-        case "react":
-        case "vite-react":
-          return "react";
-        case "next":
-          return "nextjs";
-        case "vue":
-        case "nuxt":
-          return "vue";
-        case "angular":
-          return "angular";
-        case "svelte":
-          return "svelte";
-        case "solid":
-          return "solid";
-        case "astro":
-          return "astro";
-        case "remix":
-          return "remix";
-        case "gatsby":
-          return "gatsby";
-        case "vite":
-          return "react";
-        default:
-          return "vanilla";
-      }
-    };
-
-    // Use manual preview files if active, otherwise use auto-detected structure
+    // Use manual preview files if active, otherwise use auto-detected structure (must be defined FIRST)
     const useStructure = isManualPreviewActive && manualPreviewFiles
       ? {
           name: 'Manual Preview',
@@ -1865,6 +1852,18 @@ Generated on: ${new Date().toLocaleString()}
           framework: 'react' as const,
         }
       : (projectStructureWithScopedFiles || projectStructure);
+
+    // Use centralized framework detection from live-preview-offloading
+    // If projectDetection exists (from handleManualPreview), use it; otherwise compute from structure
+    const effectiveFramework = projectDetection?.framework 
+      ? projectDetection.framework 
+      : useStructure?.framework || 'vanilla';
+    
+    // Get template using centralized mapping
+    const getSandpackTemplate = (framework: string) => {
+      const config = getSandpackConfig({ framework: framework as any, bundler: 'unknown', normalizedFiles: {} } as any);
+      return config.template;
+    };
 
     // Detect if project has Vue Router configured
     const hasVueRouter = useStructure?.files && Object.keys(useStructure.files).some(path => {
@@ -1911,7 +1910,7 @@ Generated on: ${new Date().toLocaleString()}
         "remix",
         "gatsby",
         "vite",
-      ].includes(useStructure.framework)
+      ].includes(effectiveFramework)
     ) {
       try {
         // Map files to Sandpack format
@@ -1972,7 +1971,7 @@ Generated on: ${new Date().toLocaleString()}
             gatsby: ['/src/pages/index.js', '/src/pages/index.tsx', '/pages/index.js'],
           };
 
-          const framework = useStructure.framework;
+          const framework = effectiveFramework;
           const priorities = entryPriorityMap[framework] || [];
           
           // Check if any of the priority entry files exist
@@ -2244,7 +2243,7 @@ export default app;`,
         const normalizedSandpackFiles = normalizeFilesForSandpack(sandpackFiles);
         
         // Detect best entry file and log for debugging
-        const detectedEntryFile = detectBestEntryFile(normalizedSandpackFiles, useStructure.framework);
+        const detectedEntryFile = detectBestEntryFile(normalizedSandpackFiles, effectiveFramework);
         if (detectedEntryFile) {
           log(`[Sandpack] Detected entry file: ${detectedEntryFile}`);
         }
@@ -2267,7 +2266,7 @@ export default app;`,
           
           if (!existingEntryFile) {
             // Add framework-specific stub files
-            const framework = useStructure.framework;
+            const framework = effectiveFramework;
             switch (framework) {
               case "vue":
               case "nuxt":
@@ -2419,7 +2418,7 @@ root.render(<App />);` };
           return result;
         })();
 
-        const template = getSandpackTemplate(useStructure.framework);
+        const template = getSandpackTemplate(effectiveFramework);
 
         // Manual preview with HTML files - use Sandpack for proper bundling
         if (isManualPreviewActive && previewMode === 'iframe') {
@@ -2997,16 +2996,21 @@ root.render(<App />);` };
               const hasStartScript = hasPackageJson && packageJsonContent.includes('"start"');
               const hasDevScript = hasPackageJson && packageJsonContent.includes('"dev"');
               
-              // Next.js should use 'npm run dev', otherwise use start script or node server.js
+              // Find the entry file location to determine working directory
+              const serverFileCandidates = ['server.js', 'app.js', 'index.js', 'main.js'];
+              const entryFile = Object.keys(files).find(f => serverFileCandidates.includes(f)) || 'server.js';
+              const entryDir = entryFile.includes('/') ? entryFile.substring(0, entryFile.lastIndexOf('/')) : '.';
+              
+              // Next.js should use 'npm run dev', otherwise use start script or node with correct path
               const startCommand = hasNextJs && hasDevScript 
-                ? 'npm run dev' 
+                ? 'cd ' + (entryDir !== '.' ? entryDir + ' && ' : '') + 'npm run dev' 
                 : hasStartScript 
-                  ? 'npm start' 
-                  : 'node server.js';
+                  ? 'cd ' + (entryDir !== '.' ? entryDir + ' && ' : '') + 'npm start' 
+                  : 'cd ' + (entryDir !== '.' ? entryDir + ' && ' : '') + 'node ' + entryFile.split('/').pop();
 
-              log(`[WebContainer] Using start command: ${startCommand}`);
+              log(`[WebContainer] Using start command: ${startCommand} (entry dir: ${entryDir})`);
 
-              // Start the development server
+              // Start the development server with correct working directory
               const process = await webcontainer.spawn('sh', ['-c', startCommand]);
               webcontainerProcessRef.current = process;
 
@@ -3844,7 +3848,7 @@ root.render(<App />);` };
               <AlertCircle className="w-16 h-16 mx-auto mb-4 text-red-400" />
               <p className="text-red-400">Failed to render framework preview</p>
               <p className="text-sm text-gray-600 mt-2">
-                Framework: {useStructure.framework}
+                Framework: {effectiveFramework}
               </p>
               <p className="text-sm text-gray-600">
                 Error: {(error as Error).message}
@@ -4442,7 +4446,18 @@ root.render(<App />);` };
                       </button>
                     </div>
                   )}
-                  {renderLivePreview()}
+                  <PreviewErrorBoundary
+                    fallback={<div className="h-full flex items-center justify-center bg-gray-900 rounded-lg p-4"><div className="text-center text-gray-400"><AlertCircle className="w-12 h-12 mx-auto mb-3 text-yellow-500" /><p className="text-lg font-medium mb-2">Preview Error</p><p className="text-sm mb-4">The preview encountered an error and could not be displayed.</p><Button onClick={() => window.location.reload()} variant="outline" size="sm">Retry</Button></div></div>}
+                    onReset={() => {
+                      log('[PreviewErrorBoundary] Reset triggered, clearing preview state');
+                      handleClearManualPreview();
+                      if (manualPreviewPathRef.current) {
+                        handleManualPreview(manualPreviewPathRef.current);
+                      }
+                    }}
+                  >
+                    {renderLivePreview()}
+                  </PreviewErrorBoundary>
                 </TabsContent>
 
                 {detectedFramework !== "vanilla" && (
@@ -4742,6 +4757,84 @@ root.render(<App />);` };
                                       onClick={() => onClearFileCommandDiffs?.(path)}
                                     >
                                       Clear
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Polled Diffs Section - from useDiffsPoller */}
+                        {polledDiffs && polledDiffs.length > 0 && (
+                          <div className="mt-4 border-t border-white/10 pt-3">
+                            <h4 className="text-xs font-medium text-cyan-400 mb-2">
+                              Polled Changes ({polledDiffs.length}) 🔄
+                            </h4>
+                            <div className="flex gap-2 mb-2">
+                              <Button
+                                size="sm"
+                                variant="default"
+                                className="h-7 px-2 text-[11px] bg-cyan-600 hover:bg-cyan-700"
+                                onClick={() => onApplyPolledDiffs?.()}
+                                disabled={!onApplyPolledDiffs}
+                              >
+                                Apply All
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[11px]"
+                                onClick={() => {
+                                  // Show path selection - for now apply all
+                                  onApplyPolledDiffs?.();
+                                }}
+                                disabled={!onApplyPolledDiffs}
+                              >
+                                Select...
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[11px]"
+                                onClick={onClearPolledDiffs}
+                                disabled={!onClearPolledDiffs}
+                              >
+                                Clear
+                              </Button>
+                            </div>
+                            <div className="space-y-1">
+                              {polledDiffs.map((diff, idx) => (
+                                <div key={diff.id || idx} className="rounded border border-cyan-500/20 p-2 bg-cyan-900/10">
+                                  <div className="flex items-center justify-between">
+                                    <div className="truncate text-[11px] text-cyan-300">{diff.path}</div>
+                                    <span className={`text-[10px] px-1.5 rounded ${
+                                      diff.changeType === 'create' ? 'bg-green-500/20 text-green-400' :
+                                      diff.changeType === 'delete' ? 'bg-red-500/20 text-red-400' :
+                                      'bg-yellow-500/20 text-yellow-400'
+                                    }`}>
+                                      {diff.changeType}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 flex gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-1 text-[10px]"
+                                      onClick={() => onApplyPolledDiffs?.([diff.path])}
+                                    >
+                                      Apply
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-1 text-[10px]"
+                                      onClick={() => {
+                                        // View diff details - could show modal
+                                        console.log('Diff details:', diff.diff);
+                                      }}
+                                    >
+                                      View
                                     </Button>
                                   </div>
                                 </div>

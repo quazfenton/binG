@@ -63,7 +63,7 @@ export {
 
 // ==================== Provider Advanced MCP Tools ====================
 export {
-  getProviderAdvancedTools,
+  getAllProviderAdvancedTools as getProviderAdvancedTools,
   callProviderTool,
   getE2BAmpToolDefinitions,
   getE2BCodexToolDefinitions,
