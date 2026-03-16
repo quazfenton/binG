@@ -152,8 +152,10 @@ class CircuitBreaker {
     }
 
     if (state.state === 'half-open') {
-      // Allow the test request but monitor closely
-      return false;
+      // CRITICAL: A probe is already running; block additional requests until probe completes
+      // This prevents race condition where multiple concurrent requests all get through during half-open
+      console.log(`[CircuitBreaker] ${endpoint}: Circuit HALF-OPEN - probe already running, skipping`);
+      return true;  // Skip - probe already in progress
     }
 
     return false;
@@ -397,12 +399,12 @@ class PriorityRequestRouter {
         return sandboxProvider;
       }
       case 'fast-agent':
-        return process.env.SANDBOX_PROVIDER || 'daytona';
       case 'n8n-agents':
-        return 'nango';
       case 'custom-fallback':
       case 'original-system':
-        return 'microsandbox';
+        // Regular LLM routing should not consume tool/sandbox quotas
+        // This prevents exhausting unrelated quotas and disabling sandbox/tool routing
+        return null;
       default:
         return null;
     }
@@ -434,9 +436,29 @@ class PriorityRequestRouter {
         enabled: true,
         service: enhancedLLMService,
         healthCheck: async () => true, // Always available
-        canHandle: () => true, // Always accepts
+        // Do not handle tool/sandbox requests - let specialized endpoints handle those
+        canHandle: (req) => {
+          const requestType = detectRequestType(req.messages);
+          // Skip if this is a tool request and tools are enabled
+          if (requestType === 'tool' && (req.enableTools !== false || req.enableComposio !== false)) {
+            return false;
+          }
+          // Skip if this is a sandbox request and sandbox is enabled
+          if (requestType === 'sandbox' && req.enableSandbox !== false) {
+            return false;
+          }
+          return true;
+        },
         processRequest: async (req) => {
-          const response = await enhancedLLMService.generateResponse(this.convertToEnhancedLLMRequest(req));
+          // Convert request with all required fields including tool/sandbox flags
+          const requestType = detectRequestType(req.messages);
+          const enhancedRequest = this.convertToEnhancedLLMRequest(req);
+          // Ensure tool/sandbox flags are passed through
+          enhancedRequest.enableTools = req.enableTools ?? requestType === 'tool';
+          enhancedRequest.enableSandbox = req.enableSandbox ?? requestType === 'sandbox';
+          enhancedRequest.isSandboxCommand = requestType === 'sandbox';
+          
+          const response = await enhancedLLMService.generateResponse(enhancedRequest);
           return this.normalizeOriginalResponse(response);
         }
       },
@@ -611,6 +633,19 @@ class PriorityRequestRouter {
         // Process request
         console.log(`[Router] Routing to ${endpoint.name}`);
         const response = await endpoint.processRequest(request);
+
+        // ===========================================
+        // Validate response - treat unsuccessful payloads as failures
+        // ===========================================
+        // Endpoint handlers can return structured failure payloads (success: false or type: 'error')
+        // We must throw these as errors so fallback routing and circuit-breaker accounting work correctly
+        if (response?.success === false || response?.data?.type === 'error') {
+          const endpointError =
+            response?.data?.error ||
+            response?.content ||
+            'Endpoint returned unsuccessful response';
+          throw new Error(endpointError);
+        }
 
         // ===========================================
         // CIRCUIT BREAKER: Record SUCCESS
@@ -906,9 +941,11 @@ class PriorityRequestRouter {
 
   /**
    * Normalize Fast-Agent response
+   * CRITICAL: Preserve all fields including success/error/fallback for proper routing logic
    */
   private normalizeFastAgentResponse(response: FastAgentResponse): any {
     return {
+      success: response.success,
       content: response.content || '',
       data: {
         content: response.content || '',
@@ -918,7 +955,10 @@ class PriorityRequestRouter {
         qualityScore: response.qualityScore,
         processingSteps: response.processingSteps,
         reflectionResults: response.reflectionResults,
-        multiModalContent: response.multiModalContent
+        multiModalContent: response.multiModalContent,
+        // Preserve these fields for routing logic to distinguish real responses from fallbacks/errors
+        fallbackToOriginal: response.fallbackToOriginal,
+        error: response.error
       }
     };
   }
