@@ -4,7 +4,7 @@ import type React from "react";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 
 // Tabs that need taller height when opened
-const TALL_TABS = ['images', 'extras', 'shell'];
+const TALL_TABS = ['images', 'extras', 'shell', 'vnc'];
 const DEFAULT_TAB_HEIGHT = 'min-h-[200px]';
 const TALL_TAB_HEIGHT = 'min-h-[400px]';
 const EXPAND_TRANSITION = 'transition-all duration-300 ease-out';
@@ -78,6 +78,8 @@ import ArrowUp from "lucide-react/dist/esm/icons/arrow-up";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import BookOpen from "lucide-react/dist/esm/icons/book-open";
 import Archive from "lucide-react/dist/esm/icons/archive";
+import Monitor from "lucide-react/dist/esm/icons/monitor";
+import VNCConnectionTab from "./vnc-connection-tab";
 import type { LLMProvider } from "../lib/chat/llm-providers";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
@@ -286,8 +288,8 @@ interface InteractionPanelProps {
   availableProviders: LLMProvider[];
   onProviderChange: (provider: string, model: string) => void;
   hasCodeBlocks?: boolean;
-  activeTab?: "chat" | "extras" | "integrations" | "shell" | "images";
-  onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell" | "images") => void;
+  activeTab?: "chat" | "extras" | "integrations" | "shell" | "images" | "vnc";
+  onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell" | "images" | "vnc") => void;
   userId?: string;
   onAttachedFilesChange?: (files: Record<string, AttachedVirtualFile>) => void;
   filesystemScopePath?: string;
@@ -343,6 +345,12 @@ export default function InteractionPanel({
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Refs for touch event handlers (needed for proper cleanup)
+  const touchMoveHandler = useRef<((e: TouchEvent) => void) | null>(null);
+  const touchEndHandler = useRef<(() => void) | null>(null);
+  const dragStartY = useRef<number>(0);
+  const dragStartHeight = useRef<number>(0);
   
   // Track tall tab transitions for smooth animation
   const [prevTab, setPrevTab] = useState<string | null>(null);
@@ -1371,10 +1379,10 @@ export default function InteractionPanel({
           }
         }}
       >
-        {/* Drag Handle - Full width resize bar */}
+        {/* Drag Handle - Full width resize bar (also touch area for mobile) */}
         <div
           ref={dragHandleRef}
-          className={`w-full absolute top-0 left-0 right-0 h-[6px] transition-all duration-200 ${
+          className={`w-full absolute top-0 left-0 right-0 h-[20px] transition-all duration-200 touch-none ${
             isDragging 
               ? 'bg-white/40 cursor-ns-resize' 
               : 'bg-white/10 cursor-ns-resize sm:bg-transparent sm:cursor-default'
@@ -1384,13 +1392,13 @@ export default function InteractionPanel({
           onMouseDown={(e) => {
             setIsExpanded(false);
             setIsDragging(true);
-            const startY = e.clientY;
-            const startHeight = panelHeight;
+            dragStartY.current = e.clientY;
+            dragStartHeight.current = panelHeight;
 
             const handleMouseMove = (e: MouseEvent) => {
-              const delta = startY - e.clientY;
+              const delta = dragStartY.current - e.clientY;
               setPanelHeight(
-                Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), startHeight + delta)),
+                Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), dragStartHeight.current + delta)),
               );
             };
 
@@ -1407,25 +1415,33 @@ export default function InteractionPanel({
             // Mobile touch-and-hold drag support
             setIsExpanded(false);
             setIsDragging(true);
-            const startY = e.touches[0].clientY;
-            const startHeight = panelHeight;
+            dragStartY.current = e.touches[0].clientY;
+            dragStartHeight.current = panelHeight;
 
-            const handleTouchMove = (e: TouchEvent) => {
+            // Create touch move handler
+            touchMoveHandler.current = (e: TouchEvent) => {
               e.preventDefault(); // Prevent page scroll while dragging
-              const delta = startY - e.touches[0].clientY;
+              const delta = dragStartY.current - e.touches[0].clientY;
               setPanelHeight(
-                Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), startHeight + delta)),
+                Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), dragStartHeight.current + delta)),
               );
             };
 
-            const handleTouchEnd = () => {
+            // Create touch end handler
+            touchEndHandler.current = () => {
               setIsDragging(false);
-              document.removeEventListener("touchmove", handleTouchMove, { passive: false });
-              document.removeEventListener("touchend", handleTouchEnd);
+              if (touchMoveHandler.current) {
+                document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false });
+              }
+              if (touchEndHandler.current) {
+                document.removeEventListener("touchend", touchEndHandler.current);
+              }
+              touchMoveHandler.current = null;
+              touchEndHandler.current = null;
             };
 
-            document.addEventListener("touchmove", handleTouchMove, { passive: false });
-            document.addEventListener("touchend", handleTouchEnd);
+            document.addEventListener("touchmove", touchMoveHandler.current, { passive: false });
+            document.addEventListener("touchend", touchEndHandler.current);
           }}
           onMouseEnter={(e) => {
             if (!isDragging) {
@@ -1585,6 +1601,10 @@ export default function InteractionPanel({
                     <TabsTrigger value="shell" className="text-xs sm:text-sm">
                       <Terminal className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                       <span className="hidden sm:inline">Shell</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="vnc" className="text-xs sm:text-sm">
+                      <Monitor className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Remote</span>
                     </TabsTrigger>
                   </TabsList>
                 </div>
@@ -2063,8 +2083,8 @@ export default function InteractionPanel({
               </TabsContent>
 
               {/* Shell Tab Content - Taller height for terminal */}
-              <TabsContent 
-                value="shell" 
+              <TabsContent
+                value="shell"
                 className={`m-0 flex-1 overflow-auto ${activeTab === 'shell' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
               >
                 <Card className="bg-white/5 border-white/10 h-full">
@@ -2082,6 +2102,18 @@ export default function InteractionPanel({
                         <p className="text-white/40 text-xs mt-2">Type commands to execute in an isolated environment</p>
                       </div>
                     </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* VNC/Remote Tab Content - Taller height for remote desktop */}
+              <TabsContent
+                value="vnc"
+                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'vnc' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
+                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                  <CardContent className="pt-0 h-full flex flex-col min-h-0 overflow-hidden">
+                    <VNCConnectionTab />
                   </CardContent>
                 </Card>
               </TabsContent>
