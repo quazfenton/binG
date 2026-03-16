@@ -33,8 +33,8 @@
 
 // Import services for internal use
 import { oauthService } from '../auth/oauth-service';
-import { toolAuthManager } from '../services/tool-authorization-manager';
-import { toolContextManager, type OAuthCapabilityResult } from '../services/tool-context-manager';
+import { toolAuthManager } from '../tools/tool-authorization-manager';
+import { toolContextManager, type OAuthCapabilityResult } from '../tools/tool-context-manager';
 
 // Re-export types and services for convenience
 export type {
@@ -50,15 +50,15 @@ export type {
   OAuthListResult,
   OAuthRevokeResult,
   OAuthExecuteResult,
-} from '../services/tool-authorization-manager';
-export { toolAuthManager, ToolAuthorizationManager } from '../services/tool-authorization-manager';
+} from '../tools/tool-authorization-manager';
+export { toolAuthManager, ToolAuthorizationManager } from '../tools/tool-authorization-manager';
 
 export type {
   ToolDetectionResult,
   ToolProcessingResult,
   OAuthCapabilityResult,
-} from '../services/tool-context-manager';
-export { toolContextManager, ToolContextManager } from '../services/tool-context-manager';
+} from '../tools/tool-context-manager';
+export { toolContextManager, ToolContextManager } from '../tools/tool-context-manager';
 
 /**
  * OAuth Integration Class

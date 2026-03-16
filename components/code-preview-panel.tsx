@@ -43,7 +43,7 @@ import type { Message } from "../types/index";
 import { parsePatch, applyPatch } from "diff";
 import { useVirtualFilesystem } from "../hooks/use-virtual-filesystem";
 import { normalizeScopePath, stripWorkspacePrefixes } from "@/lib/virtual-filesystem/scope-utils";
-import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync-events";
+import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import { createRefreshScheduler } from "@/lib/virtual-filesystem/refresh-scheduler";
 import {
   parseCodeBlocksFromMessages,

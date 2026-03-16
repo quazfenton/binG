@@ -1,0 +1,42 @@
+# Dockerfile for MCP Server Service
+# Provides filesystem, memory, and other tools via MCP protocol
+
+FROM node:20-alpine
+
+# Install system dependencies
+RUN apk add --no-cache \
+    git \
+    python3 \
+    build-base
+
+# Enable corepack for pnpm
+RUN corepack enable
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package.json pnpm-lock.yaml ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy MCP library and service
+COPY lib/mcp/ ./lib/mcp/
+COPY services/mcp-server/ ./services/mcp-server/
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV MCP_PORT=8888
+ENV WORKSPACE_ROOT=/workspace
+ENV VFS_ROOT=/workspace/vfs
+
+# Expose MCP port
+EXPOSE 8888
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget -q --spider http://localhost:${MCP_PORT}/health || exit 1
+
+# Start MCP server
+CMD ["node", "services/mcp-server/index.js"]

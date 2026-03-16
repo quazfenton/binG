@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getToolManager } from '@/lib/tools';
-import { toolAuthManager } from '@/lib/services/tool-authorization-manager';
+import { toolAuthManager } from '@/lib/tools/tool-authorization-manager';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { checkRateLimitMiddleware } from '@/lib/middleware/rate-limit';
 import { cors, addCORSHeaders } from '@/lib/middleware/cors';

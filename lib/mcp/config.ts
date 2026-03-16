@@ -12,7 +12,7 @@
  * Uses Next.js built-in env loading - just ensure .env.mcp exists
  */
 
-import { mcpToolRegistry, MCPToolRegistry } from './tool-registry'
+import { mcpToolRegistry, MCPToolRegistry } from './registry'
 import { MCPClient } from './client'
 import type {
   MCPServerConfig,

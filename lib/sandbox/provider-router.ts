@@ -1,26 +1,28 @@
 /**
  * Phase 2: Provider Router
- * 
+ *
  * Intelligently selects optimal sandbox provider based on:
  * - Task type (code-interpreter, agent, fullstack, batch, computer-use)
  * - Resource requirements (CPU, memory, GPU)
  * - Persistence needs
  * - Quota availability
  * - Latency/cost optimization
- * 
+ * - Execution policy (local-safe, sandbox-required, sandbox-heavy, etc.)
+ *
  * Auto-prioritizes provider-specific services:
  * - E2B: AMP/Codex agents, desktop environments
  * - Daytona: Computer Use, LSP services, object storage
  * - CodeSandbox: Batch execution, task management, previews
  * - Sprites: Checkpoints, persistent services, auto-suspend
- * 
+ *
  * @see lib/sandbox/providers/ - Provider implementations
  * @see lib/services/quota-manager.ts - Quota tracking
- * 
+ * @see lib/sandbox/types.ts - Execution policies
+ *
  * @example
  * ```typescript
  * import { providerRouter } from '@/lib/sandbox/phase2-integration';
- * 
+ *
  * // Auto-select provider for task
  * const provider = await providerRouter.selectOptimalProvider({
  *   type: 'agent',
@@ -28,17 +30,17 @@
  *   expectedDuration: 'long',
  * });
  * // Returns: 'e2b' (best for agents with AMP/Codex)
- * 
- * // Get provider with service capabilities
- * const { provider, services } = await providerRouter.selectWithServices({
- *   type: 'fullstack-app',
- *   needsServices: ['preview', 'lsp', 'computer-use'],
- * });
+ *
+ * // Select provider by execution policy
+ * const provider = await providerRouter.selectByExecutionPolicy('sandbox-heavy');
+ * // Returns: 'daytona' (best for heavy workloads)
  * ```
  */
 
-import { quotaManager } from '../services/quota-manager';
+import { quotaManager } from '../management/quota-manager';
 import type { SandboxProviderType } from './providers';
+import type { ExecutionPolicy } from './types';
+import { getExecutionPolicyConfig, getPreferredProviders } from './types';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Phase2:ProviderRouter');
@@ -240,6 +242,15 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     persistenceSupport: false,
     gpuSupport: false,
   },
+  {
+    type: 'opensandbox-nullclaw' as SandboxProviderType,
+    services: ['pty', 'preview', 'agent'],
+    bestFor: ['agent', 'persistent-service', 'general'],
+    costTier: 'low',
+    latencyTier: 'medium',
+    persistenceSupport: false,
+    gpuSupport: false,
+  },
 ];
 
 /**
@@ -322,7 +333,65 @@ export class ProviderRouter {
   getProviderProfile(provider: SandboxProviderType): ProviderProfile | undefined {
     return PROVIDER_PROFILES.find(p => p.type === provider);
   }
-  
+
+  /**
+   * Select provider by execution policy
+   *
+   * Maps execution policies to optimal providers:
+   * - local-safe: No provider (local execution)
+   * - sandbox-required: daytona (fast, reliable)
+   * - sandbox-preferred: daytona → e2b
+   * - sandbox-heavy: daytona (full resources)
+   * - persistent-sandbox: sprites (auto-suspend, checkpoints)
+   * - desktop-required: daytona (computer use support)
+   */
+  async selectByExecutionPolicy(policy: ExecutionPolicy): Promise<{
+    provider: SandboxProviderType | 'local';
+    confidence: number;
+    reason: string;
+  }> {
+    const policyConfig = getExecutionPolicyConfig(policy);
+    const preferredProviders = getPreferredProviders(policy);
+
+    // Local-safe policy - no sandbox needed
+    if (policy === 'local-safe') {
+      return {
+        provider: 'local',
+        confidence: 1,
+        reason: 'Local execution - no cloud sandbox required',
+      };
+    }
+
+    // Try preferred providers in order
+    for (const providerType of preferredProviders) {
+      try {
+        const { getSandboxProvider } = await import('./providers');
+        await getSandboxProvider(providerType as SandboxProviderType);
+
+        const profile = this.getProviderProfile(providerType as SandboxProviderType);
+        return {
+          provider: providerType as SandboxProviderType,
+          confidence: 0.9,
+          reason: `Selected by execution policy ${policy}: ${profile?.bestFor.join(', ') || 'Optimal for policy'}`,
+        };
+      } catch (error: any) {
+        logger.warn(`Provider ${providerType} unavailable for policy ${policy}: ${error.message}`);
+        continue;
+      }
+    }
+
+    // Fallback: try any available provider
+    if (policyConfig.allowLocalFallback) {
+      return {
+        provider: 'local',
+        confidence: 0.5,
+        reason: `No cloud providers available for policy ${policy}, falling back to local execution`,
+      };
+    }
+
+    throw new Error(`No available providers for execution policy ${policy}`);
+  }
+
   /**
    * Evaluate all providers and return best match
    */
@@ -512,4 +581,17 @@ export function checkServiceSupport(
  */
 export function getProvidersForService(service: ProviderService): SandboxProviderType[] {
   return providerRouter.getProvidersForService(service);
+}
+
+/**
+ * Convenience function: Select provider by execution policy
+ */
+export async function selectProviderByExecutionPolicy(
+  policy: ExecutionPolicy
+): Promise<{
+  provider: SandboxProviderType | 'local';
+  confidence: number;
+  reason: string;
+}> {
+  return providerRouter.selectByExecutionPolicy(policy);
 }

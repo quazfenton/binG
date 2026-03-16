@@ -9,13 +9,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   WebSocketTerminalServer,
   webSocketTerminalServer,
-} from '@/lib/backend/websocket-terminal';
+} from '@/lib/terminal/websocket-terminal';
 import {
   SandboxManager,
   sandboxManager,
-} from '@/lib/backend/sandbox-manager';
-import { QuotaManager, quotaManager } from '@/lib/backend/quota';
-import { WorkspaceManager, workspaceManager } from '@/lib/backend/agent-workspace';
+} from '@/lib/sandbox/sandbox-manager';
+import { QuotaManager, quotaManager } from '@/lib/management/quota';
+import { WorkspaceManager, workspaceManager } from '@/lib/agent/agent-workspace';
 import { sandboxMetrics } from '@/lib/backend/metrics';
 
 // Mock LocalStorageBackend for testing

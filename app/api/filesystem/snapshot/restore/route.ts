@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
     });
 
     // Dynamic import - server-only module
-    const { vfsSyncBackService } = await import('@/lib/sandbox/vfs-sync-back');
+    const { vfsSyncBackService } = await import('@/lib/virtual-filesystem/sync/vfs-sync-back');
 
     // Sync sandbox to VFS (session ownership already verified above)
     const result = await vfsSyncBackService.syncSandboxToVFS(sessionId, {

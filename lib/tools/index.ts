@@ -16,7 +16,33 @@ export {
 export { ToolUtilities, createToolUtilities } from './tool-utilities';
 
 // ============================================================================
-// Unified Registry (Simplified - re-exports ToolIntegrationManager)
+// Tool Registry (Auto-Registration)
+// ============================================================================
+
+export {
+  ToolRegistry,
+  getToolRegistry,
+  type RegisteredTool,
+} from './registry';
+
+// ============================================================================
+// Bootstrap (Auto-Registration System)
+// ============================================================================
+
+export {
+  bootstrapToolSystem,
+  quickBootstrap,
+  getToolsSummary,
+  registerTool,
+  registerTools,
+  unregisterTool,
+  clearAllTools,
+  type BootstrapConfig,
+  type BootstrapResult,
+} from './bootstrap';
+
+// ============================================================================
+// Unified Registry (Backwards Compatibility)
 // ============================================================================
 // Note: UnifiedToolRegistry has been consolidated into ToolIntegrationManager
 // Use getToolManager() for the singleton instance
@@ -74,7 +100,7 @@ export {
   type ArcadeTool,
   type ArcadeConnection,
   type ArcadeExecutionResult,
-} from '../api/arcade-service';
+} from '../platforms/arcade-service';
 
 // Nango service
 export {
@@ -87,7 +113,7 @@ export {
   type NangoProxyRequest,
   type NangoProxyResponse,
   type NangoExecutionResult,
-} from '../api/nango-service';
+} from '../platforms/nango-service';
 
 // Smithery provider
 export {
@@ -97,7 +123,7 @@ export {
   type SmitheryServerConfig,
   type SmitheryTool,
   DEFAULT_SMITHERY_SERVERS,
-} from '../tool-integration/providers/smithery';
+} from './tool-integration/providers/smithery';
 
 // ============================================================================
 // Singleton Tool Manager
@@ -234,4 +260,4 @@ export {
   type ComposioServiceConfig,
   type ComposioToolRequest,
   type ComposioToolResponse,
-} from '../api/composio-service';
+} from '../platforms/composio-service';

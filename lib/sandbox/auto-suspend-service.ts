@@ -482,7 +482,7 @@ export class AutoSuspendService extends EventEmitter {
         
         // Trigger VFS sync if available
         try {
-          const { sandboxFilesystemSync } = await import('./sandbox-filesystem-sync');
+          const { sandboxFilesystemSync } = await import('../virtual-filesystem/sync/sandbox-filesystem-sync');
           // This will sync files from VFS to sandbox
           sandboxFilesystemSync.startSync(sandbox.id, sandbox.id);
           console.log(`[AutoSuspend] Started VFS sync for file restoration`);

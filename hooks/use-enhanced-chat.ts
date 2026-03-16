@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { streamingErrorHandler } from '@/lib/streaming/streaming-error-handler';
 import type { Message } from '@/types';
-import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync-events';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { buildApiHeaders } from '@/lib/utils';
 
 export interface UseChatOptions {

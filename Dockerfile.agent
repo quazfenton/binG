@@ -1,29 +1,49 @@
-# Dockerfile for Agent Gateway and Worker services
+# Dockerfile for Agent Services (Gateway, Worker, Planner, Background)
+# Multi-service image for V2 agent architecture
+
 FROM node:20-alpine
 
+# Install system dependencies
+RUN apk add --no-cache \
+    docker \
+    docker-cli-compose \
+    git \
+    python3 \
+    py3-pip \
+    build-base \
+    linux-headers \
+    curl
+
+# Enable corepack for pnpm
+RUN corepack enable
+
+# Set working directory
 WORKDIR /app
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
-
-# Copy package files from new location
-COPY lib/agent/services/agent-gateway/package.json lib/agent/services/agent-gateway/pnpm-lock.yaml* ./lib/agent/services/agent-gateway/
-COPY lib/agent/services/agent-worker/package.json lib/agent/services/agent-worker/pnpm-lock.yaml* ./lib/agent/services/agent-worker/
+# Copy package files
+COPY package.json pnpm-lock.yaml ./
 
 # Install dependencies
-WORKDIR /app/lib/agent/services/agent-gateway
 RUN pnpm install --frozen-lockfile
 
-WORKDIR /app/lib/agent/services/agent-worker
-RUN pnpm install --frozen-lockfile
+# Copy shared libraries
+COPY lib/ ./lib/
 
-# Copy source
-COPY lib/agent/services/agent-gateway ./lib/agent/services/agent-gateway
-COPY lib/agent/services/agent-worker ./lib/agent/services/agent-worker
-COPY lib ./lib
+# Copy service entry points
+COPY services/ ./services/
 
-WORKDIR /app
-
+# Set default environment variables
 ENV NODE_ENV=production
+ENV SERVICE_NAME=worker
+ENV PORT=3003
 
-CMD ["node", "lib/agent/services/agent-gateway/dist/index.js"]
+# Expose ports for all services
+EXPOSE 3002 3003 3004 3005 3006
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD wget -q --spider http://localhost:${PORT}/health || exit 1
+
+# Start the specified service
+# SERVICE_NAME can be: gateway, worker, planner, background
+CMD ["sh", "-c", "node services/${SERVICE_NAME}/index.js"]

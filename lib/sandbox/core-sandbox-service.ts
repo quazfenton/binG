@@ -1,10 +1,10 @@
 import type { WorkspaceSession, SandboxConfig, ToolResult, PreviewInfo } from './types'
 import { getSandboxProvider, type SandboxProvider, type SandboxHandle, type SandboxProviderType } from './providers'
-import { saveSession, updateSession, deleteSession } from './session-store'
+import { saveSession, updateSession, deleteSession } from '../storage/session-store'
 import { setupCacheVolumes } from './dep-cache'
 import { provisionBaseImage, warmPool } from './base-image'
 import { randomUUID } from 'crypto'
-import { quotaManager } from '../services/quota-manager'
+import { quotaManager } from '../management/quota-manager'
 import { createLogger } from '@/lib/utils/logger'
 
 const log = createLogger('SandboxService')

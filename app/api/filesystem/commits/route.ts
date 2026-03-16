@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner } from '@/lib/virtual-filesystem';
-import { ShadowCommitManager } from '@/lib/stateful-agent/commit/shadow-commit';
+import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { sessionIdSchema } from '@/lib/validation/schemas';
 
 export const runtime = 'nodejs';

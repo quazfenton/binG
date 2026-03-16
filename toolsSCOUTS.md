@@ -1,3 +1,520 @@
+You’ve already integrated an **unusually powerful stack** (Mastra, CrewAI, Vercel AI SDK, OpenAI/Mistral Agents, Composio, multiple sandboxes). The main weakness you identified is correct:
+
+> **Manual tool wiring does not scale.**
+
+You currently have a **flat tool list** (~40 tools). Advanced agent systems solve this using **tool orchestration layers** and **capability registries** instead of manual routing.
+
+Below is the **elite-level architecture used in advanced agent platforms**, adapted to your stack.
+
+---
+
+# Core Problem With Current Tool Handling
+
+Your current model:
+
+```
+OpenCode
+  ↓
+parse tool name
+  ↓
+executeTool(toolName)
+  ↓
+manual switch routing
+```
+
+Problems:
+
+* tool list becomes huge
+* no automatic capability discovery
+* agents choose tools poorly
+* difficult to extend
+* no permission system
+* no tool composition
+
+---
+
+# Elite Architecture: Capability-Based Tool System
+
+Instead of exposing raw tools like:
+
+```
+filesystem.read_file
+filesystem.write_file
+nullclaw_browse
+blaxel_codegenSearch
+```
+
+Expose **capabilities**.
+
+Example:
+
+```
+file.read
+file.write
+web.browse
+repo.search
+memory.store
+sandbox.execute
+automation.discord
+automation.telegram
+```
+
+Each capability maps to **multiple implementations**.
+
+Example:
+
+```
+repo.search
+ ├ blaxel
+ ├ ripgrep
+ └ embedding search
+```
+
+The system automatically selects the best one.
+
+---
+
+# Tool Layer Stack
+
+Modern systems use **four layers**.
+
+```
+Agent
+  ↓
+Capability Layer
+  ↓
+Tool Router
+  ↓
+Tool Providers
+```
+
+Example with your stack:
+
+```
+OpenCode
+  ↓
+Capability: repo.search
+  ↓
+Router
+  ↓
+Blaxel OR Ripgrep OR Embedding search
+```
+
+---
+
+# Recommended Tool Architecture
+
+```
+tools/
+   registry.ts
+   capabilities.ts
+   router.ts
+
+providers/
+   filesystem/
+   memory/
+   sandbox/
+   nullclaw/
+   blaxel/
+   composio/
+```
+
+---
+
+# Tool Registry
+
+Tools register themselves automatically.
+
+Example:
+
+```ts
+registerTool({
+  capability: "file.read",
+  name: "filesystem.read_file",
+  provider: "mcp",
+  handler: readFile
+})
+```
+
+Another tool:
+
+```ts
+registerTool({
+  capability: "repo.search",
+  name: "blaxel_codegenCodebaseSearch",
+  provider: "blaxel",
+  handler: searchCode
+})
+```
+
+Now the agent does NOT need to know the exact tool name.
+
+---
+
+# Capability Router
+
+Instead of:
+
+```ts
+executeTool("filesystem.read_file")
+```
+
+Agents request:
+
+```
+file.read
+```
+
+Router decides:
+
+```ts
+selectBestTool(capability)
+```
+
+Example logic:
+
+```
+repo.search
+   if repo indexed → embeddings
+   else → blaxel
+```
+
+---
+
+# Tool Discovery for Agents
+
+Instead of sending **40 tools to the LLM**, send **capabilities**.
+
+Example tool spec:
+
+```json
+{
+  "capability": "repo.search",
+  "description": "Search for code across the repository"
+}
+```
+
+This dramatically improves tool selection.
+
+---
+
+# Automatic Tool Composition
+
+Elite systems compose tools dynamically.
+
+Example request:
+
+```
+"Find the auth file and modify it"
+```
+
+System builds chain automatically:
+
+```
+repo.search
+ → file.read
+ → file.edit
+```
+
+---
+
+# Capability Graph
+
+Capabilities have dependencies.
+
+```
+repo.modify
+   ↓
+repo.search
+file.read
+file.write
+```
+
+Agents reason about **capabilities instead of tools**.
+
+---
+
+# Your Stack Mapped to Capabilities
+
+Filesystem:
+
+```
+file.read
+file.write
+file.list
+file.move
+file.search
+```
+
+Memory:
+
+```
+memory.store
+memory.query
+memory.graph
+```
+
+Nullclaw:
+
+```
+web.browse
+automation.discord
+automation.telegram
+automation.browser
+```
+
+Blaxel:
+
+```
+repo.search
+repo.grep
+repo.semantic_search
+```
+
+Sandboxes:
+
+```
+sandbox.execute
+sandbox.run_agent
+sandbox.run_repo_agent
+```
+
+---
+
+# Tool Provider Layer
+
+Providers implement capabilities.
+
+Example providers in your system:
+
+```
+MCP filesystem
+Nullclaw automation
+Blaxel code search
+E2B sandbox
+Daytona sandbox
+CodeSandbox batch
+Sprites checkpoints
+```
+
+Each registers capabilities.
+
+---
+
+# Smart Tool Selection
+
+Router chooses tool based on **context**.
+
+Example:
+
+```
+repo.search
+```
+
+Decision tree:
+
+```
+if repoIndexAvailable → embedding search
+else if blaxelAvailable → blaxel
+else → ripgrep
+```
+
+---
+
+# Sandboxed Execution Strategy
+
+Instead of exposing multiple sandbox tools:
+
+```
+e2b_runCodexAgent
+daytona_takeScreenshot
+codesandbox_runBatchJob
+```
+
+Expose capability:
+
+```
+sandbox.execute
+sandbox.browser
+sandbox.agent
+```
+
+Router decides provider:
+
+```
+heavy compute → E2B
+browser automation → Daytona
+batch jobs → CodeSandbox
+```
+
+---
+
+# Self-Reflection Layer
+
+Elite agents run **reflection loops**.
+
+Flow:
+
+```
+Plan
+Execute
+Evaluate
+Fix
+```
+
+Example:
+
+```
+Step 1 edit file
+Step 2 run tests
+Step 3 detect error
+Step 4 repair code
+```
+
+---
+
+# Multi-Agent Collaboration
+
+Your stack supports this already.
+
+Agents:
+
+```
+Planner Agent
+Coder Agent
+Search Agent
+Debugger Agent
+```
+
+CrewAI or Mastra can coordinate.
+
+Example flow:
+
+```
+User prompt
+ ↓
+Planner
+ ↓
+Coder Agent
+ ↓
+Debugger Agent
+ ↓
+Verifier Agent
+```
+
+---
+
+# Autonomous Repo Exploration
+
+Advanced coding agents explore repositories automatically.
+
+Background worker builds:
+
+```
+AST index
+symbol graph
+dependency graph
+embedding index
+```
+
+Then agents can query:
+
+```
+find_symbol("AuthProvider")
+```
+
+Instead of brute force file search.
+
+---
+
+# Memory System Upgrade
+
+Use **three memory layers**.
+
+Short-term:
+
+```
+current conversation
+```
+
+Session memory:
+
+```
+project context
+```
+
+Long-term:
+
+```
+cross-project knowledge
+```
+
+Your memory MCP can evolve into this.
+
+---
+
+# Observability (Important)
+
+Track:
+
+```
+tool latency
+tool success rate
+agent step count
+token usage
+failure loops
+```
+
+Tools like:
+
+* Langfuse
+* OpenTelemetry
+
+---
+
+# Ideal Execution Loop
+
+Elite loop looks like:
+
+```
+Planner
+  ↓
+Task Graph
+  ↓
+Executor Agent
+  ↓
+Capability Router
+  ↓
+Tool Providers
+  ↓
+Reflection
+  ↓
+Next task
+```
+
+---
+
+# How This Changes Your Code
+
+Current:
+
+```ts
+if(toolName === "filesystem.read_file")
+```
+
+New:
+
+```ts
+executeCapability("file.read")
+```
+
+Router handles the rest.
+
+---
+
+
+
+
 Expanding **Capability-based Tool Router** and **Unified Tool Registry** is exactly the right place to focus because those two pieces become the **core infrastructure layer for everything else** (OpenCode, MCP, Composio, sandboxes, automation, etc.).
 
 Right now your architecture has:

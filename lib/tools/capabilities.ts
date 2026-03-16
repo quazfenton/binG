@@ -1,11 +1,11 @@
 /**
  * Capability Layer - High-level tool capabilities
- * 
+ *
  * Instead of exposing raw tools like:
  *   - filesystem.read_file
  *   - nullclaw_browse
  *   - blaxel_codegenSearch
- * 
+ *
  * We expose semantic capabilities:
  *   - file.read
  *   - file.write
@@ -13,10 +13,10 @@
  *   - repo.search
  *   - sandbox.execute
  *   - automation.discord
- * 
+ *
  * Each capability can have multiple implementations (providers).
  * The router automatically selects the best one based on context.
- * 
+ *
  * Tool Layer Stack:
  *   Agent → Capability Layer → Router → Tool Providers
  */
@@ -28,6 +28,23 @@ import { z } from 'zod';
 // ============================================================================
 
 export type CapabilityCategory = 'file' | 'sandbox' | 'web' | 'repo' | 'memory' | 'automation';
+
+export type ToolLatency = 'low' | 'medium' | 'high';
+export type ToolCost = 'low' | 'medium' | 'high';
+
+/**
+ * Tool metadata for intelligent routing
+ */
+export interface ToolMetadata {
+  /** Expected latency: low (<100ms), medium (100ms-1s), high (>1s) */
+  latency?: ToolLatency;
+  /** Relative cost: low (free/cheap), medium, high (expensive API calls) */
+  cost?: ToolCost;
+  /** Historical reliability score (0.0 - 1.0) */
+  reliability?: number;
+  /** Tags for additional filtering */
+  tags?: string[];
+}
 
 export interface CapabilityDefinition {
   /** Unique capability identifier (e.g., 'file.read', 'web.browse') */
@@ -48,6 +65,10 @@ export interface CapabilityDefinition {
   requiresAuth?: boolean;
   /** Tags for discovery */
   tags: string[];
+  /** Tool metadata for intelligent routing (latency, cost, reliability) */
+  metadata?: ToolMetadata;
+  /** Required permissions for this capability */
+  permissions?: string[];
 }
 
 // ============================================================================
@@ -634,7 +655,7 @@ export const AUTOMATION_WORKFLOW_CAPABILITY: CapabilityDefinition = {
  * await executeCapability('integration.connect', { provider: 'gmail', userId }, context);
  * 
  * // New
- * import { toolAuthManager } from '@/lib/services/tool-authorization-manager';
+ * import { toolAuthManager } from '@/lib/tools/tool-authorization-manager';
  * const result = await toolAuthManager.initiateConnection(userId, 'gmail');
  * ```
  */
@@ -659,6 +680,12 @@ export const INTEGRATION_CONNECT_CAPABILITY: CapabilityDefinition = {
   providerPriority: ['composio', 'arcade', 'nango'],
   requiresAuth: false, // Connection initiation doesn't require OAuth, but using the tool does
   tags: ['integration', 'oauth', 'connection', 'auth', 'nango', 'composio', 'arcade', 'deprecated'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+  permissions: ['oauth:connect'],
 };
 
 /**
@@ -671,7 +698,7 @@ export const INTEGRATION_CONNECT_CAPABILITY: CapabilityDefinition = {
  * await executeCapability('integration.list_connections', { userId }, context);
  * 
  * // New
- * import { toolAuthManager } from '@/lib/services/tool-authorization-manager';
+ * import { toolAuthManager } from '@/lib/tools/tool-authorization-manager';
  * const result = await toolAuthManager.listConnections(userId);
  * ```
  */

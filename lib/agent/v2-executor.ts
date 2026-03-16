@@ -1,6 +1,8 @@
-import { agentSessionManager } from './agent-session-manager';
+import { agentSessionManager } from '../session/agent/agent-session-manager';
 import { createLogger } from '../utils/logger';
 import { normalizeToolInvocation, type ToolInvocation } from '../types/tool-invocation';
+import type { ExecutionPolicy } from '../sandbox/types';
+import { determineExecutionPolicy } from '../sandbox/types';
 
 const logger = createLogger('Agent:V2Executor');
 
@@ -11,6 +13,11 @@ export interface V2ExecuteOptions {
   context?: string;
   stream?: boolean;
   preferredAgent?: 'opencode' | 'nullclaw' | 'cli';
+  /**
+   * Execution policy for sandbox selection
+   * Auto-detected from task if not specified
+   */
+  executionPolicy?: ExecutionPolicy;
   cliCommand?: {
     command: string;
     args?: string[];
@@ -21,6 +28,14 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
   const taskWithContext = options.context
     ? `${options.context}\n\nTASK:\n${options.task}`
     : options.task;
+
+  // Auto-detect execution policy if not specified
+  const executionPolicy = options.executionPolicy || determineExecutionPolicy({
+    task: taskWithContext,
+    requiresBash: /bash|shell|command|execute|run\s+\w+/i.test(taskWithContext),
+    requiresFileWrite: /write|create|save|edit|modify|delete\s+(file|\w+\.\w+)/i.test(taskWithContext),
+    requiresBackend: /server|api|database|backend|express|fastapi|flask|django/i.test(taskWithContext),
+  });
 
   let result: any;
   try {
@@ -40,6 +55,7 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
         userId: options.userId,
         conversationId: options.conversationId,
         task: taskWithContext,
+        executionPolicy,
       });
     }
   } catch (error: any) {
@@ -48,13 +64,14 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
   }
 
   const session = agentSessionManager.getSession(options.userId, options.conversationId);
-  
+
   return {
     success: result.success ?? true,
     data: result,
     sessionId: session?.id,
     conversationId: session?.conversationId,
     workspacePath: session?.workspacePath,
+    executionPolicy: session?.executionPolicy,
   };
 }
 
@@ -71,10 +88,19 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           ? `${options.context}\n\nTASK:\n${options.task}`
           : options.task;
 
+        // Auto-detect execution policy if not specified
+        const executionPolicy = options.executionPolicy || determineExecutionPolicy({
+          task: taskWithContext,
+          requiresBash: /bash|shell|command|execute|run\s+\w+/i.test(taskWithContext),
+          requiresFileWrite: /write|create|save|edit|modify|delete\s+(file|\w+\.\w+)/i.test(taskWithContext),
+          requiresBackend: /server|api|database|backend|express|fastapi|flask|django/i.test(taskWithContext),
+        });
+
         // Send init event IMMEDIATELY to start the session - don't wait for anything
         controller.enqueue(encoder.encode(formatEvent('init', {
           agent: 'v2',
           conversationId: options.conversationId,
+          executionPolicy,
           timestamp: Date.now(),
         })));
 
@@ -121,11 +147,12 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           // Directly use OpenCode - it's already capable of handling prompts and file operations
           // Just translate outputs to our VFS system
           const { runOpenCodeDirect } = await import('./opencode-direct');
-          
+
           result = await runOpenCodeDirect({
             userId: options.userId,
             conversationId: options.conversationId,
             task: taskWithContext,
+            executionPolicy,
             onChunk: (chunk) => {
               controller.enqueue(encoder.encode(formatEvent('token', { content: chunk, timestamp: Date.now() })));
             },

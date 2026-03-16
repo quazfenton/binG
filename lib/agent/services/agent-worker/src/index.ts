@@ -1,12 +1,13 @@
 /**
- * Agent Worker - Runs OpenCode engine loop
- * 
+ * Agent Worker - Runs OpenCode engine loop with Git-Backed VFS
+ *
  * Features:
  * - Pull jobs from Redis queue
  * - Persistent OpenCode engine (no CLI spawn)
  * - Redis PubSub + Streams for events
  * - Checkpoint/resume for crash recovery
  * - Tool execution via MCP server
+ * - Git-backed VFS for automatic commits and rollbacks
  */
 
 import Redis from 'ioredis';
@@ -25,6 +26,7 @@ const NULLCLAW_URL = process.env.NULLCLAW_URL || 'http://localhost:3000';
 const OPENCODE_MODEL = process.env.OPENCODE_MODEL || 'opencode/minimax-m2.5-free';
 const OPENCODE_MAX_STEPS = parseInt(process.env.OPENCODE_MAX_STEPS || '15');
 const WORKER_CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY || '4');
+const GIT_VFS_AUTO_COMMIT = process.env.GIT_VFS_AUTO_COMMIT !== 'false';
 
 // Redis clients
 const redis = new Redis(REDIS_URL);
@@ -139,9 +141,34 @@ async function runOpenCode(job: AgentJob): Promise<void> {
     await publishEvent({
       type: 'init',
       sessionId,
-      data: { agent: 'opencode', sessionId, timestamp: Date.now() },
+      data: { 
+        agent: 'opencode', 
+        sessionId, 
+        timestamp: Date.now(),
+        gitVfsEnabled: GIT_VFS_AUTO_COMMIT,
+      },
       timestamp: Date.now(),
     });
+
+    // Initialize git-backed VFS for this session
+    let gitVFS: any = null;
+    if (GIT_VFS_AUTO_COMMIT) {
+      try {
+        // Dynamic import to avoid circular dependencies
+        const { virtualFilesystem } = await import('../../../../../lib/virtual-filesystem/virtual-filesystem-service');
+        gitVFS = virtualFilesystem.getGitBackedVFS(userId, {
+          autoCommit: true,
+          sessionId,
+          enableShadowCommits: true,
+        });
+        logger.info('Git-backed VFS initialized', { sessionId, userId });
+      } catch (vfsError: any) {
+        logger.warn('Failed to initialize git-backed VFS, continuing without', { error: vfsError.message });
+      }
+    }
+
+    // Track file changes for git commit
+    const fileChanges: Array<{ path: string; content: string; operation: string }> = [];
 
     // Run with persistent engine (no CLI spawn!)
     await opencodeEngine.run({
@@ -174,6 +201,22 @@ async function runOpenCode(job: AgentJob): Promise<void> {
             // Execute tool and get result
             const toolResult = await executeTool(toolName, toolArgs);
 
+            // Track file changes for git commit
+            if (gitVFS && toolName && (toolName.includes('write') || toolName.includes('edit') || toolName.includes('create'))) {
+              const filePath = toolArgs.path || toolArgs.file;
+              const content = toolArgs.content;
+              if (filePath && content) {
+                fileChanges.push({ path: filePath, content, operation: toolName });
+                // Write to git-backed VFS (auto-commits)
+                try {
+                  await gitVFS.writeFile(userId, filePath, content);
+                  logger.debug('File written to git-backed VFS', { path: filePath, sessionId });
+                } catch (vfsError: any) {
+                  logger.warn('Failed to write to git-backed VFS', { path: filePath, error: vfsError.message });
+                }
+              }
+            }
+
             await publishEvent({
               type: 'tool:result',
               sessionId,
@@ -183,15 +226,53 @@ async function runOpenCode(job: AgentJob): Promise<void> {
             break;
 
           case 'done':
+            // Commit all file changes as single commit
+            if (gitVFS && fileChanges.length > 0) {
+              try {
+                await gitVFS.commitChanges(userId, `Agent completed: ${prompt.substring(0, 50)}...`);
+                logger.info('Git commit created for file changes', { count: fileChanges.length, sessionId });
+                
+                await publishEvent({
+                  type: 'git:commit',
+                  sessionId,
+                  data: { 
+                    filesChanged: fileChanges.length,
+                    paths: fileChanges.map(fc => fc.path),
+                    timestamp: Date.now(),
+                  },
+                  timestamp: Date.now(),
+                });
+              } catch (commitError: any) {
+                logger.warn('Failed to commit changes to git', { error: commitError.message });
+              }
+            }
+
             await publishEvent({
               type: 'done',
               sessionId,
-              data: { response: event.data.response, timestamp: Date.now() },
+              data: { 
+                response: event.data.response, 
+                timestamp: Date.now(),
+                filesChanged: fileChanges.length,
+              },
               timestamp: Date.now(),
             });
             break;
 
           case 'error':
+            // Rollback on error if git VFS enabled
+            if (gitVFS && GIT_VFS_AUTO_COMMIT) {
+              try {
+                const state = await gitVFS.getState(userId);
+                if (state.version > 0) {
+                  await gitVFS.rollback(userId, state.version - 1);
+                  logger.info('Rolled back changes due to error', { sessionId, version: state.version });
+                }
+              } catch (rollbackError: any) {
+                logger.warn('Failed to rollback', { error: rollbackError.message });
+              }
+            }
+
             await publishEvent({
               type: 'error',
               sessionId,

@@ -15,7 +15,7 @@ import TerminalPanel from "@/components/terminal/TerminalPanel";
 import { useChatHistory } from "@/hooks/use-chat-history";
 import { voiceService } from "@/lib/voice/voice-service";
 import { toast } from "sonner";
-import type { LLMProvider } from "@/lib/api/llm-providers";
+import type { LLMProvider } from "@/lib/chat/llm-providers";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
 import { setCurrentMode } from "@/lib/mode-manager";
@@ -30,7 +30,7 @@ import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from
 import type { AttachedVirtualFile } from "@/hooks/use-virtual-filesystem";
 import { parsePatch, applyPatch } from "diff";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
-import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync-events";
+import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 
 /**
  * Render the main conversation interface with chat, filesystem attachments, providers/models selection,
