@@ -1,0 +1,1606 @@
+/**
+ * Response Router - Consolidated Response Handling & Request Routing
+ * 
+ * Merges:
+ * - lib/tools/unified-response-handler.ts (response formatting, tool extraction)
+ * - lib/api/priority-request-router.ts (priority-based routing, circuit breaker)
+ * 
+ * Provides unified interface for:
+ * - Request routing through priority chain
+ * - Response formatting and normalization
+ * - Tool invocation extraction
+ * - Circuit breaker protection
+ * - Quota management
+ * - Streaming event generation
+ * 
+ * @example
+ * ```typescript
+ * import { responseRouter } from '@/lib/api/response-router'
+ * 
+ * const result = await responseRouter.routeAndFormat({
+ *   messages: [{ role: 'user', content: 'Hello' }],
+ *   provider: 'openai',
+ *   model: 'gpt-4o',
+ *   userId: 'user_123',
+ *   enableTools: true,
+ * })
+ * 
+ * // result contains unified response with tool invocations, commands, etc.
+ * ```
+ */
+
+import { createLogger } from '../../utils/logger'
+import { normalizeToolInvocations, type ToolInvocation } from '../../types/tool-invocation'
+import { quotaManager } from '../../management/quota-manager'
+import { detectRequestType } from '../../utils/request-type-detector'
+
+// Import router services
+import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from './fast-agent-service'
+import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from './n8n-agent-service'
+import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from './custom-fallback-service'
+import { enhancedLLMService, type EnhancedLLMRequest } from './enhanced-llm-service'
+import { initializeComposioService, getComposioService, type ComposioToolRequest } from '../../platforms/composio-service'
+
+// Import tools
+import { getToolManager, getUnifiedToolRegistry, getToolDiscoveryService, getToolErrorHandler } from '../../tools'
+import { toolAuthManager } from '../../tools/tool-authorization-manager'
+import { sandboxBridge } from '../../sandbox'
+
+// Import state for session management
+import { sessionManager } from '../../session/session-manager'
+
+// Import V2 gateway client for containerized OpenCode
+import {
+  submitJobToGateway,
+  submitJobToRedisQueue,
+  waitForJobCompletion,
+  checkGatewayHealth,
+  type V2JobRequest,
+} from './v2-gateway-client'
+
+const logger = createLogger('API:ResponseRouter')
+
+// ============================================================================
+// Type Definitions
+// ============================================================================
+
+export interface LLMMessage {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  toolCalls?: Array<{
+    id: string
+    name: string
+    arguments: Record<string, any>
+  }>
+  toolResults?: Array<{
+    toolCallId: string
+    result: any
+  }>
+}
+
+export interface RouterRequest {
+  messages: LLMMessage[]
+  provider: string
+  model: string
+  temperature?: number
+  maxTokens?: number
+  stream?: boolean
+  apiKeys?: Record<string, string>
+  requestId?: string
+  userId?: string
+  enableTools?: boolean
+  enableSandbox?: boolean
+  enableComposio?: boolean
+  conversationId?: string
+}
+
+export interface RouterResponse {
+  success: boolean
+  content?: string
+  data?: any
+  source: string
+  priority: number
+  fallbackChain?: string[]
+  metadata?: Record<string, any>
+}
+
+export interface UnifiedResponse {
+  success: boolean
+  content: string
+  source: string
+  priority: number
+  data: {
+    content: string
+    usage?: {
+      promptTokens: number
+      completionTokens: number
+      totalTokens: number
+    }
+    model?: string
+    provider?: string
+    toolCalls?: any[]
+    toolInvocations?: ToolInvocation[]
+    files?: any[]
+    reasoning?: string
+    chainedAgents?: string[]
+    qualityScore?: number
+    processingSteps?: any[]
+    reflectionResults?: any[]
+    multiModalContent?: any[]
+    iterations?: number
+    classifications?: Record<string, any>
+    optimizations?: Record<string, any>
+    isFallback?: boolean
+    fallbackReason?: string
+    requiresAuth?: boolean
+    authUrl?: string
+    toolName?: string
+    authProvider?: string
+    composioMcp?: {
+      url?: string
+      headers?: Record<string, string>
+    }
+    messageMetadata?: Record<string, any>
+  }
+  commands?: {
+    request_files?: string[]
+    write_diffs?: Array<{ path: string; diff: string }>
+  }
+  metadata?: {
+    duration?: number
+    routedThrough?: string
+    fallbackChain?: string[]
+    triedEndpoints?: number
+    actualProvider?: string
+    actualModel?: string
+    messageMetadata?: Record<string, any>
+    timestamp: string
+  }
+}
+
+// Endpoint statistics
+interface EndpointStats {
+  successes: number
+  failures: number
+  lastSuccessTime: number
+  lastFailureTime: number
+}
+
+// ============================================================================
+// Circuit Breaker Implementation
+// ============================================================================
+
+type CircuitState = 'closed' | 'open' | 'half-open'
+
+interface CircuitBreakerConfig {
+  failureThreshold: number
+  recoveryTimeoutMs: number
+  failureWindowMs: number
+}
+
+interface CircuitBreakerState {
+  state: CircuitState
+  failures: number
+  successes: number
+  lastFailureTime: number
+  lastSuccessTime: number
+  failureTimestamps: number[]
+}
+
+const DEFAULT_CIRCUIT_BREAKER_CONFIG: CircuitBreakerConfig = {
+  failureThreshold: 5,
+  recoveryTimeoutMs: 30000,
+  failureWindowMs: 60000,
+}
+
+class CircuitBreaker {
+  private states = new Map<string, CircuitBreakerState>()
+  private readonly config: CircuitBreakerConfig
+
+  constructor(config?: Partial<CircuitBreakerConfig>) {
+    this.config = { ...DEFAULT_CIRCUIT_BREAKER_CONFIG, ...config }
+  }
+
+  private getState(endpoint: string): CircuitBreakerState {
+    if (!this.states.has(endpoint)) {
+      this.states.set(endpoint, {
+        state: 'closed',
+        failures: 0,
+        successes: 0,
+        lastFailureTime: 0,
+        lastSuccessTime: 0,
+        failureTimestamps: [],
+      })
+    }
+    return this.states.get(endpoint)!
+  }
+
+  shouldSkip(endpoint: string): boolean {
+    const state = this.getState(endpoint)
+    const now = Date.now()
+
+    if (state.state === 'closed') {
+      return false
+    }
+
+    if (state.state === 'open') {
+      if (now - state.lastFailureTime >= this.config.recoveryTimeoutMs) {
+        state.state = 'half-open'
+        return false
+      }
+      return true
+    }
+
+    return false
+  }
+
+  recordSuccess(endpoint: string): void {
+    const state = this.getState(endpoint)
+    const now = Date.now()
+
+    state.successes++
+    state.lastSuccessTime = now
+    state.failures = 0
+    state.failureTimestamps = []
+
+    if (state.state === 'half-open') {
+      state.state = 'closed'
+    }
+  }
+
+  recordFailure(endpoint: string): void {
+    const state = this.getState(endpoint)
+    const now = Date.now()
+
+    state.failures++
+    state.lastFailureTime = now
+    state.failureTimestamps.push(now)
+    state.failureTimestamps = state.failureTimestamps.filter(
+      t => t > now - this.config.failureWindowMs
+    )
+
+    if (state.failureTimestamps.length >= this.config.failureThreshold) {
+      state.state = 'open'
+    }
+  }
+
+  getStats(endpoint: string): {
+    state: CircuitState
+    failures: number
+    successes: number
+    failureRate: number
+  } {
+    const state = this.getState(endpoint)
+    const total = state.failures + state.successes
+
+    return {
+      state: state.state,
+      failures: state.failures,
+      successes: state.successes,
+      failureRate: total > 0 ? state.failures / total : 0,
+    }
+  }
+
+  reset(endpoint: string): void {
+    this.states.set(endpoint, {
+      state: 'closed',
+      failures: 0,
+      successes: 0,
+      lastFailureTime: 0,
+      lastSuccessTime: 0,
+      failureTimestamps: [],
+    })
+  }
+
+  getAllStates(): Map<string, CircuitBreakerState> {
+    return new Map(this.states)
+  }
+}
+
+// ============================================================================
+// Response Router Class
+// ============================================================================
+
+export class ResponseRouter {
+  private circuitBreaker: CircuitBreaker
+  private composioService: ReturnType<typeof initializeComposioService> | null
+  private endpointStats: Map<string, EndpointStats>
+
+  constructor() {
+    this.circuitBreaker = new CircuitBreaker()
+    this.composioService = initializeComposioService()
+    this.endpointStats = new Map()
+  }
+
+  /**
+   * Update endpoint statistics
+   */
+  private updateStats(endpoint: string, success: boolean): void {
+    const stats = this.endpointStats.get(endpoint) || {
+      successes: 0,
+      failures: 0,
+      lastSuccessTime: 0,
+      lastFailureTime: 0,
+    }
+
+    if (success) {
+      stats.successes++
+      stats.lastSuccessTime = Date.now()
+    } else {
+      stats.failures++
+      stats.lastFailureTime = Date.now()
+    }
+
+    this.endpointStats.set(endpoint, stats)
+  }
+
+  /**
+   * Get endpoint statistics
+   */
+  getEndpointStats(endpoint: string): EndpointStats | undefined {
+    return this.endpointStats.get(endpoint)
+  }
+
+  /**
+   * Get all endpoint statistics
+   */
+  getAllEndpointStats(): Map<string, EndpointStats> {
+    return new Map(this.endpointStats)
+  }
+
+  /**
+   * Route request through priority chain and format response
+   */
+  async routeAndFormat(request: RouterRequest): Promise<UnifiedResponse> {
+    const startTime = Date.now()
+    const requestId = request.requestId || `req_${Date.now()}`
+
+    try {
+      // Route request
+      const routerResponse = await this.routeRequest(request)
+
+      // Format response
+      const unifiedResponse = this.formatResponse(routerResponse, requestId)
+
+      // Add timing metadata
+      unifiedResponse.metadata.duration = Date.now() - startTime
+
+      return unifiedResponse
+    } catch (error: any) {
+      logger.error('Request routing failed:', error.message)
+
+      return {
+        success: false,
+        content: error.message || 'Request failed',
+        source: 'error',
+        priority: 999,
+        data: {
+          content: error.message || 'Request failed',
+        },
+        metadata: {
+          duration: Date.now() - startTime,
+          timestamp: new Date().toISOString(),
+        },
+      }
+    }
+  }
+
+  /**
+   * Route request through priority chain
+   */
+  private async routeRequest(request: RouterRequest): Promise<RouterResponse> {
+    const errors: Array<{ endpoint: string; error: Error }> = []
+    const fallbackChain: string[] = []
+    const requestType = detectRequestType(request.messages)
+
+    // Define endpoint priority chain
+    const endpoints = [
+      {
+        name: 'fast-agent',
+        priority: 0,
+        enabled: process.env.FAST_AGENT_ENABLED === 'true',
+        service: fastAgentService,
+        healthCheck: () => fastAgentService.healthCheck(),
+        canHandle: (req: RouterRequest) => true,
+        processRequest: async (req: RouterRequest) => {
+          const response = await fastAgentService.processRequest({
+            messages: req.messages,
+            provider: req.provider,
+            model: req.model,
+            temperature: req.temperature,
+            maxTokens: req.maxTokens,
+            stream: req.stream,
+            userId: req.userId,
+            requestId: req.requestId,
+          } as FastAgentRequest)
+          return this.normalizeFastAgentResponse(response)
+        },
+      },
+      {
+        name: 'original-system',
+        priority: 1,
+        enabled: true,
+        service: enhancedLLMService,
+        healthCheck: async () => true,
+        canHandle: () => true,
+        processRequest: async (req: RouterRequest) => {
+          const response = await enhancedLLMService.generateResponse({
+            messages: req.messages,
+            model: req.model,
+            temperature: req.temperature,
+            maxTokens: req.maxTokens,
+            stream: req.stream,
+          } as EnhancedLLMRequest)
+          return this.normalizeOriginalResponse(response)
+        },
+      },
+      {
+        name: 'n8n-agents',
+        priority: 2,
+        enabled: process.env.N8N_ENABLED === 'true',
+        service: n8nAgentService,
+        healthCheck: () => n8nAgentService.healthCheck(),
+        canHandle: (req: RouterRequest) => true,
+        processRequest: async (req: RouterRequest) => {
+          const response = await n8nAgentService.processRequest({
+            messages: req.messages,
+            userId: req.userId,
+            requestId: req.requestId,
+          } as N8nAgentRequest)
+          return this.normalizeN8nResponse(response)
+        },
+      },
+      {
+        name: 'custom-fallback',
+        priority: 3,
+        enabled: process.env.CUSTOM_FALLBACK_ENABLED === 'true',
+        service: customFallbackService,
+        healthCheck: () => customFallbackService.healthCheck(),
+        canHandle: () => true,
+        processRequest: async (req: RouterRequest) => {
+          const response = await customFallbackService.processRequest({
+            messages: req.messages,
+            provider: req.provider,
+            model: req.model,
+          } as CustomFallbackRequest)
+          return this.normalizeCustomFallbackResponse(response)
+        },
+      },
+      {
+        name: 'tool-execution',
+        priority: 4,
+        enabled: req.enableTools !== false && !!req.userId,
+        service: null,
+        healthCheck: async () => {
+          try {
+            const toolManager = getToolManager()
+            return !!toolManager && !!(process.env.ARCADE_API_KEY || process.env.NANGO_SECRET_KEY)
+          } catch {
+            return false
+          }
+        },
+        canHandle: (req: RouterRequest) => req.enableTools !== false && !!req.userId,
+        processRequest: async (req: RouterRequest) => this.processToolRequest(req, true),
+      },
+      {
+        name: 'composio-tools',
+        priority: 5,
+        enabled: !!this.composioService && process.env.COMPOSIO_ENABLED !== 'false' && !!req.userId,
+        service: this.composioService,
+        healthCheck: async () => this.composioService?.healthCheck() ?? false,
+        canHandle: (req: RouterRequest) => !!req.userId && req.enableComposio !== false,
+        processRequest: async (req: RouterRequest) => this.processComposioRequest(req),
+      },
+      {
+        name: 'sandbox-agent',
+        priority: 6,
+        enabled: req.enableSandbox !== false && !!req.userId,
+        service: sandboxBridge,
+        healthCheck: async () => {
+          const sandboxProvider = process.env.SANDBOX_PROVIDER || 'daytona'
+          return !!process.env[`${sandboxProvider.toUpperCase()}_API_KEY`]
+        },
+        canHandle: (req: RouterRequest) => req.enableSandbox !== false && !!req.userId,
+        processRequest: async (req: RouterRequest) => this.processSandboxRequest(req),
+      },
+      {
+        name: 'v2-opencode-gateway',
+        priority: 7,
+        enabled: process.env.V2_AGENT_ENABLED === 'true' || process.env.OPENCODE_CONTAINERIZED === 'true',
+        service: null,
+        healthCheck: async () => {
+          const health = await checkGatewayHealth()
+          return health.healthy
+        },
+        canHandle: (req: RouterRequest) => {
+          // V2 is best for code/agent tasks
+          const requestType = detectRequestType(req.messages)
+          return requestType === 'sandbox' || requestType === 'tool' || req.enableTools === true
+        },
+        processRequest: async (req: RouterRequest) => this.processV2GatewayRequest(req),
+      },
+    ]
+
+    // Filter enabled endpoints and sort by priority
+    const enabledEndpoints = endpoints
+      .filter(e => {
+        // For endpoints with dynamic enabled check, evaluate it
+        if (typeof e.enabled === 'function') {
+          return e.enabled(request)
+        }
+        return e.enabled
+      })
+      .sort((a, b) => a.priority - b.priority)
+
+    // Route through priority chain
+    for (const endpoint of enabledEndpoints) {
+
+      // Check circuit breaker
+      if (this.circuitBreaker.shouldSkip(endpoint.name)) {
+        fallbackChain.push(`${endpoint.name} (circuit breaker open)`)
+        continue
+      }
+
+      // Check if endpoint can handle request
+      if (!endpoint.canHandle(request)) {
+        continue
+      }
+
+      // Health check (skip for original-system)
+      if (endpoint.name !== 'original-system') {
+        const isHealthy = await endpoint.healthCheck()
+        if (!isHealthy) {
+          fallbackChain.push(`${endpoint.name} (unhealthy)`)
+          continue
+        }
+      }
+
+      try {
+        logger.debug(`Routing to ${endpoint.name}`)
+        const response = await endpoint.processRequest(request)
+
+        // Record success
+        this.circuitBreaker.recordSuccess(endpoint.name)
+        this.updateStats(endpoint.name, true)
+
+        // Record quota usage
+        const quotaProvider = this.mapEndpointToProvider(endpoint.name)
+        if (quotaProvider) {
+          quotaManager.recordUsage(quotaProvider)
+        }
+
+        return {
+          success: true,
+          ...response,
+          source: endpoint.name,
+          priority: endpoint.priority,
+          fallbackChain: fallbackChain.length > 0 ? fallbackChain : undefined,
+        }
+      } catch (error: any) {
+        logger.error(`${endpoint.name} failed:`, error.message)
+
+        // Record failure
+        this.circuitBreaker.recordFailure(endpoint.name)
+        this.updateStats(endpoint.name, false)
+
+        errors.push({ endpoint: endpoint.name, error })
+        fallbackChain.push(`${endpoint.name} (error: ${error.message.substring(0, 50)})`)
+      }
+    }
+
+    // All endpoints failed
+    return {
+      success: false,
+      content: 'All endpoints failed',
+      source: 'emergency-fallback',
+      priority: 999,
+      fallbackChain,
+      metadata: {
+        errors: errors.map(e => ({ endpoint: e.endpoint, error: e.error.message })),
+        allEndpointsFailed: true,
+      },
+    }
+  }
+
+  /**
+   * Format response through unified handler
+   */
+  private formatResponse(response: RouterResponse, requestId: string): UnifiedResponse {
+    const content = this.extractContent(response)
+    const commands = this.extractCommands(content)
+    const toolInvocations = this.extractToolInvocations(response)
+    const toolName = response.data?.toolName
+    const authProvider = this.inferProviderFromToolName(toolName)
+    const requiresAuth = !!response.data?.requiresAuth
+
+    return {
+      success: response.success !== false,
+      content,
+      source: response.source || 'unknown',
+      priority: response.priority || 999,
+      data: {
+        content,
+        usage: this.calculateUsage(response),
+        model: response.metadata?.actualModel || response.data?.model || response.model,
+        provider: response.metadata?.actualProvider || response.data?.provider || response.provider,
+        toolCalls: response.data?.toolCalls,
+        toolInvocations,
+        files: response.data?.files,
+        chainedAgents: response.data?.chainedAgents,
+        qualityScore: response.data?.qualityScore,
+        processingSteps: response.data?.processingSteps,
+        reflectionResults: response.data?.reflectionResults,
+        multiModalContent: response.data?.multiModalContent,
+        iterations: response.data?.iterations,
+        classifications: response.data?.classifications,
+        optimizations: response.data?.optimizations,
+        isFallback: response.data?.isFallback,
+        fallbackReason: response.data?.fallbackReason,
+        requiresAuth,
+        authUrl: response.data?.authUrl,
+        toolName,
+        authProvider,
+        composioMcp: response.data?.composioMcp || response.metadata?.composioMcp,
+        messageMetadata: response.data?.messageMetadata,
+        reasoning: this.extractReasoning(response),
+      },
+      commands,
+      metadata: {
+        duration: response.metadata?.duration,
+        routedThrough: response.metadata?.routedThrough || response.source,
+        fallbackChain: response.fallbackChain || response.metadata?.fallbackChain,
+        triedEndpoints: response.metadata?.triedEndpoints,
+        actualProvider: response.metadata?.actualProvider,
+        actualModel: response.metadata?.actualModel,
+        timestamp: new Date().toISOString(),
+        messageMetadata: requiresAuth
+          ? {
+              requiresAuth: true,
+              authUrl: response.data?.authUrl,
+              toolName,
+              provider: authProvider,
+            }
+          : undefined,
+      },
+    }
+  }
+
+  /**
+   * Extract content from response
+   */
+  private extractContent(response: any): string {
+    if (typeof response.content === 'string') {
+      return response.content
+    }
+
+    if (response.data?.content) {
+      return response.data.content
+    }
+
+    if (response.choices?.[0]?.message?.content) {
+      return response.choices[0].message.content
+    }
+
+    return ''
+  }
+
+  /**
+   * Extract commands from content
+   */
+  private extractCommands(content: string): { request_files?: string[]; write_diffs?: Array<{ path: string; diff: string }> } | undefined {
+    try {
+      const match = content.match(/=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/)
+      if (!match) return undefined
+
+      const block = match[1]
+
+      const reqMatch = block.match(/request_files:\s*\[(.*?)\]/s)
+      const request_files = reqMatch
+        ? JSON.parse(`[${reqMatch[1]}]`.replace(/([a-zA-Z0-9_./-]+)(?=\s*[\],])/g, '"$1"'))
+        : []
+
+      let write_diffs: Array<{ path: string; diff: string }> = []
+      const diffsMatch = block.match(/write_diffs:\s*\[([\s\S]*?)\]/)
+      if (diffsMatch) {
+        const items = diffsMatch[1]
+          .split(/},/)
+          .map(s => (s.endsWith('}') ? s : s + '}'))
+          .map(s => s.trim())
+          .filter(Boolean)
+
+        write_diffs = items.map(raw => {
+          const pathMatch = raw.match(/path:\s*"([^"]+)"/)
+          const diffMatch = raw.match(/diff:\s*"([\s\S]*)"/)
+          return {
+            path: pathMatch?.[1] || '',
+            diff: (diffMatch?.[1] || '').replace(/\\n/g, '\n'),
+          }
+        })
+      }
+
+      return { request_files, write_diffs }
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Extract tool invocations from response
+   */
+  private extractToolInvocations(response: any): ToolInvocation[] {
+    return normalizeToolInvocations(
+      response.data?.toolInvocations ||
+      response.messageMetadata?.toolInvocations ||
+      response.metadata?.toolInvocations ||
+      response.data?.toolResults
+    )
+  }
+
+  /**
+   * Extract reasoning from response
+   */
+  private extractReasoning(response: any): string | undefined {
+    const explicitReasoning =
+      response.data?.reasoning ||
+      response.data?.reasoningTrace ||
+      response.metadata?.reasoning ||
+      response.metadata?.reasoningTrace
+
+    if (Array.isArray(explicitReasoning)) {
+      const joined = explicitReasoning.filter(Boolean).join('\n')
+      return joined || undefined
+    }
+    if (typeof explicitReasoning === 'string' && explicitReasoning.trim()) {
+      return explicitReasoning.trim()
+    }
+
+    const content = this.extractContent(response)
+    const thinkRegex = /<think>([\s\S]*?)<\/think>/gi
+    const captures: string[] = []
+    let match: RegExpExecArray | null
+    while ((match = thinkRegex.exec(content)) !== null) {
+      if (match[1]?.trim()) captures.push(match[1].trim())
+    }
+    return captures.length > 0 ? captures.join('\n') : undefined
+  }
+
+  /**
+   * Calculate usage statistics
+   */
+  private calculateUsage(response: any): { promptTokens: number; completionTokens: number; totalTokens: number } {
+    if (response.usage || response.data?.usage) {
+      const usage = response.usage || response.data.usage
+      return {
+        promptTokens: usage.promptTokens || usage.prompt_tokens || 0,
+        completionTokens: usage.completionTokens || usage.completion_tokens || 0,
+        totalTokens: usage.totalTokens || usage.total_tokens || 0,
+      }
+    }
+
+    const content = this.extractContent(response)
+    const estimatedTokens = Math.ceil(content.length / 4)
+
+    return {
+      promptTokens: 0,
+      completionTokens: estimatedTokens,
+      totalTokens: estimatedTokens,
+    }
+  }
+
+  /**
+   * Infer provider from tool name
+   */
+  private inferProviderFromToolName(toolName?: string): string | undefined {
+    if (!toolName || typeof toolName !== 'string') return undefined
+    const normalized = toolName.toLowerCase()
+    if (normalized.startsWith('gmail.') || normalized.startsWith('google')) return 'google'
+    if (normalized.startsWith('github.')) return 'github'
+    if (normalized.startsWith('slack.')) return 'slack'
+    if (normalized.startsWith('notion.')) return 'notion'
+    if (normalized.startsWith('discord.')) return 'discord'
+    if (normalized.startsWith('twitter.') || normalized.startsWith('x.')) return 'twitter'
+    if (normalized.startsWith('spotify.')) return 'spotify'
+    if (normalized.startsWith('twilio.')) return 'twilio'
+    return normalized.split('.')[0]
+  }
+
+  /**
+   * Map endpoint name to quota provider key
+   */
+  private mapEndpointToProvider(endpointName: string): string | null {
+    switch (endpointName) {
+      case 'fast-agent':
+        return process.env.SANDBOX_PROVIDER || 'daytona'
+      case 'n8n-agents':
+        return 'nango'
+      case 'custom-fallback':
+      case 'original-system':
+        return 'microsandbox'
+      default:
+        return null
+    }
+  }
+
+  /**
+   * Normalize FastAgent response
+   */
+  private normalizeFastAgentResponse(response: FastAgentResponse): RouterResponse {
+    return {
+      success: response.success,
+      content: response.content,
+      data: response.data,
+      source: 'fast-agent',
+      priority: 0,
+    }
+  }
+
+  /**
+   * Normalize original system response
+   */
+  private normalizeOriginalResponse(response: any): RouterResponse {
+    return {
+      success: true,
+      content: response.content || response.choices?.[0]?.message?.content,
+      data: {
+        usage: response.usage,
+        model: response.model,
+        provider: 'original-system',
+      },
+      source: 'original-system',
+      priority: 1,
+    }
+  }
+
+  /**
+   * Normalize N8N response
+   */
+  private normalizeN8nResponse(response: N8nAgentResponse): RouterResponse {
+    return {
+      success: response.success,
+      content: response.content,
+      data: response.data,
+      source: 'n8n-agents',
+      priority: 2,
+    }
+  }
+
+  /**
+   * Normalize custom fallback response
+   */
+  private normalizeCustomFallbackResponse(response: CustomFallbackResponse): RouterResponse {
+    return {
+      success: response.success,
+      content: response.content,
+      data: response.data,
+      source: 'custom-fallback',
+      priority: 3,
+    }
+  }
+
+  /**
+   * Build canonical tool invocation record
+   */
+  private buildCanonicalToolInvocationRecord(params: {
+    toolName: string
+    args?: Record<string, unknown>
+    result?: unknown
+    provider?: string
+    sourceSystem: string
+    requestId?: string
+    conversationId?: string
+  }): Record<string, unknown> {
+    return {
+      toolName: params.toolName,
+      args: params.args ?? {},
+      result: params.result,
+      provider: params.provider,
+      sourceSystem: params.sourceSystem,
+      requestId: params.requestId,
+      conversationId: params.conversationId,
+    }
+  }
+
+  /**
+   * Build canonical tool invocations
+   */
+  private buildCanonicalToolInvocations(params: {
+    toolName: string
+    args?: Record<string, unknown>
+    result?: unknown
+    provider?: string
+    sourceSystem: string
+    requestId?: string
+    conversationId?: string
+  }): ToolInvocation[] {
+    return normalizeToolInvocations([this.buildCanonicalToolInvocationRecord(params)])
+  }
+
+  /**
+   * Detect tool intent from messages
+   */
+  private detectToolIntent(messages: LLMMessage[]): { detectedTool: string | null; toolInput: any; error?: string } {
+    const lastMessage = messages[messages.length - 1]
+    const content = typeof lastMessage?.content === 'string' ? lastMessage.content : ''
+
+    // Look for tool call patterns
+    const toolCallMatch = content.match(/<tool\s+name=["']([^"']+)["']\s*>([\s\S]*?)<\/tool>/)
+    if (toolCallMatch) {
+      try {
+        return {
+          detectedTool: toolCallMatch[1],
+          toolInput: JSON.parse(toolCallMatch[2] || '{}'),
+        }
+      } catch {
+        return {
+          detectedTool: toolCallMatch[1],
+          toolInput: {},
+          error: 'Invalid tool arguments JSON',
+        }
+      }
+    }
+
+    // Check for function call patterns
+    if (lastMessage?.toolCalls?.length > 0) {
+      const toolCall = lastMessage.toolCalls[0]
+      return {
+        detectedTool: toolCall.name || null,
+        toolInput: toolCall.arguments || {},
+      }
+    }
+
+    return { detectedTool: null, toolInput: {} }
+  }
+
+  /**
+   * Process tool request via unified registry
+   */
+  private async processToolRequest(request: RouterRequest, allowFallbackToComposio: boolean = true): Promise<any> {
+    if (!request.userId) {
+      return {
+        content: 'User ID required for tool access',
+        data: {
+          source: 'tool-execution',
+          requiresAuth: true,
+          error: 'User ID not provided',
+        },
+      }
+    }
+
+    try {
+      const unifiedRegistry = getUnifiedToolRegistry()
+      const toolDiscovery = getToolDiscoveryService()
+      const errorHandler = getToolErrorHandler()
+
+      // Detect tool intent from messages
+      const detectionResult = this.detectToolIntent(request.messages)
+
+      if (!detectionResult.detectedTool) {
+        // No tool detected, fall through to composio
+        if (allowFallbackToComposio) {
+          return await this.processComposioRequestInternal(request, false)
+        }
+        return {
+          content: 'No tool intent detected',
+          data: { source: 'tool-execution', type: 'no_intent' },
+        }
+      }
+
+      // Check authorization
+      const isAuthorized = await toolAuthManager.isAuthorized(request.userId, detectionResult.detectedTool)
+      if (!isAuthorized) {
+        const provider = toolAuthManager.getRequiredProvider(detectionResult.detectedTool)
+        if (provider) {
+          const authUrl = toolAuthManager.getAuthorizationUrl(provider)
+          return {
+            content: `I need authorization to use ${detectionResult.detectedTool}. Please connect your account to proceed.`,
+            data: {
+              source: 'tool-execution',
+              requiresAuth: true,
+              authUrl,
+              toolName: detectionResult.detectedTool,
+              type: 'auth_required',
+            },
+          }
+        }
+      }
+
+      // Execute via unified registry
+      const result = await unifiedRegistry.executeTool(
+        detectionResult.detectedTool,
+        detectionResult.toolInput,
+        {
+          userId: request.userId,
+          conversationId: request.requestId || `conv_${Date.now()}`,
+          metadata: { sessionId: `session_${request.requestId}` },
+        },
+      )
+
+      if (result.success) {
+        // Record usage for statistics
+        toolDiscovery.recordUsage(detectionResult.detectedTool, true, 0)
+
+        return {
+          content: result.output ? JSON.stringify(result.output) : `Tool ${detectionResult.detectedTool} executed successfully`,
+          data: {
+            source: 'tool-execution',
+            toolCalls: [{ name: detectionResult.detectedTool, arguments: detectionResult.toolInput }],
+            toolResults: [{ name: detectionResult.detectedTool, result: result.output }],
+            toolInvocations: this.buildCanonicalToolInvocations({
+              toolName: detectionResult.detectedTool,
+              args: detectionResult.toolInput,
+              result: result.output,
+              provider: result.provider ?? toolAuthManager.getRequiredProvider(detectionResult.detectedTool) ?? 'unknown',
+              sourceSystem: 'response-router',
+              requestId: request.requestId,
+              conversationId: request.requestId,
+            }),
+            type: 'tool_execution',
+          },
+        }
+      }
+
+      // Handle errors with unified error handler
+      const toolError = errorHandler.handleError(
+        new Error(result.error || 'Tool execution failed'),
+        detectionResult.detectedTool,
+        detectionResult.toolInput,
+      )
+
+      // Record failed usage
+      toolDiscovery.recordUsage(detectionResult.detectedTool, false, 0)
+
+      // If auth required, return auth URL
+      if (toolError.category === 'authentication' || result.authRequired) {
+        const provider = toolAuthManager.getRequiredProvider(detectionResult.detectedTool)
+        const authUrl = provider ? toolAuthManager.getAuthorizationUrl(provider) : result.authUrl
+        return {
+          content: `Authorization required for ${detectionResult.detectedTool}. Please connect your account.`,
+          data: {
+            source: 'tool-execution',
+            requiresAuth: true,
+            authUrl,
+            toolName: detectionResult.detectedTool,
+            type: 'auth_required',
+          },
+        }
+      }
+
+      // Fallback to Composio if unified registry failed
+      if (allowFallbackToComposio) {
+        logger.info('Unified registry failed, falling back to Composio')
+        const fallback = await this.processComposioRequestInternal(request, false)
+        if (fallback?.data?.type === 'auth_required' || fallback?.data?.type === 'composio_execution') {
+          return fallback
+        }
+      }
+
+      // Return error with hints
+      return {
+        content: `Tool execution failed: ${toolError.message}\n\nHints:\n${toolError.hints?.join('\n') || 'Please try again'}`,
+        data: {
+          source: 'tool-execution',
+          error: toolError.message,
+          category: toolError.category,
+          retryable: toolError.retryable,
+          hints: toolError.hints,
+          type: 'error',
+        },
+      }
+    } catch (error) {
+      logger.error('Tool processing error:', error)
+      const errorHandler = getToolErrorHandler()
+      const toolError = errorHandler.handleError(error, 'unknown')
+
+      if (allowFallbackToComposio) {
+        logger.info('Tool execution error, falling back to Composio')
+        const fallback = await this.processComposioRequestInternal(request, false)
+        if (fallback?.data?.type === 'auth_required' || fallback?.data?.type === 'composio_execution') {
+          return fallback
+        }
+      }
+
+      return {
+        content: `Tool execution failed: ${toolError.message}`,
+        data: {
+          source: 'tool-execution',
+          error: toolError.message,
+          category: toolError.category,
+          hints: toolError.hints,
+          type: 'error',
+        },
+      }
+    }
+  }
+
+  /**
+   * Process Composio tool request with 800+ toolkits
+   */
+  private async processComposioRequest(request: RouterRequest): Promise<any> {
+    return this.processComposioRequestInternal(request, true)
+  }
+
+  private async processComposioRequestInternal(request: RouterRequest, allowFallbackToToolExecution: boolean): Promise<any> {
+    if (!this.composioService) {
+      return {
+        content: 'Composio service not available',
+        data: {
+          source: 'composio-tools',
+          error: 'Service not initialized',
+        },
+      }
+    }
+
+    if (!request.userId) {
+      return {
+        content: 'User ID required for Composio tool access',
+        data: {
+          source: 'composio-tools',
+          requiresAuth: true,
+          error: 'User ID not provided',
+        },
+      }
+    }
+
+    try {
+      const composioRequest: ComposioToolRequest = {
+        messages: request.messages,
+        userId: request.userId,
+        stream: request.stream,
+        requestId: request.requestId || `comp_${Date.now()}`,
+        enableAllTools: true,
+      }
+
+      const result = await this.composioService.processToolRequest(composioRequest)
+
+      // Handle authentication required
+      if (result.requiresAuth) {
+        const toolkitName = result.authToolkit || 'the requested service'
+        const inferredProvider = toolkitName.toLowerCase().includes('gmail') || toolkitName.toLowerCase().includes('google')
+          ? 'google'
+          : toolkitName.toLowerCase()
+        const authUrl = result.authUrl || toolAuthManager.getAuthorizationUrl(inferredProvider)
+        return {
+          content: result.content || `I need authorization to use ${toolkitName} through Composio. Please connect your account to proceed.`,
+          data: {
+            source: 'composio-tools',
+            requiresAuth: true,
+            authUrl,
+            toolkit: toolkitName,
+            provider: inferredProvider,
+            toolName: toolkitName,
+            type: 'auth_required',
+            composioSessionId: result.metadata?.sessionId,
+            composioMcp: result.metadata?.mcp,
+          },
+        }
+      }
+
+      const genericNoOutput =
+        !result.content ||
+        result.content.trim().length === 0 ||
+        result.content.includes('Tool request was processed but returned no text output') ||
+        (result.content.includes('Tool request was processed (') && result.content.includes('but returned no text output'))
+
+      // If Composio did not produce actionable output, fallback to deterministic tool pipeline
+      if (genericNoOutput && allowFallbackToToolExecution) {
+        logger.info('Composio no-output, falling back to tool-execution')
+        const fallback = await this.processToolRequest(request, false)
+        if (fallback?.data?.type === 'auth_required' || fallback?.data?.type === 'tool_execution') {
+          return fallback
+        }
+      }
+
+      // Success response
+      const canonicalToolInvocations = Array.isArray(result.toolCalls)
+        ? normalizeToolInvocations(
+            result.toolCalls.map((toolCall: any, index: number) =>
+              this.buildCanonicalToolInvocationRecord({
+                toolName: toolCall?.name ?? toolCall?.toolName ?? `composio-tool-${index + 1}`,
+                args: toolCall?.arguments ?? toolCall?.args ?? toolCall?.input ?? {},
+                result: toolCall?.result ?? toolCall?.output,
+                provider: 'composio',
+                sourceSystem: 'response-router',
+                requestId: request.requestId,
+                conversationId: result.metadata?.sessionId ?? request.requestId,
+              }),
+            ),
+          )
+        : []
+
+      return {
+        content: result.content || 'Tool request completed.',
+        data: {
+          source: 'composio-tools',
+          type: 'composio_execution',
+          toolCalls: result.toolCalls,
+          toolInvocations: canonicalToolInvocations,
+          connectedAccounts: result.connectedAccounts,
+          composioSessionId: result.metadata?.sessionId,
+          composioMcp: result.metadata?.mcp,
+          toolsUsed: result.metadata?.toolsUsed,
+          executionTime: result.metadata?.executionTime,
+        },
+      }
+    } catch (error: any) {
+      logger.error('Composio processing error:', error)
+      return {
+        content: `I encountered an error while processing your request with Composio: ${error.message}`,
+        data: {
+          source: 'composio-tools',
+          error: error.message,
+          type: 'error',
+        },
+      }
+    }
+  }
+
+  /**
+   * Process sandbox request
+   */
+  private async processSandboxRequest(request: RouterRequest): Promise<any> {
+    if (!request.userId) {
+      return {
+        content: 'User authentication required for sandbox access',
+        data: {
+          source: 'sandbox-agent',
+          requiresAuth: true,
+          error: 'User ID not provided',
+        },
+      }
+    }
+
+    try {
+      const session = await sessionManager.getOrCreateSession(request.userId, request.conversationId || request.requestId || 'default')
+
+      if (!session.sandboxHandle) {
+        return {
+          content: 'Sandbox not available',
+          data: {
+            source: 'sandbox-agent',
+            error: 'No sandbox handle',
+          },
+        }
+      }
+
+      // Execute command in sandbox
+      const lastMessage = request.messages[request.messages.length - 1]
+      const command = typeof lastMessage?.content === 'string' ? lastMessage.content : ''
+
+      const result = await session.sandboxHandle.executeCommand(command, session.workspacePath)
+
+      return {
+        content: result.output || 'Command executed',
+        data: {
+          source: 'sandbox-agent',
+          type: 'sandbox_execution',
+          exitCode: result.exitCode,
+          success: result.success,
+        },
+      }
+    } catch (error: any) {
+      logger.error('Sandbox processing error:', error)
+      return {
+        content: `Sandbox execution failed: ${error.message}`,
+        data: {
+          source: 'sandbox-agent',
+          error: error.message,
+          type: 'error',
+        },
+      }
+    }
+  }
+
+  /**
+   * Process V2 Gateway request (containerized OpenCode)
+   */
+  private async processV2GatewayRequest(request: RouterRequest): Promise<any> {
+    if (!request.userId) {
+      return {
+        content: 'User authentication required for V2 agent',
+        data: {
+          source: 'v2-opencode-gateway',
+          requiresAuth: true,
+          error: 'User ID not provided',
+        },
+      }
+    }
+
+    try {
+      // Extract last user message as task
+      const lastMessage = request.messages[request.messages.length - 1]
+      const task = typeof lastMessage?.content === 'string' ? lastMessage.content : JSON.stringify(lastMessage?.content || '')
+
+      // Build context from conversation history
+      const context = request.messages
+        .filter(m => m.role !== 'system')
+        .map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
+        .join('\n')
+
+      // Submit job to V2 gateway
+      const v2Request: V2JobRequest = {
+        userId: request.userId,
+        conversationId: request.conversationId || request.requestId || 'default',
+        prompt: task,
+        context,
+        model: request.model,
+      }
+
+      // Try gateway first, fallback to Redis queue
+      let jobResponse
+      try {
+        jobResponse = await submitJobToGateway(v2Request)
+        logger.info('Job submitted to V2 gateway', {
+          jobId: jobResponse.jobId,
+          sessionId: jobResponse.sessionId,
+        })
+      } catch (gatewayError: any) {
+        logger.warn('Gateway unavailable, falling back to Redis queue:', gatewayError.message)
+        jobResponse = await submitJobToRedisQueue(v2Request)
+        logger.info('Job submitted to Redis queue', {
+          jobId: jobResponse.jobId,
+          sessionId: jobResponse.sessionId,
+        })
+      }
+
+      // Wait for job completion (with timeout)
+      const timeoutMs = request.stream ? 30000 : 120000 // Shorter timeout for streaming
+      const result = await waitForJobCompletion(
+        jobResponse.jobId,
+        jobResponse.sessionId,
+        timeoutMs
+      )
+
+      // Extract response from job result
+      const content = result.result?.response || result.result?.content || 'Task completed'
+      const toolInvocations = result.result?.toolInvocations || []
+      const steps = result.result?.steps || []
+
+      return {
+        content,
+        data: {
+          source: 'v2-opencode-gateway',
+          type: 'v2_execution',
+          jobId: jobResponse.jobId,
+          sessionId: jobResponse.sessionId,
+          toolInvocations,
+          processingSteps: steps,
+          agent: 'opencode',
+          model: request.model,
+        },
+      }
+    } catch (error: any) {
+      logger.error('V2 gateway processing error:', error)
+      return {
+        content: `V2 agent execution failed: ${error.message}`,
+        data: {
+          source: 'v2-opencode-gateway',
+          error: error.message,
+          type: 'error',
+          fallbackToV1: true,
+        },
+      }
+    }
+  }
+
+  /**
+   * Create streaming events from unified response
+   */
+  createStreamingEvents(response: UnifiedResponse, requestId: string): string[] {
+    const events: string[] = []
+    const encoder = new TextEncoder()
+
+    // Init event
+    events.push(
+      `data: ${JSON.stringify({
+        requestId,
+        startTime: Date.now(),
+        provider: response.data.provider,
+        model: response.data.model,
+        source: response.source,
+        priority: response.priority,
+      })}\n\n`
+    )
+
+    // Processing steps if available
+    if (response.data.processingSteps?.length) {
+      response.data.processingSteps.forEach((step, index) => {
+        events.push(
+          `data: ${JSON.stringify({
+            requestId,
+            stepIndex: index,
+            ...step,
+          })}\n\n`
+        )
+      })
+    }
+
+    // Tool invocation lifecycle
+    if (response.data.toolInvocations?.length) {
+      response.data.toolInvocations.forEach((invocation: any) => {
+        events.push(
+          `data: ${JSON.stringify({
+            requestId,
+            ...invocation,
+          })}\n\n`
+        )
+      })
+    }
+
+    // Reasoning trace
+    if (response.data.reasoning) {
+      events.push(
+        `data: ${JSON.stringify({
+          requestId,
+          reasoning: response.data.reasoning,
+        })}\n\n`
+      )
+    }
+
+    // Tool calls if available
+    if (response.data.toolCalls?.length) {
+      events.push(
+        `data: ${JSON.stringify({
+          requestId,
+          toolCalls: response.data.toolCalls,
+        })}\n\n`
+      )
+    }
+
+    // Content tokens (chunked)
+    const content = response.content
+    const chunks = this.chunkContent(content, 30)
+    chunks.forEach((chunk, index) => {
+      events.push(
+        `data: ${JSON.stringify({
+          type: 'token',
+          content: chunk,
+          requestId,
+          timestamp: Date.now(),
+          offset: index * 30,
+        })}\n\n`
+      )
+    })
+
+    // Files if available
+    if (response.data.files?.length) {
+      events.push(
+        `data: ${JSON.stringify({
+          requestId,
+          files: response.data.files,
+        })}\n\n`
+      )
+    }
+
+    // Reflection results if available
+    if (response.data.reflectionResults?.length) {
+      events.push(
+        `data: ${JSON.stringify({
+          requestId,
+          reflections: response.data.reflectionResults,
+          qualityScore: response.data.qualityScore,
+        })}\n\n`
+      )
+    }
+
+    // Multimodal content if available
+    if (response.data.multiModalContent?.length) {
+      response.data.multiModalContent.forEach((item, index) => {
+        events.push(
+          `data: ${JSON.stringify({
+            requestId,
+            index,
+            ...item,
+          })}\n\n`
+        )
+      })
+    }
+
+    // Commands if available
+    if (response.commands) {
+      events.push(
+        `data: ${JSON.stringify({
+          requestId,
+          commands: response.commands,
+        })}\n\n`
+      )
+    }
+
+    // Done event
+    events.push(
+      `data: ${JSON.stringify({
+        requestId,
+        success: response.success,
+        totalTokens: response.data.usage?.totalTokens || content.length,
+        qualityScore: response.data.qualityScore,
+        source: response.source,
+        metadata: response.metadata,
+        messageMetadata: response.data.messageMetadata || response.metadata?.messageMetadata,
+      })}\n\n`
+    )
+
+    return events
+  }
+
+  /**
+   * Chunk content for streaming
+   */
+  private chunkContent(content: string, chunkSize: number): string[] {
+    const chunks: string[] = []
+    let offset = 0
+
+    while (offset < content.length) {
+      let endOffset = Math.min(offset + chunkSize, content.length)
+
+      if (endOffset < content.length) {
+        const nextSpace = content.indexOf(' ', endOffset)
+        const nextNewline = content.indexOf('\n', endOffset)
+
+        if (nextSpace !== -1 && nextSpace - endOffset < 20) {
+          endOffset = nextSpace
+        } else if (nextNewline !== -1 && nextNewline - endOffset < 30) {
+          endOffset = nextNewline + 1
+        }
+      }
+
+      chunks.push(content.slice(offset, endOffset))
+      offset = endOffset
+    }
+
+    return chunks
+  }
+
+  /**
+   * Get circuit breaker statistics
+   */
+  getCircuitBreakerStats(): Map<string, any> {
+    const stats = new Map<string, any>()
+    for (const [endpoint, state] of this.circuitBreaker.getAllStates()) {
+      stats.set(endpoint, this.circuitBreaker.getStats(endpoint))
+    }
+    return stats
+  }
+
+  /**
+   * Reset circuit breaker for endpoint
+   */
+  resetCircuitBreaker(endpoint: string): void {
+    this.circuitBreaker.reset(endpoint)
+  }
+
+  /**
+   * Get comprehensive router statistics
+   */
+  getRouterStats(): {
+    circuitBreaker: Map<string, any>
+    endpoints: Map<string, EndpointStats>
+  } {
+    return {
+      circuitBreaker: this.getCircuitBreakerStats(),
+      endpoints: this.getAllEndpointStats(),
+    }
+  }
+}
+
+// ============================================================================
+// Singleton Instance
+// ============================================================================
+
+export const responseRouter = new ResponseRouter()
+
+// ============================================================================
+// Convenience Functions
+// ============================================================================
+
+/**
+ * @deprecated Use responseRouter.routeAndFormat()
+ */
+export async function routeAndFormatRequest(request: RouterRequest): Promise<UnifiedResponse> {
+  return responseRouter.routeAndFormat(request)
+}
+
+/**
+ * @deprecated Use responseRouter.createStreamingEvents()
+ */
+export function createStreamingEvents(response: UnifiedResponse, requestId: string): string[] {
+  return responseRouter.createStreamingEvents(response, requestId)
+}

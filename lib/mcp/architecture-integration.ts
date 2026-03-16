@@ -7,14 +7,15 @@
  * This module provides unified MCP tool access for both architectures
  */
 
-import { mcpToolRegistry } from './tool-registry'
+import { mcpToolRegistry } from './registry'
 import { parseMCPServerConfigs, initializeMCP, shutdownMCP, getMCPSettings, isMCPAvailable, getMCPToolCount } from './config'
 import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } from './mcporter-integration'
 import { createLogger } from '../utils/logger'
 import { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
-import { ArcadeService, getArcadeService } from '../api/arcade-service'
+import { ArcadeService, getArcadeService } from '../platforms/arcade-service'
 import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
 import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '../agent/nullclaw-integration'
+import { standaloneGitTools } from '../tools/git-tools'
 
 // Blaxel codegen tool definitions for LLM tool calling
 const getBlaxelCodegenToolDefinitions = (): Array<{
@@ -516,7 +517,24 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
     }
   }> = process.env.COMPOSIO_API_KEY && userId ? await getComposioMCPTools(userId) : []
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools]
+  // NEW: Include Git tools (shadow commits, VFS sync)
+  const gitTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = Object.entries(standaloneGitTools).map(([name, toolDef]) => ({
+    type: 'function' as const,
+    function: {
+      name: `git_${name}`,
+      description: toolDef.description || `Git operation: ${name}`,
+      parameters: toolDef.parameters as any,
+    },
+  }))
+
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools]
 
   if (tools.length === 0) {
     logger.debug('MCP not available - no tools to return')

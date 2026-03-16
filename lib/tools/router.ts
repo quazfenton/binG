@@ -18,10 +18,10 @@ import {
   ALL_CAPABILITIES,
   type CapabilityCategory,
 } from './capabilities';
-import type { ToolExecutionContext, ToolExecutionResult } from '../tool-integration/types';
+import type { ToolExecutionContext, ToolExecutionResult } from './tool-integration/types';
 import { getToolManager } from './index';
-import { getArcadeService } from '../api/arcade-service';
-import { getNangoService } from '../api/nango-service';
+import { getArcadeService } from '../platforms/arcade-service';
+import { getNangoService } from '../platforms/nango-service';
 
 const logger = createLogger('Tools:CapabilityRouter');
 
@@ -397,8 +397,8 @@ class OpenCodeV2Provider implements CapabilityProvider {
     input: any,
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
-    const { OpencodeV2Provider } = await import('../sandbox/providers/opencode-v2-provider');
-    const { agentSessionManager } = await import('../agent/agent-session-manager');
+    const { OpencodeV2Provider } = await import('../sandbox/spawn/opencode-cli');
+    const { agentSessionManager } = await import('../session/agent/agent-session-manager');
 
     try {
       // Get or create session
@@ -779,8 +779,8 @@ class GitHelperProvider implements CapabilityProvider {
     input: any,
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
-    const { agentSessionManager } = await import('../agent/agent-session-manager');
-    const { E2BGitHelper } = await import('../sandbox/providers/e2b-git-helper');
+    const { agentSessionManager } = await import('../session/agent/agent-session-manager');
+    const { E2BGitHelper } = await import('../virtual-filesystem/e2b-git-helper');
 
     try {
       // Get session with sandbox
@@ -1175,8 +1175,8 @@ class OAuthIntegrationProvider implements CapabilityProvider {
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
     try {
-      const { getNangoService } = await import('../api/nango-service');
-      const { getArcadeService } = await import('../api/arcade-service');
+      const { getNangoService } = await import('../platforms/nango-service');
+      const { getArcadeService } = await import('../platforms/arcade-service');
       const { getToolManager } = await import('../tools');
 
       switch (capabilityId) {
@@ -1185,7 +1185,7 @@ class OAuthIntegrationProvider implements CapabilityProvider {
           const { provider, userId, redirectUrl, scopes } = input;
 
           // Use tool authorization manager to get auth URL
-          const { toolAuthManager } = await import('../services/tool-authorization-manager');
+          const { toolAuthManager } = await import('../tools/tool-authorization-manager');
           const authUrl = toolAuthManager.getAuthorizationUrl(provider);
           
           return {
@@ -1402,28 +1402,68 @@ class CapabilityRouter {
    * For async checks, the provider will be validated during execution
    */
   private selectProvider(capability: CapabilityDefinition): CapabilityProvider | null {
+    const availableProviders: Array<{ provider: CapabilityProvider; score: number }> = [];
+
     for (const providerId of capability.providerPriority) {
       const provider = this.providers.get(providerId);
       if (!provider) continue;
 
       const available = provider.isAvailable();
-      
+
       // Handle both sync and async availability checks
-      if (available === true) {
-        return provider;
-      }
-      
-      // For Promise<boolean>, we return the provider and let execute() handle async validation
-      if (available instanceof Promise) {
-        // Store for async validation during execute - return provider tentatively
-        return provider;
+      if (available === true || available instanceof Promise) {
+        // Score this provider based on metadata
+        const score = this.scoreProvider(providerId, capability);
+        availableProviders.push({ provider, score });
       }
     }
+
+    // Return highest scored provider
+    if (availableProviders.length > 0) {
+      availableProviders.sort((a, b) => b.score - a.score);
+      return availableProviders[0].provider;
+    }
+
     return null;
   }
 
   /**
+   * Score a provider based on capability metadata
+   * Higher score = better choice
+   */
+  private scoreProvider(providerId: string, capability: CapabilityDefinition): number {
+    let score = 100; // Base score
+
+    // Apply metadata-based scoring
+    if (capability.metadata) {
+      // Latency scoring
+      if (capability.metadata.latency === 'low') score += 20;
+      else if (capability.metadata.latency === 'medium') score += 10;
+      else if (capability.metadata.latency === 'high') score -= 10;
+
+      // Cost scoring
+      if (capability.metadata.cost === 'low') score += 15;
+      else if (capability.metadata.cost === 'medium') score += 5;
+      else if (capability.metadata.cost === 'high') score -= 15;
+
+      // Reliability scoring (0.0 - 1.0)
+      if (capability.metadata.reliability) {
+        score += capability.metadata.reliability * 30;
+      }
+    }
+
+    // Provider priority bonus (earlier in list = higher priority)
+    const priorityIndex = capability.providerPriority.indexOf(providerId);
+    if (priorityIndex >= 0) {
+      score += (capability.providerPriority.length - priorityIndex) * 5;
+    }
+
+    return score;
+  }
+
+  /**
    * Execute a capability - routes to best available provider
+   * Uses intelligent provider selection based on metadata scoring
    */
   async execute(
     capabilityId: string,
@@ -1437,13 +1477,24 @@ class CapabilityRouter {
       return { success: false, error: `Unknown capability: ${capabilityId}` };
     }
 
-    // Try each provider in priority order
-    const errors: string[] = [];
-    
-    for (const providerId of capability.providerPriority) {
-      const provider = this.providers.get(providerId);
-      if (!provider) continue;
+    // Check permissions if specified
+    if (capability.permissions && capability.permissions.length > 0) {
+      const hasPermission = this.checkPermissions(capability.permissions, context);
+      if (!hasPermission) {
+        return {
+          success: false,
+          error: `Permission denied. Required: ${capability.permissions.join(', ')}`,
+        };
+      }
+    }
 
+    // Get scored and sorted providers
+    const providerScores = this.getScoredProviders(capability);
+
+    // Try each provider in score order (highest first)
+    const errors: string[] = [];
+
+    for (const { providerId, provider, score } of providerScores) {
       // Check availability
       let available = false;
       try {
@@ -1453,20 +1504,24 @@ class CapabilityRouter {
       }
 
       if (!available) {
-        logger.debug(`[CapabilityRouter] Provider ${provider.name} not available for ${capabilityId}`);
+        logger.debug(`[CapabilityRouter] Provider ${provider.name} not available for ${capabilityId} (score: ${score})`);
         continue;
       }
 
-      logger.debug(`[CapabilityRouter] Executing ${capabilityId} via ${provider.name}`);
+      logger.debug(`[CapabilityRouter] Executing ${capabilityId} via ${provider.name} (score: ${score})`);
 
       try {
         const result = await provider.execute(capabilityId, input, context);
-        
+
         if (result.success) {
-          logger.debug(`[CapabilityRouter] ${capabilityId} succeeded via ${provider.name}`);
+          logger.debug(`[CapabilityRouter] ${capabilityId} succeeded via ${provider.name} (score: ${score})`);
           return {
             ...result,
             provider: provider.id as any,
+            metadata: {
+              providerScore: score,
+              providerId: provider.id,
+            },
           };
         }
 
@@ -1489,6 +1544,38 @@ class CapabilityRouter {
       error: `All providers failed for ${capabilityId}: ${errors.join('; ')}`,
       fallbackChain: capability.providerPriority,
     };
+  }
+
+  /**
+   * Get providers sorted by score (highest first)
+   */
+  private getScoredProviders(capability: CapabilityDefinition): Array<{
+    providerId: string;
+    provider: CapabilityProvider;
+    score: number;
+  }> {
+    const scored: Array<{ providerId: string; provider: CapabilityProvider; score: number }> = [];
+
+    for (const providerId of capability.providerPriority) {
+      const provider = this.providers.get(providerId);
+      if (!provider) continue;
+
+      const score = this.scoreProvider(providerId, capability);
+      scored.push({ providerId, provider, score });
+    }
+
+    // Sort by score (highest first)
+    scored.sort((a, b) => b.score - a.score);
+
+    return scored;
+  }
+
+  /**
+   * Check if context has required permissions
+   */
+  private checkPermissions(required: string[], context: ToolExecutionContext): boolean {
+    const userPermissions = (context.metadata?.permissions as string[]) || [];
+    return required.every(p => userPermissions.includes(p));
   }
 
   /**

@@ -1,8 +1,8 @@
 /**
  * Secure Logger
- * 
+ *
  * @deprecated Use createLogger(source, { secure: true }) from lib/utils/logger.ts instead
- * 
+ *
  * This module is kept for backwards compatibility.
  * All new code should use:
  * ```typescript
@@ -11,14 +11,13 @@
  * ```
  */
 
-// Re-export from unified logger for backwards compatibility
+// Re-export from unified logger for backwards compatibility (excluding createSecureLogger to avoid duplicate)
 export {
   Logger as SecureLogger,
   LogLevel,
   LogEntry,
   LoggerConfig,
   createLogger,
-  createSecureLogger,
   configureLogger,
   flushLogs,
   loggers,

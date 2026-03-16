@@ -17,7 +17,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { createComputerUseAgent, getComputerUseSystemPrompt, computerUseTools, toolCallToAction } from '@/lib/sandbox/providers/computer-use-tools-enhanced'
-import type { DesktopSandboxHandle, DesktopAction, DesktopStats } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
+import type { DesktopSandboxHandle, DesktopAction, DesktopStats } from '@/lib/computer/e2b-desktop-provider-enhanced'
 import { openai } from '@ai-sdk/openai'
 
 // ==================== Types ====================
@@ -74,7 +74,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     setError('')
 
     try {
-      const { e2bDesktopProvider } = await import('@/lib/sandbox/providers/e2b-desktop-provider-enhanced')
+      const { e2bDesktopProvider } = await import('@/lib/computer/e2b-desktop-provider-enhanced')
 
       const desktopHandle = await e2bDesktopProvider.createDesktop({
         resolution: [1024, 720],
@@ -202,8 +202,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
               },
             ],
             tools: computerUseTools,
-            maxSteps: 1,
-          })
+          } as any)
 
           // Get the tool call from the result
           const toolCall = result.toolCalls?.[0]
@@ -212,7 +211,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
             appendTerminalOutput(`Agent calling: ${toolCall.toolName}`)
 
             // Convert tool call to desktop action
-            const action = toolCallToAction(toolCall.toolName, toolCall.args as any)
+            const action = toolCallToAction(toolCall.toolName, (toolCall as any).args)
 
             if (action) {
               // Execute the action on the desktop
@@ -275,15 +274,17 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
         case 'double_click':
           return await desktop.doubleClick(action.x, action.y)
         case 'middle_click':
-          return await (desktop as any).middleClick(action.x, action.y)
+          return await desktop.leftClick(action.x, action.y, 'middle')
         case 'drag':
           return await desktop.drag(action.startX, action.startY, action.endX, action.endY)
         case 'scroll':
-          return await (desktop as any).scroll(action.direction, action.ticks)
+          const scrollDirection = action.scrollY > 0 ? 'down' : 'up'
+          const scrollTicks = Math.abs(action.scrollY)
+          return await desktop.scroll(scrollDirection, scrollTicks)
         case 'type':
           return await desktop.type(action.text)
-        case 'press':
-          return await (desktop as any).press(action.keys)
+        case 'keypress':
+          return await desktop.press(action.keys)
         case 'screenshot':
           const base64 = await desktop.screenshotBase64()
           return { success: true, output: `Screenshot taken (${base64.length} bytes)` }
@@ -312,7 +313,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     if (!desktop) return
 
     try {
-      const dataUrl = await desktop.screenshotDataUrl()
+      const dataUrl = await (desktop as any).screenshotDataUrl()
       setCurrentScreenshot(dataUrl)
 
       // Draw to canvas
@@ -342,7 +343,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
 
     try {
       appendTerminalOutput(`$ ${terminalCommand}`)
-      const result = await desktop.runCommand(terminalCommand)
+      const result = await (desktop as any).runCommand(terminalCommand)
 
       if (result.output) {
         appendTerminalOutput(result.output)
@@ -371,7 +372,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     if (!desktop) return
 
     try {
-      const result = await desktop.executeAction(action)
+      const result = await (desktop as any).executeAction(action)
       setActionHistory(prev => [
         ...prev,
         {

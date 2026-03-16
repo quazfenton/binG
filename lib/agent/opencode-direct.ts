@@ -1,12 +1,19 @@
 /**
- * OpenCode Direct - Runs OpenCode without task routing overhead
- * 
- * This module directly invokes OpenCode and translates its outputs to VFS
- * in real-time, without waiting for task routing decisions.
+ * OpenCode Direct - Runs OpenCode with execution policy-based sandbox selection
+ *
+ * This module invokes OpenCode and translates its outputs to VFS
+ * in real-time, with intelligent sandbox selection based on task requirements.
+ *
+ * Execution Policies:
+ * - local-safe: Default, no cloud sandbox
+ * - sandbox-required: For bash/file operations
+ * - sandbox-heavy: For full-stack apps
  */
 
 import { createLogger } from '../utils/logger';
-import { agentSessionManager } from './agent-session-manager';
+import { agentSessionManager } from '../session/agent/agent-session-manager';
+import type { ExecutionPolicy } from '../sandbox/types';
+import { determineExecutionPolicy } from '../sandbox/types';
 
 const logger = createLogger('Agent:OpencodeDirect');
 
@@ -16,6 +23,11 @@ interface OpenCodeDirectOptions {
   task: string;
   onChunk?: (chunk: string) => void;
   onTool?: (toolName: string, args: Record<string, any>, result: any) => void;
+  /**
+   * Execution policy for sandbox selection
+   * Auto-detected from task if not specified
+   */
+  executionPolicy?: ExecutionPolicy;
 }
 
 interface FileChange {
@@ -34,23 +46,37 @@ interface OpenCodeDirectResult {
 }
 
 /**
- * Run OpenCode directly - bypasses task routing for faster response
+ * Run OpenCode with execution policy-based sandbox selection
  */
 export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise<OpenCodeDirectResult> {
-  const { userId, conversationId, task, onChunk, onTool } = options;
+  const { userId, conversationId, task, onChunk, onTool, executionPolicy: explicitPolicy } = options;
 
-  logger.info('Running OpenCode directly', { userId, conversationId });
+  // Auto-detect execution policy from task if not explicitly specified
+  const detectedPolicy = explicitPolicy || determineExecutionPolicy({
+    task,
+    requiresBash: /bash|shell|command|execute|run\s+\w+/i.test(task),
+    requiresFileWrite: /write|create|save|edit|modify|delete\s+(file|\w+\.\w+)/i.test(task),
+    requiresBackend: /server|api|database|backend|express|fastapi|flask|django/i.test(task),
+    requiresGUI: /gui|desktop|browser|electron|tauri/i.test(task),
+    isLongRunning: /server|daemon|service|long-running|persistent/i.test(task),
+  });
 
-  // Create session only when needed (noSandbox: true means cloud sandbox won't be created)
-  // OpenCode can run locally without cloud sandbox
+  logger.info('Running OpenCode with execution policy', { userId, conversationId, policy: detectedPolicy });
+
+  // Create session with execution policy
   const session = await agentSessionManager.getOrCreateSession(
     userId,
     conversationId,
-    { enableMCP: true, enableNullclaw: false, mode: 'opencode', noSandbox: true }
+    {
+      enableMCP: true,
+      enableNullclaw: false,
+      mode: 'opencode',
+      executionPolicy: detectedPolicy,
+    }
   );
 
   // Use OpencodeV2Provider directly
-  const { OpencodeV2Provider } = await import('../sandbox/providers/opencode-v2-provider');
+  const { OpencodeV2Provider } = await import('../sandbox/spawn/opencode-cli');
   const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('../mcp');
 
   const provider = new OpencodeV2Provider({

@@ -26,7 +26,7 @@ import type {
   ProxyConfig,
   EnvServiceConfig,
 } from './sandbox-provider'
-import { quotaManager } from '@/lib/services/quota-manager'
+import { quotaManager } from '@/lib/management/quota-manager'
 import { SandboxSecurityManager } from '../security-manager'
 import { syncVfsSnapshotToSprite, syncChangedFilesToSprite, type TarSyncFile } from './sprites-tar-sync'
 import { SpritesCheckpointManager, createCheckpointManager, type RetentionPolicy } from './sprites-checkpoint-manager'
