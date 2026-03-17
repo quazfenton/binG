@@ -4574,7 +4574,6 @@ root.render(<App />);` };
                     </div>
                   )}
                   <PreviewErrorBoundary
-                    fallback={<div className="h-full flex items-center justify-center bg-gray-900 rounded-lg p-4"><div className="text-center text-gray-400"><AlertCircle className="w-12 h-12 mx-auto mb-3 text-yellow-500" /><p className="text-lg font-medium mb-2">Preview Error</p><p className="text-sm mb-4">The preview encountered an error and could not be displayed.</p><Button onClick={() => window.location.reload()} variant="outline" size="sm">Retry</Button></div></div>}
                     onReset={() => {
                       log('[PreviewErrorBoundary] Reset triggered, clearing preview state');
                       handleClearManualPreview();

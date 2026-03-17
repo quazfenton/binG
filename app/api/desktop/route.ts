@@ -1,20 +1,20 @@
 /**
- * E2B Desktop API Endpoint
+ * Desktop API Endpoint
  *
- * Provides REST API for E2B desktop sandbox management
+ * Provides REST API for desktop sandbox management (E2B-based)
  * Replaces direct server-side imports in client components
  *
  * Endpoints:
- * - POST /api/e2b/desktop/create - Create desktop sandbox
- * - GET /api/e2b/desktop/:id - Get desktop info
- * - POST /api/e2b/desktop/:id/action - Execute computer use action
- * - POST /api/e2b/desktop/:id/screenshot - Take screenshot
- * - POST /api/e2b/desktop/:id/terminal - Execute terminal command
- * - DELETE /api/e2b/desktop/:id - Close desktop
+ * - POST /api/desktop - Create desktop sandbox
+ * - GET /api/desktop/:id - Get desktop info
+ * - POST /api/desktop/:id/action - Execute computer use action
+ * - POST /api/desktop/:id/screenshot - Take screenshot
+ * - POST /api/desktop/:id/terminal - Execute terminal command
+ * - DELETE /api/desktop/:id - Close desktop
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { e2bDesktopProvider } from '@/lib/computer/e2b-desktop-provider-enhanced';
+import { e2bDesktopProvider, type DesktopAction, type AgentLoopResult } from '@/lib/computer/e2b-desktop-provider-enhanced';
 
 // Store active desktop sessions (in production, use Redis)
 const activeDesktops = new Map<string, {
@@ -24,7 +24,7 @@ const activeDesktops = new Map<string, {
 }>();
 
 /**
- * POST /api/e2b/desktop
+ * POST /api/desktop
  * Create a new desktop sandbox or execute action based on path
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id?: string; action?: string }> }) {
@@ -181,7 +181,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 }
 
 /**
- * GET /api/e2b/desktop/:id
+ * GET /api/desktop/:id
  * Get desktop info and stats
  */
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -225,7 +225,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 /**
- * DELETE /api/e2b/desktop/:id
+ * DELETE /api/desktop/:id
  * Close desktop sandbox
  */
 export async function DELETE(

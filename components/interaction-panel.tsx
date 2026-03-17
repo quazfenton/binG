@@ -1453,7 +1453,7 @@ export default function InteractionPanel({
 
               // CRITICAL: Remove any previously attached touch listeners first to prevent memory leaks
               if (touchMoveHandler.current) {
-                document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false });
+                document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false } as EventListenerOptions);
               }
               if (touchEndHandler.current) {
                 document.removeEventListener("touchend", touchEndHandler.current);
@@ -1472,7 +1472,7 @@ export default function InteractionPanel({
               touchEndHandler.current = () => {
                 setIsDragging(false);
                 if (touchMoveHandler.current) {
-                  document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false });
+                  document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false } as EventListenerOptions);
                 }
                 if (touchEndHandler.current) {
                   document.removeEventListener("touchend", touchEndHandler.current);

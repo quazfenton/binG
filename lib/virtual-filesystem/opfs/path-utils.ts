@@ -5,7 +5,7 @@
  * Provides mount point support and traversal protection
  */
 
-import { join, normalize } from 'path';
+import { join, normalize, resolve } from 'path';
 
 export interface PathResolutionOptions {
   root?: string;

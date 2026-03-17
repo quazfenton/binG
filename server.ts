@@ -190,9 +190,9 @@ app.prepare().then(startup).then(() => {
       const { getDatabaseSessionStore } = await import('@/lib/database/session-store');
       const sessionStore = getDatabaseSessionStore();
       const session = await sessionStore.getSession(anonymousSessionId);
-      
-      if (session && session.userId) {
-        userId = session.userId;
+
+      if (session && (session as any).userId) {
+        userId = (session as any).userId;
         console.log(`[WebSocket] Authenticated anonymous user ${userId}`);
       }
     }

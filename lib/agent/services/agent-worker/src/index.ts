@@ -17,8 +17,8 @@ import fetch from 'node-fetch';
 import * as fs from 'fs/promises';
 import { getOpenCodeEngine, OpenCodeEngine, type OpenCodeEvent } from './opencode-engine';
 import { checkpointManager, type AgentCheckpoint } from './checkpoint-manager';
-import { taskRouter } from '../../../../task-router';
-import { executeV2Task } from '../../../../v2-executor';
+import { taskRouter } from '../../task-router';
+import { executeV2Task } from '../../v2-executor';
 import { providerRouter, latencyTracker } from '../../../../sandbox/provider-router';
 import { determineExecutionPolicy } from '../../../../sandbox/types';
 
