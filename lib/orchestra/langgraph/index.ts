@@ -23,4 +23,4 @@ export {
 // Agent graph orchestration uses lib/mastra/ and lib/stateful-agent/ instead
 
 // Re-export for convenience
-export { createCheckpointer } from '@/lib/stateful-agent/checkpointer';
+export { createCheckpointer } from '../stateful-agent/commit/shadow-commit';

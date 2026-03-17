@@ -8,7 +8,7 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { EventEmitter } from 'events';
 import { createLogger } from './logger';
-import { createNDJSONParser } from '../../../utils/ndjson-parser';
+import { createNDJSONParser } from '../../utils/ndjson-parser';
 
 const logger = createLogger('Agent:OpenCodeEngine');
 

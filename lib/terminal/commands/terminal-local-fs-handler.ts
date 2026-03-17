@@ -14,10 +14,10 @@
  */
 
 import { LocalCommandExecutor, type LocalFilesystemEntry, type LocalCommandExecutorConfig } from './local-filesystem-executor'
-import { createLogger } from '../../utils/logger'
+import { createLogger } from '@/lib/utils/logger'
 import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '../security/terminal-security'
 // Types only - no server module imports
-import type { VFSyncResult } from '../virtual-filesystem/sync/vfs-sync-back.types'
+import type { VFSyncResult } from '@/lib/virtual-filesystem/sync/vfs-sync-back'
 
 const logger = createLogger('TerminalLocalFS')
 

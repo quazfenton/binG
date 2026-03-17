@@ -24,7 +24,7 @@
  *   GET  /stats             – scheduler statistics
  */
 
-import { createServer, type IncomingMessage, type ServerResponse } from 'http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { Queue, Worker, type Job } from 'bullmq'
 import Redis from 'ioredis'
 
@@ -155,6 +155,10 @@ class SchedulerService {
       {
         connection: new Redis(REDIS_URL),
         concurrency: 5,
+        limiter: {
+          max: 10,
+          duration: 60000, // 10 commands per minute
+        },
       },
     )
 

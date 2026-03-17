@@ -8,6 +8,7 @@
 import { spawn, ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import * as MCPTypes from './types'
+import { createNDJSONParser, type NDJSONParser } from '@/lib/utils/ndjson-parser';
 
 const {
   MCP_PROTOCOL_VERSION,
@@ -82,6 +83,7 @@ export class MCPClient extends EventEmitter {
 
   private process?: ChildProcess
   private messageBuffer: string = ''
+  private ndjsonParser?: NDJSONParser
   private eventListeners: Map<string, Set<MCPEventListener>> = new Map()
 
   // Cached server data
@@ -179,6 +181,24 @@ export class MCPClient extends EventEmitter {
    */
   async disconnect(): Promise<void> {
     try {
+      // Finalize NDJSON parser to process any remaining buffered data
+      if (this.ndjsonParser) {
+        const remaining = this.ndjsonParser.finalize();
+        // Process any remaining messages
+        for (const message of remaining) {
+          try {
+            if ('id' in message) {
+              this.handleResponse(message as MCPResponse);
+            } else if ('method' in message) {
+              this.handleNotification(message as MCPNotification);
+            }
+          } catch (error) {
+            console.error('[MCPClient] Error processing final message:', error);
+          }
+        }
+        this.ndjsonParser = undefined;
+      }
+
       // Close process if stdio
       if (this.process) {
         this.process.kill()
@@ -640,24 +660,29 @@ export class MCPClient extends EventEmitter {
   }
 
   private handleMessage(data: string): void {
-    this.messageBuffer += data
-    
-    const lines = this.messageBuffer.split('\n')
-    this.messageBuffer = lines.pop() || ''
-    
-    for (const line of lines) {
-      if (!line.trim()) continue
-      
+    // Initialize parser on first use
+    if (!this.ndjsonParser) {
+      this.ndjsonParser = createNDJSONParser({
+        maxBufferSize: 10 * 1024 * 1024, // 10MB
+        maxLineLength: 1024 * 1024, // 1MB
+        verbose: false,
+      })
+    }
+
+    // Parse NDJSON with robust error handling for partial chunks
+    const messages = this.ndjsonParser.parse(data)
+
+    for (const message of messages) {
       try {
-        const message: MCPResponse | MCPNotification = JSON.parse(line)
-        
-        if ('id' in message) {
-          this.handleResponse(message as MCPResponse)
-        } else if ('method' in message) {
-          this.handleNotification(message as MCPNotification)
+        const typedMessage: MCPResponse | MCPNotification = message
+
+        if ('id' in typedMessage) {
+          this.handleResponse(typedMessage as MCPResponse)
+        } else if ('method' in typedMessage) {
+          this.handleNotification(typedMessage as MCPNotification)
         }
       } catch (error) {
-        console.error('[MCPClient] Failed to parse message:', error)
+        console.error('[MCPClient] Failed to process message:', error)
       }
     }
   }

@@ -41,16 +41,6 @@ import { createLogger } from '../../utils/logger';
 const logger = createLogger('VFS:SyncBack');
 
 /**
- * File entry for VFS sync
- */
-export interface VFSFileEntry {
-  path: string;
-  content: string;
-  lastModified: number;
-  size: number;
-}
-
-/**
  * Sync mode options
  */
 export type SyncMode = 'full' | 'incremental' | 'changed-only';

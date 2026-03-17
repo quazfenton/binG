@@ -19,7 +19,7 @@ import { pipeline } from 'stream/promises';
 import { pack, unpack } from 'tar-stream';
 import { VirtualFilesystemService } from '../virtual-filesystem-service';
 import type { SandboxHandle } from '../../sandbox/providers/sandbox-provider';
-import { emitFilesystemUpdated } from '../sync-events';
+import { emitFilesystemUpdated } from './sync-events';
 
 const vfs = new VirtualFilesystemService();
 
