@@ -133,21 +133,25 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
     errorMessage,
     retryCount,
     canRetry,
+    isUsingFallback,
+    fallbackUrl,
     handleLoad,
     handleRetry,
     handleReset,
+    handleFallback,
   } = useIframeLoader({
     url: currentUrl,
     timeout: 30000,
     maxRetries: 3,
     retryDelay: 5000,
     enableAutoRetry: true,
+    enableFallback: true,
     onLoaded: () => {
-      setIsLoading(false);
+      setIsReloading(false);
       setIframeError(null);
     },
     onFailed: (reason, error) => {
-      setIsLoading(false);
+      setIsReloading(false);
       setIframeError(error || 'Failed to load content');
     },
   });
@@ -173,7 +177,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setIsLoading(false);
+      setIsReloading(false);
     }, 2000);
     return () => clearTimeout(timer);
   }, [iframeKey]);
@@ -431,6 +435,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                       reason={failureReason || 'failed'}
                       errorMessage={errorMessage || iframeError || undefined}
                       onRetry={handleRetry}
+                      onTryFallback={handleFallback}
                       onOpenExternal={handleOpenExternal}
                       onClose={onClose}
                       autoRetryCount={retryCount}
@@ -440,11 +445,11 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                 ) : (
                   <iframe
                     key={iframeKey}
-                    src={currentUrl}
+                    src={isUsingFallback && fallbackUrl ? fallbackUrl : currentUrl}
                     className="w-full h-full border-0"
                     title="Embed"
                     onLoad={() => {
-                      setIsLoading(false);
+                      setIsReloading(false);
                       setIframeError(null);
                     }}
                     onError={() => {

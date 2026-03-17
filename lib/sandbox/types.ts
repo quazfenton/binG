@@ -541,3 +541,33 @@ export function assessRisk(input: string, context?: {
     blockReason,
   };
 }
+
+/**
+ * Workspace session - represents an active sandbox workspace
+ * Legacy type for backwards compatibility
+ */
+export interface WorkspaceSession {
+  sessionId: string;
+  sandboxId: string;
+  userId: string;
+  ptySessionId?: string;
+  cwd: string;
+  createdAt: string;
+  lastActive: string;
+  status: 'creating' | 'ready' | 'active' | 'suspended' | 'closed';
+}
+
+/**
+ * Sandbox configuration - legacy type for backwards compatibility
+ */
+export interface SandboxConfig {
+  provider?: string;
+  language?: string;
+  template?: string;
+  resources?: {
+    cpu?: number;
+    memory?: number;
+    disk?: number;
+  };
+  env?: Record<string, string>;
+}

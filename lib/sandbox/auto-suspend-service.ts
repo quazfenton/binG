@@ -16,7 +16,9 @@
  */
 
 import { EventEmitter } from 'node:events';
-import type { SandboxHandle, SandboxProvider } from './types';
+import type { SandboxHandle } from './providers/sandbox-provider';
+import type { SandboxProviderType } from './providers';
+import type { WorkspaceSession, SandboxConfig } from './types';
 import { sandboxBridge } from './sandbox-service-bridge';
 
 export interface AutoSuspendConfig {

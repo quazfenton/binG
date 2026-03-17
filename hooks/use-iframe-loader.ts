@@ -15,6 +15,7 @@ export interface UseIframeLoaderOptions {
   maxRetries?: number;
   retryDelay?: number;
   enableAutoRetry?: boolean;
+  enableFallback?: boolean;
   onLoaded?: () => void;
   onFailed?: (reason: IframeFailureReason, error?: string) => void;
 }
@@ -37,9 +38,12 @@ export interface UseIframeLoaderReturn {
   errorMessage: string | null;
   retryCount: number;
   canRetry: boolean;
+  isUsingFallback: boolean;
+  fallbackUrl: string | null;
   handleLoad: (url: string) => void;
   handleRetry: () => void;
   handleReset: () => void;
+  handleFallback: () => void;
 }
 
 export function useIframeLoader({
@@ -48,6 +52,7 @@ export function useIframeLoader({
   maxRetries = 3,
   retryDelay = 5000,
   enableAutoRetry = true,
+  enableFallback = false,
   onLoaded,
   onFailed,
 }: UseIframeLoaderOptions): UseIframeLoaderReturn {
@@ -57,9 +62,12 @@ export function useIframeLoader({
   const [failureReason, setFailureReason] = useState<IframeFailureReason | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
-  
+  const [isUsingFallback, setIsUsingFallback] = useState(false);
+  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
+
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const currentUrlRef = useRef<string>('');
+  const originalUrlRef = useRef<string>('');
 
   const detectFailureReason = useCallback((error?: string): IframeFailureReason => {
     if (!error) return 'failed';
@@ -91,7 +99,7 @@ export function useIframeLoader({
 
   const handleLoad = useCallback((newUrl: string) => {
     if (!newUrl) return;
-    
+
     // Reset state
     setIsLoading(true);
     setIsLoaded(false);
@@ -99,7 +107,10 @@ export function useIframeLoader({
     setFailureReason(null);
     setErrorMessage(null);
     setRetryCount(0);
+    setIsUsingFallback(false);
+    setFallbackUrl(null);
     currentUrlRef.current = newUrl;
+    originalUrlRef.current = newUrl;
 
     // Clear any existing timeout
     if (timeoutRef.current) {
@@ -111,12 +122,12 @@ export function useIframeLoader({
       if (isLoading && !isLoaded) {
         const reason: IframeFailureReason = 'timeout';
         const errorMsg = 'Connection timed out after 30 seconds';
-        
+
         setIsLoading(false);
         setIsFailed(true);
         setFailureReason(reason);
         setErrorMessage(errorMsg);
-        
+
         onFailed?.(reason, errorMsg);
       }
     }, timeout);
@@ -140,17 +151,49 @@ export function useIframeLoader({
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }
-    
+
     const reason = detectFailureReason(error);
-    
+
     setIsLoading(false);
     setIsLoaded(false);
     setIsFailed(true);
     setFailureReason(reason);
     setErrorMessage(error || 'Failed to load content');
-    
+
     onFailed?.(reason, error);
   }, [detectFailureReason, onFailed]);
+
+  const handleFallback = useCallback(() => {
+    if (!originalUrlRef.current) return;
+
+    const encodedUrl = encodeURIComponent(originalUrlRef.current);
+    const fallback = `https://demo.webfuse.com/+iframetest/?url=${encodedUrl}`;
+
+    setIsUsingFallback(true);
+    setFallbackUrl(fallback);
+    setIsFailed(false);
+    setFailureReason(null);
+    setErrorMessage(null);
+    setRetryCount(0);
+
+    // Clear any existing timeout
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+
+    // Set timeout for fallback iframe
+    timeoutRef.current = setTimeout(() => {
+      const reason: IframeFailureReason = 'timeout';
+      const errorMsg = 'Fallback connection timed out';
+
+      setIsLoading(false);
+      setIsFailed(true);
+      setFailureReason(reason);
+      setErrorMessage(errorMsg);
+
+      onFailed?.(reason, errorMsg);
+    }, timeout);
+  }, [timeout, onFailed]);
 
   const handleRetry = useCallback(() => {
     if (retryCount >= maxRetries) return;
@@ -173,14 +216,17 @@ export function useIframeLoader({
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }
-    
+
     setIsLoading(false);
     setIsLoaded(false);
     setIsFailed(false);
     setFailureReason(null);
     setErrorMessage(null);
     setRetryCount(0);
+    setIsUsingFallback(false);
+    setFallbackUrl(null);
     currentUrlRef.current = '';
+    originalUrlRef.current = '';
   }, []);
 
   // Cleanup on unmount
@@ -207,9 +253,12 @@ export function useIframeLoader({
     errorMessage,
     retryCount,
     canRetry: retryCount < maxRetries,
+    isUsingFallback,
+    fallbackUrl,
     handleLoad,
     handleRetry,
     handleReset,
+    handleFallback,
   };
 }
 

@@ -46,9 +46,15 @@ function checkRateLimit(userId: string): { allowed: boolean; remaining: number; 
 }
 
 export async function POST(req: NextRequest) {
+  // Initialize variables that need to be accessed in catch block
+  let authResult: Awaited<ReturnType<typeof resolveRequestAuth>> | null = null;
+  let template = 'node';
+  let validTemplates: string[] = [];
+  let detail = '';
+  
   try {
     // SECURITY: Require authentication - no anonymous sandbox creation allowed
-    const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
+    authResult = await resolveRequestAuth(req, { allowAnonymous: false });
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Authentication required' },
@@ -92,7 +98,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Validate template
-    const validTemplates = ['node', 'typescript', 'javascript', 'python', 'docker', 'react', 'nextjs', 'vue', 'svelte'];
+    validTemplates = ['node', 'typescript', 'javascript', 'python', 'docker', 'react', 'nextjs', 'vue', 'svelte'];
     if (!validTemplates.includes(template)) {
       return NextResponse.json(
         { error: `Invalid template '${template}'. Valid templates: ${validTemplates.join(', ')}` },
@@ -199,8 +205,8 @@ export async function POST(req: NextRequest) {
     
     if (matchedKey) {
       const errorConfig = errorMessages[matchedKey];
-      logger.error(`DevBox error: ${errorConfig.code}`, { detail, userId: authResult.userId });
-      
+      logger.error(`DevBox error: ${errorConfig.code}`, { detail, userId: authResult?.userId || 'unknown' });
+
       return NextResponse.json(
         {
           error: errorConfig.message,
@@ -212,7 +218,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Generic error with detail for debugging
-    logger.error('DevBox creation failed', { detail, userId: authResult.userId });
+    logger.error('DevBox creation failed', { detail, userId: authResult?.userId || 'unknown' });
     
     return NextResponse.json(
       {

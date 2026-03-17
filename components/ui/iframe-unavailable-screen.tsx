@@ -29,10 +29,11 @@ import { toast } from 'sonner';
 
 export interface IframeUnavailableProps {
   url: string;
-  reason?: 'blocked' | 'failed' | 'header-detected' | 'timeout' | 'x-frame-options' | 'csp-blocked';
+  reason?: 'blocked' | 'failed' | 'header-detected' | 'timeout' | 'x-frame-options' | 'csp-blocked' | 'network-error' | 'ssl-error';
   errorMessage?: string;
   onRetry?: () => void;
   onOpenExternal?: () => void;
+  onTryFallback?: () => void;
   onClose?: () => void;
   autoRetryCount?: number;
   maxRetries?: number;
@@ -44,6 +45,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
   errorMessage,
   onRetry,
   onOpenExternal,
+  onTryFallback,
   onClose,
   autoRetryCount = 0,
   maxRetries = 3,
@@ -252,6 +254,16 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
 
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-3 mt-auto">
+          {onTryFallback && (
+            <Button
+              onClick={onTryFallback}
+              className="flex-1 min-w-[140px] bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white"
+            >
+              <Globe className="w-4 h-4 mr-2" />
+              Try Fallback
+            </Button>
+          )}
+
           {onRetry && autoRetryCount < maxRetries && (
             <Button
               onClick={handleRetry}
@@ -271,7 +283,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
               )}
             </Button>
           )}
-          
+
           <Button
             onClick={handleOpenExternal}
             variant="outline"
@@ -280,7 +292,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
             <ExternalLink className="w-4 h-4 mr-2" />
             Open in New Tab
           </Button>
-          
+
           {onClose && (
             <Button
               onClick={onClose}
