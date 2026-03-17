@@ -1,5 +1,9 @@
 import { virtualFilesystem } from './virtual-filesystem-service';
 import { filesystemEditDatabase } from './filesystem-edit-database';
+import { getDatabase } from '@/lib/database/connection';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('FilesystemEditSession');
 
 export type FilesystemEditOperationType = 'write' | 'patch' | 'delete';
 export type FilesystemEditTransactionStatus =
@@ -293,6 +297,82 @@ class FilesystemEditSessionService {
     const revertedPaths: string[] = [];
     const conflicts: string[] = [];
 
+    // Try Git-backed VFS rollback first (if previous version is available)
+    const useGitRollback = tx.operations.length > 0 && tx.operations[0].previousVersion != null;
+    
+    if (useGitRollback) {
+      try {
+        // Get the target version (minimum previousVersion across all operations)
+        const targetVersion = Math.min(
+          ...tx.operations
+            .filter(op => op.previousVersion != null)
+            .map(op => op.previousVersion!)
+        );
+        
+        // Get current workspace version
+        const currentVersion = await virtualFilesystem.getWorkspaceVersion(tx.ownerId);
+        
+        // Only rollback if target version is different from current
+        if (targetVersion < currentVersion) {
+          logger.info('[FilesystemEditSession] Using Git-backed rollback', {
+            transactionId: input.transactionId,
+            targetVersion,
+            currentVersion,
+          });
+          
+          // Use the existing VFS rollback method
+          const rollbackResult = await virtualFilesystem.rollbackToVersion(tx.ownerId, targetVersion);
+          
+          if (rollbackResult.success && rollbackResult.restoredFiles > 0) {
+            // Mark all successfully rolled back files
+            revertedPaths.push(
+              ...tx.operations
+                .filter(op => op.previousVersion != null)
+                .map(op => op.path)
+            );
+            
+            tx.deniedReason = input.reason?.trim() || 'User denied AI file edits';
+            tx.status = 'denied';
+            
+            const denialRecord: FilesystemEditDenialRecord = {
+              transactionId: tx.id,
+              conversationId: tx.conversationId,
+              timestamp: new Date().toISOString(),
+              reason: tx.deniedReason,
+              paths: tx.operations.map((op) => op.path),
+            };
+            
+            // Persist transaction and denial to database
+            filesystemEditDatabase.persistTransaction(tx);
+            filesystemEditDatabase.persistDenial(denialRecord);
+            
+            const denialList = this.denialHistoryByConversation.get(tx.conversationId) || [];
+            denialList.push(denialRecord);
+            this.denialHistoryByConversation.set(
+              tx.conversationId,
+              denialList.slice(-20),
+            );
+            
+            logger.info('[FilesystemEditSession] Git rollback successful', {
+              restoredFiles: rollbackResult.restoredFiles,
+              deletedFiles: rollbackResult.deletedFiles,
+            });
+            
+            return {
+              transaction: tx,
+              revertedPaths,
+              conflicts: [],
+            };
+          }
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        logger.warn('[FilesystemEditSession] Git rollback failed, falling back to manual revert:', message);
+        // Fall through to manual revert logic below
+      }
+    }
+
+    // Manual revert (fallback for when Git rollback is not available)
     for (let i = tx.operations.length - 1; i >= 0; i -= 1) {
       const op = tx.operations[i];
 
