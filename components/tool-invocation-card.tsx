@@ -65,7 +65,7 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
 
   const config = getStatusConfig();
   const isToolCall = tool.toolName === 'execute_python' || tool.toolName === 'run_code';
-  const codeContent = tool.args?.code;
+  const codeContent = tool.args?.code as string | undefined;
 
   return (
     <div
