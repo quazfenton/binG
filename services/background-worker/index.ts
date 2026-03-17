@@ -13,7 +13,7 @@
  */
 
 import { createServer } from 'http';
-import { createLogger } from '../lib/utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import { watch } from 'chokidar';
 import { readdir, readFile, stat } from 'fs/promises';
 import { join, relative } from 'path';

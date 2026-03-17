@@ -2618,7 +2618,7 @@ root.render(<App />);` };
           );
         }
 
-        // CodeSandbox DevBox preview mode (for backend/full-stack apps) - Pending state
+        // CodeSandbox DevBox preview mode (for backend/full-stack apps)
         if (isManualPreviewActive && previewMode === 'devbox') {
           const packageJson = Object.entries(useStructure.files).find(
             ([path]) => path === 'package.json' || path.endsWith('/package.json')
@@ -2636,36 +2636,156 @@ root.render(<App />);` };
             runtime = 'python';
           }
 
+          // Function to create DevBox
+          const startDevBox = async () => {
+            setIsCodesandboxLoading(true);
+            setCodesandboxUrl(null);
+
+            try {
+              log('[DevBox] Creating cloud dev environment...');
+
+              // Call API to create CodeSandbox devbox
+              const response = await fetch('/api/sandbox/devbox', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  files: useStructure.files,
+                  template: runtime === 'python' ? 'python' : 'node',
+                }),
+              });
+
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                const errorMsg = errorData.error || `Failed to create CodeSandbox environment (${response.status})`;
+                throw new Error(errorMsg);
+              }
+
+              const data = await response.json();
+              const sandboxUrl = data.url || `https://${data.sandboxId}.csb.app`;
+
+              setCodesandboxUrl(sandboxUrl);
+              log(`[DevBox] DevBox ready: ${sandboxUrl}`);
+              toast.success('DevBox environment created successfully');
+            } catch (err: any) {
+              logError('[DevBox] Error:', err);
+              toast.error('DevBox creation failed', {
+                description: err.message,
+                duration: 5000,
+              });
+              setCodesandboxUrl(`Error: ${err.message}`);
+            } finally {
+              setIsCodesandboxLoading(false);
+            }
+          };
+
           return (
-            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex items-center justify-center p-8">
-              <div className="text-center max-w-md">
-                <div className="w-20 h-20 mx-auto mb-6 bg-blue-500/20 rounded-full flex items-center justify-center">
-                  <Zap className="w-10 h-10 text-blue-400" />
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-white text-sm font-medium">🏗️ DevBox</span>
+                  <span className="text-blue-300 text-xs">Cloud Dev Environment</span>
                 </div>
-                <h3 className="text-white text-xl font-medium mb-2">DevBox Environment</h3>
-                <p className="text-gray-400 text-sm mb-2">
-                  Full-stack {runtime} environment for backend applications
-                </p>
-                <p className="text-gray-500 text-xs mb-6">
-                  Starts a cloud development container with your project files
-                </p>
-                <div className="flex gap-3 justify-center">
+                <div className="flex gap-2">
                   <Button
-                    onClick={() => {
-                      // TODO: Integrate CodeSandbox API to start real DevBox
-                      toast.info('DevBox integration coming soon');
-                    }}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-6"
+                    size="sm"
+                    variant="outline"
+                    onClick={startDevBox}
+                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                    disabled={isCodesandboxLoading}
                   >
-                    ▶ Start DevBox
+                    {isCodesandboxLoading ? '⏳ Creating...' : '▶ Start DevBox'}
                   </Button>
                   <Button
+                    size="sm"
                     variant="outline"
                     onClick={() => setPreviewMode('sandpack')}
-                    className="border-gray-600 text-gray-300 hover:bg-gray-800"
+                    className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
                   >
                     Use Sandpack
                   </Button>
+                </div>
+              </div>
+
+              <div className="flex-1 flex flex-col">
+                <div className="p-2 bg-gray-900 border-b border-gray-800">
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <p className="text-gray-400">📦 Runtime:</p>
+                      <p className="text-blue-300">{runtime}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">📁 Files:</p>
+                      <p className="text-blue-300">{Object.keys(useStructure.files).length} files</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">🐍 Python files:</p>
+                      <p className="text-blue-300">{pythonFiles.length} files</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex-1 flex items-center justify-center p-8">
+                  {isCodesandboxLoading ? (
+                    <div className="text-center space-y-4">
+                      <div className="w-16 h-16 mx-auto bg-blue-500/20 rounded-full flex items-center justify-center">
+                        <RefreshCw className="w-8 h-8 text-blue-400 animate-spin" />
+                      </div>
+                      <h3 className="text-white text-lg font-medium">Creating DevBox Environment</h3>
+                      <p className="text-gray-400 text-sm max-w-md">
+                        Setting up a cloud development container with your {runtime} project...
+                      </p>
+                      <p className="text-gray-500 text-xs">
+                        This may take 30-60 seconds for complex projects
+                      </p>
+                    </div>
+                  ) : codesandboxUrl ? (
+                    codesandboxUrl.startsWith('http') ? (
+                      <div className="w-full h-full flex flex-col">
+                        <div className="mb-2 text-blue-400 flex items-center justify-between px-4">
+                          <span>✓ DevBox ready: <a href={codesandboxUrl} target="_blank" rel="noopener noreferrer" className="underline">{codesandboxUrl}</a></span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => window.open(codesandboxUrl, '_blank')}
+                            className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                          >
+                            Open in New Tab ↗
+                          </Button>
+                        </div>
+                        <iframe
+                          src={codesandboxUrl}
+                          className="flex-1 w-full bg-white rounded"
+                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-center space-y-4">
+                        <AlertCircle className="w-12 h-12 mx-auto text-red-400" />
+                        <p className="text-red-400">{codesandboxUrl}</p>
+                        <Button onClick={startDevBox} variant="outline" className="border-gray-600 text-gray-300 hover:bg-gray-800">
+                          <RefreshCw className="w-4 h-4 mr-2" />
+                          Retry
+                        </Button>
+                      </div>
+                    )
+                  ) : (
+                    <div className="text-center space-y-4">
+                      <div className="w-20 h-20 mx-auto bg-blue-500/20 rounded-full flex items-center justify-center">
+                        <Zap className="w-10 h-10 text-blue-400" />
+                      </div>
+                      <h3 className="text-white text-xl font-medium">DevBox Environment</h3>
+                      <p className="text-gray-400 text-sm max-w-md">
+                        Full-stack {runtime} environment for backend applications
+                      </p>
+                      <p className="text-gray-500 text-xs max-w-md">
+                        Starts a cloud development container with your project files, including a full VS Code editor
+                      </p>
+                      <Button onClick={startDevBox} className="bg-blue-600 hover:bg-blue-700 text-white px-6">
+                        <Play className="w-4 h-4 mr-2" />
+                        Start DevBox
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

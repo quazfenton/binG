@@ -12,8 +12,8 @@
  */
 
 import { createServer } from 'http';
-import { createLogger } from '../lib/utils/logger';
-import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '../lib/mcp';
+import { createLogger } from '@/lib/utils/logger';
+import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 
 const logger = createLogger('MCPServer');
 

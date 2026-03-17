@@ -9,28 +9,25 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
-import { withAuth } from '@/lib/auth/with-auth';
-
-const DB_FILE = process.env.SQLITE_DB_PATH || './data/bing.db';
+import { getDatabase } from '@/lib/database/connection';
+import { withAuth } from '@/lib/auth/enhanced-middleware';
 
 /**
  * Get user preferences from database
  */
 async function getUserPreferences(userId: string): Promise<Record<string, boolean>> {
   try {
-    const db = await getDatabase(DB_FILE);
-    
+    const db = getDatabase();
+
     // Check if user has preferences record
-    const existing = await db.get(
-      'SELECT preferences FROM user_preferences WHERE user_id = ?',
-      [userId]
-    );
-    
+    const existing = db.prepare(
+      'SELECT preferences FROM user_preferences WHERE user_id = ?'
+    ).get([userId]) as any;
+
     if (existing?.preferences) {
       return JSON.parse(existing.preferences);
     }
-    
+
     // Return defaults
     return {
       OPENCODE_ENABLED: false,
@@ -55,35 +52,33 @@ async function saveUserPreference(
   value: boolean
 ): Promise<void> {
   try {
-    const db = await getDatabase(DB_FILE);
-    
+    const db = getDatabase();
+
     // Get existing preferences
-    const existing = await db.get(
-      'SELECT preferences FROM user_preferences WHERE user_id = ?',
-      [userId]
-    );
-    
+    const existing = db.prepare(
+      'SELECT preferences FROM user_preferences WHERE user_id = ?'
+    ).get([userId]) as any;
+
     let preferences: Record<string, boolean> = {
       OPENCODE_ENABLED: false,
       NULLCLAW_ENABLED: false,
     };
-    
+
     if (existing?.preferences) {
       preferences = JSON.parse(existing.preferences);
     }
-    
+
     // Update the specific key
     preferences[key] = value;
-    
+
     // Upsert preferences
-    await db.run(
-      `INSERT INTO user_preferences (user_id, preferences, updated_at) 
+    db.prepare(
+      `INSERT INTO user_preferences (user_id, preferences, updated_at)
        VALUES (?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(user_id) DO UPDATE SET 
+       ON CONFLICT(user_id) DO UPDATE SET
          preferences = excluded.preferences,
-         updated_at = CURRENT_TIMESTAMP`,
-      [userId, JSON.stringify(preferences)]
-    );
+         updated_at = CURRENT_TIMESTAMP`
+    ).run([userId, JSON.stringify(preferences)]);
   } catch (error) {
     console.error('[UserPreferences] Failed to save preference:', error);
     throw error;
@@ -94,11 +89,11 @@ async function saveUserPreference(
  * GET /api/user/preferences
  * Get all user preferences
  */
-export async function GET(request: NextRequest) {
-  return withAuth(request, async (user) => {
+export const GET = withAuth(
+  async (request: NextRequest, auth) => {
     try {
-      const preferences = await getUserPreferences(user.id);
-      
+      const preferences = await getUserPreferences(auth.userId || 'anonymous');
+
       return NextResponse.json({
         success: true,
         preferences,
@@ -109,21 +104,21 @@ export async function GET(request: NextRequest) {
         { status: 500 }
       );
     }
-  });
-}
+  }
+);
 
 /**
  * POST /api/user/preferences
  * Save a user preference override
- * 
+ *
  * Body: { [key: string]: boolean }
  * Example: { "OPENCODE_ENABLED": true }
  */
-export async function POST(request: NextRequest) {
-  return withAuth(request, async (user) => {
+export const POST = withAuth(
+  async (request: NextRequest, auth) => {
     try {
       const body = await request.json();
-      
+
       // Validate body is an object
       if (!body || typeof body !== 'object') {
         return NextResponse.json(
@@ -131,11 +126,11 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      
+
       // Validate and save each key-value pair
       const allowedKeys = ['OPENCODE_ENABLED', 'NULLCLAW_ENABLED'];
       const updates: Record<string, boolean> = {};
-      
+
       for (const [key, value] of Object.entries(body)) {
         // Only allow specific keys
         if (!allowedKeys.includes(key)) {
@@ -144,7 +139,7 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           );
         }
-        
+
         // Only allow boolean values
         if (typeof value !== 'boolean') {
           return NextResponse.json(
@@ -152,11 +147,11 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           );
         }
-        
+
         updates[key] = value;
-        await saveUserPreference(user.id, key, value);
+        await saveUserPreference(auth.userId || 'anonymous', key, value);
       }
-      
+
       return NextResponse.json({
         success: true,
         preferences: updates,
@@ -169,5 +164,5 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
-  });
-}
+  }
+);

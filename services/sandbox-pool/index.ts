@@ -13,11 +13,11 @@
  */
 
 import { createServer } from 'http';
-import { createLogger } from '../lib/utils/logger';
-import { getSandboxProvider, getSandboxProviderWithFallback } from '../lib/sandbox/providers';
-import type { SandboxHandle, SandboxCreateConfig, SandboxProviderType } from '../lib/sandbox/providers';
-import { backgroundExecutor } from '../lib/agent/background-jobs';
-import { createResourceMonitor, type ResourceMonitor } from '../lib/sandbox/resource-monitor';
+import { createLogger } from '@/lib/utils/logger';
+import { getSandboxProvider, getSandboxProviderWithFallback } from '@/lib/sandbox/providers';
+import type { SandboxHandle, SandboxCreateConfig, SandboxProviderType } from '@/lib/sandbox/providers';
+import { backgroundExecutor } from '@/lib/agent/background-jobs';
+import { createResourceMonitor, type ResourceMonitor } from '@/lib/sandbox/resource-monitor';
 import Redis from 'ioredis';
 
 const logger = createLogger('SandboxPool');
@@ -45,7 +45,7 @@ class SandboxPoolService {
   private availableQueue: string[] = [];
   private redisClient?: any;
   private healthCheckInterval?: NodeJS.Timeout;
-  private initialized = false;
+  public initialized = false;
 
   async initialize(): Promise<void> {
     if (this.initialized) return;

@@ -97,6 +97,7 @@ class SchedulerService {
   private queue: Queue
   private worker!: Worker
   private tasks: Map<string, ScheduledTask> = new Map()
+  public initialized = false
 
   constructor() {
     this.redis = new Redis(REDIS_URL)
@@ -170,6 +171,7 @@ class SchedulerService {
     })
 
     console.log('[Scheduler] Worker started')
+    this.initialized = true
   }
 
   // -- task execution -------------------------------------------------------
@@ -721,4 +723,4 @@ async function main() {
 main()
 
 export { schedulerService, SchedulerService }
-export type { ScheduledTask, ScheduledTaskType, TaskExecutionResult }
+export type { TaskExecutionResult }

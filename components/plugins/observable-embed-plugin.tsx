@@ -1,6 +1,6 @@
 /**
  * Observable Notebook Embed Plugin
- * 
+ *
  * Embed Observable notebooks for interactive data visualization and exploration
  * @see https://observablehq.com/
  */
@@ -14,6 +14,8 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { ExternalLink, RefreshCw, BarChart2, BarChart3, Monitor } from "lucide-react";
+import useIframeLoader from '@/hooks/use-iframe-loader';
+import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 
 export interface ObservableEmbedPluginProps {
   onOpenWindow?: (notebookId: string, title: string) => void;
@@ -35,6 +37,38 @@ const ObservableEmbedPlugin: React.FC<ObservableEmbedPluginProps> = ({ onOpenWin
   const [currentNotebook, setCurrentNotebook] = useState<ObservableNotebook | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Use iframe loader hook with fallback
+  const {
+    isLoading: hookIsLoading,
+    isLoaded,
+    isFailed,
+    failureReason,
+    errorMessage,
+    retryCount,
+    canRetry,
+    isUsingFallback,
+    fallbackUrl,
+    handleLoad,
+    handleRetry,
+    handleReset,
+    handleFallback,
+  } = useIframeLoader({
+    url: currentNotebook?.embedUrl || '',
+    timeout: 30000,
+    maxRetries: 3,
+    retryDelay: 5000,
+    enableAutoRetry: true,
+    enableFallback: true,
+    onLoaded: () => {
+      setIsLoading(false);
+      setError(null);
+    },
+    onFailed: (reason, error) => {
+      setIsLoading(false);
+      setError(error || 'Failed to load Observable notebook');
+    },
+  });
 
   // Extract notebook info from Observable URL
   const extractNotebookInfo = (url: string): { author: string; notebook: string } | null => {
@@ -200,16 +234,32 @@ const ObservableEmbedPlugin: React.FC<ObservableEmbedPluginProps> = ({ onOpenWin
                 Close Notebook
               </Button>
             </div>
-            
+
             {/* Embed iframe */}
             <div className="border rounded-lg overflow-hidden" style={{ height: "700px" }}>
-              <iframe
-                src={currentNotebook.embedUrl}
-                className="w-full h-full"
-                title={`Observable Notebook: ${currentNotebook.name}`}
-                allow="accelerometer; ambient-light-sensor; camera; encrypted-media; geolocation; gyroscope; microphone; midi; usb; vr; xr-spatial-tracking"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
-              />
+              {isFailed ? (
+                <div className="w-full h-full">
+                  <IframeUnavailableScreen
+                    url={currentNotebook.embedUrl}
+                    reason={failureReason || 'failed'}
+                    errorMessage={errorMessage || undefined}
+                    onRetry={handleRetry}
+                    onTryFallback={handleFallback}
+                    onOpenExternal={() => window.open(currentNotebook.viewUrl, '_blank', 'noopener,noreferrer')}
+                    onClose={() => setCurrentNotebook(null)}
+                    autoRetryCount={retryCount}
+                    maxRetries={3}
+                  />
+                </div>
+              ) : (
+                <iframe
+                  src={isUsingFallback && fallbackUrl ? fallbackUrl : currentNotebook.embedUrl}
+                  className="w-full h-full"
+                  title={`Observable Notebook: ${currentNotebook.name}`}
+                  allow="accelerometer; ambient-light-sensor; camera; encrypted-media; geolocation; gyroscope; microphone; midi; usb; vr; xr-spatial-tracking"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+                />
+              )}
             </div>
             
             <div className="flex gap-2">

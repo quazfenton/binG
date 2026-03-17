@@ -17,7 +17,7 @@ function getUserIdFromRequest(request: NextRequest): string {
     'default-user';
 
   // Validate userId format (prevent injection)
-  if (!/^[a-zA-Z0-9_-:]+$/.test(userId)) {
+  if (!/^[a-zA-Z0-9_:-]+$/.test(userId)) {
     console.warn('[DiffsApply] Invalid user ID format, using default:', userId);
     return 'default-user';
   }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Brain, Terminal, CheckCircle, Loader2, Users, User, Sparkles, Zap, Clock, AlertCircle } from 'lucide-react';
 import { ToolInvocation } from '@/lib/types/tool-invocation';
 

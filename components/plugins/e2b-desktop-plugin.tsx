@@ -19,6 +19,8 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
+import useIframeLoader from '@/hooks/use-iframe-loader'
+import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen'
 
 // ==================== Types ====================
 
@@ -85,6 +87,38 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
   // Refs
   const screenshotCanvasRef = useRef<HTMLCanvasElement>(null)
   const terminalEndRef = useRef<HTMLDivElement>(null)
+
+  // Use iframe loader hook with fallback for stream URL
+  const {
+    isLoading,
+    isLoaded,
+    isFailed,
+    failureReason,
+    errorMessage,
+    retryCount,
+    canRetry,
+    isUsingFallback,
+    fallbackUrl,
+    handleLoad,
+    handleRetry,
+    handleReset,
+    handleFallback,
+  } = useIframeLoader({
+    url: streamUrl,
+    timeout: 30000,
+    maxRetries: 3,
+    retryDelay: 5000,
+    enableAutoRetry: true,
+    enableFallback: true,
+    onLoaded: () => {
+      setIsConnected(true);
+      setError('');
+    },
+    onFailed: (reason, error) => {
+      setIsConnected(false);
+      setError(error || 'Failed to load desktop stream');
+    },
+  });
 
   // ==================== Desktop Lifecycle ====================
 
@@ -163,55 +197,6 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
       console.error('[DesktopPlugin] Disconnect error:', err)
     }
   }, [desktopId])
-
-  /**
-   * Execute computer use agent action via API
-   */
-  const runAgent = useCallback(async () => {
-    if (!desktopId || !agentTask) return
-
-    setIsAgentRunning(true)
-    setCurrentIteration(0)
-    setActionHistory([])
-
-    try {
-      const response = await fetch(`/api/e2b/desktop/${desktopId}/action`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          task: agentTask,
-          maxIterations,
-        }),
-      })
-
-      const data: ApiResponse<{ iterations: number; actions: ActionHistoryItem[]; completed: boolean }> = await response.json()
-
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to run agent')
-      }
-
-      setActionHistory(data.data!.actions.map((action, i) => ({
-        ...action,
-        timestamp: Date.now() + i,
-      })))
-      setCurrentIteration(data.data!.iterations)
-
-      // Fetch updated screenshot
-      const screenshotResponse = await fetch(`/api/e2b/desktop/${desktopId}/screenshot`)
-      const screenshotData: ApiResponse<{ screenshot: string }> = await screenshotResponse.json()
-      if (screenshotData.success) {
-        setCurrentScreenshot(screenshotData.data!.screenshot)
-      }
-
-      toast.success(data.data!.completed ? 'Task completed' : `Completed ${data.data!.iterations} iterations`)
-    } catch (err: any) {
-      console.error('[DesktopPlugin] Agent error:', err)
-      setError(err.message || 'Failed to run agent')
-      toast.error('Agent failed: ' + err.message)
-    } finally {
-      setIsAgentRunning(false)
-    }
-  }, [desktopId, agentTask, maxIterations])
 
   /**
    * Execute terminal command via API
@@ -588,12 +573,28 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
             <div className="h-full flex flex-col">
               {/* VNC Stream */}
               {streamUrl ? (
-                <iframe
-                  src={streamUrl}
-                  className="flex-1 w-full bg-black"
-                  title="Desktop Stream"
-                  allow="fullscreen"
-                />
+                isFailed ? (
+                  <div className="flex-1 relative">
+                    <IframeUnavailableScreen
+                      url={streamUrl}
+                      reason={failureReason || 'failed'}
+                      errorMessage={errorMessage || undefined}
+                      onRetry={handleRetry}
+                      onTryFallback={handleFallback}
+                      onOpenExternal={() => window.open(streamUrl, '_blank', 'noopener,noreferrer')}
+                      onClose={onClose}
+                      autoRetryCount={retryCount}
+                      maxRetries={3}
+                    />
+                  </div>
+                ) : (
+                  <iframe
+                    src={isUsingFallback && fallbackUrl ? fallbackUrl : streamUrl}
+                    className="flex-1 w-full bg-black"
+                    title="Desktop Stream"
+                    allow="fullscreen"
+                  />
+                )
               ) : (
                 <div className="flex-1 flex items-center justify-center text-gray-400">
                   {isConnected ? 'No stream available' : 'Connect to desktop'}

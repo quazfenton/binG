@@ -9,6 +9,8 @@
  * - Preview offloading decision logic
  * - Robust framework detection
  * - Enhanced entry point detection with relative path normalization
+ * - Port detection for server previews
+ * - CodeSandbox template mapping
  *
  * Priority:
  * 1. Local/Client-side (Sandpack, WebContainer, Pyodide) - preferred
@@ -24,25 +26,38 @@
  * - codesandbox: CodeSandbox cloud environment
  * - nextjs: Next.js via WebContainer
  *
+ * Key Functions:
+ * - detectProject(): Full project analysis with heuristics
+ * - detectFramework(): Framework detection from files and package.json
+ * - detectEntryPoint(): Entry point detection with path normalization
+ * - detectPort(): Port detection from package.json or code content
+ * - getCodeSandboxTemplate(): Map frameworks to CodeSandbox templates
+ * - getSandpackConfig(): Get Sandpack configuration for project
+ * - analyzeHeuristics(): Analyze project for cloud offload decision
+ *
  * @example
  * ```typescript
- * import { livePreviewOffloading } from '@/lib/previews/live-preview-offloading';
+ * import {
+ *   detectProject,
+ *   detectFramework,
+ *   detectPort,
+ *   getCodeSandboxTemplate,
+ *   getSandpackConfig,
+ *   analyzeHeuristics
+ * } from '@/lib/previews/live-preview-offloading';
  *
- * // Detect project and select preview mode
- * const previewMode = livePreviewOffloading.detectPreviewMode(files, packageJson);
- * // Returns: 'sandpack', 'webcontainer', 'pyodide', 'devbox', etc.
+ * // Full project analysis
+ * const detection = detectProject({ files });
+ * console.log(`Framework: ${detection.framework}, Port: ${detectPort(files)}`);
  *
- * // Get framework from project files
- * const framework = livePreviewOffloading.detectFramework(files, packageJson);
- * // Returns: 'react', 'vue', 'next', 'flask', etc.
+ * // Get CodeSandbox template
+ * const template = getCodeSandboxTemplate(detection.framework);
  *
- * // Detect entry point with relative path normalization
- * const entryPoint = livePreviewOffloading.detectEntryPoint(files, framework);
- * // Returns: '/src/main.tsx', '/src/index.js', etc.
- *
- * // Get preview mode configuration for Sandpack
- * const sandpackConfig = livePreviewOffloading.getSandpackConfig(files, framework);
- * // Returns: { template, files, customSetup }
+ * // Check if should offload to cloud
+ * const heuristics = analyzeHeuristics({ files });
+ * if (heuristics.shouldOffload) {
+ *   console.log(`Offload recommended: ${heuristics.offloadReason}`);
+ * }
  * ```
  */
 
@@ -1264,6 +1279,107 @@ export class LivePreviewOffloading {
   }
 
   /**
+   * Detect port from package.json or code content
+   * Migrated from preview-offloader.ts
+   */
+  detectPort(files: Record<string, string>): number {
+    const packageJson = this.parsePackageJson(files['package.json'] || files['/package.json']);
+    if (packageJson) {
+      const scripts = packageJson.scripts || {};
+      const startScript = scripts.dev || scripts.start || '';
+
+      // Extract port from start script
+      const portMatch = startScript.match(/-p\s+(\d+)|--port\s+(\d+)|PORT=(\d+)/);
+      if (portMatch) {
+        return parseInt(portMatch[1] || portMatch[2] || portMatch[3], 10);
+      }
+
+      // Framework defaults from dependencies
+      const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+      if (deps.next || deps['next']) return 3000;
+      if (deps.nuxt || deps['@nuxt/core']) return 3000;
+      if (deps.vite) return 5173;
+      if (deps.react) return 3000;
+      if (deps.vue) return 3000;
+      if (deps.svelte) return 3000;
+      if (deps.astro) return 4321;
+      if (deps.gatsby) return 8000;
+      if (deps.remix) return 3000;
+    }
+
+    // Check Python files for port
+    for (const [path, content] of Object.entries(files)) {
+      if (path.endsWith('.py')) {
+        // Flask/FastAPI pattern: app.run(port=8000) or uvicorn.run(port=8000)
+        const portMatch = content.match(/run\(.*port\s*=\s*(\d+)|app\.run\(.*(\d+)|port=(\d+)/);
+        if (portMatch) {
+          return parseInt(portMatch[1] || portMatch[2] || portMatch[3], 10);
+        }
+        // Streamlit default
+        if (content.includes('import streamlit') || content.includes('st.')) return 8501;
+        // Gradio default
+        if (content.includes('import gradio')) return 7860;
+      }
+    }
+
+    // Check JavaScript/TypeScript files for port
+    for (const [path, content] of Object.entries(files)) {
+      if (path.endsWith('.js') || path.endsWith('.ts') || path.endsWith('.jsx') || path.endsWith('.tsx')) {
+        // Express pattern: app.listen(3000) or app.listen({ port: 3000 })
+        const portMatch = content.match(/app\.listen\((\d+)|app\.listen\(\{.*port:\s*(\d+)/);
+        if (portMatch) {
+          return parseInt(portMatch[1] || portMatch[2], 10);
+        }
+        // HTTP server pattern: http.createServer().listen(3000)
+        const httpMatch = content.match(/\.listen\((\d+)/);
+        if (httpMatch) {
+          return parseInt(httpMatch[1], 10);
+        }
+      }
+    }
+
+    // Default port
+    return 3000;
+  }
+
+  /**
+   * Get CodeSandbox template for framework
+   * Migrated from preview-offloader.ts with enhancements
+   *
+   * Maps detected frameworks to CodeSandbox templates:
+   * @see https://codesandbox.io/docs/sdk/templates
+   */
+  getCodeSandboxTemplate(framework: AppFramework): string {
+    const templateMap: Record<AppFramework, string> = {
+      // JavaScript/TypeScript frameworks
+      'react': 'react',
+      'vite-react': 'react',
+      'next': 'nextjs',
+      'nuxt': 'nuxt',
+      'vue': 'vue',
+      'svelte': 'svelte',
+      'solid': 'solid',
+      'angular': 'angular',
+      'astro': 'astro',
+      'remix': 'remix',
+      'qwik': 'qwik',
+      'gatsby': 'react',  // Gatsby uses React template
+      'vite': 'vanilla-vite',
+      'vanilla': 'vanilla',
+      'node': 'node',
+      // Python frameworks (use Python template)
+      'gradio': 'python',
+      'streamlit': 'python',
+      'flask': 'python',
+      'fastapi': 'python',
+      'django': 'python',
+      'unknown': 'node',  // Default to Node.js template
+    };
+
+    return templateMap[framework] || 'node';
+  }
+
+  /**
    * Get Sandpack configuration for the project
    */
   getSandpackConfig(detection: ProjectDetection): SandpackConfig {
@@ -1565,8 +1681,14 @@ export const detectEntryPoint = (filePaths: string[], framework: AppFramework) =
 export const analyzeHeuristics = (request: PreviewRequest): OffloadHeuristics =>
   livePreviewOffloading.analyzeHeuristics(request);
 
-export const shouldUseLocalPreview = (detection: ProjectDetection) => 
+export const shouldUseLocalPreview = (detection: ProjectDetection) =>
   livePreviewOffloading.shouldUseLocalPreview(detection);
 
-export const getCloudFallback = (localMode: PreviewMode) => 
+export const getCloudFallback = (localMode: PreviewMode) =>
   livePreviewOffloading.getCloudFallback(localMode);
+
+export const detectPort = (files: Record<string, string>) =>
+  livePreviewOffloading.detectPort(files);
+
+export const getCodeSandboxTemplate = (framework: AppFramework) =>
+  livePreviewOffloading.getCodeSandboxTemplate(framework);

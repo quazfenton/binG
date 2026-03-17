@@ -1,6 +1,6 @@
 /**
  * P-Stream Movie Embed Plugin
- * 
+ *
  * Embeds movies and TV shows from pstream.net
  * Provides a clean iframe wrapper with search and favorites
  */
@@ -28,8 +28,11 @@ import {
   Tv,
   Star,
   Play,
+  RefreshCw,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import useIframeLoader from '@/hooks/use-iframe-loader';
+import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 
 interface FavoriteEntry {
   id: string;
@@ -67,6 +70,38 @@ const PStreamEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
   const [videoTitle, setVideoTitle] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Use iframe loader hook with fallback
+  const {
+    isLoading: hookIsLoading,
+    isLoaded,
+    isFailed,
+    failureReason,
+    errorMessage,
+    retryCount,
+    canRetry,
+    isUsingFallback,
+    fallbackUrl,
+    handleLoad,
+    handleRetry,
+    handleReset,
+    handleFallback,
+  } = useIframeLoader({
+    url: embedUrl,
+    timeout: 30000,
+    maxRetries: 3,
+    retryDelay: 5000,
+    enableAutoRetry: true,
+    enableFallback: true,
+    onLoaded: () => {
+      setIsLoading(false);
+      setError(null);
+    },
+    onFailed: (reason, error) => {
+      setIsLoading(false);
+      setError(error || 'Failed to load video stream');
+    },
+  });
 
   // Load favorites and history from localStorage
   useEffect(() => {
@@ -383,10 +418,24 @@ const PStreamEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
 
         {/* Main Content Area */}
         <div className="flex-1 relative bg-black">
-          {embedUrl ? (
+          {isFailed ? (
+            <div className="absolute inset-0">
+              <IframeUnavailableScreen
+                url={embedUrl}
+                reason={failureReason || 'failed'}
+                errorMessage={errorMessage || undefined}
+                onRetry={handleRetry}
+                onTryFallback={handleFallback}
+                onOpenExternal={() => window.open(inputUrl, '_blank', 'noopener,noreferrer')}
+                onClose={onClose}
+                autoRetryCount={retryCount}
+                maxRetries={3}
+              />
+            </div>
+          ) : embedUrl ? (
             <>
               <iframe
-                src={embedUrl}
+                src={isUsingFallback && fallbackUrl ? fallbackUrl : embedUrl}
                 className="w-full h-full"
                 allow="autoplay; fullscreen; picture-in-picture"
                 allowFullScreen
