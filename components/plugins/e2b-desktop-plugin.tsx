@@ -21,6 +21,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
 import useIframeLoader from '@/hooks/use-iframe-loader'
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen'
+import type { DesktopAction, AgentLoopResult } from '@/lib/computer/e2b-desktop-provider-enhanced'
 
 // ==================== Types ====================
 
@@ -46,7 +47,7 @@ interface DesktopStats {
 interface ActionHistoryItem {
   id: string
   iteration: number
-  action: any
+  action: DesktopAction
   result: { success: boolean; output: string }
   timestamp: number
 }
@@ -130,7 +131,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     setError('')
 
     try {
-      const response = await fetch('/api/e2b/desktop', {
+      const response = await fetch('/api/desktop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -153,7 +154,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
       // Start stats polling
       const statsInterval = setInterval(async () => {
         try {
-          const statsResponse = await fetch(`/api/e2b/desktop/${data.data!.sandboxId}`)
+          const statsResponse = await fetch(`/api/desktop/${data.data!.sandboxId}`)
           const statsData: ApiResponse<{ stats: DesktopStats; screenshot: string }> = await statsResponse.json()
           
           if (statsData.success) {
@@ -183,7 +184,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     if (!desktopId) return
 
     try {
-      await fetch(`/api/e2b/desktop/${desktopId}`, {
+      await fetch(`/api/desktop/${desktopId}`, {
         method: 'DELETE',
       })
       
@@ -205,7 +206,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     if (!desktopId || !command) return
 
     try {
-      const response = await fetch(`/api/e2b/desktop/${desktopId}/terminal`, {
+      const response = await fetch(`/api/desktop/${desktopId}/terminal`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command }),
@@ -235,10 +236,10 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
 
   // Auto-connect on mount
   useEffect(() => {
-    if (isVisible && !desktop && !isConnecting) {
+    if (isVisible && !desktopId && !isConnecting) {
       connectToDesktop()
     }
-  }, [isVisible, desktop, isConnecting, connectToDesktop])
+  }, [isVisible, desktopId, isConnecting, connectToDesktop])
 
   // Scroll terminal to bottom
   useEffect(() => {
@@ -248,147 +249,96 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
   // ==================== Agent Loop ====================
 
   /**
-   * Run computer use agent
+   * Run computer use agent via API endpoint
    */
   const runAgent = useCallback(async () => {
-    if (!desktop || !agentTask) return
+    if (!desktopId || !agentTask) return
 
     setIsAgentRunning(true)
     setCurrentIteration(0)
     setActionHistory([])
+    appendTerminalOutput(`Starting agent loop for task: "${agentTask}"`)
 
     try {
-      // Import generateText from ai SDK for LLM calls
-      const { generateText } = await import('ai')
+      // Call API endpoint to run agent
+      const response = await fetch(`/api/desktop/${desktopId}/agent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task: agentTask,
+          maxIterations,
+        }),
+      })
 
-      const apiKey = process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY
-      if (!apiKey) {
-        appendTerminalOutput('Error: No LLM API key configured (OPENAI_API_KEY or OPENROUTER_API_KEY)')
-        setIsAgentRunning(false)
-        return
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Agent failed')
       }
 
-      // Create OpenAI model instance
-      const model = process.env.COMPUTER_USE_MODEL || 'gpt-4o'
-      const openaiModel = openai(model)
+      // Stream agent output
+      const reader = response.body?.getReader()
+      if (!reader) return
 
-      // Manual agent loop implementation
-      let iteration = 0
-      let shouldContinue = true
+      const decoder = new TextDecoder()
+      
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
 
-      while (shouldContinue && iteration < maxIterations && desktop.isAlive()) {
-        iteration++
-        setCurrentIteration(iteration)
+        const chunk = decoder.decode(value)
+        const lines = chunk.split('\n')
 
-        try {
-          // Take screenshot for vision input
-          const screenshotBase64 = await desktop.screenshotBase64()
-
-          appendTerminalOutput(`\n--- Iteration ${iteration} ---`)
-
-          // Call LLM with computer use tools
-          const result = await generateText({
-            model: openaiModel,
-            system: getComputerUseSystemPrompt(),
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: agentTask },
-                  { type: 'image', image: screenshotBase64 },
-                ],
-              },
-            ],
-            tools: computerUseTools,
-          } as any)
-
-          // Get the tool call from the result
-          const toolCall = result.toolCalls?.[0]
-
-          if (toolCall) {
-            appendTerminalOutput(`Agent calling: ${toolCall.toolName}`)
-
-            // Convert tool call to desktop action
-            const action = toolCallToAction(toolCall.toolName, (toolCall as any).args)
-
-            if (action) {
-              // Execute the action on the desktop
-              const actionResult = await executeDesktopAction(action)
-
-              // Record in history
-              setActionHistory(prev => [
-                ...prev,
-                {
-                  id: `${iteration}-${Date.now()}`,
-                  action,
-                  result: { success: actionResult.success, output: actionResult.output || '' },
-                  timestamp: Date.now(),
-                },
-              ])
-
-              appendTerminalOutput(`Action result: ${actionResult.success ? 'Success' : 'Failed'} - ${actionResult.output?.substring(0, 100)}`)
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const event = JSON.parse(line)
+            if (event.type === 'iteration') {
+              setCurrentIteration(event.iteration)
+              appendTerminalOutput(`\n--- Iteration ${event.iteration} ---`)
+            } else if (event.type === 'action') {
+              appendTerminalOutput(`Agent action: ${event.action}`)
+            } else if (event.type === 'result') {
+              appendTerminalOutput(`Result: ${event.result}`)
+            } else if (event.type === 'message') {
+              appendTerminalOutput(`Agent: ${event.message}`)
+            } else if (event.type === 'history') {
+              setActionHistory(event.history)
             }
-          } else if (result.text) {
-            appendTerminalOutput(`Agent: ${result.text}`)
-            // If no tool call and we have text, agent might be done
-            if (result.text.toLowerCase().includes('complete') || result.text.toLowerCase().includes('done')) {
-              shouldContinue = false
-            }
-          } else {
-            appendTerminalOutput('Agent returned no action or text, stopping...')
-            shouldContinue = false
+          } catch (e) {
+            // Non-JSON output
+            if (chunk.trim()) appendTerminalOutput(chunk)
           }
-
-          // Small delay between iterations
-          await new Promise(resolve => setTimeout(resolve, 1000))
-        } catch (llmError: any) {
-          appendTerminalOutput(`LLM Error: ${llmError.message}`)
-          console.error('[DesktopPlugin] LLM error:', llmError)
-          shouldContinue = false
         }
       }
 
-      appendTerminalOutput(`\nAgent finished after ${iteration} iterations`)
+      appendTerminalOutput(`\nAgent finished`)
       setIsAgentRunning(false)
     } catch (err: any) {
       console.error('[DesktopPlugin] Agent error:', err)
       appendTerminalOutput(`Agent error: ${err.message}`)
       setIsAgentRunning(false)
+      toast.error('Agent failed', { description: err.message })
     }
-  }, [desktop, agentTask, maxIterations])
+  }, [desktopId, agentTask, maxIterations])
 
   /**
-   * Execute a desktop action and return the result
+   * Execute a desktop action via API endpoint
    */
   const executeDesktopAction = async (action: DesktopAction): Promise<{ success: boolean; output: string }> => {
     try {
-      switch (action.type) {
-        case 'mouse_move':
-          return await desktop.moveMouse(action.x, action.y)
-        case 'left_click':
-          return await desktop.leftClick(action.x, action.y)
-        case 'right_click':
-          return await desktop.rightClick(action.x, action.y)
-        case 'double_click':
-          return await desktop.doubleClick(action.x, action.y)
-        case 'middle_click':
-          return await desktop.leftClick(action.x, action.y, 'middle')
-        case 'drag':
-          return await desktop.drag(action.startX, action.startY, action.endX, action.endY)
-        case 'scroll':
-          const scrollDirection = action.scrollY > 0 ? 'down' : 'up'
-          const scrollTicks = Math.abs(action.scrollY)
-          return await desktop.scroll(scrollDirection, scrollTicks)
-        case 'type':
-          return await desktop.type(action.text)
-        case 'keypress':
-          return await desktop.press(action.keys)
-        case 'screenshot':
-          const base64 = await desktop.screenshotBase64()
-          return { success: true, output: `Screenshot taken (${base64.length} bytes)` }
-        default:
-          return { success: false, output: `Unknown action type: ${(action as any).type}` }
+      const response = await fetch(`/api/desktop/${desktopId}/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(action),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        return { success: false, output: error.error || 'Action failed' }
       }
+
+      const result = await response.json()
+      return { success: result.success, output: result.output || 'Success' }
     } catch (error: any) {
       return { success: false, output: error.message }
     }
@@ -405,57 +355,42 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
   // ==================== Manual Actions ====================
 
   /**
-   * Take screenshot
+   * Take screenshot via API
    */
   const takeScreenshot = useCallback(async () => {
-    if (!desktop) return
+    if (!desktopId) return
 
     try {
-      const dataUrl = await (desktop as any).screenshotDataUrl()
-      setCurrentScreenshot(dataUrl)
-
-      // Draw to canvas
-      const canvas = screenshotCanvasRef.current
-      if (canvas) {
-        const ctx = canvas.getContext('2d')
-        const img = new Image()
-        img.onload = () => {
-          canvas.width = img.width
-          canvas.height = img.height
-          ctx?.drawImage(img, 0, 0)
-        }
-        img.src = dataUrl
+      const response = await fetch(`/api/desktop/${desktopId}/screenshot`, {
+        method: 'POST',
+      })
+      const data = await response.json()
+      
+      if (data.success) {
+        setCurrentScreenshot(data.dataUrl)
+        appendTerminalOutput('Screenshot captured')
+      } else {
+        appendTerminalOutput(`Screenshot error: ${data.error}`)
       }
-
-      appendTerminalOutput('Screenshot captured')
     } catch (err: any) {
       appendTerminalOutput(`Screenshot error: ${err.message}`)
     }
-  }, [desktop])
+  }, [desktopId])
 
   /**
-   * Run terminal command
+   * Run terminal command via API
    */
   const runTerminalCommand = useCallback(async () => {
-    if (!desktop || !terminalCommand) return
+    if (!desktopId || !terminalCommand) return
 
     try {
       appendTerminalOutput(`$ ${terminalCommand}`)
-      const result = await (desktop as any).runCommand(terminalCommand)
-
-      if (result.output) {
-        appendTerminalOutput(result.output)
-      }
-
-      if (!result.success) {
-        appendTerminalOutput(`Command failed with exit code ${result.exitCode}`)
-      }
-
+      await executeTerminalCommand(terminalCommand)
       setTerminalCommand('')
     } catch (err: any) {
       appendTerminalOutput(`Command error: ${err.message}`)
     }
-  }, [desktop, terminalCommand])
+  }, [desktopId, terminalCommand, executeTerminalCommand])
 
   /**
    * Append to terminal output
@@ -467,10 +402,10 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
   // ==================== Manual Desktop Actions ====================
 
   const manualAction = useCallback(async (action: DesktopAction) => {
-    if (!desktop) return
+    if (!desktopId) return
 
     try {
-      const result = await (desktop as any).executeAction(action)
+      const result = await executeDesktopAction(action)
       setActionHistory(prev => [
         ...prev,
         {

@@ -126,7 +126,9 @@
     "autoprefixer": "^10.4.20",
     "bcryptjs": "^3.0.2",
     "better-sqlite3": "^11.1.2",
-    "bullmq": "^5.0.0",
+    "bullmq": "^5.34.0",
+    "bullmq-redis": "^1.0.0",
+    "ioredis": "^5.4.1",
     "chokidar": "^5.0.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -247,7 +249,8 @@
       "jsondiffpatch": ">=0.6.0",
       "undici": ">=7.1.0",
       "glob": ">=11.0.0",
-      "ioredis": "^5.4.1"
+      "ioredis": "^5.4.1",
+      "bullmq>ioredis": "^5.4.1"
     },
     "onlyBuiltDependencies": [
       "better-sqlite3"

@@ -9,7 +9,7 @@
 
 import { Mistral } from '@mistralai/mistralai'
 import { randomUUID } from 'node:crypto'
-import type { ToolResult } from '../types'
+import type { ToolResult } from '../../types'
 import type { ToolType } from './mistral-types'
 
 export interface AgentSpec {

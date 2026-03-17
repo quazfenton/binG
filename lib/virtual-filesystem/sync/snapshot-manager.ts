@@ -168,7 +168,7 @@ export class SnapshotManager extends EventEmitter {
     console.log(`Snapshot created: ${snapshotPath} (${result.sizeBytes} bytes)`);
     this.emit('snapshot_created', result);
     sandboxMetrics.snapshotCreatedTotal.inc({ status: 'success' });
-    sandboxMetrics.snapshotSizeBytes.observe({}, result.sizeBytes);
+    sandboxMetrics.snapshotSizeBytes.observe({ userId }, result.sizeBytes);
     sandboxMetrics.snapshotCreationDuration.observe({ userId }, duration);
 
     // Upload to remote storage backend if available

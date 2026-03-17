@@ -380,8 +380,24 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             if (!dataString) continue;
 
             // Use robust NDJSON parser to handle partial chunks
-            const parsedObjects = parser.parse(dataString);
-            
+            let parsedObjects: any[];
+            try {
+              parsedObjects = parser.parse(dataString);
+            } catch (parseError) {
+              // Handle parsing errors gracefully - use streaming error handler
+              const streamingError = streamingErrorHandler.processError(
+                parseError instanceof Error ? parseError : new Error(String(parseError))
+              );
+
+              // Only show error to user if it should be shown
+              if (streamingErrorHandler.shouldShowToUser(streamingError)) {
+                console.error('SSE parsing error:', parseError);
+              } else {
+                console.warn('SSE parsing error (handled silently):', parseError);
+              }
+              continue;
+            }
+
             for (const eventData of parsedObjects) {              // Determine event type from current context or data
               const eventType = currentEventType || eventData.type || 'token';
 
@@ -788,31 +804,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
                   break;
               }
-            }
+            } // End for loop
 
             // Handle other SSE fields (id, retry) - ignore them
             if (line.startsWith('id: ') || line.startsWith('retry: ')) {
               continue;
             }
-
-          } catch (parseError) {
-            // Handle parsing errors gracefully - use streaming error handler
-            const streamingError = streamingErrorHandler.processError(
-              parseError instanceof Error ? parseError : new Error(String(parseError))
-            );
-            
-            // Only show error to user if it should be shown
-            if (streamingErrorHandler.shouldShowToUser(streamingError)) {
-              console.error('SSE parsing error:', parseError);
-            } else {
-              console.warn('SSE parsing error (handled silently):', parseError);
-            }
-            
-            // Continue processing other lines even if one fails
-            continue;
-          }
-        }
-      }
+          } // End if (line.startsWith('data: '))
+        } // End for (const line of lines)
+      } // End while (true)
 
       // If we reach here without a 'done' event, consider it complete
       clearTimeout(timeoutId);

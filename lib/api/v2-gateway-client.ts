@@ -230,21 +230,34 @@ export async function* subscribeToSessionEvents(sessionId: string): AsyncGenerat
   try {
     await redis.psubscribe(channel)
 
-    const listener = new Promise.AsyncIterator<V2AgentEvent>((resolve, reject) => {
-      redis.on('pmessage', (pattern, channel, message) => {
-        try {
-          const event: V2AgentEvent = JSON.parse(message)
-          if (event.sessionId === sessionId || channel.includes(sessionId)) {
-            resolve({ value: event, done: false })
-          }
-        } catch (err: any) {
-          reject(err)
+    // Create async iterator for Redis messages
+    const messageQueue: V2AgentEvent[] = []
+    let errorOccurred: Error | null = null
+    let isDone = false
+
+    redis.on('pmessage', (pattern, channel, message) => {
+      try {
+        const event: V2AgentEvent = JSON.parse(message)
+        if (event.sessionId === sessionId || channel.includes(sessionId)) {
+          messageQueue.push(event)
         }
-      })
+      } catch (err: any) {
+        errorOccurred = err
+      }
     })
 
-    for await (const event of listener) {
-      yield event
+    // Poll for messages
+    while (!isDone && !errorOccurred) {
+      if (messageQueue.length > 0) {
+        yield messageQueue.shift()!
+      } else {
+        // Wait a bit before checking again
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+    }
+
+    if (errorOccurred) {
+      throw errorOccurred
     }
   } finally {
     redis.punsubscribe(channel)

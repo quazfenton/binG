@@ -1,11 +1,11 @@
 /**
  * Test Setup
- * 
+ *
  * Global test configuration and mocks
  */
 
 import '@testing-library/jest-dom/vitest';
-import { vi } from 'vitest';
+import { vi, afterAll } from 'vitest';
 
 // Mock console methods to reduce noise in tests
 const originalLog = console.log;

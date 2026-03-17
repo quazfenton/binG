@@ -6,7 +6,7 @@
  * SECURITY: All tool calls now require userId for proper isolation.
  */
 
-import { composioSessionManager, executeToolCall } from './composio-client';
+import { composioService } from '@/lib/platforms/composio-service';
 
 export interface ToolCall {
   tool: string;

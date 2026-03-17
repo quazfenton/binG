@@ -30,8 +30,8 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import { createLogger } from '../utils/logger';
-import { getSandboxProvider, type SandboxProviderType } from './providers';
+import { createLogger } from '@/lib/utils/logger';
+import { getSandboxProvider, type SandboxProviderType } from '../providers';
 
 const logger = createLogger('CloudAgent:Spawner');
 

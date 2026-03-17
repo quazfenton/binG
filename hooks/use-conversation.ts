@@ -151,31 +151,33 @@ export function useConversation() {
           }
           
           // Parse the JSON data
-          const parsedObjects = parser.parse(data);
-          for (const parsed of parsedObjects) {
-            if (parsed.choices?.[0]?.delta?.content) {
-              fullContent += parsed.choices[0].delta.content;
+          try {
+            const parsedObjects = parser.parse(data);
+            for (const parsed of parsedObjects) {
+              if (parsed.choices?.[0]?.delta?.content) {
+                fullContent += parsed.choices[0].delta.content;
 
-              // Throttle updates to once every 100ms
-              const now = Date.now();
-              if (now - lastUpdateTime.current > 100) {
-                lastUpdateTime.current = now;
-                setMessages(prev => {
-                  const existing = prev.find(m => m.id === messageId);
-                  if (existing) {
-                    return prev.map(m =>
-                      m.id === messageId
-                        ? { ...m, content: fullContent }
-                        : m
-                    );
-                  }
-                  return [...prev, {
-                    id: messageId,
-                    role: 'assistant',
-                    content: fullContent,
-                    timestamp: new Date().toISOString(),
-                  }];
-                });
+                // Throttle updates to once every 100ms
+                const now = Date.now();
+                if (now - lastUpdateTime.current > 100) {
+                  lastUpdateTime.current = now;
+                  setMessages(prev => {
+                    const existing = prev.find(m => m.id === messageId);
+                    if (existing) {
+                      return prev.map(m =>
+                        m.id === messageId
+                          ? { ...m, content: fullContent }
+                          : m
+                      );
+                    }
+                    return [...prev, {
+                      id: messageId,
+                      role: 'assistant',
+                      content: fullContent,
+                      timestamp: new Date().toISOString(),
+                    }];
+                  });
+                }
               }
             }
           } catch (e) {

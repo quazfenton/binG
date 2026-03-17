@@ -153,36 +153,6 @@ export function createStreamingEvents(
     })
   }
 
-  // Reflection results if available
-  if (response.data?.reflectionResults?.length) {
-    events.push(sseEncode('reflection', {
-      requestId,
-      reflections: response.data.reflectionResults,
-      qualityScore: response.data.qualityScore,
-    }))
-  }
-
-  // Multimodal content if available
-  if (response.data?.multiModalContent?.length) {
-    response.data.multiModalContent.forEach((item: any, index: number) => {
-      events.push(sseEncode('multimodal', {
-        requestId,
-        index,
-        ...item,
-      }))
-    })
-  }
-
-  // Sandbox output chunks (extracted from tool results)
-  const sandboxChunks = extractSandboxOutputChunks(response.data?.toolInvocations || [])
-  for (const chunk of sandboxChunks) {
-    events.push(sseEncode('sandbox_output', {
-      requestId,
-      ...chunk,
-      timestamp: Date.now(),
-    }))
-  }
-
   // Done event
   events.push(sseEncode('done', {
     requestId,

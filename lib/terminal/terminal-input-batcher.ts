@@ -86,7 +86,7 @@ export class TerminalInputBatcher {
   /**
    * Send resize
    */
-  sendResize(cols: number, rows: number): void {
+  resize(cols: number, rows: number): void {
     if (this.sessionId) {
       this.sendResize(this.sessionId, cols, rows)
     }

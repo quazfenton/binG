@@ -14,10 +14,10 @@
 
 import { createServer } from 'http';
 import { createLogger } from '@/lib/utils/logger';
-import { getSandboxProvider, getSandboxProviderWithFallback } from '@/lib/sandbox/providers';
+import { getSandboxProvider, getSandboxProviderWithFallback } from '../../lib/sandbox/providers';
 import type { SandboxHandle, SandboxCreateConfig, SandboxProviderType } from '@/lib/sandbox/providers';
 import { backgroundExecutor } from '@/lib/agent/background-jobs';
-import { createResourceMonitor, type ResourceMonitor } from '@/lib/sandbox/resource-monitor';
+import { createResourceMonitor, type ResourceMonitor } from '@/lib/management/resource-monitor';
 import Redis from 'ioredis';
 
 const logger = createLogger('SandboxPool');
