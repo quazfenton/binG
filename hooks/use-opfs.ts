@@ -8,7 +8,7 @@
 'use client';
 
 import { useCallback, useEffect, useState, useRef } from 'react';
-import { opfsAdapter, type SyncStatus, type SyncResult } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
+import { opfsAdapter, OPFSAdapter, type SyncStatus, type SyncResult } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
 import { opfsCore, type OPFSStats } from '@/lib/virtual-filesystem/opfs/opfs-core';
 import { formatBytes, getOPFSSupportInfo } from '@/lib/virtual-filesystem/opfs/utils';
 
@@ -80,7 +80,7 @@ export function useOPFS(
     lastSyncTime: null,
     isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
     hasConflicts: false,
-    opfsSupported: opfsAdapter.constructor.isSupported(),
+    opfsSupported: OPFSAdapter.isSupported(),
   });
   const [supportInfo, setSupportInfo] = useState<ReturnType<typeof getOPFSSupportInfo>>(
     typeof window !== 'undefined' ? getOPFSSupportInfo() : {

@@ -11,9 +11,12 @@
  * ```
  */
 
-// Import from unified logger - re-export types for backwards compatibility
-export type { LogLevel, LogEntry, LoggerConfig } from './logger';
-export { Logger, createLogger, configureLogger, flushLogs, loggers } from './logger';
+// Import from unified logger
+import { Logger, createLogger, configureLogger, flushLogs, loggers, type LogLevel, type LogEntry, type LoggerConfig as UnifiedLoggerConfig } from './logger';
+
+// Re-export for backwards compatibility
+export { Logger, createLogger, configureLogger, flushLogs, loggers };
+export type { LogLevel, LogEntry };
 
 /**
  * Secure Logger configuration
@@ -30,17 +33,17 @@ export interface SecureLoggerConfig {
 /**
  * Backwards-compatible SecureLogger class
  * Wraps the unified Logger to maintain old API
- * 
+ *
  * @deprecated Use createLogger(source, { secure: true }) instead
  */
 export class SecureLogger extends Logger {
   constructor(config?: SecureLoggerConfig) {
     super('SecureLogger', {
-      level: config?.level || 'info',
-      enableRedaction: config?.enableRedaction ?? true,
-      enableTimestamps: config?.enableTimestamps ?? true,
-      prefix: config?.prefix || '[SecureLogger]',
+      minLevel: config?.level || 'info',
       secure: true,
+      showTimestamp: config?.enableTimestamps ?? true,
+      showSource: config?.prefix ? true : false,
+      includeStack: false,
     });
   }
 
@@ -49,7 +52,7 @@ export class SecureLogger extends Logger {
    * @deprecated Use createLogger with secure: true instead
    */
   enableRedaction(): void {
-    this.config.secure = true;
+    (this as any).config.secure = true;
   }
 
   /**
@@ -59,7 +62,7 @@ export class SecureLogger extends Logger {
    */
   disableRedaction(): void {
     console.warn('⚠️  Redaction disabled - DO NOT USE IN PRODUCTION');
-    this.config.secure = false;
+    (this as any).config.secure = false;
   }
 
   /**
@@ -67,7 +70,6 @@ export class SecureLogger extends Logger {
    * @deprecated Use createLogger(source, { secure: true }).info() instead
    */
   redact(text: string): string {
-    // Access protected method via super call
     return (this as any).redact(text);
   }
 
@@ -76,7 +78,6 @@ export class SecureLogger extends Logger {
    * @deprecated Use createLogger(source, { secure: true }).info() instead
    */
   redactObject(obj: any, maxDepth?: number): any {
-    // Access protected method via super call
     return (this as any).redactObject(obj, maxDepth);
   }
 
@@ -85,11 +86,12 @@ export class SecureLogger extends Logger {
    * @deprecated Use createLogger(source, { secure: true }) instead
    */
   child(prefix: string): SecureLogger {
+    const childConfig = (this as any).config;
     const child = new SecureLogger({
-      level: this.config.level,
-      enableRedaction: this.config.secure,
-      enableTimestamps: this.config.enableTimestamps,
-      prefix: `${this.config.prefix || ''}${prefix}`,
+      level: childConfig.minLevel,
+      enableRedaction: childConfig.secure,
+      enableTimestamps: childConfig.showTimestamp,
+      prefix: `${childConfig.showSource ? prefix : ''}`,
     });
     return child;
   }
