@@ -43,6 +43,7 @@ export type SandboxProviderType =
   | 'mistral-agent'
   | 'mistral'
   | 'vercel-sandbox'
+  | 'oracle-vm'
 
 // Provider registry
 interface ProviderEntry {
@@ -337,6 +338,22 @@ function initializeRegistry() {
     asyncFactory: async () => {
       const { VercelSandboxProvider } = await import('./vercel-sandbox-provider')
       return new VercelSandboxProvider()
+    },
+  })
+
+  // Oracle VM - SSH into Oracle Cloud Infrastructure VM instances
+  providerRegistry.set('oracle-vm', {
+    provider: null as any,
+    priority: 9,
+    enabled: true,
+    available: !!process.env.ORACLE_VM_HOST,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { OracleVMProvider } = await import('./oracle-vm-provider')
+      return new OracleVMProvider()
     },
   })
 }
