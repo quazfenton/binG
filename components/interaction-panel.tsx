@@ -106,6 +106,8 @@ import ObservableEmbedPlugin from "./plugins/observable-embed-plugin";
 import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
+import PStreamEmbedPlugin from "./plugins/pstream-embed-plugin";
+import E2BDesktopPlugin from "./plugins/e2b-desktop-plugin";
 import IntegrationPanel from "./integrations/IntegrationPanel";
 import { useVirtualFilesystem, type AttachedVirtualFile } from "../hooks/use-virtual-filesystem";
 import { usePanel } from "../contexts/panel-context";
@@ -200,6 +202,16 @@ const popOutPlugins: Plugin[] = [
     minSize: { width: 600, height: 400 },
   },
   {
+    id: "pstream-embed",
+    name: "Movies",
+    description: "Watch movies and TV shows from pstream.net",
+    icon: Film,
+    component: PStreamEmbedPlugin,
+    category: "media",
+    defaultSize: { width: 1000, height: 700 },
+    minSize: { width: 800, height: 600 },
+  },
+  {
     id: "github-explorer",
     name: "GitHub Explorer",
     description: "Browse trending repositories and analyze code",
@@ -268,6 +280,16 @@ const popOutPlugins: Plugin[] = [
     category: "code",
     defaultSize: { width: 1000, height: 800 },
     minSize: { width: 800, height: 600 },
+  },
+  {
+    id: "e2b-desktop",
+    name: "E2B Desktop",
+    description: "Computer use desktop environment with VNC streaming",
+    icon: Monitor,
+    component: E2BDesktopPlugin,
+    category: "media",
+    defaultSize: { width: 1200, height: 800 },
+    minSize: { width: 900, height: 600 },
   },
 ];
 

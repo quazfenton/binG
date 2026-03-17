@@ -11,14 +11,14 @@
  * - Screenshot gallery
  * - Terminal command execution
  * - Agent loop monitoring
+ *
+ * Uses API endpoints instead of direct server imports
  */
 
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { createComputerUseAgent, getComputerUseSystemPrompt, computerUseTools, toolCallToAction } from '@/lib/sandbox/providers/computer-use-tools-enhanced'
-import type { DesktopSandboxHandle, DesktopAction, DesktopStats } from '@/lib/computer/e2b-desktop-provider-enhanced'
-import { openai } from '@ai-sdk/openai'
+import { toast } from 'sonner'
 
 // ==================== Types ====================
 
@@ -27,18 +27,40 @@ interface DesktopPluginProps {
   isVisible?: boolean
 }
 
+interface DesktopInfo {
+  sandboxId: string
+  streamUrl: string
+  resolution: [number, number]
+  createdAt: number
+}
+
+interface DesktopStats {
+  actions: number
+  screenshots: number
+  commands: number
+  uptime: number
+}
+
 interface ActionHistoryItem {
   id: string
-  action: DesktopAction
+  iteration: number
+  action: any
   result: { success: boolean; output: string }
   timestamp: number
+}
+
+interface ApiResponse<T> {
+  success: boolean
+  data?: T
+  error?: string
+  details?: string
 }
 
 // ==================== Component ====================
 
 export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopPluginProps) {
   // Desktop state
-  const [desktop, setDesktop] = useState<DesktopSandboxHandle | null>(null)
+  const [desktopId, setDesktopId] = useState<string>('')
   const [streamUrl, setStreamUrl] = useState<string>('')
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
@@ -67,38 +89,51 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
   // ==================== Desktop Lifecycle ====================
 
   /**
-   * Connect to desktop sandbox
+   * Connect to desktop sandbox via API
    */
   const connectToDesktop = useCallback(async () => {
     setIsConnecting(true)
     setError('')
 
     try {
-      const { e2bDesktopProvider } = await import('@/lib/computer/e2b-desktop-provider-enhanced')
-
-      const desktopHandle = await e2bDesktopProvider.createDesktop({
-        resolution: [1024, 720],
-        dpi: 96,
-        timeoutMs: 300000,
-        startStreaming: true,
-        // Note: autoCleanup is not a valid option for createDesktop
-        // Use desktopSessionManager.createSession if you need autoCleanup
+      const response = await fetch('/api/e2b/desktop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resolution: [1024, 720],
+          dpi: 96,
+          timeoutMs: 300000,
+        }),
       })
 
-      setDesktop(desktopHandle)
-      setStreamUrl(desktopHandle.getStreamUrl() || '')
+      const data: ApiResponse<DesktopInfo> = await response.json()
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to create desktop')
+      }
+
+      setDesktopId(data.data!.sandboxId)
+      setStreamUrl(data.data!.streamUrl)
       setIsConnected(true)
 
       // Start stats polling
-      const statsInterval = setInterval(() => {
-        if (desktopHandle.isAlive()) {
-          setStats(desktopHandle.getStats())
-        } else {
+      const statsInterval = setInterval(async () => {
+        try {
+          const statsResponse = await fetch(`/api/e2b/desktop/${data.data!.sandboxId}`)
+          const statsData: ApiResponse<{ stats: DesktopStats; screenshot: string }> = await statsResponse.json()
+          
+          if (statsData.success) {
+            setStats(statsData.data!.stats)
+            setCurrentScreenshot(statsData.data!.screenshot)
+          } else {
+            clearInterval(statsInterval)
+          }
+        } catch {
           clearInterval(statsInterval)
         }
       }, 5000)
 
-      console.log('[DesktopPlugin] Connected to desktop:', desktopHandle.id)
+      console.log('[DesktopPlugin] Connected to desktop:', data.data!.sandboxId)
     } catch (err: any) {
       console.error('[DesktopPlugin] Connection error:', err)
       setError(err.message || 'Failed to connect to desktop')
@@ -108,32 +143,110 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
   }, [])
 
   /**
-   * Disconnect from desktop
+   * Disconnect from desktop via API
    */
   const disconnectFromDesktop = useCallback(async () => {
-    if (desktop) {
-      try {
-        await desktop.kill()
-        setDesktop(null)
-        setStreamUrl('')
-        setIsConnected(false)
-        setActionHistory([])
-        setStats(null)
-        console.log('[DesktopPlugin] Disconnected from desktop')
-      } catch (err: any) {
-        console.error('[DesktopPlugin] Disconnect error:', err)
-      }
+    if (!desktopId) return
+
+    try {
+      await fetch(`/api/e2b/desktop/${desktopId}`, {
+        method: 'DELETE',
+      })
+      
+      setDesktopId('')
+      setStreamUrl('')
+      setIsConnected(false)
+      setActionHistory([])
+      setStats(null)
+      console.log('[DesktopPlugin] Disconnected from desktop')
+    } catch (err: any) {
+      console.error('[DesktopPlugin] Disconnect error:', err)
     }
-  }, [desktop])
+  }, [desktopId])
+
+  /**
+   * Execute computer use agent action via API
+   */
+  const runAgent = useCallback(async () => {
+    if (!desktopId || !agentTask) return
+
+    setIsAgentRunning(true)
+    setCurrentIteration(0)
+    setActionHistory([])
+
+    try {
+      const response = await fetch(`/api/e2b/desktop/${desktopId}/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task: agentTask,
+          maxIterations,
+        }),
+      })
+
+      const data: ApiResponse<{ iterations: number; actions: ActionHistoryItem[]; completed: boolean }> = await response.json()
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to run agent')
+      }
+
+      setActionHistory(data.data!.actions.map((action, i) => ({
+        ...action,
+        timestamp: Date.now() + i,
+      })))
+      setCurrentIteration(data.data!.iterations)
+
+      // Fetch updated screenshot
+      const screenshotResponse = await fetch(`/api/e2b/desktop/${desktopId}/screenshot`)
+      const screenshotData: ApiResponse<{ screenshot: string }> = await screenshotResponse.json()
+      if (screenshotData.success) {
+        setCurrentScreenshot(screenshotData.data!.screenshot)
+      }
+
+      toast.success(data.data!.completed ? 'Task completed' : `Completed ${data.data!.iterations} iterations`)
+    } catch (err: any) {
+      console.error('[DesktopPlugin] Agent error:', err)
+      setError(err.message || 'Failed to run agent')
+      toast.error('Agent failed: ' + err.message)
+    } finally {
+      setIsAgentRunning(false)
+    }
+  }, [desktopId, agentTask, maxIterations])
+
+  /**
+   * Execute terminal command via API
+   */
+  const executeTerminalCommand = useCallback(async (command: string) => {
+    if (!desktopId || !command) return
+
+    try {
+      const response = await fetch(`/api/e2b/desktop/${desktopId}/terminal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command }),
+      })
+
+      const data: ApiResponse<{ output: string; exitCode: number }> = await response.json()
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to execute command')
+      }
+
+      setTerminalOutput(prev => [...prev, `$ ${command}`, data.data!.output])
+      terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    } catch (err: any) {
+      setTerminalOutput(prev => [...prev, `$ ${command}`, `Error: ${err.message}`])
+    }
+  }, [desktopId])
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (desktop && desktop.isAlive()) {
-        desktop.kill().catch(console.error)
+      if (desktopId) {
+        disconnectFromDesktop().catch(console.error)
       }
     }
-  }, [desktop])
+  }, [desktopId, disconnectFromDesktop])
 
   // Auto-connect on mount
   useEffect(() => {
