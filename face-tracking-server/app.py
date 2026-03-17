@@ -44,14 +44,28 @@ face_data = {
 def init_camera():
     """Initialize webcam"""
     global camera
-    try:
-        camera = cv2.VideoCapture(0)
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        return camera.isOpened()
-    except Exception as e:
-        print(f"Camera init error: {e}")
+    
+    # Reuse already-open camera to prevent resource leaks
+    if camera and camera.isOpened():
+        return True
+    
+    # Try to open new camera
+    new_camera = cv2.VideoCapture(0)
+    new_camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    new_camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    
+    if not new_camera.isOpened():
+        new_camera.release()
+        print("Failed to initialize camera")
         return False
+    
+    # Release old camera if exists
+    if camera:
+        camera.release()
+    
+    camera = new_camera
+    print("Camera initialized successfully")
+    return True
 
 def release_camera():
     """Release webcam"""
@@ -107,7 +121,8 @@ def calculate_expressions(landmarks, face_rect):
     
     if face_height > 0:
         avg_brow_raise = (left_brow_raise + right_brow_raise) / 2
-        expressions["eyebrows_raised"] = min(1.0, (avg_brow_raise / face_height - 0.05) * 10)
+        # Clamp to 0.0-1.0 range to prevent negative or out-of-range values
+        expressions["eyebrows_raised"] = max(0.0, min(1.0, (avg_brow_raise / face_height - 0.05) * 10))
     
     # Head rotation estimation (simplified)
     nose_tip = landmarks[1]
@@ -123,20 +138,23 @@ def calculate_expressions(landmarks, face_rect):
 def track_faces():
     """Main face tracking loop"""
     global face_data, is_tracking, camera
-    
+
     with mp_face_mesh.FaceMesh(
         max_num_faces=1,
         refine_landmarks=True,
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
     ) as face_mesh:
-        
+
         while is_tracking:
-            if not camera:
+            # CRITICAL: Capture camera reference once per iteration to prevent race condition
+            # Another request could release camera between check and .read() call
+            current_camera = camera
+            if current_camera is None:
                 time.sleep(0.1)
                 continue
             
-            ret, frame = camera.read()
+            ret, frame = current_camera.read()
             if not ret:
                 time.sleep(0.1)
                 continue
