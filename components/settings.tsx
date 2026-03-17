@@ -27,6 +27,7 @@ import {
   Mail,
   Trophy,
   Check,
+  Server,
 } from "lucide-react";
 import ModalLoginForm from "@/components/auth/modal-login-form";
 import ModalSignupForm from "@/components/auth/modal-signup-form";
@@ -119,6 +120,134 @@ export default function Settings({
   const [assistantBubbleBg, setAssistantBubbleBg] = useState("#000000");
   const [assistantBubbleText, setAssistantBubbleText] = useState("#ffffff");
   const [assistantBubbleBorder, setAssistantBubbleBorder] = useState("#ffffff");
+
+  // Environment variable toggles state (user-specific overrides)
+  const [envVars, setEnvVars] = useState<Record<string, boolean>>({
+    OPENCODE_ENABLED: false,
+    NULLCLAW_ENABLED: false,
+  });
+
+  // Oracle VM configuration state
+  const [oracleVmConfig, setOracleVmConfig] = useState({
+    host: '',
+    port: 22,
+    username: 'opc',
+    privateKeyPath: '~/.ssh/id_rsa',
+    workspace: '/home/opc/workspace',
+  });
+
+  // Load Oracle VM config from localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = localStorage.getItem('oracle_vm_config');
+    if (saved) {
+      try {
+        setOracleVmConfig(JSON.parse(saved));
+      } catch (e) {
+        console.error('Failed to load Oracle VM config:', e);
+      }
+    }
+  }, []);
+
+  // Save Oracle VM config to localStorage
+  const handleSaveOracleVmConfig = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('oracle_vm_config', JSON.stringify(oracleVmConfig));
+      toast.success('Oracle VM configuration saved');
+    }
+  };
+
+  // Load env var toggles from localStorage and server on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    const loadPreferences = async () => {
+      // Start with localStorage (for offline/immediate feedback)
+      const saved = localStorage.getItem('user_env_overrides');
+      let localPrefs: Record<string, boolean> = {};
+      if (saved) {
+        try {
+          localPrefs = JSON.parse(saved);
+        } catch (e) {
+          console.error('Failed to parse localStorage prefs:', e);
+        }
+      }
+      
+      // If authenticated, fetch from server (overrides localStorage)
+      if (isAuthenticated) {
+        try {
+          const response = await fetch('/api/user/preferences');
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.preferences) {
+              // Merge server prefs with local
+              const merged = { ...localPrefs, ...data.preferences };
+              setEnvVars(merged);
+              
+              // Update localStorage with server data
+              localStorage.setItem('user_env_overrides', JSON.stringify(merged));
+              
+              // Apply to document for CSS-based feature flags
+              Object.entries(merged).forEach(([key, value]) => {
+                if (value === true) {
+                  document.documentElement.setAttribute(`data-${key.toLowerCase()}`, 'true');
+                } else {
+                  document.documentElement.removeAttribute(`data-${key.toLowerCase()}`);
+                }
+              });
+              
+              return; // Done
+            }
+          }
+        } catch (e) {
+          console.error('Failed to load server preferences:', e);
+          // Fall back to localStorage
+        }
+      }
+      
+      // Use localStorage if not authenticated or server fetch failed
+      if (Object.keys(localPrefs).length > 0) {
+        setEnvVars(localPrefs);
+        Object.entries(localPrefs).forEach(([key, value]) => {
+          if (value === true) {
+            document.documentElement.setAttribute(`data-${key.toLowerCase()}`, 'true');
+          } else {
+            document.documentElement.removeAttribute(`data-${key.toLowerCase()}`);
+          }
+        });
+      }
+    };
+    
+    loadPreferences();
+  }, [isAuthenticated]);
+
+  // Save env var toggles to localStorage and sync to server
+  const toggleEnvVar = async (key: string) => {
+    setEnvVars((prev) => {
+      const updated = { ...prev, [key]: !prev[key] };
+      if (typeof window !== 'undefined') {
+        // Save to localStorage
+        localStorage.setItem('user_env_overrides', JSON.stringify(updated));
+        
+        // Apply to document for CSS-based feature flags
+        if (updated[key]) {
+          document.documentElement.setAttribute(`data-${key.toLowerCase()}`, 'true');
+        } else {
+          document.documentElement.removeAttribute(`data-${key.toLowerCase()}`);
+        }
+        
+        // Sync to server (if authenticated)
+        fetch('/api/user/preferences', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [key]: updated[key] }),
+        }).catch(err => console.warn('Failed to sync preference to server:', err));
+        
+        toast.success(`${key} ${updated[key] ? 'enabled' : 'disabled'}`);
+      }
+      return updated;
+    });
+  };
   
   // Color picker state
   const [openColorPicker, setOpenColorPicker] = useState<string | null>(null);
@@ -1091,6 +1220,137 @@ export default function Settings({
               >
                 <div className="custom-toggle-slider" />
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Environment Variables Section - User Overrides */}
+        <div className="bg-black/30 rounded-lg p-4 border border-white/10">
+          <div className="flex items-center gap-2 mb-4">
+            <SettingsIcon className="h-4 w-4" />
+            <h3 className="font-medium">User Feature Overrides</h3>
+          </div>
+          <p className="text-xs text-gray-400 mb-3">
+            Override environment variables for your session. Settings sync to your account and persist across devices.
+          </p>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <Label htmlFor="opencode-enabled" className="text-sm">OpenCode</Label>
+                <p className="text-xs text-gray-500">OpenCode AI integration (alternative to default LLM)</p>
+              </div>
+              <div
+                className={`custom-toggle ${envVars.OPENCODE_ENABLED ? 'active' : ''}`}
+                onClick={() => toggleEnvVar('OPENCODE_ENABLED')}
+                title={envVars.OPENCODE_ENABLED ? 'Enabled' : 'Disabled'}
+              >
+                <div className="custom-toggle-slider" />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <Label htmlFor="nullclaw-enabled" className="text-sm">Nullclaw</Label>
+                <p className="text-xs text-gray-500">Nullclaw integration for advanced agent capabilities</p>
+              </div>
+              <div
+                className={`custom-toggle ${envVars.NULLCLAW_ENABLED ? 'active' : ''}`}
+                onClick={() => toggleEnvVar('NULLCLAW_ENABLED')}
+                title={envVars.NULLCLAW_ENABLED ? 'Enabled' : 'Disabled'}
+              >
+                <div className="custom-toggle-slider" />
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-2">
+            <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+              <p className="text-xs text-blue-400">
+                💡 <strong>How it works:</strong> Your preferences override server environment variables for your session only.
+              </p>
+            </div>
+            <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+              <p className="text-xs text-green-400">
+                ✅ <strong>Synced to account:</strong> Settings persist across devices when logged in.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Oracle VM Configuration */}
+        <div className="bg-black/30 rounded-lg p-4 border border-white/10">
+          <div className="flex items-center gap-2 mb-4">
+            <Server className="h-4 w-4" />
+            <h3 className="font-medium">Oracle VM Sandbox</h3>
+          </div>
+          <p className="text-xs text-gray-400 mb-3">
+            Connect to your Oracle Cloud Infrastructure VM for sandboxed code execution via SSH.
+          </p>
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="oracle-vm-host" className="text-xs text-white/70">VM Host (IP or hostname)</Label>
+              <Input
+                id="oracle-vm-host"
+                value={oracleVmConfig.host}
+                onChange={(e) => setOracleVmConfig(prev => ({ ...prev, host: e.target.value }))}
+                placeholder="192.168.1.100 or vm-host.oraclecloud.com"
+                className="bg-black/30 border-white/20 text-xs"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label htmlFor="oracle-vm-port" className="text-xs text-white/70">SSH Port</Label>
+                <Input
+                  id="oracle-vm-port"
+                  type="number"
+                  value={oracleVmConfig.port}
+                  onChange={(e) => setOracleVmConfig(prev => ({ ...prev, port: parseInt(e.target.value) || 22 }))}
+                  placeholder="22"
+                  className="bg-black/30 border-white/20 text-xs"
+                />
+              </div>
+              <div>
+                <Label htmlFor="oracle-vm-user" className="text-xs text-white/70">Username</Label>
+                <Input
+                  id="oracle-vm-user"
+                  value={oracleVmConfig.username}
+                  onChange={(e) => setOracleVmConfig(prev => ({ ...prev, username: e.target.value }))}
+                  placeholder="opc"
+                  className="bg-black/30 border-white/20 text-xs"
+                />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="oracle-vm-key" className="text-xs text-white/70">SSH Private Key Path</Label>
+              <Input
+                id="oracle-vm-key"
+                value={oracleVmConfig.privateKeyPath}
+                onChange={(e) => setOracleVmConfig(prev => ({ ...prev, privateKeyPath: e.target.value }))}
+                placeholder="~/.ssh/id_rsa"
+                className="bg-black/30 border-white/20 text-xs"
+              />
+            </div>
+            <div>
+              <Label htmlFor="oracle-vm-workspace" className="text-xs text-white/70">Workspace Directory</Label>
+              <Input
+                id="oracle-vm-workspace"
+                value={oracleVmConfig.workspace}
+                onChange={(e) => setOracleVmConfig(prev => ({ ...prev, workspace: e.target.value }))}
+                placeholder="/home/opc/workspace"
+                className="bg-black/30 border-white/20 text-xs"
+              />
+            </div>
+            <Button
+              size="sm"
+              className="w-full"
+              onClick={handleSaveOracleVmConfig}
+            >
+              Save Configuration
+            </Button>
+            <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+              <p className="text-xs text-yellow-400">
+                ⚠️ <strong>Required:</strong> SSH private key must be configured. Set <code>ORACLE_VM_HOST</code> environment variable to enable.
+              </p>
             </div>
           </div>
         </div>
