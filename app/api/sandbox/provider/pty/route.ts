@@ -184,6 +184,10 @@ async function handleProviderPTYRequest(
  * Auto-detects provider from sandbox ID.
  */
 export async function POST(req: NextRequest) {
+  let body: { sandboxId?: string; sessionId?: string } = {};
+  let sandboxId: string | undefined;
+  let sessionId: string | undefined;
+  
   try {
     // Authenticate request
     const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
@@ -195,12 +199,13 @@ export async function POST(req: NextRequest) {
     }
 
     // Parse request body
-    const body = await req.json();
-    const { sandboxId, sessionId } = body;
+    body = await req.json();
+    sandboxId = body.sandboxId;
+    sessionId = body.sessionId;
 
     if (!sandboxId || !sessionId) {
       return NextResponse.json(
-        { error: 'sandboxId and sessionId are required' },
+        { error: 'sandboxId and sessionId are required', received: Object.keys(body) },
         { status: 400 }
       );
     }
@@ -208,9 +213,24 @@ export async function POST(req: NextRequest) {
     // Detect provider type
     const providerType = detectProviderType(sandboxId);
     
+    logger.debug('Provider type detection', {
+      sandboxId,
+      detectedType: providerType,
+      prefixes: ['e2b-', 'daytona-', 'sprite-', 'codesandbox-', 'csb-', 'vercel-', 'mistral-', 'blaxel-', 'micro-']
+    });
+
     if (!providerType) {
+      logger.warn('Unknown provider type for PTY request', {
+        sandboxId,
+        sessionId,
+        hint: 'Sandbox ID must start with one of: e2b-, daytona-, sprite-, csb-, codesandbox-, vercel-, mistral-, blaxel-, micro-'
+      });
       return NextResponse.json(
-        { error: 'Unknown provider type. Sandbox ID must have provider prefix (e2b-, daytona-, sprite-, etc.)' },
+        { 
+          error: 'Unknown provider type. Sandbox ID must have provider prefix (e2b-, daytona-, sprite-, csb-, vercel-, etc.)',
+          providedSandboxId: sandboxId,
+          supportedPrefixes: ['e2b-', 'daytona-', 'sprite-', 'csb-', 'codesandbox-', 'vercel-', 'mistral-', 'blaxel-', 'micro-']
+        },
         { status: 400 }
       );
     }
@@ -219,9 +239,26 @@ export async function POST(req: NextRequest) {
     const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
     const session = sandboxBridge.getSessionBySandboxId(sandboxId);
     
+    logger.debug('Session lookup for PTY', {
+      sandboxId,
+      sessionFound: !!session,
+      sessionUserId: session?.userId,
+      sessionStatus: session?.status,
+    });
+
     if (!session) {
+      logger.warn('Sandbox session not found for PTY', {
+        sandboxId,
+        sessionId,
+        providerType,
+        possibleCauses: ['sandbox destroyed', 'session expired', 'invalid sandbox ID']
+      });
       return NextResponse.json(
-        { error: 'Sandbox not found or has been terminated' },
+        { 
+          error: 'Sandbox not found or has been terminated',
+          sandboxId,
+          suggestion: 'Create a new sandbox or verify the sandbox ID is correct'
+        },
         { status: 404 }
       );
     }
@@ -247,6 +284,12 @@ export async function POST(req: NextRequest) {
     });
 
     // Get provider-specific PTY URL
+    logger.debug('Fetching PTY URL from provider', {
+      providerType,
+      sandboxId,
+      sessionId
+    });
+
     const ptyInfo = await handleProviderPTYRequest(sandboxId, sessionId, providerType);
 
     logger.info('Provider PTY URL obtained', {
@@ -254,18 +297,37 @@ export async function POST(req: NextRequest) {
       sandboxId,
       hasPtyUrl: !!ptyInfo.ptyUrl,
       hasWsUrl: !!ptyInfo.wsUrl,
+      hasWorkspaceUrl: !!ptyInfo.workspaceUrl,
+      urlPreview: ptyInfo.ptyUrl || ptyInfo.wsUrl || ptyInfo.workspaceUrl 
+        ? (ptyInfo.ptyUrl || ptyInfo.wsUrl || ptyInfo.workspaceUrl).replace(/\/\/[^/]+\//, '//[host]/') 
+        : null
     });
 
     return NextResponse.json(ptyInfo);
   } catch (error: any) {
-    logger.error('Provider PTY request failed', error);
+    logger.error('Provider PTY request failed', {
+      error: error.message,
+      stack: error.stack,
+      sandboxId,
+      sessionId,
+      providerType: detectProviderType(sandboxId || '')
+    });
+
+    const isAuthError = error.message?.includes('permission') || error.message?.includes('unauthorized');
+    const isNotFoundError = error.message?.includes('not found') || error.message?.includes('does not exist');
     
     return NextResponse.json(
       { 
         error: error.message || 'Failed to get provider PTY URL',
-        fallback: 'Use generic WebSocket endpoint instead'
+        providerType: detectProviderType(sandboxId || ''),
+        suggestion: isAuthError 
+          ? 'Check sandbox ownership and permissions'
+          : isNotFoundError 
+            ? 'Verify sandbox exists and is running'
+            : 'Use generic WebSocket endpoint as fallback: /api/sandbox/terminal/ws',
+        fallback: 'Use generic WebSocket endpoint: /api/sandbox/terminal/ws'
       },
-      { status: 500 }
+      { status: isAuthError ? 403 : isNotFoundError ? 404 : 500 }
     );
   }
 }

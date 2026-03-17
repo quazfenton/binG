@@ -24,6 +24,9 @@ import {
 
 export interface GlitchEmbedPluginProps {
   onOpenWindow?: (projectId: string, title: string) => void;
+  onClose?: () => void;
+  onResult?: (result: any) => void;
+  initialData?: any;
 }
 
 export interface GlitchProject {

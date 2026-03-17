@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSmitheryService } from '@/lib/mcp/smithery-service';
-import type { SmitheryServer } from '@/lib/tool-integration/providers/smithery-client';
+import type { SmitheryServer } from '@/lib/tools/tool-integration/providers/smithery-client';
 import { verifyAuth } from '@/lib/auth/jwt';
 
 

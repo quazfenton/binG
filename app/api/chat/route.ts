@@ -1,28 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from 'zod';
-import { llmService, PROVIDERS } from "@/lib/api/llm-providers";
-import { errorHandler } from "@/lib/api/error-handler";
-import { priorityRequestRouter } from "@/lib/api/priority-request-router";
-import { unifiedResponseHandler } from "@/lib/api/unified-response-handler";
+import { llmService, PROVIDERS } from "@/lib/chat/llm-providers";
+import { errorHandler } from "@/lib/chat/error-handler";
+import { responseRouter } from "@/lib/api/response-router";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
 import { generateSecureId } from '@/lib/utils';
-import { chatRequestLogger } from '@/lib/api/chat-request-logger';
-import { chatLogger } from '@/lib/api/chat-logger';
+import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
+import { chatLogger } from '@/lib/chat/chat-logger';
 import { parsePatch, applyPatch } from 'diff';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
-import { ShadowCommitManager } from '@/lib/stateful-agent/commit/shadow-commit';
+import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil } from '@/lib/virtual-filesystem/scope-utils';
-import type { LLMMessage } from "@/lib/api/llm-providers";
+import type { LLMMessage } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
-import { createFilesystemTools, createAgentLoop } from '@/lib/mastra';
+import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
 import { executeV2Task, executeV2TaskStreaming } from '@/lib/agent/v2-executor';
-import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/api/unified-agent-service';
+import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@/lib/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
+import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -278,17 +278,25 @@ export async function POST(request: NextRequest) {
       ));
 
     if (wantsV2) {
-      if (!authenticatedUserId) {
+      // Allow unauthenticated users to send up to 3 messages before requiring login
+      const userMessageCount = messages.filter((m) => m.role === 'user').length;
+      const MAX_GUEST_MESSAGES = 3;
+
+      if (!authenticatedUserId && userMessageCount > MAX_GUEST_MESSAGES) {
         return NextResponse.json({
           success: false,
           status: 'auth_required',
-          loginRequired: true, // Explicitly mark as site login, not OAuth
+          loginRequired: true,
           error: {
             type: 'auth_required',
-            message: 'Agent V2 requires authentication. Please log in first.',
+            message: `You've reached the ${MAX_GUEST_MESSAGES}-message limit for V2 Agent. Please create an account or log in to continue.`,
           },
         }, { status: 401 });
       }
+
+        // For unauthenticated users, use "guest" as the userId
+        // Don't include conversationId in userId as it causes duplicate paths in workspace
+        const effectiveUserId = authenticatedUserId || 'guest';
 
       const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content;
       const task = typeof lastUserMessage === 'string'
@@ -297,58 +305,87 @@ export async function POST(request: NextRequest) {
 
       const context = buildAgenticContext(contextualMessages);
 
+      // Check if we should use the agent gateway
+      const gatewayUrl = process.env.V2_GATEWAY_URL;
+
       // Try V2 execution with fallback to v1/regular LLM chat on failure
       try {
-        if (stream) {
-          const streamBody = executeV2TaskStreaming({
-            userId: authenticatedUserId,
+        if (stream && gatewayUrl) {
+          // Use agent gateway for streaming
+          return await handleGatewayStreaming({
+            gatewayUrl,
+            userId: effectiveUserId,
             conversationId: resolvedConversationId,
             task,
             context,
-            stream: true,
-          });
-
-          return new Response(streamBody, {
-            headers: {
-              'Content-Type': 'text/event-stream',
-              'Cache-Control': 'no-cache, no-store, must-revalidate',
-              Pragma: 'no-cache',
-              Expires: '0',
-              Connection: 'keep-alive',
-              'X-Accel-Buffering': 'no',
-            },
+            requestId,
           });
         }
 
-        const v2Result = await executeV2Task({
-          userId: authenticatedUserId,
-          conversationId: resolvedConversationId,
-          task,
-          context,
-        });
-
-        // If V2 explicitly signals fallback needed (session creation failed)
-        if (v2Result.fallbackToV1) {
-          chatLogger.warn('V2 execution failed, falling back to v1/regular LLM chat', { requestId }, {
-            error: v2Result.error,
-            errorCode: v2Result.errorCode,
+        if (gatewayUrl) {
+          // Use agent gateway for non-streaming
+          const gatewayResult = await handleGatewayRequest({
+            gatewayUrl,
+            userId: effectiveUserId,
+            conversationId: resolvedConversationId,
+            task,
+            context,
+            model,
           });
-          // Continue to fallback code below
+
+          if (gatewayResult.success) {
+            return NextResponse.json(gatewayResult);
+          }
+          // Fall through to v1 if gateway failed
+          chatLogger.warn('Gateway execution failed, falling back to v1', { requestId });
         } else {
-          return NextResponse.json(v2Result);
+          // Fallback to local V2 execution (no gateway configured)
+          if (stream) {
+            const streamBody = executeV2TaskStreaming({
+              userId: effectiveUserId,
+              conversationId: resolvedConversationId,
+              task,
+              context,
+              stream: true,
+            });
+
+            return new Response(streamBody, {
+              headers: {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                Pragma: 'no-cache',
+                Expires: '0',
+                Connection: 'keep-alive',
+                'X-Accel-Buffering': 'no',
+              },
+            });
+          }
+
+          const v2Result = await executeV2Task({
+            userId: effectiveUserId,
+            conversationId: resolvedConversationId,
+            task,
+            context,
+          });
+
+          if (v2Result.fallbackToV1) {
+            chatLogger.warn('V2 execution failed, falling back to v1/regular LLM chat', { requestId }, {
+              error: v2Result.error,
+              errorCode: v2Result.errorCode,
+            });
+          } else {
+            return NextResponse.json(v2Result);
+          }
         }
       } catch (v2Error: any) {
-        // V2 execution failed - log and fall through to v1 fallback
         chatLogger.error('V2 execution failed, falling back to v1', { requestId }, {
           error: v2Error.message,
           stack: v2Error.stack,
         });
-        // Continue to fallback path below
       }
       
       // FALLBACK: V2 failed, use regular v1/priority router chat path
       chatLogger.info('Using v1 fallback path after V2 failure', { requestId, provider, model });
-      // This continues to the regular priority router path below
     }
 
     // Agentic pipeline (non-V2) for code-centric requests
@@ -407,7 +444,7 @@ export async function POST(request: NextRequest) {
         mode: 'auto',
       };
 
-      const tools = await getMCPToolsForAI_SDK();
+      const tools = await getMCPToolsForAI_SDK(authenticatedUserId);
       config.tools = tools.map(t => ({
         name: t.function.name,
         description: t.function.description,
@@ -538,32 +575,30 @@ export async function POST(request: NextRequest) {
       enableComposio: routerRequest.enableComposio,
     });
 
-    // Route through priority chain (Fast-Agent → n8n → Custom Fallback → Original System)
+    // Route through priority chain and format response using consolidated router
     try {
-      const routerResponse = await priorityRequestRouter.route(routerRequest);
+      const unifiedResponse = await responseRouter.routeAndFormat(routerRequest);
 
-      const actualProvider = routerResponse.metadata?.actualProvider || routerResponse.source;
-      const actualModel = routerResponse.metadata?.actualModel || routerRequest.model;
+      const actualProvider = unifiedResponse.metadata?.actualProvider || unifiedResponse.source;
+      const actualModel = unifiedResponse.metadata?.actualModel || routerRequest.model;
 
-      chatLogger.info('Request handled by priority router', { requestId, provider: actualProvider, model: actualModel }, {
-        source: routerResponse.source,
-        priority: routerResponse.priority,
-        fallbackChain: routerResponse.fallbackChain,
+      chatLogger.info('Request handled by response router', { requestId, provider: actualProvider, model: actualModel }, {
+        source: unifiedResponse.source,
+        priority: unifiedResponse.priority,
+        fallbackChain: unifiedResponse.metadata?.fallbackChain,
       });
-      
-// Check for auth_required in response
-if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
+
+      // Check for auth_required in response
+      if (unifiedResponse.data?.requiresAuth && unifiedResponse.data?.authUrl) {
         return NextResponse.json({
           status: 'auth_required',
-          authUrl: routerResponse.data.authUrl,
-          toolName: routerResponse.data.toolName,
-          provider: routerResponse.data.provider || 'unknown',
-          message: `Please authorize ${routerResponse.data.toolName} to continue`
+          authUrl: unifiedResponse.data.authUrl,
+          toolName: unifiedResponse.data.toolName,
+          provider: unifiedResponse.data.provider || 'unknown',
+          message: `Please authorize ${unifiedResponse.data.toolName} to continue`
         }, { status: 401 });
       }
-      
-      // Process response through unified handler
-      const unifiedResponse = unifiedResponseHandler.processResponse(routerResponse, requestId);
+
       let rawResponseContent = unifiedResponse.content || '';
 
       // LLM Agent Tools: Execute filesystem tools if enabled and user is authenticated
@@ -667,6 +702,36 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
         sanitizedResponseContent,
       );
 
+      if (filesystemEdits && filesystemEdits.applied.length > 0) {
+        const codeArtifacts = filesystemEdits.applied
+          .filter((edit) => edit.operation !== 'delete')
+          .map((edit) => {
+            const requestedFile = filesystemEdits.requestedFiles.find(f => f.path === edit.path);
+            return {
+              path: edit.path,
+              operation: edit.operation,
+              content: requestedFile?.content || '',
+              language: requestedFile?.language || (
+                edit.path.endsWith('.ts') || edit.path.endsWith('.tsx') ? 'typescript' :
+                edit.path.endsWith('.js') || edit.path.endsWith('.jsx') ? 'javascript' :
+                edit.path.endsWith('.json') ? 'json' :
+                edit.path.endsWith('.css') ? 'css' :
+                edit.path.endsWith('.html') ? 'html' : 'text'
+              ),
+              previousContent: undefined,
+              newVersion: edit.version,
+              previousVersion: edit.previousVersion,
+            };
+          });
+        
+        if (codeArtifacts.length > 0) {
+          clientResponse.metadata = {
+            ...clientResponse.metadata,
+            codeArtifacts,
+          };
+        }
+      }
+
       // Handle streaming response
       if (stream && selectedProvider.supportsStreaming) {
         const streamRequestId = requestId || generateSecureId('stream');
@@ -708,7 +773,7 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
                 // Stream from agent
                 const streamPromise = (async () => {
                   // First, send initial token events from base response
-                  const baseEvents = unifiedResponseHandler.createStreamingEvents(clientResponse, streamRequestId);
+                  const baseEvents = responseRouter.createStreamingEvents(clientResponse, streamRequestId);
                   for (const event of baseEvents) {
                     if (request.signal?.aborted) return;
                     controller.enqueue(encoderRef.encode(event));
@@ -825,7 +890,7 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
 
         // Fallback: Standard streaming (non-agent or ToolLoopAgent not available)
         // Create streaming events from unified response
-        const events = unifiedResponseHandler.createStreamingEvents(clientResponse, streamRequestId);
+        const events = responseRouter.createStreamingEvents(clientResponse, streamRequestId);
         const supplementalAgenticEvents = buildSupplementalAgenticEvents(clientResponse, streamRequestId, events);
         if (supplementalAgenticEvents.length > 0) {
           events.splice(Math.max(0, events.length - 1), 0, ...supplementalAgenticEvents);
@@ -959,6 +1024,11 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
         contentLength: clientResponse.content?.length || 0,
         success: clientResponse.success,
       });
+      
+      // Record successful latency for provider router
+      try {
+        llmProviderRouter.recordRequest(provider as LLMProviderType, responseLatency, clientResponse.success !== false);
+      } catch {}
 
       const responseStatus = clientResponse.success ? 200 : 500;
       return NextResponse.json(
@@ -1017,11 +1087,21 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
         latencyMs: errorLatency,
         stack: error instanceof Error ? error.stack : undefined,
       });
+      
+      // Record error latency for provider router
+      try {
+        llmProviderRouter.recordRequest(provider as LLMProviderType, errorLatency, false);
+      } catch {}
     } else {
       chatLogger.warn('Provider not available', { requestId, provider, model }, {
         error: errorMessage,
         latencyMs: errorLatency,
       });
+      
+      // Record error latency for provider router
+      try {
+        llmProviderRouter.recordRequest(provider as LLMProviderType, errorLatency, false);
+      } catch {}
     }
 
     // Process error with enhanced error handler for logging
@@ -1074,7 +1154,8 @@ function sanitizeAssistantDisplayContent(content: string): string {
   next = next.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
 
   // Remove raw WRITE/PATCH/APPLY_DIFF heredoc command blocks that leak into visible output
-  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+\n\s*<<<\s*\n[\s\S]*?\n\s*>>>(?=\n|$)/g, '\n');
+  // Handle variations: blank lines between path and <<<, different whitespace
+  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){1,2}<<<[\s\S]*?>>>(?=\n|$)/g, '\n');
   next = next.replace(/(?:^|\n)\s*DELETE\s+[^\n]+(?=\n|$)/g, '\n');
   // Remove <apply_diff> XML tags
   next = next.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
@@ -1215,6 +1296,154 @@ function shouldUseContextPack(messages: LLMMessage[]): boolean {
 
   const pattern = new RegExp(contextPackKeywords.join('|'), 'i');
   return pattern.test(lastUserMessage);
+}
+
+/**
+ * Handle non-streaming request via agent gateway
+ */
+async function handleGatewayRequest(params: {
+  gatewayUrl: string;
+  userId: string;
+  conversationId: string;
+  task: string;
+  context?: string;
+  model?: string;
+}): Promise<any> {
+  const { gatewayUrl, userId, conversationId, task, context, model } = params;
+
+  try {
+    // Create job via gateway
+    const jobResponse = await fetch(`${gatewayUrl}/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        conversationId,
+        prompt: task,
+        context,
+        model,
+      }),
+    });
+
+    if (!jobResponse.ok) {
+      throw new Error(`Gateway error: ${jobResponse.statusText}`);
+    }
+
+    const { jobId, sessionId } = await jobResponse.json();
+
+    // Poll for completion
+    const maxWaitMs = 120000; // 2 minutes
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitMs) {
+      const statusResponse = await fetch(`${gatewayUrl}/jobs/${jobId}`);
+      
+      if (!statusResponse.ok) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+
+      const jobStatus = await statusResponse.json();
+
+      if (jobStatus.status === 'completed') {
+        return {
+          success: true,
+          data: jobStatus,
+          sessionId,
+          jobId,
+        };
+      }
+
+      if (jobStatus.status === 'failed') {
+        throw new Error(jobStatus.error || 'Job failed');
+      }
+
+      // Still processing, wait a bit
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    throw new Error('Job timed out');
+  } catch (error: any) {
+    chatLogger.error('Gateway request failed', {}, { error: error.message });
+    throw error;
+  }
+}
+
+/**
+ * Handle streaming request via agent gateway
+ */
+async function handleGatewayStreaming(params: {
+  gatewayUrl: string;
+  userId: string;
+  conversationId: string;
+  task: string;
+  context?: string;
+  requestId: string;
+}): Promise<Response> {
+  const { gatewayUrl, userId, conversationId, task, context, requestId } = params;
+
+  // Create job first
+  const jobResponse = await fetch(`${gatewayUrl}/jobs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId,
+      conversationId,
+      prompt: task,
+      context,
+    }),
+  });
+
+  if (!jobResponse.ok) {
+    throw new Error(`Gateway error: ${jobResponse.statusText}`);
+  }
+
+  const { sessionId } = await jobResponse.json();
+  chatLogger.info('Created gateway job', { requestId, sessionId });
+
+  // Stream events from gateway
+  const streamResponse = await fetch(`${gatewayUrl}/stream/${sessionId}`);
+
+  if (!streamResponse.ok || !streamResponse.body) {
+    throw new Error(`Gateway stream error: ${streamResponse.statusText}`);
+  }
+
+  // Transform gateway events to our SSE format
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  const readableStream = new ReadableStream({
+    async start(controller) {
+      const reader = streamResponse.body.getReader();
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done) break;
+
+          const text = decoder.decode(value);
+          
+          // Gateway sends: event: type\ndata: {...}\n\n
+          // We pass through as-is for now
+          controller.enqueue(value);
+        }
+      } catch (error) {
+        chatLogger.error('Stream error', { requestId }, { error: String(error) });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(readableStream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
 }
 
 async function buildWorkspaceSessionContext(
@@ -1558,6 +1787,59 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
   }
 
   return writes;
+}
+
+function extractTopLevelWrites(content: string): Array<{ path: string; content: string }> {
+  const writes: Array<{ path: string; content: string }> = [];
+
+  const topLevelWriteRegex = /^WRITE\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  let match: RegExpExecArray | null;
+  while ((match = topLevelWriteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!path) continue;
+    writes.push({ path, content: fileContent });
+  }
+
+  const altWriteRegex = /^WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)>>>/gim;
+  while ((match = altWriteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!path) continue;
+    if (!writes.some(w => w.path === path && w.content === fileContent)) {
+      writes.push({ path, content: fileContent });
+    }
+  }
+
+  return writes;
+}
+
+function extractTopLevelDeletes(content: string): string[] {
+  const deletes: string[] = [];
+
+  const deleteRegex = /^DELETE\s+([^\n]+)/gim;
+  let match: RegExpExecArray | null;
+  while ((match = deleteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path) deletes.push(path);
+  }
+
+  return deletes;
+}
+
+function extractTopLevelPatches(content: string): Array<{ path: string; diff: string }> {
+  const patches: Array<{ path: string; diff: string }> = [];
+
+  const patchRegex = /^PATCH\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  let match: RegExpExecArray | null;
+  while ((match = patchRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const diff = match[2] ?? '';
+    if (!path) continue;
+    patches.push({ path, diff });
+  }
+
+  return patches;
 }
 
 function extractFsActionDeletes(content: string): string[] {
@@ -1938,6 +2220,7 @@ async function applyFilesystemEditsFromResponse(input: {
   const combinedWriteEdits = [
     ...extractTaggedFileEdits(input.responseContent || ''),
     ...extractFsActionWrites(input.responseContent || ''),
+    ...extractTopLevelWrites(input.responseContent || ''),
     ...extractBashHereDocWrites(input.responseContent || ''),
     ...extractFilenameHintCodeBlocks(input.responseContent || ''),
     ...fileWriteFolderCreateOps.writes.map(w => ({ path: w.path, content: w.content })),
@@ -1945,10 +2228,14 @@ async function applyFilesystemEditsFromResponse(input: {
   const combinedDiffOperations = [
     ...extractFencedDiffEdits(input.responseContent || ''),
     ...extractFsActionPatches(input.responseContent || ''),
+    ...extractTopLevelPatches(input.responseContent || ''),
     ...(input.commands?.write_diffs || []),
   ];
   const applyDiffOperations = extractApplyDiffOperations(input.responseContent || '');
-  const deleteTargets = extractFsActionDeletes(input.responseContent || '');
+  const deleteTargets = [
+    ...extractFsActionDeletes(input.responseContent || ''),
+    ...extractTopLevelDeletes(input.responseContent || ''),
+  ];
   const folderCreateTargets = fileWriteFolderCreateOps.folders; // Separate folder creation targets
   const requestFiles = input.commands?.request_files || [];
 

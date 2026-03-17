@@ -32,9 +32,9 @@
  */
 
 import { getSandboxProvider, type SandboxProviderType } from './providers';
-import { getTerminalSession, updateTerminalSession } from './terminal-session-store';
+import { getTerminalSession, updateTerminalSession } from '../terminal/session/terminal-session-store';
 import { createLogger } from '../utils/logger';
-import { vfsSyncBackService } from './vfs-sync-back';
+import { vfsSyncBackService } from '../virtual-filesystem/sync/vfs-sync-back';
 
 const logger = createLogger('Phase3:SnapshotPortability');
 
@@ -197,7 +197,7 @@ export class SnapshotPortability {
       const { randomUUID } = await import('crypto');
       const sessionId = `user-${snapshot.userId}-${Date.now()}-${randomUUID().slice(0, 8)}`;
       
-      const { saveTerminalSession } = await import('./terminal-session-store');
+      const { saveTerminalSession } = await import('../terminal/session/terminal-session-store');
       saveTerminalSession({
         sessionId,
         sandboxId: handle.id,
@@ -349,6 +349,7 @@ export class SnapshotPortability {
     if (sandboxId.startsWith('wc-fs-')) return 'webcontainer-filesystem';
     if (sandboxId.startsWith('wc-spawn-')) return 'webcontainer-spawn';
     if (sandboxId.startsWith('osb-ci-')) return 'opensandbox-code-interpreter';
+    if (sandboxId.startsWith('osb-nullclaw-')) return 'opensandbox-nullclaw' as any;
     if (sandboxId.startsWith('osb-agent-')) return 'opensandbox-agent';
     if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) return 'opensandbox';
     if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox';

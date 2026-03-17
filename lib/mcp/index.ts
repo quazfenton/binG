@@ -25,7 +25,7 @@ export {
   mcpToolRegistry,
   type MCPRegistryEvent,
   type MCPRegistryEventType,
-} from './tool-registry'
+} from './registry'
 
 // Configuration
 export {

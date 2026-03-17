@@ -23,7 +23,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { UniversalVfsSync, type VfsFile, type SyncOptions } from '@/lib/sandbox/providers/universal-vfs-sync';
+import { UniversalVfsSync, type VfsFile, type SyncOptions } from '@/lib/virtual-filesystem/sync/universal-vfs-sync';
 import { getSandboxProvider } from '@/lib/sandbox/providers';
 import type { SandboxProviderType } from '@/lib/sandbox/providers';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
@@ -399,9 +399,8 @@ export async function POST(req: NextRequest): Promise<NextResponse<SyncResponse>
       );
     }
 
-    // STEP 5: P2 FIX - Resolve provider from session instead of trusting request
-    // This prevents attacks where a malicious user provides wrong provider to access other sandboxes
-    const resolvedProvider = session.provider || sandboxBridge.inferProviderFromSandboxId(sandboxId);
+    // STEP 5: P2 FIX - Resolve provider from sandbox ID
+    const resolvedProvider = sandboxBridge.inferProviderFromSandboxId(sandboxId);
     
     if (!resolvedProvider) {
       return NextResponse.json(

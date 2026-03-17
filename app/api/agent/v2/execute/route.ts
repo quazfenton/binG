@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { agentSessionManager } from '@/lib/agent/agent-session-manager';
+import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
 import { executeV2Task, executeV2TaskStreaming } from '@/lib/agent/v2-executor';
 import { createLogger } from '@/lib/utils/logger';
 

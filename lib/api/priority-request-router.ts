@@ -9,18 +9,18 @@
  * - Quota management
  */
 
-import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from './fast-agent-service';
-import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from './n8n-agent-service';
-import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from './custom-fallback-service';
-import { enhancedLLMService, type EnhancedLLMRequest } from './enhanced-llm-service';
+import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from '../chat/fast-agent-service';
+import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from '../chat/n8n-agent-service';
+import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from '../chat/custom-fallback-service';
+import { enhancedLLMService, type EnhancedLLMRequest } from '../chat/enhanced-llm-service';
 import { getToolManager, getUnifiedToolRegistry, getToolDiscoveryService, getToolErrorHandler } from '../tools';
-import { toolAuthManager } from '../services/tool-authorization-manager';
+import { toolAuthManager } from '../tools/tool-authorization-manager';
 import { sandboxBridge } from '../sandbox';
-import type { LLMMessage } from './llm-providers';
+import type { LLMMessage } from '../chat/llm-providers';
 import { detectRequestType } from '../utils/request-type-detector';
 import { normalizeToolInvocations } from '@/lib/types/tool-invocation';
-import { initializeComposioService, getComposioService, type ComposioToolRequest } from './composio-service';
-import { quotaManager } from '../services/quota-manager';
+import { initializeComposioService, getComposioService, type ComposioToolRequest } from '../platforms/composio-service';
+import { quotaManager } from '../management/quota-manager';
 
 // ===========================================
 // Circuit Breaker Pattern Implementation
@@ -152,8 +152,10 @@ class CircuitBreaker {
     }
 
     if (state.state === 'half-open') {
-      // Allow the test request but monitor closely
-      return false;
+      // CRITICAL: A probe is already running; block additional requests until probe completes
+      // This prevents race condition where multiple concurrent requests all get through during half-open
+      console.log(`[CircuitBreaker] ${endpoint}: Circuit HALF-OPEN - probe already running, skipping`);
+      return true;  // Skip - probe already in progress
     }
 
     return false;
@@ -306,6 +308,44 @@ class PriorityRequestRouter {
   }
 
   /**
+   * Build canonical tool invocation record
+   */
+  private buildCanonicalToolInvocationRecord(params: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+    provider?: string;
+    sourceSystem: string;
+    requestId?: string;
+    conversationId?: string;
+  }): Record<string, unknown> {
+    return {
+      toolName: params.toolName,
+      args: params.args ?? {},
+      result: params.result,
+      provider: params.provider,
+      sourceSystem: params.sourceSystem,
+      requestId: params.requestId,
+      conversationId: params.conversationId,
+    };
+  }
+
+  /**
+   * Build canonical tool invocations
+   */
+  private buildCanonicalToolInvocations(params: {
+    toolName: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+    provider?: string;
+    sourceSystem: string;
+    requestId?: string;
+    conversationId?: string;
+  }) {
+    return normalizeToolInvocations([this.buildCanonicalToolInvocationRecord(params)]);
+  }
+
+  /**
    * Get circuit breaker statistics for monitoring
    */
   getCircuitBreakerStats(): Map<string, any> {
@@ -359,12 +399,12 @@ class PriorityRequestRouter {
         return sandboxProvider;
       }
       case 'fast-agent':
-        return process.env.SANDBOX_PROVIDER || 'daytona';
       case 'n8n-agents':
-        return 'nango';
       case 'custom-fallback':
       case 'original-system':
-        return 'microsandbox';
+        // Regular LLM routing should not consume tool/sandbox quotas
+        // This prevents exhausting unrelated quotas and disabling sandbox/tool routing
+        return null;
       default:
         return null;
     }
@@ -396,9 +436,29 @@ class PriorityRequestRouter {
         enabled: true,
         service: enhancedLLMService,
         healthCheck: async () => true, // Always available
-        canHandle: () => true, // Always accepts
+        // Do not handle tool/sandbox requests - let specialized endpoints handle those
+        canHandle: (req) => {
+          const requestType = detectRequestType(req.messages);
+          // Skip if this is a tool request and tools are enabled
+          if (requestType === 'tool' && (req.enableTools !== false || req.enableComposio !== false)) {
+            return false;
+          }
+          // Skip if this is a sandbox request and sandbox is enabled
+          if (requestType === 'sandbox' && req.enableSandbox !== false) {
+            return false;
+          }
+          return true;
+        },
         processRequest: async (req) => {
-          const response = await enhancedLLMService.generateResponse(this.convertToEnhancedLLMRequest(req));
+          // Convert request with all required fields including tool/sandbox flags
+          const requestType = detectRequestType(req.messages);
+          const enhancedRequest = this.convertToEnhancedLLMRequest(req);
+          // Ensure tool/sandbox flags are passed through
+          enhancedRequest.enableTools = req.enableTools ?? requestType === 'tool';
+          enhancedRequest.enableSandbox = req.enableSandbox ?? requestType === 'sandbox';
+          enhancedRequest.isSandboxCommand = requestType === 'sandbox';
+          
+          const response = await enhancedLLMService.generateResponse(enhancedRequest);
           return this.normalizeOriginalResponse(response);
         }
       },
@@ -573,6 +633,19 @@ class PriorityRequestRouter {
         // Process request
         console.log(`[Router] Routing to ${endpoint.name}`);
         const response = await endpoint.processRequest(request);
+
+        // ===========================================
+        // Validate response - treat unsuccessful payloads as failures
+        // ===========================================
+        // Endpoint handlers can return structured failure payloads (success: false or type: 'error')
+        // We must throw these as errors so fallback routing and circuit-breaker accounting work correctly
+        if (response?.success === false || response?.data?.type === 'error') {
+          const endpointError =
+            response?.data?.error ||
+            response?.content ||
+            'Endpoint returned unsuccessful response';
+          throw new Error(endpointError);
+        }
 
         // ===========================================
         // CIRCUIT BREAKER: Record SUCCESS
@@ -868,9 +941,11 @@ class PriorityRequestRouter {
 
   /**
    * Normalize Fast-Agent response
+   * CRITICAL: Preserve all fields including success/error/fallback for proper routing logic
    */
   private normalizeFastAgentResponse(response: FastAgentResponse): any {
     return {
+      success: response.success,
       content: response.content || '',
       data: {
         content: response.content || '',
@@ -880,7 +955,10 @@ class PriorityRequestRouter {
         qualityScore: response.qualityScore,
         processingSteps: response.processingSteps,
         reflectionResults: response.reflectionResults,
-        multiModalContent: response.multiModalContent
+        multiModalContent: response.multiModalContent,
+        // Preserve these fields for routing logic to distinguish real responses from fallbacks/errors
+        fallbackToOriginal: response.fallbackToOriginal,
+        error: response.error
       }
     };
   }
@@ -1171,9 +1249,10 @@ class PriorityRequestRouter {
       }
     }
     
-    // Check for function call patterns
-    if (lastMessage?.tool_calls?.length > 0) {
-      const toolCall = lastMessage.tool_calls[0];
+    // Check for function call patterns (OpenAI-style tool calls)
+    const messageWithToolCalls = lastMessage as any;
+    if (messageWithToolCalls?.tool_calls?.length > 0) {
+      const toolCall = messageWithToolCalls.tool_calls[0];
       return {
         detectedTool: toolCall.function?.name || null,
         toolInput: toolCall.function?.arguments ? JSON.parse(toolCall.function.arguments) : {},
@@ -1238,7 +1317,7 @@ class PriorityRequestRouter {
 
       // Use the agent loop (LLM-driven tool calling), NOT raw command execution
       try {
-        const { runAgentLoop } = await import('../sandbox/agent-loop');
+        const { runAgentLoop } = await import('../orchestra/agent-loop');
         const result = await runAgentLoop({
           userMessage: messageContent,
           sandboxId: session.sandboxId,
