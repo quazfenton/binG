@@ -14,6 +14,7 @@ import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesyste
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil } from '@/lib/virtual-filesystem/scope-utils';
+import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import type { LLMMessage } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
@@ -1411,6 +1412,7 @@ async function handleGatewayStreaming(params: {
   // Transform gateway events to our SSE format
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
+  const parser = createNDJSONParser();
 
   const readableStream = new ReadableStream({
     async start(controller) {
@@ -1419,17 +1421,24 @@ async function handleGatewayStreaming(params: {
       try {
         while (true) {
           const { done, value } = await reader.read();
-          
+
           if (done) break;
 
-          const text = decoder.decode(value);
+          // Decode chunk and parse complete NDJSON lines
+          const chunk = decoder.decode(value, { stream: true });
           
-          // Gateway sends: event: type\ndata: {...}\n\n
-          // We pass through as-is for now
-          controller.enqueue(value);
+          // Parse NDJSON and re-emit as SSE
+          const events = parser.parse(chunk);
+          for (const event of events) {
+            // Gateway sends NDJSON events, convert to SSE format
+            const eventType = event.type || 'message';
+            const sseEvent = `event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`;
+            controller.enqueue(encoder.encode(sseEvent));
+          }
         }
       } catch (error) {
         chatLogger.error('Stream error', { requestId }, { error: String(error) });
+        controller.error(error);
       } finally {
         controller.close();
       }

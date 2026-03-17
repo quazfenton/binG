@@ -77,8 +77,8 @@ const logger = createLogger('API:ResponseRouter')
 // ============================================================================
 
 export interface LLMMessage {
-  role: 'user' | 'assistant' | 'system'
-  content: string
+  role: 'user' | 'assistant' | 'system' | 'tool'
+  content: string | Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }>
   toolCalls?: Array<{
     id: string
     name: string

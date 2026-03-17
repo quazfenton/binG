@@ -177,19 +177,23 @@ export default function MessageBubble({
       const txStatus = payload?.data?.transaction?.status;
       const conflicts = payload?.data?.conflicts || [];
       const revertedPaths = payload?.data?.revertedPaths || [];
-      
+
       if (txStatus === "reverted_with_conflicts") {
         setFileEditDecision("reverted_with_conflicts");
         toast.error("Reverted with conflicts", {
-          description: conflicts.length > 0 
+          description: conflicts.length > 0
             ? `${revertedPaths.length} files reverted, ${conflicts.length} conflicts detected`
             : "Some files could not be fully reverted",
           duration: 5000,
         });
       } else {
         setFileEditDecision("denied");
+        // Check if Git-backed rollback was used (all files reverted without conflicts)
+        const usedGitRollback = revertedPaths.length === fileEditInfo.applied.length && conflicts.length === 0;
         toast.success("File edits reverted", {
-          description: `${revertedPaths.length} file(s) restored to previous state`,
+          description: usedGitRollback
+            ? `${revertedPaths.length} file(s) restored using Git-backed rollback`
+            : `${revertedPaths.length} file(s) restored to previous state`,
           duration: 3000,
         });
       }
@@ -203,7 +207,7 @@ export default function MessageBubble({
     } finally {
       setIsApplyingEditAction(false);
     }
-  }, [buildRequestHeaders, fileEditInfo?.transactionId, isApplyingEditAction]);
+  }, [buildRequestHeaders, fileEditInfo?.transactionId, isApplyingEditAction, fileEditInfo.applied.length]);
   
   const layout = useResponsiveLayout()
   
@@ -909,6 +913,7 @@ export default function MessageBubble({
                   fileEditDecision === "accepted" ||
                   fileEditDecision === "auto_applied"
                 }
+                title="Accept the AI's file changes permanently"
               >
                 Accept
               </Button>
@@ -922,6 +927,7 @@ export default function MessageBubble({
                   fileEditDecision === "denied" ||
                   fileEditDecision === "reverted_with_conflicts"
                 }
+                title="Revert all file changes to their previous state using Git-backed rollback"
               >
                 Deny + Revert
               </Button>

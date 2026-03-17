@@ -327,9 +327,38 @@ export function ExperimentalWorkspacePanel() {
   const [newItemName, setNewItemName] = useState("");
   const [creatingParentPath, setCreatingParentPath] = useState("/");
 
+  // VFS snapshot state
+  const [vfsSnapshot, setVfsSnapshot] = useState<{ files: Array<{ path: string; content: string; language: string }> } | null>(null);
+
+  // Filesystem state (alias for vfsSnapshot with additional metadata)
+  const [filesystem, setFilesystem] = useState<{ 
+    sessionId: string; 
+    version: number; 
+    files: Array<{ path: string; content: string; language: string }> 
+  } | null>(null);
+
+  // Fetch VFS snapshot on mount
+  useEffect(() => {
+    const fetchSnapshot = async () => {
+      try {
+        const snapshot = await vfs.getSnapshot();
+        setVfsSnapshot(snapshot);
+        // Initialize filesystem state with snapshot data
+        setFilesystem({
+          sessionId: `session-${Date.now()}`,
+          version: 1,
+          files: snapshot?.files || [],
+        });
+      } catch (error) {
+        console.error('Failed to fetch VFS snapshot:', error);
+      }
+    };
+    fetchSnapshot();
+  }, [vfs]);
+
   // Build file tree from filesystem
   const fileTree = React.useMemo(() => {
-    const files = filesystem?.files || [];
+    const files = vfsSnapshot?.files || [];
     const root: FileNode = {
       name: "workspace",
       path: "/",
@@ -364,7 +393,7 @@ export function ExperimentalWorkspacePanel() {
     });
 
     return root;
-  }, [filesystem?.files]);
+  }, [vfsSnapshot?.files]);
 
   // Scroll chat to bottom
   useEffect(() => {
@@ -412,7 +441,7 @@ export function ExperimentalWorkspacePanel() {
       id: `exp-chat-${Date.now()}`,
       role: "user",
       content: chatInput.trim(),
-      timestamp: Date.now(),
+      timestamp: new Date().toISOString(),
     };
 
     setChatMessages((prev) => [...prev, userMessage]);
@@ -436,7 +465,7 @@ export function ExperimentalWorkspacePanel() {
           id: `exp-chat-${Date.now()}`,
           role: "assistant",
           content: data.response || data.content || "Response received",
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
         };
         setChatMessages((prev) => [...prev, assistantMessage]);
       } else {
@@ -449,7 +478,7 @@ export function ExperimentalWorkspacePanel() {
           id: `exp-chat-${Date.now()}`,
           role: "assistant",
           content: "Thanks for your message! This is experimental chat with localStorage persistence.",
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
         };
         setChatMessages((prev) => [...prev, assistantMessage]);
       }, 1000);
