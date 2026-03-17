@@ -13,6 +13,8 @@ export interface ToolResult {
   success: boolean;
   /** Tool output */
   output?: string;
+  /** Binary output (base64 encoded) */
+  binary?: string;
   /** Error message if failed */
   error?: string;
   /** Tool name */

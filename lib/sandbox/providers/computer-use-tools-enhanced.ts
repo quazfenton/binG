@@ -22,7 +22,7 @@ import type { DesktopAction } from '../../computer/e2b-desktop-provider-enhanced
  */
 export const mouseMoveTool: Tool = {
   description: 'Move the mouse cursor to specified coordinates on the screen',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       x: {
@@ -48,7 +48,7 @@ export const mouseMoveTool: Tool = {
  */
 export const leftClickTool: Tool = {
   description: 'Perform a left mouse click at the specified or current position. Use for selecting items, clicking buttons, etc.',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       x: {
@@ -73,7 +73,7 @@ export const leftClickTool: Tool = {
  */
 export const rightClickTool: Tool = {
   description: 'Perform a right mouse click to open context menus',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       x: {
@@ -98,7 +98,7 @@ export const rightClickTool: Tool = {
  */
 export const doubleClickTool: Tool = {
   description: 'Perform a double left click. Use to open files, folders, or applications.',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       x: {
@@ -123,7 +123,7 @@ export const doubleClickTool: Tool = {
  */
 export const dragMouseTool: Tool = {
   description: 'Drag the mouse from one position to another. Use for moving windows, selecting text, or drawing.',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       startX: {
@@ -159,7 +159,7 @@ export const dragMouseTool: Tool = {
  */
 export const scrollTool: Tool = {
   description: 'Scroll up or down in the current window',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       direction: {
@@ -186,7 +186,7 @@ export const scrollTool: Tool = {
  */
 export const typeTextTool: Tool = {
   description: 'Type text using the keyboard. Simulates human typing. Use for entering text in input fields, search boxes, etc.',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       text: {
@@ -207,7 +207,7 @@ export const typeTextTool: Tool = {
  */
 export const pressKeyTool: Tool = {
   description: 'Press a key or key combination. Use for special keys (Enter, Tab, Escape) or shortcuts (Ctrl+C, Alt+Tab).',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       keys: {
@@ -232,7 +232,7 @@ export const pressKeyTool: Tool = {
  */
 export const screenshotTool: Tool = {
   description: 'Take a screenshot of the current desktop state. Returns base64-encoded PNG image. Always use this first to understand the desktop state.',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {},
   },
@@ -246,7 +246,7 @@ export const screenshotTool: Tool = {
  */
 export const waitTool: Tool = {
   description: 'Wait for a specified duration. Use to allow time for animations, page loads, or application startup.',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       duration: {
@@ -267,7 +267,7 @@ export const waitTool: Tool = {
  */
 export const terminalCommandTool: Tool = {
   description: 'Execute a terminal command in the Linux desktop environment. Use for running scripts, installing packages, file operations, etc.',
-  parameters: {
+  inputSchema: {
     type: 'object',
     properties: {
       command: {

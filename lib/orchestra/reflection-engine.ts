@@ -166,7 +166,7 @@ Provide specific, actionable improvements and rate your confidence (0-1).
         model,
         prompt: analysisPrompt,
         schema: ReflectionOutputSchema,
-        maxTokens: 500,
+        maxOutputTokens: 500,
         temperature: 0.1,
       });
 

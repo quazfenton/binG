@@ -405,7 +405,7 @@ Return a JSON object:
       const result = await generateText({
         model: this.getModel(),
         prompt: planningPrompt,
-        maxTokens: 1000,
+        maxOutputTokens: 1000,
       });
 
       try {
@@ -454,7 +454,7 @@ Respond with valid JSON matching this schema:
         model: this.getModel(),
         prompt: decompositionPrompt,
         schema: TaskGraphSchema,
-        maxTokens: 1500,
+        maxOutputTokens: 1500,
       });
 
       this.taskGraph = {
@@ -514,19 +514,21 @@ Use 'createFile' for new files.`;
           createFile: allTools.createFile,
           execShell: allTools.execShell,
         },
-        maxSteps: 10,
+        maxToolCalls: 10,
         onStepFinish: async ({ toolCalls, toolResults }) => {
           // Execute tool calls via ToolExecutor
           for (const call of toolCalls) {
             try {
-              const execResult = await this.toolExecutor.execute(call.toolName, call.args);
+              const execResult = await this.toolExecutor.execute(call.toolName, call.toolCallId ? call.args : {});
               // Update local state based on result
-              if (execResult.success && execResult.content && call.args.path) {
+              if (execResult.success && execResult.content && call.toolCallId && call.args && 'path' in call.args) {
                 this.vfs[call.args.path] = execResult.content;
-                
+
                 // Auto-write to Tool Memory Graph
-                await this.addMemoryNode('file', execResult.content, call.args.path);
-                
+                if (call.args && 'path' in call.args) {
+                  await this.addMemoryNode('file', execResult.content, call.args.path);
+                }
+
                 // Update execution graph if tracking
                 if (this.executionGraphId) {
                   const graph = executionGraphEngine.getGraph(this.executionGraphId);
@@ -534,7 +536,7 @@ Use 'createFile' for new files.`;
                     const readyNodes = executionGraphEngine.getReadyNodes(graph);
                     if (readyNodes.length > 0) {
                       executionGraphEngine.markComplete(graph, readyNodes[0].id, {
-                        file: call.args.path,
+                        file: call.args && 'path' in call.args ? call.args.path : 'unknown',
                         success: true,
                       });
                     }
@@ -544,7 +546,7 @@ Use 'createFile' for new files.`;
             } catch (err: any) {
               this.errors.push({
                 step: this.steps,
-                path: call.args.path,
+                path: call.toolCallId && call.args && 'path' in call.args ? call.args.path : 'unknown',
                 message: err.message,
                 timestamp: Date.now(),
               });

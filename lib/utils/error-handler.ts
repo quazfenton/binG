@@ -18,7 +18,9 @@
  * - Memory leak fixes
  */
 
-import { logger, sanitizeForLogging } from './secure-logger';
+import { createLogger, sanitizeForLogging } from './logger';
+
+const logger = createLogger('ErrorHandler', { secure: true });
 
 // ============================================================================
 // TYPE DEFINITIONS

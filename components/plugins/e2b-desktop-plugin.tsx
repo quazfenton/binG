@@ -21,7 +21,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { toast } from 'sonner'
 import useIframeLoader from '@/hooks/use-iframe-loader'
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen'
-import type { DesktopAction, AgentLoopResult } from '@/lib/computer/e2b-desktop-provider-enhanced'
+import type { DesktopAction, AgentLoopResult, DesktopStats } from '@/lib/computer/e2b-desktop-provider-enhanced'
 
 // ==================== Types ====================
 
@@ -35,13 +35,6 @@ interface DesktopInfo {
   streamUrl: string
   resolution: [number, number]
   createdAt: number
-}
-
-interface DesktopStats {
-  actions: number
-  screenshots: number
-  commands: number
-  uptime: number
 }
 
 interface ActionHistoryItem {
@@ -68,6 +61,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [error, setError] = useState<string>('')
+  const [desktop, setDesktop] = useState<any>(null)
 
   // Agent state
   const [isAgentRunning, setIsAgentRunning] = useState(false)
@@ -410,6 +404,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
         ...prev,
         {
           id: `manual-${Date.now()}`,
+          iteration: prev.length + 1,
           action,
           result: { success: result.success, output: result.output || '' },
           timestamp: Date.now(),
@@ -419,7 +414,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     } catch (err: any) {
       appendTerminalOutput(`Action error: ${err.message}`)
     }
-  }, [desktop])
+  }, [desktopId])
 
   // ==================== Render ====================
 
@@ -540,28 +535,28 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
               <div className="p-4 border-t border-gray-700 flex gap-2">
                 <button
                   onClick={takeScreenshot}
-                  disabled={!desktop}
+                  disabled={!isConnected}
                   className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 disabled:opacity-50"
                 >
                   📸 Screenshot
                 </button>
                 <button
                   onClick={() => manualAction({ type: 'left_click' })}
-                  disabled={!desktop}
+                  disabled={!isConnected}
                   className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 disabled:opacity-50"
                 >
                   🖱️ Left Click
                 </button>
                 <button
                   onClick={() => manualAction({ type: 'right_click' })}
-                  disabled={!desktop}
+                  disabled={!isConnected}
                   className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 disabled:opacity-50"
                 >
                   🖱️ Right Click
                 </button>
                 <button
                   onClick={() => manualAction({ type: 'keypress', keys: ['Control_L', 'c'] })}
-                  disabled={!desktop}
+                  disabled={!isConnected}
                   className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 disabled:opacity-50"
                 >
                   ⌨️ Ctrl+C
@@ -629,7 +624,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
                   <div className="grid grid-cols-3 gap-4">
                     <div className="p-4 bg-gray-800 rounded">
                       <div className="text-sm text-gray-400">Actions</div>
-                      <div className="text-xl font-bold text-white">{stats.actionsExecuted}</div>
+                      <div className="text-xl font-bold text-white">{stats.actionCount}</div>
                     </div>
                     <div className="p-4 bg-gray-800 rounded">
                       <div className="text-sm text-gray-400">Screenshots</div>
@@ -697,11 +692,11 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
                   onKeyPress={(e) => e.key === 'Enter' && runTerminalCommand()}
                   placeholder="Enter command..."
                   className="flex-1 p-2 bg-gray-800 text-white rounded border border-gray-700 focus:border-blue-500 focus:outline-none font-mono"
-                  disabled={!desktop}
+                  disabled={!isConnected}
                 />
                 <button
                   onClick={runTerminalCommand}
-                  disabled={!desktop || !terminalCommand}
+                  disabled={!isConnected || !terminalCommand}
                   className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
                 >
                   Run

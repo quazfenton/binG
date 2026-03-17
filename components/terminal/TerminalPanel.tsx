@@ -16,7 +16,7 @@ import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT
 import { createLogger } from '@/lib/utils/logger';
 import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
 import { wireTerminalHandlers, cleanupHandlers, type TerminalHandlers } from '@/lib/terminal/commands/terminal-handler-wiring';
-import type { LocalFilesystemEntry } from '@/lib/terminal/local-filesystem-executor';
+import type { LocalFilesystemEntry } from '@/lib/terminal/commands/local-filesystem-executor';
 import { extractSessionIdFromPath, normalizeScopePath } from '@/lib/virtual-filesystem/scope-utils';
 import { emitFilesystemUpdated, onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { createRefreshScheduler } from '@/lib/virtual-filesystem/refresh-scheduler';
