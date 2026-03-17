@@ -6,14 +6,14 @@
  */
 
 import type { SandboxProvider } from './sandbox-provider'
-import { MicrosandboxProvider } from './microsandbox-provider'
+import { MicrosandboxProvider } from '../local/microsandbox-provider'
 import { BlaxelProvider } from './blaxel-provider'
 import { SpritesProvider } from './sprites-provider'
 import { CodeSandboxProvider } from './codesandbox-provider'
 import { E2BProvider } from './e2b-provider'
 import { DaytonaProvider } from './daytona-provider'
 import { RunloopProvider } from './runloop-provider'
-import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from './e2b-desktop-provider-enhanced'
+import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from '../../computer/e2b-desktop-provider-enhanced'
 import { CircuitBreaker, providerCircuitBreakers, createCircuitBreakerWithMetrics } from '@/lib/utils/circuit-breaker'
 import { sandboxMetrics } from '@/lib/backend/metrics'
 import { createLogger } from '@/lib/utils/logger'
@@ -39,9 +39,11 @@ export type SandboxProviderType =
   | 'opensandbox'
   | 'opensandbox-code-interpreter'
   | 'opensandbox-agent'
+  | 'opensandbox-nullclaw'
   | 'mistral-agent'
   | 'mistral'
   | 'vercel-sandbox'
+  | 'oracle-vm'
 
 // Provider registry
 interface ProviderEntry {
@@ -119,7 +121,7 @@ function initializeRegistry() {
     initPromise: null,
     failureCount: 0,
     asyncFactory: async () => {
-      const { MicrosandboxProvider } = await import('./microsandbox-provider')
+      const { MicrosandboxProvider } = await import('../local/microsandbox-provider')
       return new MicrosandboxProvider()
     },
   })
@@ -275,6 +277,21 @@ function initializeRegistry() {
     },
   })
 
+  providerRegistry.set('opensandbox-nullclaw', {
+    provider: null as any,
+    priority: 9,
+    enabled: true,
+    available: false,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { OpenSandboxNullclawProvider } = await import('./opensandbox-nullclaw-provider')
+      return new OpenSandboxNullclawProvider()
+    },
+  })
+
   // Mistral Agent provider (lazy initialization)
   providerRegistry.set('mistral-agent', {
     provider: null as any,
@@ -321,6 +338,22 @@ function initializeRegistry() {
     asyncFactory: async () => {
       const { VercelSandboxProvider } = await import('./vercel-sandbox-provider')
       return new VercelSandboxProvider()
+    },
+  })
+
+  // Oracle VM - SSH into Oracle Cloud Infrastructure VM instances
+  providerRegistry.set('oracle-vm', {
+    provider: null as any,
+    priority: 9,
+    enabled: true,
+    available: !!process.env.ORACLE_VM_HOST,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { OracleVMProvider } = await import('./oracle-vm-provider')
+      return new OracleVMProvider()
     },
   })
 }
@@ -380,7 +413,7 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
   }
 
   // Check health checker status (if running)
-  const { providerHealthChecker } = await import('./health-checker');
+  const { providerHealthChecker } = await import('../../management/health-checker');
   const healthStatus = providerHealthChecker.getProviderHealth(providerType);
   if (healthStatus && !healthStatus.healthy && healthStatus.consecutiveFailures >= 3) {
     log.warn(`Provider ${providerType} is unhealthy: ${healthStatus.lastError}`)
@@ -589,7 +622,7 @@ export function getProviderPriority(type: SandboxProviderType): number {
 }
 
 // Re-export provider implementations for direct import
-export { MicrosandboxProvider } from './microsandbox-provider'
+export { MicrosandboxProvider } from '../local/microsandbox-provider'
 export { BlaxelProvider, verifyCallbackSignature, verifyCallbackMiddleware } from './blaxel-provider'
 export type { BlaxelSandboxHandle } from './blaxel-provider'
 export { SpritesProvider } from './sprites-provider'
@@ -601,8 +634,8 @@ export { OpenSandboxProvider } from './opensandbox-provider'
 export { OpenSandboxCodeInterpreterProvider } from './opensandbox-code-interpreter-provider'
 export { OpenSandboxAgentSandboxProvider } from './opensandbox-agent-sandbox-provider'
 export { E2BProvider, E2BGitIntegration, createE2BGitIntegration } from './e2b-provider'
-export { createAmpService, executeAmpTask } from './e2b-amp-service'
-export { CodexSchemas, createCodexService, executeCodexTask } from './e2b-codex-service'
+export { createAmpService, executeAmpTask } from '../spawn/e2b-amp-service'
+export { CodexSchemas, createCodexService, executeCodexTask } from '../spawn/e2b-codex-service'
 // export { MistralAgentProvider } from './mistral/mistral-agent-provider' // Lazy export
 
 // Re-export CodeSandbox advanced integration
@@ -630,8 +663,8 @@ export { syncFilesToSprite, syncVfsSnapshotToSprite, syncChangedFilesToSprite } 
 export type { TarSyncFile, TarSyncResult } from './sprites-tar-sync'
 
 // Re-export Universal VFS Sync
-export { UniversalVfsSync, computeFileHash, detectChangedFiles } from './universal-vfs-sync'
-export type { VfsFile, SyncOptions, SyncResult, ProviderSyncStrategy } from './universal-vfs-sync'
+export { UniversalVfsSync, computeFileHash, detectChangedFiles } from '../../virtual-filesystem/sync/universal-vfs-sync'
+export type { VfsFile, SyncOptions, SyncResult, ProviderSyncStrategy } from '../../virtual-filesystem/sync/universal-vfs-sync'
 
 // Re-export Blaxel Jobs Manager
 export { BlaxelJobsManager, executeBatchJob, deployBatchJob } from './blaxel-jobs-manager'
@@ -678,7 +711,7 @@ export {
   createGatewayFromEnv,
   callMCPTool,
   listMCPTools,
-} from './mcp-gateway'
+} from '../../mcp/mcp-gateway'
 export type {
   MCPGateway,
   MCPServerConfig,
@@ -686,7 +719,7 @@ export type {
   MCPGatewayConfig,
   GatewayConnectionResult,
   GatewayToolCallResult,
-} from './mcp-gateway'
+} from '../../mcp/mcp-gateway'
 
 // Re-export Advanced Tool Calling
 export {
@@ -694,7 +727,7 @@ export {
   calculateCost,
   getRecommendedModel,
   compareProviders,
-} from './advanced-tool-calling'
+} from '../../tools/advanced-tool-calling'
 export type {
   AdvancedToolRouter,
   TaskType,
@@ -705,7 +738,7 @@ export type {
   CostTracking,
   CostReport,
   OptimizationRecommendation,
-} from './advanced-tool-calling'
+} from '../../tools/advanced-tool-calling'
 
 // Re-export Template Integration
 export {
@@ -762,7 +795,7 @@ export {
   type DesktopStats,
   type AmpSession,
   type MCPConfig,
-} from './e2b-desktop-provider-enhanced';
+} from '../../computer/e2b-desktop-provider-enhanced';
 
 // ===========================================
 // E2B MCP Gateway Exports
@@ -775,7 +808,7 @@ export {
   type MCPGatewayConfig as E2BMCPGatewayConfig,
   type MCPGatewayResult,
   type MCPToolConfig,
-} from './e2b-mcp-gateway';
+} from '../../mcp/e2b-mcp-gateway';
 
 // ===========================================
 // E2B Structured Output Exports
@@ -824,7 +857,7 @@ export {
   type GitPushOptions,
   type GitBranchInfo,
   type GitStatusInfo,
-} from './e2b-git-helper';
+} from '../../virtual-filesystem/e2b-git-helper';
 
 // ===========================================
 // E2B Analytics Exports

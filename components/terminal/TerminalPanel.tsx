@@ -12,13 +12,13 @@ import { toast } from 'sonner';
 import { motion } from 'framer-motion';
 import { saveTerminalSession, getTerminalSessions, addCommandToHistory } from '@/lib/terminal/terminal-storage';
 import { secureRandom, generateSecureId } from '@/lib/utils';
-import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '@/lib/terminal/terminal-security';
+import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT_SECURITY_CONFIG } from '@/lib/terminal/security/terminal-security';
 import { createLogger } from '@/lib/utils/logger';
 import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
-import { wireTerminalHandlers, cleanupHandlers, type TerminalHandlers } from '@/lib/sandbox/terminal-handler-wiring';
-import type { LocalFilesystemEntry } from '@/lib/sandbox/local-filesystem-executor';
+import { wireTerminalHandlers, cleanupHandlers, type TerminalHandlers } from '@/lib/terminal/commands/terminal-handler-wiring';
+import type { LocalFilesystemEntry } from '@/lib/terminal/local-filesystem-executor';
 import { extractSessionIdFromPath, normalizeScopePath } from '@/lib/virtual-filesystem/scope-utils';
-import { emitFilesystemUpdated, onFilesystemUpdated } from '@/lib/virtual-filesystem/sync-events';
+import { emitFilesystemUpdated, onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { createRefreshScheduler } from '@/lib/virtual-filesystem/refresh-scheduler';
 
 const logger = createLogger('TerminalPanel');

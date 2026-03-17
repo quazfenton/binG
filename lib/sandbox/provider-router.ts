@@ -1,26 +1,28 @@
 /**
  * Phase 2: Provider Router
- * 
+ *
  * Intelligently selects optimal sandbox provider based on:
  * - Task type (code-interpreter, agent, fullstack, batch, computer-use)
  * - Resource requirements (CPU, memory, GPU)
  * - Persistence needs
  * - Quota availability
  * - Latency/cost optimization
- * 
+ * - Execution policy (local-safe, sandbox-required, sandbox-heavy, etc.)
+ *
  * Auto-prioritizes provider-specific services:
  * - E2B: AMP/Codex agents, desktop environments
  * - Daytona: Computer Use, LSP services, object storage
  * - CodeSandbox: Batch execution, task management, previews
  * - Sprites: Checkpoints, persistent services, auto-suspend
- * 
+ *
  * @see lib/sandbox/providers/ - Provider implementations
  * @see lib/services/quota-manager.ts - Quota tracking
- * 
+ * @see lib/sandbox/types.ts - Execution policies
+ *
  * @example
  * ```typescript
  * import { providerRouter } from '@/lib/sandbox/phase2-integration';
- * 
+ *
  * // Auto-select provider for task
  * const provider = await providerRouter.selectOptimalProvider({
  *   type: 'agent',
@@ -28,20 +30,135 @@
  *   expectedDuration: 'long',
  * });
  * // Returns: 'e2b' (best for agents with AMP/Codex)
- * 
- * // Get provider with service capabilities
- * const { provider, services } = await providerRouter.selectWithServices({
- *   type: 'fullstack-app',
- *   needsServices: ['preview', 'lsp', 'computer-use'],
- * });
+ *
+ * // Select provider by execution policy
+ * const provider = await providerRouter.selectByExecutionPolicy('sandbox-heavy');
+ * // Returns: 'daytona' (best for heavy workloads)
  * ```
  */
 
-import { quotaManager } from '../services/quota-manager';
+import { quotaManager } from '../management/quota-manager';
 import type { SandboxProviderType } from './providers';
+import type { ExecutionPolicy } from './types';
+import { getExecutionPolicyConfig, getPreferredProviders } from './types';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Phase2:ProviderRouter');
+
+/**
+ * Dynamic latency tracking for provider selection
+ * Tracks real-time response times for each provider
+ */
+interface LatencyMetrics {
+  provider: SandboxProviderType;
+  avgLatencyMs: number;
+  p95LatencyMs: number;
+  p99LatencyMs: number;
+  sampleCount: number;
+  lastUpdated: number;
+  recentLatencies: number[]; // Rolling window of last 100 requests
+}
+
+class LatencyTracker {
+  private metrics = new Map<SandboxProviderType, LatencyMetrics>();
+  private readonly MAX_SAMPLES = 100;
+  private readonly STALE_THRESHOLD_MS = 300000; // 5 minutes
+
+  constructor() {
+    // Initialize metrics for all providers
+    const providers: SandboxProviderType[] = [
+      'daytona', 'e2b', 'sprites', 'codesandbox', 'microsandbox',
+      'blaxel', 'opensandbox', 'mistral', 'vercel-sandbox'
+    ];
+    
+    for (const provider of providers) {
+      this.metrics.set(provider, {
+        provider,
+        avgLatencyMs: 0,
+        p95LatencyMs: 0,
+        p99LatencyMs: 0,
+        sampleCount: 0,
+        lastUpdated: Date.now(),
+        recentLatencies: [],
+      });
+    }
+  }
+
+  /**
+   * Record latency for a provider
+   */
+  record(provider: SandboxProviderType, latencyMs: number): void {
+    const metric = this.metrics.get(provider);
+    if (!metric) return;
+
+    // Add to rolling window
+    metric.recentLatencies.push(latencyMs);
+    if (metric.recentLatencies.length > this.MAX_SAMPLES) {
+      metric.recentLatencies.shift();
+    }
+
+    // Update statistics
+    metric.sampleCount++;
+    metric.lastUpdated = Date.now();
+    metric.avgLatencyMs = this.calculateAverage(metric.recentLatencies);
+    metric.p95LatencyMs = this.calculatePercentile(metric.recentLatencies, 95);
+    metric.p99LatencyMs = this.calculatePercentile(metric.recentLatencies, 99);
+  }
+
+  /**
+   * Get current latency metrics for provider
+   */
+  getMetrics(provider: SandboxProviderType): LatencyMetrics | null {
+    return this.metrics.get(provider) || null;
+  }
+
+  /**
+   * Get all providers sorted by latency (fastest first)
+   */
+  getProvidersByLatency(): SandboxProviderType[] {
+    return Array.from(this.metrics.values())
+      .filter(m => m.sampleCount > 0 && Date.now() - m.lastUpdated < this.STALE_THRESHOLD_MS)
+      .sort((a, b) => a.avgLatencyMs - b.avgLatencyMs)
+      .map(m => m.provider);
+  }
+
+  /**
+   * Check if provider latency is acceptable
+   */
+  isLatencyAcceptable(provider: SandboxProviderType, thresholdMs: number = 5000): boolean {
+    const metric = this.metrics.get(provider);
+    if (!metric || metric.sampleCount === 0) return true; // No data, assume OK
+    
+    return metric.avgLatencyMs < thresholdMs;
+  }
+
+  /**
+   * Get latency tier based on current metrics
+   */
+  getLatencyTier(provider: SandboxProviderType): 'low' | 'medium' | 'high' {
+    const metric = this.metrics.get(provider);
+    if (!metric || metric.sampleCount === 0) return 'medium'; // Default if no data
+
+    if (metric.avgLatencyMs < 1000) return 'low';      // < 1s
+    if (metric.avgLatencyMs < 5000) return 'medium';   // 1-5s
+    return 'high';                                      // > 5s
+  }
+
+  private calculateAverage(values: number[]): number {
+    if (values.length === 0) return 0;
+    return values.reduce((sum, val) => sum + val, 0) / values.length;
+  }
+
+  private calculatePercentile(values: number[], percentile: number): number {
+    if (values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const index = Math.ceil((percentile / 100) * sorted.length) - 1;
+    return sorted[Math.max(0, index)];
+  }
+}
+
+// Singleton instance
+export const latencyTracker = new LatencyTracker();
 
 /**
  * Task type for provider selection
@@ -240,6 +357,15 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     persistenceSupport: false,
     gpuSupport: false,
   },
+  {
+    type: 'opensandbox-nullclaw' as SandboxProviderType,
+    services: ['pty', 'preview', 'agent'],
+    bestFor: ['agent', 'persistent-service', 'general'],
+    costTier: 'low',
+    latencyTier: 'medium',
+    persistenceSupport: false,
+    gpuSupport: false,
+  },
 ];
 
 /**
@@ -322,7 +448,65 @@ export class ProviderRouter {
   getProviderProfile(provider: SandboxProviderType): ProviderProfile | undefined {
     return PROVIDER_PROFILES.find(p => p.type === provider);
   }
-  
+
+  /**
+   * Select provider by execution policy
+   *
+   * Maps execution policies to optimal providers:
+   * - local-safe: No provider (local execution)
+   * - sandbox-required: daytona (fast, reliable)
+   * - sandbox-preferred: daytona → e2b
+   * - sandbox-heavy: daytona (full resources)
+   * - persistent-sandbox: sprites (auto-suspend, checkpoints)
+   * - desktop-required: daytona (computer use support)
+   */
+  async selectByExecutionPolicy(policy: ExecutionPolicy): Promise<{
+    provider: SandboxProviderType | 'local';
+    confidence: number;
+    reason: string;
+  }> {
+    const policyConfig = getExecutionPolicyConfig(policy);
+    const preferredProviders = getPreferredProviders(policy);
+
+    // Local-safe policy - no sandbox needed
+    if (policy === 'local-safe') {
+      return {
+        provider: 'local',
+        confidence: 1,
+        reason: 'Local execution - no cloud sandbox required',
+      };
+    }
+
+    // Try preferred providers in order
+    for (const providerType of preferredProviders) {
+      try {
+        const { getSandboxProvider } = await import('./providers');
+        await getSandboxProvider(providerType as SandboxProviderType);
+
+        const profile = this.getProviderProfile(providerType as SandboxProviderType);
+        return {
+          provider: providerType as SandboxProviderType,
+          confidence: 0.9,
+          reason: `Selected by execution policy ${policy}: ${profile?.bestFor.join(', ') || 'Optimal for policy'}`,
+        };
+      } catch (error: any) {
+        logger.warn(`Provider ${providerType} unavailable for policy ${policy}: ${error.message}`);
+        continue;
+      }
+    }
+
+    // Fallback: try any available provider
+    if (policyConfig.allowLocalFallback) {
+      return {
+        provider: 'local',
+        confidence: 0.5,
+        reason: `No cloud providers available for policy ${policy}, falling back to local execution`,
+      };
+    }
+
+    throw new Error(`No available providers for execution policy ${policy}`);
+  }
+
   /**
    * Evaluate all providers and return best match
    */
@@ -400,16 +584,31 @@ export class ProviderRouter {
           score -= 5;
         }
       }
-      
-      // Performance priority adjustment
+
+      // Performance priority adjustment - Use DYNAMIC latency
       if (context.performancePriority === 'latency') {
-        if (profile.latencyTier === 'low') {
-          score += 5;
-        } else if (profile.latencyTier === 'high') {
-          score -= 5;
+        // Use real-time latency tier instead of static profile
+        const dynamicLatencyTier = latencyTracker.getLatencyTier(profile.type);
+        if (dynamicLatencyTier === 'low') {
+          score += 8; // Increased weight for dynamic data
+          reasons.push(`Excellent real-time latency (${latencyTracker.getMetrics(profile.type)?.avgLatencyMs.toFixed(0)}ms)`);
+        } else if (dynamicLatencyTier === 'medium') {
+          score += 3;
+        } else if (dynamicLatencyTier === 'high') {
+          score -= 8;
+          reasons.push(`High real-time latency (${latencyTracker.getMetrics(profile.type)?.avgLatencyMs.toFixed(0)}ms)`);
         }
       }
-      
+
+      // Dynamic latency bonus/penalty (always applied, not just for latency priority)
+      const currentLatencyTier = latencyTracker.getLatencyTier(profile.type);
+      if (currentLatencyTier === 'low' && latencyTracker.isLatencyAcceptable(profile.type, 1000)) {
+        score += 3; // Bonus for consistently fast providers
+      } else if (currentLatencyTier === 'high' && !latencyTracker.isLatencyAcceptable(profile.type, 10000)) {
+        score -= 5; // Penalty for very slow providers
+        reasons.push('Provider experiencing high latency');
+      }
+
       // Quota check (soft penalty, doesn't disqualify)
       const quotaCheck = quotaManager.checkQuota(profile.type);
       if (!quotaCheck.allowed) {
@@ -512,4 +711,17 @@ export function checkServiceSupport(
  */
 export function getProvidersForService(service: ProviderService): SandboxProviderType[] {
   return providerRouter.getProvidersForService(service);
+}
+
+/**
+ * Convenience function: Select provider by execution policy
+ */
+export async function selectProviderByExecutionPolicy(
+  policy: ExecutionPolicy
+): Promise<{
+  provider: SandboxProviderType | 'local';
+  confidence: number;
+  reason: string;
+}> {
+  return providerRouter.selectByExecutionPolicy(policy);
 }

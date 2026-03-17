@@ -26,7 +26,7 @@ import type {
   ProxyConfig,
   EnvServiceConfig,
 } from './sandbox-provider'
-import { quotaManager } from '@/lib/services/quota-manager'
+import { quotaManager } from '@/lib/management/quota-manager'
 import { SandboxSecurityManager } from '../security-manager'
 import { syncVfsSnapshotToSprite, syncChangedFilesToSprite, type TarSyncFile } from './sprites-tar-sync'
 import { SpritesCheckpointManager, createCheckpointManager, type RetentionPolicy } from './sprites-checkpoint-manager'
@@ -84,6 +84,8 @@ export class SpritesProvider implements SandboxProvider {
     if (!this.token) {
       console.warn('[Sprites] SPRITES_TOKEN not configured. Provider will fail on first use.')
     }
+    
+    console.log(`[Sprites] Initialized - Region: "${this.defaultRegion}", Plan: "${this.defaultPlan}", Checkpoints: ${this.enableCheckpoints}`)
   }
 
   private async ensureClient(): Promise<any> {
@@ -133,6 +135,8 @@ export class SpritesProvider implements SandboxProvider {
     const client = await this.ensureClient()
 
     try {
+      console.log(`[Sprites] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Language: ${config.language || 'default'}, Region: ${this.defaultRegion}`)
+    
       // Enforce max instances (handles, not actual Sprites which are persistent)
       if (sandboxInstances.size >= MAX_INSTANCES) {
         let oldestId: string | null = null
@@ -153,7 +157,7 @@ export class SpritesProvider implements SandboxProvider {
 
       // Build create config with auto-suspend services if enabled
       const createConfig: any = {}
-      
+
       if (this.enableAutoSuspend) {
         // Configure service for auto-suspend/resume with memory state preservation
         // Documentation: https://docs.sprites.dev/working-with-sprites#auto-suspend
@@ -168,6 +172,8 @@ export class SpritesProvider implements SandboxProvider {
         console.log(`[Sprites] Auto-suspend enabled for Sprite: ${spriteName}`)
       }
 
+      console.log(`[Sprites] Creating Sprite "${spriteName}" with config:`, JSON.stringify(createConfig, null, 2))
+      
       // Create Sprite with config
       const sprite = await client.createSprite(spriteName, createConfig)
 
@@ -193,7 +199,7 @@ export class SpritesProvider implements SandboxProvider {
       sandboxInstances.set(spriteName, instance)
       quotaManager.recordUsage('sprites')
 
-      console.log(`[Sprites] Created Sprite: ${spriteName}, URL: ${metadata.url}`)
+      console.log(`[Sprites] ✓ Created Sprite: ${spriteName}, URL: ${metadata.url}`)
 
       const handle = new SpritesSandboxHandle(
         sprite,
@@ -209,7 +215,11 @@ export class SpritesProvider implements SandboxProvider {
 
       return handle
     } catch (error: any) {
-      console.error('[Sprites] Failed to create Sprite:', error.message)
+      console.error(`[Sprites] ✗ Failed to create Sprite:`, error.message)
+      console.error(`[Sprites] Error details:`, {
+        name: error.name,
+        message: error.message,
+      })
       throw new Error(`Sprites creation failed: ${error.message}`)
     }
   }

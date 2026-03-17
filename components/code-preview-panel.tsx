@@ -43,13 +43,26 @@ import type { Message } from "../types/index";
 import { parsePatch, applyPatch } from "diff";
 import { useVirtualFilesystem } from "../hooks/use-virtual-filesystem";
 import { normalizeScopePath, stripWorkspacePrefixes } from "@/lib/virtual-filesystem/scope-utils";
-import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync-events";
+import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import { createRefreshScheduler } from "@/lib/virtual-filesystem/refresh-scheduler";
 import {
   parseCodeBlocksFromMessages,
   type CodeBlock as ParsedCodeBlock,
 } from "../lib/code-parser";
 import { createDebugLogger } from "@/config/features";
+
+// Import live preview offloading functions
+import {
+  detectProject,
+  getSandpackConfig,
+  livePreviewOffloading,
+  type ProjectDetection,
+  type PreviewMode,
+  type AppFramework,
+} from "@/lib/previews/live-preview-offloading";
+
+// Import Preview Error Boundary
+import { PreviewErrorBoundary } from "./preview-error-boundary";
 
 // Lazy load Sandpack to avoid SSR issues
 // React.lazy requires default export, so we remap the named export
@@ -80,6 +93,17 @@ interface CodePreviewPanelProps {
   onClearAllCommandDiffs?: () => void;
   onClearFileCommandDiffs?: (path: string) => void;
   onSquashFileCommandDiffs?: (path: string) => void;
+  // Polled diffs from useDiffsPoller hook
+  polledDiffs?: Array<{
+    id: string;
+    path: string;
+    diff: string;
+    changeType: 'create' | 'update' | 'delete';
+    timestamp: number;
+    source: 'poll';
+  }>;
+  onApplyPolledDiffs?: (pathsToApply?: string[]) => Promise<void>;
+  onClearPolledDiffs?: () => void;
 }
 
 // Use CodeBlock from the parser module
@@ -159,6 +183,9 @@ export default function CodePreviewPanel({
   onClearAllCommandDiffs,
   onClearFileCommandDiffs,
   onSquashFileCommandDiffs,
+  polledDiffs = [],
+  onApplyPolledDiffs,
+  onClearPolledDiffs,
 }: CodePreviewPanelProps) {
   const [detectedFramework] = useState<"react" | "vue" | "vanilla">("vanilla");
 
@@ -246,9 +273,10 @@ export default function CodePreviewPanel({
   
   // Manual Sandpack preview state - user-initiated explicit preview
   const [manualPreviewFiles, setManualPreviewFiles] = useState<Record<string, string> | null>(null);
+  const [projectDetection, setProjectDetection] = useState<ReturnType<typeof detectProject> | null>(null);
   const [isManualPreviewActive, setIsManualPreviewActive] = useState(false);
   const [manualPreviewMayBeStale, setManualPreviewMayBeStale] = useState(false); // Track if VFS changed while in manual preview
-  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'node' | 'local' | 'cloud'>('sandpack');
+  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'node' | 'local' | 'cloud'>('sandpack');
   const [devBoxOutput, setDevBoxOutput] = useState<string[]>([]);
   const [isDevBoxRunning, setIsDevBoxRunning] = useState(false);
   const [pyodideOutput, setPyodideOutput] = useState<string>('');
@@ -265,6 +293,10 @@ export default function CodePreviewPanel({
   const [isNextjsBuilding, setIsNextjsBuilding] = useState(false);
   const [codesandboxUrl, setCodesandboxUrl] = useState<string | null>(null);
   const [isCodesandboxLoading, setIsCodesandboxLoading] = useState(false);
+  const [opensandboxUrl, setOpensandboxUrl] = useState<string | null>(null);
+  const [opensandboxId, setOpensandboxId] = useState<string | null>(null);
+  const [isOpensandboxDeploying, setIsOpensandboxDeploying] = useState(false);
+  const [opensandboxLogs, setOpensandboxLogs] = useState<string[]>([]);
   const [localExecutionOutput, setLocalExecutionOutput] = useState<string>('');
   const [isLocalExecuting, setIsLocalExecuting] = useState(false);
   const [executionMode, setExecutionMode] = useState<'local' | 'cloud' | 'hybrid'>('local');
@@ -276,6 +308,14 @@ export default function CodePreviewPanel({
   const pyodideRef = useRef<any>(null);
   const manualPreviewPathRef = useRef<string | null>(null);
   const manualPreviewActiveRef = useRef(false);
+
+  // WebContainer refs (top-level to satisfy Rules of Hooks)
+  const webcontainerInstanceRef = useRef<any>(null);
+  const webcontainerProcessRef = useRef<any>(null);
+  const webcontainerUrlRef = useRef<string | null>(null);
+
+  // Track Sandpack normalization to avoid logging on every render
+  const lastNormalizationRef = useRef<string>('');
 
   // Context menu state for file operations
   const [contextMenu, setContextMenu] = useState<{
@@ -304,7 +344,7 @@ export default function CodePreviewPanel({
     const originalPath = path;
     const cleanPath = stripWorkspacePrefixes(path || 'project');
     const normalized = normalizeScopePath(cleanPath);
-    log(`normalizeProjectPath: "${originalPath}" -> "${normalized}"`);
+    // Removed verbose logging - called too frequently
     return normalized;
   }, []);
 
@@ -600,7 +640,7 @@ export default function CodePreviewPanel({
   
   const handleManualPreview = useCallback(async (
     directoryPath?: string,
-    mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'local' | 'cloud',
+    mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'local' | 'cloud',
     options?: { silent?: boolean; preserveTab?: boolean },
   ) => {
     // Prevent multiple concurrent calls
@@ -696,106 +736,35 @@ export default function CodePreviewPanel({
 
       log(`[handleManualPreview] detected root="${selectedRoot}", files normalized from ${Object.keys(files).length} to ${Object.keys(previewFiles).length}`);
 
-      // Auto-detect best preview mode AND execution mode
-      let selectedMode = mode || 'sandpack';
+      // Auto-detect best preview mode AND execution mode using centralized logic
+      let selectedMode: PreviewMode = mode as PreviewMode || 'sandpack';
       let detectedExecutionMode: 'local' | 'cloud' | 'hybrid' = 'local';
 
+      // Use centralized live preview offloading detection
+      const detection = livePreviewOffloading.detectProject({
+        files: previewFiles,
+        scopePath: normalizeProjectPath(targetPath),
+      });
+      
       if (!mode) {
-        const filePaths = Object.keys(previewFiles);
-        const hasHtml = filePaths.some(f => f.endsWith('.html'));
-        const hasJsx = filePaths.some(f => f.endsWith('.jsx') || f.endsWith('.tsx'));
-        const hasVue = filePaths.some(f => f.endsWith('.vue'));
-        const hasSvelte = filePaths.some(f => f.endsWith('.svelte'));
-        const hasPython = filePaths.some(f => f.endsWith('.py'));
-        const hasNodeServer = filePaths.some(f => ['server.js', 'app.js', 'index.js'].includes(f));
-        const hasNextJS = filePaths.some(f => 
-          f.startsWith('pages/') || 
-          f.startsWith('app/') ||
-          f.includes('next.config') ||
-          f.includes('/_app.') ||
-          f.includes('/_document.')
-        );
-        const hasPackageJson = filePaths.includes('package.json');
-        const hasSimplePython = hasPython && !filePaths.some(f => f.includes('flask') || f.includes('django'));
-        const hasViteConfig = filePaths.some(f => f.includes('vite.config'));
-        const hasWebpackConfig = filePaths.some(f => f.includes('webpack.config'));
-        const hasParcelConfig = filePaths.some(f => f.includes('parcel') || f.endsWith('.parcelrc'));
-        const packageJsonContent = hasPackageJson ? previewFiles['package.json'] : '';
-        const hasViteProject = hasViteConfig || packageJsonContent.includes('"vite"');
-        const hasWebpackProject = hasWebpackConfig || packageJsonContent.includes('"webpack"');
-        const hasParcelProject = hasParcelConfig || packageJsonContent.includes('"parcel"');
-        const hasHeavyComputation = Object.values(previewFiles).some((c: any) => {
-          if (typeof c !== 'string') return false;
-          return c.includes('tensorflow') || c.includes('pytorch') || c.includes('cuda') || c.includes('gpu');
-        });
-        const hasAPIKeys = Object.values(previewFiles).some((c: any) =>
-          typeof c === 'string' && (c.includes('OPENAI_API_KEY') || c.includes('process.env'))
-        );
-
-        // Determine execution mode based on requirements
-        if (hasHeavyComputation || hasAPIKeys) {
-          detectedExecutionMode = 'cloud';
-        } else if (hasSimplePython || hasJsx || hasVue || hasSvelte || hasHtml) {
-          detectedExecutionMode = 'local';
-        } else if (hasPython || hasNodeServer) {
-          detectedExecutionMode = 'hybrid';
-        }
-
-        // Select preview mode with enhanced bundler detection and fallback hierarchy
-        // Check for Next.js first (before generic node server detection)
-        const nextJsInPackageJson = packageJsonContent && packageJsonContent.includes('"next"');
-        const nextJsConfig = filePaths.some(f => f.includes('next.config'));
-        const nextJsPagesOrApp = filePaths.some(f => f.startsWith('pages/') || f.startsWith('app/'));
+        selectedMode = detection.previewMode;
         
-        if (nextJsConfig || nextJsInPackageJson || nextJsPagesOrApp) {
-          selectedMode = 'nextjs';
-        } else if (hasViteProject) {
-          selectedMode = 'vite';
-        } else if (hasWebpackProject) {
-          selectedMode = 'webpack';
-        } else if (hasParcelProject) {
-          selectedMode = 'parcel';
-        } else if (hasSimplePython && !hasPackageJson) {
-          selectedMode = 'pyodide';
-        } else if (hasNodeServer && hasPackageJson) {
-          // Check for Next.js first (highest priority for Node frameworks)
-          const hasNextJS = filePaths.some(f => 
-            f === 'next.config.js' || 
-            f === 'next.config.mjs' || 
-            f === 'next.config.ts'
-          ) || (packageJsonContent && packageJsonContent.includes('"next"'));
-          
-          if (hasNextJS) {
-            selectedMode = 'nextjs'; // Next.js gets its own optimized preview
-          } else {
-            // Node.js backend with package.json = WebContainer (preferred, runs in browser)
-            selectedMode = 'webcontainer';
-          }
-        } else if (hasPython || hasNodeServer) {
-          // Python or Node without simple setup = CodeSandbox (cloud fallback)
-          // Only use CodeSandbox if project is complex (has Docker, complex deps, etc.)
-          const hasDocker = filePaths.some(f => f === 'Dockerfile' || f === 'docker-compose.yml');
-          const hasComplexDeps = packageJsonContent && (
-            packageJsonContent.includes('prisma') ||
-            packageJsonContent.includes('sequelize') ||
-            packageJsonContent.includes('typeorm') ||
-            packageJsonContent.includes('mongodb') ||
-            packageJsonContent.includes('redis')
-          );
-          
-          if (hasDocker || hasComplexDeps) {
-            selectedMode = 'codesandbox'; // Cloud dev environment for complex apps
-          } else {
-            selectedMode = detectedExecutionMode === 'local' ? 'local' : 'devbox';
-          }
-        } else if (hasHtml && !hasJsx && !hasVue && !hasSvelte) {
-          selectedMode = 'iframe';
-        } else if (hasJsx || hasVue || hasSvelte) {
-          selectedMode = 'sandpack';
+        // Determine execution mode based on project requirements
+        if (detection.hasHeavyComputation || detection.hasAPIKeys) {
+          detectedExecutionMode = 'cloud';
+        } else if (detection.hasPython || detection.hasNodeServer) {
+          detectedExecutionMode = detection.hasPython && !detection.hasBackend ? 'local' : 'hybrid';
+        } else {
+          detectedExecutionMode = 'local';
         }
+        
+        log(`[handleManualPreview] Detected via live-preview-offloading: framework=${detection.framework}, bundler=${detection.bundler}, mode=${selectedMode}, root="${detection.selectedRoot}"`);
       }
 
-      log(`[handleManualPreview] mode="${selectedMode}", execution="${detectedExecutionMode}", root="${selectedRoot}"`);
+      log(`[handleManualPreview] mode="${selectedMode}", execution="${detectedExecutionMode}", root="${detection.selectedRoot}"`);
+
+      // Store detection result for use in renderLivePreview
+      setProjectDetection(detection);
 
       // Set execution mode
       setExecutionMode(detectedExecutionMode);
@@ -836,6 +805,32 @@ export default function CodePreviewPanel({
   useEffect(() => {
     manualPreviewActiveRef.current = isManualPreviewActive;
   }, [isManualPreviewActive]);
+
+  // WebContainer URL tracking (top-level to satisfy Rules of Hooks)
+  useEffect(() => {
+    webcontainerUrlRef.current = webcontainerUrl;
+  }, [webcontainerUrl]);
+
+  // WebContainer cleanup on unmount (top-level to satisfy Rules of Hooks)
+  useEffect(() => {
+    return () => {
+      if (webcontainerProcessRef.current) {
+        webcontainerProcessRef.current.kill();
+      }
+      if (webcontainerInstanceRef.current) {
+        webcontainerInstanceRef.current.destroy?.();
+      }
+    };
+  }, []);
+
+  // Pyodide cleanup on unmount (top-level to satisfy Rules of Hooks)
+  useEffect(() => {
+    return () => {
+      if (pyodideRef.current) {
+        pyodideRef.current = null;
+      }
+    };
+  }, []);
 
   // Clear manual preview
   const handleClearManualPreview = useCallback(() => {
@@ -1293,7 +1288,11 @@ export default function CodePreviewPanel({
 
   // Generate project structure for complex projects
   // Also merge virtual filesystem files for live preview
+  // NOTE: Commented out legacy codeBlock parsing - use VFS (scopedPreviewFiles) as primary source instead
   useEffect(() => {
+    // Use scopedPreviewFiles from VFS as the primary source - this has real project files
+    // Legacy codeBlocks parsing creates file-0.sh, file-1.js etc which pollutes the project
+    /*
     if (codeBlocks.length > 0) {
       // Use the centralized parser to get project structure
       const parsedData = parseCodeBlocksFromMessages(messages);
@@ -1304,24 +1303,19 @@ export default function CodePreviewPanel({
         const structure = analyzeProjectStructure(codeBlocks);
         setProjectStructure(structure);
       }
-    } else if (
-      (projectFiles && Object.keys(projectFiles).length > 0) ||
-      Object.keys(scopedPreviewFiles).length > 0
-    ) {
-      const files = {
-        ...(projectFiles || {}),
-        ...scopedPreviewFiles,
-      };
+    } else if (projectFiles && Object.keys(projectFiles).length > 0) {
+    */
+    if (projectFiles && Object.keys(projectFiles).length > 0) {
       const structure: ProjectStructure = {
         name: 'filesystem-project',
-        files,
+        files: projectFiles,
         framework: 'react',
         bundler: 'vite',
         packageManager: 'npm'
       };
       setProjectStructure(structure);
     }
-  }, [codeBlocks, scopedPreviewFiles, projectFiles]);
+  }, [codeBlocks, projectFiles]);
 
   const projectStructureWithScopedFiles = useMemo(() => {
     const scopedRelativeFiles = Object.entries(scopedPreviewFiles).reduce(
@@ -1335,28 +1329,27 @@ export default function CodePreviewPanel({
       {} as Record<string, string>,
     );
 
-    if (projectStructure) {
-      return {
-        ...projectStructure,
-        files: {
-          ...projectStructure.files,
-          ...scopedRelativeFiles,
-        },
-      };
-    }
-
+    // VFS files should take priority over legacy projectStructure
+    // Only use projectStructure as fallback if VFS is empty
     if (Object.keys(scopedRelativeFiles).length > 0) {
       return {
-        name: 'scoped-filesystem-project',
+        name: 'filesystem-project',
         files: scopedRelativeFiles,
-        framework: 'react' as const,
-        bundler: 'vite' as const,
-        packageManager: 'npm' as const,
-      };
+        framework: 'react',
+        bundler: 'vite',
+        packageManager: 'npm',
+        filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath),
+        dependencies: [],
+        devDependencies: [],
+      } as ProjectStructure;
+    }
+
+    if (projectStructure) {
+      return projectStructure;
     }
 
     return null;
-  }, [filesystemScopePath, projectStructure, scopedPreviewFiles]);
+  }, [filesystemScopePath, normalizedFilesystemPath, scopedPreviewFiles, projectStructure, normalizeProjectPath]);
 
   const visualEditorProjectData = useMemo(() => {
     let structure = projectStructureWithScopedFiles || projectStructure;
@@ -1408,6 +1401,7 @@ export default function CodePreviewPanel({
       'app.tsx', 'app.jsx', 'page.tsx', 'index.tsx', 'index.jsx', 'index.ts', 'index.js', 'index.html',
       'main.py', 'app.py', 'manage.py', 'server.js', 'app.js', 'index.js'
     ];
+    
     const entryFile =
       entryCandidates.find((candidate) => filePaths.includes(candidate))
       || filePaths.find((path) => path.endsWith('/index.html'))
@@ -1441,7 +1435,7 @@ export default function CodePreviewPanel({
       entryFile,
       previewModeHint,
     };
-  }, [filesystemScopePath, normalizeProjectPath, normalizedFilesystemPath, projectStructure, projectStructureWithScopedFiles]);
+  }, [filesystemScopePath, normalizeProjectPath, normalizedFilesystemPath, projectFiles, projectStructure, projectStructureWithScopedFiles, scopedPreviewFiles]);
 
   const applySimpleLineDiff = (
     originalContent: string,
@@ -1854,37 +1848,7 @@ Generated on: ${new Date().toLocaleString()}
   };
 
   const renderLivePreview = () => {
-    // Enhanced framework support with better template mapping
-    const getSandpackTemplate = (framework: string) => {
-      switch (framework) {
-        case "react":
-        case "vite-react":
-          return "react";
-        case "next":
-          return "nextjs";
-        case "vue":
-        case "nuxt":
-          return "vue";
-        case "angular":
-          return "angular";
-        case "svelte":
-          return "svelte";
-        case "solid":
-          return "solid";
-        case "astro":
-          return "astro";
-        case "remix":
-          return "remix";
-        case "gatsby":
-          return "gatsby";
-        case "vite":
-          return "react";
-        default:
-          return "vanilla";
-      }
-    };
-
-    // Use manual preview files if active, otherwise use auto-detected structure
+    // Use manual preview files if active, otherwise use auto-detected structure (must be defined FIRST)
     const useStructure = isManualPreviewActive && manualPreviewFiles
       ? {
           name: 'Manual Preview',
@@ -1892,6 +1856,19 @@ Generated on: ${new Date().toLocaleString()}
           framework: 'react' as const,
         }
       : (projectStructureWithScopedFiles || projectStructure);
+
+    // Use centralized framework detection from live-preview-offloading
+    // If projectDetection exists (from handleManualPreview), use it; otherwise compute from structure
+    // CRITICAL: Only use projectDetection when manual preview is active to avoid stale framework detection
+    const effectiveFramework = isManualPreviewActive && projectDetection?.framework
+      ? projectDetection.framework
+      : useStructure?.framework || 'vanilla';
+    
+    // Get template using centralized mapping
+    const getSandpackTemplate = (framework: string) => {
+      const config = getSandpackConfig({ framework: framework as any, bundler: 'unknown', normalizedFiles: {} } as any);
+      return config.template;
+    };
 
     // Detect if project has Vue Router configured
     const hasVueRouter = useStructure?.files && Object.keys(useStructure.files).some(path => {
@@ -1938,7 +1915,7 @@ Generated on: ${new Date().toLocaleString()}
         "remix",
         "gatsby",
         "vite",
-      ].includes(useStructure.framework)
+      ].includes(effectiveFramework)
     ) {
       try {
         // Map files to Sandpack format
@@ -1999,7 +1976,7 @@ Generated on: ${new Date().toLocaleString()}
             gatsby: ['/src/pages/index.js', '/src/pages/index.tsx', '/pages/index.js'],
           };
 
-          const framework = useStructure.framework;
+          const framework = effectiveFramework;
           const priorities = entryPriorityMap[framework] || [];
           
           // Check if any of the priority entry files exist
@@ -2271,18 +2248,182 @@ export default app;`,
         const normalizedSandpackFiles = normalizeFilesForSandpack(sandpackFiles);
         
         // Detect best entry file and log for debugging
-        const detectedEntryFile = detectBestEntryFile(normalizedSandpackFiles, useStructure.framework);
+        const detectedEntryFile = detectBestEntryFile(normalizedSandpackFiles, effectiveFramework);
         if (detectedEntryFile) {
           log(`[Sandpack] Detected entry file: ${detectedEntryFile}`);
         }
 
-        // Add entry file to normalized files (not the original sandpackFiles)
-        addEntryFileIfMissing();
-        
-        // Update normalized files with any added entry files
-        const finalSandpackFiles = normalizeFilesForSandpack(sandpackFiles);
+        // CRITICAL FIX: Normalize file paths to be relative to project root for Sandpack
+        // The VFS paths are like "/project/sessions/draft-chat_xxx/src/main.js" but Sandpack needs "/src/main.js"
+        // We need to strip the filesystem scope prefix from all file paths
+        const finalSandpackFiles = (() => {
+          // Create a copy of sandpackFiles to work with
+          const filesCopy = { ...sandpackFiles };
+          
+          // Add entry file stub if missing (using same logic as addEntryFileIfMissing but as pure function)
+          const existingEntryFile = Object.keys(filesCopy).some(path => {
+            const fileName = path.split('/').pop() || '';
+            return /^index\.(js|jsx|ts|tsx|mjs|cjs|vue)$/.test(fileName) ||
+                   /^main\.(js|jsx|ts|tsx|mjs|cjs|vue)$/.test(fileName) ||
+                   /^App\.(js|jsx|ts|tsx|vue)$/.test(fileName) ||
+                   /^page\.(js|jsx|ts|tsx)$/.test(fileName);
+          });
+          
+          if (!existingEntryFile) {
+            // Add framework-specific stub files
+            const framework = effectiveFramework;
+            switch (framework) {
+              case "vue":
+              case "nuxt":
+                filesCopy["/src/App.vue"] = { code: `<template>
+  <div id="app">
+    <h1>Hello Vue!</h1>
+    <p>This is a generated Vue application.</p>
+  </div>
+</template>
 
-        const template = getSandpackTemplate(useStructure.framework);
+<script>
+export default {
+  name: 'App'
+}
+</script>
+
+<style>
+#app {
+  font-family: Avenir, Helvetica, Arial, sans-serif;
+  text-align: center;
+  color: #2c3e50;
+  margin-top: 60px;
+}
+</style>` };
+                filesCopy["/src/main.js"] = { code: `import { createApp } from 'vue';
+import App from './App.vue';
+createApp(App).mount('#app');` };
+                filesCopy["/index.html"] = { code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>` };
+                break;
+              case "react":
+              case "next":
+              case "vite-react":
+              default:
+                filesCopy["/src/index.jsx"] = { code: `import React from 'react';
+import ReactDOM from 'react-dom/client';
+
+function App() {
+  return (
+    <div className="App">
+      <h1>Hello React!</h1>
+      <p>This is a generated React application.</p>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);` };
+                filesCopy["/index.html"] = { code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/index.jsx"></script>
+  </body>
+</html>` };
+                break;
+            }
+          }
+          
+          // Step 1: Normalize (filter build outputs, cache files, etc.)
+          const normalized = normalizeFilesForSandpack(filesCopy);
+
+          // Step 2: Strip any leading project folder to get paths relative to project root
+          // Files at this point are like: "/my-vue-app/src/main.js" or "/src/main.js" or "/index.html"
+          // We need them to be: "/src/main.js" or "/index.html" (relative to project root for Sandpack)
+          const stripped: Record<string, { code: string }> = {};
+
+          // Common project subfolder names that indicate the preceding folder is a project root
+          const projectSubfolderPatterns = [
+            /^\/([^/]+)\/src\//,      // /my-app/src/...
+            /^\/([^/]+)\/pages\//,    // /my-app/pages/...
+            /^\/([^/]+)\/app\//,      // /my-app/app/...
+            /^\/([^/]+)\/public\//,   // /my-app/public/...
+            /^\/([^/]+)\/lib\//,      // /my-app/lib/...
+            /^\/([^/]+)\/components\//, // /my-app/components/...
+            /^\/([^/]+)\/styles\//,   // /my-app/styles/...
+            /^\/([^/]+)\/assets\//,   // /my-app/assets/...
+          ];
+
+          // Also strip VFS scope prefix (e.g. /project/sessions/draft-chat_xxx/)
+          const scopePrefix = normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath);
+
+          for (const [path, fileObj] of Object.entries(normalized)) {
+            let relativePath = path;
+
+            // Strip VFS scope prefix first (e.g. /project/sessions/draft-chat_xxx/my-vue-app/src/main.js -> /my-vue-app/src/main.js)
+            const prefixVariants = [
+              `/${scopePrefix}/`,
+              `${scopePrefix}/`,
+              `/project/sessions/`,
+            ];
+            for (const prefix of prefixVariants) {
+              if (relativePath.startsWith(prefix)) {
+                relativePath = '/' + relativePath.slice(prefix.length);
+                // If we stripped a sessions prefix, also strip the session ID folder
+                if (prefix === '/project/sessions/' || prefix === 'project/sessions/') {
+                  const slashIdx = relativePath.indexOf('/', 1);
+                  if (slashIdx > 0) {
+                    relativePath = relativePath.slice(slashIdx);
+                  }
+                }
+                break;
+              }
+            }
+
+            // Try to strip leading project folder if path contains a known subfolder pattern
+            for (const pattern of projectSubfolderPatterns) {
+              const match = relativePath.match(pattern);
+              if (match) {
+                const projectFolder = match[1];
+                // Don't strip if the "project folder" is actually a standard folder name
+                if (!['src', 'pages', 'app', 'public', 'lib', 'components', 'styles', 'assets'].includes(projectFolder)) {
+                  relativePath = relativePath.replace(`/${projectFolder}/`, '/');
+                  break;
+                }
+              }
+            }
+
+            // Ensure path starts with /
+            if (!relativePath.startsWith('/')) {
+              relativePath = '/' + relativePath;
+            }
+
+            stripped[relativePath] = fileObj;
+          }
+
+          const result = stripped;
+          // Only log once when files actually change (not on every render)
+          const resultKey = `${Object.keys(result).length}-${Object.keys(result).sort().join('|').slice(0, 50)}`;
+          if (resultKey !== lastNormalizationRef.current) {
+            log(`[Sandpack] Normalized ${Object.keys(filesCopy).length} -> ${Object.keys(normalized).length} (filtered) -> ${Object.keys(result).length} (scope strip)`);
+            lastNormalizationRef.current = resultKey;
+          }
+          return result;
+        })();
+
+        const template = getSandpackTemplate(effectiveFramework);
 
         // Manual preview with HTML files - use Sandpack for proper bundling
         if (isManualPreviewActive && previewMode === 'iframe') {
@@ -2350,7 +2491,7 @@ export default app;`,
                         recompileMode: "delayed",
                         recompileDelay: 300,
                       }}
-                      files={finalSandpackFiles}
+                files={sandpackFiles}
                       customSetup={{ dependencies: {} }}
                     />
                   </div>
@@ -2541,129 +2682,111 @@ export default app;`,
             ([path]) => path === 'requirements.txt'
           );
           
-          // Enhanced Pyodide with package installation and caching
-          React.useEffect(() => {
-            const loadPyodide = async () => {
-              setIsPyodideLoading(true);
-              setPyodideOutput('');
+          // Pyodide loading function (regular function, NOT a hook)
+          const loadPyodideRuntime = async () => {
+            setIsPyodideLoading(true);
+            setPyodideOutput('');
 
-              try {
-                // Multiple CDN sources for reliability
-                const CDN_SOURCES = [
-                  'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/',
-                  'https://unpkg.com/pyodide@0.23.4/',
-                ];
-                
-                let pyodide: any = null;
-                let lastError: any = null;
+            try {
+              const CDN_SOURCES = [
+                'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/',
+                'https://unpkg.com/pyodide@0.23.4/',
+              ];
+              
+              let pyodide: any = null;
+              let lastError: any = null;
 
-                // Try each CDN until one works
-                for (const cdn of CDN_SOURCES) {
-                  try {
-                    const script = document.createElement('script');
-                    script.src = 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js';
-                    script.async = true;
-                    
-                    await new Promise((resolve, reject) => {
-                      script.onload = resolve;
-                      script.onerror = reject;
-                      document.head.appendChild(script);
+              for (const cdn of CDN_SOURCES) {
+                try {
+                  const script = document.createElement('script');
+                  script.src = 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js';
+                  script.async = true;
+                  
+                  await new Promise((resolve, reject) => {
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.head.appendChild(script);
+                  });
+
+                  if ((window as any).loadPyodide) {
+                    pyodide = await (window as any).loadPyodide({
+                      indexURL: cdn,
+                      packageCacheDir: '/lib/python3.11/site-packages',
                     });
-
-                    if ((window as any).loadPyodide) {
-                      pyodide = await (window as any).loadPyodide({
-                        indexURL: cdn,
-                        // Enable IndexedDB caching
-                        packageCacheDir: '/lib/python3.11/site-packages',
-                      });
-                      break; // Success!
-                    }
-                  } catch (err: any) {
-                    lastError = err;
-                    console.warn(`CDN ${cdn} failed, trying next...`);
-                    continue;
+                    break;
                   }
+                } catch (err: any) {
+                  lastError = err;
+                  console.warn(`CDN ${cdn} failed, trying next...`);
+                  continue;
                 }
-
-                if (!pyodide) {
-                  throw new Error(`All CDNs failed: ${lastError?.message}`);
-                }
-
-                pyodideRef.current = pyodide;
-
-                // Enhanced stdout capture
-                pyodide.setStdout({
-                  batched: (msg: string) => {
-                    setPyodideOutput(prev => prev + msg);
-                  },
-                  write: (msg: string) => {
-                    setPyodideOutput(prev => prev + msg);
-                  },
-                  isatty: () => false,
-                });
-
-                // Preload common packages if configured
-                const preloadPackages = process.env.NEXT_PUBLIC_PYODIDE_PRELOAD_PACKAGES?.split(',') || [];
-                
-                if (preloadPackages.length > 0) {
-                  setPyodideOutput(prev => prev + `# Preloading ${preloadPackages.length} package(s)...\n`);
-                  try {
-                    await pyodide.loadPackage(preloadPackages);
-                    setPyodideOutput(prev => prev + `✓ Preloaded: ${preloadPackages.join(', ')}\n`);
-                  } catch (err: any) {
-                    setPyodideOutput(prev => prev + `⚠ Preload warning: ${err.message}\n`);
-                  }
-                }
-
-                // Install requirements if present
-                if (requirementsFile) {
-                  setPyodideOutput(prev => prev + '# Installing requirements...\n');
-                  try {
-                    await pyodide.runPythonAsync(`
-                      import micropip
-                      requirements = """${requirementsFile[1]}"""
-                      for pkg in requirements.strip().split('\\n'):
-                          pkg = pkg.strip()
-                          if pkg and not pkg.startswith('#'):
-                              try:
-                                  await micropip.install(pkg)
-                                  print(f'✓ Installed {pkg}')
-                              except Exception as e:
-                                  print(f'⚠ Could not install {pkg}: {e}')
-                    `);
-                  } catch (err: any) {
-                    setPyodideOutput(prev => prev + `⚠ Package installation warning: ${err.message}\n`);
-                  }
-                }
-
-                // Execute main Python file
-                if (mainFile) {
-                  setPyodideOutput(prev => prev + `\n# Running ${mainFile[0]}...\n# ─────────────────────────────\n`);
-                  try {
-                    await pyodide.runPythonAsync(mainFile[1]);
-                    setPyodideOutput(prev => prev + '\n✅ Execution complete!\n');
-                  } catch (err: any) {
-                    setPyodideOutput(prev => prev + `\n❌ Error: ${err.message}\n`);
-                  }
-                }
-
-                setIsPyodideLoading(false);
-              } catch (err: any) {
-                console.error('Failed to load Pyodide:', err);
-                setPyodideOutput(prev => prev + `❌ Failed to load Pyodide: ${err.message}\n`);
-                setIsPyodideLoading(false);
               }
-            };
 
-            loadPyodide();
-
-            return () => {
-              // Cleanup
-              if (pyodideRef.current) {
-                pyodideRef.current = null;
+              if (!pyodide) {
+                throw new Error(`All CDNs failed: ${lastError?.message}`);
               }
-            };
-          }, [mainFile, requirementsFile]);
+
+              pyodideRef.current = pyodide;
+
+              pyodide.setStdout({
+                batched: (msg: string) => {
+                  setPyodideOutput(prev => prev + msg);
+                },
+                write: (msg: string) => {
+                  setPyodideOutput(prev => prev + msg);
+                },
+                isatty: () => false,
+              });
+
+              const preloadPackages = process.env.NEXT_PUBLIC_PYODIDE_PRELOAD_PACKAGES?.split(',') || [];
+              
+              if (preloadPackages.length > 0) {
+                setPyodideOutput(prev => prev + `# Preloading ${preloadPackages.length} package(s)...\n`);
+                try {
+                  await pyodide.loadPackage(preloadPackages);
+                  setPyodideOutput(prev => prev + `✓ Preloaded: ${preloadPackages.join(', ')}\n`);
+                } catch (err: any) {
+                  setPyodideOutput(prev => prev + `⚠ Preload warning: ${err.message}\n`);
+                }
+              }
+
+              if (requirementsFile) {
+                setPyodideOutput(prev => prev + '# Installing requirements...\n');
+                try {
+                  await pyodide.runPythonAsync(`
+                    import micropip
+                    requirements = """${requirementsFile[1]}"""
+                    for pkg in requirements.strip().split('\\n'):
+                        pkg = pkg.strip()
+                        if pkg and not pkg.startswith('#'):
+                            try:
+                                await micropip.install(pkg)
+                                print(f'✓ Installed {pkg}')
+                            except Exception as e:
+                                print(f'⚠ Could not install {pkg}: {e}')
+                  `);
+                } catch (err: any) {
+                  setPyodideOutput(prev => prev + `⚠ Package installation warning: ${err.message}\n`);
+                }
+              }
+
+              if (mainFile) {
+                setPyodideOutput(prev => prev + `\n# Running ${mainFile[0]}...\n# ─────────────────────────────\n`);
+                try {
+                  await pyodide.runPythonAsync(mainFile[1]);
+                  setPyodideOutput(prev => prev + '\n✅ Execution complete!\n');
+                } catch (err: any) {
+                  setPyodideOutput(prev => prev + `\n❌ Error: ${err.message}\n`);
+                }
+              }
+
+              setIsPyodideLoading(false);
+            } catch (err: any) {
+              console.error('Failed to load Pyodide:', err);
+              setPyodideOutput(prev => prev + `❌ Failed to load Pyodide: ${err.message}\n`);
+              setIsPyodideLoading(false);
+            }
+          };
 
           return (
             <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
@@ -2677,16 +2800,19 @@ export default app;`,
                     size="sm"
                     variant="outline"
                     onClick={() => {
-                      setPyodideOutput('');
                       if (pyodideRef.current && mainFile) {
+                        setPyodideOutput('');
                         pyodideRef.current.runPythonAsync(mainFile[1]).catch((err: any) => {
                           setPyodideOutput(prev => prev + `\nError: ${err.message}\n`);
                         });
+                      } else {
+                        void loadPyodideRuntime();
                       }
                     }}
                     className="text-xs bg-green-600 hover:bg-green-700 text-white"
+                    disabled={isPyodideLoading}
                   >
-                    ▶ Re-run
+                    {isPyodideLoading ? '⏳ Loading...' : pyodideRef.current ? '▶ Re-run' : '▶ Load & Run'}
                   </Button>
                   <Button
                     size="sm"
@@ -2729,7 +2855,7 @@ export default app;`,
                       <div className="w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin" />
                       <span>Loading Pyodide (this may take a moment)...</span>
                     </div>
-                  ) : (
+                  ) : pyodideRef.current ? (
                     <div className="space-y-1">
                       <p className="text-gray-500"># Pyodide Python Runtime</p>
                       <p className="text-gray-500"># Executing: {mainFile?.[0] || 'unknown'}</p>
@@ -2740,6 +2866,11 @@ export default app;`,
                         <p className="text-gray-600">No output yet...</p>
                       )}
                       <p className="text-blue-400 animate-pulse">▊</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 text-gray-400">
+                      <p>Click "▶ Load & Run" to start the Python runtime.</p>
+                      <p className="text-xs text-gray-500">Pyodide runs Python natively in the browser — no server needed!</p>
                     </div>
                   )}
                 </div>
@@ -2803,38 +2934,186 @@ export default app;`,
           const bootWebContainer = async () => {
             setIsWebcontainerBooting(true);
             setWebcontainerUrl(null);
+            webcontainerUrlRef.current = null;
 
             try {
-              log('[WebContainer] Creating sandbox via provider...');
-
-              // Use the sandbox bridge to create WebContainer sandbox
-              const response = await fetch('/api/sandbox/webcontainer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  files: useStructure.files,
-                }),
-              });
-
-              if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error || `Failed to create WebContainer sandbox (${response.status})`);
+              log('[WebContainer] Bootstrapping in browser...');
+              
+              // Dynamically import WebContainer API (browser-only)
+              const { WebContainer } = await import('@webcontainer/api');
+              
+              // Boot the WebContainer instance
+              const webcontainer = await WebContainer.boot();
+              webcontainerInstanceRef.current = webcontainer;
+              
+              log('[WebContainer] Instance booted, writing files...');
+              
+              // Write all files to the virtual filesystem
+              const files = useStructure.files;
+              
+              // Collect unique parent directories and create them first
+              const dirs = new Set<string>();
+              for (const filePath of Object.keys(files)) {
+                const parts = filePath.split('/').filter(Boolean);
+                for (let i = 1; i < parts.length; i++) {
+                  dirs.add('/' + parts.slice(0, i).join('/'));
+                }
               }
+              // Create directories shallowest-first
+              const sortedDirs = Array.from(dirs).sort((a, b) => a.split('/').length - b.split('/').length);
+              for (const dir of sortedDirs) {
+                try {
+                  await webcontainer.fs.mkdir(dir, { recursive: true });
+                } catch {
+                  // Directory may already exist
+                }
+              }
+              
+              // Now write files
+              for (const [filePath, content] of Object.entries(files)) {
+                try {
+                  await webcontainer.fs.writeFile(filePath, content);
+                } catch (writeErr: any) {
+                  logWarn(`[WebContainer] Failed to write ${filePath}:`, writeErr.message);
+                }
+              }
+              
+              log('[WebContainer] Files written, installing dependencies...');
+              
+              // Install dependencies if package.json exists
+              const hasPackageJson = files['package.json'] !== undefined;
+              if (hasPackageJson) {
+                try {
+                  const installProcess = await webcontainer.spawn('npm', ['install']);
+                  await installProcess.exit;
+                  log('[WebContainer] Dependencies installed');
+                } catch (installErr: any) {
+                  logWarn('[WebContainer] npm install failed:', installErr.message);
+                  // Continue anyway - some projects don't need deps
+                }
+              }
+              
+              log('[WebContainer] Starting server...');
 
-              const data = await response.json();
-              const { sandboxId, url } = data;
+              // Determine start command - check for Next.js first
+              const packageJsonContent = hasPackageJson ? files['package.json'] : '';
+              const hasNextJs = packageJsonContent.includes('next') || files['next.config.js'] || files['next.config.ts'];
+              const hasStartScript = hasPackageJson && packageJsonContent.includes('"start"');
+              const hasDevScript = hasPackageJson && packageJsonContent.includes('"dev"');
+              
+              // Find the entry file location to determine working directory
+              const serverFileCandidates = ['server.js', 'app.js', 'index.js', 'main.js'];
+              const entryFile = Object.keys(files).find(f => serverFileCandidates.includes(f)) || 'server.js';
+              const entryDir = entryFile.includes('/') ? entryFile.substring(0, entryFile.lastIndexOf('/')) : '.';
+              
+              // Next.js should use 'npm run dev', otherwise use start script or node with correct path
+              // cdPrefix is empty when entryDir is '.' so we don't emit a bare 'cd <command>'
+              const cdPrefix = entryDir !== '.' ? `cd ${entryDir} && ` : '';
+              const startCommand = hasNextJs && hasDevScript 
+                ? cdPrefix + 'npm run dev' 
+                : hasStartScript 
+                  ? cdPrefix + 'npm start' 
+                  : cdPrefix + 'node ' + entryFile.split('/').pop();
 
-              log(`[WebContainer] Sandbox ready: ${sandboxId}`);
-              setWebcontainerUrl(url);
-              setIsWebcontainerBooting(false);
+              log(`[WebContainer] Using start command: ${startCommand} (entry dir: ${entryDir})`);
+
+              // Start the development server with correct working directory
+              const process = await webcontainer.spawn('sh', ['-c', startCommand]);
+              webcontainerProcessRef.current = process;
+
+              // Monitor process exit
+              const exitPromise = process.exit.then((exitCode: number) => {
+                logError(`[WebContainer] Process exited with code ${exitCode}`);
+                if (exitCode !== 0 && !webcontainerUrlRef.current) {
+                  setWebcontainerUrl(`Error: Server exited with code ${exitCode}. Check output for details.`);
+                  setIsWebcontainerBooting(false);
+                }
+              });
+              
+              // Listen for server-ready event
+              let serverReadyCalled = false;
+              webcontainer.on('server-ready', (port: number, url: string) => {
+                serverReadyCalled = true;
+                log(`[WebContainer] Server ready: ${url} (port ${port})`);
+                setWebcontainerUrl(url);
+                setIsWebcontainerBooting(false);
+              });
+              
+              // Also watch for output to detect server start
+              let serverOutput = '';
+              let outputWithoutAnsi = '';
+              
+              // ANSI escape code regex for stripping terminal formatting
+              const ansiRegex = /\x1b\[[0-9;]*[a-zA-Z]/g;
+              
+              process.output.pipeTo(new WritableStream({
+                write(data) {
+                  serverOutput += data;
+                  // Strip ANSI codes for readable output and pattern matching
+                  const cleanData = data.replace(ansiRegex, '');
+                  outputWithoutAnsi += cleanData;
+                  log(`[WebContainer] Server output: ${cleanData.trim()}`);
+                  
+                  // Look for port in output - multiple patterns
+                  const patterns = [
+                    /listening on.*?:(\d+)/i,
+                    /server.*?running.*?:(\d+)/i,
+                    /port.*?(\d+)/i,
+                    /http:\/\/localhost:(\d+)/i,
+                    /http:\/\/0\.0\.0\.0:(\d+)/i,
+                    /ready in.*?(\d+)/i,  // Next.js pattern
+                    /:(\d{4,5})/  // generic 4-5 digit port
+                  ];
+                  
+                  for (const pattern of patterns) {
+                    const portMatch = outputWithoutAnsi.match(pattern);
+                    if (portMatch && !webcontainerUrlRef.current) {
+                      const port = parseInt(portMatch[1], 10);
+                      if (port > 0 && port < 65536) {
+                        log(`[WebContainer] Detected port ${port} from output`);
+                        setWebcontainerUrl(`http://localhost:${port}`);
+                        break;
+                      }
+                    }
+                  }
+                }
+              }));
+
+              // Set a fallback URL after timeout if no server-ready event
+              // Increased timeout to 45s for slower boots, only set URL if we have a valid one
+              setTimeout(() => {
+                // Only show timeout message if server-ready wasn't called and we don't have a URL
+                if (!serverReadyCalled && !webcontainerUrlRef.current) {
+                  log('[WebContainer] Timeout waiting for server-ready event, checking output...');
+                  // Try to extract port from server output as last resort (use ANSI-stripped output)
+                  const portMatch = outputWithoutAnsi.match(/listening on.*?:(\d+)/i) || outputWithoutAnsi.match(/port.*?(\d+)/i) || outputWithoutAnsi.match(/http:\/\/localhost:(\d+)/i) || outputWithoutAnsi.match(/ready in.*?(\d+)/i);
+                  if (portMatch) {
+                    const port = parseInt(portMatch[1], 10);
+                    log(`[WebContainer] Extracted port ${port} from output after timeout`);
+                    setWebcontainerUrl(`http://localhost:${port}`);
+                  } else {
+                    // Check if this might be a Next.js project (known WebContainer limitation)
+                    const cleanOutput = outputWithoutAnsi.slice(-300).replace(/\n/g, ' ').trim();
+                    const isNextJs = files['next.config.js'] || files['next.config.ts'] || (files['package.json'] && files['package.json'].includes('next'));
+                    const nextJsHint = isNextJs 
+                      ? ' Note: Next.js dev server has limited WebContainer support. Try Sandpack mode for frontend preview instead.' 
+                      : '';
+                    setWebcontainerUrl(`Timeout: Server did not start.${nextJsHint} Output: "${cleanOutput || 'None'}"`);
+                  }
+                } else if (!webcontainerUrlRef.current && serverReadyCalled) {
+                  // server-ready was called but URL wasn't set (shouldn't happen, but handle it)
+                  log('[WebContainer] server-ready event fired but URL not set - using fallback');
+                  setWebcontainerUrl('http://localhost:3000');
+                }
+                setIsWebcontainerBooting(false);
+              }, 45000);
+              
             } catch (err: any) {
               logError('[WebContainer] Boot error:', err);
               
-              // If error mentions "Unauthorized" or "not found", suggest clearing sessions
-              if (err.message.includes('Unauthorized') || err.message.includes('not found')) {
-                log('[WebContainer] Session may be stale, suggesting cleanup');
-                toast.error('WebContainer failed - session may be stale', {
-                  description: 'Try clicking "Clear Sessions" and retry',
+              if (err.message.includes('SharedArrayBuffer') || err.message.includes('cross-origin')) {
+                toast.error('WebContainer requires cross-origin isolation', {
+                  description: 'Your browser may not support SharedArrayBuffer. Try Chrome or Edge.',
                   duration: 5000,
                 });
               } else {
@@ -2931,6 +3210,7 @@ export default app;`,
         }
 
         // Next.js preview mode - Optimized for Next.js apps
+        // Uses WebContainer directly in browser (same as webcontainer mode but with Next.js-specific config)
         if (isManualPreviewActive && previewMode === 'nextjs') {
           const packageJson = Object.entries(useStructure.files).find(
             ([path]) => path === 'package.json'
@@ -2946,32 +3226,91 @@ export default app;`,
           const startNextJS = async () => {
             setIsNextjsBuilding(true);
             setNextjsUrl(null);
-            
+            webcontainerUrlRef.current = null;
+
             try {
-              log('[Next.js] Starting Next.js dev server...');
-              
-              // Use WebContainer to run Next.js
-              const response = await fetch('/api/sandbox/webcontainer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  files: useStructure.files,
-                  startCommand: 'npm run dev',
-                  waitForPort: 3000,
-                }),
-              });
-              
-              if (!response.ok) {
-                throw new Error('Failed to start Next.js server');
+              log('[Next.js] Booting WebContainer for Next.js...');
+
+              // Dynamically import WebContainer API (browser-only)
+              const { WebContainer } = await import('@webcontainer/api');
+
+              // Boot the WebContainer instance
+              const webcontainer = await WebContainer.boot();
+              webcontainerInstanceRef.current = webcontainer;
+
+              log('[Next.js] Writing files to virtual filesystem...');
+
+              // Write all files
+              const files = useStructure.files;
+              for (const [filePath, content] of Object.entries(files)) {
+                try {
+                  const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+                  if (dir) {
+                    await webcontainer.fs.mkdir(dir, { recursive: true });
+                  }
+                  await webcontainer.fs.writeFile(filePath, content);
+                } catch (writeErr: any) {
+                  logWarn(`[Next.js] Failed to write ${filePath}:`, writeErr.message);
+                }
               }
+
+              log('[Next.js] Installing dependencies...');
+              await webcontainer.spawn('npm', ['install']);
+
+              log('[Next.js] Starting Next.js dev server...');
+              const process = await webcontainer.spawn('npm', ['run', 'dev']);
+              webcontainerProcessRef.current = process;
+
+              let serverOutput = '';
+              let outputWithoutAnsi = '';
+              const ansiRegex = /\x1b\[[0-9;]*[a-zA-Z]/g;
               
-              const data = await response.json();
-              // Next.js runs on port 3000 by default
-              const devUrl = data.url || 'http://localhost:3000';
-              
-              setNextjsUrl(devUrl);
-              log(`[Next.js] Dev server ready: ${devUrl}`);
-              setIsNextjsBuilding(false);
+              process.output.pipeTo(new WritableStream({
+                write(data) {
+                  serverOutput += data;
+                  const cleanData = data.replace(ansiRegex, '');
+                  outputWithoutAnsi += cleanData;
+                  log(`[Next.js] Output: ${cleanData.trim()}`);
+                  
+                  // Next.js typically outputs "Ready in X.Xs" or "started on port"
+                  const patterns = [
+                    /ready in.*?(\d+)/i,
+                    /started on.*?:(\d+)/i,
+                    /localhost:(\d+)/i,
+                    /:(\d{4,5})/
+                  ];
+                  
+                  for (const pattern of patterns) {
+                    const match = outputWithoutAnsi.match(pattern);
+                    if (match && !webcontainerUrlRef.current) {
+                      const port = parseInt(match[1], 10);
+                      if (port > 0 && port < 65536) {
+                        const url = `http://localhost:${port}`;
+                        log(`[Next.js] Server ready: ${url}`);
+                        setNextjsUrl(url);
+                        setIsNextjsBuilding(false);
+                        break;
+                      }
+                    }
+                  }
+                }
+              }));
+
+              // Fallback timeout
+              setTimeout(() => {
+                if (!webcontainerUrlRef.current) {
+                  const portMatch = outputWithoutAnsi.match(/:(\d{4,5})/);
+                  if (portMatch) {
+                    const port = parseInt(portMatch[1], 10);
+                    setNextjsUrl(`http://localhost:${port}`);
+                  } else {
+                    const cleanOutput = outputWithoutAnsi.slice(-300).replace(/\n/g, ' ').trim();
+                    setNextjsUrl(`Timeout: "${cleanOutput || 'No output'}"`);
+                  }
+                }
+                setIsNextjsBuilding(false);
+              }, 45000);
+
             } catch (err: any) {
               logError('[Next.js] Start error:', err);
               setNextjsUrl(`Error: ${err.message}`);
@@ -3516,7 +3855,7 @@ export default app;`,
               <AlertCircle className="w-16 h-16 mx-auto mb-4 text-red-400" />
               <p className="text-red-400">Failed to render framework preview</p>
               <p className="text-sm text-gray-600 mt-2">
-                Framework: {useStructure.framework}
+                Framework: {effectiveFramework}
               </p>
               <p className="text-sm text-gray-600">
                 Error: {(error as Error).message}
@@ -3652,7 +3991,7 @@ export default app;`,
                   recompileMode: "delayed",
                   recompileDelay: 300,
                 }}
-                files={finalSandpackFiles}
+                files={sandpackFiles}
                 customSetup={{
                   dependencies: {},
                 }}
@@ -4114,7 +4453,18 @@ export default app;`,
                       </button>
                     </div>
                   )}
-                  {renderLivePreview()}
+                  <PreviewErrorBoundary
+                    fallback={<div className="h-full flex items-center justify-center bg-gray-900 rounded-lg p-4"><div className="text-center text-gray-400"><AlertCircle className="w-12 h-12 mx-auto mb-3 text-yellow-500" /><p className="text-lg font-medium mb-2">Preview Error</p><p className="text-sm mb-4">The preview encountered an error and could not be displayed.</p><Button onClick={() => window.location.reload()} variant="outline" size="sm">Retry</Button></div></div>}
+                    onReset={() => {
+                      log('[PreviewErrorBoundary] Reset triggered, clearing preview state');
+                      handleClearManualPreview();
+                      if (manualPreviewPathRef.current) {
+                        handleManualPreview(manualPreviewPathRef.current);
+                      }
+                    }}
+                  >
+                    {renderLivePreview()}
+                  </PreviewErrorBoundary>
                 </TabsContent>
 
                 {detectedFramework !== "vanilla" && (
@@ -4414,6 +4764,84 @@ export default app;`,
                                       onClick={() => onClearFileCommandDiffs?.(path)}
                                     >
                                       Clear
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Polled Diffs Section - from useDiffsPoller */}
+                        {polledDiffs && polledDiffs.length > 0 && (
+                          <div className="mt-4 border-t border-white/10 pt-3">
+                            <h4 className="text-xs font-medium text-cyan-400 mb-2">
+                              Polled Changes ({polledDiffs.length}) 🔄
+                            </h4>
+                            <div className="flex gap-2 mb-2">
+                              <Button
+                                size="sm"
+                                variant="default"
+                                className="h-7 px-2 text-[11px] bg-cyan-600 hover:bg-cyan-700"
+                                onClick={() => onApplyPolledDiffs?.()}
+                                disabled={!onApplyPolledDiffs}
+                              >
+                                Apply All
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[11px]"
+                                onClick={() => {
+                                  // Show path selection - for now apply all
+                                  onApplyPolledDiffs?.();
+                                }}
+                                disabled={!onApplyPolledDiffs}
+                              >
+                                Select...
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[11px]"
+                                onClick={onClearPolledDiffs}
+                                disabled={!onClearPolledDiffs}
+                              >
+                                Clear
+                              </Button>
+                            </div>
+                            <div className="space-y-1">
+                              {polledDiffs.map((diff, idx) => (
+                                <div key={diff.id || idx} className="rounded border border-cyan-500/20 p-2 bg-cyan-900/10">
+                                  <div className="flex items-center justify-between">
+                                    <div className="truncate text-[11px] text-cyan-300">{diff.path}</div>
+                                    <span className={`text-[10px] px-1.5 rounded ${
+                                      diff.changeType === 'create' ? 'bg-green-500/20 text-green-400' :
+                                      diff.changeType === 'delete' ? 'bg-red-500/20 text-red-400' :
+                                      'bg-yellow-500/20 text-yellow-400'
+                                    }`}>
+                                      {diff.changeType}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 flex gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-1 text-[10px]"
+                                      onClick={() => onApplyPolledDiffs?.([diff.path])}
+                                    >
+                                      Apply
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-1 text-[10px]"
+                                      onClick={() => {
+                                        // View diff details - could show modal
+                                        console.log('Diff details:', diff.diff);
+                                      }}
+                                    >
+                                      View
                                     </Button>
                                   </div>
                                 </div>

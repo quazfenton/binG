@@ -24,6 +24,8 @@ export const SSE_EVENT_TYPES = {
   STEP_METRIC: 'step_metric',
   /** Filesystem mutation notification */
   FILESYSTEM: 'filesystem',
+  /** Git-style diffs for client sync */
+  DIFFS: 'diffs',
   /** Reasoning / chain-of-thought */
   REASONING: 'reasoning',
   /** Stream completed */
@@ -76,6 +78,23 @@ export interface SSEFilesystemPayload {
   [key: string]: unknown;
 }
 
+export interface SSEDiffsPayload {
+  /** Array of file diffs */
+  files: Array<{
+    /** File path relative to workspace */
+    path: string;
+    /** Unified diff format string */
+    diff: string;
+    /** Type of change: create, update, delete */
+    changeType: 'create' | 'update' | 'delete';
+  }>;
+  /** Number of files changed */
+  count?: number;
+  /** Request ID for tracking */
+  requestId?: string;
+  [key: string]: unknown;
+}
+
 export interface SSEReasoningPayload {
   reasoning: string;
 }
@@ -102,6 +121,7 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.STEP; data: SSEStepPayload }
   | { type: typeof SSE_EVENT_TYPES.STEP_METRIC; data: SSEStepMetricPayload }
   | { type: typeof SSE_EVENT_TYPES.FILESYSTEM; data: SSEFilesystemPayload }
+  | { type: typeof SSE_EVENT_TYPES.DIFFS; data: SSEDiffsPayload }
   | { type: typeof SSE_EVENT_TYPES.REASONING; data: SSEReasoningPayload }
   | { type: typeof SSE_EVENT_TYPES.DONE; data: SSEDonePayload }
   | { type: typeof SSE_EVENT_TYPES.ERROR; data: SSEErrorPayload }

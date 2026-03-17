@@ -1,4 +1,5 @@
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
+import DatabaseConstructor from 'better-sqlite3';
 import { readFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import * as crypto from 'crypto';
@@ -86,7 +87,7 @@ export function getDatabase(): Database.Database {
       // Using pre-imported functions from top-level imports
       mkdirSync(dirname(DB_PATH), { recursive: true });
 
-      db = new Database(DB_PATH);
+      db = new DatabaseConstructor(DB_PATH);
 
       // Enable WAL mode for better performance
       db.pragma('journal_mode = WAL');

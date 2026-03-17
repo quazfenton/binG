@@ -10,7 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getApprovalStep } from '@/lib/mastra/workflows/hitl-workflow';
+import { getApprovalStep } from '@/lib/orchestra/mastra/workflows/hitl-workflow';
 import { verifyAuth } from '@/lib/auth/jwt';
 
 // Lazy load Mastra to avoid build-time initialization
@@ -19,7 +19,7 @@ let _mastra: any = null;
 async function getMastra() {
   if (!_mastra) {
     try {
-      const { mastra } = await import('@/lib/mastra/mastra-instance');
+      const { mastra } = await import('@/lib/orchestra/mastra/mastra-instance');
       _mastra = mastra;
     } catch (error) {
       console.error('[Mastra API] Failed to load Mastra:', error);

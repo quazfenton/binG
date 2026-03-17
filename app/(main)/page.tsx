@@ -49,7 +49,9 @@ export default function ChatBox() {
     const mediaUrl = (saved || fallback || "").trim()
 
     if (mediaUrl) {
-      root.style.setProperty("--app-bg-media", `url("${mediaUrl}")`)
+      // Use image proxy to bypass CORS/hotlinking restrictions
+      const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(mediaUrl)}`
+      root.style.setProperty("--app-bg-media", `url("${proxiedUrl}")`)
       root.style.setProperty("--app-bg-media-opacity", "0.12")
     }
   }, [])
@@ -59,17 +61,9 @@ export default function ChatBox() {
   }
 
   return (
-    <ThemeProvider
-      attribute="class"
-      defaultTheme="dark"
-      themes={["dark", "light", "ocean", "forest", "sepia", "midnight"]}
-      enableSystem={false}
-      disableTransitionOnChange
-    >
-      <TamboWrapper>
-        <ConversationInterface />
-        <PWAInstallPrompt />
-      </TamboWrapper>
-    </ThemeProvider>
+    <TamboWrapper>
+      <ConversationInterface />
+      <PWAInstallPrompt />
+    </TamboWrapper>
   )
 }

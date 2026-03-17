@@ -12,6 +12,7 @@ import type {
 import { diffTracker } from './filesystem-diffs';
 import { stripWorkspacePrefixes } from './scope-utils';
 import { VFSBatchOperations } from './vfs-batch-operations';
+import { createGitBackedVFS, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
 
 // Default configuration
 const DEFAULT_WORKSPACE_ROOT = process.env.DEFAULT_WORKSPACE_ROOT || 'project';
@@ -799,6 +800,14 @@ export class VirtualFilesystemService {
    */
   getDiffTracker() {
     return diffTracker;
+  }
+
+  /**
+   * Get git-backed VFS wrapper for owner
+   * Enables automatic commits, rollbacks, and version tracking
+   */
+  getGitBackedVFS(ownerId: string, options?: GitVFSOptions): GitBackedVFS {
+    return getGitBackedVFSForOwner(ownerId, this, options);
   }
 }
 

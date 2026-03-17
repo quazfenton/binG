@@ -561,6 +561,178 @@
     --assistant-bubble-border: rgba(139, 92, 246, 0.3);
 }
 
+/* Rose mode */
+.rose {
+    --background: 330 25% 96%;
+    --foreground: 330 35% 18%;
+    --card: 0 0% 100%;
+    --card-foreground: 330 35% 18%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 330 35% 18%;
+    --primary: 340 82% 52%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 330 20% 88%;
+    --secondary-foreground: 330 35% 18%;
+    --muted: 330 20% 88%;
+    --muted-foreground: 330 15% 42%;
+    --accent: 320 70% 58%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 330 18% 82%;
+    --input: 330 18% 82%;
+    --ring: 340 82% 52%;
+    /* Rose gradient background */
+    --app-bg-image:
+        radial-gradient(circle at 50% 45%, rgba(253, 164, 175, 0.35) 0%, rgba(255, 241, 244, 1) 82%);
+    --app-scene-overlay:
+        radial-gradient(circle at 50% 45%, rgba(244, 63, 94, 0.15) 0%, rgba(251, 113, 133, 0.1) 65%, rgba(255, 241, 244, 0.4) 100%);
+    /* Pink/rose orb effects */
+    --app-orb-1: rgba(244, 63, 94, 0.15);
+    --app-orb-2: rgba(236, 72, 153, 0.12);
+    --app-orb-3: rgba(219, 39, 119, 0.1);
+    --app-orb-blur: 80px;
+    --app-orb-brightness: 0.9;
+    --app-noise-opacity: 0.02;
+    --app-bg-media: none;
+    --app-bg-media-opacity: 0;
+    /* Rose-tinted chat bubbles */
+    --user-bubble-bg: linear-gradient(135deg, rgba(253, 164, 175, 0.4), rgba(244, 63, 94, 0.3));
+    --user-bubble-text: #881337;
+    --assistant-bubble-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(255, 228, 230, 0.9));
+    --assistant-bubble-text: #831843;
+    --assistant-bubble-border: rgba(244, 63, 94, 0.3);
+}
+
+/* Desert mode */
+.desert {
+    --background: 35 30% 94%;
+    --foreground: 28 40% 20%;
+    --card: 0 0% 100%;
+    --card-foreground: 28 40% 20%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 28 40% 20%;
+    --primary: 24 75% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 35 25% 86%;
+    --secondary-foreground: 28 40% 20%;
+    --muted: 35 25% 86%;
+    --muted-foreground: 28 20% 45%;
+    --accent: 18 70% 60%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 35 20% 78%;
+    --input: 35 20% 78%;
+    --ring: 24 75% 55%;
+    /* Desert sunset gradient background */
+    --app-bg-image:
+        radial-gradient(circle at 50% 45%, rgba(251, 146, 60, 0.4) 0%, rgba(254, 243, 199, 1) 82%);
+    --app-scene-overlay:
+        radial-gradient(circle at 50% 45%, rgba(249, 115, 22, 0.18) 0%, rgba(234, 88, 12, 0.12) 65%, rgba(254, 243, 199, 0.4) 100%);
+    /* Orange/amber orb effects */
+    --app-orb-1: rgba(249, 115, 22, 0.18);
+    --app-orb-2: rgba(234, 88, 12, 0.14);
+    --app-orb-3: rgba(194, 65, 12, 0.12);
+    --app-orb-blur: 85px;
+    --app-orb-brightness: 0.95;
+    --app-noise-opacity: 0.03;
+    --app-bg-media: none;
+    --app-bg-media-opacity: 0;
+    /* Warm sand-colored chat bubbles */
+    --user-bubble-bg: linear-gradient(135deg, rgba(251, 146, 60, 0.35), rgba(249, 115, 22, 0.3));
+    --user-bubble-text: #7c2d12;
+    --assistant-bubble-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(254, 237, 213, 0.9));
+    --assistant-bubble-text: #9a3412;
+    --assistant-bubble-border: rgba(249, 115, 22, 0.35);
+}
+
+/* Lavender mode */
+.lavender {
+    --background: 260 30% 96%;
+    --foreground: 260 35% 20%;
+    --card: 0 0% 100%;
+    --card-foreground: 260 35% 20%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 260 35% 20%;
+    --primary: 270 65% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 260 25% 88%;
+    --secondary-foreground: 260 35% 20%;
+    --muted: 260 25% 88%;
+    --muted-foreground: 260 18% 45%;
+    --accent: 280 60% 62%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 260 20% 80%;
+    --input: 260 20% 80%;
+    --ring: 270 65% 58%;
+    /* Lavender dreamy gradient background */
+    --app-bg-image:
+        radial-gradient(circle at 50% 45%, rgba(196, 181, 253, 0.4) 0%, rgba(246, 245, 255, 1) 82%);
+    --app-scene-overlay:
+        radial-gradient(circle at 50% 45%, rgba(139, 92, 246, 0.18) 0%, rgba(167, 139, 250, 0.12) 65%, rgba(246, 245, 255, 0.4) 100%);
+    /* Purple/lilac orb effects */
+    --app-orb-1: rgba(139, 92, 246, 0.18);
+    --app-orb-2: rgba(167, 139, 250, 0.14);
+    --app-orb-3: rgba(196, 181, 253, 0.12);
+    --app-orb-blur: 90px;
+    --app-orb-brightness: 0.92;
+    --app-noise-opacity: 0.02;
+    --app-bg-media: none;
+    --app-bg-media-opacity: 10;
+    /* Lavender-tinted chat bubbles */
+    --user-bubble-bg: linear-gradient(135deg, rgba(196, 181, 253, 0.4), rgba(139, 92, 246, 0.3));
+    --user-bubble-text: #5b21b6;
+    --assistant-bubble-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(246, 245, 255, 0.9));
+    --assistant-bubble-text: #6b21a8;
+    --assistant-bubble-border: rgba(139, 92, 246, 0.35);
+}
+
+/* Slate mode */
+.slate {
+    --background: 220 20% 95%;
+    --foreground: 220 30% 22%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 30% 22%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 30% 22%;
+    --primary: 220 55% 48%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 15% 86%;
+    --secondary-foreground: 220 30% 22%;
+    --muted: 220 15% 86%;
+    --muted-foreground: 220 15% 48%;
+    --accent: 215 50% 52%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 220 15% 78%;
+    --input: 220 15% 78%;
+    --ring: 220 55% 48%;
+    /* Slate cool gradient background */
+    --app-bg-image:
+        radial-gradient(circle at 50% 45%, rgba(148, 163, 184, 0.35) 0%, rgba(248, 250, 252, 1) 82%);
+    --app-scene-overlay:
+        radial-gradient(circle at 50% 45%, rgba(71, 85, 105, 0.18) 0%, rgba(51, 65, 85, 0.12) 65%, rgba(248, 250, 252, 0.4) 100%);
+    /* Blue-gray/slate orb effects */
+    --app-orb-1: rgba(71, 85, 105, 0.18);
+    --app-orb-2: rgba(51, 65, 85, 0.14);
+    --app-orb-3: rgba(30, 41, 59, 0.12);
+    --app-orb-blur: 75px;
+    --app-orb-brightness: 0.88;
+    --app-noise-opacity: 0.03;
+    --app-bg-media: none;
+    --app-bg-media-opacity: 0;
+    /* Slate gray chat bubbles */
+    --user-bubble-bg: linear-gradient(135deg, rgba(148, 163, 184, 0.35), rgba(71, 85, 105, 0.3));
+    --user-bubble-text: #1e293b;
+    --assistant-bubble-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(241, 245, 249, 0.9));
+    --assistant-bubble-text: #334155;
+    --assistant-bubble-border: rgba(71, 85, 105, 0.35);
+}
+
 body {
     position: relative;
     background-color: hsl(var(--background));
@@ -611,30 +783,35 @@ body::after {
 }
 
 /* Force hardcoded dark utility classes to flip in non-dark themes */
-:where(.light, .ocean, .forest, .sepia) body {
+:where(.light, .ocean, .forest, .sepia, .rose, .desert, .lavender, .slate) body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
 }
-
-:where(.light, .ocean, .forest, .sepia) [class*="bg-black"] {
-    background-color: hsl(var(--background) / 0.6) !important;
+/* Themes whitish panel opacity changed from 0.6 to be more transparent */
+:where(.light, .ocean, .forest, .sepia, .rose, .desert, .lavender, .slate) [class*="bg-black"] {
+    background-color: hsl(var(--background) / 0.3) !important;
     backdrop-filter: blur(12px);
 }
 
-:where(.light, .ocean, .forest, .sepia) [class*="text-white"] {
+:where(.light, .ocean, .forest, .sepia, .rose, .desert, .lavender, .slate) [class*="text-white"] {
     color: hsl(var(--foreground)) !important;
 }
 
-:where(.light, .ocean, .forest, .sepia) [class*="border-white"] {
+:where(.light, .ocean, .forest, .sepia, .rose, .desert, .lavender, .slate) [class*="border-white"] {
     border-color: hsl(var(--border) / 0.5) !important;
 }
 
-:where(.light, .ocean, .forest, .sepia) [class*="bg-white/"] {
+:where(.light, .ocean, .forest, .sepia, .rose, .desert, .lavender, .slate) [class*="bg-white/"] {
     background-color: hsl(var(--secondary) / 0.5) !important;
 }
 
-:where(.light, .ocean, .forest, .sepia) [class*="text-gray-"] {
+:where(.light, .ocean, .forest, .sepia, .rose, .desert, .lavender, .slate) [class*="text-gray-"] {
     color: hsl(var(--muted-foreground)) !important;
+}
+
+/* Allow cross-origin images for background previews */
+img[crossorigin] {
+    image-rendering: auto;
 }
 
 /* Mobile viewport fixes */

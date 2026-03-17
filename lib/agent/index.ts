@@ -11,7 +11,7 @@ export {
   AgentSessionManager,
   type AgentSession,
   type AgentSessionConfig,
-} from './agent-session-manager';
+} from '../session/agent/agent-session-manager';
 
 // Filesystem Bridge
 export { 
