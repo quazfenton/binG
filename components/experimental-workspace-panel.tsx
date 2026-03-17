@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { usePanel } from "@/contexts/panel-context";
+import { usePanel, type PanelTab } from "@/contexts/panel-context";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -26,7 +26,7 @@ import {
   Plus,
   Trash2,
   ExternalLink,
-  GitHistory,
+  LucideHistory,
   RotateCcw,
   Code,
   FileCode,
@@ -62,7 +62,6 @@ import {
   Youtube,
   Maximize2,
   Minimize2,
-  SwipeRight,
   Users,
   Heart,
   MessageCircle as MessageComment,
@@ -309,15 +308,16 @@ export function ExperimentalWorkspacePanel() {
   
   // Get agent activity from hook (will be wired later)
   // For now, using local state that can be updated by parent component via props
-  const { agentActivity: externalAgentActivity, setAgentActivity: setExternalAgentActivity } = 
+  const { agentActivity: externalAgentActivity, setAgentActivity: setExternalAgentActivity } =
     (window as any).__agentActivity || { agentActivity: undefined, setAgentActivity: undefined };
 
-  const { filesystem } = useVirtualFilesystem();
-  const { 
-    writeFile, 
+  const vfs = useVirtualFilesystem();
+  const {
+    currentPath,
+    nodes,
+    writeFile,
     listDirectory,
-    ownerId 
-  } = useVirtualFilesystem(filesystem?.scopePath || 'project');
+  } = vfs;
   const chatEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -1136,7 +1136,7 @@ export function ExperimentalWorkspacePanel() {
                       <Separator className="my-4 bg-white/10" />
                       <div className="space-y-2">
                         <div className="flex items-center gap-2 mb-2">
-                          <GitHistory className="h-3 w-3 text-purple-400" />
+                          <LucideHistory className="h-3 w-3 text-purple-400" />
                           <span className="text-xs font-medium text-white/90">Version History</span>
                         </div>
                         <VersionHistoryPanel
@@ -1855,7 +1855,7 @@ export function ExperimentalWorkspacePanel() {
                         className="absolute top-4 right-4 h-8 w-8 bg-black/70 hover:bg-black/90 text-white z-20 border border-white/20"
                         title="Change video"
                       >
-                        <Settings className="h-4 w-4" />
+                        <RotateCcw className="h-4 w-4" />
                       </Button>
                       
                       {/* Minimize button */}

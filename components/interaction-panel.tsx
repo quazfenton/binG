@@ -1497,7 +1497,7 @@ export default function InteractionPanel({
             size="sm"
             onClick={togglePanel}
             className={`absolute top-2 left-2 w-8 h-8 p-0 z-[70] transition-all duration-300 sm:w-6 sm:h-6 ${
-              isOpen
+              isPanelOpen
                 ? "text-yellow-400 hover:bg-yellow-500/20 hover:text-yellow-300"
                 : "text-gray-400 hover:text-white hover:bg-white/10"
             }`}

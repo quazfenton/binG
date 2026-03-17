@@ -11,17 +11,9 @@
  * ```
  */
 
-// Import from unified logger
-import {
-  Logger,
-  LogLevel,
-  LogEntry,
-  LoggerConfig as UnifiedLoggerConfig,
-  createLogger,
-  configureLogger,
-  flushLogs,
-  loggers,
-} from './logger';
+// Import from unified logger - re-export types for backwards compatibility
+export type { LogLevel, LogEntry, LoggerConfig } from './logger';
+export { Logger, createLogger, configureLogger, flushLogs, loggers } from './logger';
 
 /**
  * Secure Logger configuration
@@ -102,16 +94,6 @@ export class SecureLogger extends Logger {
     return child;
   }
 }
-
-// Re-export types and functions for backwards compatibility
-export {
-  LogLevel,
-  LogEntry,
-  createLogger,
-  configureLogger,
-  flushLogs,
-  loggers,
-};
 
 /**
  * @deprecated Use LoggerConfig from unified logger instead
