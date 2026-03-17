@@ -62,7 +62,6 @@ export default async function EmbedPage({ params }: EmbedPageProps) {
   return (
     <div
       className="w-screen h-screen"
-      data-theme={config.theme}
       data-embed-type={type}
     >
       <Component />

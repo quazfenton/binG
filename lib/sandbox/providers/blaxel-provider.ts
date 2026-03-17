@@ -31,7 +31,7 @@ import type {
   AsyncExecutionResult,
   LogEntry,
 } from './sandbox-provider'
-import { quotaManager } from '@/lib/services/quota-manager'
+import { quotaManager } from '@/lib/management/quota-manager'
 import { blaxelAsyncManager, verifyWebhookFromRequest } from './blaxel-async'
 import { getDatabase } from '@/lib/database/connection'
 import { encryptSecret, decryptSecret, generateSecureSecret } from '@/lib/utils/crypto'

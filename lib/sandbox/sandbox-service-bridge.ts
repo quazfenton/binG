@@ -18,10 +18,10 @@ import {
   deleteSession as deleteSessionFromStore,
   clearUserSessions as clearUserSessionsFromStore,
   clearStaleSessions as clearStaleSessionsFromStore,
-} from './session-store';
+} from '../storage/session-store';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
-import { sandboxFilesystemSync } from './sandbox-filesystem-sync';
-import { sandboxPersistenceManager } from './persistence-manager';
+import { sandboxFilesystemSync } from '../virtual-filesystem/sync/sandbox-filesystem-sync';
+import { sandboxPersistenceManager } from '../storage/persistence-manager';
 
 // Track pending session creations to prevent race conditions
 const pendingCreations = new Map<string, Promise<WorkspaceSession>>();

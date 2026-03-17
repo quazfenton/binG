@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createCloudStorageService } from '@/lib/services/cloud-storage';
+import { createCloudStorageService } from '@/lib/storage/cloud-storage';
 import { verifyAuth } from '@/lib/auth/jwt';
 import type { StorageResponse, UploadData } from '@/lib/types/storage';
 import { createSuccessResponse, createErrorResponse, toStorageError } from '@/lib/types/storage';

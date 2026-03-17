@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from 'fs';
-import path from 'path';
+import * as path from 'path';
 import { getDatabase } from './connection';
 
 interface Migration {

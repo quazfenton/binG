@@ -1,28 +1,86 @@
-# Docker Compose for V2 Agent Development
-# Includes: Main app + Nullclaw container
-# Uses pnpm for package management
-# Optimized with persistent caching for Python, Node, and CLI tools
+# Docker Compose for V2 Agent Architecture
+#
+# Advanced Multi-Agent Architecture (Cursor/Devin-style):
+# ┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
+# │   NextJS    │────▶│Agent Gateway │────▶│  Redis Queue    │
+# │   (app)    │     │  (gateway)   │     │  (pubsub/jobs)  │
+# └─────────────┘     └──────────────┘     └────────┬────────┘
+#                                                   │
+#          ┌────────────────┬───────────────────────┼──────────────────────────────┐
+#          │                │                       │                              │
+#          ▼                ▼                       ▼                              ▼
+# ┌─────────────────┐ ┌──────────┐       ┌─────────────────┐           ┌─────────────────┐
+# │ Planner Worker  │ │Scheduler │       │Executor Workers │           │Background Worker│
+# │(task planning)  │ │ (cron)   │       │ (OpenCode loop) │           │ (indexing/search)│
+# └─────────────────┘ └──────────┘       └────────┬────────┘           └─────────────────┘
+#                                                  │
+#                          ┌───────────────────────┼────────────────┐
+#                          │                       │                │
+#                          ▼                       ▼                ▼
+#                   ┌─────────────┐         ┌─────────────┐ ┌─────────────┐
+#                   │MCP Server   │         │ Nullclaw    │ │Sandbox Pool │
+#                   │(filesystem) │         │(automation) │ │(execution)  │
+#                   └─────────────┘         └──────┬──────┘ └──────┬──────┘
+#                                                  │               │
+#                                                  ▼               ▼
+#                                           ┌─────────────────────────┐
+#                                           │   OpenSandbox Server    │
+#                                           │ (container isolation)   │
+#                                           └─────────────────────────┘
+#
+# Services:
+# - NextJS: UI + API orchestration (NOT agent loop)
+# - Gateway: Session management + SSE streaming + job creation
+# - Planner: Task decomposition into dependency graphs
+# - Executor (x3): OpenCode engine loop with tool routing
+# - Background: Repo indexing, embeddings, file watchers
+# - Scheduler: Cron-like scheduled tasks (BullMQ repeatable jobs)
+# - MCP: Filesystem, memory, and other tools via HTTP
+# - Nullclaw: Discord, Telegram, browse, automation
+# - OpenSandbox: Container runtime for isolated sandboxes + nullclaw
+# - Sandbox: Pre-warmed sandbox pool
+# - Redis: Job queue + PubSub for events
+# - Qdrant: Vector database for code embeddings/search
+# - Traefik: Reverse proxy + SSL termination
 
 services:
-  # Main binG application
+  # Traefik Reverse Proxy
+  traefik:
+    image: traefik:v2.10
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - bing-network
+    restart: unless-stopped
+
+  # Main NextJS application (UI + API orchestration only)
   app:
     build:
       context: .
       dockerfile: Dockerfile.dev
+      args:
+        - ENCRYPTION_KEY=${ENCRYPTION_KEY:-build-temp-key-change-in-production}
+        - JWT_SECRET=${JWT_SECRET:-build-temp-secret-change-in-production}
+        - BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY:-build-temp-blaxel-key-change}
+        - NANGO_SECRET_KEY=${NANGO_SECRET_KEY:-build-temp-nango-key}
+        - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/binG}
     ports:
       - "5555:5555"
-      - "8080:8080"
     volumes:
       - type: bind
         source: .
         target: /app
         consistency: cached
-        bind:
-          create_host_path: true
-          propagation: cached
-      - type: volume
-        source: next_cache
-        target: /app/.next
       - type: bind
         source: /var/run/docker.sock
         target: /var/run/docker.sock
@@ -31,54 +89,220 @@ services:
       - pip_cache:/root/.cache/pip
       - npm_global:/root/.npm
       - opencode_data:/root/.opencode
-      - nullclaw_data:/root/.nullclaw
     environment:
       - NODE_ENV=development
       - PORT=5555
-      - OPENCODE_CONTAINERIZED=true
+
+      # V2 Agent Configuration
       - V2_AGENT_ENABLED=true
+      - V2_GATEWAY_URL=http://gateway:3002
+      - V2_WORKER_URL=http://worker:3003
+
+      # MCP Configuration
       - MCP_ENABLED=true
       - MCP_CLI_PORT=8888
-      
+
+      # Redis for job queue + PubSub
+      - REDIS_URL=redis://redis:6379
+
       # Nullclaw Integration
-      # Set NULLCLAW_URL to use external service (URL mode)
-      # Leave empty to use container mode (app spawns containers)
       - NULLCLAW_ENABLED=${NULLCLAW_ENABLED:-true}
       - NULLCLAW_URL=${NULLCLAW_URL:-http://nullclaw:3000}
       - NULLCLAW_API_KEY=${NULLCLAW_API_KEY:-}
-      - NULLCLAW_MODE=${NULLCLAW_MODE:-shared}  # shared | per-session
-      - NULLCLAW_POOL_SIZE=${NULLCLAW_POOL_SIZE:-2}
-      - NULLCLAW_MAX_CONTAINERS=${NULLCLAW_MAX_CONTAINERS:-4}
-      - NULLCLAW_PORT=${NULLCLAW_PORT:-3001}
-      - NULLCLAW_NETWORK=bing-network
-      - NULLCLAW_TIMEOUT=300000
-      - NULLCLAW_ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
-      - NULLCLAW_HEALTH_TIMEOUT=30000
-      
+      - NULLCLAW_MODE=${NULLCLAW_MODE:-shared}
+
+      # Vector Search (Qdrant)
+      - QDRANT_URL=http://qdrant:6333
+      - VECTOR_SEARCH_ENABLED=true
+
+      # Agent Configuration
       - CHAT_AGENTIC_PIPELINE=auto
       - WORKFORCE_ENABLED=true
-      - WORKFORCE_MAX_CONCURRENCY=4
-      - PIP_CACHE_DIR=/root/.cache/pip
-      - NPM_CONFIG_CACHE=/root/.npm
+      - PLANNER_ENABLED=true
+
+      # OpenSandbox
+      - OPEN_SANDBOX_BASE_URL=http://opensandbox:8080/v1
+      - OPEN_SANDBOX_API_KEY=${OPEN_SANDBOX_API_KEY:-dev-key}
+
+      # Scheduler
+      - SCHEDULER_URL=http://scheduler:3007
+
+      # Database
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/binG
     depends_on:
-      nullclaw:
+      redis:
         condition: service_healthy
-        required: false  # App can run without Nullclaw
+      gateway:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     networks:
       - bing-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.rule=Host(`localhost`)"
+      - "traefik.http.routers.app.entrypoints=web"
+      - "traefik.http.services.app.loadbalancer.server.port=5555"
 
-  # Nullclaw task assistant
+  # Agent Gateway - Session management + SSE + job creation
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=development
+      - PORT=3002
+      - REDIS_URL=redis://redis:6379
+      - WORKER_URL=http://worker:3003
+      - MAX_CONCURRENT_JOBS=10
+      - JOB_TIMEOUT_MS=300000
+      - SESSION_TIMEOUT_MS=3600000
+    volumes:
+      - workspace_data:/workspace
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - bing-network
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gateway.rule=Host(`localhost`) && PathPrefix(`/api/gateway`)"
+      - "traefik.http.services.gateway.loadbalancer.server.port=3002"
+
+  # Planner Worker - Task decomposition and planning
+  planner:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      - NODE_ENV=development
+      - PORT=3004
+      - REDIS_URL=redis://redis:6379
+      - OPENCODE_MODEL=${OPENCODE_MODEL:-opencode/minimax-m2.5-free}
+      - PLANNER_MAX_TASKS=20
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - workspace_data:/workspace
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    networks:
+      - bing-network
+    restart: unless-stopped
+
+  # Executor Workers - Run OpenCode engine loop (scaled for parallel tasks)
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    ports:
+      - "3003:3003"
+    environment:
+      - NODE_ENV=development
+      - PORT=3003
+      - REDIS_URL=redis://redis:6379
+      - MCP_SERVER_URL=http://mcp:8888
+      - NULLCLAW_URL=http://nullclaw:3000
+      - OPENCODE_MODEL=${OPENCODE_MODEL:-opencode/minimax-m2.5-free}
+      - OPENCODE_MAX_STEPS=15
+      - WORKER_CONCURRENCY=4
+      - QDRANT_URL=http://qdrant:6333
+      - SANDBOX_POOL_URL=http://sandbox:3005
+      # Git-Backed VFS
+      - GIT_VFS_AUTO_COMMIT=true
+      - GIT_VFS_ENABLE_SHADOW_COMMITS=true
+      - ROLLBACK_ON_ERROR=true
+      # OpenSandbox for containerized nullclaw
+      - OPEN_SANDBOX_BASE_URL=http://opensandbox:8080/v1
+      - OPEN_SANDBOX_API_KEY=${OPEN_SANDBOX_API_KEY:-dev-key}
+      - NULLCLAW_ALLOWED_DOMAINS=${NULLCLAW_ALLOWED_DOMAINS:-openrouter.ai,api.discord.com,api.telegram.org}
+      - SCHEDULER_URL=http://scheduler:3007
+    volumes:
+      - workspace_data:/workspace
+      - opencode_data:/root/.opencode
+    depends_on:
+      redis:
+        condition: service_healthy
+      mcp:
+        condition: service_started
+      nullclaw:
+        condition: service_healthy
+      sandbox:
+        condition: service_started
+      opensandbox:
+        condition: service_healthy
+    networks:
+      - bing-network
+    restart: unless-stopped
+    deploy:
+      replicas: 3  # Scale for parallel task execution
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.worker.rule=Host(`localhost`) && PathPrefix(`/api/worker`)"
+      - "traefik.http.services.worker.loadbalancer.server.port=3003"
+
+  # Background Worker - Repo indexing, embeddings, file watchers
+  background:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      - NODE_ENV=development
+      - PORT=3006
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+      - WORKSPACE_ROOT=/workspace
+      - INDEX_INTERVAL_MS=300000  # 5 minutes
+    volumes:
+      - workspace_data:/workspace
+      - index_data:/index
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    networks:
+      - bing-network
+    restart: unless-stopped
+
+  # MCP Tool Server - Filesystem, memory, and other tools
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp
+    ports:
+      - "8888:8888"
+    environment:
+      - NODE_ENV=development
+      - MCP_PORT=8888
+      - WORKSPACE_ROOT=/workspace
+      - VFS_ROOT=/workspace/vfs
+    volumes:
+      - workspace_data:/workspace
+    networks:
+      - bing-network
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mcp.rule=Host(`localhost`) && PathPrefix(`/api/mcp`)"
+      - "traefik.http.services.mcp.loadbalancer.server.port=8888"
+
+  # Nullclaw - Automation tools (Discord, Telegram, browse)
   nullclaw:
     image: ghcr.io/nullclaw/nullclaw:latest
     ports:
       - "3001:3000"
     volumes:
-      - ./nullclaw.config.yml:/app/config.yml:ro  # Mount config file
-      - nullclaw_config:/root/.nullclaw  # Persist Nullclaw config
+      - ./nullclaw.config.yml:/app/config.yml:ro
+      - nullclaw_config:/root/.nullclaw
     environment:
       - NULLCLAW_TIMEOUT=3600
       - ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
-      # Provider API keys (set in .env)
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
       - DISCORD_CHANNEL_ID=${DISCORD_CHANNEL_ID:-}
@@ -93,7 +317,153 @@ services:
       start_period: 30s
     restart: unless-stopped
     labels:
-      - "traefik.enable=false"  # Not directly accessible
+      - "traefik.enable=true"
+      - "traefik.http.routers.nullclaw.rule=Host(`localhost`) && PathPrefix(`/api/nullclaw`)"
+      - "traefik.http.services.nullclaw.loadbalancer.server.port=3000"
+
+  # Sandbox Pool - Isolated code execution
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    ports:
+      - "3005:3005"
+    environment:
+      - NODE_ENV=development
+      - PORT=3005
+      - REDIS_URL=redis://redis:6379
+      - SANDBOX_POOL_SIZE=5
+      - SANDBOX_IDLE_TIMEOUT=600
+      - DEFAULT_SANDBOX_PROVIDER=${SANDBOX_PROVIDER:-microsandbox}
+      # Provider API keys
+      - E2B_API_KEY=${E2B_API_KEY:-}
+      - DAYTONA_API_KEY=${DAYTONA_API_KEY:-}
+      - SPRITES_TOKEN=${SPRITES_TOKEN:-}
+      - CODESANDBOX_API_KEY=${CODESANDBOX_API_KEY:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - sandbox_data:/sandbox
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - bing-network
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sandbox.rule=Host(`localhost`) && PathPrefix(`/api/sandbox`)"
+      - "traefik.http.services.sandbox.loadbalancer.server.port=3005"
+
+  # Scheduler - Cron-like scheduled tasks (BullMQ repeatable jobs)
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    ports:
+      - "3007:3007"
+    environment:
+      - NODE_ENV=development
+      - PORT=3007
+      - REDIS_URL=redis://redis:6379
+      - NULLCLAW_URL=http://nullclaw:3000
+      - SANDBOX_POOL_URL=http://sandbox:3005
+      - BACKGROUND_WORKER_URL=http://background:3006
+      - GATEWAY_URL=http://gateway:3002
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - bing-network
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.scheduler.rule=Host(`localhost`) && PathPrefix(`/api/scheduler`)"
+      - "traefik.http.services.scheduler.loadbalancer.server.port=3007"
+
+  # OpenSandbox Server - Container runtime for isolated execution
+  opensandbox:
+    image: registry.cn-hangzhou.aliyuncs.com/agent-sandbox/agent-sandbox:latest
+    ports:
+      - "8787:8080"
+    environment:
+      - OPEN_SANDBOX_API_KEY=${OPEN_SANDBOX_API_KEY:-dev-key}
+      - OPEN_SANDBOX_LOG_LEVEL=info
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - opensandbox_data:/data
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.opensandbox.rule=Host(`localhost`) && PathPrefix(`/api/opensandbox`)"
+      - "traefik.http.services.opensandbox.loadbalancer.server.port=8080"
+
+  # Qdrant - Vector database for code embeddings and semantic search
+  qdrant:
+    image: qdrant/qdrant:v1.7.0
+    ports:
+      - "6333:6333"
+      - "6334:6334"  # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:6333/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.qdrant.rule=Host(`localhost`) && PathPrefix(`/api/vector`)"
+      - "traefik.http.services.qdrant.loadbalancer.server.port=6333"
+
+  # Redis - Job queue + PubSub for event streaming
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # PostgreSQL - Primary database
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=binG
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
 
 networks:
   bing-network:
@@ -117,5 +487,15 @@ volumes:
     driver: local
   nullclaw_config:
     driver: local
-  next_cache:
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  postgres_data:
+    driver: local
+  sandbox_data:
+    driver: local
+  opensandbox_data:
+    driver: local
+  index_data:
     driver: local

@@ -1,11 +1,19 @@
 /**
- * Task Router - Routes tasks between OpenCode and Nullclaw
- * 
+ * Task Router - Routes tasks between OpenCode and Nullclaw with execution policy selection
+ *
  * OpenCode: Coding tasks (file ops, bash, code generation)
  * Nullclaw: Non-coding tasks (messaging, browsing, automation)
+ *
+ * Execution Policies:
+ * - local-safe: Simple prompts, read-only
+ * - sandbox-required: Bash, file writes
+ * - sandbox-heavy: Full-stack apps, databases
+ * - desktop-required: GUI, browser automation
  */
 
 import { createLogger } from '../utils/logger';
+import type { ExecutionPolicy } from '../sandbox/types';
+import { determineExecutionPolicy } from '../sandbox/types';
 
 const logger = createLogger('Agent:TaskRouter');
 
@@ -20,6 +28,11 @@ export interface TaskRequest {
   onStreamChunk?: (chunk: string) => void;
   onToolExecution?: (toolName: string, args: Record<string, any>, result: any) => void;
   preferredAgent?: 'opencode' | 'nullclaw' | 'cli';
+  /**
+   * Execution policy for sandbox selection
+   * Auto-detected from task if not specified
+   */
+  executionPolicy?: ExecutionPolicy;
   cliCommand?: {
     command: string;
     args?: string[];
@@ -170,16 +183,24 @@ class TaskRouter {
   }
 
   /**
-   * Execute task with OpenCode agent
+   * Execute task with OpenCode agent using execution policy
    */
   private async executeWithOpenCode(request: TaskRequest): Promise<any> {
+    // Determine execution policy (explicit or auto-detected)
+    const executionPolicy = request.executionPolicy || determineExecutionPolicy({
+      task: request.task,
+      requiresBash: /bash|shell|command|execute|run\s+\w+/i.test(request.task),
+      requiresFileWrite: /write|create|save|edit|modify|delete\s+(file|\w+\.\w+)/i.test(request.task),
+      requiresBackend: /server|api|database|backend|express|fastapi|flask|django/i.test(request.task),
+    });
+
     const useV2 =
       process.env.OPENCODE_CONTAINERIZED === 'true' ||
       process.env.V2_AGENT_ENABLED === 'true';
 
     if (!useV2) {
       // Fallback to local OpenCode engine
-      const { createOpenCodeEngine } = await import('../api/opencode-engine-service');
+      const { createOpenCodeEngine } = await import('../session/agent/opencode-engine-service');
       const engine = createOpenCodeEngine({
         model: process.env.OPENCODE_MODEL,
         workingDir: `/workspace/users/${request.userId}/sessions/${request.conversationId}`,
@@ -206,14 +227,20 @@ class TaskRouter {
       };
     }
 
-    const { OpencodeV2Provider } = await import('../sandbox/providers/opencode-v2-provider');
-    const { agentSessionManager } = await import('./agent-session-manager');
+    const { OpencodeV2Provider } = await import('../sandbox/spawn/opencode-cli');
+    const { agentSessionManager } = await import('../session/agent/agent-session-manager');
     const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('../mcp');
 
+    // V2 session with execution policy-based sandbox selection
     const session = await agentSessionManager.getOrCreateSession(
       request.userId,
       request.conversationId,
-      { enableMCP: true, enableNullclaw: true, mode: 'hybrid' },
+      {
+        enableMCP: true,
+        enableNullclaw: true,
+        mode: 'hybrid',
+        executionPolicy,
+      },
     );
 
     const provider = new OpencodeV2Provider({
@@ -227,7 +254,7 @@ class TaskRouter {
       sandboxHandle: session.sandboxHandle,
     });
 
-    const tools = await getMCPToolsForAI_SDK();
+    const tools = await getMCPToolsForAI_SDK(request.userId);
 
     const result = await provider.runAgentLoop({
       userMessage: request.task,
@@ -302,42 +329,52 @@ class TaskRouter {
   private async executeWithNullclaw(request: TaskRequest, taskType: TaskType): Promise<any> {
     const { executeNullclawTask, isNullclawAvailable, initializeNullclaw } = await import('./nullclaw-integration');
 
-    // Initialize Nullclaw if needed
-    if (!isNullclawAvailable()) {
-      await initializeNullclaw();
+    try {
+      // Initialize Nullclaw if needed
+      if (!isNullclawAvailable()) {
+        await initializeNullclaw();
+      }
+
+      // Build Nullclaw task based on type
+      const nullclawType: 'message' | 'browse' | 'automate' = 
+        taskType === 'messaging' ? 'message' : 
+        taskType === 'browsing' ? 'browse' : 
+        'automate';
+      const task = {
+        id: request.id,
+        type: nullclawType,
+        description: request.task,
+        params: this.extractParams(request.task, taskType),
+      };
+
+      const result = await executeNullclawTask(
+        task.type,
+        task.description,
+        task.params,
+        request.userId,
+        request.conversationId,
+      );
+
+      request.onToolExecution?.('nullclaw_task', task.params, result);
+
+      return {
+        success: result.status === 'completed',
+        response: result.result,
+        error: result.error,
+        agent: 'nullclaw',
+      };
+    } catch (error: any) {
+      // Log and re-throw to trigger fallback to v1
+      console.error('[TaskRouter] Nullclaw execution failed:', error.message);
+      throw error;
     }
-
-    // Build Nullclaw task based on type
-    const task = {
-      id: request.id,
-      type: taskType === 'messaging' ? 'message' : taskType === 'browsing' ? 'browse' : 'automate',
-      description: request.task,
-      params: this.extractParams(request.task, taskType),
-    };
-
-    const result = await executeNullclawTask(
-      task.type,
-      task.description,
-      task.params,
-      request.userId,
-      request.conversationId,
-    );
-
-    request.onToolExecution?.('nullclaw_task', task.params, result);
-
-    return {
-      success: result.status === 'completed',
-      response: result.result,
-      error: result.error,
-      agent: 'nullclaw',
-    };
   }
 
   /**
    * Execute task with a generic CLI agent inside the sandbox
    */
   private async executeWithCliAgent(request: TaskRequest): Promise<any> {
-    const { agentSessionManager } = await import('./agent-session-manager');
+    const { agentSessionManager } = await import('../session/agent/agent-session-manager');
     const session = await agentSessionManager.getOrCreateSession(
       request.userId,
       request.conversationId,

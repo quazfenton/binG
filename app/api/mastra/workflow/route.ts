@@ -18,7 +18,7 @@ let _mastra: any = null;
 async function getMastra() {
   if (!_mastra) {
     try {
-      const { mastra } = await import('@/lib/mastra/mastra-instance');
+      const { mastra } = await import('@/lib/orchestra/mastra/mastra-instance');
       _mastra = mastra;
     } catch (error) {
       console.error('[Mastra API] Failed to load Mastra:', error);

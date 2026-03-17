@@ -24,7 +24,7 @@ let _webSocketTerminalServer: any = null;
 async function getWebSocketTerminalServer() {
   if (!_webSocketTerminalServer) {
     try {
-      const { webSocketTerminalServer } = await import('@/lib/backend/websocket-terminal');
+      const { webSocketTerminalServer } = await import('@/lib/terminal/websocket-terminal');
       _webSocketTerminalServer = webSocketTerminalServer;
     } catch (error) {
       console.warn('[Backend] Failed to load WebSocket terminal server:', (error as Error).message);

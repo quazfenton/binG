@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { virtualFilesystem } from '@/lib/virtual-filesystem';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { ShadowCommitManager } from '@/lib/stateful-agent/commit/shadow-commit';
+import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { extractSessionIdFromPath } from '@/lib/virtual-filesystem/scope-utils';
 import { fileContentSchema, languageSchema } from '@/lib/validation/schemas';
 

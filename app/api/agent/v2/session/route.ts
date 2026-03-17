@@ -8,11 +8,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { agentSessionManager } from '@/lib/agent/agent-session-manager';
+import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
 import { agentFSBridge } from '@/lib/agent/agent-fs-bridge';
 import { nullclawIntegration, type NullclawTask } from '@/lib/agent/nullclaw-integration';
 import { cloudAgentOffload } from '@/lib/agent/cloud-agent-offload';
-import { createOpenCodeEngine } from '@/lib/api/opencode-engine-service';
+import { createOpenCodeEngine } from '@/lib/session/agent/opencode-engine-service';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:AgentV2');

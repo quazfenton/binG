@@ -17,6 +17,9 @@ import { ExternalLink, RefreshCw, BarChart2, BarChart3, Monitor } from "lucide-r
 
 export interface ObservableEmbedPluginProps {
   onOpenWindow?: (notebookId: string, title: string) => void;
+  onClose?: () => void;
+  onResult?: (result: any) => void;
+  initialData?: any;
 }
 
 export interface ObservableNotebook {

@@ -8,7 +8,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyCallbackSignature } from '@/lib/sandbox/providers';
+import { verifyBlaxelCallbackFromRequest } from '@/lib/sandbox/providers';
 
 const CALLBACK_SECRET = process.env.BLAXEL_CALLBACK_SECRET;
 
@@ -32,15 +32,14 @@ export async function POST(request: NextRequest) {
     const rawBody = await request.text();
 
     if (CALLBACK_SECRET) {
-      // Create a new Request with the raw body for signature verification
-      // This allows verifyCallbackSignature to read the body without consuming the original
-      const verificationRequest = new NextRequest(request.url, {
+      // Create verification request object for signature verification
+      const verificationData = {
         method: request.method,
-        headers: request.headers,
+        headers: Object.fromEntries(request.headers.entries()) as Record<string, string>,
         body: rawBody,
-      });
+      };
 
-      const isValid = await verifyCallbackSignature(verificationRequest, CALLBACK_SECRET);
+      const isValid = verifyBlaxelCallbackFromRequest(verificationData, CALLBACK_SECRET);
 
       if (!isValid) {
         console.warn('[BlaxelCallback] Invalid signature detected');

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
-import { terminalManager } from '@/lib/sandbox/terminal-manager';
+import { terminalManager } from '@/lib/terminal/terminal-manager';
 import { sandboxCreationRateLimiter } from '@/lib/utils/rate-limiter';
 import { createLogger } from '@/lib/utils/logger';
 
@@ -182,7 +182,6 @@ export async function DELETE(req: NextRequest) {
   } catch (error) {
     const err = error as Error;
     logger.error('Failed to kill terminal session', {
-      sessionId: req.body?.sessionId,
       error: err.message,
       stack: err.stack,
     });

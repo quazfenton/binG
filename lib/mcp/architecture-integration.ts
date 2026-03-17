@@ -7,14 +7,15 @@
  * This module provides unified MCP tool access for both architectures
  */
 
-import { mcpToolRegistry } from './tool-registry'
+import { mcpToolRegistry } from './registry'
 import { parseMCPServerConfigs, initializeMCP, shutdownMCP, getMCPSettings, isMCPAvailable, getMCPToolCount } from './config'
 import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } from './mcporter-integration'
 import { createLogger } from '../utils/logger'
 import { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
-import { ArcadeService, getArcadeService } from '../api/arcade-service'
+import { ArcadeService, getArcadeService } from '../platforms/arcade-service'
 import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
 import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '../agent/nullclaw-integration'
+import { standaloneGitTools } from '../tools/git-tools'
 
 // Blaxel codegen tool definitions for LLM tool calling
 const getBlaxelCodegenToolDefinitions = (): Array<{
@@ -283,12 +284,189 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
 }
 
 /**
+ * Get Composio MCP tools in AI SDK format
+ *
+ * Loads tools from Composio SDK with multiple fallback strategies
+ *
+ * @param userId - User identifier for session-based tool loading
+ * @param requestedToolkits - Optional toolkit filters
+ * @returns Array of tool definitions in AI SDK format
+ */
+export async function getComposioMCPTools(
+  userId: string,
+  requestedToolkits?: string[]
+): Promise<Array<{
+  type: 'function'
+  function: {
+    name: string
+    description?: string
+    parameters: any
+  }
+}>> {
+  try {
+    const { Composio } = await import('@composio/core')
+    const apiKey = process.env.COMPOSIO_API_KEY
+
+    if (!apiKey) {
+      logger.debug('Composio API key not configured, skipping tool loading')
+      return []
+    }
+
+    const composio = new Composio({ apiKey })
+    const requested = (requestedToolkits || []).map((t) => t.toLowerCase())
+
+    const extractToolArray = (raw: any): any[] => {
+      if (Array.isArray(raw)) return raw
+      if (Array.isArray(raw?.items)) return raw.items
+      if (Array.isArray(raw?.tools)) return raw.tools
+      return []
+    }
+
+    const normalizeTool = (tool: any) => {
+      const name = tool?.slug || tool?.name || tool?.toolSlug
+      const description = tool?.description || tool?.deprecated?.displayName || `Tool ${name}`
+      const parameters =
+        tool?.inputParameters ||
+        tool?.input_parameters ||
+        tool?.parameters ||
+        {
+          type: 'object',
+          properties: {},
+          additionalProperties: true,
+        }
+
+      const toolkit =
+        tool?.toolkit?.slug ||
+        tool?.toolkitSlug ||
+        tool?.appName ||
+        (typeof name === 'string' ? String(name).split('_')[0]?.toLowerCase() : 'unknown')
+
+      return { ...tool, name, description, parameters, toolkit }
+    }
+
+    const filterByToolkit = (tools: any[]) => {
+      if (requested.length === 0) return tools
+      return tools.filter((tool) => requested.includes(String(tool.toolkit || '').toLowerCase()))
+    }
+
+    let tools: any[] = []
+
+    // Strategy 1: Direct tools.get() (newest SDK)
+    if (typeof composio?.tools?.get === 'function') {
+      try {
+        const result = await composio.tools.get(userId, {
+          ...(requested.length > 0 ? { toolkits: requested } : {}),
+          limit: 300,
+        })
+        tools = extractToolArray(result).map(normalizeTool)
+        if (tools.length > 0) {
+          logger.debug(`Loaded ${tools.length} Composio tools via tools.get()`)
+          return filterByToolkit(tools).map((t) => ({
+            type: 'function' as const,
+            function: {
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+            },
+          }))
+        }
+      } catch (err: any) {
+        logger.debug('Composio tools.get() failed, trying fallback:', err?.message)
+      }
+    }
+
+    // Strategy 2: tools.list() with various params
+    if (typeof composio?.tools?.list === 'function') {
+      const tryParams = [
+        requested.length > 0 ? { toolkit_slug: requested[0], limit: 300 } : { limit: 300 },
+        requested.length > 0 ? { apps: requested.join(','), limit: 300 } : { limit: 300 },
+        requested.length > 0 ? { toolkits: requested, limit: 300 } : { limit: 300 },
+        undefined,
+      ]
+      for (const params of tryParams) {
+        try {
+          const result = params ? await composio.tools.list(params) : await composio.tools.list()
+          tools = extractToolArray(result).map(normalizeTool)
+          if (tools.length > 0) {
+            logger.debug(`Loaded ${tools.length} Composio tools via tools.list()`)
+            return filterByToolkit(tools).map((t) => ({
+              type: 'function' as const,
+              function: {
+                name: t.name,
+                description: t.description,
+                parameters: t.parameters,
+              },
+            }))
+          }
+        } catch (err: any) {
+          logger.debug('Composio tools.list() with params failed:', err?.message)
+        }
+      }
+    }
+
+    // Strategy 3: Session-based native tools
+    if (typeof composio?.create === 'function') {
+      try {
+        const session = await composio.create(userId)
+        if (typeof session?.tools === 'function') {
+          const result = await session.tools()
+          tools = extractToolArray(result).map(normalizeTool)
+          if (tools.length > 0) {
+            logger.debug(`Loaded ${tools.length} Composio tools via session.tools()`)
+            return filterByToolkit(tools).map((t) => ({
+              type: 'function' as const,
+              function: {
+                name: t.name,
+                description: t.description,
+                parameters: t.parameters,
+              },
+            }))
+          }
+        }
+      } catch (err: any) {
+        logger.debug('Composio session.tools() failed:', err?.message)
+      }
+    }
+
+    // Strategy 4: Raw tools fallback
+    if (typeof composio?.tools?.getRawComposioTools === 'function') {
+      try {
+        const result = await composio.tools.getRawComposioTools({
+          ...(requested.length > 0 ? { toolkits: requested } : {}),
+          limit: 300,
+        })
+        tools = extractToolArray(result).map(normalizeTool)
+        if (tools.length > 0) {
+          logger.debug(`Loaded ${tools.length} Composio tools via getRawComposioTools()`)
+          return filterByToolkit(tools).map((t) => ({
+            type: 'function' as const,
+            function: {
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters,
+            },
+          }))
+        }
+      } catch (err: any) {
+        logger.debug('Composio getRawComposioTools() failed:', err?.message)
+      }
+    }
+
+    logger.debug('No Composio tools loaded after trying all strategies')
+    return []
+  } catch (error: any) {
+    logger.error('Failed to load Composio MCP tools:', error?.message)
+    return []
+  }
+}
+
+/**
  * Get MCP tools in AI SDK format for Architecture 1
  *
  * Use this in your chat/agent implementation to get MCP tools
  * in the format expected by AI SDK's tool calling
  */
-export async function getMCPToolsForAI_SDK() {
+export async function getMCPToolsForAI_SDK(userId?: string) {
   if (mcporterIntegration.isEnabled()) {
     await refreshMCPorterToolsCache()
   }
@@ -329,14 +507,41 @@ export async function getMCPToolsForAI_SDK() {
     }
   }> = process.env.NULLCLAW_ENABLED === 'true' ? nullclawMCPBridge.getToolDefinitions() : []
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools]
+  // NEW: Include Composio tools when API key is available and userId provided
+  const composioTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = process.env.COMPOSIO_API_KEY && userId ? await getComposioMCPTools(userId) : []
+
+  // NEW: Include Git tools (shadow commits, VFS sync)
+  const gitTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = Object.entries(standaloneGitTools).map(([name, toolDef]) => ({
+    type: 'function' as const,
+    function: {
+      name: `git_${name}`,
+      description: toolDef.description || `Git operation: ${name}`,
+      parameters: toolDef.parameters as any,
+    },
+  }))
+
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools]
 
   if (tools.length === 0) {
     logger.debug('MCP not available - no tools to return')
     return []
   }
 
-  logger.debug(`Returning ${tools.length} MCP tools for AI SDK (${blaxelTools.length} Blaxel, ${arcadeTools.length} Arcade, ${providerTools.length} provider-specific)`)
+  logger.debug(`Returning ${tools.length} MCP tools for AI SDK (${blaxelTools.length} Blaxel, ${arcadeTools.length} Arcade, ${providerTools.length} provider-specific, ${composioTools.length} Composio)`)
   return tools
 }
 

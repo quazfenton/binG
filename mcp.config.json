@@ -15,13 +15,13 @@
     },
     "git": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-git", "."],
+      "args": ["-y", "@modelcontextprotocol/mcp-server-git", "."],
       "enabled": true,
       "description": "Git repository analysis and operations"
     },
     "fetch": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-fetch"],
+      "args": ["-y", "@modelcontextprotocol/mcp-server-fetch"],
       "enabled": true,
       "description": "HTTP requests and API fetching"
     },

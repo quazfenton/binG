@@ -27,12 +27,14 @@ import {
   Mail,
   Trophy,
   Check,
+  Server,
 } from "lucide-react";
 import ModalLoginForm from "@/components/auth/modal-login-form";
 import ModalSignupForm from "@/components/auth/modal-signup-form";
 import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
+import Image from "next/image";
 
 interface SettingsProps {
   onClose: () => void;
@@ -59,7 +61,10 @@ const applyCustomBackgroundMedia = (value: string) => {
     root.style.setProperty("--app-bg-media-opacity", "0");
     return;
   }
-  root.style.setProperty("--app-bg-media", `url("${value}")`);
+  
+  // Use image proxy for external URLs to bypass CORS/hotlinking restrictions
+  const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(value)}`;
+  root.style.setProperty("--app-bg-media", `url("${proxiedUrl}")`);
   root.style.setProperty("--app-bg-media-opacity", "0.12");
 };
 
@@ -86,6 +91,10 @@ const THEME_OPTIONS = [
   { id: "forest", label: "Forest", swatch: "bg-emerald-600" },
   { id: "sepia", label: "Sepia", swatch: "bg-amber-700" },
   { id: "midnight", label: "Midnight", swatch: "bg-indigo-800" },
+  { id: "rose", label: "Rose", swatch: "bg-rose-500" },
+  { id: "desert", label: "Desert", swatch: "bg-orange-600" },
+  { id: "lavender", label: "Lavender", swatch: "bg-violet-500" },
+  { id: "slate", label: "Slate", swatch: "bg-slate-600" },
 ] as const;
 
 export default function Settings({
@@ -111,13 +120,141 @@ export default function Settings({
   const [assistantBubbleBg, setAssistantBubbleBg] = useState("#000000");
   const [assistantBubbleText, setAssistantBubbleText] = useState("#ffffff");
   const [assistantBubbleBorder, setAssistantBubbleBorder] = useState("#ffffff");
+
+  // Environment variable toggles state (user-specific overrides)
+  const [envVars, setEnvVars] = useState<Record<string, boolean>>({
+    OPENCODE_ENABLED: false,
+    NULLCLAW_ENABLED: false,
+  });
+
+  // Oracle VM configuration state
+  const [oracleVmConfig, setOracleVmConfig] = useState({
+    host: '',
+    port: 22,
+    username: 'opc',
+    privateKeyPath: '~/.ssh/id_rsa',
+    workspace: '/home/opc/workspace',
+  });
+
+  // Load Oracle VM config from localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = localStorage.getItem('oracle_vm_config');
+    if (saved) {
+      try {
+        setOracleVmConfig(JSON.parse(saved));
+      } catch (e) {
+        console.error('Failed to load Oracle VM config:', e);
+      }
+    }
+  }, []);
+
+  // Save Oracle VM config to localStorage
+  const handleSaveOracleVmConfig = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('oracle_vm_config', JSON.stringify(oracleVmConfig));
+      toast.success('Oracle VM configuration saved');
+    }
+  };
+
+  // Load env var toggles from localStorage and server on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    const loadPreferences = async () => {
+      // Start with localStorage (for offline/immediate feedback)
+      const saved = localStorage.getItem('user_env_overrides');
+      let localPrefs: Record<string, boolean> = {};
+      if (saved) {
+        try {
+          localPrefs = JSON.parse(saved);
+        } catch (e) {
+          console.error('Failed to parse localStorage prefs:', e);
+        }
+      }
+      
+      // If authenticated, fetch from server (overrides localStorage)
+      if (isAuthenticated) {
+        try {
+          const response = await fetch('/api/user/preferences');
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.preferences) {
+              // Merge server prefs with local
+              const merged = { ...localPrefs, ...data.preferences };
+              setEnvVars(merged);
+              
+              // Update localStorage with server data
+              localStorage.setItem('user_env_overrides', JSON.stringify(merged));
+              
+              // Apply to document for CSS-based feature flags
+              Object.entries(merged).forEach(([key, value]) => {
+                if (value === true) {
+                  document.documentElement.setAttribute(`data-${key.toLowerCase()}`, 'true');
+                } else {
+                  document.documentElement.removeAttribute(`data-${key.toLowerCase()}`);
+                }
+              });
+              
+              return; // Done
+            }
+          }
+        } catch (e) {
+          console.error('Failed to load server preferences:', e);
+          // Fall back to localStorage
+        }
+      }
+      
+      // Use localStorage if not authenticated or server fetch failed
+      if (Object.keys(localPrefs).length > 0) {
+        setEnvVars(localPrefs);
+        Object.entries(localPrefs).forEach(([key, value]) => {
+          if (value === true) {
+            document.documentElement.setAttribute(`data-${key.toLowerCase()}`, 'true');
+          } else {
+            document.documentElement.removeAttribute(`data-${key.toLowerCase()}`);
+          }
+        });
+      }
+    };
+    
+    loadPreferences();
+  }, [isAuthenticated]);
+
+  // Save env var toggles to localStorage and sync to server
+  const toggleEnvVar = async (key: string) => {
+    setEnvVars((prev) => {
+      const updated = { ...prev, [key]: !prev[key] };
+      if (typeof window !== 'undefined') {
+        // Save to localStorage
+        localStorage.setItem('user_env_overrides', JSON.stringify(updated));
+        
+        // Apply to document for CSS-based feature flags
+        if (updated[key]) {
+          document.documentElement.setAttribute(`data-${key.toLowerCase()}`, 'true');
+        } else {
+          document.documentElement.removeAttribute(`data-${key.toLowerCase()}`);
+        }
+        
+        // Sync to server (if authenticated)
+        fetch('/api/user/preferences', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [key]: updated[key] }),
+        }).catch(err => console.warn('Failed to sync preference to server:', err));
+        
+        toast.success(`${key} ${updated[key] ? 'enabled' : 'disabled'}`);
+      }
+      return updated;
+    });
+  };
   
   // Color picker state
   const [openColorPicker, setOpenColorPicker] = useState<string | null>(null);
   const [selectedColorType, setSelectedColorType] = useState<'bg' | 'text' | 'border'>('bg');
   
   // Background URL selector state
-  const [showBgSelector, setShowBgSelector] = useState(false);
+  const [showBgSelector, setShowBgSelector] = useState(true);
   const [bgUrlName, setBgUrlName] = useState("");
   
   // Preset background URLs
@@ -125,6 +262,12 @@ export default function Settings({
     { id: 'default', name: 'Default', url: process.env.NEXT_PUBLIC_BG_MEDIA_URL || '' },
     { id: 'sky', name: 'Sky', url: 'https://media.tenor.com/CWaT-F5vNb8AAAAM/sky-gif.gif' },
     { id: 'aurora', name: 'Aurora', url: 'https://i.pinimg.com/originals/64/ce/9f/64ce9f3c2463b528dfba90720fed9ea5.gif' },
+    { id: 'stars', name: 'Stars', url: 'https://i.imgur.com/DtHvUjb.gif' },
+    { id: 'neon', name: 'Neon', url: 'https://64.media.tumblr.com/5d0e893e84a5116a7f9e424fc2f378ef/tumblr_n4suq4tHbE1tq9q5vo1_r1_500.gif' },
+    { id: 'fire', name: 'Fire', url: 'https://i.imgur.com/9uxEl57.gif' },
+    { id: 'energy', name: 'Energy', url: 'https://media0.giphy.com/media/v1.Y2lkPTZjMDliOTUyenh5Nmx4NzV4djJuYWF0am93MGRycGE2cDJiOW5wZmpibzV0c2M0NiZlcD12MV9naWZzX3NlYXJjaCZjdD1n/nk0a5GWGrnAx55339K/200w.gif' },
+    { id: 'cosmic', name: 'Cosmic', url: 'https://64.media.tumblr.com/0411acaf933ca0d247a7e115cd761608/e85d08b8418d3bbd-0f/s500x750/cebc4e249625c0222eeb5d9e2cc703fcb9283ef5.gif' },
+    { id: 'natura', name: 'Natura', url: 'https://64.media.tumblr.com/54f8f2ac56a71691c4d6e5c7fe290e68/tumblr_pgrkl8nswk1r7rste_500.gif' },
     { id: 'none', name: 'None', url: '' },
   ];
   
@@ -393,7 +536,8 @@ export default function Settings({
       handleClearCustomBg();
       toast.success("Background cleared");
     }
-    setShowBgSelector(false);
+    // Keep selector open for easy switching
+    // setShowBgSelector(false);
   };
 
   const handleApplyBubbleColors = () => {
@@ -543,8 +687,8 @@ export default function Settings({
               </div>
               <div className="text-xs text-gray-500">
                 {user?.subscriptionTier === 'premium' 
-                  ? 'Unlimited prompts • Custom themes • Priority support'
-                  : 'Limited prompts • Basic features'
+                  ? 'Premium • Priority support'
+                  : 'Unimited prompts • Basic features'
                 }
               </div>
             </div>
@@ -586,48 +730,14 @@ export default function Settings({
           )}
         </div>
 
-        {/* Themes Section */}
+        {/* Custom Background URL Section */}
         <div className="bg-black/30 rounded-lg p-4 border border-white/10">
           <div className="flex items-center gap-2 mb-4">
             <Palette className="h-4 w-4" />
-            <h3 className="font-medium">Theme</h3>
+            <h3 className="font-medium">Background</h3>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            {THEME_OPTIONS.map((option) => {
-              const isActive = theme === option.id;
-              return (
-                <button
-                  key={option.id}
-                  onClick={() => setTheme(option.id)}
-                  className={`relative overflow-hidden flex flex-col items-center gap-2 p-3 rounded-xl border transition-all duration-200 ${
-                    isActive
-                      ? 'border-white/40 bg-white/15 shadow-lg shadow-white/5'
-                      : 'border-white/10 hover:border-white/25 hover:bg-white/8'
-                  }`}
-                >
-                  {/* Theme preview gradient */}
-                  <div className={`w-full h-10 rounded-lg ${option.swatch} shadow-inner`} />
-                  
-                  {/* Theme name */}
-                  <span className="text-xs font-medium text-white/90">{option.label}</span>
-                  
-                  {/* Active indicator */}
-                  {isActive && (
-                    <div className="absolute top-2 right-2 w-5 h-5 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center">
-                      <Check className="w-3 h-3 text-white" />
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="mt-3 text-xs text-gray-400 text-center">
-            Active: <span className="text-white font-medium capitalize">{resolvedTheme || theme}</span>
-          </div>
-
-          <div className="mt-4 space-y-2">
+          <div className="space-y-2">
             <Label htmlFor="custom-bg-url" className="text-xs text-white/70">
               Custom: Background URL
             </Label>
@@ -652,7 +762,7 @@ export default function Settings({
                 {showBgSelector ? 'Close' : 'Select'}
               </Button>
             </div>
-            
+
             {/* Background URL Selector */}
             {showBgSelector && (
               <div className="space-y-3 mt-2 p-3 bg-black/30 rounded-lg border border-white/10">
@@ -665,10 +775,12 @@ export default function Settings({
                       className="relative overflow-hidden h-16 rounded-lg border border-white/10 hover:border-white/30 transition-all group"
                     >
                       {preset.url ? (
-                        <img
+                        <Image
                           src={preset.url}
                           alt={preset.name}
-                          className="w-full h-full object-cover"
+                          fill
+                          className="object-cover"
+                          sizes="64px"
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center bg-gray-800">
@@ -681,7 +793,7 @@ export default function Settings({
                     </button>
                   ))}
                 </div>
-                
+
                 {savedBackgrounds.length > 0 && (
                   <>
                     <div className="text-xs text-gray-400 font-medium mt-3">Saved Backgrounds</div>
@@ -692,8 +804,14 @@ export default function Settings({
                           onClick={() => handleSelectBackground(bg.url, bg.name)}
                           className="w-full flex items-center gap-2 p-2 rounded bg-black/20 hover:bg-white/10 transition-all text-left"
                         >
-                          <div className="w-8 h-6 rounded overflow-hidden flex-shrink-0 bg-gray-800">
-                            <img src={bg.url} alt={bg.name} className="w-full h-full object-cover" />
+                          <div className="w-8 h-6 rounded overflow-hidden flex-shrink-0 bg-gray-800 relative">
+                            <Image
+                              src={bg.url}
+                              alt={bg.name}
+                              fill
+                              className="object-cover"
+                              sizes="32px"
+                            />
                           </div>
                           <span className="text-xs text-white/80 truncate flex-1">{bg.name}</span>
                           <span className="text-[10px] text-gray-500 truncate max-w-[100px]">{bg.url}</span>
@@ -705,8 +823,51 @@ export default function Settings({
               </div>
             )}
           </div>
+        </div>
 
-          <div className="mt-4 space-y-2">
+        {/* Themes Section */}
+        <div className="bg-black/30 rounded-lg p-4 border border-white/10">
+          <div className="flex items-center gap-2 mb-4">
+            <Palette className="h-4 w-4" />
+            <h3 className="font-medium">Theme</h3>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {THEME_OPTIONS.map((option) => {
+              const isActive = theme === option.id;
+              return (
+                <button
+                  key={option.id}
+                  onClick={() => setTheme(option.id)}
+                  className={`relative overflow-hidden flex flex-col items-center gap-2 p-3 rounded-xl border transition-all duration-200 ${
+                    isActive
+                      ? 'border-white/40 bg-white/15 shadow-lg shadow-white/5'
+                      : 'border-white/10 hover:border-white/25 hover:bg-white/8'
+                  }`}
+                >
+                  {/* Theme preview gradient */}
+                  <div className={`w-full h-10 rounded-lg ${option.swatch} shadow-inner`} />
+
+                  {/* Theme name */}
+                  <span className="text-xs font-medium text-white/90">{option.label}</span>
+
+                  {/* Active indicator */}
+                  {isActive && (
+                    <div className="absolute top-2 right-2 w-5 h-5 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center">
+                      <Check className="w-3 h-3 text-white" />
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-3 text-xs text-gray-400 text-center">
+            Active: <span className="text-white font-medium capitalize">{resolvedTheme || theme}</span>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-2">
             <Label className="text-xs text-white/70">Message Bubble Colors</Label>
             
             {/* Color Picker Popover */}
@@ -1063,6 +1224,137 @@ export default function Settings({
           </div>
         </div>
 
+        {/* Environment Variables Section - User Overrides */}
+        <div className="bg-black/30 rounded-lg p-4 border border-white/10">
+          <div className="flex items-center gap-2 mb-4">
+            <SettingsIcon className="h-4 w-4" />
+            <h3 className="font-medium">User Feature Overrides</h3>
+          </div>
+          <p className="text-xs text-gray-400 mb-3">
+            Override environment variables for your session. Settings sync to your account and persist across devices.
+          </p>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <Label htmlFor="opencode-enabled" className="text-sm">OpenCode</Label>
+                <p className="text-xs text-gray-500">OpenCode AI integration (alternative to default LLM)</p>
+              </div>
+              <div
+                className={`custom-toggle ${envVars.OPENCODE_ENABLED ? 'active' : ''}`}
+                onClick={() => toggleEnvVar('OPENCODE_ENABLED')}
+                title={envVars.OPENCODE_ENABLED ? 'Enabled' : 'Disabled'}
+              >
+                <div className="custom-toggle-slider" />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <Label htmlFor="nullclaw-enabled" className="text-sm">Nullclaw</Label>
+                <p className="text-xs text-gray-500">Nullclaw integration for advanced agent capabilities</p>
+              </div>
+              <div
+                className={`custom-toggle ${envVars.NULLCLAW_ENABLED ? 'active' : ''}`}
+                onClick={() => toggleEnvVar('NULLCLAW_ENABLED')}
+                title={envVars.NULLCLAW_ENABLED ? 'Enabled' : 'Disabled'}
+              >
+                <div className="custom-toggle-slider" />
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-2">
+            <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+              <p className="text-xs text-blue-400">
+                💡 <strong>How it works:</strong> Your preferences override server environment variables for your session only.
+              </p>
+            </div>
+            <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+              <p className="text-xs text-green-400">
+                ✅ <strong>Synced to account:</strong> Settings persist across devices when logged in.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Oracle VM Configuration */}
+        <div className="bg-black/30 rounded-lg p-4 border border-white/10">
+          <div className="flex items-center gap-2 mb-4">
+            <Server className="h-4 w-4" />
+            <h3 className="font-medium">Oracle VM Sandbox</h3>
+          </div>
+          <p className="text-xs text-gray-400 mb-3">
+            Connect to your Oracle Cloud Infrastructure VM for sandboxed code execution via SSH.
+          </p>
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="oracle-vm-host" className="text-xs text-white/70">VM Host (IP or hostname)</Label>
+              <Input
+                id="oracle-vm-host"
+                value={oracleVmConfig.host}
+                onChange={(e) => setOracleVmConfig(prev => ({ ...prev, host: e.target.value }))}
+                placeholder="192.168.1.100 or vm-host.oraclecloud.com"
+                className="bg-black/30 border-white/20 text-xs"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label htmlFor="oracle-vm-port" className="text-xs text-white/70">SSH Port</Label>
+                <Input
+                  id="oracle-vm-port"
+                  type="number"
+                  value={oracleVmConfig.port}
+                  onChange={(e) => setOracleVmConfig(prev => ({ ...prev, port: parseInt(e.target.value) || 22 }))}
+                  placeholder="22"
+                  className="bg-black/30 border-white/20 text-xs"
+                />
+              </div>
+              <div>
+                <Label htmlFor="oracle-vm-user" className="text-xs text-white/70">Username</Label>
+                <Input
+                  id="oracle-vm-user"
+                  value={oracleVmConfig.username}
+                  onChange={(e) => setOracleVmConfig(prev => ({ ...prev, username: e.target.value }))}
+                  placeholder="opc"
+                  className="bg-black/30 border-white/20 text-xs"
+                />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="oracle-vm-key" className="text-xs text-white/70">SSH Private Key Path</Label>
+              <Input
+                id="oracle-vm-key"
+                value={oracleVmConfig.privateKeyPath}
+                onChange={(e) => setOracleVmConfig(prev => ({ ...prev, privateKeyPath: e.target.value }))}
+                placeholder="~/.ssh/id_rsa"
+                className="bg-black/30 border-white/20 text-xs"
+              />
+            </div>
+            <div>
+              <Label htmlFor="oracle-vm-workspace" className="text-xs text-white/70">Workspace Directory</Label>
+              <Input
+                id="oracle-vm-workspace"
+                value={oracleVmConfig.workspace}
+                onChange={(e) => setOracleVmConfig(prev => ({ ...prev, workspace: e.target.value }))}
+                placeholder="/home/opc/workspace"
+                className="bg-black/30 border-white/20 text-xs"
+              />
+            </div>
+            <Button
+              size="sm"
+              className="w-full"
+              onClick={handleSaveOracleVmConfig}
+            >
+              Save Configuration
+            </Button>
+            <div className="p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+              <p className="text-xs text-yellow-400">
+                ⚠️ <strong>Required:</strong> SSH private key must be configured. Set <code>ORACLE_VM_HOST</code> environment variable to enable.
+              </p>
+            </div>
+          </div>
+        </div>
+
         <div className="mt-8">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-medium">Text Transcript</h3>
@@ -1115,7 +1407,6 @@ export default function Settings({
             )}
           </div>
         </div>
-      </div>
 
       {/* Auth Modal */}
       {showAuthModal && (

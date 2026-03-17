@@ -6,7 +6,7 @@ export async function GET() {
   try {
     let wsServer: any = null;
     try {
-      const { webSocketTerminalServer } = await import('@/lib/backend/websocket-terminal');
+      const { webSocketTerminalServer } = await import('@/lib/terminal/websocket-terminal');
       wsServer = webSocketTerminalServer;
     } catch {
       // WS module not available

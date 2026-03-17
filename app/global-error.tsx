@@ -1,22 +1,46 @@
-"use client";
-
-// Global error boundary - must be a Client Component in Next.js 16
-// Note: This page is intentionally kept minimal to avoid build-time errors
+'use client'
 
 export default function GlobalError({
   error,
   reset,
 }: {
-  error: Error & { digest?: string };
-  reset: () => void;
+  error: Error & { digest?: string }
+  reset: () => void
 }) {
   return (
-    <div style={{ padding: '2rem', textAlign: 'center' }}>
-      <h1>Error</h1>
-      <p>An error occurred. Please refresh the page.</p>
-      <button onClick={() => reset()} style={{ marginTop: '1rem', padding: '0.5rem 1rem' }}>
-        Try again
-      </button>
-    </div>
-  );
+    <html lang="en" suppressHydrationWarning>
+      <body style={{ 
+        background: '#0a0a0a', 
+        color: '#fff', 
+        margin: 0, 
+        padding: '40px', 
+        textAlign: 'center',
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontFamily: 'sans-serif'
+      }}>
+        <h2 style={{ fontSize: '24px', marginBottom: '16px' }}>Something went wrong!</h2>
+        <p style={{ marginBottom: '24px', color: '#888' }}>
+          {error?.message || 'An unexpected error occurred.'}
+        </p>
+        <button
+          onClick={() => reset()}
+          style={{
+            padding: '12px 24px',
+            background: '#3B82F6',
+            color: 'white',
+            border: 'none',
+            borderRadius: '8px',
+            cursor: 'pointer',
+            fontSize: '14px'
+          }}
+        >
+          Try again
+        </button>
+      </body>
+    </html>
+  )
 }

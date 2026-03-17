@@ -3,8 +3,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { streamingErrorHandler } from '@/lib/streaming/streaming-error-handler';
 import type { Message } from '@/types';
-import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync-events';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { buildApiHeaders } from '@/lib/utils';
+import type { AgentType, AgentStatus } from '@/components/agent-status-display';
 
 export interface UseChatOptions {
   api: string;
@@ -24,6 +25,17 @@ export interface UseChatReturn {
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   stop: () => void;
   setInput: (input: string) => void;
+  // Agent status for multi-agent display
+  agentStatus: {
+    type: AgentType;
+    status: AgentStatus;
+    currentAction?: string;
+  };
+  // Version tracking
+  currentVersion?: number;
+  // Agent activity for experimental panel
+  agentActivity?: any;
+  setAgentActivity?: (activity: any) => void;
 }
 
 /**
@@ -35,6 +47,25 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | undefined>();
   
+  // Agent status state
+  const [agentType, setAgentType] = useState<AgentType>('single');
+  const [agentStatus, setAgentStatus] = useState<AgentStatus>('idle');
+  const [currentAction, setCurrentAction] = useState<string | undefined>();
+  
+  // Version tracking
+  const [currentVersion, setCurrentVersion] = useState<number | undefined>();
+
+  // Agent activity for experimental panel
+  const [agentActivity, setAgentActivity] = useState<any>({
+    status: 'idle',
+    currentAction: '',
+    toolInvocations: [],
+    reasoningChunks: [],
+    processingSteps: [],
+    gitCommits: [],
+    diffs: [],
+  });
+
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentMessageRef = useRef<Message | null>(null);
   const messagesRef = useRef<Message[]>([]);
@@ -52,6 +83,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
       setIsLoading(false);
+      setAgentStatus('idle');
     }
   }, []);
 
@@ -385,21 +417,39 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
               switch (eventType) {
                 case 'init':
-                  // Initialization event - just log for debugging
+                  // Initialization event - update agent status
                   console.log('Chat stream initialized:', eventData);
+                  if (eventData.agent === 'planner') {
+                    setAgentType('planner');
+                  } else if (eventData.agent === 'executor') {
+                    setAgentType('executor');
+                  } else if (eventData.agent === 'background') {
+                    setAgentType('background');
+                  }
+                  setAgentStatus('thinking');
+                  // Update agent activity
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: 'thinking',
+                    currentAction: eventData.currentAction || 'Initializing...',
+                  }));
                   break;
 
                 case 'token':
                 case 'data':
                   if (eventData.content) {
                     accumulatedContent += eventData.content;
-                    
+
                     // Update the assistant message in real-time
-                    setMessages(prev => prev.map(msg => 
-                      msg.id === assistantMessage.id 
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
                         ? { ...msg, content: accumulatedContent }
                         : msg
                     ));
+                  }
+                  // Update agent status to executing if we're receiving tokens
+                  if (agentStatus === 'thinking') {
+                    setAgentStatus('executing');
                   }
                   break;
 
@@ -412,9 +462,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         : msg
                     ));
                   }
+                  // Update version if provided
+                  if (eventData.version) {
+                    setCurrentVersion(eventData.version);
+                  }
                   // Streaming complete
                   clearTimeout(timeoutId);
                   setIsLoading(false);
+                  setAgentStatus('completed');
                   if (options.onFinish && currentMessageRef.current) {
                     options.onFinish({
                       ...currentMessageRef.current,
@@ -463,6 +518,60 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   });
                   break;
 
+                case 'diffs': {
+                  // Handle git-style diffs for client sync
+                  // eventData contains: { files: [{ path, diff, changeType }], count, requestId }
+                  const diffFiles = eventData.files as Array<{ path: string; diff: string; changeType: string }> || [];
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === assistantMessage.id
+                      ? {
+                          ...msg,
+                          metadata: {
+                            ...(msg.metadata || {}),
+                            diffs: diffFiles,
+                            diffsCount: eventData.count,
+                            diffsRequestId: eventData.requestId,
+                          },
+                        }
+                      : msg
+                  ));
+                  // Update agent activity
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    diffs: [...prev.diffs, ...diffFiles.map((f: any) => ({
+                      path: f.path,
+                      diff: f.diff,
+                      changeType: f.changeType,
+                    }))],
+                  }));
+                  // Also emit filesystem updated event so VFS listeners get notified
+                  emitFilesystemUpdated({
+                    scopePath: undefined,
+                    sessionId: undefined,
+                    applied: diffFiles.map(f => ({ path: f.path, operation: f.changeType === 'delete' ? 'delete' : 'write' })),
+                    errors: undefined,
+                    source: 'diffs',
+                  });
+                  // Emit custom event for any listeners interested in diff updates
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('agent-diffs', {
+                      detail: {
+                        files: diffFiles,
+                        count: eventData.count,
+                        requestId: eventData.requestId,
+                        timestamp: Date.now(),
+                      }
+                    }));
+                  }
+                  if (process.env.NODE_ENV === 'development') {
+                    console.log('[Chat] Received diffs event:', {
+                      count: eventData.count,
+                      files: diffFiles.map(f => f.path),
+                    });
+                  }
+                  break;
+                }
+
                 case 'reasoning':
                   if (eventData.reasoning) {
                     setMessages(prev => prev.map(msg =>
@@ -476,6 +585,18 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           }
                         : msg
                     ));
+                    // Update agent activity
+                    setAgentActivity(prev => ({
+                      ...prev,
+                      status: 'thinking',
+                      currentAction: 'Thinking...',
+                      reasoningChunks: [...prev.reasoningChunks, {
+                        id: Date.now().toString(),
+                        type: eventData.type || 'reasoning',
+                        content: eventData.reasoning,
+                        timestamp: Date.now(),
+                      }],
+                    }));
                   }
                   break;
 
@@ -485,12 +606,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     const existing = Array.isArray((msg.metadata as any)?.toolInvocations)
                       ? ([...(msg.metadata as any).toolInvocations] as any[])
                       : [];
-                    
+
                     // Find existing invocation with same toolCallId
-                    const idx = existing.findIndex((inv) => 
+                    const idx = existing.findIndex((inv) =>
                       inv.toolCallId === eventData.toolCallId
                     );
-                    
+
                     // Handle different states for real-time updates
                     if (eventData.state === 'partial-call') {
                       // Streaming arguments - update or create
@@ -523,6 +644,19 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           state: 'call',
                         };
                       }
+                      // Update agent activity
+                      setAgentActivity(prev => ({
+                        ...prev,
+                        status: 'executing',
+                        currentAction: `Executing ${eventData.toolName}...`,
+                        toolInvocations: [...prev.toolInvocations, {
+                          id: eventData.toolCallId || Date.now().toString(),
+                          toolName: eventData.toolName,
+                          state: 'call',
+                          args: eventData.args || {},
+                          timestamp: Date.now(),
+                        }],
+                      }));
                     } else if (eventData.state === 'result') {
                       // Tool completed
                       if (idx === -1) {
@@ -540,8 +674,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           result: eventData.result,
                         };
                       }
+                      // Update agent activity - update existing tool
+                      setAgentActivity(prev => ({
+                        ...prev,
+                        toolInvocations: prev.toolInvocations.map(t =>
+                          t.toolName === eventData.toolName
+                            ? { ...t, state: 'result', result: eventData.result }
+                            : t
+                        ),
+                      }));
                     }
-                    
+
                     return {
                       ...msg,
                       metadata: {
@@ -577,6 +720,65 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       },
                     };
                   }));
+                  // Update agent activity
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: eventData.status === 'started' ? 'executing' : 
+                            eventData.status === 'completed' ? 'completed' : prev.status,
+                    currentAction: eventData.status === 'started' ? eventData.step : prev.currentAction,
+                    processingSteps: [...prev.processingSteps, {
+                      id: Date.now().toString(),
+                      step: eventData.step,
+                      status: eventData.status,
+                      stepIndex: eventData.stepIndex || prev.processingSteps.length,
+                      timestamp: Date.now(),
+                    }],
+                  }));
+                  // Update agent status based on step
+                  if (eventData.status === 'started') {
+                    setAgentStatus('executing');
+                    setCurrentAction(eventData.step);
+                  } else if (eventData.status === 'completed') {
+                    setCurrentAction(undefined);
+                  }
+                  break;
+
+                case 'git:commit':
+                  // Git commit event - update version
+                  if (eventData.version) {
+                    setCurrentVersion(eventData.version);
+                  }
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id !== assistantMessage.id) return msg;
+                    return {
+                      ...msg,
+                      metadata: {
+                        ...(msg.metadata || {}),
+                        gitCommit: {
+                          filesChanged: eventData.filesChanged,
+                          paths: eventData.paths,
+                          version: eventData.version,
+                        },
+                      },
+                    };
+                  }));
+                  // Update agent activity
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    gitCommits: [...prev.gitCommits, {
+                      version: eventData.version,
+                      filesChanged: eventData.filesChanged || eventData.paths?.length || 0,
+                      paths: eventData.paths || [],
+                      timestamp: Date.now(),
+                    }],
+                  }));
+                  break;
+
+                case 'git:rollback':
+                  // Git rollback event
+                  if (eventData.version) {
+                    setCurrentVersion(eventData.version);
+                  }
                   break;
 
                 case 'step_metric':
@@ -860,5 +1062,16 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     setMessages,
     stop,
     setInput,
+    // Agent status for multi-agent display
+    agentStatus: {
+      type: agentType,
+      status: agentStatus,
+      currentAction,
+    },
+    // Version tracking
+    currentVersion,
+    // Agent activity for experimental panel
+    agentActivity,
+    setAgentActivity,
   };
 }

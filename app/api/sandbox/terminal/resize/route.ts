@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
-import { terminalManager } from '@/lib/sandbox/terminal-manager';
+import { terminalManager } from '@/lib/terminal/terminal-manager';
 
 export const runtime = 'nodejs';
 

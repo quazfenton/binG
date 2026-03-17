@@ -8,7 +8,7 @@
 import * as fs from 'fs/promises';
 import * as yaml from 'js-yaml';
 import { EventEmitter } from 'node:events';
-import { StatefulAgent, type StatefulAgentOptions } from '@/lib/stateful-agent/agents/stateful-agent';
+import { StatefulAgent, type StatefulAgentOptions } from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
 
 export interface RoleAgentConfig {
   role: string;

@@ -41,12 +41,12 @@
  * ```
  */
 
-import { enhancedTerminalManager } from '@/lib/sandbox/enhanced-terminal-manager'
+import { enhancedTerminalManager } from '@/lib/terminal/enhanced-terminal-manager'
 import { getSandboxProvider } from '@/lib/sandbox/providers'
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge'
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp'
 import type { PreviewInfo } from '@/lib/sandbox/types'
-import type { DesktopHandle } from '@/lib/sandbox/providers/e2b-desktop-provider-enhanced'
+import type { DesktopHandle } from '@/lib/computer/e2b-desktop-provider-enhanced'
 import { GitManager, type GitStatusResult } from './git-manager'
 import { createLogger } from '@/lib/utils/logger'
 
@@ -670,7 +670,7 @@ export class UnifiedAgent {
     }
 
     log.debug('Listing MCP tools...')
-    const tools = await getMCPToolsForAI_SDK()
+    const tools = await getMCPToolsForAI_SDK(this.config.userId)
     log.debug(`Found ${tools.length} MCP tools`)
     return tools.map(t => ({ name: t.function.name, description: t.function.description }))
   }
@@ -680,7 +680,7 @@ export class UnifiedAgent {
 
     try {
       log.debug('Initializing MCP...')
-      const tools = await getMCPToolsForAI_SDK()
+      const tools = await getMCPToolsForAI_SDK(this.config.userId)
       this.mcpInitialized = true
       log.info(`MCP initialized with ${tools.length} tools`)
     } catch (error: any) {

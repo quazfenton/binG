@@ -634,7 +634,7 @@ export class SandboxConnectionManager {
       logger.debug('Connecting to E2B PTY', { sandboxId })
       
       // Get E2B PTY URL from backend
-      const response = await fetch('/api/sandbox/e2b/pty', {
+      const response = await fetch('/api/sandbox/provider/pty', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -694,7 +694,7 @@ export class SandboxConnectionManager {
       logger.debug('Connecting to Daytona PTY', { sandboxId })
       
       // Get Daytona sandbox details including WebSocket URL
-      const response = await fetch('/api/sandbox/daytona/pty', {
+      const response = await fetch('/api/sandbox/provider/pty', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -752,7 +752,7 @@ export class SandboxConnectionManager {
       logger.debug('Connecting to Sprites PTY', { sandboxId })
       
       // Get Sprites workspace PTY URL via backend
-      const response = await fetch('/api/sandbox/sprites/pty', {
+      const response = await fetch('/api/sandbox/provider/pty', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -813,7 +813,7 @@ export class SandboxConnectionManager {
     try {
       logger.debug('Connecting to CodeSandbox PTY', { sandboxId })
       
-      const response = await fetch('/api/sandbox/codesandbox/pty', {
+      const response = await fetch('/api/sandbox/provider/pty', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -870,7 +870,7 @@ export class SandboxConnectionManager {
     try {
       logger.debug('Connecting to Vercel Sandbox PTY', { sandboxId })
       
-      const response = await fetch('/api/sandbox/vercel/pty', {
+      const response = await fetch('/api/sandbox/provider/pty', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

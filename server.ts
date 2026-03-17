@@ -31,7 +31,7 @@ import next from 'next';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
 import { initializeBackend, getBackendStatus } from '@/lib/backend';
-import { terminalManager } from '@/lib/sandbox/terminal-manager';
+import { terminalManager } from '@/lib/terminal/terminal-manager';
 import { createLogger } from '@/lib/utils/logger';
 import { getDatabaseSessionStore } from '@/lib/database/session-store';
 
@@ -76,7 +76,7 @@ async function startup() {
     logger.info('Backend initialized successfully', backendStatus);
 
     // Start provider health checking
-    const { startProviderHealthCheck } = await import('@/lib/sandbox/providers/health-checker');
+    const { startProviderHealthCheck } = await import('@/lib/management/health-checker');
     await startProviderHealthCheck();
     logger.info('Provider health checker started');
 

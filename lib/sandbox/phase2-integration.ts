@@ -91,7 +91,7 @@ export {
   type KeyboardInput,
   type RecordingResult,
   type ScreenshotResult,
-} from './daytona-computer-use-workflow';
+} from '../computer/daytona-computer-use-workflow';
 
 // ==================== CodeSandbox Batch CI/CD ====================
 export {
@@ -113,24 +113,31 @@ export {
 export {
   LivePreviewOffloading,
   livePreviewOffloading,
-  getPreviewProvider,
-  getProviderPreviewUrl,
-  getPreview,
-  createSmartPreview,
-  type PreviewProvider,
+  detectProject,
+  getSandpackConfig,
+  detectPreviewMode,
+  detectFramework,
+  detectEntryPoint,
+  shouldUseLocalPreview,
+  getCloudFallback,
+  type PreviewMode,
   type AppFramework,
+  type Bundler,
+  type ProjectDetection,
+  type SandpackConfig,
+  type PreviewRequest,
   type PreviewContext,
   type PreviewResult,
   type SmartPreviewConfig,
-} from './live-preview-offloading';
+} from '../previews/live-preview-offloading';
 
 // ==================== Unified Phase 2 Integration Class ====================
 
 import { providerRouter, type TaskContext, type ProviderService, type ProviderSelectionResult } from './provider-router';
 import { e2bIntegration, type AmpAgentConfig, type CodexAgentConfig, type GitCloneConfig, type E2BResult } from './e2b-deep-integration';
-import { daytonaComputerUse, type ScreenRegion, type MousePosition, type KeyboardInput, type ScreenshotResult, type RecordingResult } from './daytona-computer-use-workflow';
+import { daytonaComputerUse, type ScreenRegion, type MousePosition, type KeyboardInput, type ScreenshotResult, type RecordingResult } from '../computer/daytona-computer-use-workflow';
 import { codesandboxBatch, type BatchTask, type ParallelTestConfig, type MultiEnvBuildConfig, type CIPipelineConfig, type BatchAggregatedResult } from './codesandbox-batch-ci';
-import { livePreviewOffloading, type PreviewContext, type PreviewResult, type SmartPreviewConfig } from './live-preview-offloading';
+import { livePreviewOffloading, type PreviewContext, type PreviewResult, type SmartPreviewConfig } from '../previews/live-preview-offloading';
 import type { SandboxProviderType } from './providers';
 
 /**
