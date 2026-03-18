@@ -14,7 +14,7 @@ export interface FilesystemOwnerResolution {
  * Helper to add anonymous session cookie to response
  * Call this for ALL routes that use resolveFilesystemOwner
  */
-export function withAnonSessionCookie<T extends NextResponse>(
+response.headers.set('set-cookie', `anon-session-id=${owner.anonSessionId}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`)
   response: T,
   owner: FilesystemOwnerResolution
 ): T {
