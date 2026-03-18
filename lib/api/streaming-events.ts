@@ -141,7 +141,7 @@ export function createStreamingEvents(
   // Content tokens (chunked for smooth streaming)
   const content = response.content
   if (content) {
-    const chunks = chunkContent(content, chunkSize)
+    const chunks = chunkText(content, chunkSize)
     chunks.forEach((chunk, index) => {
       events.push(sseEncode('token', {
         type: 'token',

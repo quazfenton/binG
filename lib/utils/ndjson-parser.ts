@@ -137,7 +137,7 @@ function isIncompleteJSON(str: string): boolean {
  * This function only does minimal validation to catch obvious issues early.
  * We do NOT count braces/brackets because they may appear inside string literals.
  */
-function validateJSONStructure(str: string): { valid: boolean; error?: string } {
+function validateJSONStructure(str: string, maxLineLength: number): { valid: boolean; error?: string } {
   const trimmed = str.trim();
 
   // Must start with { or [ for valid JSON objects/arrays
@@ -145,9 +145,9 @@ function validateJSONStructure(str: string): { valid: boolean; error?: string } 
     return { valid: false, error: 'Invalid JSON: must start with { or [' };
   }
 
-  // Basic length check (prevent extremely long lines)
-  if (trimmed.length > 1024 * 1024) { // 1MB limit
-    return { valid: false, error: 'JSON line exceeds maximum length' };
+  // Use configurable maxLineLength instead of hard-coded limit
+  if (trimmed.length > maxLineLength) {
+    return { valid: false, error: `JSON line exceeds maximum length (${trimmed.length} > ${maxLineLength})` };
   }
 
   // That's it - let JSON.parse() do the real validation
@@ -246,7 +246,7 @@ export function createNDJSONParser(options: NDJSONParserOptions = {}): NDJSONPar
         if (!trimmed) continue;
 
         // Quick validation before attempting parse
-        const validation = validateJSONStructure(trimmed);
+        const validation = validateJSONStructure(trimmed, maxLineLength);
         if (!validation.valid) {
           // Check if it looks like incomplete JSON (might complete in next chunk)
           if (isIncompleteJSON(trimmed)) {
