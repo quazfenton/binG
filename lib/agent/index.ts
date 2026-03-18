@@ -93,3 +93,44 @@ export {
   type UnifiedAgentConfig,
   type AgentCapability,
 } from './unified-agent';
+
+// Loop Detection - Prevent infinite agent loops
+export {
+  createLoopDetector,
+  LoopDetector,
+  type LoopDetectionConfig,
+  type LoopDetectionResult,
+  type ToolCallRecord,
+} from './loop-detection';
+
+// Capability Chain - Chain multiple capabilities
+export {
+  createCapabilityChain,
+  chain,
+  CapabilityChain,
+  type ChainConfig,
+  type ChainStep,
+  type ChainExecutionResult,
+  type CapabilityExecutor,
+} from './capability-chain';
+
+// Bootstrapped Agency - Self-improving agency
+export {
+  createBootstrappedAgency,
+  BootstrappedAgency,
+  type AgencyConfig,
+  type AgencyMetrics,
+  type ExecutionRecord,
+} from './bootstrapped-agency';
+
+// Productive Scripts - Pre-defined script templates
+export {
+  runProductiveScript,
+  runCustomScript,
+  getAvailableScripts,
+  getScriptTemplate,
+  type ScriptType,
+  type ScriptConfig,
+  type ScriptStep,
+  type ScriptExecutionResult,
+} from './productive-scripts';

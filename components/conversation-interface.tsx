@@ -560,30 +560,40 @@ export default function ConversationInterface() {
           voiceService.speak(lastMessage.content).catch(console.error);
         }
 
-        if (lastMessage.content.includes('[CONTINUE_REQUESTED]')) {
-          console.log('[Continuance] Auto-triggering next request');
-          toast.info('Continuance requested by AI - sending next message');
-          
-          setTimeout(() => {
-            const fakeEvent = {
-              preventDefault: () => {},
-              currentTarget: { reset: () => {} },
-            } as React.FormEvent<HTMLFormElement>;
-            
-            setInput('Please continue with the remaining tasks or improvements.');
-            
-            setTimeout(() => {
-              handleSubmit(fakeEvent);
-            }, 50);
-          }, 1000);
+        // Track last CONTINUE_REQUESTED message ID to prevent duplicate auto-submits
+        const lastContinueMessageId = lastMessage.id;
+        const lastContinueContent = lastMessage.content;
+
+        // Check if we already processed this CONTINUE_REQUESTED message
+        const alreadyProcessed = processedContinueRef.current === lastContinueMessageId;
+        if (alreadyProcessed) {
+          return; // Skip duplicate processing
         }
+        processedContinueRef.current = lastContinueMessageId;
+
+        console.log('[Continuance] Auto-triggering next request');
+        toast.info('Continuance requested by AI - sending next message');
+
+        setTimeout(() => {
+          const fakeEvent = {
+            preventDefault: () => {},
+            currentTarget: { reset: () => {} },
+          } as React.FormEvent<HTMLFormElement>;
+
+          setInput('Please continue with the remaining tasks or improvements.');
+
+          setTimeout(() => {
+            handleSubmit(fakeEvent);
+          }, 50);
+        }, 1000);
       }
     }
   }, [
     messages,
     isLoading,
     saveCurrentChat,
-    currentConversationId,
+    // Note: removed currentConversationId from deps to prevent duplicate triggers
+    // when it's set in the same effect cycle
     filesystemSessionId,
     isVoiceEnabled,
     getAllChats,
@@ -1208,22 +1218,17 @@ export default function ConversationInterface() {
     }
     const failedCount = Object.values(failed).reduce((sum, list) => sum + list.length, 0);
     if (failedCount > 0) {
-      // Group errors by type for better user feedback
-      const allErrors = Object.values(failed).flat();
-      const searchNotFoundErrors = allErrors.filter(e => e.includes('search block not found') || e.includes('Patch could not be applied'));
-      const fileNotExistErrors = allErrors.filter(e => e.includes('file does not exist') || e.includes('not found') || e.includes('ENOENT'));
-      const otherErrors = allErrors.filter(e => !searchNotFoundErrors.includes(e) && !fileNotExistErrors.includes(e));
+      // failed contains diff payloads (strings), not error messages
+      // Group by file path for better user feedback
+      const failedPaths = Object.keys(failed);
+      const totalFailedDiffs = failedCount;
       
-      if (searchNotFoundErrors.length > 0) {
-        toast.error(`Diff failed: ${searchNotFoundErrors.length} edit(s) - search text not found. The file may have changed since the diff was generated.`);
-      }
-      if (fileNotExistErrors.length > 0) {
-        toast.error(`Diff failed: ${fileNotExistErrors.length} file(s) don't exist. Use WRITE to create new files.`);
-      }
-      if (otherErrors.length > 0) {
-        toast.error(`File operation failed: ${otherErrors.length} error(s). Check console for details.`);
-        console.error('[Diff Errors]', otherErrors);
-      }
+      toast.error(`Diff application failed: ${totalFailedDiffs} edit(s) could not be applied to ${failedPaths.length} file(s). This usually means the file content has changed since the diff was generated. Please review the files and try again.`);
+      console.error('[Diff Application Failed]', {
+        failedFiles: failedPaths,
+        failedDiffs: failed,
+        reason: 'Search blocks not found or patches could not be applied',
+      });
     }
   }, [filesystemScopePath, filesystemSessionId]);
 

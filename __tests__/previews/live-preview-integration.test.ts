@@ -1,6 +1,6 @@
 /**
  * LivePreview Integration Tests
- * 
+ *
  * Comprehensive integration tests for the preview detection and offloading system.
  * Tests framework detection, preview mode selection, port detection, and cloud offloading heuristics.
  */

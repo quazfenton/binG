@@ -664,7 +664,7 @@ export class LivePreviewOffloading {
    * Detect project configuration from files
    * 
    * Enhanced with heuristics analysis for auto-offload decision
-   * 
+   *
    * Analyzes project files to determine:
    * - Framework (React, Vue, Next.js, Flask, etc.)
    * - Bundler (Vite, Webpack, Parcel)
@@ -675,40 +675,49 @@ export class LivePreviewOffloading {
    */
   detectProject(request: PreviewRequest): ProjectDetection & { heuristics?: OffloadHeuristics } {
     const { files, scopePath } = request;
-    const filePaths = Object.keys(files);
+    
+    // Handle both object format and array format for backward compatibility
+    const filesObj = Array.isArray(files) 
+      ? (files as Array<{name: string; content: string}>).reduce((acc, f) => {
+          if (f.name && f.content !== undefined) acc[f.name] = f.content;
+          return acc;
+        }, {} as Record<string, string>)
+      : files as Record<string, string>;
+    
+    const filePaths = Object.keys(filesObj);
     const fileCount = filePaths.length;
 
     // Detect package manager
     const packageManager = this.detectPackageManager(filePaths);
 
     // Parse package.json if exists
-    const packageJson = this.parsePackageJson(files['package.json'] || files['/package.json']);
+    const packageJson = this.parsePackageJson(filesObj['package.json'] || filesObj['/package.json']);
 
     // Detect framework
-    const framework = this.detectFramework(filePaths, files, packageJson);
+    const framework = this.detectFramework(filePaths, filesObj, packageJson);
 
     // Detect bundler
-    const bundler = this.detectBundler(filePaths, files, packageJson);
+    const bundler = this.detectBundler(filePaths, filesObj, packageJson);
 
     // Detect entry point
     const entryPoint = this.detectEntryPoint(filePaths, framework);
 
     // Compute root directory scores
-    const rootScores = this.computeRootScores(files);
+    const rootScores = this.computeRootScores(filesObj);
 
     // Select best root
     const selectedRoot = this.selectRoot(rootScores);
 
     // Normalize files relative to selected root
-    const normalizedFiles = this.normalizeFiles(files, selectedRoot, scopePath);
+    const normalizedFiles = this.normalizeFiles(filesObj, selectedRoot, scopePath);
 
     // Detect project characteristics
     const hasPython = filePaths.some(p => p.endsWith('.py'));
     const hasNodeServer = filePaths.some(p => SERVER_FILES.includes(p));
     const hasNextJS = this.detectNextJS(filePaths, packageJson);
     const hasBackend = hasPython || hasNodeServer || framework === 'next' || framework === 'nuxt' || framework === 'remix';
-    const hasHeavyComputation = this.detectHeavyComputation(Object.values(files));
-    const hasAPIKeys = this.detectAPIKeys(Object.values(files));
+    const hasHeavyComputation = this.detectHeavyComputation(Object.values(filesObj));
+    const hasAPIKeys = this.detectAPIKeys(Object.values(filesObj));
 
     // Analyze heuristics for offload decision
     const heuristics = this.analyzeHeuristics(request);
@@ -1775,3 +1784,45 @@ export const detectPort = (files: Record<string, string>) =>
 
 export const getCodeSandboxTemplate = (framework: AppFramework) =>
   livePreviewOffloading.getCodeSandboxTemplate(framework);
+
+/**
+ * Extract YouTube video ID from URL or plain ID
+ *
+ * @param url - YouTube URL or video ID
+ * @returns Video ID or null if invalid
+ *
+ * @example
+ * ```typescript
+ * extractYouTubeId('https://www.youtube.com/watch?v=dQw4w9WgXcQ') // 'dQw4w9WgXcQ'
+ * extractYouTubeId('https://youtu.be/dQw4w9WgXcQ') // 'dQw4w9WgXcQ'
+ * extractYouTubeId('dQw4w9WgXcQ') // 'dQw4w9WgXcQ'
+ * ```
+ */
+export function extractYouTubeId(url: string): string | null {
+  if (!url) return null;
+
+  // If it's already just an ID (11 characters, alphanumeric)
+  if (/^[a-zA-Z0-9_-]{11}$/.test(url)) {
+    return url;
+  }
+
+  // Standard YouTube URL: https://www.youtube.com/watch?v=VIDEO_ID
+  const watchMatch = url.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+  if (watchMatch) {
+    return watchMatch[1];
+  }
+
+  // Shortened URL: https://youtu.be/VIDEO_ID
+  const shortMatch = url.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
+  if (shortMatch) {
+    return shortMatch[1];
+  }
+
+  // Embed URL: https://www.youtube.com/embed/VIDEO_ID
+  const embedMatch = url.match(/\/embed\/([a-zA-Z0-9_-]{11})/);
+  if (embedMatch) {
+    return embedMatch[1];
+  }
+
+  return null;
+}

@@ -282,8 +282,8 @@ describe('Safe Diff Operations Integration', () => {
         {
           operation: 'replace',
           lineRange: [2, 2],
-          content: '  "name": "test-package",', // Trailing comma makes it invalid
-          description: 'Add trailing comma',
+          content: '  "name": "test-package"', // Remove comma to make it invalid JSON
+          description: 'Remove comma to create invalid JSON',
         },
       ];
 
@@ -413,9 +413,13 @@ describe('Safe Diff Operations Integration', () => {
         language: 'typescript',
       };
 
+      // FIX: Set up event listener BEFORE triggering the operation
       const backupCreated = await new Promise<boolean>((resolve) => {
-        diffOps.on('backup_created', () => resolve(true));
-        setTimeout(() => resolve(false), 1000);
+        const timeout = setTimeout(() => resolve(false), 1000);
+        diffOps.once('backup_created', () => {
+          clearTimeout(timeout);
+          resolve(true);
+        });
       });
 
       const result = await diffOps.safelyApplyDiffs('backup-test', currentContent, diffs, fileState);

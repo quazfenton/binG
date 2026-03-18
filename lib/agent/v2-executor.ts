@@ -34,7 +34,6 @@ function sanitizeV2ResponseContent(content: string): string {
   sanitized = removeHeredocBlocks(sanitized);
 
   // Normalize spacing
-  let sanitized = output.join('\n');
   sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
 
   return sanitized;
@@ -243,10 +242,12 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           });
         } else {
           // FIX (Bug 8): ensure session exists before runOpenCodeDirect
+          // Use consistent session mode based on preferredAgent
+          const sessionMode = options.preferredAgent === 'nullclaw' ? 'nullclaw' : 'opencode';
           await agentSessionManager.getOrCreateSession(
             options.userId,
             options.conversationId,
-            { enableMCP: true, mode: 'opencode', executionPolicy },
+            { enableMCP: true, mode: sessionMode, executionPolicy },
           );
 
           const { runOpenCodeDirect } = await import('./opencode-direct');

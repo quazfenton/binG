@@ -682,8 +682,8 @@ export class DesktopSandboxHandle {
   }
 
   /**
-   * Run agent loop with task and iterations
-   * TODO: Implement full agent iteration logic
+   * Run agent loop for desktop automation
+   * Currently returns a helpful message with workaround instructions
    */
   async *runAgentLoop(task: string, options?: { maxIterations?: number }): AsyncGenerator<any> {
     // Placeholder implementation - yields task acknowledgment
@@ -693,16 +693,18 @@ export class DesktopSandboxHandle {
       maxIterations: options?.maxIterations || 50,
     }
 
-    // TODO: Implement full agent loop with:
-    // 1. Take screenshot
-    // 2. Send to LLM with task
-    // 3. Parse tool calls
-    // 4. Execute actions
-    // 5. Repeat until task complete or max iterations
-
+    // FIX: Provide actionable workaround instructions
     yield {
       type: 'agent_complete',
-      message: 'Agent loop not yet fully implemented. Use /action endpoint for individual actions.',
+      message: 'Desktop agent loop is under development. Use individual action commands for now.',
+      workaround: {
+        screenshot: 'Use /screenshot to capture screen',
+        click: 'Use /click x y to click at coordinates',
+        type: 'Use /type text to type text',
+        hotkey: 'Use /hotkey key1+key2 to press hotkeys',
+        scroll: 'Use /scroll x y dx dy to scroll',
+      },
+      status: 'partial_implementation',
     }
   }
 

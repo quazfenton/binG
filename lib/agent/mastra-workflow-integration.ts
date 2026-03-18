@@ -74,6 +74,8 @@ export class MastraWorkflowIntegration extends EventEmitter {
   private taskReviews: Map<string, MastraTaskReview> = new Map();
   private mastraModule?: any;
   private workflows: Map<string, any> = new Map();
+  private runningWorkflowsCount = 0;
+  private workflowQueue: Array<{ workflowId: string; data: any; resolve: any; reject: any }> = [];
 
   constructor(config: MastraIntegrationConfig = {}) {
     super();
@@ -91,7 +93,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
    * Initialize Mastra module
    */
   private async ensureMastraModule(): Promise<void> {
-    if (this.mastraModule) return;
+    if (this.mastraModule !== undefined) return;  // Already initialized (including null for fallback)
 
     try {
       // Dynamic import to avoid hard dependency
@@ -102,7 +104,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
       logger.warn('Mastra module not available, using fallback implementation', {
         error: error.message,
       });
-      // Use fallback implementation
+      // Use fallback implementation - set to null to prevent retry
       this.mastraModule = null;
     }
   }
@@ -238,6 +240,22 @@ export class MastraWorkflowIntegration extends EventEmitter {
 
     logger.info('Executing workflow', { workflowId, timeout });
 
+    // FIX: Enforce maxConcurrentWorkflows limit
+    if (this.runningWorkflowsCount >= this.config.maxConcurrentWorkflows!) {
+      logger.warn('Workflow queue full, waiting for slot', {
+        workflowId,
+        runningCount: this.runningWorkflowsCount,
+        maxConcurrent: this.config.maxConcurrentWorkflows,
+      });
+      
+      // Wait for a slot to become available
+      await new Promise<void>((resolve) => {
+        this.workflowQueue.push({ workflowId, data: inputData, resolve, reject: () => {} });
+      });
+    }
+
+    this.runningWorkflowsCount++;
+
     // Create workflow result tracker
     const result: MastraWorkflowResult = {
       success: false,
@@ -258,7 +276,12 @@ export class MastraWorkflowIntegration extends EventEmitter {
         result.steps = await this.simulateWorkflowExecution(workflowId, inputData, timeout);
       }
 
-      result.success = result.steps.every(s => s.status === 'completed');
+      // FIX: Check for failed steps, not just completed ones
+      const failedSteps = result.steps.filter(s => s.status === 'failed');
+      result.success = failedSteps.length === 0 && result.steps.every(s => s.status === 'completed');
+      if (failedSteps.length > 0) {
+        result.error = failedSteps.map(s => s.error).filter(Boolean).join('; ');
+      }
       result.result = result.steps.map(s => s.result);
       result.duration = Date.now() - startTime;
 
@@ -268,6 +291,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
         workflowId,
         success: result.success,
         duration: result.duration,
+        failedSteps: failedSteps.length,
       });
 
       this.emit('workflow:completed', result);
@@ -275,6 +299,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
       return result;
     } catch (error: any) {
       result.error = error.message;
+      result.success = false;
       result.duration = Date.now() - startTime;
 
       this.activeWorkflows.set(workflowId, result);
@@ -286,7 +311,16 @@ export class MastraWorkflowIntegration extends EventEmitter {
 
       this.emit('workflow:failed', { workflowId, error });
 
-      return result;
+      throw error; // Re-throw to prevent treating failed workflows as successful
+    } finally {
+      // FIX: Decrement running count and process queue
+      this.runningWorkflowsCount--;
+      
+      // Process next workflow in queue if available
+      const nextWorkflow = this.workflowQueue.shift();
+      if (nextWorkflow) {
+        nextWorkflow.resolve();
+      }
     }
   }
 
@@ -328,6 +362,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
     }
 
     // Execute workflow with timeout
+    const stepStartTime = Date.now();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -343,18 +378,21 @@ export class MastraWorkflowIntegration extends EventEmitter {
 
       clearTimeout(timeoutId);
 
+      // FIX: Calculate actual step duration from start time
+      const stepDuration = Date.now() - stepStartTime;
+
       return [
         {
           id: 'execute',
           name: 'Execution',
           status: 'completed',
           result: workflowResult,
-          duration: timeout - timeoutId,
+          duration: stepDuration,
         },
       ];
     } catch (error: any) {
       clearTimeout(timeoutId);
-      throw error;
+      throw error;  // Re-throw to properly mark step as failed
     }
   }
 
@@ -383,7 +421,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
     // Import and execute code agent workflow
     try {
       const { codeAgentWorkflow } = await import('../orchestra/mastra/workflows/code-agent-workflow');
-      
+
       // Execute the workflow
       const result = await codeAgentWorkflow.execute({
         taskId: data.task || data.taskId,
@@ -393,10 +431,11 @@ export class MastraWorkflowIntegration extends EventEmitter {
       return {
         workflowType: 'code-agent',
         result,
+        success: true,
       };
     } catch (error: any) {
       logger.error('Code agent workflow execution failed', { error: error.message });
-      return { error: error.message };
+      throw error;  // Re-throw to properly mark step as failed
     }
   }
 
@@ -406,7 +445,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
   private async executeHITLWorkflow(data: any): Promise<any> {
     try {
       const { hitlWorkflow } = await import('../orchestra/mastra/workflows/hitl-workflow');
-      
+
       const result = await hitlWorkflow.execute({
         taskId: data.task,
         approvalRequired: data.approvalRequired,
@@ -415,10 +454,11 @@ export class MastraWorkflowIntegration extends EventEmitter {
       return {
         workflowType: 'hitl',
         result,
+        success: true,
       };
     } catch (error: any) {
       logger.error('HITL workflow execution failed', { error: error.message });
-      return { error: error.message };
+      throw error;  // Re-throw to properly mark step as failed
     }
   }
 
@@ -428,7 +468,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
   private async executeParallelWorkflow(data: any): Promise<any> {
     try {
       const { parallelWorkflow } = await import('../orchestra/mastra/workflows/parallel-workflow');
-      
+
       const result = await parallelWorkflow.execute({
         tasks: data.tasks,
         maxConcurrency: data.maxConcurrency,
@@ -437,10 +477,11 @@ export class MastraWorkflowIntegration extends EventEmitter {
       return {
         workflowType: 'parallel',
         result,
+        success: true,
       };
     } catch (error: any) {
       logger.error('Parallel workflow execution failed', { error: error.message });
-      return { error: error.message };
+      throw error;  // Re-throw to properly mark step as failed
     }
   }
 

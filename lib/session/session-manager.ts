@@ -250,6 +250,13 @@ export class SessionManager {
   }
 
   /**
+   * List sessions for a user (alias for getUserSessions)
+   */
+  listSessions(userId: string): Session[] {
+    return this.getUserSessions(userId);
+  }
+
+  /**
    * Destroy session and cleanup
    */
   async destroySession(userId: string, conversationId: string): Promise<void> {

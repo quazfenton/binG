@@ -633,8 +633,33 @@ export function ExperimentalWorkspacePanel() {
     return `https://www.youtube.com/embed/${videoId}?autoplay=1&loop=1&playlist=${videoId}`;
   }, []);
 
-  const extractYouTubeId = useCallback((urlOrId: string): string => {
-    return urlOrId;
+  const extractYouTubeId = useCallback((urlOrId: string): string | null => {
+    if (!urlOrId) return null;
+    
+    // If it's already just an ID (11 characters, alphanumeric with - and _)
+    if (/^[a-zA-Z0-9_-]{11}$/.test(urlOrId)) {
+      return urlOrId;
+    }
+    
+    // Standard YouTube URL: https://www.youtube.com/watch?v=VIDEO_ID
+    const watchMatch = urlOrId.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+    if (watchMatch) {
+      return watchMatch[1];
+    }
+    
+    // Shortened URL: https://youtu.be/VIDEO_ID
+    const shortMatch = urlOrId.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
+    if (shortMatch) {
+      return shortMatch[1];
+    }
+    
+    // Embed URL: https://www.youtube.com/embed/VIDEO_ID
+    const embedMatch = urlOrId.match(/\/embed\/([a-zA-Z0-9_-]{11})/);
+    if (embedMatch) {
+      return embedMatch[1];
+    }
+    
+    return null;
   }, []);
 
   const clearChatHistory = useCallback(() => {

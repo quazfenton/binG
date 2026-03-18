@@ -356,3 +356,30 @@ export async function shutdownOrchestration(): Promise<void> {
   
   logger.info('Orchestration shutdown complete');
 }
+
+// ============================================================================
+// Cloud Deployment Service
+// ============================================================================
+
+export {
+  cloudDeploymentService,
+  CloudDeploymentService,
+  type CloudDeployment,
+  type CloudDeploymentConfig,
+  type DeploymentResult,
+  type CloudProvider,
+} from '../sandbox/cloud-deployment-service';
+
+// ============================================================================
+// Workflow Templates
+// ============================================================================
+
+export {
+  workflowTemplateService,
+  WorkflowTemplateService,
+  type WorkflowTemplate,
+  type WorkflowStep,
+  type WorkflowTemplateId,
+  type TemplateExecutionConfig,
+  type TemplateExecutionResult,
+} from './workflow-templates';

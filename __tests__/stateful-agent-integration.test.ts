@@ -13,6 +13,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { StatefulAgent } from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
 import type { StatefulAgentOptions, StatefulAgentResult } from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
 
+// Mock session lock
+vi.mock('@/lib/session/session-lock', () => ({
+  acquireSessionLock: vi.fn().mockImplementation(async (sessionId: string) => {
+    return () => { /* no-op release */ };
+  }),
+}));
+
 // Mock dependencies
 vi.mock('@/lib/orchestra/reflection-engine', () => ({
   reflectionEngine: {

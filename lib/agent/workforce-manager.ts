@@ -43,6 +43,7 @@ class WorkforceManager {
    */
   setExecutionGraphEngine(executionGraphEngine: any): void {
     // Engine is imported, this is for future customization
+    logger.debug('Execution graph engine set for workforce manager');
   }
 
   async spawnTask(

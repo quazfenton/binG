@@ -8,8 +8,26 @@ import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { detectTemplate, templateToTaskGraph, type TemplateType } from './template-flows';
+import { createLoopDetector, type LoopDetectionResult } from '@/lib/agent/loop-detection';
+import { createCapabilityChain, type CapabilityChain } from '@/lib/agent/capability-chain';
+import { createBootstrappedAgency, type BootstrappedAgency } from '@/lib/agent/bootstrapped-agency';
 
 const log = createLogger('StatefulAgent');
+
+/**
+ * Acquire session lock to prevent concurrent access
+ * Falls back to no-op if session lock module not available
+ */
+async function acquireSessionLock(sessionId: string): Promise<() => void> {
+  try {
+    const { acquireSessionLock: acquireLock } = await import('@/lib/session/session-lock');
+    return acquireLock(sessionId);
+  } catch {
+    // Session lock not available, return no-op
+    log.warn('Session lock not available, running without concurrency protection');
+    return () => { /* no-op */ };
+  }
+}
 
 export interface StatefulAgentOptions {
   sessionId?: string;
@@ -18,6 +36,12 @@ export interface StatefulAgentOptions {
   enforcePlanActVerify?: boolean;
   enableReflection?: boolean;
   enableTaskDecomposition?: boolean;
+  // Execution mode: quick (minimal overhead), standard (balanced), thorough (max quality)
+  executionMode?: 'quick' | 'standard' | 'thorough';
+  // Enable capability chaining for complex workflows
+  enableCapabilityChaining?: boolean;
+  // Enable bootstrapped agency for learning from past executions
+  enableBootstrappedAgency?: boolean;
 }
 
 export interface StatefulAgentResult {
@@ -111,6 +135,22 @@ export class StatefulAgent {
   // Execution Graph Integration
   private executionGraphId?: string;
 
+  // Loop Detection
+  private loopDetector = createLoopDetector({
+    maxConsecutiveSimilar: 3,
+    maxRepetitionsInWindow: 5,
+    windowSizeSeconds: 60,
+    enabled: true,
+  });
+
+  // Capability Chain
+  private enableCapabilityChaining: boolean;
+  private currentChain?: CapabilityChain;
+
+  // Bootstrapped Agency
+  private enableBootstrappedAgency: boolean;
+  private agency?: BootstrappedAgency;
+
   constructor(options: StatefulAgentOptions = {}) {
     this.sessionId = options.sessionId || crypto.randomUUID();
     this.sandboxHandle = options.sandboxHandle;
@@ -118,6 +158,8 @@ export class StatefulAgent {
     this.enforcePlanActVerify = options.enforcePlanActVerify ?? true;
     this.enableReflection = options.enableReflection ?? true;
     this.enableTaskDecomposition = options.enableTaskDecomposition ?? true;
+    this.enableCapabilityChaining = options.enableCapabilityChaining ?? false;
+    this.enableBootstrappedAgency = options.enableBootstrappedAgency ?? false;
 
     this.toolExecutor = new ToolExecutor({
       sandboxHandle: this.sandboxHandle,
@@ -130,6 +172,18 @@ export class StatefulAgent {
       nodes: new Map(),
       edges: new Map(),
     };
+
+    // Initialize bootstrapped agency if enabled
+    if (this.enableBootstrappedAgency) {
+      this.agency = createBootstrappedAgency({
+        sessionId: this.sessionId,
+        enableLearning: true,
+        maxHistorySize: 1000,
+        enablePatternRecognition: true,
+        enableAdaptiveSelection: true,
+      });
+      log.info('Bootstrapped Agency initialized', { sessionId: this.sessionId });
+    }
   }
 
   /**
@@ -246,6 +300,16 @@ export class StatefulAgent {
   }
 
   async run(userMessage: string): Promise<StatefulAgentResult> {
+    const startTime = Date.now();
+    log.info('StatefulAgent.run() started', {
+      sessionId: this.sessionId,
+      executionMode: this.executionMode,
+      userMessageLength: userMessage.length,
+      enableReflection: this.enableReflection,
+      enableTaskDecomposition: this.enableTaskDecomposition,
+      maxSelfHealAttempts: this.maxSelfHealAttempts,
+    });
+
     // Acquire exclusive session lock to prevent concurrent access
     const releaseLock = await acquireSessionLock(this.sessionId);
 
@@ -254,49 +318,66 @@ export class StatefulAgent {
       this.steps = 0;
 
       try {
+        log.info('Starting discovery phase', { sessionId: this.sessionId });
         await this.runDiscoveryPhase(userMessage);
 
+        log.info('Starting planning phase', { sessionId: this.sessionId });
         this.status = 'planning';
         await this.runPlanningPhase(userMessage);
 
         // Create execution graph for tracking
         if (this.enableTaskDecomposition && this.taskGraph) {
+          log.info('Creating execution graph', { 
+            sessionId: this.sessionId, 
+            taskCount: this.taskGraph.tasks.length,
+          });
           await this.createExecutionGraph();
         }
 
+        log.info('Starting editing phase', { sessionId: this.sessionId });
         this.status = 'editing';
         await this.runEditingPhase(userMessage);
 
+        log.info('Starting verification phase', { sessionId: this.sessionId });
         this.status = 'verifying';
         await this.runVerificationPhase();
 
         // Apply reflection if enabled
         if (this.enableReflection) {
+          log.info('Starting reflection phase', { sessionId: this.sessionId });
           await this.applyReflection();
         }
 
         this.status = 'completed';
 
+        const duration = Date.now() - startTime;
         const result: StatefulAgentResult = {
           success: this.errors.length === 0,
-          response: `Completed ${this.steps} steps. Modified ${this.transactionLog.length} files.`,
+          response: `Completed ${this.steps} steps in ${Math.round(duration / 1000)}s. Modified ${this.transactionLog.length} files.`,
           steps: this.steps,
           errors: this.errors,
           vfs: this.vfs,
-          metrics: this.toolExecutor.getMetrics(),
+          metrics: {
+            ...this.toolExecutor.getMetrics(),
+            duration,
+            executionMode: this.executionMode,
+            reflectionApplied: this.enableReflection,
+            taskDecompositionApplied: this.enableTaskDecomposition,
+          },
         };
 
         // Log completion metrics
         log.info('StatefulAgent execution completed', {
           sessionId: this.sessionId,
+          executionMode: this.executionMode,
           success: result.success,
           steps: result.steps,
           filesModified: this.transactionLog.length,
           errors: result.errors.length,
+          duration: `${Math.round(duration / 1000)}s`,
           reflectionEnabled: this.enableReflection,
           taskDecompositionEnabled: this.enableTaskDecomposition,
           executionGraphId: this.executionGraphId,
-          duration: Date.now() - (this as any).startTime,
         });
 
         return result;
@@ -308,11 +389,14 @@ export class StatefulAgent {
           timestamp: Date.now(),
         });
 
+        const duration = Date.now() - startTime;
         log.error('StatefulAgent execution failed', {
           sessionId: this.sessionId,
+          executionMode: this.executionMode,
           error: error.message,
           steps: this.steps,
           errors: this.errors.length,
+          duration: `${Math.round(duration / 1000)}s`,
         });
 
         return {
@@ -321,11 +405,17 @@ export class StatefulAgent {
           steps: this.steps,
           errors: this.errors,
           vfs: this.vfs,
+          metrics: {
+            duration,
+            executionMode: this.executionMode,
+            failedAtStep: this.steps,
+          },
         };
       }
     } finally {
       // Always release the lock, even if there's an error
       releaseLock();
+      log.debug('Session lock released', { sessionId: this.sessionId });
     }
   }
 
@@ -413,6 +503,21 @@ Respond with a list of file paths, one per line. No other text.`;
       for (const filePath of filePaths.slice(0, 15)) {
         try {
           const readResult = await this.toolExecutor.execute('readFile', { path: filePath });
+          
+          // Record for loop detection
+          const loopResult = this.loopDetector.recordToolCall('readFile', { path: filePath }, readResult);
+          if (loopResult.isLoop) {
+            log.warn('Loop detected in file reads', { 
+              path: filePath, 
+              reason: loopResult.reason,
+              severity: loopResult.severity,
+            });
+            
+            if (loopResult.suggestedAction === 'terminate') {
+              throw new Error(`Infinite loop detected: ${loopResult.reason}`);
+            }
+          }
+          
           if (readResult.success && readResult.content) {
             this.vfs[filePath] = readResult.content;
             successfulReads.push(filePath);
@@ -632,6 +737,21 @@ Use 'createFile' for new files.`;
           for (const call of toolCalls) {
             try {
               const execResult = await this.toolExecutor.execute(call.toolName, call.toolCallId ? call.args : {});
+              
+              // Record for loop detection
+              const loopResult = this.loopDetector.recordToolCall(call.toolName, call.args, execResult);
+              if (loopResult.isLoop) {
+                log.warn('Loop detected in tool execution', { 
+                  tool: call.toolName,
+                  reason: loopResult.reason,
+                  severity: loopResult.severity,
+                });
+                
+                if (loopResult.suggestedAction === 'terminate') {
+                  throw new Error(`Infinite loop detected: ${loopResult.reason}`);
+                }
+              }
+              
               // Update local state based on result
               if (execResult.success && execResult.content && call.toolCallId && call.args && 'path' in call.args) {
                 this.vfs[call.args.path] = execResult.content;

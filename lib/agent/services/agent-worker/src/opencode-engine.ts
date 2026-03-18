@@ -88,8 +88,9 @@ class OpenCodeEngine extends EventEmitter {
       const parser = createNDJSONParser();
 
       this.process.stdout?.on('data', (data: Buffer) => {
-        // Feed only the NEW chunk; the parser retains any incomplete line
-        const parsed = parser.parse(data.toString());
+        // FIX: Use Buffer.toString('utf8') to properly handle multi-byte characters
+        // The NDJSON parser handles partial chunks internally
+        const parsed = parser.parse(data.toString('utf8'));
         for (const obj of parsed) {
           this.handleOutput(obj);
         }
@@ -97,20 +98,34 @@ class OpenCodeEngine extends EventEmitter {
       });
 
       this.process.stderr?.on('data', (data) => {
-        logger.warn('OpenCode stderr', { output: data.toString().substring(0, 200) });
+        logger.warn('OpenCode stderr', { output: data.toString('utf8').substring(0, 200) });
       });
 
+      // FIX: Listen for 'error' event to prevent hanging on process crash
       this.process.on('error', (err) => {
         logger.error('OpenCode process error', { error: err.message });
         this.isReady = false;
         this.emit('error', err);
+        
+        // Reject any pending promises to prevent hanging
+        for (const [sessionId, rejectFn] of this.pendingResolves.entries()) {
+          rejectFn(new Error(`OpenCode process error: ${err.message}`));
+          this.pendingResolves.delete(sessionId);
+        }
       });
 
-      this.process.on('exit', (code) => {
-        logger.warn('OpenCode process exited', { code });
+      // FIX: Listen for 'exit' event to handle unexpected crashes
+      this.process.on('exit', (code, signal) => {
+        logger.warn('OpenCode process exited', { code, signal });
         this.isReady = false;
         this.emit('exit', code);
-        
+
+        // Reject any pending promises to prevent hanging
+        for (const [sessionId, rejectFn] of this.pendingResolves.entries()) {
+          rejectFn(new Error(`OpenCode process exited with code ${code}${signal ? `, signal ${signal}` : ''}`));
+          this.pendingResolves.delete(sessionId);
+        }
+
         // Auto-restart if crashed
         if (code !== 0 && this.restartAttempts < this.maxRestartAttempts) {
           this.restartAttempts++;
