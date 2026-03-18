@@ -12,11 +12,14 @@
  */
 
 import { z } from 'zod';
-import { getUnifiedToolRegistry, type ToolInfo } from './registry';
 import { getToolManager } from './index';
-import { getArcadeService } from '../api/arcade-service';
-import { getNangoService } from '../api/nango-service';
+import type { ToolInfo } from './registry';
+import { getArcadeService } from '../platforms/arcade-service';
+import { getNangoService } from '../platforms/nango-service';
 import { getTamboService } from '../tambo/tambo-service';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('Tools:Discovery');
 
 export interface DiscoveryOptions {
   /** Search query */
@@ -41,7 +44,19 @@ export interface ToolUsageStats {
   lastUsed?: number;
 }
 
-export interface DiscoveredTool extends ToolInfo {
+export interface DiscoveredTool {
+  /** Tool name/identifier */
+  name: string;
+  /** Tool description */
+  description: string;
+  /** Provider (arcade, nango, composio, etc.) */
+  provider: string;
+  /** Tool category */
+  category?: string;
+  /** Whether tool requires authentication */
+  requiresAuth: boolean;
+  /** Input schema */
+  inputSchema?: z.ZodSchema;
   /** Provider-specific tool ID */
   providerToolId?: string;
   /** Example usage */
@@ -58,7 +73,7 @@ export interface DiscoveredTool extends ToolInfo {
 export class ToolDiscoveryService {
   private static instance: ToolDiscoveryService;
   private usageStats = new Map<string, ToolUsageStats>();
-  private registry = getUnifiedToolRegistry();
+  private toolManager = getToolManager();
 
   static getInstance(): ToolDiscoveryService {
     if (!ToolDiscoveryService.instance) {
@@ -80,41 +95,64 @@ export class ToolDiscoveryService {
       userId,
     } = options;
 
+    logger.debug('Tool search started', {
+      query: query || '(all tools)',
+      category,
+      provider,
+      requiresAuth,
+      limit,
+      userId,
+    });
+
     let results: DiscoveredTool[] = [];
 
-    // Search unified registry
-    if (query) {
-      const registryResults = await this.registry.searchTools(query, userId);
-      results = registryResults.map(tool => ({
-        ...tool,
-        providerToolId: `${tool.provider}:${tool.name}`,
-      }));
-    } else {
-      // Get all available tools
-      const allTools = await this.registry.getAvailableTools(userId);
-      results = allTools.map(tool => ({
-        ...tool,
-        providerToolId: `${tool.provider}:${tool.name}`,
-      }));
-    }
+    // Use consolidated ToolIntegrationManager for tool search
+    const tools = this.toolManager.searchTools(query || '');
+    logger.debug(`Found ${tools.length} tools from tool manager`, { query });
+
+    // Convert to DiscoveredTool format
+    results = tools.map(tool => ({
+      name: tool.toolName,
+      description: tool.description,
+      provider: tool.provider,
+      category: tool.category,
+      requiresAuth: tool.requiresAuth,
+      inputSchema: tool.inputSchema,
+      providerToolId: `${tool.provider}:${tool.toolName}`,
+    }));
 
     // Apply filters
     if (category) {
-      results = results.filter(tool => 
+      const beforeCount = results.length;
+      results = results.filter(tool =>
         tool.category?.toLowerCase() === category.toLowerCase()
       );
+      logger.debug(`Category filter applied: ${category}`, {
+        before: beforeCount,
+        after: results.length,
+      });
     }
 
     if (provider) {
-      results = results.filter(tool => 
+      const beforeCount = results.length;
+      results = results.filter(tool =>
         tool.provider.toLowerCase() === provider.toLowerCase()
       );
+      logger.debug(`Provider filter applied: ${provider}`, {
+        before: beforeCount,
+        after: results.length,
+      });
     }
 
     if (requiresAuth !== undefined) {
-      results = results.filter(tool => 
+      const beforeCount = results.length;
+      results = results.filter(tool =>
         tool.requiresAuth === requiresAuth
       );
+      logger.debug(`Auth filter applied: ${requiresAuth ? 'requires auth' : 'no auth required'}`, {
+        before: beforeCount,
+        after: results.length,
+      });
     }
 
     // Add usage stats
@@ -127,7 +165,16 @@ export class ToolDiscoveryService {
     results = this.sortResults(results, query);
 
     // Apply limit
-    return results.slice(0, limit);
+    const finalResults = results.slice(0, limit);
+    
+    logger.info('Tool search completed', {
+      query,
+      totalFound: results.length,
+      returned: finalResults.length,
+      limited: results.length > limit,
+    });
+
+    return finalResults;
   }
 
   /**

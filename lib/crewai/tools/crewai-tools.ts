@@ -272,7 +272,7 @@ export class FileReadTool implements BaseTool {
 
     try {
       const fs = await import('fs/promises');
-      const content = await fs.readFile(path, encoding);
+      const content = await fs.readFile(path, { encoding });
 
       return { success: true, data: { content, path } };
     } catch (error) {

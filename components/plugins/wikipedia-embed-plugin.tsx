@@ -24,6 +24,8 @@ import {
   Languages,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import useIframeLoader from '@/hooks/use-iframe-loader';
+import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 
 interface BookmarkEntry {
   url: string;
@@ -39,7 +41,6 @@ interface SearchHistoryEntry {
 const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [iframeUrl, setIframeUrl] = useState('https://en.wikipedia.org/wiki/Main_Page');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
   const [iframeError, setIframeError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
@@ -48,6 +49,38 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   const [isReloading, setIsReloading] = useState(false);
   const [iframeKey, setIframeKey] = useState(0);
   const [activeTab, setActiveTab] = useState<'browse' | 'bookmarks' | 'history'>('browse');
+
+  // Use iframe loader hook with fallback
+  const {
+    isLoading,
+    isLoaded,
+    isFailed,
+    failureReason,
+    errorMessage,
+    retryCount,
+    canRetry,
+    isUsingFallback,
+    fallbackUrl,
+    handleLoad,
+    handleRetry,
+    handleReset,
+    handleFallback,
+  } = useIframeLoader({
+    url: iframeUrl,
+    timeout: 30000,
+    maxRetries: 3,
+    retryDelay: 5000,
+    enableAutoRetry: true,
+    enableFallback: true,
+    onLoaded: () => {
+      setIsReloading(false);
+      setIframeError(null);
+    },
+    onFailed: (reason, error) => {
+      setIsReloading(false);
+      setIframeError(error || 'Failed to load content');
+    },
+  });
 
   const languages = [
     { code: 'en', name: 'English' },
@@ -75,7 +108,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setIsLoading(false);
+      setIsReloading(false);
     }, 2000);
     return () => clearTimeout(timer);
   }, [iframeKey]);
@@ -278,28 +311,31 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                     </div>
                   </div>
                 )}
-                
-                {iframeError ? (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="text-center space-y-4 max-w-md p-6">
-                      <BookOpen className="w-12 h-12 mx-auto text-amber-500/60" />
-                      <p className="text-amber-200/60">{iframeError}</p>
-                      <Button onClick={handleReload} className="bg-amber-600 hover:bg-amber-500">
-                        <RefreshCw className="w-4 h-4 mr-2" />
-                        Retry
-                      </Button>
-                    </div>
+
+                {isFailed || iframeError ? (
+                  <div className="absolute inset-0">
+                    <IframeUnavailableScreen
+                      url={iframeUrl}
+                      reason={failureReason || 'failed'}
+                      errorMessage={errorMessage || iframeError || undefined}
+                      onRetry={handleRetry}
+                      onTryFallback={handleFallback}
+                      onOpenExternal={handleOpenExternal}
+                      onClose={onClose}
+                      autoRetryCount={retryCount}
+                      maxRetries={3}
+                    />
                   </div>
                 ) : (
                   <iframe
                     key={iframeKey}
-                    src={iframeUrl}
+                    src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
                     className="w-full h-full border-0"
                     title="Wikipedia"
-                    onLoad={() => setIsLoading(false)}
+                    onLoad={() => setIsReloading(false)}
                     onError={() => {
                       setIframeError('Failed to load Wikipedia. Note: Wikipedia restricts embedding in some contexts. Try using the external link button.');
-                      setIsLoading(false);
+                      setIsReloading(false);
                     }}
                     sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
                     allow="fullscreen"

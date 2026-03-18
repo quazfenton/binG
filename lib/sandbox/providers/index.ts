@@ -6,16 +6,19 @@
  */
 
 import type { SandboxProvider } from './sandbox-provider'
-import { MicrosandboxProvider } from './microsandbox-provider'
+import { MicrosandboxProvider } from '../local/microsandbox-provider'
 import { BlaxelProvider } from './blaxel-provider'
 import { SpritesProvider } from './sprites-provider'
 import { CodeSandboxProvider } from './codesandbox-provider'
 import { E2BProvider } from './e2b-provider'
 import { DaytonaProvider } from './daytona-provider'
 import { RunloopProvider } from './runloop-provider'
-import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from './e2b-desktop-provider-enhanced'
+import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from '../../computer/e2b-desktop-provider-enhanced'
 import { CircuitBreaker, providerCircuitBreakers, createCircuitBreakerWithMetrics } from '@/lib/utils/circuit-breaker'
 import { sandboxMetrics } from '@/lib/backend/metrics'
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('SandboxProviders')
 
 /**
  * Union type for all supported sandbox providers.
@@ -36,12 +39,15 @@ export type SandboxProviderType =
   | 'opensandbox'
   | 'opensandbox-code-interpreter'
   | 'opensandbox-agent'
+  | 'opensandbox-nullclaw'
   | 'mistral-agent'
   | 'mistral'
+  | 'vercel-sandbox'
+  | 'oracle-vm'
 
 // Provider registry
 interface ProviderEntry {
-  provider: SandboxProvider
+  provider: SandboxProvider | null
   priority: number
   enabled: boolean
   available: boolean
@@ -51,14 +57,15 @@ interface ProviderEntry {
   failureCount: number
   circuitBreaker?: CircuitBreaker
   factory?: () => SandboxProvider
+  asyncFactory?: () => Promise<SandboxProvider>
 }
 
 const providerRegistry = new Map<SandboxProviderType, ProviderEntry>()
 
 function initializeRegistry() {
   // Register providers with priority (lower = higher priority in fallback chain)
-  // Use factory functions for lazy initialization to avoid SDK import errors in tests
-  
+  // Use async factory functions for lazy initialization to avoid SDK import errors in tests
+
   providerRegistry.set('daytona', {
     provider: null as any,
     priority: 1,
@@ -68,8 +75,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { DaytonaProvider } = require('./daytona-provider')
+    asyncFactory: async () => {
+      const { DaytonaProvider } = await import('./daytona-provider')
       return new DaytonaProvider()
     },
   })
@@ -83,8 +90,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { E2BProvider } = require('./e2b-provider')
+    asyncFactory: async () => {
+      const { E2BProvider } = await import('./e2b-provider')
       return new E2BProvider()
     },
   })
@@ -98,8 +105,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { RunloopProvider } = require('./runloop-provider')
+    asyncFactory: async () => {
+      const { RunloopProvider } = await import('./runloop-provider')
       return new RunloopProvider()
     },
   })
@@ -113,8 +120,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { MicrosandboxProvider } = require('./microsandbox-provider')
+    asyncFactory: async () => {
+      const { MicrosandboxProvider } = await import('../local/microsandbox-provider')
       return new MicrosandboxProvider()
     },
   })
@@ -128,8 +135,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { BlaxelProvider } = require('./blaxel-provider')
+    asyncFactory: async () => {
+      const { BlaxelProvider } = await import('./blaxel-provider')
       return new BlaxelProvider()
     },
   })
@@ -144,8 +151,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { BlaxelMcpServer } = require('./blaxel-mcp-server')
+    asyncFactory: async () => {
+      const { BlaxelMcpServer } = await import('./blaxel-mcp-server')
       return new BlaxelMcpServer()
     },
   })
@@ -159,8 +166,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { SpritesProvider } = require('./sprites-provider')
+    asyncFactory: async () => {
+      const { SpritesProvider } = await import('./sprites-provider')
       return new SpritesProvider()
     },
   })
@@ -174,8 +181,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { CodeSandboxProvider } = require('./codesandbox-provider')
+    asyncFactory: async () => {
+      const { CodeSandboxProvider } = await import('./codesandbox-provider')
       return new CodeSandboxProvider()
     },
   })
@@ -189,8 +196,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { WebContainerProvider } = require('./webcontainer-provider')
+    asyncFactory: async () => {
+      const { WebContainerProvider } = await import('./webcontainer-provider')
       return new WebContainerProvider()
     },
   })
@@ -204,8 +211,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { WebContainerFileSystemProvider } = require('./webcontainer-filesystem-provider')
+    asyncFactory: async () => {
+      const { WebContainerFileSystemProvider } = await import('./webcontainer-filesystem-provider')
       return new WebContainerFileSystemProvider()
     },
   })
@@ -219,8 +226,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { WebContainerSpawnProvider } = require('./webcontainer-spawn-provider')
+    asyncFactory: async () => {
+      const { WebContainerSpawnProvider } = await import('./webcontainer-spawn-provider')
       return new WebContainerSpawnProvider()
     },
   })
@@ -234,8 +241,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { OpenSandboxProvider } = require('./opensandbox-provider')
+    asyncFactory: async () => {
+      const { OpenSandboxProvider } = await import('./opensandbox-provider')
       return new OpenSandboxProvider()
     },
   })
@@ -249,8 +256,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { OpenSandboxCodeInterpreterProvider } = require('./opensandbox-code-interpreter-provider')
+    asyncFactory: async () => {
+      const { OpenSandboxCodeInterpreterProvider } = await import('./opensandbox-code-interpreter-provider')
       return new OpenSandboxCodeInterpreterProvider()
     },
   })
@@ -264,9 +271,24 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { OpenSandboxAgentSandboxProvider } = require('./opensandbox-agent-sandbox-provider')
+    asyncFactory: async () => {
+      const { OpenSandboxAgentSandboxProvider } = await import('./opensandbox-agent-sandbox-provider')
       return new OpenSandboxAgentSandboxProvider()
+    },
+  })
+
+  providerRegistry.set('opensandbox-nullclaw', {
+    provider: null as any,
+    priority: 9,
+    enabled: true,
+    available: false,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { OpenSandboxNullclawProvider } = await import('./opensandbox-nullclaw-provider')
+      return new OpenSandboxNullclawProvider()
     },
   })
 
@@ -280,8 +302,8 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
-      const { MistralAgentProvider } = require('./mistral/mistral-agent-provider')
+    asyncFactory: async () => {
+      const { MistralAgentProvider } = await import('./mistral/mistral-agent-provider')
       return new MistralAgentProvider()
     },
   })
@@ -296,10 +318,42 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    factory: () => {
+    asyncFactory: async () => {
       // Lazy import to avoid circular dependencies
-      const { MistralCodeInterpreterProvider } = require('./mistral-code-interpreter-provider')
+      const { MistralCodeInterpreterProvider } = await import('./mistral-code-interpreter-provider')
       return new MistralCodeInterpreterProvider()
+    },
+  })
+
+  // Vercel Sandbox - Isolated Linux VMs with snapshot support
+  providerRegistry.set('vercel-sandbox', {
+    provider: null as any,
+    priority: 8,
+    enabled: true,
+    available: false,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { VercelSandboxProvider } = await import('./vercel-sandbox-provider')
+      return new VercelSandboxProvider()
+    },
+  })
+
+  // Oracle VM - SSH into Oracle Cloud Infrastructure VM instances
+  providerRegistry.set('oracle-vm', {
+    provider: null as any,
+    priority: 9,
+    enabled: true,
+    available: !!process.env.ORACLE_VM_HOST,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { OracleVMProvider } = await import('./oracle-vm-provider')
+      return new OracleVMProvider()
     },
   })
 }
@@ -319,9 +373,12 @@ function delay(ms: number): Promise<void> {
  */
 export async function getSandboxProvider(type?: SandboxProviderType): Promise<SandboxProvider> {
   const providerType = type || (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona';
+  log.debug(`getSandboxProvider called with type: ${providerType}`)
+  
   const entry = providerRegistry.get(providerType);
 
   if (!entry) {
+    log.error(`Unknown sandbox provider type: ${providerType}`)
     throw new Error(
       `Unknown sandbox provider type: ${providerType}. ` +
       `Available providers: ${Array.from(providerRegistry.keys()).join(', ')}`
@@ -329,10 +386,12 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
   }
 
   if (!entry.enabled) {
+    log.error(`Provider ${providerType} is disabled`)
     throw new Error(`Provider ${providerType} is disabled`)
   }
 
-  if (!entry.provider && !entry.factory) {
+  if (!entry.provider && !entry.factory && !entry.asyncFactory) {
+    log.error(`Provider ${providerType} has no initialization factory`)
     throw new Error(`Provider ${providerType} has no initialization factory`)
   }
 
@@ -345,6 +404,7 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
   // Check circuit breaker before attempting initialization
   if (!circuitBreaker.canExecute()) {
     const stats = circuitBreaker.getStats();
+    log.warn(`Provider ${providerType} circuit breaker ${stats.state}`)
     sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'circuit_open' });
     throw new Error(
       `Provider ${providerType} is unavailable (circuit breaker ${stats.state}). ` +
@@ -352,25 +412,43 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
     );
   }
 
+  // Check health checker status (if running)
+  const { providerHealthChecker } = await import('../../management/health-checker');
+  const healthStatus = providerHealthChecker.getProviderHealth(providerType);
+  if (healthStatus && !healthStatus.healthy && healthStatus.consecutiveFailures >= 3) {
+    log.warn(`Provider ${providerType} is unhealthy: ${healthStatus.lastError}`)
+    sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'unhealthy' });
+    throw new Error(
+      `Provider ${providerType} is unhealthy (${healthStatus.consecutiveFailures} consecutive failures). ` +
+      `Last error: ${healthStatus.lastError || 'unknown'}`
+    );
+  }
+
   // Already initialized and healthy — return immediately
   if (entry.provider && entry.healthy) {
+    log.debug(`Provider ${providerType} already initialized and healthy`)
     return entry.provider
   }
 
   // Race condition prevention: if already initializing, wait for the existing attempt
   if (entry.initializing && entry.initPromise) {
+    log.debug(`Provider ${providerType} initialization in progress, waiting...`)
     return entry.initPromise
   }
 
   // Start initialization with retry logic
   entry.initializing = true
   const initStartTime = Date.now();
+  log.debug(`Starting initialization for provider ${providerType}`)
 
   entry.initPromise = (async () => {
     let lastError: Error | undefined
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        if (entry.factory) {
+        log.debug(`Provider ${providerType} initialization attempt ${attempt}/${MAX_RETRIES}`)
+        if (entry.asyncFactory) {
+          entry.provider = await entry.asyncFactory()
+        } else if (entry.factory) {
           entry.provider = entry.factory()
         }
         if (!entry.provider) {
@@ -383,19 +461,23 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
 
         // Record successful initialization metrics
         const initDuration = (Date.now() - initStartTime) / 1000;
+        log.info(`Provider ${providerType} initialized successfully in ${initDuration}s`)
         sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'success' });
-        sandboxMetrics.providerInitDuration.observe({ provider: providerType }, initDuration);
-        circuitBreaker.getState(); // Record success in circuit breaker
+        sandboxMetrics.providerInitDuration.observe(initDuration);
+
+        // Circuit breaker success is recorded via the execute() wrapper, not here
 
         return entry.provider
       } catch (error: any) {
         lastError = error
         entry.failureCount++
 
+        log.error(`Provider ${providerType} initialization failed (attempt ${attempt}/${MAX_RETRIES}): ${error.message}`)
+
         // Record failed initialization metrics
         const initDuration = (Date.now() - initStartTime) / 1000;
         sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'failure' });
-        sandboxMetrics.providerInitDuration.observe({ provider: providerType }, initDuration);
+        sandboxMetrics.providerInitDuration.observe(initDuration);
 
         if (attempt < MAX_RETRIES) {
           await delay(Math.pow(2, attempt) * 100) // exponential backoff: 200ms, 400ms
@@ -407,6 +489,7 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
     entry.healthy = false
     entry.initializing = false
     entry.initPromise = null
+    log.error(`Provider ${providerType} failed after ${MAX_RETRIES} attempts: ${lastError?.message}`)
     throw new Error(
       `Failed to initialize provider ${providerType} after ${MAX_RETRIES} attempts: ${lastError?.message}. ` +
       `Check that required environment variables are set.`
@@ -473,6 +556,15 @@ export function getAllProviders(): SandboxProviderType[] {
 }
 
 /**
+ * Get enabled providers (not disabled in registry)
+ */
+export function getEnabledProviders(): SandboxProviderType[] {
+  return Array.from(providerRegistry.entries())
+    .filter(([, entry]) => entry.enabled)
+    .map(([type]) => type)
+}
+
+/**
  * Get available providers (initialized and ready)
  * Uses the same async retry logic as getSandboxProvider() for consistency.
  */
@@ -531,7 +623,7 @@ export function getProviderPriority(type: SandboxProviderType): number {
 }
 
 // Re-export provider implementations for direct import
-export { MicrosandboxProvider } from './microsandbox-provider'
+export { MicrosandboxProvider } from '../local/microsandbox-provider'
 export { BlaxelProvider, verifyCallbackSignature, verifyCallbackMiddleware } from './blaxel-provider'
 export type { BlaxelSandboxHandle } from './blaxel-provider'
 export { SpritesProvider } from './sprites-provider'
@@ -543,8 +635,8 @@ export { OpenSandboxProvider } from './opensandbox-provider'
 export { OpenSandboxCodeInterpreterProvider } from './opensandbox-code-interpreter-provider'
 export { OpenSandboxAgentSandboxProvider } from './opensandbox-agent-sandbox-provider'
 export { E2BProvider, E2BGitIntegration, createE2BGitIntegration } from './e2b-provider'
-export { createAmpService, executeAmpTask } from './e2b-amp-service'
-export { CodexSchemas, createCodexService, executeCodexTask } from './e2b-codex-service'
+export { createAmpService, executeAmpTask } from '../spawn/e2b-amp-service'
+export { CodexSchemas, createCodexService, executeCodexTask } from '../spawn/e2b-codex-service'
 // export { MistralAgentProvider } from './mistral/mistral-agent-provider' // Lazy export
 
 // Re-export CodeSandbox advanced integration
@@ -572,8 +664,8 @@ export { syncFilesToSprite, syncVfsSnapshotToSprite, syncChangedFilesToSprite } 
 export type { TarSyncFile, TarSyncResult } from './sprites-tar-sync'
 
 // Re-export Universal VFS Sync
-export { UniversalVfsSync, computeFileHash, detectChangedFiles } from './universal-vfs-sync'
-export type { VfsFile, SyncOptions, SyncResult, ProviderSyncStrategy } from './universal-vfs-sync'
+export { UniversalVfsSync, computeFileHash, detectChangedFiles } from '../../virtual-filesystem/sync/universal-vfs-sync'
+export type { VfsFile, SyncOptions, SyncResult, ProviderSyncStrategy } from '../../virtual-filesystem/sync/universal-vfs-sync'
 
 // Re-export Blaxel Jobs Manager
 export { BlaxelJobsManager, executeBatchJob, deployBatchJob } from './blaxel-jobs-manager'
@@ -620,7 +712,7 @@ export {
   createGatewayFromEnv,
   callMCPTool,
   listMCPTools,
-} from './mcp-gateway'
+} from '../../mcp/mcp-gateway'
 export type {
   MCPGateway,
   MCPServerConfig,
@@ -628,7 +720,7 @@ export type {
   MCPGatewayConfig,
   GatewayConnectionResult,
   GatewayToolCallResult,
-} from './mcp-gateway'
+} from '../../mcp/mcp-gateway'
 
 // Re-export Advanced Tool Calling
 export {
@@ -636,7 +728,7 @@ export {
   calculateCost,
   getRecommendedModel,
   compareProviders,
-} from './advanced-tool-calling'
+} from '../../tools/advanced-tool-calling'
 export type {
   AdvancedToolRouter,
   TaskType,
@@ -647,7 +739,7 @@ export type {
   CostTracking,
   CostReport,
   OptimizationRecommendation,
-} from './advanced-tool-calling'
+} from '../../tools/advanced-tool-calling'
 
 // Re-export Template Integration
 export {
@@ -704,7 +796,7 @@ export {
   type DesktopStats,
   type AmpSession,
   type MCPConfig,
-} from './e2b-desktop-provider-enhanced';
+} from '../../computer/e2b-desktop-provider-enhanced';
 
 // ===========================================
 // E2B MCP Gateway Exports
@@ -717,7 +809,7 @@ export {
   type MCPGatewayConfig as E2BMCPGatewayConfig,
   type MCPGatewayResult,
   type MCPToolConfig,
-} from './e2b-mcp-gateway';
+} from '../../mcp/e2b-mcp-gateway';
 
 // ===========================================
 // E2B Structured Output Exports
@@ -766,7 +858,7 @@ export {
   type GitPushOptions,
   type GitBranchInfo,
   type GitStatusInfo,
-} from './e2b-git-helper';
+} from '../../virtual-filesystem/e2b-git-helper';
 
 // ===========================================
 // E2B Analytics Exports

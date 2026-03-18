@@ -1,49 +1,59 @@
-# Node.js dependencies
+# Node.js
 node_modules/
-npm-debug.log
-yarn-error.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-fastagent.secrets.yaml
-
-# Build output
+# Runtime
+.pnpm-store/
 dist/
-.next/
 build/
+.next/
+out/
 
-# Local environment files
+# Environment
 .env
 .env.local
-.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+!.env.example
 
-# Version control
-.git
-.gitignore
-
-# Temporary files
+# Logs
+logs/
 *.log
-*.tmp
-temp/
-tmp/
 
-# Docker-specific files
-.dockerignore
+# OS
+.DS_Store
+Thumbs.db
 
-# IDE and editor files
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
-# OS-specific files
-.DS_Store
-Thumbs.db
-
-# Test and coverage files
+# Testing
 coverage/
-*.test.js
-*.spec.js
+.nyc_output/
 
-# Documentation and miscellaneous
-README.md
-LICENSE
-docs/
+# Docker
+docker-compose.override.yml
+
+# V2 Agent
+/workspace/
+/var/run/docker.sock
+
+# MCP
+.mcp/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Nullclaw
+nullclaw.config.yml

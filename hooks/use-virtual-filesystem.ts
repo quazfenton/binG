@@ -1,13 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { generateSecureId } from '@/lib/utils';
+import { getOrCreateAnonymousSessionId, buildApiHeaders } from '@/lib/utils';
+import { createDebugLogger } from '@/config/features';
 import type {
   VirtualFile,
   VirtualFilesystemNode,
   VirtualFilesystemSearchResult,
   VirtualWorkspaceSnapshot,
 } from '@/lib/virtual-filesystem/filesystem-types';
+import { opfsAdapter, OPFSAdapter } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
+import { opfsCore } from '@/lib/virtual-filesystem/opfs/opfs-core';
 
 export interface AttachedVirtualFile {
   path: string;
@@ -17,26 +20,125 @@ export interface AttachedVirtualFile {
   lastModified: string;
 }
 
+export interface UseVirtualFilesystemOptions {
+  autoLoad?: boolean;
+  useOPFS?: boolean;       // Enable OPFS caching for instant reads/writes
+  offlineMode?: boolean;   // Force offline operation
+}
+
+export interface SyncStatus {
+  isSyncing: boolean;
+  pendingChanges: number;
+  lastSyncTime: number | null;
+  isOnline: boolean;
+  hasConflicts: boolean;
+}
+
 interface ApiResponse<T> {
   success: boolean;
   error?: string;
   data: T;
 }
 
-function getOrCreateAnonymousSessionId(): string {
-  if (typeof window === 'undefined') {
-    return 'server-session';
-  }
+const vfsLogger = createDebugLogger('useVFS', 'DEBUG_VFS');
 
-  let sessionId = localStorage.getItem('anonymous_session_id');
-  if (!sessionId) {
-    sessionId = generateSecureId('anon');
-    localStorage.setItem('anonymous_session_id', sessionId);
-  }
-  return sessionId;
+// =============================================================================
+// SHARED IN-MEMORY SNAPSHOT CACHE
+// =============================================================================
+// Single shared cache for VFS snapshots to prevent redundant API calls
+// between CodePreviewPanel and TerminalPanel
+// =============================================================================
+interface SnapshotCacheEntry {
+  snapshot: {
+    root: string;
+    version: number;
+    updatedAt: string;
+    path: string;
+    files: Array<{
+      path: string;
+      content: string;
+      language: string;
+      version: number;
+      size: number;
+      lastModified: string;
+    }>;
+  };
+  timestamp: number;
 }
 
-export function useVirtualFilesystem(initialPath: string = 'project') {
+const snapshotCache = new Map<string, SnapshotCacheEntry>();
+const SNAPSHOT_CACHE_TTL_MS = 30000; // 30 seconds for snapshots (was 5s)
+const LIST_CACHE_TTL_MS = 15000;     // 15 seconds for directory listings
+const SNAPSHOT_CACHE_MAX_ENTRIES = 50; // Increased from 10
+
+function getCacheKey(path: string, ownerId: string): string {
+  return `${ownerId}:${path}`;
+}
+
+function getCachedSnapshot(path: string, ownerId: string): { snapshot: SnapshotCacheEntry['snapshot']; isFresh: boolean } | null {
+  const key = getCacheKey(path, ownerId);
+  const entry = snapshotCache.get(key);
+  
+  if (!entry) return null;
+  
+  const age = Date.now() - entry.timestamp;
+  const isFresh = age < SNAPSHOT_CACHE_TTL_MS;
+  
+  // Clean up stale entries
+  if (!isFresh) {
+    snapshotCache.delete(key);
+    return null;
+  }
+  
+  return { snapshot: entry.snapshot, isFresh };
+}
+
+function setCachedSnapshot(path: string, ownerId: string, snapshot: SnapshotCacheEntry['snapshot']): void {
+  const key = getCacheKey(path, ownerId);
+  
+  // Evict oldest entries if cache is full
+  if (snapshotCache.size >= SNAPSHOT_CACHE_MAX_ENTRIES) {
+    let oldestKey: string | null = null;
+    let oldestTimestamp = Infinity;
+    
+    for (const [k, v] of snapshotCache.entries()) {
+      if (v.timestamp < oldestTimestamp) {
+        oldestTimestamp = v.timestamp;
+        oldestKey = k;
+      }
+    }
+    
+    if (oldestKey) {
+      snapshotCache.delete(oldestKey);
+    }
+  }
+  
+  snapshotCache.set(key, { snapshot, timestamp: Date.now() });
+}
+
+function invalidateSnapshotCache(path?: string, ownerId?: string): void {
+  if (!path && !ownerId) {
+    // Clear all
+    snapshotCache.clear();
+    return;
+  }
+  
+  // Clear specific path or all paths for owner
+  for (const key of snapshotCache.keys()) {
+    if (ownerId && !key.startsWith(ownerId + ':')) continue;
+    if (path && !key.includes(path)) continue;
+    snapshotCache.delete(key);
+  }
+}
+
+export function useVirtualFilesystem(
+  initialPath: string = 'project',
+  options: UseVirtualFilesystemOptions = {}
+) {
+  const autoLoad = options?.autoLoad !== false; // default true
+  const useOPFS = options?.useOPFS ?? false;
+  const offlineMode = options?.offlineMode ?? false;
+
   const [currentPath, setCurrentPath] = useState(initialPath);
   const currentPathRef = useRef(currentPath);
   const initialPathRef = useRef(initialPath);
@@ -44,54 +146,132 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
   const [attachedFiles, setAttachedFiles] = useState<Record<string, AttachedVirtualFile>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // OPFS sync status
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>({
+    isSyncing: false,
+    pendingChanges: 0,
+    lastSyncTime: null,
+    isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    hasConflicts: false,
+  });
 
-  const buildHeaders = useCallback((includeJsonContentType: boolean): HeadersInit => {
-    const headers: Record<string, string> = {
-      'x-anonymous-session-id': getOrCreateAnonymousSessionId(),
+  const { log, error: logError, warn: logWarn } = vfsLogger;
+
+  // Track in-flight requests to prevent duplicate concurrent calls
+  const inFlightRequests = useRef<Map<string, Promise<any>>>(new Map());
+
+  // Initialize OPFS on mount if enabled
+  useEffect(() => {
+    if (useOPFS && typeof window !== 'undefined') {
+      const sessionId = getOrCreateAnonymousSessionId();
+      
+      // Check if OPFS is supported
+      if (!OPFSAdapter.isSupported()) {
+        logWarn('OPFS not supported in this browser - using server-only mode');
+        return;
+      }
+      
+      opfsAdapter.enable(sessionId).then(() => {
+        log('OPFS enabled successfully for session:', sessionId);
+      }).catch(err => {
+        logWarn('OPFS initialization failed, falling back to server-only:', err);
+      });
+    }
+
+    return () => {
+      if (useOPFS) {
+        opfsAdapter.disable().catch(console.error);
+      }
     };
-    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    if (includeJsonContentType) {
-      headers['Content-Type'] = 'application/json';
-    }
-    return headers;
-  }, []);
+  }, [useOPFS, logWarn]);
+
+  // Track online status
+  useEffect(() => {
+    const handleOnline = () => {
+      setSyncStatus(prev => ({ ...prev, isOnline: true }));
+      // Trigger sync when coming back online
+      if (useOPFS && !offlineMode) {
+        syncWithServer().catch(console.error);
+      }
+    };
+    const handleOffline = () => {
+      setSyncStatus(prev => ({ ...prev, isOnline: false }));
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [useOPFS, offlineMode]);
+
+  // Update sync status periodically
+  useEffect(() => {
+    if (!useOPFS) return;
+
+    const interval = setInterval(() => {
+      const status = opfsAdapter.getSyncStatus();
+      setSyncStatus(prev => ({
+        ...prev,
+        isSyncing: status.isSyncing,
+        pendingChanges: status.pendingChanges,
+        lastSyncTime: status.lastSyncTime,
+        isOnline: status.isOnline,
+      }));
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [useOPFS]);
 
   const request = useCallback(async <TData>(
     url: string,
     options: RequestInit & { includeJsonContentType?: boolean } = {},
   ): Promise<TData> => {
     const { includeJsonContentType = true, ...rest } = options;
+    log(`request: ${options.method || 'GET'} ${url}`);
+    
     const response = await fetch(url, {
       ...rest,
       headers: {
-        ...buildHeaders(includeJsonContentType),
+        ...buildApiHeaders({ json: includeJsonContentType }),
         ...(rest.headers || {}),
       },
     });
 
+    log(`request: response status=${response.status}`);
+    
     let payload: ApiResponse<TData> | null = null;
     try {
       payload = await response.json();
     } catch {
+      // Response body was not valid JSON – surface the HTTP error directly
+      if (!response.ok) {
+        throw new Error(`Request failed (${response.status} ${response.statusText})`);
+      }
       payload = null;
     }
 
     if (!response.ok || !payload?.success) {
       const message = payload?.error || `Request failed (${response.status})`;
+      logError(`request: failed - ${message}`);
       throw new Error(message);
     }
 
     return payload.data;
-  }, [buildHeaders]);
+  }, []);
 
   useEffect(() => {
     currentPathRef.current = currentPath;
   }, [currentPath]);
 
   const listDirectory = useCallback(async (pathToLoad?: string) => {
+    // Invalidate snapshot cache when directory changes
+    invalidateSnapshotCache(pathToLoad || currentPathRef.current, getOrCreateAnonymousSessionId());
+    
+    log(`listDirectory: loading "${pathToLoad || currentPathRef.current}"`);
     setIsLoading(true);
     setError(null);
     try {
@@ -100,11 +280,13 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
         `/api/filesystem/list?path=${encodeURIComponent(targetPath)}`,
         { method: 'GET', includeJsonContentType: false },
       );
+      log(`listDirectory: loaded "${data.path}", ${data.nodes.length} entries`);
       setCurrentPath(data.path);
       setNodes(data.nodes);
       return data.nodes;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to list files';
+      logError(`listDirectory: failed - ${message}`);
       setError(message);
       return [];
     } finally {
@@ -113,28 +295,66 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
   }, [request]);
 
   const readFile = useCallback(async (filePath: string): Promise<VirtualFile> => {
+    // OPFS-first strategy
+    if (useOPFS) {
+      try {
+        const opfsFile = await opfsAdapter.readFile('current-user', filePath);
+        log(`readFile: OPFS cache hit for "${filePath}"`);
+        return opfsFile;
+      } catch (err) {
+        logWarn(`readFile: OPFS cache miss for "${filePath}", fetching from server`);
+      }
+    }
+    
+    // Server fetch
     return request<VirtualFile>('/api/filesystem/read', {
       method: 'POST',
       body: JSON.stringify({ path: filePath }),
     });
-  }, [request]);
+  }, [request, useOPFS, logWarn]);
 
   const writeFile = useCallback(async (filePath: string, content: string) => {
+    log(`writeFile: writing "${filePath}" (contentLength=${content.length})`);
+    
+    // Invalidate snapshot cache on write
+    invalidateSnapshotCache();
+    
+    // OPFS-first strategy
+    if (useOPFS && !offlineMode) {
+      // Write to OPFS instantly
+      const opfsFile = await opfsAdapter.writeFile('current-user', filePath, content);
+      log(`writeFile: OPFS write complete for "${filePath}", version=${opfsFile.version}`);
+      
+      // Update local state immediately
+      await listDirectory(currentPathRef.current);
+      
+      return opfsFile;
+    }
+    
+    // Server-only or offline mode
     const data = await request<{
       path: string;
       version: number;
+      previousVersion?: number | null;
+      workspaceVersion?: number;
+      sessionId?: string | null;
+      commitId?: string;
       language: string;
       size: number;
       lastModified: string;
     }>('/api/filesystem/write', {
       method: 'POST',
-      body: JSON.stringify({ path: filePath, content }),
+      body: JSON.stringify({ path: filePath, content, source: 'use-virtual-filesystem' }),
     });
+    log(`writeFile: server write complete for "${data.path}", version=${data.version}`);
     await listDirectory(currentPathRef.current);
     return data;
-  }, [listDirectory, request]);
+  }, [listDirectory, request, useOPFS, offlineMode, log]);
 
   const deletePath = useCallback(async (targetPath: string) => {
+    // Invalidate snapshot cache on delete
+    invalidateSnapshotCache(targetPath, getOrCreateAnonymousSessionId());
+    
     const data = await request<{ deletedCount: number }>('/api/filesystem/delete', {
       method: 'POST',
       body: JSON.stringify({ path: targetPath }),
@@ -165,18 +385,86 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
 
   const getSnapshot = useCallback(async (pathForSnapshot?: string) => {
     const targetPath = pathForSnapshot || currentPathRef.current;
-    const data = await request<{
-      root: string;
-      version: number;
-      updatedAt: string;
-      path: string;
-      files: VirtualWorkspaceSnapshot['files'];
-    }>(
-      `/api/filesystem/snapshot?path=${encodeURIComponent(targetPath)}`,
-      { method: 'GET', includeJsonContentType: false },
-    );
-    return data;
+    const ownerId = getOrCreateAnonymousSessionId();
+    const cacheKey = `${ownerId}:${targetPath}`;
+
+    // Check shared cache first
+    const cached = getCachedSnapshot(targetPath, ownerId);
+    if (cached) {
+      vfsLogger.log(`getSnapshot: cache hit for "${targetPath}" (fresh: ${cached.isFresh})`);
+      return cached.snapshot;
+    }
+
+    // Check if request is already in-flight (prevent duplicate concurrent calls)
+    const existingRequest = inFlightRequests.current.get(cacheKey);
+    if (existingRequest) {
+      vfsLogger.log(`getSnapshot: joining in-flight request for "${targetPath}"`);
+      return existingRequest;
+    }
+
+    vfsLogger.log(`getSnapshot: cache miss for "${targetPath}", fetching from API`);
+
+    const requestPromise = (async () => {
+      try {
+        const data = await request<{
+          root: string;
+          version: number;
+          updatedAt: string;
+          path: string;
+          files: VirtualWorkspaceSnapshot['files'];
+        }>(
+          `/api/filesystem/snapshot?path=${encodeURIComponent(targetPath)}`,
+          { method: 'GET', includeJsonContentType: false },
+        );
+        setCachedSnapshot(targetPath, ownerId, data);
+        return data;
+      } catch (error) {
+        vfsLogger.logError(`getSnapshot: failed for "${targetPath}"`, error);
+        throw error;
+      } finally {
+        // Always clean up in-flight tracking
+        inFlightRequests.current.delete(cacheKey);
+      }
+    })();
+
+    inFlightRequests.current.set(cacheKey, requestPromise);
+    return requestPromise;
   }, [request]);
+
+  /**
+   * Sync with server (OPFS only)
+   */
+  const syncWithServer = useCallback(async () => {
+    if (!useOPFS) return;
+
+    setSyncStatus(prev => ({ ...prev, isSyncing: true }));
+
+    try {
+      const ownerId = getOrCreateAnonymousSessionId();
+      const result = await opfsAdapter.syncToServer(ownerId);
+      
+      setSyncStatus(prev => ({
+        ...prev,
+        isSyncing: false,
+        pendingChanges: result.filesSynced,
+        lastSyncTime: Date.now(),
+        hasConflicts: result.conflicts.length > 0,
+      }));
+
+      // Invalidate snapshot cache after OPFS sync (files may have changed)
+      invalidateSnapshotCache(undefined, ownerId);
+
+      if (result.conflicts.length > 0) {
+        logWarn('Sync completed with conflicts:', result.conflicts);
+      }
+    } catch (err) {
+      logError('Sync failed:', err);
+      setSyncStatus(prev => ({
+        ...prev,
+        isSyncing: false,
+      }));
+    }
+  }, [useOPFS, logWarn, logError]);
 
   const attachFile = useCallback(async (filePath: string): Promise<AttachedVirtualFile> => {
     const file = await readFile(filePath);
@@ -217,14 +505,19 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
     return result.path;
   }, [writeFile]);
 
+  // Load directory on first mount and when initialPath changes
+  const hasMountedRef = useRef(false);
   useEffect(() => {
-    // Only load directory when initialPath actually changes (not on every render)
-    if (initialPathRef.current !== initialPath) {
+    if (!autoLoad) return;
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      void listDirectory(initialPath);
+    } else if (initialPathRef.current !== initialPath) {
       initialPathRef.current = initialPath;
       void listDirectory(initialPath);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialPath]);
+  }, [initialPath, autoLoad]);
 
   const attachedFileList = useMemo(
     () => Object.values(attachedFiles).sort((a, b) => a.path.localeCompare(b.path)),
@@ -238,6 +531,7 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
     attachedFileList,
     isLoading,
     error,
+    syncStatus,  // NEW: OPFS sync status
     setCurrentPath,
     listDirectory,
     readFile,
@@ -249,5 +543,6 @@ export function useVirtualFilesystem(initialPath: string = 'project') {
     detachFile,
     clearAttachedFiles,
     uploadBrowserFile,
+    syncWithServer,  // NEW: Manual sync trigger
   };
 }

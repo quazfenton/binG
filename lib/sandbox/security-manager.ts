@@ -63,7 +63,37 @@ export class SandboxSecurityManager {
     }
 
     // Normalize path separators
-    const normalized = inputPath.replace(/\\/g, '/');
+    let normalized = inputPath.replace(/\\/g, '/');
+
+    // Check for Windows drive letters (e.g., C:\, D:\) - convert to Linux path
+    // These appear as absolute paths on Windows but need special handling on Linux
+    const windowsDriveMatch = normalized.match(/^([A-Za-z]):\//);
+    if (windowsDriveMatch) {
+      const driveLetter = windowsDriveMatch[1].toLowerCase();
+      console.warn(`[SandboxSecurityManager] Converting Windows path to Linux path`, {
+        inputPath,
+        normalized,
+        driveLetter,
+        workspaceDir,
+        hint: 'Windows absolute path detected - stripping drive letter'
+      });
+      // Strip the drive letter (e.g., "C:/home/user" -> "/home/user")
+      normalized = normalized.slice(2);
+    }
+
+    // Handle paths that start with /workspace/ - convert to workspace-relative paths
+    // This handles our internal /workspace/users/... paths for cloud sandboxes
+    if (normalized.startsWith('/workspace/')) {
+      // Convert /workspace/users/... to /home/user/workspace/...
+      normalized = normalized.replace(/^\/workspace\//, '/home/user/workspace/');
+    }
+
+    // Also handle any remaining Windows-style paths that got concatenated incorrectly
+    // e.g., "/home/user/C:\home\user" -> "/home/user"
+    const weirdWindowsPath = normalized.match(/^(.+?):\\(.+)$/);
+    if (weirdWindowsPath) {
+      normalized = weirdWindowsPath[1];
+    }
 
     // Check for obvious traversal attempts
     if (normalized.includes('..') || normalized.includes('\0')) {
@@ -71,14 +101,20 @@ export class SandboxSecurityManager {
     }
 
     // Resolve absolute paths
+    // Check normalized path for absoluteness (handles Windows paths converted to Linux absolute)
     let resolved: string;
-    if (inputPath.startsWith('/')) {
-      resolved = resolve(inputPath);
+    if (normalized.startsWith('/')) {
+      resolved = resolve(normalized);
     } else {
       resolved = resolve(workspaceDir, normalized);
     }
 
     // Ensure the resolved path is actually within the workspace
+    // Allow /tmp paths for temporary prompt files
+    if (normalized.startsWith('/tmp/') || normalized.startsWith('/tmp')) {
+      return resolved;
+    }
+    
     const rel = relative(workspaceDir, resolved);
     const isWithin = !rel.startsWith('..') && !pathIsAbsolute(rel);
 

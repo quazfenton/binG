@@ -1,4 +1,4 @@
-import type { LLMMessage } from '@/lib/api/llm-providers';
+import type { LLMMessage } from '@/lib/chat/llm-providers';
 import { createHash } from 'crypto';
 
 // LOW PRIORITY FIX: Cache for request type detection to avoid repeated analysis

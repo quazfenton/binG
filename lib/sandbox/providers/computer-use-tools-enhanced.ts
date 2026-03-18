@@ -12,8 +12,9 @@
  * - Error handling and validation
  */
 
+import { z } from 'zod'
 import type { Tool } from 'ai'
-import type { DesktopAction } from './e2b-desktop-provider-enhanced'
+import type { DesktopAction } from '../../computer/e2b-desktop-provider-enhanced'
 
 // ==================== Tool Definitions ====================
 
@@ -22,20 +23,10 @@ import type { DesktopAction } from './e2b-desktop-provider-enhanced'
  */
 export const mouseMoveTool: Tool = {
   description: 'Move the mouse cursor to specified coordinates on the screen',
-  parameters: {
-    type: 'object',
-    properties: {
-      x: {
-        type: 'number',
-        description: 'X coordinate (horizontal position). Range: 0-1920 for typical screens.',
-      },
-      y: {
-        type: 'number',
-        description: 'Y coordinate (vertical position). Range: 0-1080 for typical screens.',
-      },
-    },
-    required: ['x', 'y'],
-  },
+  inputSchema: z.object({
+    x: z.number(),
+    y: z.number(),
+  }),
   execute: async ({ x, y }: { x: number; y: number }) => ({
     type: 'mouse_move' as const,
     x,
@@ -48,19 +39,10 @@ export const mouseMoveTool: Tool = {
  */
 export const leftClickTool: Tool = {
   description: 'Perform a left mouse click at the specified or current position. Use for selecting items, clicking buttons, etc.',
-  parameters: {
-    type: 'object',
-    properties: {
-      x: {
-        type: 'number',
-        description: 'X coordinate (optional - uses current position if not specified)',
-      },
-      y: {
-        type: 'number',
-        description: 'Y coordinate (optional - uses current position if not specified)',
-      },
-    },
-  },
+  inputSchema: z.object({
+    x: z.number().optional(),
+    y: z.number().optional(),
+  }),
   execute: async ({ x, y }: { x?: number; y?: number } = {}) => ({
     type: 'left_click' as const,
     x,
@@ -73,19 +55,10 @@ export const leftClickTool: Tool = {
  */
 export const rightClickTool: Tool = {
   description: 'Perform a right mouse click to open context menus',
-  parameters: {
-    type: 'object',
-    properties: {
-      x: {
-        type: 'number',
-        description: 'X coordinate (optional)',
-      },
-      y: {
-        type: 'number',
-        description: 'Y coordinate (optional)',
-      },
-    },
-  },
+  inputSchema: z.object({
+    x: z.number().optional(),
+    y: z.number().optional(),
+  }),
   execute: async ({ x, y }: { x?: number; y?: number } = {}) => ({
     type: 'right_click' as const,
     x,
@@ -98,19 +71,10 @@ export const rightClickTool: Tool = {
  */
 export const doubleClickTool: Tool = {
   description: 'Perform a double left click. Use to open files, folders, or applications.',
-  parameters: {
-    type: 'object',
-    properties: {
-      x: {
-        type: 'number',
-        description: 'X coordinate (optional)',
-      },
-      y: {
-        type: 'number',
-        description: 'Y coordinate (optional)',
-      },
-    },
-  },
+  inputSchema: z.object({
+    x: z.number().optional(),
+    y: z.number().optional(),
+  }),
   execute: async ({ x, y }: { x?: number; y?: number } = {}) => ({
     type: 'double_click' as const,
     x,
@@ -123,28 +87,12 @@ export const doubleClickTool: Tool = {
  */
 export const dragMouseTool: Tool = {
   description: 'Drag the mouse from one position to another. Use for moving windows, selecting text, or drawing.',
-  parameters: {
-    type: 'object',
-    properties: {
-      startX: {
-        type: 'number',
-        description: 'Starting X coordinate',
-      },
-      startY: {
-        type: 'number',
-        description: 'Starting Y coordinate',
-      },
-      endX: {
-        type: 'number',
-        description: 'Ending X coordinate',
-      },
-      endY: {
-        type: 'number',
-        description: 'Ending Y coordinate',
-      },
-    },
-    required: ['startX', 'startY', 'endX', 'endY'],
-  },
+  inputSchema: z.object({
+    startX: z.number(),
+    startY: z.number(),
+    endX: z.number(),
+    endY: z.number(),
+  }),
   execute: async ({ startX, startY, endX, endY }: { startX: number; startY: number; endX: number; endY: number }) => ({
     type: 'drag' as const,
     startX,
@@ -159,22 +107,10 @@ export const dragMouseTool: Tool = {
  */
 export const scrollTool: Tool = {
   description: 'Scroll up or down in the current window',
-  parameters: {
-    type: 'object',
-    properties: {
-      direction: {
-        type: 'string',
-        enum: ['up', 'down'],
-        description: 'Direction to scroll',
-      },
-      ticks: {
-        type: 'number',
-        description: 'Number of scroll ticks (default: 1)',
-        default: 1,
-      },
-    },
-    required: ['direction'],
-  },
+  inputSchema: z.object({
+    direction: z.enum(['up', 'down']),
+    ticks: z.number().default(1),
+  }),
   execute: async ({ direction, ticks = 1 }: { direction: 'up' | 'down'; ticks?: number }) => ({
     type: 'scroll' as const,
     scrollY: direction === 'down' ? ticks : -ticks,
@@ -186,16 +122,9 @@ export const scrollTool: Tool = {
  */
 export const typeTextTool: Tool = {
   description: 'Type text using the keyboard. Simulates human typing. Use for entering text in input fields, search boxes, etc.',
-  parameters: {
-    type: 'object',
-    properties: {
-      text: {
-        type: 'string',
-        description: 'The text to type',
-      },
-    },
-    required: ['text'],
-  },
+  inputSchema: z.object({
+    text: z.string(),
+  }),
   execute: async ({ text }: { text: string }) => ({
     type: 'type' as const,
     text,
@@ -207,20 +136,9 @@ export const typeTextTool: Tool = {
  */
 export const pressKeyTool: Tool = {
   description: 'Press a key or key combination. Use for special keys (Enter, Tab, Escape) or shortcuts (Ctrl+C, Alt+Tab).',
-  parameters: {
-    type: 'object',
-    properties: {
-      keys: {
-        type: 'array',
-        items: {
-          type: 'string',
-          description: 'Key name (e.g., "Enter", "Control_L", "Alt_L", "Tab", "Escape", "arrow_up")',
-        },
-        description: 'Key or keys to press (for combinations like Ctrl+C, use ["Control_L", "c"])',
-      },
-    },
-    required: ['keys'],
-  },
+  inputSchema: z.object({
+    keys: z.array(z.string()),
+  }),
   execute: async ({ keys }: { keys: string[] }) => ({
     type: 'keypress' as const,
     keys,
@@ -232,10 +150,7 @@ export const pressKeyTool: Tool = {
  */
 export const screenshotTool: Tool = {
   description: 'Take a screenshot of the current desktop state. Returns base64-encoded PNG image. Always use this first to understand the desktop state.',
-  parameters: {
-    type: 'object',
-    properties: {},
-  },
+  inputSchema: z.object({}),
   execute: async () => ({
     type: 'screenshot' as const,
   }),
@@ -246,16 +161,9 @@ export const screenshotTool: Tool = {
  */
 export const waitTool: Tool = {
   description: 'Wait for a specified duration. Use to allow time for animations, page loads, or application startup.',
-  parameters: {
-    type: 'object',
-    properties: {
-      duration: {
-        type: 'number',
-        description: 'Duration to wait in milliseconds (e.g., 1000 for 1 second)',
-      },
-    },
-    required: ['duration'],
-  },
+  inputSchema: z.object({
+    duration: z.number(),
+  }),
   execute: async ({ duration }: { duration: number }) => ({
     type: 'wait' as const,
     duration,
@@ -267,24 +175,11 @@ export const waitTool: Tool = {
  */
 export const terminalCommandTool: Tool = {
   description: 'Execute a terminal command in the Linux desktop environment. Use for running scripts, installing packages, file operations, etc.',
-  parameters: {
-    type: 'object',
-    properties: {
-      command: {
-        type: 'string',
-        description: 'The terminal command to execute (e.g., "ls -la", "firefox &", "pip install package")',
-      },
-      cwd: {
-        type: 'string',
-        description: 'Working directory for the command (default: /home/user)',
-      },
-      timeout: {
-        type: 'number',
-        description: 'Command timeout in milliseconds (default: 60000)',
-      },
-    },
-    required: ['command'],
-  },
+  inputSchema: z.object({
+    command: z.string(),
+    cwd: z.string().optional(),
+    timeout: z.number().optional(),
+  }),
   execute: async ({ command, cwd, timeout }: { command: string; cwd?: string; timeout?: number }) => ({
     type: 'terminal_command' as const,
     command,

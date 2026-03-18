@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
+import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 
 interface SandboxSession {
   sessionId: string;
@@ -99,30 +100,18 @@ export function useSandbox(options: UseSandboxOptions) {
         if (!reader) throw new Error('No response stream');
 
         const decoder = new TextDecoder();
+        const parser = createNDJSONParser();
         let finalResponse = '';
-        let buffer = '';
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
+          // Decode chunk and parse complete NDJSON lines
+          const chunk = decoder.decode(value, { stream: true });
+          const events = parser.parse(chunk);
 
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const json = line.slice(6).trim();
-            if (!json) continue;
-
-            let event: any;
-            try {
-              event = JSON.parse(json);
-            } catch {
-              // Skip malformed events
-              continue;
-            }
-
+          for (const event of events) {
             if (event.type === 'tool_execution') {
               const step: SandboxAgentStep = {
                 toolName: event.toolName,

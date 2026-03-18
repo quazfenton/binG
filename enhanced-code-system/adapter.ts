@@ -1,7 +1,7 @@
-import { getProvidersWithPuter } from '../lib/api/llm-providers'
+import { getProvidersWithPuter } from '../lib/chat/llm-providers'
 import { normalizeStream, collectNonStream } from '../lib/streaming'
 import { streamPartsToEdits, applyEditsToProject } from '../lib/code-parser'
-import { llmService } from '../lib/api/llm-providers' // Import the main LLM service
+import { llmService } from '../lib/chat/llm-providers' // Import the main LLM service
 
 export async function runModelAndApply(
   project: any,

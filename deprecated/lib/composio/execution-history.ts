@@ -7,7 +7,7 @@
  * @see https://docs.composio.dev/docs/webhooks Composio Webhooks
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 /**
  * Execution record
