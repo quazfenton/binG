@@ -178,8 +178,8 @@ export async function verifyToken(
       };
     }
     
-    // Validate required userId claim with strict type checking
-    if (typeof payload.userId !== 'string' || payload.userId.trim().length === 0) {
+    // Validate required userId claim
+    if (typeof payload.userId !== 'string' || payload.userId.trim() === '') {
       return {
         valid: false,
         error: 'Token contains invalid userId claim',
