@@ -235,16 +235,19 @@ export async function* subscribeToSessionEvents(sessionId: string): AsyncGenerat
     let errorOccurred: Error | null = null
     let isDone = false
 
-    redis.on('pmessage', (pattern, channel, message) => {
+    // Create named listener so we can remove it later (prevents memory leak)
+    const messageListener = (pattern: string, pchannel: string, message: string) => {
       try {
         const event: V2AgentEvent = JSON.parse(message)
-        if (event.sessionId === sessionId || channel.includes(sessionId)) {
+        if (event.sessionId === sessionId || pchannel.includes(sessionId)) {
           messageQueue.push(event)
         }
       } catch (err: any) {
         errorOccurred = err
       }
-    })
+    }
+
+    redis.on('pmessage', messageListener)
 
     // Poll for messages
     while (!isDone && !errorOccurred) {
@@ -261,6 +264,8 @@ export async function* subscribeToSessionEvents(sessionId: string): AsyncGenerat
     }
   } finally {
     redis.punsubscribe(channel)
+    // Remove listener to prevent memory leak on shared Redis client
+    redis.off('pmessage', messageListener)
   }
 }
 

@@ -100,31 +100,46 @@ export function useSandbox(options: UseSandboxOptions) {
         if (!reader) throw new Error('No response stream');
 
         const decoder = new TextDecoder();
-        const parser = createNDJSONParser();
+        let buffer = '';
         let finalResponse = '';
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          // Decode chunk and parse complete NDJSON lines
+          // Decode chunk and parse SSE format (data: {...}\n\n)
           const chunk = decoder.decode(value, { stream: true });
-          const events = parser.parse(chunk);
+          buffer += chunk;
 
-          for (const event of events) {
-            if (event.type === 'tool_execution') {
-              const step: SandboxAgentStep = {
-                toolName: event.toolName,
-                args: event.args,
-                result: event.result,
-              };
-              setSteps(prev => [...prev, step]);
-              options.onStepExecuted?.(step);
-            } else if (event.type === 'complete') {
-              finalResponse = event.response;
-            } else if (event.type === 'error') {
-              // Let the outer try/catch handle server-sent errors
-              throw new Error(event.message);
+          // Process complete SSE events
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+            // Extract JSON from SSE format
+            const jsonStr = trimmed.slice(6); // Remove 'data: ' prefix
+            try {
+              const event = JSON.parse(jsonStr);
+
+              if (event.type === 'tool_execution') {
+                const step: SandboxAgentStep = {
+                  toolName: event.toolName,
+                  args: event.args,
+                  result: event.result,
+                };
+                setSteps(prev => [...prev, step]);
+                options.onStepExecuted?.(step);
+              } else if (event.type === 'complete') {
+                finalResponse = event.response;
+              } else if (event.type === 'error') {
+                // Let the outer try/catch handle server-sent errors
+                throw new Error(event.message);
+              }
+            } catch (parseError: any) {
+              console.warn('Failed to parse SSE event:', parseError.message, jsonStr);
             }
           }
         }
