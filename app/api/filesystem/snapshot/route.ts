@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { resolveFilesystemOwner, virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem';
 
 export const runtime = 'nodejs';
 
@@ -103,19 +103,6 @@ export async function GET(req: NextRequest) {
 
     log(`[${requestId}] GET /api/filesystem/snapshot path="${pathFilter}" (polling=${tracking.isPolling}, count=${tracking.requestCount})`);
 
-    // SECURITY: Set anonymous session cookie for new anonymous users
-    const responseInit: ResponseInit = {
-      headers: {
-        'cache-control': 'private, no-store',
-        'vary': 'Authorization, Cookie',
-      }
-    };
-
-    if (owner.anonSessionId) {
-      // Set secure, http-only cookie for anonymous session
-      responseInit.headers!['set-cookie'] = `anon-session-id=${owner.anonSessionId}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`;
-    }
-
     // Check server-side cache first
     // SECURITY: Use owner + path + auth status as cache key to prevent cross-user leakage
     const authHeader = req.headers.get('authorization');
@@ -129,27 +116,31 @@ export async function GET(req: NextRequest) {
       if (ifNoneMatch === cached.etag) {
         log(`[${requestId}] Cache hit with matching ETag, returning 304`);
         // SECURITY: Use private cache headers to prevent shared caching
-        return new NextResponse(null, {
+        const response = new NextResponse(null, {
           status: 304,
           headers: {
-            ...responseInit.headers,
+            'cache-control': 'private, no-store',
+            'vary': 'Authorization, Cookie',
             etag: cached.etag,
           }
         });
+        return withAnonSessionCookie(response, owner);
       }
 
       log(`[${requestId}] Cache hit (age: ${Math.round((now - cached.timestamp) / 1000)}s)`);
       // SECURITY: Use private cache headers to prevent shared caching
-      return NextResponse.json({
+      const response = NextResponse.json({
         success: true,
         data: cached.data,
         cached: true,
       }, {
         headers: {
-          ...responseInit.headers,
+          'cache-control': 'private, no-store',
+          'vary': 'Authorization, Cookie',
           etag: cached.etag,
         }
       });
+      return withAnonSessionCookie(response, owner);
     }
 
     // Generate new snapshot
@@ -222,16 +213,18 @@ export async function GET(req: NextRequest) {
       cached: false,
     }, {
       headers: {
-        ...responseInit.headers,
+        'cache-control': 'private, no-store',
+        'vary': 'Authorization, Cookie',
         etag,
       }
     });
-    return response;
+    return withAnonSessionCookie(response, owner);
   } catch (error: unknown) {
     const duration = Date.now() - startTime;
     logError(`[${requestId}] ERROR after ${duration}ms:`, error instanceof Error ? error.message : error);
-    
+
     const message = error instanceof Error ? error.message : 'Failed to export workspace snapshot';
-    return NextResponse.json({ success: false, error: message }, { status: 400 });
+    const errorResponse = NextResponse.json({ success: false, error: message }, { status: 400 });
+    return withAnonSessionCookie(errorResponse, owner);
   }
 }

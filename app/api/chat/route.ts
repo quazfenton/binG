@@ -1436,15 +1436,9 @@ async function handleGatewayStreaming(params: {
             controller.enqueue(encoder.encode(sseEvent));
           }
 
-          // Handle non-JSON chunks (errors, plain text)
-          if (events.length === 0 && chunk.trim()) {
-            const trimmed = chunk.trim();
-            if (!trimmed.startsWith('data:') && !trimmed.startsWith('event:')) {
-              // Forward as SSE data event
-              const sseEvent = `event: message\ndata: ${JSON.stringify({ text: trimmed })}\n\n`;
-              controller.enqueue(encoder.encode(sseEvent));
-            }
-          }
+          // NOTE: No fallback for non-JSON chunks needed
+          // The NDJSON parser buffers incomplete chunks automatically
+          // and emits them when complete on the next iteration
         }
       } catch (error) {
         chatLogger.error('Stream error', { requestId }, { error: String(error) });

@@ -2654,6 +2654,17 @@ root.render(<App />);` };
                 }),
               });
 
+              // Check content type before parsing JSON
+              const contentType = response.headers.get('content-type');
+              if (!contentType?.includes('application/json')) {
+                // Response is likely HTML error page
+                const text = await response.text();
+                throw new Error(
+                  `Server returned ${response.status} ${response.statusText} (not JSON). ` +
+                  `This may indicate a server error or maintenance.`
+                );
+              }
+
               if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
                 const errorMsg = errorData.error || `Failed to create CodeSandbox environment (${response.status})`;
@@ -3564,10 +3575,21 @@ root.render(<App />);` };
                 }),
               });
 
+              // Check content type before parsing JSON
+              const contentType = response.headers.get('content-type');
+              if (!contentType?.includes('application/json')) {
+                // Response is likely HTML error page
+                const text = await response.text();
+                throw new Error(
+                  `Server returned ${response.status} ${response.statusText} (not JSON). ` +
+                  `This may indicate a server error or maintenance.`
+                );
+              }
+
               if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
                 const errorMsg = errorData.error || `Failed to create CodeSandbox environment (${response.status})`;
-                
+
                 // If error mentions "Unauthorized", suggest clearing sessions
                 if (errorMsg.includes('Unauthorized') || errorMsg.includes('not found')) {
                   log('[CodeSandbox] Session may be stale, suggesting cleanup');
