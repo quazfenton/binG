@@ -572,6 +572,25 @@ export default function MessageBubble({
           <span className="inline-block w-2 h-5 bg-gradient-to-t from-purple-400 to-purple-300 animate-typing-cursor ml-1 rounded-sm" />
         )}
 
+        {/* Reasoning Display - Shows before main content when agent is thinking */}
+        {!isUser && activeReasoningChunks.length > 0 && (
+          reasoningStream.isExpanded || activeReasoningChunks.length === 1 ? (
+            <ReasoningDisplay
+              reasoningChunks={activeReasoningChunks}
+              isStreaming={reasoningStream.isStreaming}
+              isExpanded={reasoningStream.isExpanded}
+              onToggle={() => reasoningStream.setIsExpanded(!reasoningStream.isExpanded)}
+              fullReasoning={activeFullReasoning}
+            />
+          ) : (
+            <ReasoningSummary
+              fullReasoning={activeFullReasoning}
+              isStreaming={reasoningStream.isStreaming}
+              onExpand={() => reasoningStream.setIsExpanded(true)}
+            />
+          )
+        )}
+
         {/* Main content */}
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
@@ -766,28 +785,10 @@ export default function MessageBubble({
                   </h4>
                 ),
               }}
-            >
-              {isUser ? message.content : mainContent}
+        >
+          {/* Main content */}
+          {isUser ? message.content : mainContent}
         </ReactMarkdown>
-
-        {/* Reasoning Display - Shows before main content when agent is thinking */}
-        {!isUser && activeReasoningChunks.length > 0 && (
-          reasoningStream.isExpanded || activeReasoningChunks.length === 1 ? (
-            <ReasoningDisplay
-              reasoningChunks={activeReasoningChunks}
-              isStreaming={reasoningStream.isStreaming}
-              isExpanded={reasoningStream.isExpanded}
-              onToggle={() => reasoningStream.setIsExpanded(!reasoningStream.isExpanded)}
-              fullReasoning={activeFullReasoning}
-            />
-          ) : (
-            <ReasoningSummary
-              fullReasoning={activeFullReasoning}
-              isStreaming={reasoningStream.isStreaming}
-              onExpand={() => reasoningStream.setIsExpanded(true)}
-            />
-          )
-        )}
 
         {/* Tool Invocations Display - Enhanced with new component */}
         {!isUser && toolInvocations.length > 0 && (

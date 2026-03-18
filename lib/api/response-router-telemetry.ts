@@ -114,12 +114,23 @@ export async function initializeTelemetry(customConfig?: Partial<TelemetryConfig
 
   try {
     // Try to initialize OpenTelemetry
-    const { NodeTracerProvider } = await import('@opentelemetry/sdk-trace-node')
-    const { BatchSpanProcessor } = await import('@opentelemetry/sdk-trace-base')
-    const { OTLPTraceExporter } = await import('@opentelemetry/exporter-trace-otlp-http')
-    const { Resource } = await import('@opentelemetry/resources')
-    const { SemanticResourceAttributes } = await import('@opentelemetry/semantic-conventions')
-    const { MeterProvider } = await import('@opentelemetry/sdk-metrics')
+    const sdkTraceNode = await import('@opentelemetry/sdk-trace-node')
+    const sdkTraceBase = await import('@opentelemetry/sdk-trace-base')
+    const exporterTraceOtlp = await import('@opentelemetry/exporter-trace-otlp-http')
+    const resources = await import('@opentelemetry/resources')
+    const semanticConventions = await import('@opentelemetry/semantic-conventions')
+    const sdkMetrics = await import('@opentelemetry/sdk-metrics')
+
+    const NodeTracerProvider = sdkTraceNode.NodeTracerProvider
+    const BatchSpanProcessor = sdkTraceBase.BatchSpanProcessor
+    const OTLPTraceExporter = exporterTraceOtlp.OTLPTraceExporter
+    const Resource = (resources as any).default || (resources as any).Resource
+    const SemanticResourceAttributes = semanticConventions.SemanticResourceAttributes
+    const MeterProvider = sdkMetrics.MeterProvider
+
+    if (!Resource) {
+      throw new Error('Resource class not found in @opentelemetry/resources')
+    }
 
     // Create tracer provider
     const provider = new NodeTracerProvider({
@@ -135,13 +146,21 @@ export async function initializeTelemetry(customConfig?: Partial<TelemetryConfig
       const exporter = new OTLPTraceExporter({
         url: `${process.env.OTEL_EXPORTER_OTLP_ENDPOINT}/v1/traces`,
       })
-      provider.addSpanProcessor(new BatchSpanProcessor(exporter, {
-        scheduledDelayMillis: config.exportInterval,
-      }))
-      logger.info('OTLP trace exporter configured')
+      // New SDK API - use addSpanProcessor from the provider
+      const providerAny = provider as any
+      if (providerAny.addSpanProcessor) {
+        providerAny.addSpanProcessor(new BatchSpanProcessor(exporter, {
+          scheduledDelayMillis: config.exportInterval,
+        }))
+        logger.info('OTLP trace exporter configured')
+      }
     }
 
-    provider.register()
+    // New SDK API - register is optional
+    const providerAny = provider as any
+    if (providerAny.register) {
+      providerAny.register()
+    }
     otelTracer = provider.getTracer(config.serviceName, config.serviceVersion)
 
     // Create meter provider
@@ -150,7 +169,11 @@ export async function initializeTelemetry(customConfig?: Partial<TelemetryConfig
         [SemanticResourceAttributes.SERVICE_NAME]: config.serviceName,
       }),
     })
-    meterProvider.register()
+    // New SDK API - register is optional
+    const meterProviderAny = meterProvider as any
+    if (meterProviderAny.register) {
+      meterProviderAny.register()
+    }
     otelMeter = meterProvider.getMeter(config.serviceName)
 
     logger.info('OpenTelemetry initialized', {
