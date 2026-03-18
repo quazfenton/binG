@@ -34,6 +34,7 @@ import {
   X,
   CheckCircle,
   Play,
+  Zap,
 } from "lucide-react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -41,10 +42,27 @@ import JSZip from "jszip";
 import type { Message } from "../types/index";
 import { parsePatch, applyPatch } from "diff";
 import { useVirtualFilesystem } from "../hooks/use-virtual-filesystem";
+import { normalizeScopePath, stripWorkspacePrefixes } from "@/lib/virtual-filesystem/scope-utils";
+import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
+import { createRefreshScheduler } from "@/lib/virtual-filesystem/refresh-scheduler";
 import {
   parseCodeBlocksFromMessages,
   type CodeBlock as ParsedCodeBlock,
 } from "../lib/code-parser";
+import { createDebugLogger } from "@/config/features";
+
+// Import live preview offloading functions
+import {
+  detectProject,
+  getSandpackConfig,
+  livePreviewOffloading,
+  type ProjectDetection,
+  type PreviewMode,
+  type AppFramework,
+} from "@/lib/previews/live-preview-offloading";
+
+// Import Preview Error Boundary
+import { PreviewErrorBoundary } from "./preview-error-boundary";
 
 // Lazy load Sandpack to avoid SSR issues
 // React.lazy requires default export, so we remap the named export
@@ -75,10 +93,50 @@ interface CodePreviewPanelProps {
   onClearAllCommandDiffs?: () => void;
   onClearFileCommandDiffs?: (path: string) => void;
   onSquashFileCommandDiffs?: (path: string) => void;
+  // Polled diffs from useDiffsPoller hook
+  polledDiffs?: Array<{
+    id: string;
+    path: string;
+    diff: string;
+    changeType: 'create' | 'update' | 'delete';
+    timestamp: number;
+    source: 'poll';
+  }>;
+  onApplyPolledDiffs?: (pathsToApply?: string[]) => Promise<void>;
+  onClearPolledDiffs?: () => void;
 }
 
 // Use CodeBlock from the parser module
 type CodeBlock = ParsedCodeBlock;
+
+const previewLogger = createDebugLogger('CodePreviewPanel', 'DEBUG_CODE_PREVIEW');
+
+// =============================================================================
+// AUTHORITATIVE STATE ARCHITECTURE
+// =============================================================================
+// The Code Preview Panel has multiple file sources that can compete, creating race conditions.
+// To fix this, we establish a clear authority hierarchy:
+//
+// 1. MANUAL (highest priority): User explicitly triggered preview via handleManualPreview()
+//    - Source: explicit user action, represents specific directory
+//    - State: manualPreviewFiles + isManualPreviewActive
+//
+// 2. VFS (default): Virtual Filesystem sync (the canonical source)
+//    - Source: filesystem changes from chat, terminal, or visual editor
+//    - State: scopedPreviewFiles (synced via filesystem-updated events)
+//    - This is the most up-to-date representation of user code
+//
+// 3. LEGACY (lowest priority): Parsed from markdown code blocks
+//    - Source: LLM responses parsed for code blocks
+//    - State: projectStructure
+//    - Deprecated: Use VFS instead for code that should persist
+//
+// The key insight: scopedPreviewFiles is the ONLY source that gets updated via
+// filesystem-updated events (cross-panel sync). Manual preview is explicitly
+// triggered by user. projectStructure is derived from chat messages.
+//
+// Resolution: Use manualPreviewFiles if active, else scopedPreviewFiles (VFS), else projectStructure
+// =============================================================================
 
 interface ProjectStructure {
   name: string;
@@ -108,6 +166,9 @@ interface ProjectStructure {
     | "vite-react";
   bundler?: "webpack" | "vite" | "parcel" | "rollup" | "esbuild";
   packageManager?: "npm" | "yarn" | "pnpm" | "bun";
+  entryFile?: string | null;
+  previewModeHint?: string;
+  filesystemScopePath?: string;
 }
 
 export default function CodePreviewPanel({
@@ -122,8 +183,16 @@ export default function CodePreviewPanel({
   onClearAllCommandDiffs,
   onClearFileCommandDiffs,
   onSquashFileCommandDiffs,
+  polledDiffs = [],
+  onApplyPolledDiffs,
+  onClearPolledDiffs,
 }: CodePreviewPanelProps) {
   const [detectedFramework] = useState<"react" | "vue" | "vanilla">("vanilla");
+
+  const { log, error: logError, warn: logWarn } = previewLogger;
+  
+  // Track previous scope path to detect navigation
+  const previousScopePathRef = useRef(filesystemScopePath);
   const [selectedTab, setSelectedTab] = useState("preview");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [projectStructure, setProjectStructure] =
@@ -140,7 +209,7 @@ export default function CodePreviewPanel({
     [commandsByFile],
   );
   
-  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || 'project');
+  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || 'project', { useOPFS: true });
   const {
     currentPath: filesystemCurrentPath,
     nodes: filesystemRawNodes,
@@ -150,6 +219,7 @@ export default function CodePreviewPanel({
     writeFile: writeFilesystemFile,
     deletePath: deleteFilesystemPath,
     isLoading: isFilesystemLoading,
+    getSnapshot: getFilesystemSnapshot,
   } = virtualFilesystem;
   const [selectedFilesystemPath, setSelectedFilesystemPath] = useState<string>("");
   const [selectedFilesystemLanguage, setSelectedFilesystemLanguage] = useState<string>("text");
@@ -160,34 +230,15 @@ export default function CodePreviewPanel({
   const [editableContent, setEditableContent] = useState("");
   const [isCreatingFile, setIsCreatingFile] = useState(false);
 
+  const lastVfsSaveRef = useRef<number>(0);
+  const VFS_SAVE_DEBOUNCE_MS = 1000;
+
   // Normalize filesystem path for display (prevent accumulated prefixes)
   const normalizedFilesystemPath = useMemo(() => {
     let cleanPath = filesystemCurrentPath || 'project';
     
-    // Remove accumulated sandbox/workspace prefixes
-    cleanPath = cleanPath
-      .replace(/^(\/tmp\/workspaces\/)+/gi, '')
-      .replace(/^(tmp\/workspaces\/)+/gi, '')
-      .replace(/^(\/workspace\/)+/gi, '')
-      .replace(/^(workspace\/)+/gi, '')
-      .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(\/sessions\/)+/gi, '')
-      .replace(/^(sessions\/)+/gi, '');
-
-    // Ensure path starts with project/
-    if (!cleanPath.startsWith('project/') && cleanPath !== 'project') {
-      cleanPath = cleanPath.replace(/^\/+/, '');
-      if (cleanPath.startsWith('project/')) {
-        cleanPath = cleanPath.replace(/^project\/(project\/)+/, 'project/');
-      } else if (cleanPath) {
-        cleanPath = `project/${cleanPath}`;
-      } else {
-        cleanPath = 'project';
-      }
-    }
-    
-    return cleanPath;
+    cleanPath = stripWorkspacePrefixes(cleanPath);
+    return normalizeScopePath(cleanPath);
   }, [filesystemCurrentPath]);
 
   // Debounce loading state to prevent rapid re-renders
@@ -200,10 +251,32 @@ export default function CodePreviewPanel({
     return () => clearTimeout(timer);
   }, [isFilesystemLoading]);
   
-  // Manual Sandpack preview state
+  // =============================================================================
+  // AUTHORITATIVE PREVIEW STATE
+  // =============================================================================
+  // CRITICAL: These states have specific, non-overlapping purposes to prevent race conditions.
+  //
+  // manualPreviewFiles: Set ONLY when user explicitly triggers preview (handleManualPreview)
+  //   - Never automatically updated by filesystem events
+  //   - Cleared only when user explicitly clears or navigates away
+  //   - Highest priority in renderLivePreview resolution
+  //
+  // scopedPreviewFiles: Set ONLY from VFS filesystem-updated events or initial load
+  //   - Represents the current state of the virtual filesystem
+  //   - Automatically stays in sync with chat/terminal/editor changes
+  //   - This is THE authoritative source for persisted code
+  //
+  // projectStructure: Set ONLY from parsed code blocks in chat messages
+  //   - Lowest priority, used only as fallback when VFS is empty
+  //   - Deprecated for new code (should go through VFS)
+  // =============================================================================
+  
+  // Manual Sandpack preview state - user-initiated explicit preview
   const [manualPreviewFiles, setManualPreviewFiles] = useState<Record<string, string> | null>(null);
+  const [projectDetection, setProjectDetection] = useState<ReturnType<typeof detectProject> | null>(null);
   const [isManualPreviewActive, setIsManualPreviewActive] = useState(false);
-  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'node' | 'local' | 'cloud'>('sandpack');
+  const [manualPreviewMayBeStale, setManualPreviewMayBeStale] = useState(false); // Track if VFS changed while in manual preview
+  const [previewMode, setPreviewMode] = useState<'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'node' | 'local' | 'cloud'>('sandpack');
   const [devBoxOutput, setDevBoxOutput] = useState<string[]>([]);
   const [isDevBoxRunning, setIsDevBoxRunning] = useState(false);
   const [pyodideOutput, setPyodideOutput] = useState<string>('');
@@ -214,6 +287,16 @@ export default function CodePreviewPanel({
   const [isWebpackBuilding, setIsWebpackBuilding] = useState(false);
   const [nodeOutput, setNodeOutput] = useState<string>('');
   const [isNodeRunning, setIsNodeRunning] = useState(false);
+  const [webcontainerUrl, setWebcontainerUrl] = useState<string | null>(null);
+  const [isWebcontainerBooting, setIsWebcontainerBooting] = useState(false);
+  const [nextjsUrl, setNextjsUrl] = useState<string | null>(null);
+  const [isNextjsBuilding, setIsNextjsBuilding] = useState(false);
+  const [codesandboxUrl, setCodesandboxUrl] = useState<string | null>(null);
+  const [isCodesandboxLoading, setIsCodesandboxLoading] = useState(false);
+  const [opensandboxUrl, setOpensandboxUrl] = useState<string | null>(null);
+  const [opensandboxId, setOpensandboxId] = useState<string | null>(null);
+  const [isOpensandboxDeploying, setIsOpensandboxDeploying] = useState(false);
+  const [opensandboxLogs, setOpensandboxLogs] = useState<string[]>([]);
   const [localExecutionOutput, setLocalExecutionOutput] = useState<string>('');
   const [isLocalExecuting, setIsLocalExecuting] = useState(false);
   const [executionMode, setExecutionMode] = useState<'local' | 'cloud' | 'hybrid'>('local');
@@ -223,9 +306,16 @@ export default function CodePreviewPanel({
   const [cacheMisses, setCacheMisses] = useState(0);
   const [snapshots, setSnapshots] = useState<Array<{ id: string; date: string; size: string }>>([]);
   const pyodideRef = useRef<any>(null);
+  const manualPreviewPathRef = useRef<string | null>(null);
+  const manualPreviewActiveRef = useRef(false);
 
-  // Track file counts per directory path for polling comparison (avoid comparing directory count to workspace count)
-  const directoryFileCounts = useRef<Map<string, number>>(new Map());
+  // WebContainer refs (top-level to satisfy Rules of Hooks)
+  const webcontainerInstanceRef = useRef<any>(null);
+  const webcontainerProcessRef = useRef<any>(null);
+  const webcontainerUrlRef = useRef<string | null>(null);
+
+  // Track Sandpack normalization to avoid logging on every render
+  const lastNormalizationRef = useRef<string>('');
 
   // Context menu state for file operations
   const [contextMenu, setContextMenu] = useState<{
@@ -249,63 +339,24 @@ export default function CodePreviewPanel({
     });
   }, [filesystemRawNodes]);
 
+  // Centralized path normalization helper
+  const normalizeProjectPath = useCallback((path: string): string => {
+    const originalPath = path;
+    const cleanPath = stripWorkspacePrefixes(path || 'project');
+    const normalized = normalizeScopePath(cleanPath);
+    // Removed verbose logging - called too frequently
+    return normalized;
+  }, []);
+
   const openFilesystemDirectory = useCallback((path: string) => {
-    // Ensure path doesn't get duplicated prefixes
-    // Handle various accumulated path patterns and normalize to project/
-    let cleanPath = path;
-
-    // Remove accumulated sandbox/workspace prefixes
-    cleanPath = cleanPath
-      .replace(/^(\/tmp\/workspaces\/)+/gi, '')
-      .replace(/^(tmp\/workspaces\/)+/gi, '')
-      .replace(/^(\/workspace\/)+/gi, '')
-      .replace(/^(workspace\/)+/gi, '')
-      .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(\/sessions\/)+/gi, '')
-      .replace(/^(sessions\/)+/gi, '');
-
-    // Ensure path starts with project/
-    if (!cleanPath.startsWith('project/') && cleanPath !== 'project') {
-      cleanPath = cleanPath.replace(/^\/+/, ''); // Remove leading slashes
-      if (cleanPath.startsWith('project/')) {
-        // Already has project/, but might have duplicates
-        cleanPath = cleanPath.replace(/^project\/(project\/)+/, 'project/');
-      } else if (cleanPath) {
-        cleanPath = `project/${cleanPath}`;
-      } else {
-        cleanPath = 'project';
-      }
-    }
-
+    const cleanPath = normalizeProjectPath(path);
+    log(`openFilesystemDirectory: "${path}" -> "${cleanPath}"`);
     setFilesystemCurrentPath(cleanPath);
     void listFilesystemDirectory(cleanPath);
-  }, [listFilesystemDirectory, setFilesystemCurrentPath]);
+  }, [listFilesystemDirectory, normalizeProjectPath, setFilesystemCurrentPath]);
 
   const openFilesystemParent = useCallback(() => {
-    // Clean accumulated path prefixes first
-    let cleanedCurrentPath = filesystemCurrentPath
-      .replace(/^(\/tmp\/workspaces\/)+/gi, '')
-      .replace(/^(tmp\/workspaces\/)+/gi, '')
-      .replace(/^(\/workspace\/)+/gi, '')
-      .replace(/^(workspace\/)+/gi, '')
-      .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(home\/[^/]+\/workspace\/)+/gi, '')
-      .replace(/^(\/sessions\/)+/gi, '')
-      .replace(/^(sessions\/)+/gi, '');
-
-    // Ensure path starts with project/
-    if (!cleanedCurrentPath.startsWith('project/') && cleanedCurrentPath !== 'project') {
-      cleanedCurrentPath = cleanedCurrentPath.replace(/^\/+/, '');
-      if (cleanedCurrentPath.startsWith('project/')) {
-        cleanedCurrentPath = cleanedCurrentPath.replace(/^project\/(project\/)+/, 'project/');
-      } else if (cleanedCurrentPath) {
-        cleanedCurrentPath = `project/${cleanedCurrentPath}`;
-      } else {
-        cleanedCurrentPath = 'project';
-      }
-    }
-
+    const cleanedCurrentPath = normalizeProjectPath(filesystemCurrentPath);
     const current = cleanedCurrentPath.replace(/\/+$/, "");
     const parts = current.split("/").filter(Boolean);
     if (parts.length <= 1 || (parts.length === 1 && parts[0] === 'project')) {
@@ -314,44 +365,30 @@ export default function CodePreviewPanel({
     }
     const parentPath = parts.slice(0, -1).join("/");
     openFilesystemDirectory(parentPath || "project");
-  }, [filesystemCurrentPath, openFilesystemDirectory]);
+  }, [filesystemCurrentPath, normalizeProjectPath, openFilesystemDirectory]);
 
   const selectFilesystemFile = useCallback(async (path: string) => {
+    log(`selectFilesystemFile: attempting to open "${path}"`);
     setIsEditingFile(false);
     setIsFilesystemFileLoading(true);
     try {
-      // Ensure path doesn't get duplicated prefixes
-      let cleanPath = path
-        .replace(/^(\/tmp\/workspaces\/)+/gi, '')
-        .replace(/^(tmp\/workspaces\/)+/gi, '')
-        .replace(/^(\/workspace\/)+/gi, '')
-        .replace(/^(workspace\/)+/gi, '')
-        .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
-        .replace(/^(home\/[^/]+\/workspace\/)+/gi, '')
-        .replace(/^(\/sessions\/)+/gi, '')
-        .replace(/^(sessions\/)+/gi, '');
-
-      // Ensure path starts with project/
-      if (!cleanPath.startsWith('project/') && cleanPath !== 'project') {
-        cleanPath = cleanPath.replace(/^\/+/, '');
-        if (cleanPath.startsWith('project/')) {
-          cleanPath = cleanPath.replace(/^project\/(project\/)+/, 'project/');
-        } else if (cleanPath) {
-          cleanPath = `project/${cleanPath}`;
-        } else {
-          cleanPath = 'project';
-        }
-      }
-
+      const cleanPath = normalizeProjectPath(path);
+      log(`selectFilesystemFile: reading from normalized path "${cleanPath}"`);
       const file = await readFilesystemFile(cleanPath);
-      setSelectedFilesystemPath(file.path);
+      log(`selectFilesystemFile: successfully read file, path="${file.path}", language="${file.language || 'text'}", contentLength=${file.content?.length || 0}`);
+      setSelectedFilesystemPath(normalizeProjectPath(file.path || cleanPath));
       setSelectedFilesystemLanguage(file.language || "text");
       setSelectedFilesystemContent(file.content || "");
-      setSelectedFileIndex(null); // Clear snippet selection when viewing real files
+      setSelectedFileIndex(null);
+    } catch (error: any) {
+      logError(`selectFilesystemFile: failed to open "${path}"`, error);
+      const message = error?.message || 'Failed to open file';
+      toast.error(message);
     } finally {
       setIsFilesystemFileLoading(false);
+      log(`selectFilesystemFile: completed (loading=false)`);
     }
-  }, [readFilesystemFile]);
+  }, [normalizeProjectPath, readFilesystemFile]);
 
   const getFileExtension = (language: string): string => {
     const extensions: Record<string, string> = {
@@ -409,32 +446,79 @@ export default function CodePreviewPanel({
   // Context menu handlers for file operations
   const handleCreateFile = useCallback((parentPath: string) => {
     const name = prompt('New file name (e.g., index.js):');
-    if (!name) return;
-    
-    const newPath = parentPath ? `${parentPath}/${name}` : name;
-    writeFilesystemFile(newPath, '').then(() => {
-      toast.success('File created: ' + name);
-      void listFilesystemDirectory(filesystemCurrentPath);
+    if (!name?.trim()) {
+      logWarn('handleCreateFile: user cancelled or empty name');
+      return;
+    }
+
+    const cleanParentPath = normalizeProjectPath(parentPath || normalizedFilesystemPath);
+    const newPath = `${cleanParentPath.replace(/\/+$/, '')}/${name.trim()}`;
+    log(`handleCreateFile: creating "${newPath}" in parent "${cleanParentPath}"`);
+
+    writeFilesystemFile(newPath, '').then(async (createdFile) => {
+      log(`handleCreateFile: write response`, createdFile);
+      const createdPath = normalizeProjectPath(createdFile?.path || newPath);
+      log(`handleCreateFile: normalized created path "${createdPath}"`);
+      
+      await listFilesystemDirectory(cleanParentPath);
+      log(`handleCreateFile: refreshed directory "${cleanParentPath}"`);
+      
+      // Select the newly created file
+      setSelectedFilesystemPath(createdPath);
+      setSelectedFilesystemContent('');
+      setSelectedFilesystemLanguage(createdFile?.language || 'text');
+      setSelectedFileIndex(null);
+      log(`handleCreateFile: selected new file in UI`);
+      
+      // Dispatch event for cross-panel sync
+      emitFilesystemUpdated({
+        path: createdPath,
+        scopePath: cleanParentPath,
+        source: 'code-preview',
+        workspaceVersion: createdFile?.workspaceVersion,
+        commitId: createdFile?.commitId,
+        sessionId: createdFile?.sessionId,
+      });
+      log(`handleCreateFile: dispatched filesystem-updated event`);
+      
+      toast.success('File created: ' + name.trim());
       setContextMenu(null);
     }).catch((err: any) => {
+      logError(`handleCreateFile: failed to create file "${newPath}"`, err);
       toast.error('Failed to create file: ' + err.message);
+      setContextMenu(null);
     });
-  }, [filesystemCurrentPath, writeFilesystemFile, listFilesystemDirectory]);
+  }, [listFilesystemDirectory, normalizeProjectPath, normalizedFilesystemPath, writeFilesystemFile]);
 
   const handleCreateFolder = useCallback((parentPath: string) => {
     const name = prompt('New folder name:');
-    if (!name) return;
-    
-    // Create a dummy file in the folder to create the directory
-    const newPath = parentPath ? `${parentPath}/${name}/.gitkeep` : `${name}/.gitkeep`;
-    writeFilesystemFile(newPath, '').then(() => {
-      toast.success('Folder created: ' + name);
-      void listFilesystemDirectory(filesystemCurrentPath);
+    if (!name?.trim()) return;
+
+    const cleanParentPath = normalizeProjectPath(parentPath || normalizedFilesystemPath);
+    const folderName = name.trim();
+    const newPath = `${cleanParentPath.replace(/\/+$/, '')}/${folderName}/.gitkeep`;
+
+    writeFilesystemFile(newPath, '').then(async (createdFolderMarker) => {
+      await listFilesystemDirectory(cleanParentPath);
+      
+      // Dispatch event for cross-panel sync
+      const folderPath = `${cleanParentPath.replace(/\/+$/, '')}/${folderName}`;
+      emitFilesystemUpdated({
+        path: folderPath,
+        scopePath: cleanParentPath,
+        source: 'code-preview',
+        workspaceVersion: createdFolderMarker?.workspaceVersion,
+        commitId: createdFolderMarker?.commitId,
+        sessionId: createdFolderMarker?.sessionId,
+      });
+      
+      toast.success('Folder created: ' + folderName);
       setContextMenu(null);
     }).catch((err: any) => {
       toast.error('Failed to create folder: ' + err.message);
+      setContextMenu(null);
     });
-  }, [filesystemCurrentPath, writeFilesystemFile, listFilesystemDirectory]);
+  }, [listFilesystemDirectory, normalizeProjectPath, normalizedFilesystemPath, writeFilesystemFile]);
 
   const handleRenameFile = useCallback((oldPath: string) => {
     const oldName = oldPath.split('/').pop() || '';
@@ -550,10 +634,28 @@ export default function CodePreviewPanel({
     toast.success('Execution cache cleared');
   }, []);
 
-  // Manual Sandpack preview handler
-  const handleManualPreview = useCallback(async (directoryPath?: string, mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'local' | 'cloud') => {
+  // Manual preview handler
+  // FIXED: Add ref guard to prevent multiple concurrent calls
+  const handleManualPreviewRef = useRef(false);
+  
+  const handleManualPreview = useCallback(async (
+    directoryPath?: string,
+    mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'local' | 'cloud',
+    options?: { silent?: boolean; preserveTab?: boolean },
+  ) => {
+    // Prevent multiple concurrent calls
+    if (handleManualPreviewRef.current) {
+      log('[handleManualPreview] already running, skipping duplicate call');
+      return;
+    }
+    handleManualPreviewRef.current = true;
+    const silent = options?.silent ?? false;
+    const preserveTab = options?.preserveTab ?? false;
+    
     try {
       const targetPath = directoryPath || filesystemCurrentPath;
+      manualPreviewPathRef.current = targetPath || null;
+      // Silent - only log on error
       console.log('[Manual Preview] Loading files from:', targetPath);
       
       // Get all files from the directory
@@ -581,93 +683,171 @@ export default function CodePreviewPanel({
       };
       
       await loadFiles(targetPath);
-      
+
       if (Object.keys(files).length === 0) {
-        toast.error('No files found in directory');
+        if (!silent) {
+          toast.error('No files found in directory');
+        }
         return;
       }
-      
-      // Auto-detect best preview mode AND execution mode
-      let selectedMode = mode || 'sandpack';
-      let detectedExecutionMode: 'local' | 'cloud' | 'hybrid' = 'local';
-      
-      if (!mode) {
-        // Detection flags
-        const hasHtml = Object.keys(files).some(f => f.endsWith('.html'));
-        const hasJsx = Object.keys(files).some(f => f.endsWith('.jsx') || f.endsWith('.tsx'));
-        const hasVue = Object.keys(files).some(f => f.endsWith('.vue'));
-        const hasSvelte = Object.keys(files).some(f => f.endsWith('.svelte'));
-        const hasParcelConfig = Object.keys(files).some(f => f.includes('parcel') || f.endsWith('.parcelrc'));
-        const hasPython = Object.keys(files).some(f => f.endsWith('.py'));
-        const hasNodeServer = Object.keys(files).some(f => f === 'server.js' || f === 'app.js' || f === 'index.js');
-        const hasPackageJson = Object.keys(files).some(f => f === 'package.json');
-        const hasSimplePython = hasPython && !Object.keys(files).some(f => f.includes('flask') || f.includes('django'));
-        const hasViteConfig = Object.keys(files).some(f => f.includes('vite.config'));
-        const hasViteProject = hasViteConfig || (hasPackageJson && Object.values(files).find((c: any) => typeof c === 'string' && c.includes('"vite"')));
-        const hasHeavyComputation = Object.values(files).some((c: any) => {
-          if (typeof c !== 'string') return false;
-          return c.includes('tensorflow') || c.includes('pytorch') || c.includes('cuda') || c.includes('gpu');
-        });
-        const hasAPIKeys = Object.values(files).some((c: any) => 
-          typeof c === 'string' && (c.includes('OPENAI_API_KEY') || c.includes('process.env'))
-        );
+
+      // Advanced root detection: find the project root based on config files and entry points
+      const rootScores = new Map<string, number>();
+      rootScores.set('', 1);
+      const addRootScore = (root: string, score: number) => {
+        rootScores.set(root, (rootScores.get(root) || 0) + score);
+      };
+
+      for (const filePath of Object.keys(files)) {
+        const cleanPath = filePath.replace(/^\/+/, '');
+        const parts = cleanPath.split('/').filter(Boolean);
+        if (parts.length === 0) continue;
+        const fileName = parts[parts.length - 1];
+        const dir = parts.slice(0, -1).join('/');
         
-        // Determine execution mode based on requirements
-        if (hasHeavyComputation || hasAPIKeys) {
-          detectedExecutionMode = 'cloud'; // Needs cloud resources or API access
-        } else if (hasSimplePython || hasJsx || hasVue || hasSvelte || hasHtml) {
-          detectedExecutionMode = 'local'; // Can run in browser
-        } else if (hasPython || hasNodeServer) {
-          detectedExecutionMode = 'hybrid'; // Try local first, fallback to cloud
-        }
-        
-        // Select preview mode
-        if (hasViteProject) {
-          selectedMode = 'vite';
-        } else if (hasSimplePython && !hasPackageJson) {
-          selectedMode = 'pyodide';
-        } else if (hasParcelConfig) {
-          selectedMode = 'parcel';
-        } else if (hasPython || (hasNodeServer && hasPackageJson)) {
-          selectedMode = detectedExecutionMode === 'local' ? 'local' : 'devbox';
-        } else if (hasHtml && !hasJsx && !hasVue && !hasSvelte) {
-          selectedMode = 'iframe';
-        } else if (hasJsx || hasVue || hasSvelte) {
-          selectedMode = 'sandpack';
+        // Score directories based on presence of config/entry files
+        if (fileName === 'package.json') addRootScore(dir, 8);
+        if (fileName === 'index.html') addRootScore(dir, 6);
+        if (fileName === 'vite.config.ts' || fileName === 'vite.config.js' || fileName === 'webpack.config.js' || fileName === '.parcelrc') addRootScore(dir, 6);
+        if (/^main\.(js|jsx|ts|tsx)$/.test(fileName)) {
+          if (dir.endsWith('/src')) addRootScore(dir.replace(/\/src$/, ''), 5);
+          addRootScore(dir, 2);
         }
       }
+
+      // Select the best root directory
+      const selectedRoot = Array.from(rootScores.entries())
+        .sort((a, b) => {
+          if (b[1] !== a[1]) return b[1] - a[1];
+          const aDepth = a[0] ? a[0].split('/').length : 0;
+          const bDepth = b[0] ? b[0].split('/').length : 0;
+          return aDepth - bDepth;
+        })[0]?.[0] || '';
+
+      // Normalize files to be relative to the detected root
+      const previewFiles = Object.entries(files).reduce((acc, [filePath, content]) => {
+        const cleanPath = filePath.replace(/^\/+/, '');
+        const relativePath = selectedRoot && cleanPath.startsWith(`${selectedRoot}/`)
+          ? cleanPath.slice(selectedRoot.length + 1)
+          : cleanPath;
+        acc[relativePath] = content;
+        return acc;
+      }, {} as Record<string, string>);
+
+      log(`[handleManualPreview] detected root="${selectedRoot}", files normalized from ${Object.keys(files).length} to ${Object.keys(previewFiles).length}`);
+
+      // Auto-detect best preview mode AND execution mode using centralized logic
+      let selectedMode: PreviewMode = mode as PreviewMode || 'sandpack';
+      let detectedExecutionMode: 'local' | 'cloud' | 'hybrid' = 'local';
+
+      // Use centralized live preview offloading detection
+      const detection = livePreviewOffloading.detectProject({
+        files: previewFiles,
+        scopePath: normalizeProjectPath(targetPath),
+      });
       
+      if (!mode) {
+        selectedMode = detection.previewMode;
+        
+        // Determine execution mode based on project requirements
+        if (detection.hasHeavyComputation || detection.hasAPIKeys) {
+          detectedExecutionMode = 'cloud';
+        } else if (detection.hasPython || detection.hasNodeServer) {
+          detectedExecutionMode = detection.hasPython && !detection.hasBackend ? 'local' : 'hybrid';
+        } else {
+          detectedExecutionMode = 'local';
+        }
+        
+        log(`[handleManualPreview] Detected via live-preview-offloading: framework=${detection.framework}, bundler=${detection.bundler}, mode=${selectedMode}, root="${detection.selectedRoot}"`);
+      }
+
+      log(`[handleManualPreview] mode="${selectedMode}", execution="${detectedExecutionMode}", root="${detection.selectedRoot}"`);
+
+      // Store detection result for use in renderLivePreview
+      setProjectDetection(detection);
+
       // Set execution mode
       setExecutionMode(detectedExecutionMode);
-      
-      // Set manual preview files and activate
-      setManualPreviewFiles(files);
+
+      // Set manual preview files and activate (use normalized previewFiles, not raw files)
+      setManualPreviewFiles(previewFiles);
       setIsManualPreviewActive(true);
       setPreviewMode(selectedMode);
-      setSelectedTab('preview');
-      
+      if (!preserveTab) {
+        setSelectedTab('preview');  // Always switch to preview tab
+      }
+
       const modeIcon = {
         sandpack: '▶', iframe: '📄', raw: '📝', parcel: '⚡',
-        devbox: '🔵', pyodide: '🐍', vite: '⚡', local: '💻', cloud: '☁️'
+        devbox: '🔵', pyodide: '🐍', vite: '⚡', webpack: '📦', 
+        webcontainer: '📀', nextjs: '▲', codesandbox: '🏖️', node: '🟢', local: '💻', cloud: '☁️'
       }[selectedMode] || '▶';
-      
+
       const execIcon = { local: '💻', cloud: '☁️', hybrid: '🔄' }[detectedExecutionMode];
-      
-      toast.success(`${modeIcon} Preview loaded (${selectedMode}) - ${execIcon} ${detectedExecutionMode} execution`, {
-        description: `${Object.keys(files).length} files detected`
-      });
+
+      if (!silent) {
+        toast.success(`${modeIcon} Preview loaded (${selectedMode}) - ${execIcon} ${detectedExecutionMode} execution`, {
+          description: `${Object.keys(previewFiles).length} files (root: "${selectedRoot || 'project root'}")`
+        });
+      }
     } catch (error: any) {
+      logError(`[handleManualPreview] failed`, error);
       console.error('[Manual Preview] Error:', error);
-      toast.error('Failed to load preview: ' + error.message);
+      if (!silent) {
+        toast.error('Failed to load preview: ' + error.message);
+      }
+    } finally {
+      // Reset the guard to allow future calls
+      handleManualPreviewRef.current = false;
     }
   }, [filesystemCurrentPath, listFilesystemDirectory, readFilesystemFile]);
+
+  useEffect(() => {
+    manualPreviewActiveRef.current = isManualPreviewActive;
+  }, [isManualPreviewActive]);
+
+  // WebContainer URL tracking (top-level to satisfy Rules of Hooks)
+  useEffect(() => {
+    webcontainerUrlRef.current = webcontainerUrl;
+  }, [webcontainerUrl]);
+
+  // WebContainer cleanup on unmount (top-level to satisfy Rules of Hooks)
+  useEffect(() => {
+    return () => {
+      if (webcontainerProcessRef.current) {
+        webcontainerProcessRef.current.kill();
+      }
+      if (webcontainerInstanceRef.current) {
+        webcontainerInstanceRef.current.destroy?.();
+      }
+    };
+  }, []);
+
+  // Pyodide cleanup on unmount (top-level to satisfy Rules of Hooks)
+  useEffect(() => {
+    return () => {
+      if (pyodideRef.current) {
+        pyodideRef.current = null;
+      }
+    };
+  }, []);
 
   // Clear manual preview
   const handleClearManualPreview = useCallback(() => {
     setManualPreviewFiles(null);
     setIsManualPreviewActive(false);
+    setManualPreviewMayBeStale(false); // Clear stale state
     toast.info('Manual preview cleared');
   }, []);
+
+  // Refresh manual preview (clears stale state)
+  const handleRefreshManualPreview = useCallback(() => {
+    if (manualPreviewPathRef.current) {
+      log('[handleRefreshManualPreview] refreshing manual preview');
+      setManualPreviewMayBeStale(false); // Clear stale before refresh
+      void handleManualPreview(manualPreviewPathRef.current, undefined, { silent: false, preserveTab: true });
+    }
+  }, [handleManualPreview]);
 
   // Listen for terminal preview commands
   useEffect(() => {
@@ -675,102 +855,151 @@ export default function CodePreviewPanel({
       const { directory } = e.detail || {};
       handleManualPreview(directory);
     };
-    
+
     window.addEventListener('code-preview-manual' as any, handleTerminalPreview);
     return () => window.removeEventListener('code-preview-manual' as any, handleTerminalPreview);
   }, [handleManualPreview]);
+
+  // Listen for open-code-preview events from message bubbles
+  useEffect(() => {
+    const handleOpenCodePreview = (e: CustomEvent) => {
+      const { code, language } = e.detail || {};
+      
+      // Open the panel if not already open
+      if (!isOpen) {
+        toast.info('Opening code preview panel');
+      }
+      
+      // Switch to preview tab
+      setSelectedTab('preview');
+      
+      // For now, just show a toast - the code is available in the message
+      if (code) {
+        log(`[open-code-preview] Received code (${language || 'unknown'}): ${code.length} chars`);
+      }
+    };
+
+    window.addEventListener('open-code-preview' as any, handleOpenCodePreview);
+    return () => window.removeEventListener('open-code-preview' as any, handleOpenCodePreview);
+  }, [isOpen]);
 
   // Listen for VFS save events from visual editor
   useEffect(() => {
     const VFS_SAVE_CHANNEL = "visual_editor_vfs_save";
 
-    // BroadcastChannel listener
+    const processVfsSave = async (savedScopePath: string, updatedFiles: Record<string, string>) => {
+      const now = Date.now();
+      if (now - lastVfsSaveRef.current < VFS_SAVE_DEBOUNCE_MS) {
+        log(`[VFS_SAVE] debounced, last save ${now - lastVfsSaveRef.current}ms ago`);
+        return;
+      }
+      lastVfsSaveRef.current = now;
+
+      const normalizedScope = normalizeProjectPath(savedScopePath || 'project');
+
+      // Track write results for event emission
+      const writeResults: Array<{ path: string; workspaceVersion?: number; commitId?: string; sessionId?: string | null }> = [];
+
+      for (const [filePath, content] of Object.entries(updatedFiles)) {
+        let fullPath = filePath;
+        if (!filePath.startsWith(normalizedScope + '/') && filePath !== normalizedScope) {
+          fullPath = `${normalizedScope}/${filePath}`.replace(/\/+/g, '/');
+        }
+        try {
+          const result = await writeFilesystemFile(fullPath, content);
+          writeResults.push({
+            path: fullPath,
+            workspaceVersion: result?.workspaceVersion,
+            commitId: result?.commitId,
+            sessionId: result?.sessionId,
+          });
+          log(`[VFS_SAVE] wrote "${fullPath}"`);
+        } catch (err) {
+          logError(`[VFS_SAVE] failed to write "${fullPath}"`, err);
+        }
+      }
+
+      try {
+        await listFilesystemDirectory(normalizedScope);
+      } catch (err) {
+        logError(`[VFS_SAVE] failed to refresh filesystem`, err);
+      }
+
+      setScopedPreviewFiles(updatedFiles);
+
+      if (selectedTab === 'preview') {
+        setTimeout(() => {
+          handleManualPreview(normalizedScope);
+        }, 500);
+      }
+
+      localStorage.removeItem("visualEditorPendingSave");
+      toast.success("Visual editor changes synced to filesystem");
+
+      // Dispatch event for cross-panel sync (Terminal, Chat)
+      // Include all updated file paths so other panels know what changed
+      if (writeResults.length > 0) {
+        emitFilesystemUpdated({
+          scopePath: normalizedScope,
+          source: 'visual-editor',
+          paths: writeResults.map(r => r.path),
+          workspaceVersion: writeResults[0]?.workspaceVersion,
+          commitId: writeResults[0]?.commitId,
+          sessionId: writeResults[0]?.sessionId,
+        });
+        log(`[VFS_SAVE] dispatched filesystem-updated event for ${writeResults.length} files`);
+      }
+    };
+
     const bc = new BroadcastChannel(VFS_SAVE_CHANNEL);
     bc.onmessage = async (event) => {
       if (event.data?.type === "VFS_SAVE") {
         const { filesystemScopePath: savedScopePath, files: updatedFiles } = event.data;
-        console.log("[CodePreviewPanel] Received VFS_SAVE from visual editor:", savedScopePath);
-        console.log("[CodePreviewPanel] Updated files:", Object.keys(updatedFiles));
-
-        // Write updated files back to VFS
-        for (const [filePath, content] of Object.entries(updatedFiles)) {
-          const fullPath = `${savedScopePath || 'project'}/${filePath}`;
-          try {
-            await writeFilesystemFile(fullPath, content);
-            console.log("[CodePreviewPanel] Written to VFS:", fullPath);
-          } catch (err) {
-            console.error(`[CodePreviewPanel] Failed to write ${fullPath}:`, err);
-          }
-        }
-
-        // Refresh the file listing - use event scope, not prop
-        try {
-          await listFilesystemDirectory(savedScopePath || filesystemScopePath);
-          console.log("[CodePreviewPanel] Refreshed filesystem");
-        } catch (err) {
-          console.error("[CodePreviewPanel] Failed to refresh filesystem:", err);
-        }
-
-        // Update local state
-        setScopedPreviewFiles(updatedFiles);
-
-        // Trigger manual preview refresh if preview tab is active - use event scope, not prop
-        if (selectedTab === 'preview') {
-          console.log("[CodePreviewPanel] Auto-refreshing preview after VFS save");
-          // Small delay to ensure VFS writes complete
-          setTimeout(() => {
-            handleManualPreview(savedScopePath || filesystemScopePath);
-          }, 500);
-        }
-
-        toast.success("Visual editor changes synced to filesystem");
+        log(`[VFS_SAVE via BroadcastChannel] received, scope="${savedScopePath}", files=[${Object.keys(updatedFiles).join(', ')}]`);
+        await processVfsSave(savedScopePath, updatedFiles);
       }
     };
 
-    // Also listen for direct window messages (for same-window communication)
     const handleWindowMessage = async (e: MessageEvent) => {
       if (e.data?.type === "VFS_SAVE") {
-        const { filesystemScopePath: savedScopePath, files: updatedFiles } = e.data;
-        console.log("[CodePreviewPanel] Received VFS_SAVE via window message:", savedScopePath);
-
-        // Write updated files back to VFS
-        for (const [filePath, content] of Object.entries(updatedFiles)) {
-          const fullPath = `${savedScopePath || 'project'}/${filePath}`;
-          try {
-            await writeFilesystemFile(fullPath, content);
-          } catch (err) {
-            console.error(`[CodePreviewPanel] Failed to write ${fullPath}:`, err);
-          }
-        }
-
-        // Refresh the file listing - use event scope, not prop
-        try {
-          await listFilesystemDirectory(savedScopePath || filesystemScopePath);
-        } catch (err) {
-          console.error("[CodePreviewPanel] Failed to refresh filesystem:", err);
-        }
-
-        // Update local state
-        setScopedPreviewFiles(updatedFiles);
-
-        // Trigger manual preview refresh - use event scope, not prop
-        if (selectedTab === 'preview') {
-          setTimeout(() => {
-            handleManualPreview(savedScopePath || filesystemScopePath);
-          }, 500);
-        }
-
-        toast.success("Visual editor changes synced to filesystem");
+        const { filesystemScopePath: savedScopePathRaw, files: updatedFilesRaw } = e.data;
+        const savedScopePath = typeof savedScopePathRaw === 'string' ? savedScopePathRaw : filesystemScopePath;
+        const updatedFiles = (updatedFilesRaw && typeof updatedFilesRaw === 'object'
+          ? updatedFilesRaw
+          : {}) as Record<string, string>;
+        
+        log(`[VFS_SAVE via window message] received, scope="${savedScopePath}", files=[${Object.keys(updatedFiles).join(', ')}]`);
+        await processVfsSave(savedScopePath, updatedFiles);
       }
     };
 
     window.addEventListener("message", handleWindowMessage);
 
+    const handleStorageEvent = async (e: StorageEvent) => {
+      if (e.key === "visualEditorPendingSave" && e.newValue) {
+        try {
+          const payload = JSON.parse(e.newValue);
+          if (payload?.type === "VFS_SAVE") {
+            const { filesystemScopePath: savedScopePath, files: updatedFiles } = payload;
+            log(`[VFS_SAVE via storage event] received, scope="${savedScopePath}", files=[${Object.keys(updatedFiles).join(', ')}]`);
+            await processVfsSave(savedScopePath, updatedFiles);
+            
+            toast.success("Visual editor changes synced to filesystem");
+          }
+        } catch (err) {
+          logError("[VFS_SAVE storage] failed to parse payload", err);
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageEvent);
+
     return () => {
       bc.close();
       window.removeEventListener("message", handleWindowMessage);
+      window.removeEventListener("storage", handleStorageEvent);
     };
-  }, [filesystemScopePath, writeFilesystemFile, listFilesystemDirectory, selectedTab, handleManualPreview]);
+  }, [filesystemScopePath, writeFilesystemFile, listFilesystemDirectory, selectedTab, handleManualPreview, normalizeProjectPath]);
 
   // Extract code blocks from messages using centralized parser
   const codeBlocks = useMemo(() => {
@@ -787,13 +1016,55 @@ export default function CodePreviewPanel({
     }
   }, [codeBlocks.length, selectedFileIndex]);
 
+  // Auto-load preview when panel opens
+  // FIXED: Use refs to avoid dependency loop with handleManualPreview
+  const autoLoadPreviewRef = useRef(false);
+  
+  useEffect(() => {
+    if (!isOpen) {
+      autoLoadPreviewRef.current = false;
+      return;
+    }
+    
+    // Only run once when panel opens
+    if (autoLoadPreviewRef.current) return;
+    autoLoadPreviewRef.current = true;
+
+    const autoLoadPreview = async () => {
+      log('[autoLoadPreview] panel opened, checking if preview should load');
+
+      // Check if there are files in the filesystem
+      try {
+        const nodes = await listFilesystemDirectory(filesystemCurrentPath || filesystemScopePath || 'project');
+        const hasFiles = nodes.some(n => n.type === 'file');
+
+        if (hasFiles && !isManualPreviewActive) {
+          log('[autoLoadPreview] files detected, loading preview automatically');
+          // Small delay to ensure panel is fully rendered
+          setTimeout(() => {
+            handleManualPreview();
+          }, 100);
+        }
+      } catch (err) {
+        logError('[autoLoadPreview] failed to check for files', err);
+      }
+    };
+
+    autoLoadPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]); // Only depend on isOpen - run once when panel opens
+
   useEffect(() => {
     if (!isOpen || selectedTab !== "files") {
       return;
     }
     let cancelled = false;
-    
+    let isInitialized = false;
+
     const initializeExplorer = async () => {
+      if (isInitialized) return;
+      isInitialized = true;
+
       setSelectedFilesystemPath("");
       setSelectedFilesystemContent("");
       setSelectedFilesystemLanguage("text");
@@ -829,21 +1100,30 @@ export default function CodePreviewPanel({
     };
 
     void initializeExplorer();
-    
+
     return () => {
       cancelled = true;
     };
-  }, [filesystemScopePath, isOpen, selectedTab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filesystemScopePath, isOpen, selectedTab]); // Removed listFilesystemDirectory from deps
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
     let cancelled = false;
+    let isRunning = false;
+    
     const loadScopedFiles = async () => {
+      if (isRunning) return;
+      isRunning = true;
+      
       try {
-        const snapshot = await virtualFilesystem.getSnapshot(filesystemScopePath);
+        const snapshot = await getFilesystemSnapshot(filesystemScopePath);
         if (cancelled) return;
+        if (typeof snapshot?.version === 'number') {
+          lastWorkspaceVersionRef.current = Math.max(lastWorkspaceVersionRef.current, snapshot.version);
+        }
         const files = (snapshot?.files || []).reduce(
           (acc, file) => {
             acc[file.path] = file.content;
@@ -858,42 +1138,161 @@ export default function CodePreviewPanel({
         if (!cancelled) {
           setScopedPreviewFiles({});
         }
+      } finally {
+        isRunning = false;
       }
     };
 
     void loadScopedFiles();
     return () => { cancelled = true; };
-  }, [filesystemScopePath, isOpen, virtualFilesystem.getSnapshot]);
+  }, [filesystemScopePath, isOpen, getFilesystemSnapshot]);
 
-  // Bidirectional sync: Poll VFS for changes from terminal/editor
+  // Bidirectional sync: Event-driven refresh from terminal/editor updates
+  // FIXED: Use refs to avoid re-creating listener on every dependency change
+  const filesystemCurrentPathRef = useRef(filesystemCurrentPath);
+  const filesystemScopePathRef = useRef(filesystemScopePath);
+  const lastWorkspaceVersionRef = useRef(0);
+
   useEffect(() => {
-    if (!isOpen || selectedTab !== 'files') return;
+    filesystemCurrentPathRef.current = filesystemCurrentPath;
+  }, [filesystemCurrentPath]);
 
-    const pollInterval = setInterval(async () => {
+  useEffect(() => {
+    filesystemScopePathRef.current = filesystemScopePath;
+  }, [filesystemScopePath]);
+
+  // Clear preview state on navigation (filesystemScopePath change)
+  // This ensures fresh state when user navigates to a different session/directory
+  useEffect(() => {
+    const prevScope = previousScopePathRef.current;
+    if (prevScope !== filesystemScopePath) {
+      log(`[navigation] scope changed from "${prevScope}" to "${filesystemScopePath}", clearing preview state`);
+      
+      // Clear manual preview state on navigation
+      setManualPreviewFiles(null);
+      setIsManualPreviewActive(false);
+      setManualPreviewMayBeStale(false);
+      
+      // Clear filesystem selection
+      setSelectedFilesystemPath('');
+      setSelectedFilesystemContent('');
+      setSelectedFilesystemLanguage('text');
+      
+      // Reset workspace version tracking for new scope
+      lastWorkspaceVersionRef.current = 0;
+      
+      previousScopePathRef.current = filesystemScopePath;
+    }
+  }, [filesystemScopePath, log]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const refresh = async (detail?: any) => {
+      log(`[filesystem-updated event] received`, detail);
+
       try {
-        // Get current directory contents
-        const currentFiles = await listFilesystemDirectory(filesystemCurrentPath);
-        const currentCount = currentFiles.length;
-        const previousCount = directoryFileCounts.current.get(filesystemCurrentPath) || 0;
+        const eventWorkspaceVersion = typeof detail?.workspaceVersion === 'number' ? detail.workspaceVersion : null;
+        if (eventWorkspaceVersion !== null && eventWorkspaceVersion <= lastWorkspaceVersionRef.current) {
+          log(`[filesystem-updated] skipped stale event at workspaceVersion=${eventWorkspaceVersion}`);
+          return;
+        }
 
-        // Compare same scope: current directory count vs previous count for same directory
-        if (currentCount !== previousCount) {
-          directoryFileCounts.current.set(filesystemCurrentPath, currentCount);
-          console.log('[CodePreview] Directory file count changed, refreshing...');
-          // Actually refresh the view
-          await listFilesystemDirectory(filesystemCurrentPath);
+        // Use refs to avoid re-creating listener
+        const currentPath = filesystemCurrentPathRef.current || filesystemScopePathRef.current || 'project';
+        const normalizedScopePath = normalizeProjectPath(currentPath);
+        log(`[filesystem-updated] refreshing directory: "${normalizedScopePath}"`);
+        await listFilesystemDirectory(normalizedScopePath);
+        log(`[filesystem-updated] directory refreshed`);
+
+        // Also refresh scoped preview files using ref
+        const scopePath = filesystemScopePathRef.current;
+        if (scopePath) {
+          const snapshot = await getFilesystemSnapshot(scopePath);
+          if (typeof snapshot?.version === 'number') {
+            lastWorkspaceVersionRef.current = Math.max(lastWorkspaceVersionRef.current, snapshot.version);
+          } else if (eventWorkspaceVersion !== null) {
+            lastWorkspaceVersionRef.current = Math.max(lastWorkspaceVersionRef.current, eventWorkspaceVersion);
+          }
+          const files = (snapshot?.files || []).reduce(
+            (acc, file) => {
+              acc[file.path] = file.content;
+              return acc;
+            },
+            {} as Record<string, string>,
+          );
+          setScopedPreviewFiles(files);
+          log(`[filesystem-updated] refreshed scopedPreviewFiles (${Object.keys(files).length} files)`);
+        }
+
+        // CRITICAL: Do NOT auto-refresh manualPreviewFiles!
+        // Manual preview is user-initiated and should NOT be overwritten by automatic events.
+        // If the user wants to refresh their manual preview, they will explicitly do so.
+        // This prevents the race condition where VFS updates overwrite user-selected preview.
+        if (manualPreviewActiveRef.current) {
+          // PRECISE STALE DETECTION: Only mark as stale if files changed in the previewed directory
+          const eventScopePath = detail?.scopePath;
+          const eventPaths = detail?.paths as string[] | undefined;
+          const previewedDir = manualPreviewPathRef.current;
+          
+          let isRelevantChange = false;
+          
+          if (eventScopePath && previewedDir) {
+            // Check if the scope path matches or is a subdirectory of the previewed directory
+            const normalizedEventScope = normalizeProjectPath(eventScopePath);
+            const normalizedPreviewed = normalizeProjectPath(previewedDir);
+            
+            // Direct match, event is in a subdirectory of previewed, OR previewed is a subdirectory of event
+            // (parent directory changes could add new files that get imported)
+            if (normalizedEventScope === normalizedPreviewed || 
+                normalizedEventScope.startsWith(normalizedPreviewed + '/') ||
+                normalizedPreviewed.startsWith(normalizedEventScope + '/')) {
+              isRelevantChange = true;
+            }
+          } else if (eventPaths && eventPaths.length > 0 && previewedDir) {
+            // Fallback: check if any changed paths are within the previewed directory
+            const normalizedPreviewed = normalizeProjectPath(previewedDir);
+            isRelevantChange = eventPaths.some(p => {
+              const normalizedPath = normalizeProjectPath(p);
+              return normalizedPath.startsWith(normalizedPreviewed + '/') || 
+                     normalizedPath === normalizedPreviewed;
+            });
+          } else if (!eventScopePath && !eventPaths) {
+            // No scope info - assume it's a general change (conservative)
+            isRelevantChange = true;
+          }
+          
+          if (isRelevantChange) {
+            log(`[filesystem-updated] manual preview active - files changed in previewed directory, marking stale`);
+            setManualPreviewMayBeStale(true);
+          } else {
+            log(`[filesystem-updated] manual preview active - change in different directory (${eventScopePath || 'unknown'}), not marking stale`);
+          }
         }
       } catch (error) {
-        console.error('[CodePreview] Poll error:', error);
+        logError(`[filesystem-updated] refresh failed`, error);
+        console.error('[CodePreview] Event refresh error:', error);
       }
-    }, 2000);
+    };
 
-    return () => clearInterval(pollInterval);
-  }, [isOpen, selectedTab, filesystemCurrentPath, listFilesystemDirectory]);
+    const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 5000, maxDelayMs: 10000 });
+    const unsubscribe = onFilesystemUpdated((event) => scheduler.schedule(event.detail));
+    log('[CodePreviewPanel] registered filesystem-updated event listener');
+    return () => {
+      unsubscribe();
+      scheduler.dispose();
+      log('[CodePreviewPanel] removed filesystem-updated event listener');
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]); // Only depend on isOpen - listener stays stable
 
   // Generate project structure for complex projects
   // Also merge virtual filesystem files for live preview
+  // NOTE: Commented out legacy codeBlock parsing - use VFS (scopedPreviewFiles) as primary source instead
   useEffect(() => {
+    // Use scopedPreviewFiles from VFS as the primary source - this has real project files
+    // Legacy codeBlocks parsing creates file-0.sh, file-1.js etc which pollutes the project
+    /*
     if (codeBlocks.length > 0) {
       // Use the centralized parser to get project structure
       const parsedData = parseCodeBlocksFromMessages(messages);
@@ -904,24 +1303,19 @@ export default function CodePreviewPanel({
         const structure = analyzeProjectStructure(codeBlocks);
         setProjectStructure(structure);
       }
-    } else if (
-      (projectFiles && Object.keys(projectFiles).length > 0) ||
-      Object.keys(scopedPreviewFiles).length > 0
-    ) {
-      const files = {
-        ...(projectFiles || {}),
-        ...scopedPreviewFiles,
-      };
+    } else if (projectFiles && Object.keys(projectFiles).length > 0) {
+    */
+    if (projectFiles && Object.keys(projectFiles).length > 0) {
       const structure: ProjectStructure = {
         name: 'filesystem-project',
-        files,
+        files: projectFiles,
         framework: 'react',
         bundler: 'vite',
         packageManager: 'npm'
       };
       setProjectStructure(structure);
     }
-  }, [codeBlocks, scopedPreviewFiles, projectFiles]);
+  }, [codeBlocks, projectFiles]);
 
   const projectStructureWithScopedFiles = useMemo(() => {
     const scopedRelativeFiles = Object.entries(scopedPreviewFiles).reduce(
@@ -935,28 +1329,113 @@ export default function CodePreviewPanel({
       {} as Record<string, string>,
     );
 
-    if (projectStructure) {
-      return {
-        ...projectStructure,
-        files: {
-          ...projectStructure.files,
-          ...scopedRelativeFiles,
-        },
-      };
-    }
-
+    // VFS files should take priority over legacy projectStructure
+    // Only use projectStructure as fallback if VFS is empty
     if (Object.keys(scopedRelativeFiles).length > 0) {
       return {
-        name: 'scoped-filesystem-project',
+        name: 'filesystem-project',
         files: scopedRelativeFiles,
-        framework: 'react' as const,
-        bundler: 'vite' as const,
-        packageManager: 'npm' as const,
-      };
+        framework: 'react',
+        bundler: 'vite',
+        packageManager: 'npm',
+        filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath),
+        dependencies: [],
+        devDependencies: [],
+      } as ProjectStructure;
+    }
+
+    if (projectStructure) {
+      return projectStructure;
     }
 
     return null;
-  }, [filesystemScopePath, projectStructure, scopedPreviewFiles]);
+  }, [filesystemScopePath, normalizedFilesystemPath, scopedPreviewFiles, projectStructure, normalizeProjectPath]);
+
+  const visualEditorProjectData = useMemo(() => {
+    let structure = projectStructureWithScopedFiles || projectStructure;
+    
+    if (!structure && scopedPreviewFiles && Object.keys(scopedPreviewFiles).length > 0) {
+      structure = {
+        name: 'filesystem-project',
+        files: scopedPreviewFiles,
+        framework: 'react',
+        bundler: 'vite',
+        packageManager: 'npm',
+        filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath)
+      };
+    }
+    
+    if (!structure && projectFiles && Object.keys(projectFiles).length > 0) {
+      structure = {
+        name: 'filesystem-project',
+        files: projectFiles,
+        framework: 'react',
+        bundler: 'vite',
+        packageManager: 'npm',
+        filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath)
+      };
+    }
+
+    const files = structure?.files || {};
+    const filePaths = Object.keys(files);
+    
+    if (filePaths.length === 0) {
+      return null;
+    }
+
+    const packageJsonPath = filePaths.find((p) => p === 'package.json' || p.endsWith('/package.json'));
+    const packageJsonContent = packageJsonPath ? files[packageJsonPath] : '';
+
+    // Infer bundler from config files or package.json
+    const inferredBundler = structure.bundler
+      || (filePaths.some((p) => p.includes('vite.config')) || packageJsonContent.includes('"vite"') ? 'vite'
+        : filePaths.some((p) => p.includes('webpack.config')) || packageJsonContent.includes('"webpack"') ? 'webpack'
+          : filePaths.some((p) => p.includes('parcel') || p.endsWith('.parcelrc')) || packageJsonContent.includes('"parcel"') ? 'parcel'
+            : filePaths.some((p) => p.includes('next.config')) || packageJsonContent.includes('"next"') || filePaths.some((p) => p.startsWith('pages/') || p.startsWith('app/')) ? 'nextjs'
+              : undefined);
+
+    // Detect entry file from common patterns
+    const entryCandidates = [
+      'src/main.tsx', 'src/main.jsx', 'src/main.ts', 'src/main.js',
+      'src/index.tsx', 'src/index.jsx', 'src/index.ts', 'src/index.js',
+      'app.tsx', 'app.jsx', 'page.tsx', 'index.tsx', 'index.jsx', 'index.ts', 'index.js', 'index.html',
+      'main.py', 'app.py', 'manage.py', 'server.js', 'app.js', 'index.js'
+    ];
+    
+    const entryFile =
+      entryCandidates.find((candidate) => filePaths.includes(candidate))
+      || filePaths.find((path) => path.endsWith('/index.html'))
+      || filePaths.find((path) => path.endsWith('/main.tsx') || path.endsWith('/main.jsx') || path.endsWith('/main.ts') || path.endsWith('/main.js'))
+      || filePaths.find((path) => path.endsWith('/index.tsx') || path.endsWith('/index.jsx') || path.endsWith('/index.ts') || path.endsWith('/index.js'))
+      || filePaths[0]
+      || null;
+
+    // Infer preview mode hint
+    const nextJsInPackageJson = packageJsonContent && packageJsonContent.includes('"next"');
+    const nextJsConfig = filePaths.some((p) => p.includes('next.config'));
+    const nextJsPagesOrApp = filePaths.some((p) => p.startsWith('pages/') || p.startsWith('app/'));
+    
+    const previewModeHint =
+      inferredBundler === 'vite' ? 'vite'
+      : inferredBundler === 'webpack' ? 'webpack'
+      : inferredBundler === 'parcel' ? 'parcel'
+      : nextJsConfig || nextJsInPackageJson || nextJsPagesOrApp ? 'nextjs'
+      : filePaths.some((p) => ['server.js', 'app.js', 'index.js'].includes(p) && packageJsonContent) ? 'webcontainer'
+      : filePaths.some((p) => p === 'Dockerfile' || p === 'docker-compose.yml') ? 'codesandbox'
+      : filePaths.some((p) => p.endsWith('.html')) ? 'iframe'
+      : filePaths.some((p) => p.endsWith('.py')) ? 'pyodide'
+      : 'sandpack';
+
+    log(`[visualEditorProjectData] bundler="${inferredBundler}", entryFile="${entryFile}", previewModeHint="${previewModeHint}"`);
+
+    return {
+      ...structure,
+      filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath),
+      bundler: inferredBundler,
+      entryFile,
+      previewModeHint,
+    };
+  }, [filesystemScopePath, normalizeProjectPath, normalizedFilesystemPath, projectFiles, projectStructure, projectStructureWithScopedFiles, scopedPreviewFiles]);
 
   const applySimpleLineDiff = (
     originalContent: string,
@@ -1152,6 +1631,30 @@ export default function CodePreviewPanel({
       else if (finalFilename === "bun.lockb") packageManager = "bun";
     }
 
+    // Detect entry file
+    const entryCandidates = [
+      'src/main.tsx', 'src/main.jsx', 'src/main.ts', 'src/main.js',
+      'src/index.tsx', 'src/index.jsx', 'src/index.ts', 'src/index.js',
+      'app.tsx', 'app.jsx', 'page.tsx', 'index.tsx', 'index.jsx', 'index.ts', 'index.js', 'index.html',
+      'main.py', 'app.py', 'manage.py', 'server.js', 'app.js'
+    ];
+    const entryFile =
+      entryCandidates.find((candidate) => Object.prototype.hasOwnProperty.call(files, candidate))
+      || Object.keys(files).find((path) => path.endsWith('/index.html'))
+      || Object.keys(files).find((path) => path.endsWith('/main.tsx') || path.endsWith('/main.jsx') || path.endsWith('/main.ts') || path.endsWith('/main.js'))
+      || Object.keys(files).find((path) => path.endsWith('/index.tsx') || path.endsWith('/index.jsx') || path.endsWith('/index.ts') || path.endsWith('/index.js'))
+      || Object.keys(files)[0]
+      || null;
+
+    // Detect preview mode hint
+    const previewModeHint =
+      bundler === 'vite' ? 'vite'
+      : bundler === 'webpack' ? 'webpack'
+      : bundler === 'parcel' ? 'parcel'
+      : Object.keys(files).some((p) => p.endsWith('.html')) ? 'iframe'
+      : Object.keys(files).some((p) => p.endsWith('.py')) ? 'pyodide'
+      : 'sandpack';
+
     const structure: ProjectStructure = {
       name: "Generated Project",
       files,
@@ -1161,6 +1664,9 @@ export default function CodePreviewPanel({
       framework,
       bundler,
       packageManager,
+      entryFile,
+      previewModeHint,
+      filesystemScopePath,
     };
     return structure;
   };
@@ -1170,7 +1676,7 @@ export default function CodePreviewPanel({
 
     // Try to get files from VFS first (most up-to-date)
     try {
-      const snapshot = await virtualFilesystem.getSnapshot(filesystemScopePath);
+      const snapshot = await getFilesystemSnapshot(filesystemScopePath);
       const vfsFiles = snapshot?.files || [];
       
       if (vfsFiles.length > 0) {
@@ -1193,7 +1699,7 @@ export default function CodePreviewPanel({
     if (zip.files['README.md'] === undefined && structureToUse && Object.keys(structureToUse.files).length > 0) {
       // Add all files from project structure
       Object.entries(structureToUse.files).forEach(([filename, fileData]) => {
-        const content = typeof fileData === 'string' ? fileData : (fileData.content || '');
+        const content = fileData;
         if (!zip.files[filename]) {
           zip.file(filename, content);
         }
@@ -1342,37 +1848,7 @@ Generated on: ${new Date().toLocaleString()}
   };
 
   const renderLivePreview = () => {
-    // Enhanced framework support with better template mapping
-    const getSandpackTemplate = (framework: string) => {
-      switch (framework) {
-        case "react":
-        case "vite-react":
-          return "react";
-        case "next":
-          return "nextjs";
-        case "vue":
-        case "nuxt":
-          return "vue";
-        case "angular":
-          return "angular";
-        case "svelte":
-          return "svelte";
-        case "solid":
-          return "solid";
-        case "astro":
-          return "astro";
-        case "remix":
-          return "remix";
-        case "gatsby":
-          return "gatsby";
-        case "vite":
-          return "react";
-        default:
-          return "vanilla";
-      }
-    };
-
-    // Use manual preview files if active, otherwise use auto-detected structure
+    // Use manual preview files if active, otherwise use auto-detected structure (must be defined FIRST)
     const useStructure = isManualPreviewActive && manualPreviewFiles
       ? {
           name: 'Manual Preview',
@@ -1380,6 +1856,50 @@ Generated on: ${new Date().toLocaleString()}
           framework: 'react' as const,
         }
       : (projectStructureWithScopedFiles || projectStructure);
+
+    // Use centralized framework detection from live-preview-offloading
+    // If projectDetection exists (from handleManualPreview), use it; otherwise compute from structure
+    // CRITICAL: Only use projectDetection when manual preview is active to avoid stale framework detection
+    const effectiveFramework = isManualPreviewActive && projectDetection?.framework
+      ? projectDetection.framework
+      : useStructure?.framework || 'vanilla';
+    
+    // Get template using centralized mapping
+    const getSandpackTemplate = (framework: string) => {
+      const config = getSandpackConfig({ framework: framework as any, bundler: 'unknown', normalizedFiles: {} } as any);
+      return config.template;
+    };
+
+    // Detect if project has Vue Router configured
+    const hasVueRouter = useStructure?.files && Object.keys(useStructure.files).some(path => {
+      const lowerPath = path.toLowerCase();
+      return lowerPath.includes('router/') || 
+             lowerPath.includes('router.') ||
+             lowerPath.endsWith('router.js') ||
+             lowerPath.endsWith('router.ts') ||
+             lowerPath.endsWith('router/index.js') ||
+             lowerPath.endsWith('router/index.ts');
+    });
+
+    // Get dependencies, adding vue-router if needed
+    const getDependencies = (): Record<string, string> => {
+      const deps = useStructure?.dependencies?.reduce(
+        (acc, dep) => {
+          acc[dep] = "latest";
+          return acc;
+        },
+        {} as Record<string, string>,
+      ) || getPopularDependencies(
+        Object.values(useStructure?.files || {}).join("\n"),
+        useStructure?.framework || 'vanilla',
+      );
+
+      // Add vue-router if project has router files but doesn't include it
+      if (hasVueRouter && !deps['vue-router']) {
+        deps['vue-router'] = 'latest';
+      }
+      return deps;
+    };
     
     if (
       useStructure &&
@@ -1395,7 +1915,7 @@ Generated on: ${new Date().toLocaleString()}
         "remix",
         "gatsby",
         "vite",
-      ].includes(useStructure.framework)
+      ].includes(effectiveFramework)
     ) {
       try {
         // Map files to Sandpack format
@@ -1440,42 +1960,75 @@ Generated on: ${new Date().toLocaleString()}
           {} as Record<string, { code: string }>,
         );
 
-        // Framework-specific entry file handling
+        // Framework-specific entry file detection and handling
         const addEntryFileIfMissing = () => {
-          const hasEntryFile = Object.keys(sandpackFiles).some(
-            (path) =>
-              path.includes("index.") ||
-              path.includes("main.") ||
-              path.includes("App."),
+          // Define framework-specific entry file priorities
+          const entryPriorityMap: Record<string, string[]> = {
+            react: ['/src/main.tsx', '/src/main.jsx', '/src/index.tsx', '/src/index.jsx', '/src/App.tsx', '/src/App.jsx', '/index.tsx', '/index.jsx', '/App.tsx', '/App.jsx'],
+            next: ['/src/app/page.tsx', '/src/app/page.jsx', '/pages/index.tsx', '/pages/index.jsx', '/src/pages/index.tsx', '/src/pages/index.jsx', '/src/index.tsx'],
+            vue: ['/src/main.ts', '/src/main.js', '/src/App.vue', '/main.ts', '/main.js', '/index.ts', '/index.js'],
+            nuxt: ['/src/main.ts', '/src/main.js', '/src/App.vue', '/app.vue', '/pages/index.ts', '/pages/index.js'],
+            svelte: ['/src/main.ts', '/src/main.js', '/src/App.svelte', '/App.svelte', '/main.ts', '/main.js'],
+            angular: ['/src/main.ts', '/src/main.js', '/src/app/app.component.ts', '/src/app/app.component.js'],
+            solid: ['/src/index.tsx', '/src/index.jsx', '/src/App.tsx', '/src/App.jsx', '/index.tsx', '/index.jsx'],
+            astro: ['/src/pages/index.astro', '/pages/index.astro', '/index.astro'],
+            remix: ['/app/routes/_index.tsx', '/app/routes/_index.jsx', '/app/root.tsx', '/app/root.jsx'],
+            gatsby: ['/src/pages/index.js', '/src/pages/index.tsx', '/pages/index.js'],
+          };
+
+          const framework = effectiveFramework;
+          const priorities = entryPriorityMap[framework] || [];
+          
+          // Check if any of the priority entry files exist
+          const existingEntryFile = priorities.find(p => 
+            Object.keys(sandpackFiles).some(path => path === p || path.endsWith(p))
           );
 
-          if (!hasEntryFile) {
-            switch (useStructure.framework) {
-              case "react":
-              case "next":
-              case "gatsby":
-                sandpackFiles["/src/App.jsx"] = {
-                  code: `import React from 'react';
+          if (existingEntryFile) {
+            log(`[addEntryFileIfMissing] Found existing entry file: ${existingEntryFile}`);
+            return; // Entry file exists, don't add stub
+          }
 
-export default function App() {
+          // Check for any existing entry-like files (more permissive for user projects)
+          const hasRealEntryFile = Object.keys(sandpackFiles).some(path => {
+            const fileName = path.split('/').pop() || '';
+            return /^index\.(js|jsx|ts|tsx|mjs|cjs)$/.test(fileName) ||
+                   /^main\.(js|jsx|ts|tsx|mjs|cjs)$/.test(fileName) ||
+                   /^App\.(js|jsx|ts|tsx)$/.test(fileName) ||
+                   /^page\.(js|jsx|ts|tsx)$/.test(fileName);
+          });
+
+          if (hasRealEntryFile) {
+            log(`[addEntryFileIfMissing] Found entry-like file, not adding stub`);
+            return;
+          }
+
+          // No entry file found - add framework-specific stub
+          log(`[addEntryFileIfMissing] No entry file found, adding stub for ${framework}`);
+          
+          switch (framework) {
+            case "react":
+            case "next":
+            case "gatsby":
+              // Use index.tsx as entry for React/Next.js projects
+              sandpackFiles["/src/index.tsx"] = {
+                code: `import React from 'react';
+import ReactDOM from 'react-dom/client';
+
+function App() {
   return (
     <div className="App">
       <h1>Hello React!</h1>
       <p>This is a generated React application.</p>
     </div>
   );
-}`,
-                };
-                sandpackFiles["/src/index.js"] = {
-                  code: `import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App';
+}
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);`,
-                };
-                sandpackFiles["/index.html"] = {
-                  code: `<!doctype html>
+              };
+              sandpackFiles["/index.html"] = {
+                code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -1484,15 +2037,15 @@ root.render(<App />);`,
   </head>
   <body>
     <div id="root"></div>
-    <script src="/src/index.js"></script>
+    <script type="module" src="/src/index.tsx"></script>
   </body>
 </html>`,
-                };
-                break;
-              case "vue":
-              case "nuxt":
-                sandpackFiles["/src/App.vue"] = {
-                  code: `<template>
+              };
+              break;
+            case "vue":
+            case "nuxt":
+              sandpackFiles["/src/App.vue"] = {
+                code: `<template>
   <div id="app">
     <h1>Hello Vue!</h1>
     <p>This is a generated Vue application.</p>
@@ -1513,14 +2066,14 @@ export default {
   margin-top: 60px;
 }
 </style>`,
-                };
-                sandpackFiles["/src/main.js"] = {
-                  code: `import { createApp } from 'vue';
+              };
+              sandpackFiles["/src/main.ts"] = {
+                code: `import { createApp } from 'vue';
 import App from './App.vue';
 createApp(App).mount('#app');`,
-                };
-                sandpackFiles["/index.html"] = {
-                  code: `<!doctype html>
+              };
+              sandpackFiles["/index.html"] = {
+                code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -1529,14 +2082,14 @@ createApp(App).mount('#app');`,
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>`,
-                };
-                break;
-              case "svelte":
-                sandpackFiles["/src/App.svelte"] = {
-                  code: `<script>
+              };
+              break;
+            case "svelte":
+              sandpackFiles["/src/App.svelte"] = {
+                code: `<script>
   let name = 'Svelte';
 </script>
 
@@ -1553,14 +2106,14 @@ createApp(App).mount('#app');`,
     margin: 0 auto;
   }
 </style>`,
-                };
-                sandpackFiles["/src/main.js"] = {
-                  code: `import App from './App.svelte';
+              };
+              sandpackFiles["/src/main.ts"] = {
+                code: `import App from './App.svelte';
 const app = new App({ target: document.getElementById('app') });
 export default app;`,
-                };
-                sandpackFiles["/index.html"] = {
-                  code: `<!doctype html>
+              };
+              sandpackFiles["/index.html"] = {
+                code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -1569,17 +2122,18 @@ export default app;`,
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
+    <script type="module" src="/src/main.ts"></script>
   </body>
 </html>`,
-                };
-                break;
-              default:
-                sandpackFiles["/src/index.js"] = {
-                  code: `console.log('Hello from ${useStructure.framework}!');`,
-                };
-                sandpackFiles["/index.html"] = {
-                  code: `<!doctype html>
+              };
+              break;
+            default:
+              // vanilla or unknown framework - use index.js
+              sandpackFiles["/src/index.js"] = {
+                code: `console.log('Hello from ${framework}!');`,
+              };
+              sandpackFiles["/index.html"] = {
+                code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -1591,42 +2145,358 @@ export default app;`,
     <script src="/src/index.js"></script>
   </body>
 </html>`,
-                };
-            }
+              };
           }
         };
 
-        addEntryFileIfMissing();
+        // Handle build output directories (dist, build, .next, etc.)
+        const normalizeFilesForSandpack = (files: Record<string, { code: string }>) => {
+          const normalized: Record<string, { code: string }> = {};
+          const buildDirs = ['dist', 'build', '.next', '.nuxt', '.output', 'public'];
+          
+          for (const [path, fileObj] of Object.entries(files)) {
+            const content = fileObj?.code || '';
+            
+            // Skip build output files - they shouldn't be in source
+            const isBuildOutput = buildDirs.some(dir => path.startsWith(dir + '/') || path.startsWith('/' + dir + '/'));
+            if (isBuildOutput) continue;
+            
+            // Skip node_modules
+            if (path.includes('node_modules/')) continue;
+            
+            // Skip map files and source maps
+            if (path.endsWith('.map') || path.includes('.map')) continue;
+            
+            // Skip cache directories
+            if (path.includes('.cache/') || path.includes('__pycache__/')) continue;
+            
+            if (typeof content === 'string' && content.trim()) {
+              const sandpackPath = path.startsWith('/') ? path : `/${path}`;
+              normalized[sandpackPath] = { code: content };
+            }
+          }
+          return normalized;
+        };
 
-        const template = getSandpackTemplate(useStructure.framework);
+        // Enhanced entry file detection with comprehensive patterns
+        const detectBestEntryFile = (
+          files: Record<string, { code: string }>,
+          framework: string
+        ): string | null => {
+          // Framework-specific entry file patterns
+          const entryPatterns: Record<string, RegExp[]> = {
+            react: [
+              /\/src\/index\.(tsx|jsx|ts|js)$/,
+              /\/src\/main\.(tsx|jsx|ts|js)$/,
+              /\/src\/App\.(tsx|jsx)$/,
+              /\/index\.(tsx|jsx)$/,
+              /\/main\.(tsx|jsx)$/,
+            ],
+            next: [
+              /\/src\/app\/page\.(tsx|jsx|ts|js)$/,
+              /\/src\/app\/layout\.(tsx|jsx|ts|js)$/,
+              /\/pages\/index\.(tsx|jsx|ts|js)$/,
+              /\/src\/pages\/index\.(tsx|jsx|ts|js)$/,
+            ],
+            vue: [
+              /\/src\/main\.(ts|js)$/,
+              /\/src\/App\.vue$/,
+              /\/main\.(ts|js)$/,
+              /\/App\.vue$/,
+            ],
+            nuxt: [
+              /\/src\/main\.(ts|js)$/,
+              /\/app\.vue$/,
+              /\/pages\/index\.(ts|js)$/,
+            ],
+            svelte: [
+              /\/src\/main\.(ts|js)$/,
+              /\/src\/App\.svelte$/,
+              /\/main\.(ts|js)$/,
+            ],
+            angular: [
+              /\/src\/main\.(ts|js)$/,
+              /\/src\/app\/app\.component\.(ts|js)$/,
+            ],
+            solid: [
+              /\/src\/index\.(tsx|jsx)$/,
+              /\/src\/App\.(tsx|jsx)$/,
+            ],
+            astro: [
+              /\/src\/pages\/index\.astro$/,
+              /\/pages\/index\.astro$/,
+              /\/index\.astro$/,
+            ],
+            vite: [
+              /\/src\/main\.(ts|js|tsx|jsx)$/,
+              /\/src\/index\.(ts|js|tsx|jsx)$/,
+              /\/main\.(ts|js)$/,
+            ],
+          };
 
-        // If manual preview with iframe mode and has HTML file, use iframe
+          const patterns = entryPatterns[framework] || entryPatterns.react;
+          
+          for (const pattern of patterns) {
+            const match = Object.keys(files).find(path => pattern.test(path));
+            if (match) return match;
+          }
+          
+          return null;
+        };
+
+        // Apply normalization to filter build outputs and cache files
+        const normalizedSandpackFiles = normalizeFilesForSandpack(sandpackFiles);
+        
+        // Detect best entry file and log for debugging
+        const detectedEntryFile = detectBestEntryFile(normalizedSandpackFiles, effectiveFramework);
+        if (detectedEntryFile) {
+          log(`[Sandpack] Detected entry file: ${detectedEntryFile}`);
+        }
+
+        // CRITICAL FIX: Normalize file paths to be relative to project root for Sandpack
+        // The VFS paths are like "/project/sessions/draft-chat_xxx/src/main.js" but Sandpack needs "/src/main.js"
+        // We need to strip the filesystem scope prefix from all file paths
+        const finalSandpackFiles = (() => {
+          // Create a copy of sandpackFiles to work with
+          const filesCopy = { ...sandpackFiles };
+          
+          // Add entry file stub if missing (using same logic as addEntryFileIfMissing but as pure function)
+          const existingEntryFile = Object.keys(filesCopy).some(path => {
+            const fileName = path.split('/').pop() || '';
+            return /^index\.(js|jsx|ts|tsx|mjs|cjs|vue)$/.test(fileName) ||
+                   /^main\.(js|jsx|ts|tsx|mjs|cjs|vue)$/.test(fileName) ||
+                   /^App\.(js|jsx|ts|tsx|vue)$/.test(fileName) ||
+                   /^page\.(js|jsx|ts|tsx)$/.test(fileName);
+          });
+          
+          if (!existingEntryFile) {
+            // Add framework-specific stub files
+            const framework = effectiveFramework;
+            switch (framework) {
+              case "vue":
+              case "nuxt":
+                filesCopy["/src/App.vue"] = { code: `<template>
+  <div id="app">
+    <h1>Hello Vue!</h1>
+    <p>This is a generated Vue application.</p>
+  </div>
+</template>
+
+<script>
+export default {
+  name: 'App'
+}
+</script>
+
+<style>
+#app {
+  font-family: Avenir, Helvetica, Arial, sans-serif;
+  text-align: center;
+  color: #2c3e50;
+  margin-top: 60px;
+}
+</style>` };
+                filesCopy["/src/main.js"] = { code: `import { createApp } from 'vue';
+import App from './App.vue';
+createApp(App).mount('#app');` };
+                filesCopy["/index.html"] = { code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>` };
+                break;
+              case "react":
+              case "next":
+              case "vite-react":
+              default:
+                filesCopy["/src/index.jsx"] = { code: `import React from 'react';
+import ReactDOM from 'react-dom/client';
+
+function App() {
+  return (
+    <div className="App">
+      <h1>Hello React!</h1>
+      <p>This is a generated React application.</p>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);` };
+                filesCopy["/index.html"] = { code: `<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Preview</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/index.jsx"></script>
+  </body>
+</html>` };
+                break;
+            }
+          }
+          
+          // Step 1: Normalize (filter build outputs, cache files, etc.)
+          const normalized = normalizeFilesForSandpack(filesCopy);
+
+          // Step 2: Strip any leading project folder to get paths relative to project root
+          // Files at this point are like: "/my-vue-app/src/main.js" or "/src/main.js" or "/index.html"
+          // We need them to be: "/src/main.js" or "/index.html" (relative to project root for Sandpack)
+          const stripped: Record<string, { code: string }> = {};
+
+          // Common project subfolder names that indicate the preceding folder is a project root
+          const projectSubfolderPatterns = [
+            /^\/([^/]+)\/src\//,      // /my-app/src/...
+            /^\/([^/]+)\/pages\//,    // /my-app/pages/...
+            /^\/([^/]+)\/app\//,      // /my-app/app/...
+            /^\/([^/]+)\/public\//,   // /my-app/public/...
+            /^\/([^/]+)\/lib\//,      // /my-app/lib/...
+            /^\/([^/]+)\/components\//, // /my-app/components/...
+            /^\/([^/]+)\/styles\//,   // /my-app/styles/...
+            /^\/([^/]+)\/assets\//,   // /my-app/assets/...
+          ];
+
+          // Also strip VFS scope prefix (e.g. /project/sessions/draft-chat_xxx/)
+          const scopePrefix = normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath);
+
+          for (const [path, fileObj] of Object.entries(normalized)) {
+            let relativePath = path;
+
+            // Strip VFS scope prefix first (e.g. /project/sessions/draft-chat_xxx/my-vue-app/src/main.js -> /my-vue-app/src/main.js)
+            const prefixVariants = [
+              `/${scopePrefix}/`,
+              `${scopePrefix}/`,
+              `/project/sessions/`,
+            ];
+            for (const prefix of prefixVariants) {
+              if (relativePath.startsWith(prefix)) {
+                relativePath = '/' + relativePath.slice(prefix.length);
+                // If we stripped a sessions prefix, also strip the session ID folder
+                if (prefix === '/project/sessions/' || prefix === 'project/sessions/') {
+                  const slashIdx = relativePath.indexOf('/', 1);
+                  if (slashIdx > 0) {
+                    relativePath = relativePath.slice(slashIdx);
+                  }
+                }
+                break;
+              }
+            }
+
+            // Try to strip leading project folder if path contains a known subfolder pattern
+            for (const pattern of projectSubfolderPatterns) {
+              const match = relativePath.match(pattern);
+              if (match) {
+                const projectFolder = match[1];
+                // Don't strip if the "project folder" is actually a standard folder name
+                if (!['src', 'pages', 'app', 'public', 'lib', 'components', 'styles', 'assets'].includes(projectFolder)) {
+                  relativePath = relativePath.replace(`/${projectFolder}/`, '/');
+                  break;
+                }
+              }
+            }
+
+            // Ensure path starts with /
+            if (!relativePath.startsWith('/')) {
+              relativePath = '/' + relativePath;
+            }
+
+            stripped[relativePath] = fileObj;
+          }
+
+          const result = stripped;
+          // Only log once when files actually change (not on every render)
+          const resultKey = `${Object.keys(result).length}-${Object.keys(result).sort().join('|').slice(0, 50)}`;
+          if (resultKey !== lastNormalizationRef.current) {
+            log(`[Sandpack] Normalized ${Object.keys(filesCopy).length} -> ${Object.keys(normalized).length} (filtered) -> ${Object.keys(result).length} (scope strip)`);
+            lastNormalizationRef.current = resultKey;
+          }
+          return result;
+        })();
+
+        const template = getSandpackTemplate(effectiveFramework);
+
+        // Manual preview with HTML files - use Sandpack for proper bundling
         if (isManualPreviewActive && previewMode === 'iframe') {
-          const htmlFile = Object.entries(useStructure.files).find(
+          const htmlFileEntry = Object.entries(useStructure.files).find(
             ([path]) => path.endsWith('.html')
           );
-          
-          if (htmlFile) {
+
+          if (htmlFileEntry) {
+            // Use Sandpack with vanilla template for proper HTML/CSS/JS bundling
+            const sandpackFiles: Record<string, { code: string }> = {};
+            
+            // Add all files to Sandpack
+            Object.entries(useStructure.files).forEach(([path, content]) => {
+              if (typeof content === "string" && content.trim()) {
+                const sandpackPath = path.startsWith("/") ? path : `/${path}`;
+                sandpackFiles[sandpackPath] = { code: content };
+              }
+            });
+
             return (
-              <div className="h-full bg-white rounded-lg overflow-hidden">
-                <div className="bg-gray-800 px-4 py-2 flex items-center justify-between">
-                  <span className="text-white text-sm font-medium">HTML Preview</span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setPreviewMode('sandpack')}
-                    className="text-xs"
-                  >
-                    Switch to Sandpack
-                  </Button>
+              <Suspense fallback={
+                <div className="h-full flex items-center justify-center bg-gray-900 rounded-lg">
+                  <div className="text-center text-gray-400">
+                    <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin" />
+                    <p>Loading HTML preview...</p>
+                  </div>
                 </div>
-                <iframe
-                  srcDoc={htmlFile[1]}
-                  className="w-full h-[calc(100%-40px)] border-0"
-                  title="Preview"
-                  sandbox="allow-scripts allow-same-origin"
-                />
-              </div>
+              }>
+                <div className="h-full bg-gray-900 rounded-lg overflow-hidden flex flex-col">
+                  <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-white text-sm font-medium">📄 HTML Preview (Sandpack)</span>
+                      <span className="text-blue-300 text-xs">Bundled with CSS/JS</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setPreviewMode('raw')}
+                        className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                      >
+                        View Raw
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setPreviewMode('sandpack')}
+                        className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                      >
+                        Full Sandpack
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    <Sandpack
+                      template="vanilla"
+                      theme="dark"
+                      options={{
+                        showTabs: true,
+                        showLineNumbers: false,
+                        showNavigator: true,
+                        showConsole: false,
+                        showRefreshButton: true,
+                        autorun: true,
+                        recompileMode: "delayed",
+                        recompileDelay: 300,
+                      }}
+                files={sandpackFiles}
+                      customSetup={{ dependencies: {} }}
+                    />
+                  </div>
+                </div>
+              </Suspense>
             );
           }
         }
@@ -1636,7 +2506,7 @@ export default app;`,
           const htmlFile = Object.entries(useStructure.files).find(
             ([path]) => path.endsWith('.html')
           );
-          
+
           if (htmlFile) {
             return (
               <div className="h-full bg-gray-900 rounded-lg overflow-hidden">
@@ -1649,7 +2519,7 @@ export default app;`,
                       onClick={() => setPreviewMode('iframe')}
                       className="text-xs"
                     >
-                      Iframe
+                      Preview
                     </Button>
                     <Button
                       size="sm"
@@ -1741,7 +2611,8 @@ export default app;`,
                 srcDoc={inlineHtml}
                 className="w-full flex-1 border-0"
                 title="Parcel Preview"
-                sandbox="allow-scripts allow-same-origin allow-modals"
+                sandbox="allow-scripts allow-same-origin allow-modals allow-forms allow-popups allow-downloads"
+                referrerPolicy="no-referrer"
               />
             </div>
           );
@@ -1758,52 +2629,71 @@ export default app;`,
           const nodeFiles = Object.entries(useStructure.files).filter(
             ([path]) => path.endsWith('.js') || path.endsWith('.ts')
           );
-          
+
           // Detect runtime
           let runtime = 'node';
-          let startCommand = 'npm start';
-          
           if (pythonFiles.length > 0) {
             runtime = 'python';
-            const hasFlask = pythonFiles.some(([_, code]) => code.includes('flask'));
-            const hasDjango = pythonFiles.some(([_, code]) => code.includes('django'));
-            if (hasFlask) startCommand = 'python app.py';
-            else if (hasDjango) startCommand = 'python manage.py runserver';
-            else startCommand = 'python main.py';
-          } else if (packageJson) {
-            try {
-              const pkg = JSON.parse(packageJson[1]);
-              if (pkg.scripts?.start) startCommand = `npm start`;
-              else if (pkg.scripts?.dev) startCommand = `npm run dev`;
-            } catch (e) {
-              startCommand = 'node index.js';
-            }
           }
+
+          // Function to create DevBox
+          const startDevBox = async () => {
+            setIsCodesandboxLoading(true);
+            setCodesandboxUrl(null);
+
+            try {
+              log('[DevBox] Creating cloud dev environment...');
+
+              // Call API to create CodeSandbox devbox
+              const response = await fetch('/api/sandbox/devbox', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  files: useStructure.files,
+                  template: runtime === 'python' ? 'python' : 'node',
+                }),
+              });
+
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                const errorMsg = errorData.error || `Failed to create CodeSandbox environment (${response.status})`;
+                throw new Error(errorMsg);
+              }
+
+              const data = await response.json();
+              const sandboxUrl = data.url || `https://${data.sandboxId}.csb.app`;
+
+              setCodesandboxUrl(sandboxUrl);
+              log(`[DevBox] DevBox ready: ${sandboxUrl}`);
+              toast.success('DevBox environment created successfully');
+            } catch (err: any) {
+              logError('[DevBox] Error:', err);
+              toast.error('DevBox creation failed', {
+                description: err.message,
+                duration: 5000,
+              });
+              setCodesandboxUrl(`Error: ${err.message}`);
+            } finally {
+              setIsCodesandboxLoading(false);
+            }
+          };
 
           return (
             <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
               <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="text-white text-sm font-medium">🔵 DevBox Runtime</span>
-                  <span className="text-blue-300 text-xs">Full-stack environment</span>
+                  <span className="text-white text-sm font-medium">🏗️ DevBox</span>
+                  <span className="text-blue-300 text-xs">Cloud Dev Environment</span>
                 </div>
                 <div className="flex gap-2">
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => {
-                      setIsDevBoxRunning(!isDevBoxRunning);
-                      if (!isDevBoxRunning) {
-                        setDevBoxOutput([
-                          `> Starting ${runtime} environment...`,
-                          `> Running: ${startCommand}`,
-                          `> Environment ready.`,
-                        ]);
-                      }
-                    }}
-                    className={`text-xs ${isDevBoxRunning ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'} text-white`}
+                    onClick={startDevBox}
+                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                    disabled={isCodesandboxLoading}
                   >
-                    {isDevBoxRunning ? '⏹ Stop' : '▶ Run'}
+                    {isCodesandboxLoading ? '⏳ Creating...' : '▶ Start DevBox'}
                   </Button>
                   <Button
                     size="sm"
@@ -1811,47 +2701,91 @@ export default app;`,
                     onClick={() => setPreviewMode('sandpack')}
                     className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
                   >
-                    Sandpack
+                    Use Sandpack
                   </Button>
                 </div>
               </div>
-              
-              {/* Terminal-like output */}
-              <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
-                <div className="text-gray-400 mb-2">
-                  <p>📦 Runtime: {runtime}</p>
-                  <p>🚀 Command: {startCommand}</p>
-                  <p>📁 Files: {Object.keys(useStructure.files).length}</p>
+
+              <div className="flex-1 flex flex-col">
+                <div className="p-2 bg-gray-900 border-b border-gray-800">
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <p className="text-gray-400">📦 Runtime:</p>
+                      <p className="text-blue-300">{runtime}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">📁 Files:</p>
+                      <p className="text-blue-300">{Object.keys(useStructure.files).length} files</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">🐍 Python files:</p>
+                      <p className="text-blue-300">{pythonFiles.length} files</p>
+                    </div>
+                  </div>
                 </div>
-                
-                {isDevBoxRunning ? (
-                  <div className="space-y-1">
-                    {devBoxOutput.map((line, i) => (
-                      <p key={i} className="text-green-400">{line}</p>
-                    ))}
-                    <p className="text-blue-400 animate-pulse">▊</p>
-                  </div>
-                ) : (
-                  <div className="text-yellow-400">
-                    <p>⚠️  DevBox is stopped</p>
-                    <p className="text-gray-500 mt-2">
-                      Click "▶ Run" to start the {runtime} environment.<br/>
-                      This will simulate running your backend code.
-                    </p>
-                  </div>
-                )}
-                
-                {/* File tree */}
-                <div className="mt-4 pt-4 border-t border-gray-800">
-                  <p className="text-gray-400 mb-2">📁 Project Structure:</p>
-                  <div className="text-gray-500 text-xs space-y-1">
-                    {Object.keys(useStructure.files).slice(0, 20).map((path) => (
-                      <p key={path}>  {path}</p>
-                    ))}
-                    {Object.keys(useStructure.files).length > 20 && (
-                      <p className="text-gray-600">  ... and {Object.keys(useStructure.files).length - 20} more files</p>
-                    )}
-                  </div>
+
+                <div className="flex-1 flex items-center justify-center p-8">
+                  {isCodesandboxLoading ? (
+                    <div className="text-center space-y-4">
+                      <div className="w-16 h-16 mx-auto bg-blue-500/20 rounded-full flex items-center justify-center">
+                        <RefreshCw className="w-8 h-8 text-blue-400 animate-spin" />
+                      </div>
+                      <h3 className="text-white text-lg font-medium">Creating DevBox Environment</h3>
+                      <p className="text-gray-400 text-sm max-w-md">
+                        Setting up a cloud development container with your {runtime} project...
+                      </p>
+                      <p className="text-gray-500 text-xs">
+                        This may take 30-60 seconds for complex projects
+                      </p>
+                    </div>
+                  ) : codesandboxUrl ? (
+                    codesandboxUrl.startsWith('http') ? (
+                      <div className="w-full h-full flex flex-col">
+                        <div className="mb-2 text-blue-400 flex items-center justify-between px-4">
+                          <span>✓ DevBox ready: <a href={codesandboxUrl} target="_blank" rel="noopener noreferrer" className="underline">{codesandboxUrl}</a></span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => window.open(codesandboxUrl, '_blank')}
+                            className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                          >
+                            Open in New Tab ↗
+                          </Button>
+                        </div>
+                        <iframe
+                          src={codesandboxUrl}
+                          className="flex-1 w-full bg-white rounded"
+                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-center space-y-4">
+                        <AlertCircle className="w-12 h-12 mx-auto text-red-400" />
+                        <p className="text-red-400">{codesandboxUrl}</p>
+                        <Button onClick={startDevBox} variant="outline" className="border-gray-600 text-gray-300 hover:bg-gray-800">
+                          <RefreshCw className="w-4 h-4 mr-2" />
+                          Retry
+                        </Button>
+                      </div>
+                    )
+                  ) : (
+                    <div className="text-center space-y-4">
+                      <div className="w-20 h-20 mx-auto bg-blue-500/20 rounded-full flex items-center justify-center">
+                        <Zap className="w-10 h-10 text-blue-400" />
+                      </div>
+                      <h3 className="text-white text-xl font-medium">DevBox Environment</h3>
+                      <p className="text-gray-400 text-sm max-w-md">
+                        Full-stack {runtime} environment for backend applications
+                      </p>
+                      <p className="text-gray-500 text-xs max-w-md">
+                        Starts a cloud development container with your project files, including a full VS Code editor
+                      </p>
+                      <Button onClick={startDevBox} className="bg-blue-600 hover:bg-blue-700 text-white px-6">
+                        <Play className="w-4 h-4 mr-2" />
+                        Start DevBox
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1868,129 +2802,111 @@ export default app;`,
             ([path]) => path === 'requirements.txt'
           );
           
-          // Enhanced Pyodide with package installation and caching
-          React.useEffect(() => {
-            const loadPyodide = async () => {
-              setIsPyodideLoading(true);
-              setPyodideOutput('');
+          // Pyodide loading function (regular function, NOT a hook)
+          const loadPyodideRuntime = async () => {
+            setIsPyodideLoading(true);
+            setPyodideOutput('');
 
-              try {
-                // Multiple CDN sources for reliability
-                const CDN_SOURCES = [
-                  'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/',
-                  'https://unpkg.com/pyodide@0.23.4/',
-                ];
-                
-                let pyodide: any = null;
-                let lastError: any = null;
+            try {
+              const CDN_SOURCES = [
+                'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/',
+                'https://unpkg.com/pyodide@0.23.4/',
+              ];
+              
+              let pyodide: any = null;
+              let lastError: any = null;
 
-                // Try each CDN until one works
-                for (const cdn of CDN_SOURCES) {
-                  try {
-                    const script = document.createElement('script');
-                    script.src = 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js';
-                    script.async = true;
-                    
-                    await new Promise((resolve, reject) => {
-                      script.onload = resolve;
-                      script.onerror = reject;
-                      document.head.appendChild(script);
+              for (const cdn of CDN_SOURCES) {
+                try {
+                  const script = document.createElement('script');
+                  script.src = 'https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js';
+                  script.async = true;
+                  
+                  await new Promise((resolve, reject) => {
+                    script.onload = resolve;
+                    script.onerror = reject;
+                    document.head.appendChild(script);
+                  });
+
+                  if ((window as any).loadPyodide) {
+                    pyodide = await (window as any).loadPyodide({
+                      indexURL: cdn,
+                      packageCacheDir: '/lib/python3.11/site-packages',
                     });
-
-                    if ((window as any).loadPyodide) {
-                      pyodide = await (window as any).loadPyodide({
-                        indexURL: cdn,
-                        // Enable IndexedDB caching
-                        packageCacheDir: '/lib/python3.11/site-packages',
-                      });
-                      break; // Success!
-                    }
-                  } catch (err: any) {
-                    lastError = err;
-                    console.warn(`CDN ${cdn} failed, trying next...`);
-                    continue;
+                    break;
                   }
+                } catch (err: any) {
+                  lastError = err;
+                  console.warn(`CDN ${cdn} failed, trying next...`);
+                  continue;
                 }
-
-                if (!pyodide) {
-                  throw new Error(`All CDNs failed: ${lastError?.message}`);
-                }
-
-                pyodideRef.current = pyodide;
-
-                // Enhanced stdout capture
-                pyodide.setStdout({
-                  batched: (msg: string) => {
-                    setPyodideOutput(prev => prev + msg);
-                  },
-                  write: (msg: string) => {
-                    setPyodideOutput(prev => prev + msg);
-                  },
-                  isatty: () => false,
-                });
-
-                // Preload common packages if configured
-                const preloadPackages = process.env.NEXT_PUBLIC_PYODIDE_PRELOAD_PACKAGES?.split(',') || [];
-                
-                if (preloadPackages.length > 0) {
-                  setPyodideOutput(prev => prev + `# Preloading ${preloadPackages.length} package(s)...\n`);
-                  try {
-                    await pyodide.loadPackage(preloadPackages);
-                    setPyodideOutput(prev => prev + `✓ Preloaded: ${preloadPackages.join(', ')}\n`);
-                  } catch (err: any) {
-                    setPyodideOutput(prev => prev + `⚠ Preload warning: ${err.message}\n`);
-                  }
-                }
-
-                // Install requirements if present
-                if (requirementsFile) {
-                  setPyodideOutput(prev => prev + '# Installing requirements...\n');
-                  try {
-                    await pyodide.runPythonAsync(`
-                      import micropip
-                      requirements = """${requirementsFile[1]}"""
-                      for pkg in requirements.strip().split('\\n'):
-                          pkg = pkg.strip()
-                          if pkg and not pkg.startswith('#'):
-                              try:
-                                  await micropip.install(pkg)
-                                  print(f'✓ Installed {pkg}')
-                              except Exception as e:
-                                  print(f'⚠ Could not install {pkg}: {e}')
-                    `);
-                  } catch (err: any) {
-                    setPyodideOutput(prev => prev + `⚠ Package installation warning: ${err.message}\n`);
-                  }
-                }
-
-                // Execute main Python file
-                if (mainFile) {
-                  setPyodideOutput(prev => prev + `\n# Running ${mainFile[0]}...\n# ─────────────────────────────\n`);
-                  try {
-                    await pyodide.runPythonAsync(mainFile[1]);
-                    setPyodideOutput(prev => prev + '\n✅ Execution complete!\n');
-                  } catch (err: any) {
-                    setPyodideOutput(prev => prev + `\n❌ Error: ${err.message}\n`);
-                  }
-                }
-
-                setIsPyodideLoading(false);
-              } catch (err: any) {
-                console.error('Failed to load Pyodide:', err);
-                setPyodideOutput(prev => prev + `❌ Failed to load Pyodide: ${err.message}\n`);
-                setIsPyodideLoading(false);
               }
-            };
 
-            loadPyodide();
-
-            return () => {
-              // Cleanup
-              if (pyodideRef.current) {
-                pyodideRef.current = null;
+              if (!pyodide) {
+                throw new Error(`All CDNs failed: ${lastError?.message}`);
               }
-            };
-          }, [mainFile, requirementsFile]);
+
+              pyodideRef.current = pyodide;
+
+              pyodide.setStdout({
+                batched: (msg: string) => {
+                  setPyodideOutput(prev => prev + msg);
+                },
+                write: (msg: string) => {
+                  setPyodideOutput(prev => prev + msg);
+                },
+                isatty: () => false,
+              });
+
+              const preloadPackages = process.env.NEXT_PUBLIC_PYODIDE_PRELOAD_PACKAGES?.split(',') || [];
+              
+              if (preloadPackages.length > 0) {
+                setPyodideOutput(prev => prev + `# Preloading ${preloadPackages.length} package(s)...\n`);
+                try {
+                  await pyodide.loadPackage(preloadPackages);
+                  setPyodideOutput(prev => prev + `✓ Preloaded: ${preloadPackages.join(', ')}\n`);
+                } catch (err: any) {
+                  setPyodideOutput(prev => prev + `⚠ Preload warning: ${err.message}\n`);
+                }
+              }
+
+              if (requirementsFile) {
+                setPyodideOutput(prev => prev + '# Installing requirements...\n');
+                try {
+                  await pyodide.runPythonAsync(`
+                    import micropip
+                    requirements = """${requirementsFile[1]}"""
+                    for pkg in requirements.strip().split('\\n'):
+                        pkg = pkg.strip()
+                        if pkg and not pkg.startswith('#'):
+                            try:
+                                await micropip.install(pkg)
+                                print(f'✓ Installed {pkg}')
+                            except Exception as e:
+                                print(f'⚠ Could not install {pkg}: {e}')
+                  `);
+                } catch (err: any) {
+                  setPyodideOutput(prev => prev + `⚠ Package installation warning: ${err.message}\n`);
+                }
+              }
+
+              if (mainFile) {
+                setPyodideOutput(prev => prev + `\n# Running ${mainFile[0]}...\n# ─────────────────────────────\n`);
+                try {
+                  await pyodide.runPythonAsync(mainFile[1]);
+                  setPyodideOutput(prev => prev + '\n✅ Execution complete!\n');
+                } catch (err: any) {
+                  setPyodideOutput(prev => prev + `\n❌ Error: ${err.message}\n`);
+                }
+              }
+
+              setIsPyodideLoading(false);
+            } catch (err: any) {
+              console.error('Failed to load Pyodide:', err);
+              setPyodideOutput(prev => prev + `❌ Failed to load Pyodide: ${err.message}\n`);
+              setIsPyodideLoading(false);
+            }
+          };
 
           return (
             <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
@@ -2004,16 +2920,19 @@ export default app;`,
                     size="sm"
                     variant="outline"
                     onClick={() => {
-                      setPyodideOutput('');
                       if (pyodideRef.current && mainFile) {
+                        setPyodideOutput('');
                         pyodideRef.current.runPythonAsync(mainFile[1]).catch((err: any) => {
                           setPyodideOutput(prev => prev + `\nError: ${err.message}\n`);
                         });
+                      } else {
+                        void loadPyodideRuntime();
                       }
                     }}
                     className="text-xs bg-green-600 hover:bg-green-700 text-white"
+                    disabled={isPyodideLoading}
                   >
-                    ▶ Re-run
+                    {isPyodideLoading ? '⏳ Loading...' : pyodideRef.current ? '▶ Re-run' : '▶ Load & Run'}
                   </Button>
                   <Button
                     size="sm"
@@ -2056,7 +2975,7 @@ export default app;`,
                       <div className="w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin" />
                       <span>Loading Pyodide (this may take a moment)...</span>
                     </div>
-                  ) : (
+                  ) : pyodideRef.current ? (
                     <div className="space-y-1">
                       <p className="text-gray-500"># Pyodide Python Runtime</p>
                       <p className="text-gray-500"># Executing: {mainFile?.[0] || 'unknown'}</p>
@@ -2068,6 +2987,11 @@ export default app;`,
                       )}
                       <p className="text-blue-400 animate-pulse">▊</p>
                     </div>
+                  ) : (
+                    <div className="space-y-2 text-gray-400">
+                      <p>Click "▶ Load & Run" to start the Python runtime.</p>
+                      <p className="text-xs text-gray-500">Pyodide runs Python natively in the browser — no server needed!</p>
+                    </div>
                   )}
                 </div>
               </div>
@@ -2075,126 +2999,701 @@ export default app;`,
           );
         }
 
-        // Vite build preview mode
+        // Vite build preview mode - removed fake build simulation, use Sandpack instead
         if (isManualPreviewActive && previewMode === 'vite') {
-          const viteConfig = Object.entries(useStructure.files).find(
-            ([path]) => path.includes('vite.config')
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex items-center justify-center p-8">
+              <div className="text-center max-w-md">
+                <Zap className="w-16 h-16 mx-auto mb-4 text-cyan-500" />
+                <h3 className="text-white text-lg font-medium mb-2">Vite Preview</h3>
+                <p className="text-gray-400 text-sm mb-4">
+                  Use Sandpack for instant Vite-compatible preview
+                </p>
+                <Button
+                  onClick={() => setPreviewMode('sandpack')}
+                  className="bg-cyan-600 hover:bg-cyan-700 text-white"
+                >
+                  Open Sandpack
+                </Button>
+              </div>
+            </div>
           );
+        }
+
+        // Webpack build preview mode - removed fake build simulation, use Sandpack instead
+        if (isManualPreviewActive && previewMode === 'webpack') {
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex items-center justify-center p-8">
+              <div className="text-center max-w-md">
+                <Package className="w-16 h-16 mx-auto mb-4 text-indigo-500" />
+                <h3 className="text-white text-lg font-medium mb-2">Webpack Preview</h3>
+                <p className="text-gray-400 text-sm mb-4">
+                  Use Sandpack for instant bundling preview
+                </p>
+                <Button
+                  onClick={() => setPreviewMode('sandpack')}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                >
+                  Open Sandpack
+                </Button>
+              </div>
+            </div>
+          );
+        }
+
+        // WebContainer preview mode - Node.js in browser
+        if (isManualPreviewActive && previewMode === 'webcontainer') {
           const packageJson = Object.entries(useStructure.files).find(
             ([path]) => path === 'package.json'
           );
-          const indexHtml = Object.entries(useStructure.files).find(
-            ([path]) => path === 'index.html' || path.endsWith('/index.html')
+          const serverFiles = Object.entries(useStructure.files).filter(
+            ([path]) => ['server.js', 'app.js', 'index.js', 'main.js'].includes(path)
           );
-          const srcFiles = Object.entries(useStructure.files).filter(
-            ([path]) => path.startsWith('src/')
-          );
-          
-          // Simulate Vite build (no hooks inside render)
-          const runViteBuild = async () => {
-            setIsViteBuilding(true);
-            setViteOutput('');
-            
-            const logs = [
-              '> vite build',
-              `vite v5.0.0 building for production...`,
-              `✓ ${srcFiles.length} modules transformed.`,
-            ];
-            
-            // Simulate build output
-            for (const log of logs) {
-              await new Promise(resolve => setTimeout(resolve, 300));
-              setViteOutput(prev => prev + log + '\n');
+          const hasStartScript = packageJson && useStructure.files[packageJson[0]]?.includes('"start"');
+
+          const bootWebContainer = async () => {
+            setIsWebcontainerBooting(true);
+            setWebcontainerUrl(null);
+            webcontainerUrlRef.current = null;
+
+            try {
+              log('[WebContainer] Bootstrapping in browser...');
+              
+              // Dynamically import WebContainer API (browser-only)
+              const { WebContainer } = await import('@webcontainer/api');
+              
+              // Boot the WebContainer instance
+              const webcontainer = await WebContainer.boot();
+              webcontainerInstanceRef.current = webcontainer;
+              
+              log('[WebContainer] Instance booted, writing files...');
+              
+              // Write all files to the virtual filesystem
+              const files = useStructure.files;
+              
+              // Collect unique parent directories and create them first
+              const dirs = new Set<string>();
+              for (const filePath of Object.keys(files)) {
+                const parts = filePath.split('/').filter(Boolean);
+                for (let i = 1; i < parts.length; i++) {
+                  dirs.add('/' + parts.slice(0, i).join('/'));
+                }
+              }
+              // Create directories shallowest-first
+              const sortedDirs = Array.from(dirs).sort((a, b) => a.split('/').length - b.split('/').length);
+              for (const dir of sortedDirs) {
+                try {
+                  await webcontainer.fs.mkdir(dir, { recursive: true });
+                } catch {
+                  // Directory may already exist
+                }
+              }
+              
+              // Now write files
+              for (const [filePath, content] of Object.entries(files)) {
+                try {
+                  await webcontainer.fs.writeFile(filePath, content);
+                } catch (writeErr: any) {
+                  logWarn(`[WebContainer] Failed to write ${filePath}:`, writeErr.message);
+                }
+              }
+              
+              log('[WebContainer] Files written, installing dependencies...');
+              
+              // Install dependencies if package.json exists
+              const hasPackageJson = files['package.json'] !== undefined;
+              if (hasPackageJson) {
+                try {
+                  const installProcess = await webcontainer.spawn('npm', ['install']);
+                  await installProcess.exit;
+                  log('[WebContainer] Dependencies installed');
+                } catch (installErr: any) {
+                  logWarn('[WebContainer] npm install failed:', installErr.message);
+                  // Continue anyway - some projects don't need deps
+                }
+              }
+              
+              log('[WebContainer] Starting server...');
+
+              // Determine start command - check for Next.js first
+              const packageJsonContent = hasPackageJson ? files['package.json'] : '';
+              const hasNextJs = packageJsonContent.includes('next') || files['next.config.js'] || files['next.config.ts'];
+              const hasStartScript = hasPackageJson && packageJsonContent.includes('"start"');
+              const hasDevScript = hasPackageJson && packageJsonContent.includes('"dev"');
+              
+              // Find the entry file location to determine working directory
+              const serverFileCandidates = ['server.js', 'app.js', 'index.js', 'main.js'];
+              const entryFile = Object.keys(files).find(f => serverFileCandidates.includes(f)) || 'server.js';
+              const entryDir = entryFile.includes('/') ? entryFile.substring(0, entryFile.lastIndexOf('/')) : '.';
+              
+              // Next.js should use 'npm run dev', otherwise use start script or node with correct path
+              // cdPrefix is empty when entryDir is '.' so we don't emit a bare 'cd <command>'
+              const cdPrefix = entryDir !== '.' ? `cd ${entryDir} && ` : '';
+              const startCommand = hasNextJs && hasDevScript 
+                ? cdPrefix + 'npm run dev' 
+                : hasStartScript 
+                  ? cdPrefix + 'npm start' 
+                  : cdPrefix + 'node ' + entryFile.split('/').pop();
+
+              log(`[WebContainer] Using start command: ${startCommand} (entry dir: ${entryDir})`);
+
+              // Start the development server with correct working directory
+              const process = await webcontainer.spawn('sh', ['-c', startCommand]);
+              webcontainerProcessRef.current = process;
+
+              // Monitor process exit
+              const exitPromise = process.exit.then((exitCode: number) => {
+                logError(`[WebContainer] Process exited with code ${exitCode}`);
+                if (exitCode !== 0 && !webcontainerUrlRef.current) {
+                  setWebcontainerUrl(`Error: Server exited with code ${exitCode}. Check output for details.`);
+                  setIsWebcontainerBooting(false);
+                }
+              });
+              
+              // Listen for server-ready event
+              let serverReadyCalled = false;
+              webcontainer.on('server-ready', (port: number, url: string) => {
+                serverReadyCalled = true;
+                log(`[WebContainer] Server ready: ${url} (port ${port})`);
+                setWebcontainerUrl(url);
+                setIsWebcontainerBooting(false);
+              });
+              
+              // Also watch for output to detect server start
+              let serverOutput = '';
+              let outputWithoutAnsi = '';
+              
+              // ANSI escape code regex for stripping terminal formatting
+              const ansiRegex = /\x1b\[[0-9;]*[a-zA-Z]/g;
+              
+              process.output.pipeTo(new WritableStream({
+                write(data) {
+                  serverOutput += data;
+                  // Strip ANSI codes for readable output and pattern matching
+                  const cleanData = data.replace(ansiRegex, '');
+                  outputWithoutAnsi += cleanData;
+                  log(`[WebContainer] Server output: ${cleanData.trim()}`);
+                  
+                  // Look for port in output - multiple patterns
+                  const patterns = [
+                    /listening on.*?:(\d+)/i,
+                    /server.*?running.*?:(\d+)/i,
+                    /port.*?(\d+)/i,
+                    /http:\/\/localhost:(\d+)/i,
+                    /http:\/\/0\.0\.0\.0:(\d+)/i,
+                    /ready in.*?(\d+)/i,  // Next.js pattern
+                    /:(\d{4,5})/  // generic 4-5 digit port
+                  ];
+                  
+                  for (const pattern of patterns) {
+                    const portMatch = outputWithoutAnsi.match(pattern);
+                    if (portMatch && !webcontainerUrlRef.current) {
+                      const port = parseInt(portMatch[1], 10);
+                      if (port > 0 && port < 65536) {
+                        log(`[WebContainer] Detected port ${port} from output`);
+                        setWebcontainerUrl(`http://localhost:${port}`);
+                        break;
+                      }
+                    }
+                  }
+                }
+              }));
+
+              // Set a fallback URL after timeout if no server-ready event
+              // Increased timeout to 45s for slower boots, only set URL if we have a valid one
+              setTimeout(() => {
+                // Only show timeout message if server-ready wasn't called and we don't have a URL
+                if (!serverReadyCalled && !webcontainerUrlRef.current) {
+                  log('[WebContainer] Timeout waiting for server-ready event, checking output...');
+                  // Try to extract port from server output as last resort (use ANSI-stripped output)
+                  const portMatch = outputWithoutAnsi.match(/listening on.*?:(\d+)/i) || outputWithoutAnsi.match(/port.*?(\d+)/i) || outputWithoutAnsi.match(/http:\/\/localhost:(\d+)/i) || outputWithoutAnsi.match(/ready in.*?(\d+)/i);
+                  if (portMatch) {
+                    const port = parseInt(portMatch[1], 10);
+                    log(`[WebContainer] Extracted port ${port} from output after timeout`);
+                    setWebcontainerUrl(`http://localhost:${port}`);
+                  } else {
+                    // Check if this might be a Next.js project (known WebContainer limitation)
+                    const cleanOutput = outputWithoutAnsi.slice(-300).replace(/\n/g, ' ').trim();
+                    const isNextJs = files['next.config.js'] || files['next.config.ts'] || (files['package.json'] && files['package.json'].includes('next'));
+                    const nextJsHint = isNextJs 
+                      ? ' Note: Next.js dev server has limited WebContainer support. Try Sandpack mode for frontend preview instead.' 
+                      : '';
+                    setWebcontainerUrl(`Timeout: Server did not start.${nextJsHint} Output: "${cleanOutput || 'None'}"`);
+                  }
+                } else if (!webcontainerUrlRef.current && serverReadyCalled) {
+                  // server-ready was called but URL wasn't set (shouldn't happen, but handle it)
+                  log('[WebContainer] server-ready event fired but URL not set - using fallback');
+                  setWebcontainerUrl('http://localhost:3000');
+                }
+                setIsWebcontainerBooting(false);
+              }, 45000);
+              
+            } catch (err: any) {
+              logError('[WebContainer] Boot error:', err);
+              
+              if (err.message.includes('SharedArrayBuffer') || err.message.includes('cross-origin')) {
+                toast.error('WebContainer requires cross-origin isolation', {
+                  description: 'Your browser may not support SharedArrayBuffer. Try Chrome or Edge.',
+                  duration: 5000,
+                });
+              } else {
+                toast.error('WebContainer boot failed', {
+                  description: err.message,
+                  duration: 5000,
+                });
+              }
+              
+              setWebcontainerUrl(`Error: ${err.message}`);
+              setIsWebcontainerBooting(false);
             }
-            
-            // Show built files
-            const distFiles = srcFiles.map(([path]) => path.replace('src/', 'dist/assets/'));
-            await new Promise(resolve => setTimeout(resolve, 500));
-            setViteOutput(prev => prev + `\n✓ built in ${Math.random() * 500 + 200 | 0}ms\n`);
-            setViteOutput(prev => prev + `\n📁 dist/\n` + distFiles.slice(0, 5).map(f => `  ${f}`).join('\n') + '\n');
-            
-            setIsViteBuilding(false);
           };
 
           return (
             <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
-              <div className="bg-cyan-900 px-4 py-2 flex items-center justify-between">
+              <div className="bg-green-900 px-4 py-2 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="text-white text-sm font-medium">⚡ Vite Build</span>
-                  <span className="text-cyan-300 text-xs">Next-gen frontend tooling</span>
+                  <span className="text-white text-sm font-medium">📀 WebContainer</span>
+                  <span className="text-green-300 text-xs">Node.js in browser</span>
                 </div>
                 <div className="flex gap-2">
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={() => {
-                      void runViteBuild();
+                      void bootWebContainer();
                     }}
                     className="text-xs bg-green-600 hover:bg-green-700 text-white"
-                    disabled={isViteBuilding}
+                    disabled={isWebcontainerBooting}
                   >
-                    {isViteBuilding ? '⏳ Building...' : '🔁 Rebuild'}
+                    {isWebcontainerBooting ? '⏳ Booting...' : '🔁 Boot'}
                   </Button>
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => setPreviewMode('sandpack')}
-                    className="text-xs bg-cyan-800 hover:bg-cyan-700 text-white"
+                    onClick={() => setPreviewMode('codesandbox')}
+                    className="text-xs bg-green-800 hover:bg-green-700 text-white"
                   >
-                    Sandpack
+                    CodeSandbox
                   </Button>
                 </div>
               </div>
-              
+
               <div className="flex-1 flex flex-col">
-                {/* Config info */}
                 <div className="p-2 bg-gray-900 border-b border-gray-800">
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div>
-                      <p className="text-gray-400">⚙️ Vite Config:</p>
-                      <p className="text-cyan-400">{viteConfig ? '✓ Found' : '⚠ Not found'}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-400">📄 index.html:</p>
-                      <p className="text-cyan-400">{indexHtml ? '✓ Found' : '⚠ Not found'}</p>
-                    </div>
-                    <div>
                       <p className="text-gray-400">📦 package.json:</p>
-                      <p className="text-cyan-400">{packageJson ? '✓ Found' : '⚠ Not found'}</p>
+                      <p className="text-green-300">{packageJson ? '✓ Found' : '⚠ Not found'}</p>
                     </div>
                     <div>
-                      <p className="text-gray-400">📁 src/ files:</p>
-                      <p className="text-cyan-400">{srcFiles.length} files</p>
+                      <p className="text-gray-400">🚀 Start script:</p>
+                      <p className="text-green-300">{hasStartScript ? '✓ Available' : '⚠ Using node'}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">📁 Server files:</p>
+                      <p className="text-green-300">{serverFiles.length} files</p>
                     </div>
                   </div>
                 </div>
-                
-                {/* Build output */}
+
                 <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
-                  {isViteBuilding ? (
-                    <div className="flex items-center gap-2 text-cyan-400">
-                      <div className="w-4 h-4 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                      <span>Building with Vite...</span>
+                  {isWebcontainerBooting ? (
+                    <div className="flex items-center gap-2 text-green-300">
+                      <div className="w-4 h-4 border-2 border-green-300 border-t-transparent rounded-full animate-spin" />
+                      <span>Booting WebContainer...</span>
                     </div>
+                  ) : webcontainerUrl ? (
+                    webcontainerUrl.startsWith('http') ? (
+                      <div className="h-full flex flex-col">
+                        <div className="mb-2 text-green-400">
+                          ✓ Server running: <a href={webcontainerUrl} target="_blank" rel="noopener noreferrer" className="underline">{webcontainerUrl}</a>
+                        </div>
+                        <iframe 
+                          src={webcontainerUrl} 
+                          className="flex-1 w-full bg-white rounded"
+                          sandbox="allow-scripts allow-same-origin allow-forms"
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-yellow-400">{webcontainerUrl}</div>
+                    )
                   ) : (
-                    <div className="space-y-1">
-                      <pre className="text-green-400 whitespace-pre-wrap">{viteOutput || 'Build complete!'}</pre>
-                      <p className="text-blue-400 animate-pulse">▊</p>
+                    <div className="space-y-2 text-gray-400">
+                      <p>Click "Boot" to start the Node.js server in your browser.</p>
+                      <p className="text-xs text-gray-500">WebContainer runs Node.js natively in the browser - no cloud needed!</p>
                     </div>
                   )}
                 </div>
-                
-                {/* File tree */}
-                <div className="p-2 bg-gray-900 border-t border-gray-800">
-                  <p className="text-gray-400 text-xs mb-1">📁 Project Structure:</p>
-                  <div className="text-gray-500 text-xs space-y-1 max-h-32 overflow-auto">
-                    {Object.keys(useStructure.files).slice(0, 15).map((path) => (
-                      <p key={path}>  {path}</p>
-                    ))}
-                    {Object.keys(useStructure.files).length > 15 && (
-                      <p className="text-gray-600">  ... and {Object.keys(useStructure.files).length - 15} more files</p>
-                    )}
+              </div>
+            </div>
+          );
+        }
+
+        // Next.js preview mode - Optimized for Next.js apps
+        // Uses WebContainer directly in browser (same as webcontainer mode but with Next.js-specific config)
+        if (isManualPreviewActive && previewMode === 'nextjs') {
+          const packageJson = Object.entries(useStructure.files).find(
+            ([path]) => path === 'package.json'
+          );
+          const nextConfig = Object.entries(useStructure.files).find(
+            ([path]) => path.startsWith('next.config')
+          );
+          const appDir = Object.entries(useStructure.files).some(
+            ([path]) => path.startsWith('app/') || path.startsWith('pages/')
+          );
+          const hasNextDev = packageJson && useStructure.files[packageJson[0]]?.includes('"dev"');
+
+          const startNextJS = async () => {
+            setIsNextjsBuilding(true);
+            setNextjsUrl(null);
+            webcontainerUrlRef.current = null;
+
+            try {
+              log('[Next.js] Booting WebContainer for Next.js...');
+
+              // Dynamically import WebContainer API (browser-only)
+              const { WebContainer } = await import('@webcontainer/api');
+
+              // Boot the WebContainer instance
+              const webcontainer = await WebContainer.boot();
+              webcontainerInstanceRef.current = webcontainer;
+
+              log('[Next.js] Writing files to virtual filesystem...');
+
+              // Write all files
+              const files = useStructure.files;
+              for (const [filePath, content] of Object.entries(files)) {
+                try {
+                  const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+                  if (dir) {
+                    await webcontainer.fs.mkdir(dir, { recursive: true });
+                  }
+                  await webcontainer.fs.writeFile(filePath, content);
+                } catch (writeErr: any) {
+                  logWarn(`[Next.js] Failed to write ${filePath}:`, writeErr.message);
+                }
+              }
+
+              log('[Next.js] Installing dependencies...');
+              await webcontainer.spawn('npm', ['install']);
+
+              log('[Next.js] Starting Next.js dev server...');
+              const process = await webcontainer.spawn('npm', ['run', 'dev']);
+              webcontainerProcessRef.current = process;
+
+              let serverOutput = '';
+              let outputWithoutAnsi = '';
+              const ansiRegex = /\x1b\[[0-9;]*[a-zA-Z]/g;
+              
+              process.output.pipeTo(new WritableStream({
+                write(data) {
+                  serverOutput += data;
+                  const cleanData = data.replace(ansiRegex, '');
+                  outputWithoutAnsi += cleanData;
+                  log(`[Next.js] Output: ${cleanData.trim()}`);
+                  
+                  // Next.js typically outputs "Ready in X.Xs" or "started on port"
+                  const patterns = [
+                    /ready in.*?(\d+)/i,
+                    /started on.*?:(\d+)/i,
+                    /localhost:(\d+)/i,
+                    /:(\d{4,5})/
+                  ];
+                  
+                  for (const pattern of patterns) {
+                    const match = outputWithoutAnsi.match(pattern);
+                    if (match && !webcontainerUrlRef.current) {
+                      const port = parseInt(match[1], 10);
+                      if (port > 0 && port < 65536) {
+                        const url = `http://localhost:${port}`;
+                        log(`[Next.js] Server ready: ${url}`);
+                        setNextjsUrl(url);
+                        setIsNextjsBuilding(false);
+                        break;
+                      }
+                    }
+                  }
+                }
+              }));
+
+              // Fallback timeout
+              setTimeout(() => {
+                if (!webcontainerUrlRef.current) {
+                  const portMatch = outputWithoutAnsi.match(/:(\d{4,5})/);
+                  if (portMatch) {
+                    const port = parseInt(portMatch[1], 10);
+                    setNextjsUrl(`http://localhost:${port}`);
+                  } else {
+                    const cleanOutput = outputWithoutAnsi.slice(-300).replace(/\n/g, ' ').trim();
+                    setNextjsUrl(`Timeout: "${cleanOutput || 'No output'}"`);
+                  }
+                }
+                setIsNextjsBuilding(false);
+              }, 45000);
+
+            } catch (err: any) {
+              logError('[Next.js] Start error:', err);
+              setNextjsUrl(`Error: ${err.message}`);
+              setIsNextjsBuilding(false);
+            }
+          };
+
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className="bg-black px-4 py-2 flex items-center justify-between border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <span className="text-white text-sm font-medium">▲ Next.js</span>
+                  <span className="text-gray-400 text-xs">React Framework</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      void startNextJS();
+                    }}
+                    className="text-xs bg-white hover:bg-gray-200 text-black"
+                    disabled={isNextjsBuilding}
+                  >
+                    {isNextjsBuilding ? '⏳ Building...' : '🚀 Dev'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewMode('webcontainer')}
+                    className="text-xs bg-gray-800 hover:bg-gray-700 text-white"
+                  >
+                    WebContainer
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex-1 flex flex-col">
+                <div className="p-2 bg-gray-900 border-b border-gray-800">
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <p className="text-gray-400">📦 package.json:</p>
+                      <p className="text-white">{packageJson ? '✓ Found' : '⚠ Not found'}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">⚙️ next.config:</p>
+                      <p className="text-white">{nextConfig ? '✓ Found' : '⚠ Default'}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">📁 App dir:</p>
+                      <p className="text-white">{appDir ? '✓ App Router' : '⚠ Pages'}</p>
+                    </div>
                   </div>
+                </div>
+
+                <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
+                  {isNextjsBuilding ? (
+                    <div className="flex items-center gap-2 text-white">
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <div className="space-y-1">
+                        <p>Starting Next.js development server...</p>
+                        <p className="text-xs text-gray-400">First build may take 30-60 seconds</p>
+                      </div>
+                    </div>
+                  ) : nextjsUrl ? (
+                    nextjsUrl.startsWith('http') ? (
+                      <div className="h-full flex flex-col">
+                        <div className="mb-2 text-green-400 flex items-center justify-between">
+                          <span>✓ Ready: <a href={nextjsUrl} target="_blank" rel="noopener noreferrer" className="underline">{nextjsUrl}</a></span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => window.open(nextjsUrl, '_blank')}
+                            className="text-xs bg-white hover:bg-gray-200 text-black"
+                          >
+                            Open in New Tab ↗
+                          </Button>
+                        </div>
+                        <iframe 
+                          src={nextjsUrl} 
+                          className="flex-1 w-full bg-white rounded"
+                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-yellow-400">{nextjsUrl}</div>
+                    )
+                  ) : (
+                    <div className="space-y-2 text-gray-400">
+                      <p>Click "Dev" to start the Next.js development server.</p>
+                      <ul className="text-xs text-gray-500 space-y-1 mt-2">
+                        <li>• Hot reload enabled</li>
+                        <li>• Server-side rendering (SSR)</li>
+                        <li>• API routes support</li>
+                        <li>• Image optimization</li>
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // CodeSandbox DevBox - Cloud development environment (fallback for complex apps)
+        if (isManualPreviewActive && previewMode === 'codesandbox') {
+          const packageJson = Object.entries(useStructure.files).find(
+            ([path]) => path === 'package.json'
+          );
+          const hasDocker = Object.entries(useStructure.files).some(
+            ([path]) => path === 'Dockerfile' || path === 'docker-compose.yml'
+          );
+          const serverFiles = Object.entries(useStructure.files).filter(
+            ([path]) => ['server.js', 'app.js', 'index.js', 'main.py', 'app.py'].includes(path)
+          );
+
+          const bootCodeSandbox = async () => {
+            setIsCodesandboxLoading(true);
+            setCodesandboxUrl(null);
+
+            try {
+              log('[CodeSandbox] Creating cloud dev environment...');
+
+              // Call API to create CodeSandbox devbox
+              const response = await fetch('/api/sandbox/devbox', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  files: useStructure.files,
+                  template: hasDocker ? 'docker' : 'node',
+                }),
+              });
+
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                const errorMsg = errorData.error || `Failed to create CodeSandbox environment (${response.status})`;
+                
+                // If error mentions "Unauthorized", suggest clearing sessions
+                if (errorMsg.includes('Unauthorized') || errorMsg.includes('not found')) {
+                  log('[CodeSandbox] Session may be stale, suggesting cleanup');
+                  throw new Error(`SESSION_STALE: ${errorMsg}`);
+                }
+                throw new Error(errorMsg);
+              }
+
+              const data = await response.json();
+              const sandboxUrl = data.url || `https://${data.sandboxId}.csb.app`;
+
+              setCodesandboxUrl(sandboxUrl);
+              log(`[CodeSandbox] DevBox ready: ${sandboxUrl}`);
+              setIsCodesandboxLoading(false);
+            } catch (err: any) {
+              logError('[CodeSandbox] Boot error:', err);
+              
+              // Handle stale session errors
+              if (err.message.includes('SESSION_STALE')) {
+                toast.error('CodeSandbox failed - session may be stale', {
+                  description: 'Click the "🗑️ Clear Sessions" button and retry',
+                  duration: 6000,
+                });
+              } else {
+                toast.error('CodeSandbox boot failed', {
+                  description: err.message,
+                  duration: 5000,
+                });
+              }
+              
+              setCodesandboxUrl(`Error: ${err.message}`);
+              setIsCodesandboxLoading(false);
+            }
+          };
+
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-white text-sm font-medium">🏖️ CodeSandbox</span>
+                  <span className="text-blue-300 text-xs">Cloud Dev Environment</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      void bootCodeSandbox();
+                    }}
+                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                    disabled={isCodesandboxLoading}
+                  >
+                    {isCodesandboxLoading ? '⏳ Creating...' : '🚀 Launch'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewMode('webcontainer')}
+                    className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                  >
+                    WebContainer
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex-1 flex flex-col">
+                <div className="p-2 bg-gray-900 border-b border-gray-800">
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <p className="text-gray-400">📦 package.json:</p>
+                      <p className="text-blue-300">{packageJson ? '✓ Found' : '⚠ Not found'}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">🐳 Docker:</p>
+                      <p className="text-blue-300">{hasDocker ? '✓ Detected' : 'Standard'}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">📁 Server files:</p>
+                      <p className="text-blue-300">{serverFiles.length} files</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
+                  {isCodesandboxLoading ? (
+                    <div className="flex items-center gap-2 text-blue-300">
+                      <div className="w-4 h-4 border-2 border-blue-300 border-t-transparent rounded-full animate-spin" />
+                      <div className="space-y-1">
+                        <p>Creating cloud development environment...</p>
+                        <p className="text-xs text-blue-400">This may take 30-60 seconds for complex projects</p>
+                      </div>
+                    </div>
+                  ) : codesandboxUrl ? (
+                    codesandboxUrl.startsWith('http') ? (
+                      <div className="h-full flex flex-col">
+                        <div className="mb-2 text-blue-400 flex items-center justify-between">
+                          <span>✓ DevBox ready: <a href={codesandboxUrl} target="_blank" rel="noopener noreferrer" className="underline">{codesandboxUrl}</a></span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => window.open(codesandboxUrl, '_blank')}
+                            className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                          >
+                            Open in New Tab ↗
+                          </Button>
+                        </div>
+                        <iframe 
+                          src={codesandboxUrl} 
+                          className="flex-1 w-full bg-white rounded"
+                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-yellow-400">{codesandboxUrl}</div>
+                    )
+                  ) : (
+                    <div className="space-y-2 text-gray-400">
+                      <p>Click "Launch" to create a cloud development environment.</p>
+                      <ul className="text-xs text-gray-500 space-y-1 mt-2">
+                        <li>• Full VS Code editor in the cloud</li>
+                        <li>• Terminal access with apt/npm/pip</li>
+                        <li>• Preview URLs for web servers</li>
+                        <li>• Perfect for Docker, databases, complex backends</li>
+                      </ul>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2454,28 +3953,16 @@ export default app;`,
                   recompileMode: "delayed",
                   recompileDelay: 300,
                 }}
-                files={sandpackFiles}
+                files={finalSandpackFiles}
                 customSetup={{
-                  dependencies:
-                    useStructure.dependencies?.reduce(
-                      (acc, dep) => {
-                        acc[dep] = "latest";
-                        return acc;
-                      },
-                      {} as Record<string, string>,
-                    ) ||
-                    getPopularDependencies(
-                      Object.values(useStructure.files).join("\n"),
-                      useStructure.framework,
-                    ),
-                  devDependencies:
-                    useStructure.devDependencies?.reduce(
-                      (acc, dep) => {
-                        acc[dep] = "latest";
-                        return acc;
-                      },
-                      {} as Record<string, string>,
-                    ) || {},
+                  dependencies: getDependencies(),
+                  devDependencies: useStructure.devDependencies?.reduce(
+                    (acc, dep) => {
+                      acc[dep] = "latest";
+                      return acc;
+                    },
+                    {} as Record<string, string>,
+                  ) || {},
                 }}
               />
             </div>
@@ -2488,7 +3975,7 @@ export default app;`,
               <AlertCircle className="w-16 h-16 mx-auto mb-4 text-red-400" />
               <p className="text-red-400">Failed to render framework preview</p>
               <p className="text-sm text-gray-600 mt-2">
-                Framework: {useStructure.framework}
+                Framework: {effectiveFramework}
               </p>
               <p className="text-sm text-gray-600">
                 Error: {(error as Error).message}
@@ -2505,7 +3992,7 @@ export default app;`,
       }
     }
 
-    // Enhanced vanilla HTML/CSS/JS preview with JSBin-style features
+    // Enhanced vanilla HTML/CSS/JS preview with Sandpack bundling
     try {
       const normalizedFiles = useStructure
         ? Object.entries(useStructure.files).map(([path, content]) => ({
@@ -2546,8 +4033,108 @@ export default app;`,
             (block) => block.language === "typescript" || block.language === "ts",
           );
 
-      // If no HTML but has other web files, create a basic HTML structure
+      // Use Sandpack for HTML/CSS/JS bundling (preferred over iframe)
+      const hasWebFiles = htmlFile || cssFile || jsFile || tsFile;
+      const shouldUseSandpackForVanilla = hasWebFiles && !useStructure?.framework;
+
+      if (shouldUseSandpackForVanilla) {
+        // Build Sandpack files with proper path resolution
+        const sandpackFiles: Record<string, { code: string }> = {};
+
+        // Process all files and add to Sandpack
+        if (useStructure) {
+          Object.entries(useStructure.files).forEach(([path, content]) => {
+            if (typeof content === "string" && content.trim()) {
+              const sandpackPath = path.startsWith("/") ? path : `/${path}`;
+              sandpackFiles[sandpackPath] = { code: content };
+            }
+          });
+        }
+
+        // If HTML file found via codeBlocks (not structure), add it
+        if (htmlFile && !sandpackFiles["/index.html"]) {
+          sandpackFiles["/index.html"] = { code: htmlFile.code };
+        }
+
+        // Add CSS file if found
+        if (cssFile && !Object.keys(sandpackFiles).some(p => p.endsWith(".css"))) {
+          sandpackFiles["/style.css"] = { code: cssFile.code };
+        }
+
+        // Add JS file if found
+        if (jsFile && !Object.keys(sandpackFiles).some(p => p.endsWith(".js"))) {
+          sandpackFiles["/index.js"] = { code: jsFile.code };
+        }
+
+        // Ensure we have an entry point
+        if (!sandpackFiles["/index.html"] && (cssFile || jsFile)) {
+          sandpackFiles["/index.html"] = {
+            code: `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Preview</title>
+  ${cssFile ? '<link rel="stylesheet" href="/style.css">' : ''}
+</head>
+<body>
+  <div id="app">
+    <h1>Preview</h1>
+    <p>Generated from your code</p>
+  </div>
+  ${jsFile ? '<script src="/index.js"></script>' : ''}
+</body>
+</html>`,
+          };
+        }
+
+        return (
+          <Suspense fallback={
+            <div className="h-96 flex items-center justify-center bg-gray-900 rounded-lg">
+              <div className="text-center text-gray-400">
+                <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin" />
+                <p>Loading preview...</p>
+              </div>
+            </div>
+          }>
+            <div className="h-96">
+              <Sandpack
+                template="vanilla"
+                theme="dark"
+                options={{
+                  showTabs: true,
+                  showLineNumbers: false,
+                  showNavigator: true,
+                  showConsole: false,
+                  showRefreshButton: true,
+                  autorun: true,
+                  recompileMode: "delayed",
+                  recompileDelay: 300,
+                }}
+                files={sandpackFiles}
+                customSetup={{
+                  dependencies: {},
+                }}
+              />
+            </div>
+          </Suspense>
+        );
+      }
+
+      // Fallback: If no HTML but has other web files, create a basic HTML structure with inlined assets
       if (!htmlFile && (cssFile || jsFile || tsFile)) {
+        // Process TypeScript/JavaScript to remove ES6 imports for inline preview
+        const processScriptForInline = (code: string): string => {
+          if (!code) return '';
+          return code
+            // Remove ES6 imports
+            .replace(/import\s+.*?from\s+['"].*?['"];?/g, '// Import removed - external modules not available in inline preview')
+            .replace(/import\s+['"].*?['"];?/g, '// Side-effect import removed')
+            // Remove export statements
+            .replace(/export\s+(default|const|let|var|function|class|interface|type)\s+/g, '$1 ')
+            .replace(/export\s*\{[^}]*\}\s*(from\s+['"].*?['"];?)?/g, '// Export removed');
+        };
+
         const autoGeneratedHtml = `
 <!DOCTYPE html>
 <html lang="en">
@@ -2556,6 +4143,8 @@ export default app;`,
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Generated Preview</title>
   ${cssFile ? `<style>${cssFile.code}</style>` : ""}
+  <!-- Babel for TypeScript/JSX transpilation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
 <body>
   <div id="app">
@@ -2563,12 +4152,26 @@ export default app;`,
     <p>This preview was automatically generated from your code.</p>
     <div id="content"></div>
   </div>
-  ${jsFile ? `<script>${jsFile.code}</script>` : ""}
+  ${
+    jsFile
+      ? `<script>
+    try {
+      ${processScriptForInline(jsFile.code)}
+    } catch (e) {
+      console.error('Error executing JavaScript:', e);
+      document.getElementById('content').innerHTML = '<p style="color: red;">Error: ' + e.message + '</p>';
+    }
+  </script>`
+      : ""
+  }
   ${
     tsFile
-      ? `<script type="module">
-    // TypeScript code (simplified for preview)
-    ${tsFile.code.replace(/import .* from .*/g, "// Import removed for preview")}
+      ? `<script type="text/babel" data-presets="typescript,react">
+    try {
+      ${processScriptForInline(tsFile.code)}
+    } catch (e) {
+      console.error('Error executing TypeScript:', e);
+    }
   </script>`
       : ""
   }
@@ -2597,7 +4200,8 @@ export default app;`,
               srcDoc={autoGeneratedHtml}
               className={`w-full bg-white rounded-lg border ${isFullscreen ? "h-screen" : "h-96"}`}
               title="Auto-generated Preview"
-              sandbox="allow-scripts allow-same-origin"
+              sandbox="allow-scripts allow-same-origin allow-modals allow-forms allow-popups allow-downloads"
+              referrerPolicy="no-referrer"
             />
           </div>
         );
@@ -2745,7 +4349,8 @@ export default app;`,
             srcDoc={combinedHtml}
             className={`w-full bg-white rounded-lg border ${isFullscreen ? "h-screen" : "h-96"}`}
             title="Live Preview"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            sandbox="allow-scripts allow-same-origin allow-modals allow-forms allow-popups allow-downloads"
+            referrerPolicy="no-referrer"
             onError={(e) => console.error("Iframe error", e)}
           />
         </div>
@@ -2876,33 +4481,36 @@ export default app;`,
           <Card className="h-full bg-transparent border-0 rounded-none">
             <CardHeader className="border-b border-white/10 bg-black/20 px-3 md:px-6">
               <div className="flex items-center justify-between gap-2">
-                <CardTitle className="text-white flex items-center gap-2 text-sm md:text-base">
-                  <CodeIcon className="w-4 h-4 md:w-5 md:h-5" />
-                  <span className="hidden sm:inline">Code Preview Panel</span>
-                  <span className="sm:hidden">Code</span>
-                  <span className="bg-gray-700 text-gray-300 rounded-full px-2 py-0.5 text-xs">
-                    {codeBlocks.length}
-                  </span>
-                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-white flex items-center gap-2 text-sm md:text-base">
+                    <CodeIcon className="w-4 h-4 md:w-5 md:h-5" />
+                    <span className="hidden sm:inline">Code Preview Panel</span>
+                    <span className="sm:hidden">Code</span>
+                    <span className="bg-gray-700 text-gray-300 rounded-full px-2 py-0.5 text-xs">
+                      {codeBlocks.length}
+                    </span>
+                  </CardTitle>
+                </div>
                 <div className="flex items-center gap-1 md:gap-2">
                   <button
                     onClick={downloadAsZip}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
+                    className="bg-blue-600/50 hover:bg-blue-500/60 backdrop-blur-sm text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center transition-all duration-200"
                   >
                     <Package className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
                     <span className="hidden sm:inline">Download ZIP</span>
                     <span className="sm:hidden">ZIP</span>
                   </button>
-                  {(projectStructureWithScopedFiles || projectStructure) && (
+                  {visualEditorProjectData && (
                     <button
                       onClick={() => {
+                        log(`[VisualEditor] opening with bundler="${visualEditorProjectData.bundler}", entryFile="${visualEditorProjectData.entryFile}", previewModeHint="${visualEditorProjectData.previewModeHint}"`);
                         localStorage.setItem(
                           "visualEditorProject",
-                          JSON.stringify(projectStructureWithScopedFiles || projectStructure),
+                          JSON.stringify(visualEditorProjectData),
                         );
                         window.open("/visual-editor", "_blank", "noopener,noreferrer");
                       }}
-                      className="bg-purple-600 hover:bg-purple-700 text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center"
+                      className="bg-purple-600/50 hover:bg-purple-500/60 backdrop-blur-sm text-white px-2 md:px-3 py-1.5 rounded text-xs md:text-sm flex items-center transition-all duration-200"
                     >
                       <Edit className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
                       <span className="hidden sm:inline">Edit</span>
@@ -2928,7 +4536,7 @@ export default app;`,
                 <TabsList className="grid w-full grid-cols-3 bg-black/40 border-b border-white/10 px-2 md:px-4">
                   <TabsTrigger
                     value="preview"
-                    className="text-white text-xs md:text-sm"
+                    className="text-white text-xs md:text-sm relative"
                   >
                     <Eye className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
                     <span className="hidden sm:inline">Live Preview</span>
@@ -2952,8 +4560,30 @@ export default app;`,
                   </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="preview" className="p-2 md:p-4 h-full">
-                  {renderLivePreview()}
+                <TabsContent value="preview" className="p-2 md:p-4 h-full relative">
+                  {/* Stale indicator with refresh button */}
+                  {isManualPreviewActive && manualPreviewMayBeStale && (
+                    <div className="absolute top-2 right-2 z-20 flex items-center gap-2 bg-yellow-500/90 text-black px-3 py-1.5 rounded-lg text-xs font-medium shadow-lg animate-pulse">
+                      <span>Files changed</span>
+                      <button
+                        onClick={handleRefreshManualPreview}
+                        className="hover:bg-yellow-600 px-2 py-0.5 rounded bg-white/20 transition-colors"
+                      >
+                        ↻ Refresh
+                      </button>
+                    </div>
+                  )}
+                  <PreviewErrorBoundary
+                    onReset={() => {
+                      log('[PreviewErrorBoundary] Reset triggered, clearing preview state');
+                      handleClearManualPreview();
+                      if (manualPreviewPathRef.current) {
+                        handleManualPreview(manualPreviewPathRef.current);
+                      }
+                    }}
+                  >
+                    {renderLivePreview()}
+                  </PreviewErrorBoundary>
                 </TabsContent>
 
                 {detectedFramework !== "vanilla" && (
@@ -2964,7 +4594,7 @@ export default app;`,
 
                 <TabsContent value="files" className="p-0 h-full">
                   <div className="flex h-full flex-col md:flex-row">
-                    <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 bg-black/30 overflow-y-auto max-h-48 md:max-h-none">
+                    <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 bg-black/30 overflow-y-auto max-h-48 md:max-h-none [scrollbar-width:thin] [scrollbar-color:rgba(0,0,0,0.3)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-black/30 [&::-webkit-scrollbar-thumb:hover]:bg-black">
                       <div className="p-2 md:p-4">
                         <h3 className="text-sm font-medium text-gray-300 mb-2">
                           Filesystem Explorer
@@ -2987,7 +4617,7 @@ export default app;`,
                               variant="outline"
                               className="h-7 px-2 text-[11px]"
                               onClick={() =>
-                                void listFilesystemDirectory(normalizedFilesystemPath)
+                                void listFilesystemDirectory(filesystemCurrentPath)
                               }
                             >
                               Refresh
@@ -3007,9 +4637,9 @@ export default app;`,
                               onClick={() => {
                                 const name = prompt('New folder name:');
                                 if (name?.trim()) {
-                                  const fullPath = `${normalizedFilesystemPath.replace(/\/+$/, '')}/${name.trim()}/.keep`;
+                                  const fullPath = `${filesystemCurrentPath.replace(/\/+$/, '')}/${name.trim()}/.keep`;
                                   writeFilesystemFile(fullPath, '').then(() => {
-                                    void listFilesystemDirectory(normalizedFilesystemPath);
+                                    void listFilesystemDirectory(filesystemCurrentPath);
                                     toast.success('Folder created');
                                   });
                                 }
@@ -3061,15 +4691,6 @@ export default app;`,
                               title="Preview with Pyodide (Python in browser)"
                             >
                               🐍 Pyodide
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 px-2 text-[11px]"
-                              onClick={() => handleManualPreview(undefined, 'vite')}
-                              title="Preview with Vite build"
-                            >
-                              ⚡ Vite
                             </Button>
                           </div>
                           {isCreatingFile && (
@@ -3151,14 +4772,23 @@ export default app;`,
                                   e.stopPropagation();
                                   const label = node.type === 'directory' ? `Delete folder "${node.name}" and all contents?` : `Delete ${node.name}?`;
                                   if (confirm(label)) {
-                                    deleteFilesystemPath(node.path).then(() => {
+                                    deleteFilesystemPath(node.path).then((deleteResult) => {
                                       toast.success(`Deleted ${node.name}`);
                                       void listFilesystemDirectory(filesystemCurrentPath);
                                       if (selectedFilesystemPath === node.path) {
                                         setSelectedFilesystemPath('');
                                         setSelectedFilesystemContent('');
                                       }
-                                    }).catch(() => toast.error('Failed to delete'));
+                                      // Dispatch event for cross-panel sync (Terminal, Chat)
+                                      emitFilesystemUpdated({
+                                        path: node.path,
+                                        scopePath: normalizedFilesystemPath,
+                                        source: 'code-preview',
+                                        type: 'delete',
+                                      });
+                                    }).catch((err: any) => {
+                                      toast.error('Failed to delete: ' + err.message);
+                                    });
                                   }
                                 }}
                               >
@@ -3260,6 +4890,84 @@ export default app;`,
                             </div>
                           </div>
                         )}
+
+                        {/* Polled Diffs Section - from useDiffsPoller */}
+                        {polledDiffs && polledDiffs.length > 0 && (
+                          <div className="mt-4 border-t border-white/10 pt-3">
+                            <h4 className="text-xs font-medium text-cyan-400 mb-2">
+                              Polled Changes ({polledDiffs.length}) 🔄
+                            </h4>
+                            <div className="flex gap-2 mb-2">
+                              <Button
+                                size="sm"
+                                variant="default"
+                                className="h-7 px-2 text-[11px] bg-cyan-600 hover:bg-cyan-700"
+                                onClick={() => onApplyPolledDiffs?.()}
+                                disabled={!onApplyPolledDiffs}
+                              >
+                                Apply All
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[11px]"
+                                onClick={() => {
+                                  // Show path selection - for now apply all
+                                  onApplyPolledDiffs?.();
+                                }}
+                                disabled={!onApplyPolledDiffs}
+                              >
+                                Select...
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-[11px]"
+                                onClick={onClearPolledDiffs}
+                                disabled={!onClearPolledDiffs}
+                              >
+                                Clear
+                              </Button>
+                            </div>
+                            <div className="space-y-1">
+                              {polledDiffs.map((diff, idx) => (
+                                <div key={diff.id || idx} className="rounded border border-cyan-500/20 p-2 bg-cyan-900/10">
+                                  <div className="flex items-center justify-between">
+                                    <div className="truncate text-[11px] text-cyan-300">{diff.path}</div>
+                                    <span className={`text-[10px] px-1.5 rounded ${
+                                      diff.changeType === 'create' ? 'bg-green-500/20 text-green-400' :
+                                      diff.changeType === 'delete' ? 'bg-red-500/20 text-red-400' :
+                                      'bg-yellow-500/20 text-yellow-400'
+                                    }`}>
+                                      {diff.changeType}
+                                    </span>
+                                  </div>
+                                  <div className="mt-1 flex gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-1 text-[10px]"
+                                      onClick={() => onApplyPolledDiffs?.([diff.path])}
+                                    >
+                                      Apply
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-1 text-[10px]"
+                                      onClick={() => {
+                                        // View diff details - could show modal
+                                        console.log('Diff details:', diff.diff);
+                                      }}
+                                    >
+                                      View
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -3335,11 +5043,55 @@ export default app;`,
                                   <button
                                     className="flex items-center text-sm text-green-400 hover:bg-green-900/30 px-2 py-1 rounded"
                                     onClick={() => {
-                                      writeFilesystemFile(selectedFilesystemPath, editableContent).then(() => {
-                                        setSelectedFilesystemContent(editableContent);
+                                      const filePath = normalizeProjectPath(selectedFilesystemPath);
+                                      log(`handleSave: saving file "${filePath}", contentLength=${editableContent.length}`);
+                                      
+                                      writeFilesystemFile(filePath, editableContent).then(async (fileData) => {
+                                        log(`handleSave: write completed, re-reading file to confirm`);
+                                        
+                                        // Re-read the file to confirm save worked
+                                        let contentToSet = editableContent;
+                                        try {
+                                          const latestFile = await readFilesystemFile(filePath);
+                                          log(`handleSave: re-read successful, path="${latestFile.path}", contentLength=${latestFile.content?.length || 0}`);
+                                          contentToSet = latestFile.content || editableContent;
+                                          setSelectedFilesystemLanguage(latestFile.language || selectedFilesystemLanguage);
+                                        } catch (readErr: any) {
+                                          logError(`handleSave: failed to re-read file after save`, readErr);
+                                          contentToSet = editableContent;
+                                        }
+                                        setSelectedFilesystemPath(filePath);
+                                        setSelectedFilesystemContent(contentToSet);
+                                        
+                                        // Update scoped preview files for live preview
+                                        setScopedPreviewFiles((prev) => ({
+                                          ...prev,
+                                          [filePath]: contentToSet,
+                                        }));
+                                        log(`handleSave: updated scopedPreviewFiles`);
+                                        
                                         setIsEditingFile(false);
+                                        
+                                        // Refresh directory listing
+                                        await listFilesystemDirectory(normalizedFilesystemPath);
+                                        log(`handleSave: refreshed directory`);
+                                        
+                                        // Dispatch event for cross-panel sync
+                                        emitFilesystemUpdated({
+                                          path: filePath,
+                                          scopePath: normalizedFilesystemPath,
+                                          source: 'code-preview',
+                                          workspaceVersion: fileData?.workspaceVersion,
+                                          commitId: fileData?.commitId,
+                                          sessionId: fileData?.sessionId,
+                                        });
+                                        log(`handleSave: dispatched filesystem-updated event`);
+                                        
                                         toast.success('File saved');
-                                      }).catch(() => toast.error('Failed to save'));
+                                      }).catch((writeErr: any) => {
+                                        logError(`handleSave: write failed for "${filePath}"`, writeErr);
+                                        toast.error('Failed to save: ' + writeErr.message);
+                                      });
                                     }}
                                   >
                                     Save
@@ -3534,11 +5286,11 @@ export default app;`,
             <button
               className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 flex items-center gap-2"
               onClick={() => {
-                const label = contextMenu.type === 'directory' 
-                  ? `Delete folder "${contextMenu.path.split('/').pop()}" and all contents?` 
+                const label = contextMenu.type === 'directory'
+                  ? `Delete folder "${contextMenu.path.split('/').pop()}" and all contents?`
                   : `Delete ${contextMenu.path.split('/').pop()}?`;
                 if (confirm(label)) {
-                  deleteFilesystemPath(contextMenu.path).then(() => {
+                  deleteFilesystemPath(contextMenu.path).then((deleteResult) => {
                     toast.success('Deleted ' + contextMenu.path.split('/').pop());
                     void listFilesystemDirectory(filesystemCurrentPath);
                     setContextMenu(null);
@@ -3546,6 +5298,13 @@ export default app;`,
                       setSelectedFilesystemPath('');
                       setSelectedFilesystemContent('');
                     }
+                    // Dispatch event for cross-panel sync (Terminal, Chat)
+                    emitFilesystemUpdated({
+                      path: contextMenu.path,
+                      scopePath: normalizedFilesystemPath,
+                      source: 'code-preview',
+                      type: 'delete',
+                    });
                   }).catch((err: any) => {
                     toast.error('Failed to delete: ' + err.message);
                   });

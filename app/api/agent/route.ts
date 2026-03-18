@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fastAgentService } from "@/lib/api/fast-agent-service";
-import type { LLMMessage } from "@/lib/api/llm-providers";
+import { fastAgentService, type FastAgentRequest } from "@/lib/chat/fast-agent-service";
+import type { LLMMessage } from "@/lib/chat/llm-providers";
 import { generateSecureId } from '@/lib/utils';
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 
@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
       provider = 'openrouter',
       model = 'deepseek/deepseek-r1',
       temperature = 0.7,
-      maxTokens = 4000,
+      maxTokens = 100000,
       stream = false,
       apiKeys = {},
       requestId = generateSecureId('agent')
@@ -55,9 +55,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Build request for Fast-Agent
-    const fastAgentRequest = {
-      messages: messages as LLMMessage[],
+    // Build request for Fast-Agent - filter out tool messages that Fast-Agent doesn't support
+    const filteredMessages = (messages as LLMMessage[])
+      .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'system')
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant' | 'system',
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      }));
+    
+    const fastAgentRequest: FastAgentRequest = {
+      messages: filteredMessages,
       provider,
       model,
       temperature,
@@ -65,7 +72,7 @@ export async function POST(request: NextRequest) {
       stream,
       apiKeys,
       requestId,
-      userId: authenticatedUserId, // Include authenticated userId
+      userId: authenticatedUserId,
     };
 
     console.log('[Agent API] Sending request to Fast-Agent');

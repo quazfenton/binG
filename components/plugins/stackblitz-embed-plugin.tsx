@@ -24,6 +24,8 @@ import {
   CheckCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import useIframeLoader from '@/hooks/use-iframe-loader';
+import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 
 interface BookmarkEntry {
   projectId: string;
@@ -42,7 +44,6 @@ interface Template {
 const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [projectId, setProjectId] = useState('');
   const [iframeUrl, setIframeUrl] = useState('https://stackblitz.com');
-  const [isLoading, setIsLoading] = useState(true);
   const [iframeError, setIframeError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
@@ -50,6 +51,38 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
   const [iframeKey, setIframeKey] = useState(0);
   const [activeTab, setActiveTab] = useState<'embed' | 'templates' | 'bookmarks'>('embed');
   const [embedMode, setEmbedMode] = useState<'full' | 'editor' | 'preview'>('full');
+
+  // Use iframe loader hook with fallback
+  const {
+    isLoading,
+    isLoaded,
+    isFailed,
+    failureReason,
+    errorMessage,
+    retryCount,
+    canRetry,
+    isUsingFallback,
+    fallbackUrl,
+    handleLoad,
+    handleRetry,
+    handleReset,
+    handleFallback,
+  } = useIframeLoader({
+    url: iframeUrl,
+    timeout: 30000,
+    maxRetries: 3,
+    retryDelay: 5000,
+    enableAutoRetry: true,
+    enableFallback: true,
+    onLoaded: () => {
+      setIsReloading(false);
+      setIframeError(null);
+    },
+    onFailed: (reason, error) => {
+      setIsReloading(false);
+      setIframeError(error || 'Failed to load content');
+    },
+  });
 
   const templates: Template[] = [
     { id: 'react', name: 'React', description: 'React with Vite', icon: '⚛️', category: 'frontend' },
@@ -81,7 +114,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setIsLoading(false);
+      setIsReloading(false);
     }, 2000);
     return () => clearTimeout(timer);
   }, [iframeKey]);
@@ -279,28 +312,31 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                     </div>
                   </div>
                 )}
-                
-                {iframeError ? (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="text-center space-y-4 max-w-md p-6">
-                      <Terminal className="w-12 h-12 mx-auto text-violet-500/60" />
-                      <p className="text-violet-200/60">{iframeError}</p>
-                      <Button onClick={handleReload} className="bg-violet-600 hover:bg-violet-500">
-                        <RefreshCw className="w-4 h-4 mr-2" />
-                        Retry
-                      </Button>
-                    </div>
+
+                {isFailed || iframeError ? (
+                  <div className="absolute inset-0">
+                    <IframeUnavailableScreen
+                      url={iframeUrl}
+                      reason={failureReason || 'failed'}
+                      errorMessage={errorMessage || iframeError || undefined}
+                      onRetry={handleRetry}
+                      onTryFallback={handleFallback}
+                      onOpenExternal={handleOpenExternal}
+                      onClose={onClose}
+                      autoRetryCount={retryCount}
+                      maxRetries={3}
+                    />
                   </div>
                 ) : (
                   <iframe
                     key={iframeKey}
-                    src={iframeUrl}
+                    src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
                     className="w-full h-full border-0"
                     title="StackBlitz"
-                    onLoad={() => setIsLoading(false)}
+                    onLoad={() => setIsReloading(false)}
                     onError={() => {
                       setIframeError('Failed to load StackBlitz. Note: StackBlitz requires valid project URLs.');
-                      setIsLoading(false);
+                      setIsReloading(false);
                     }}
                     sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-top-navigation allow-top-navigation-by-user-activation"
                     allow="fullscreen; encrypted-media"

@@ -11,7 +11,7 @@
  * - Performance profiling
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 /**
  * Debug log entry

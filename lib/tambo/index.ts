@@ -1,8 +1,8 @@
 /**
  * Tambo Module Index
- * 
+ *
  * Central export for all Tambo functionality
- * 
+ *
  * @see https://tambo.ai/docs
  */
 
@@ -14,24 +14,24 @@ export {
   allTamboTools,
   getToolByName,
   registerTool,
-  type TamboTool,
 } from './tambo-tools';
+export type { TamboTool } from './tambo-tools';
 
 // Unified registries (single source of truth)
 export {
   tamboToolRegistry,
   getTamboToolRegistry,
   initializeDefaultTools,
-  type TamboTool,
 } from './tambo-tool-registry';
+export type { TamboTool as TamboToolType } from './tambo-tool-registry';
 
 export {
   tamboComponentRegistry,
   getTamboComponentRegistry,
   initializeDefaultComponents,
   withInteractable,
-  type TamboComponent,
 } from './tambo-component-registry';
+export type { TamboComponent } from './tambo-component-registry';
 
 // React hooks
 export {

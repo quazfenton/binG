@@ -6,8 +6,17 @@ export function useServiceWorker() {
   const [registration, setRegistration] = useState<ServiceWorkerRegistration | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
+  
+  // Detect development mode
+  const isDevelopment = typeof window !== 'undefined' && window.location.hostname === 'localhost';
 
   useEffect(() => {
+    // Don't register service worker in development - it causes reload loops
+    if (isDevelopment) {
+      console.log('[ServiceWorker] Skipping registration in development mode');
+      return;
+    }
+  
     // Check if service workers are supported
     if (!('serviceWorker' in navigator)) {
       console.warn('Service workers not supported');
@@ -54,7 +63,7 @@ export function useServiceWorker() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []);
+  }, [isDevelopment]);
 
   // Update service worker
   const updateServiceWorker = async () => {

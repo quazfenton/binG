@@ -23,7 +23,7 @@ export async function PUT(request: NextRequest) {
     const db = await initializeDatabase();
     
     // Get current user data
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(authResult.userId);
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(authResult.userId) as { id: number; email: string; password: string } | undefined;
     
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
     }
 
     const db = await initializeDatabase();
-    const user = db.prepare('SELECT id, email, created_at FROM users WHERE id = ?').get(authResult.userId);
+    const user = db.prepare('SELECT id, email, created_at FROM users WHERE id = ?').get(authResult.userId) as { id: number; email: string; created_at: string } | undefined;
 
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });

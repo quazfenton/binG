@@ -1,6 +1,17 @@
-/* Parse assistant outputs into edits / ProjectStructure updates.
-   Minimal heuristics: JSON with file array, unified diff detection, or fallback to assistant-output.txt.
-*/
+/**
+ * @module code-parser
+ * @compatibility-boundary
+ *
+ * LEGACY: Parse assistant text outputs into edits / ProjectStructure updates.
+ * Minimal heuristics: JSON with file array, unified diff detection, or fallback
+ * to assistant-output.txt.
+ *
+ * Canonical tool invocations and file-effect events are now emitted directly by
+ * agent producers (priority-router, V2 executor, Mastra, OpenCode engine).
+ * This module is retained as a fallback for agents that cannot provide
+ * structured events. Prefer consuming `ToolInvocation[]` from message metadata
+ * before falling back to text parsing here.
+ */
 
 import { StreamPart } from './streaming'
 import type { Message } from '../types/index'

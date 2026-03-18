@@ -5,7 +5,7 @@
  * Implements correlation between async execution requests and their callback responses.
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 export interface PendingExecution {
   sessionId: string;

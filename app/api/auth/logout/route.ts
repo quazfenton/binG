@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authService } from '@/lib/auth/auth-service';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
-import { deleteSessionsByUserId } from '@/lib/sandbox/session-store';
+import { deleteSessionsByUserId } from '@/lib/storage/session-store';
 import { revokeToken, extractTokenFromHeader } from '@/lib/security/jwt-auth';
 import { authCache } from '@/lib/auth/request-auth';
 

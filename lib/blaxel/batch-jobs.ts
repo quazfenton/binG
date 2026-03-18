@@ -11,7 +11,7 @@
  * - Result aggregation
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 /**
  * Task status

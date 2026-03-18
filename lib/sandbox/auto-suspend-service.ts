@@ -15,8 +15,10 @@
  * @see https://docs.blaxel.ai/Agents/Asynchronous-triggers
  */
 
-import { EventEmitter } from 'events';
-import type { SandboxHandle, SandboxProvider } from './types';
+import { EventEmitter } from 'node:events';
+import type { SandboxHandle } from './providers/sandbox-provider';
+import type { SandboxProviderType } from './providers';
+import type { WorkspaceSession, SandboxConfig } from './types';
 import { sandboxBridge } from './sandbox-service-bridge';
 
 export interface AutoSuspendConfig {
@@ -482,7 +484,7 @@ export class AutoSuspendService extends EventEmitter {
         
         // Trigger VFS sync if available
         try {
-          const { sandboxFilesystemSync } = await import('./sandbox-filesystem-sync');
+          const { sandboxFilesystemSync } = await import('../virtual-filesystem/sync/sandbox-filesystem-sync');
           // This will sync files from VFS to sandbox
           sandboxFilesystemSync.startSync(sandbox.id, sandbox.id);
           console.log(`[AutoSuspend] Started VFS sync for file restoration`);

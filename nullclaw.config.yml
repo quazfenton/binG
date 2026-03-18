@@ -1,0 +1,56 @@
+# Nullclaw Configuration
+# Format based on: https://github.com/nullclaw/nullclaw
+
+# Model providers
+providers:
+  openrouter:
+    api_key: ${OPENROUTER_API_KEY:-}
+    models:
+      - claude-3-5-sonnet
+      - gpt-4o
+      - llama-3-70b
+
+# Agent settings
+agents:
+  defaults:
+    model:
+      primary: claude-3-5-sonnet
+      fallback: gpt-4o
+    max_steps: 20
+    timeout: 3600
+
+# Tool configurations
+tools:
+  discord:
+    enabled: ${DISCORD_BOT_TOKEN:+true}
+    api_key: ${DISCORD_BOT_TOKEN:-}
+    channels:
+      - ${DISCORD_CHANNEL_ID:-}
+  
+  telegram:
+    enabled: ${TELEGRAM_BOT_TOKEN:+true}
+    api_key: ${TELEGRAM_BOT_TOKEN:-}
+  
+  browser:
+    enabled: true
+    headless: true
+    timeout: 30000
+  
+  http:
+    enabled: true
+    allowed_domains:
+      - openrouter.ai
+      - api.discord.com
+      - api.telegram.org
+      - '*'
+
+# Server settings
+server:
+  host: 0.0.0.0
+  port: 3000
+  log_level: INFO
+
+# Health endpoint
+health:
+  enabled: true
+  endpoint: /health
