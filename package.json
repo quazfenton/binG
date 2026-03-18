@@ -144,7 +144,6 @@
     "fastify": "^4.25.0",
     "framer-motion": "^11.18.0",
     "input-otp": "1.4.1",
-    "ioredis": "^5.4.1",
     "ipaddr.js": "^2.2.0",
     "isomorphic-git": "^1.27.2",
     "jose": "^6.0.10",

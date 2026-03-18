@@ -37,6 +37,7 @@ export interface CommitHistoryEntry {
   message: string;
   author?: string;
   filesChanged: number;
+  workspaceVersion?: number | null;
   diff?: string;
   createdAt: string;
 }
@@ -307,6 +308,7 @@ export class ShadowCommitManager {
         author: d.author,
         createdAt: d.created_at,
         filesChanged: 0, // Would need to query files separately
+        workspaceVersion: d.workspace_version ?? null,
       }));
     }
 
@@ -331,6 +333,7 @@ export class ShadowCommitManager {
         author: data.author,
         createdAt: data.timestamp,
         filesChanged: data.transactions?.length || 0,
+        workspaceVersion: data.workspaceVersion ?? null,
         diff: data.diff,
       };
     });
