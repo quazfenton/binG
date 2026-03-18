@@ -7,7 +7,7 @@
  * @see {@link ../virtual-filesystem-service} Base VFS service
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import type { VirtualFile } from './filesystem-types';
 import { virtualFilesystem } from './virtual-filesystem-service';
 

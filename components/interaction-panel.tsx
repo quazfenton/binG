@@ -4,7 +4,7 @@ import type React from "react";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 
 // Tabs that need taller height when opened
-const TALL_TABS = ['images', 'extras', 'shell'];
+const TALL_TABS = ['images', 'extras', 'shell', 'vnc'];
 const DEFAULT_TAB_HEIGHT = 'min-h-[200px]';
 const TALL_TAB_HEIGHT = 'min-h-[400px]';
 const EXPAND_TRANSITION = 'transition-all duration-300 ease-out';
@@ -55,6 +55,7 @@ import Zap from "lucide-react/dist/esm/icons/zap";
 import Film from "lucide-react/dist/esm/icons/film";
 import Camera from "lucide-react/dist/esm/icons/camera";
 import MapIcon from "lucide-react/dist/esm/icons/map";
+import BarChart2 from "lucide-react/dist/esm/icons/bar-chart-2";
 import Gamepad2 from "lucide-react/dist/esm/icons/gamepad-2";
 import Shield from "lucide-react/dist/esm/icons/shield";
 import Database from "lucide-react/dist/esm/icons/database";
@@ -77,7 +78,9 @@ import ArrowUp from "lucide-react/dist/esm/icons/arrow-up";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import BookOpen from "lucide-react/dist/esm/icons/book-open";
 import Archive from "lucide-react/dist/esm/icons/archive";
-import type { LLMProvider } from "../lib/api/llm-providers";
+import Monitor from "lucide-react/dist/esm/icons/monitor";
+import VNCConnectionTab from "./vnc-connection-tab";
+import type { LLMProvider } from "../lib/chat/llm-providers";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
 import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";
@@ -98,13 +101,19 @@ import DuckDuckGoEmbedPlugin from "./plugins/duckduckgo-embed-plugin";
 import CodeSandboxEmbedPlugin from "./plugins/codesandbox-embed-plugin";
 import StackBlitzEmbedPlugin from "./plugins/stackblitz-embed-plugin";
 import GenericEmbedPlugin from "./plugins/generic-embed-plugin";
+import GlitchEmbedPlugin from "./plugins/glitch-embed-plugin";
+import ObservableEmbedPlugin from "./plugins/observable-embed-plugin";
 import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
+import PStreamEmbedPlugin from "./plugins/pstream-embed-plugin";
+import E2BDesktopPlugin from "./plugins/e2b-desktop-plugin";
 import IntegrationPanel from "./integrations/IntegrationPanel";
 import { useVirtualFilesystem, type AttachedVirtualFile } from "../hooks/use-virtual-filesystem";
+import { usePanel } from "../contexts/panel-context";
 import { pluginMigrationService, PluginCategorizer } from "../lib/plugins/plugin-migration";
 import { secureRandom } from "../lib/utils";
+import Layout from "lucide-react/dist/esm/icons/layout";
 import DevOpsCommandCenterPlugin from "./plugins/devops-command-center-plugin";
 import AIPromptLibraryPlugin from "./plugins/ai-prompt-library-plugin";
 import APIPlaygroundProPlugin from "./plugins/api-playground-pro-plugin";
@@ -118,9 +127,50 @@ import JsonValidatorPlugin from "./plugins/json-validator-plugin";
 import UrlUtilitiesPlugin from "./plugins/url-utilities-plugin";
 import WikiKnowledgeBasePlugin from "./plugins/wiki-knowledge-base-plugin";
 import ImageGenerationTab from "./image-generation-tab";
+import SquareSplitHorizontal from "lucide-react/dist/esm/icons/square-split-horizontal";
 
 // Pop-out plugin windows for Plugins tab
 const popOutPlugins: Plugin[] = [
+  {
+    id: "codesandbox-embed",
+    name: "CodeSandbox Embed",
+    description: "Embed CodeSandbox projects for live code editing",
+    icon: Code,
+    component: CodeSandboxEmbedPlugin,
+    category: "code",
+    defaultSize: { width: 1000, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "stackblitz-embed",
+    name: "StackBlitz Embed",
+    description: "Embed StackBlitz projects for web development",
+    icon: Code,
+    component: StackBlitzEmbedPlugin,
+    category: "code",
+    defaultSize: { width: 1000, height: 700 },
+    minSize: { width: 700, height: 500 },
+  },
+  {
+    id: "glitch-embed",
+    name: "Glitch Projects",
+    description: "Embed Glitch projects for live code editing and preview",
+    icon: Code,
+    component: GlitchEmbedPlugin,
+    category: "code",
+    defaultSize: { width: 1100, height: 800 },
+    minSize: { width: 800, height: 600 },
+  },
+  {
+    id: "observable-embed",
+    name: "Observable Notebooks",
+    description: "Embed Observable notebooks for interactive data visualization",
+    icon: BarChart2,
+    component: ObservableEmbedPlugin,
+    category: "data",
+    defaultSize: { width: 1100, height: 800 },
+    minSize: { width: 800, height: 600 },
+  },
   {
     id: "huggingface-spaces",
     name: "Hugging Face Spaces",
@@ -150,6 +200,16 @@ const popOutPlugins: Plugin[] = [
     category: "utility",
     defaultSize: { width: 800, height: 600 },
     minSize: { width: 600, height: 400 },
+  },
+  {
+    id: "pstream-embed",
+    name: "Movies",
+    description: "Watch movies and TV shows from pstream.net",
+    icon: Film,
+    component: PStreamEmbedPlugin,
+    category: "media",
+    defaultSize: { width: 1000, height: 700 },
+    minSize: { width: 800, height: 600 },
   },
   {
     id: "github-explorer",
@@ -187,7 +247,7 @@ const popOutPlugins: Plugin[] = [
     description: "Build and test API requests",
     icon: Globe,
     component: NetworkRequestBuilderPlugin,
-    category: "developer",
+    category: "code",
     defaultSize: { width: 800, height: 600 },
     minSize: { width: 600, height: 400 },
   },
@@ -197,7 +257,7 @@ const popOutPlugins: Plugin[] = [
     description: "Take and organize notes during conversations",
     icon: FileText,
     component: NoteTakerPlugin,
-    category: "productivity",
+    category: "utility",
     defaultSize: { width: 600, height: 500 },
     minSize: { width: 400, height: 300 },
   },
@@ -207,7 +267,7 @@ const popOutPlugins: Plugin[] = [
     description: "Create diagrams and flowcharts",
     icon: CheckCircle,
     component: InteractiveDiagrammingPlugin,
-    category: "productivity",
+    category: "utility",
     defaultSize: { width: 900, height: 700 },
     minSize: { width: 700, height: 500 },
   },
@@ -217,9 +277,19 @@ const popOutPlugins: Plugin[] = [
     description: "Manage deployments and infrastructure",
     icon: Server,
     component: DevOpsCommandCenterPlugin,
-    category: "developer",
+    category: "code",
     defaultSize: { width: 1000, height: 800 },
     minSize: { width: 800, height: 600 },
+  },
+  {
+    id: "e2b-desktop",
+    name: "E2B Desktop",
+    description: "Computer use desktop environment with VNC streaming",
+    icon: Monitor,
+    component: E2BDesktopPlugin,
+    category: "media",
+    defaultSize: { width: 1200, height: 800 },
+    minSize: { width: 900, height: 600 },
   },
 ];
 
@@ -240,10 +310,17 @@ interface InteractionPanelProps {
   availableProviders: LLMProvider[];
   onProviderChange: (provider: string, model: string) => void;
   hasCodeBlocks?: boolean;
-  activeTab?: "chat" | "extras" | "integrations" | "shell" | "images";
-  onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell" | "images") => void;
+  activeTab?: "chat" | "extras" | "integrations" | "shell" | "images" | "vnc";
+  onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell" | "images" | "vnc") => void;
   userId?: string;
   onAttachedFilesChange?: (files: Record<string, AttachedVirtualFile>) => void;
+  filesystemScopePath?: string;
+  // Diffs poller controls
+  isPollingDiffs?: boolean;
+  pollCount?: number;
+  onStartPollingDiffs?: () => void;
+  onStopPollingDiffs?: () => void;
+  onPollDiffsNow?: () => void;
 }
 
 export default function InteractionPanel({
@@ -266,7 +343,14 @@ export default function InteractionPanel({
   activeTab = "chat",
   onActiveTabChange,
   onAttachedFilesChange,
+  filesystemScopePath,
+  isPollingDiffs,
+  pollCount,
+  onStartPollingDiffs,
+  onStopPollingDiffs,
+  onPollDiffsNow,
 }: InteractionPanelProps) {
+  const { togglePanel, isOpen: isPanelOpen } = usePanel();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragHandleRef = useRef<HTMLDivElement>(null);
 
@@ -283,6 +367,12 @@ export default function InteractionPanel({
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Refs for touch event handlers (needed for proper cleanup)
+  const touchMoveHandler = useRef<((e: TouchEvent) => void) | null>(null);
+  const touchEndHandler = useRef<(() => void) | null>(null);
+  const dragStartY = useRef<number>(0);
+  const dragStartHeight = useRef<number>(0);
   
   // Track tall tab transitions for smooth animation
   const [prevTab, setPrevTab] = useState<string | null>(null);
@@ -411,7 +501,7 @@ export default function InteractionPanel({
     }
   }, []);
   // Virtual filesystem integration
-  const virtualFilesystem = useVirtualFilesystem("project");
+  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || "project");
   const selectedFilePaths = useMemo(
     () => Object.keys(virtualFilesystem.attachedFiles),
     [virtualFilesystem.attachedFiles],
@@ -424,6 +514,14 @@ export default function InteractionPanel({
   useEffect(() => {
     onAttachedFilesChange?.(virtualFilesystem.attachedFiles);
   }, [onAttachedFilesChange, virtualFilesystem.attachedFiles]);
+
+  const previousScopeRef = useRef(filesystemScopePath);
+  useEffect(() => {
+    if (previousScopeRef.current !== filesystemScopePath) {
+      virtualFilesystem.clearAttachedFiles();
+      previousScopeRef.current = filesystemScopePath;
+    }
+  }, [filesystemScopePath, virtualFilesystem]);
 
   // Initialize plugin migration service
   useEffect(() => {
@@ -570,7 +668,7 @@ export default function InteractionPanel({
       description: "Manage deployments and infrastructure",
       icon: Server,
       component: DevOpsCommandCenterPlugin,
-      category: "developer",
+      category: "code",
       defaultSize: { width: 1000, height: 800 },
       minSize: { width: 800, height: 600 },
     },
@@ -601,7 +699,7 @@ export default function InteractionPanel({
       description: "Advanced API testing with collections and automation",
       icon: Globe,
       component: APIPlaygroundProPlugin,
-      category: "developer",
+      category: "code",
       defaultSize: { width: 900, height: 700 },
       minSize: { width: 700, height: 500 },
     },
@@ -1278,10 +1376,11 @@ export default function InteractionPanel({
   // Calculate bottom position based on panel state
   const bottomPosition = "env(safe-area-inset-bottom, 0px)";
 
+  /* Main panel opacity changed from 60% to be more transparent */
   return (
-    <>
+    <> 
       <div
-        className={`fixed bg-black/60 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 border-t`}
+        className={`fixed bg-black/10 backdrop-blur-md border border-white/10 transition-all duration-200 z-50 left-0 right-0 border-t`}
         style={{
           bottom: bottomPosition,
           height: isMinimized
@@ -1291,7 +1390,7 @@ export default function InteractionPanel({
               : `min(${panelHeight}px, calc(100dvh - env(safe-area-inset-top, 0px) - 60px))`,
           maxHeight: "calc(100dvh - env(safe-area-inset-top, 0px) - 60px)",
         }}
-        onClick={(e) => {
+          onClick={(e) => {
           if (
             window.innerWidth <= 768 &&
             textareaRef.current &&
@@ -1302,49 +1401,111 @@ export default function InteractionPanel({
           }
         }}
       >
-        {/* Drag Handle - Full width resize bar */}
+        {/* Drag Handle - Full width resize bar (also touch area for mobile) */}
         <div
           ref={dragHandleRef}
-          className={`w-full absolute top-0 left-0 right-0 h-[4px] transition-all duration-200 ${
-            isDragging ? 'bg-white/40 cursor-ns-resize' : 'bg-transparent cursor-default'
+          className={`w-full absolute top-0 left-0 right-0 h-[40px] transition-all duration-200 pointer-events-none ${
+            isDragging
+              ? 'bg-white/40'
+              : 'bg-gradient-to-b from-white/10 to-transparent sm:from-transparent sm:bg-transparent'
           }`}
-          style={{ zIndex: 50 }}
+          style={{ zIndex: 40 }}
           onDoubleClick={toggleMinimized}
-          onMouseDown={(e) => {
-            setIsExpanded(false);
-            setIsDragging(true);
-            const startY = e.clientY;
-            const startHeight = panelHeight;
+        >
+          {/* Touch target for drag - only enabled when actively dragging or on mobile */}
+          <div
+            className="absolute inset-0 pointer-events-auto sm:pointer-events-none"
+            onMouseDown={(e) => {
+              // Only allow dragging from the very top area, not the button area
+              if (e.clientX < 64) return; // Skip left 64px where button is
+              
+              e.preventDefault();
+              setIsExpanded(false);
+              setIsDragging(true);
+              dragStartY.current = e.clientY;
+              dragStartHeight.current = panelHeight;
 
-            const handleMouseMove = (e: MouseEvent) => {
-              const delta = startY - e.clientY;
-              setPanelHeight(
-                Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), startHeight + delta)),
-              );
-            };
+              const handleMouseMove = (e: MouseEvent) => {
+                const delta = dragStartY.current - e.clientY;
+                setPanelHeight(
+                  Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), dragStartHeight.current + delta)),
+                );
+              };
 
-            const handleMouseUp = () => {
-              setIsDragging(false);
-              document.removeEventListener("mousemove", handleMouseMove);
-              document.removeEventListener("mouseup", handleMouseUp);
-            };
+              const handleMouseUp = () => {
+                setIsDragging(false);
+                document.removeEventListener("mousemove", handleMouseMove);
+                document.removeEventListener("mouseup", handleMouseUp);
+              };
 
-            document.addEventListener("mousemove", handleMouseMove);
-            document.addEventListener("mouseup", handleMouseUp);
-          }}
-          onMouseEnter={(e) => {
-            if (!isDragging) {
-              e.currentTarget.classList.add('bg-white/20');
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (!isDragging) {
-              e.currentTarget.classList.remove('bg-white/20');
-            }
-          }}
-        />
+              document.addEventListener("mousemove", handleMouseMove);
+              document.addEventListener("mouseup", handleMouseUp);
+            }}
+            onTouchStart={(e) => {
+              // Prevent parent onClick from firing
+              e.stopPropagation();
+              // Mobile touch-and-hold drag support
+              e.preventDefault();
+              setIsExpanded(false);
+              setIsDragging(true);
+              dragStartY.current = e.touches[0].clientY;
+              dragStartHeight.current = panelHeight;
+
+              // CRITICAL: Remove any previously attached touch listeners first to prevent memory leaks
+              if (touchMoveHandler.current) {
+                document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false } as EventListenerOptions);
+              }
+              if (touchEndHandler.current) {
+                document.removeEventListener("touchend", touchEndHandler.current);
+              }
+
+              // Create touch move handler
+              touchMoveHandler.current = (e: TouchEvent) => {
+                e.preventDefault(); // Prevent page scroll while dragging
+                const delta = dragStartY.current - e.touches[0].clientY;
+                setPanelHeight(
+                  Math.max(getPanelMinHeight(), Math.min(getPanelMaxHeight(), dragStartHeight.current + delta)),
+                );
+              };
+
+              // Create touch end handler
+              touchEndHandler.current = () => {
+                setIsDragging(false);
+                if (touchMoveHandler.current) {
+                  document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false } as EventListenerOptions);
+                }
+                if (touchEndHandler.current) {
+                  document.removeEventListener("touchend", touchEndHandler.current);
+                }
+                touchMoveHandler.current = null;
+                touchEndHandler.current = null;
+              };
+
+              document.addEventListener("touchmove", touchMoveHandler.current, { passive: false });
+              document.addEventListener("touchend", touchEndHandler.current);
+            }}
+          >
+            {/* Visual indicator for mobile drag area */}
+            <div className="w-full h-[4px] bg-white/30 rounded-full mx-auto mt-1 sm:hidden" />
+          </div>
+        </div>
 
         <div className="p-2 sm:p-3 h-full flex flex-col relative" style={{ cursor: 'default' }}>
+          {/* Experimental Workspace Toggle Button - Higher z-index for mobile */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={togglePanel}
+            className={`absolute top-2 left-2 w-8 h-8 p-0 z-[70] transition-all duration-300 sm:w-6 sm:h-6 ${
+              isPanelOpen
+                ? "text-yellow-400 hover:bg-yellow-500/20 hover:text-yellow-300"
+                : "text-gray-400 hover:text-white hover:bg-white/10"
+            }`}
+            title="Toggle experimental workspace panel"
+          >
+            <SquareSplitHorizontal className="w-4 h-4 sm:w-3 sm:h-3" />
+          </Button>
+
           {/* Minimize Button */}
           <Button
             variant="ghost"
@@ -1453,9 +1614,9 @@ export default function InteractionPanel({
               }}
               className={`flex-1 flex flex-col min-h-0 transition-all duration-300 ease-out`}
             >
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2 sticky top-0 z-20 bg-black/70 backdrop-blur-sm py-1">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-2 gap-2 sticky top-0 z-20 py-1">
                 <div className="w-full sm:w-auto overflow-x-auto no-scrollbar">
-                  <TabsList className="bg-black/40 w-max min-w-full sm:min-w-0 sm:w-auto">
+                  <TabsList className="w-max min-w-full sm:min-w-0 sm:w-auto" style={{ backgroundColor: 'transparent' }}>
                     <TabsTrigger value="chat" className="text-xs sm:text-sm">
                       <MessageSquare className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                       <span className="hidden sm:inline">Chat</span>
@@ -1476,10 +1637,14 @@ export default function InteractionPanel({
                       <Terminal className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                       <span className="hidden sm:inline">Shell</span>
                     </TabsTrigger>
+                    <TabsTrigger value="vnc" className="text-xs sm:text-sm">
+                      <Monitor className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                      <span className="hidden sm:inline">Remote</span>
+                    </TabsTrigger>
                   </TabsList>
                 </div>
 
-                <div className="grid grid-cols-4 gap-1 w-full sm:w-auto sm:flex sm:space-x-2 flex-shrink-0">
+                <div className="grid grid-cols-6 gap-1 w-full sm:w-auto sm:flex sm:space-x-2 flex-shrink-0">
                   <Button
                     variant="outline"
                     size="sm"
@@ -1524,6 +1689,17 @@ export default function InteractionPanel({
                       }`}
                     />
                   </Button>
+                  {onPollDiffsNow && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={onPollDiffsNow}
+                      title={`Refresh file changes (${pollCount || 0} polls)`}
+                      className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                    >
+                      <RefreshCw className="h-3 w-3 sm:h-4 sm:w-4" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -1537,13 +1713,16 @@ export default function InteractionPanel({
                     onProviderChange(provider, model);
                   }}
                 >
-                  <SelectTrigger className="w-full sm:w-[280px] bg-black/40 border-white/20">
+                  <SelectTrigger 
+                    className="w-full sm:w-[280px] border-white/20"
+                    style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}
+                  >
                     <SelectValue placeholder="Select a model" />
                   </SelectTrigger>
                   <SelectContent>
                     {/* Only show available providers (with API keys configured) */}
                     {availableProviders
-                      .filter(p => p.isAvailable !== false)
+                      .filter(p => (p as any).isAvailable !== false)
                       .map((provider) => (
                         <SelectGroup key={provider.id}>
                           <SelectLabel>{provider.name}</SelectLabel>
@@ -1555,7 +1734,7 @@ export default function InteractionPanel({
                         </SelectGroup>
                       ))}
                     {/* Show message if no providers configured */}
-                    {availableProviders.filter(p => p.isAvailable !== false).length === 0 && (
+                    {availableProviders.filter(p => (p as any).isAvailable !== false).length === 0 && (
                       <SelectItem value="none" disabled>
                         No providers configured - add API keys to .env
                       </SelectItem>
@@ -1573,7 +1752,14 @@ export default function InteractionPanel({
                       key={index}
                       variant="secondary"
                       size="sm"
-                      className="text-xs bg-black/20 hover:bg-black/40 transition-all duration-200 shrink-0"
+                      className="text-xs transition-all duration-200 shrink-0"
+                      style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)', border: '1px solid rgba(255, 255, 255, 0.1)' }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.15)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)';
+                      }}
                       onClick={() => {
                         setInput(suggestion);
                         textareaRef.current?.focus();
@@ -1873,7 +2059,7 @@ export default function InteractionPanel({
                             <button
                               key={extra.id}
                               onClick={() => {
-                                extra.action(setInput, onActiveTabChange, setPluginToOpen);
+                                extra.action();
                                 toast.success(
                                   `${extra.name} prompt loaded! Check the chat input.`,
                                 );
@@ -1932,8 +2118,8 @@ export default function InteractionPanel({
               </TabsContent>
 
               {/* Shell Tab Content - Taller height for terminal */}
-              <TabsContent 
-                value="shell" 
+              <TabsContent
+                value="shell"
                 className={`m-0 flex-1 overflow-auto ${activeTab === 'shell' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
               >
                 <Card className="bg-white/5 border-white/10 h-full">
@@ -1951,6 +2137,18 @@ export default function InteractionPanel({
                         <p className="text-white/40 text-xs mt-2">Type commands to execute in an isolated environment</p>
                       </div>
                     </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              {/* VNC/Remote Tab Content - Taller height for remote desktop */}
+              <TabsContent
+                value="vnc"
+                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'vnc' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
+              >
+                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
+                  <CardContent className="pt-0 h-full flex flex-col min-h-0 overflow-hidden">
+                    <VNCConnectionTab />
                   </CardContent>
                 </Card>
               </TabsContent>

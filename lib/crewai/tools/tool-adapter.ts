@@ -6,7 +6,7 @@
  * Includes delegation tools for inter-agent collaboration.
  */
 
-import { createToolExecutor, type ToolExecutor, type ToolExecutorConfig } from '@/lib/stateful-agent/tools/tool-executor';
+import { createToolExecutor, type ToolExecutor, type ToolExecutorConfig } from '@/lib/orchestra/stateful-agent/tools/tool-executor';
 import { RoleAgent } from '../agents/role-agent';
 
 export interface CrewAIToolDefinition {

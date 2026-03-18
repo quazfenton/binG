@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { llmService, PROVIDERS } from "@/lib/api/llm-providers";
+import { llmService, PROVIDERS } from "@/lib/chat/llm-providers";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 
 export async function GET(request: NextRequest) {

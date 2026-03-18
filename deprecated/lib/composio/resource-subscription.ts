@@ -11,7 +11,7 @@
  * - Real-time notifications
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 /**
  * Subscription event types

@@ -53,9 +53,10 @@ export function middleware(request: NextRequest) {
 
   if (isDev) {
     // Development CSP - more permissive for debugging, allows iframe embedding
+    // MUST include ws: and wss: for Next.js HMR WebSocket connections
     response.headers.set(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https:; font-src 'self' data: https://fonts.gstatic.com; frame-src 'self' https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self';"
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https://fonts.gstatic.com; frame-src 'self' https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self';"
     );
   } else {
     // Production CSP - RELAXED for Next.js compatibility

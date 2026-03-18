@@ -26,9 +26,17 @@ export class DaytonaProvider implements SandboxProvider {
   private client: Daytona
 
   constructor() {
+    const rawApiKey = process.env.DAYTONA_API_KEY || process.env.DAYTONA_API_TOKEN || ''
+    const apiKey = rawApiKey.trim().replace(/^['"]+|['"]+$/g, '')
+    if (apiKey) {
+      process.env.DAYTONA_API_KEY = apiKey
+    }
+
     this.client = new Daytona({
-      apiKey: process.env.DAYTONA_API_KEY!,
+      apiKey,
     })
+    
+    console.log(`[Daytona] Initialized - API Key configured: ${!!apiKey}`)
   }
 
   /**
@@ -61,54 +69,56 @@ export class DaytonaProvider implements SandboxProvider {
       'javascript': 'node:20-slim',
       'node': 'node:20-slim',
       'nodejs': 'node:20-slim',
-      
+
       // Python official images
       'python': 'python:3.11-slim',
       'python3': 'python:3.11-slim',
       'py': 'python:3.11-slim',
-      
+
       // Go official images
       'go': 'golang:1.21',
       'golang': 'golang:1.21',
-      
+
       // Rust official images
       'rust': 'rust:1.74',
       'rustlang': 'rust:1.74',
-      
+
       // Java official images
       'java': 'eclipse-temurin:17-jre-alpine',
       'jdk': 'eclipse-temurin:17-jre-alpine',
       'jvm': 'eclipse-temurin:17-jre-alpine',
-      
+
       // C/C++ official images
       'c': 'gcc:13',
       'cpp': 'gcc:13',
       'c++': 'gcc:13',
       'gcc': 'gcc:13',
-      
+
       // Ruby official images
       'ruby': 'ruby:3.2-slim',
       'rb': 'ruby:3.2-slim',
-      
+
       // PHP official images
       'php': 'php:8.2-cli',
-      
+
       // .NET official images
       'csharp': 'mcr.microsoft.com/dotnet/sdk:8.0',
       'dotnet': 'mcr.microsoft.com/dotnet/sdk:8.0',
       '.net': 'mcr.microsoft.com/dotnet/sdk:8.0',
-      
+
       // General purpose / multi-language
       'ubuntu': 'ubuntu:22.04',
       'debian': 'debian:bookworm-slim',
       'alpine': 'alpine:3.19',
       'bash': 'ubuntu:22.04',
       'shell': 'ubuntu:22.04',
-      
+
       // Daytona official images (if available)
       'daytona-base': 'daytonaio/sandbox:latest',
     };
-    const image = imageMap[config.language ?? 'typescript'] || 'node:20-slim';
+    const image = imageMap[config.language ?? 'typescript'] || 'node:20-slim'
+
+    console.log(`[Daytona] Creating sandbox - Language: "${config.language || 'default'}", Image: "${image}", User: ${config.labels?.userId || 'unknown'}`)
 
     // Build sandbox creation params
     const createParams: any = {
@@ -123,22 +133,55 @@ export class DaytonaProvider implements SandboxProvider {
       labels: config.labels,
     }
 
-    // Add persistent cache volume if enabled
-    if (USE_PERSISTENT_CACHE) {
+    console.log(`[Daytona] Sandbox params:`, JSON.stringify({
+      image,
+      autoStopInterval: createParams.autoStopInterval,
+      resources: createParams.resources,
+      hasEnvVars: !!config.envVars,
+      hasLabels: !!config.labels,
+      useCache: USE_PERSISTENT_CACHE,
+    }, null, 2))
+
+    // Add persistent cache volume if enabled.
+    // IMPORTANT: volumeId must be a real Daytona volume UUID, NOT a human-readable name.
+    // Passing an invalid/non-existent ID causes the Daytona API to return
+    // "An unexpected error occurred". We validate the value looks like a UUID
+    // (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) before attaching the volume.
+    const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    const cacheVolumeId = process.env.SANDBOX_CACHE_VOLUME_ID || ''
+    if (USE_PERSISTENT_CACHE && UUID_PATTERN.test(cacheVolumeId)) {
       createParams.volumes = [
         {
-          volumeId: CACHE_VOLUME_NAME,
+          volumeId: cacheVolumeId,
           mountPath: '/opt/cache',
           readOnly: false,
         }
       ]
       createParams.envVars.SANDBOX_CACHE_ENABLED = 'true'
+      console.log(`[Daytona] Persistent cache volume enabled: ${cacheVolumeId}`)
+    } else if (USE_PERSISTENT_CACHE) {
+      console.warn(
+        `[Daytona] Persistent cache requested but SANDBOX_CACHE_VOLUME_ID is missing or not a valid UUID ` +
+        `(got: "${cacheVolumeId || CACHE_VOLUME_NAME}"). ` +
+        `Skipping volume mount to avoid sandbox creation failure. ` +
+        `Set SANDBOX_CACHE_VOLUME_ID to the UUID shown in your Daytona dashboard.`
+      )
     }
 
-    const sandbox = await this.client.create(createParams)
+    try {
+      const sandbox = await this.client.create(createParams)
+      console.log(`[Daytona] ✓ Created sandbox ${sandbox.id} (image: ${image})`)
 
-    await sandbox.process.executeCommand(`mkdir -p ${WORKSPACE_DIR}`)
-    return new DaytonaSandboxHandle(sandbox, this.client)
+      await sandbox.process.executeCommand(`mkdir -p ${WORKSPACE_DIR}`)
+      return new DaytonaSandboxHandle(sandbox, this.client)
+    } catch (error: any) {
+      console.error(`[Daytona] ✗ Failed to create sandbox:`, error.message)
+      console.error(`[Daytona] Error details:`, {
+        name: error.name,
+        message: error.message,
+      })
+      throw error
+    }
   }
 
   async getSandbox(sandboxId: string): Promise<SandboxHandle> {
@@ -173,18 +216,23 @@ class DaytonaSandboxHandle implements SandboxHandle {
    * Get Computer Use Service for this sandbox
    * Requires DAYTONA_API_KEY environment variable
    */
-  getComputerUseService(): ComputerUseService | null {
+  getComputerUseService(): { takeRegion?(config: { x?: number; y?: number; width?: number; height?: number }): Promise<{ image: string }>; startRecording?(): Promise<{ recordingId: string }>; stopRecording?(recordingId: string): Promise<{ video: string }> } | undefined {
     const apiKey = process.env.DAYTONA_API_KEY
     if (!apiKey) {
       console.warn('[Daytona] DAYTONA_API_KEY not set, Computer Use Service unavailable')
-      return null
+      return undefined
     }
-    
+
     if (!this.computerUseService) {
       this.computerUseService = createComputerUseService(this.id, apiKey)
     }
-    
-    return this.computerUseService
+
+    // Return compatible interface for SandboxHandle
+    return {
+      takeRegion: (config) => this.computerUseService!.takeRegionImage(config || {}),
+      startRecording: () => this.computerUseService!.startRecording(),
+      stopRecording: (recordingId) => this.computerUseService!.stopRecording(recordingId),
+    }
   }
 
   /**
@@ -226,28 +274,31 @@ class DaytonaSandboxHandle implements SandboxHandle {
    * Start screen recording
    * @see https://www.daytona.io/docs/en/computer-use.md#start-recording
    */
-  async startRecording(options?: ScreenRecordingRequest): Promise<ToolResult> {
+  async startRecording(options?: ScreenRecordingRequest): Promise<{ recordingId: string }> {
     const service = this.getComputerUseService()
     if (!service) throw new Error('Computer Use Service not available')
-    return service.startRecording(options)
+    const result = await service.startRecording()
+    return { recordingId: result.output || '' }
   }
 
   /**
    * Stop screen recording
    */
-  async stopRecording(recordingId: string): Promise<ToolResult> {
+  async stopRecording(recordingId: string): Promise<{ video: string }> {
     const service = this.getComputerUseService()
     if (!service) throw new Error('Computer Use Service not available')
-    return service.stopRecording(recordingId)
+    const result = await service.stopRecording(recordingId)
+    return { video: result.output || '' }
   }
 
   /**
    * Take regional screenshot
    */
-  async takeRegionScreenshot(x: number, y: number, width: number, height: number): Promise<ToolResult> {
+  async takeRegionScreenshot(x: number, y: number, width: number, height: number): Promise<{ image: string }> {
     const service = this.getComputerUseService()
     if (!service) throw new Error('Computer Use Service not available')
-    return service.takeRegion({ x, y, width, height })
+    const result = await service.takeRegion({ x, y, width, height })
+    return { image: result.binary ? Buffer.from(result.binary).toString('base64') : (result.output || '') }
   }
 
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {

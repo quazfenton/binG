@@ -7,7 +7,7 @@
  * @see https://docs.composio.dev/docs/cli Composio CLI
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 /**
  * Toolkit information

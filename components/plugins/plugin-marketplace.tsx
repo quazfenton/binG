@@ -460,10 +460,10 @@ export const PluginMarketplace: React.FC<PluginMarketplaceProps> = ({
                         <CardTitle className="text-lg flex items-center gap-2">
                           {plugin.name}
                           {plugin.verified && (
-                            <CheckCircle className="w-4 h-4 text-blue-400" title="Verified" />
+                            <CheckCircle className="w-4 h-4 text-blue-400" />
                           )}
                           {plugin.featured && (
-                            <Star className="w-4 h-4 text-yellow-400" title="Featured" />
+                            <Star className="w-4 h-4 text-yellow-400" />
                           )}
                         </CardTitle>
                         <p className="text-sm text-white/60">by {plugin.author}</p>

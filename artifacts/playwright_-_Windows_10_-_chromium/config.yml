@@ -1,0 +1,24 @@
+apiVersion: v1alpha
+kind: playwright
+showConsoleLog: false
+sauce:
+  region: us-west-1
+  concurrency: 1
+  sauceignore: .sauceignore
+playwright:
+  version: 1.58.1
+suites:
+- name: playwright - Windows 10 - chromium
+  testMatch:
+  - .*.spec.js
+  platformName: Windows 10
+  params:
+    browserName: chromium
+    project: ""
+rootDir: .
+artifacts:
+  download:
+    match:
+    - '*'
+    when: fail
+    directory: ./artifacts

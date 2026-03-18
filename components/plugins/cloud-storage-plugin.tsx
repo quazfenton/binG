@@ -6,7 +6,7 @@ import { Cloud, X, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/auth-context';
 import { FEATURE_FLAGS } from '@/config/features';
-import { cloudStorage } from '@/lib/services/cloud-storage';
+import { cloudStorage } from '@/lib/storage/cloud-storage';
 
 const CloudStoragePlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { isAuthenticated, user } = useAuth();

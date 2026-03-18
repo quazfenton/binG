@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
-import { terminalManager } from '@/lib/sandbox/terminal-manager';
+import { terminalManager } from '@/lib/terminal/terminal-manager';
 import { sandboxCreationRateLimiter } from '@/lib/utils/rate-limiter';
 import { createLogger } from '@/lib/utils/logger';
 
@@ -59,10 +59,11 @@ export async function POST(req: NextRequest) {
 
     // If session exists, verify the sandbox is still valid
     if (userSession) {
+      const provider = sandboxBridge.inferProviderFromSandboxId(userSession.sandboxId)
+        || (process.env.SANDBOX_PROVIDER as any) || 'daytona';
+
       try {
         // Try to get the sandbox - this will fail if it was destroyed
-        const provider = sandboxBridge.inferProviderFromSandboxId(userSession.sandboxId)
-          || (process.env.SANDBOX_PROVIDER as any) || 'daytona';
         const sandboxProvider = await sandboxBridge.getProvider(provider);
         await sandboxProvider.getSandbox(userSession.sandboxId);
 
@@ -181,7 +182,6 @@ export async function DELETE(req: NextRequest) {
   } catch (error) {
     const err = error as Error;
     logger.error('Failed to kill terminal session', {
-      sessionId: req.body?.sessionId,
       error: err.message,
       stack: err.stack,
     });

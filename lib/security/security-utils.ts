@@ -36,11 +36,21 @@ export function safeJoin(base: string, ...paths: string[]): string {
     throw new Error(`Base path must be absolute, got: "${base}"`);
   }
 
+  // SECURITY: URL decode paths to catch encoded path traversal attempts
+  // e.g., "..%2F..%2Fetc%2Fpasswd" should be treated same as "../.. /etc/passwd"
+  const decodedPaths = paths.map(p => {
+    try {
+      return decodeURIComponent(p);
+    } catch {
+      return p;
+    }
+  });
+
   // Normalize base (already absolute)
   const normalizedBase = resolve(base);
 
   // Join all path segments
-  const joined = join(normalizedBase, ...paths);
+  const joined = join(normalizedBase, ...decodedPaths);
 
   // Normalize to resolve any .. or . segments
   const resolved = normalize(joined);

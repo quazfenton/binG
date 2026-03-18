@@ -5,7 +5,7 @@
  * Extracts code execution results, tool calls, and structured outputs.
  */
 
-import type { ToolResult } from '../../types';
+import type { ToolResult } from '../../../types';
 import type {
   CodeExecutionResult,
   Conversation,
