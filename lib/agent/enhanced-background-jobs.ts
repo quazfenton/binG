@@ -1,9 +1,9 @@
 /**
  * Enhanced Background Jobs Integration
- * 
+ *
  * Integrates background jobs with session management, execution graph,
  * and unified agent state for comprehensive job tracking and execution.
- * 
+ *
  * Features:
  * - Session-aware job management
  * - Execution graph integration for job tracking
@@ -15,15 +15,32 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'crypto';
 import { createLogger } from '../utils/logger';
-import type { Session } from '../session/session-manager';
-import type { ExecutionGraph, ExecutionNode } from '../agent/execution-graph';
-import type { UnifiedAgentState } from '../orchestra/unified-agent-state';
+import type { ExecutionGraph, ExecutionNode } from './execution-graph';
 
 const logger = createLogger('Agent:EnhancedBackgroundJobs');
 
 // ============================================================================
 // Types
 // ============================================================================
+
+/**
+ * Session interface for quota checking (avoid circular dependency)
+ */
+interface SessionLike {
+  quota?: {
+    computeMinutes: number;
+    computeUsed: number;
+    storageBytes: number;
+    storageUsed: number;
+    apiCalls: number;
+    apiCallsUsed: number;
+  };
+  metrics?: {
+    computeTime?: number;
+    ioOps?: number;
+    apiCalls?: number;
+  };
+}
 
 export interface EnhancedJobConfig {
   jobId?: string;
@@ -392,7 +409,7 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
   /**
    * Check if quota is available for job execution
    */
-  private checkQuotaAvailable(session: Session, category: string): boolean {
+  private checkQuotaAvailable(session: SessionLike, category: string): boolean {
     if (!session.quota) return true;
 
     const limits = this.QUOTA_LIMITS;

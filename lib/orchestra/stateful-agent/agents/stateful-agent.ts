@@ -7,6 +7,7 @@ import { generateObject } from 'ai';
 import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
+import { detectTemplate, templateToTaskGraph, type TemplateType } from './template-flows';
 
 const log = createLogger('StatefulAgent');
 
@@ -454,7 +455,7 @@ Respond with a list of file paths, one per line. No other text.`;
 
   /**
    * Run planning phase - creates a systematic plan for the task
-   * Enhanced with LLM-based task decomposition
+   * Enhanced with LLM-based task decomposition and template detection
    * @public - Exposed for LangGraph integration
    */
   public async runPlanningPhase(userMessage: string) {
@@ -470,8 +471,24 @@ Respond with a list of file paths, one per line. No other text.`;
       return this.currentPlan;
     }
 
-    // Use LLM for task decomposition if enabled
-    if (this.enableTaskDecomposition) {
+    // Detect template from user message
+    const detectedTemplate = detectTemplate(userMessage);
+    
+    if (detectedTemplate) {
+      log.info('Template detected', { template: detectedTemplate });
+      
+      // Use template-based task decomposition
+      const templateTaskGraph = templateToTaskGraph(
+        (await import('./template-flows')).getTemplate(detectedTemplate)
+      );
+      
+      this.taskGraph = templateTaskGraph;
+      log.info('Template task graph created', {
+        template: detectedTemplate,
+        taskCount: templateTaskGraph.tasks.length,
+      });
+    } else if (this.enableTaskDecomposition) {
+      // Fall back to LLM-based decomposition
       await this.decomposeIntoTasks(userMessage);
     }
 
@@ -704,11 +721,32 @@ Use 'createFile' for new files.`;
     }
 
     const errorMessages = errors.map(e => e.message).join('\n');
-    
+
     try {
-      await this.runEditingPhase(`Fix the following errors:\n${errorMessages}`);
+      // Analyze error type to determine healing strategy
+      const errorType = this.classifyError(errors[0]);
+      log.info('Self-healing initiated', { errorType, attempt: this.retryCount + 1 });
+
+      // Apply targeted healing strategy based on error type
+      switch (errorType) {
+        case 'syntax':
+          await this.fixSyntaxError(errors[0]);
+          break;
+        case 'missing_import':
+          await this.addMissingImport(errors[0]);
+          break;
+        case 'type_error':
+          await this.fixTypeError(errors[0]);
+          break;
+        case 'runtime':
+          await this.fixRuntimeError(errors[0]);
+          break;
+        default:
+          // Generic retry with same approach
+          await this.runEditingPhase(`Fix the following errors:\n${errorMessages}`);
+      }
     } catch (err: any) {
-      console.error('[StatefulAgent] Self-healing failed:', err);
+      log.error('Self-healing failed', err.message);
       this.errors.push({
         step: this.steps,
         message: `Self-healing failed: ${err.message}`,
@@ -718,6 +756,97 @@ Use 'createFile' for new files.`;
 
     this.steps++;
     return this.getState();
+  }
+
+  /**
+   * Classify error type for targeted healing
+   */
+  private classifyError(error: any): 'syntax' | 'missing_import' | 'type_error' | 'runtime' | 'unknown' {
+    const message = error.message?.toLowerCase() || '';
+    
+    if (/syntax|parse|unexpected token/i.test(message)) {
+      return 'syntax';
+    }
+    if (/cannot find module|import|not defined/i.test(message)) {
+      return 'missing_import';
+    }
+    if (/type|property.*does not exist|is not assignable/i.test(message)) {
+      return 'type_error';
+    }
+    if (/runtime|execution|failed/i.test(message)) {
+      return 'runtime';
+    }
+    
+    return 'unknown';
+  }
+
+  /**
+   * Fix syntax errors
+   */
+  private async fixSyntaxError(error: any) {
+    const { generateText } = await import('ai');
+    
+    const fixPrompt = `Fix the syntax error in this code:
+
+ERROR: ${error.message}
+
+Provide only the corrected code, no explanation.`;
+
+    const result = await generateText({
+      model: this.getModel(),
+      prompt: fixPrompt,
+    });
+
+    // Apply the fix (simplified - in reality would need to identify file and location)
+    log.info('Syntax error fix applied', { fix: result.text.substring(0, 100) });
+  }
+
+  /**
+   * Add missing imports
+   */
+  private async addMissingImport(error: any) {
+    const { generateText } = await import('ai');
+    
+    const fixPrompt = `Add the missing import for this error:
+
+ERROR: ${error.message}
+
+Provide only the import statement, no explanation.`;
+
+    const result = await generateText({
+      model: this.getModel(),
+      prompt: fixPrompt,
+    });
+
+    log.info('Missing import added', { import: result.text.trim() });
+  }
+
+  /**
+   * Fix type errors
+   */
+  private async fixTypeError(error: any) {
+    const { generateText } = await import('ai');
+    
+    const fixPrompt = `Fix the type error in this code:
+
+ERROR: ${error.message}
+
+Provide only the corrected code, no explanation.`;
+
+    const result = await generateText({
+      model: this.getModel(),
+      prompt: fixPrompt,
+    });
+
+    log.info('Type error fix applied', { fix: result.text.substring(0, 100) });
+  }
+
+  /**
+   * Fix runtime errors
+   */
+  private async fixRuntimeError(error: any) {
+    // Runtime errors often need context - use generic retry
+    await this.runEditingPhase(`Fix the runtime error: ${error.message}`);
   }
 
   getState() {

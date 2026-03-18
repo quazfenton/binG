@@ -12,10 +12,9 @@
  * 4. Streaming: Native SSE event emission at every state transition.
  */
 
-// import { z } from 'zod';
-// import { llmService, type LLMRequest } from '@/lib/chat/llm-providers';
-// import { executeWithSelfHeal, classifyError } from '@/lib/orchestra/stateful-agent/agents/self-healing';
-// import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
+import { llmService, type LLMRequest } from '@/lib/chat/llm-providers';
+import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
+import { SelfHealingExecutor } from '@/lib/crewai/runtime/self-healing';
 
 export interface IterationConfig {
   maxIterations: number;
@@ -172,23 +171,79 @@ export class AgentOrchestrator {
   // ==========================================
 
   private async generatePlan(task: string, history: any[]) {
-    // TODO: Wire up to lib/orchestra/mastra/workflows/code-agent-workflow.ts planner step
-    return [{ action: "Execute user request" }];
+    const planPrompt = `You are a planning agent. Create a step-by-step execution plan for the following task.
+TASK: ${task}
+Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"}]`;
+    const response = await this.callLLM(planPrompt, []);
+    try {
+      const parsed = JSON.parse(response.text.match(/\[.*\]/s)?.[0] || '[]');
+      return parsed.length ? parsed : [{ action: task }];
+    } catch {
+      return [{ action: task }];
+    }
   }
 
   private async callLLM(prompt: string, history: any[]) {
-    // TODO: Wire up to lib/chat/llm-providers
-    return { text: "Done", done: true, toolCalls: [], usage: { totalTokens: 100 } }; 
+    const request: LLMRequest = {
+      model: process.env.LLM_MODEL || 'gpt-4o',
+      temperature: 0.2,
+      maxTokens: 4000,
+      messages: [
+        { role: 'system', content: 'You are an autonomous AI coding agent. You have tools available to interact with the system.' },
+        ...history,
+        { role: 'user', content: prompt }
+      ]
+    };
+    const response = await llmService.generateResponse(request);
+    return {
+      text: response.content || '',
+      done: !response.toolCalls || response.toolCalls.length === 0,
+      toolCalls: response.toolCalls || [],
+      usage: response.usage || { totalTokens: 0 }
+    };
   }
 
   private async executeToolWithHealing(name: string, args: any) {
-    // TODO: Wire up to lib/orchestra/stateful-agent/agents/self-healing.ts
-    // Use exponential backoff for network/transient errors
-    return this.config.executeTool(name, args);
+    // Basic self-healing wrapper
+    const maxRetries = 2;
+    let attempt = 0;
+    
+    while (attempt <= maxRetries) {
+      try {
+        return await this.config.executeTool(name, args);
+      } catch (error: any) {
+        attempt++;
+        if (attempt > maxRetries) {
+          throw new Error(`Tool ${name} failed after ${maxRetries} retries: ${error.message}`);
+        }
+        // Small exponential backoff for transient issues
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+      }
+    }
   }
 
   private async runVerification(files: string[]) {
-    // TODO: Wire up to lib/orchestra/stateful-agent/agents/verification.ts
-    return { passed: true, errors: [] };
+    // Mocking file content read for verification
+    const modifiedFilesRecord: Record<string, string> = {};
+    for (const file of files) {
+      try {
+        const result = await this.config.executeTool('readFile', { path: file });
+        if (result && result.content) {
+          modifiedFilesRecord[file] = result.content;
+        }
+      } catch (e) {
+        // Skip if we can't read it
+      }
+    }
+    
+    if (Object.keys(modifiedFilesRecord).length === 0) {
+      return { passed: true, errors: [] };
+    }
+    
+    const result = await verifyChanges(modifiedFilesRecord, { strict: false });
+    return {
+      passed: result.passed,
+      errors: result.errors
+    };
   }
 }
