@@ -5,6 +5,10 @@ import { reflectionEngine } from '@/lib/orchestra/reflection-engine';
 import { executionGraphEngine } from '@/lib/agent/execution-graph';
 import { generateObject } from 'ai';
 import { z } from 'zod';
+import { createLogger } from '@/lib/utils/logger';
+import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
+
+const log = createLogger('StatefulAgent');
 
 export interface StatefulAgentOptions {
   sessionId?: string;
@@ -131,21 +135,54 @@ export class StatefulAgent {
    * Create execution graph for tracking task progress
    */
   private async createExecutionGraph(): Promise<void> {
+    if (!this.taskGraph || this.taskGraph.tasks.length === 0) return;
+    
     const graph = executionGraphEngine.createGraph(this.sessionId);
     this.executionGraphId = graph.id;
-    
+
     // Add nodes for each task in the task graph
-    if (this.taskGraph) {
-      for (const task of this.taskGraph.tasks) {
-        executionGraphEngine.addNode(graph, {
-          id: task.id,
-          type: 'agent_step',
-          name: task.description,
-          description: task.description,
-          dependencies: task.dependencies,
-        });
-      }
+    for (const task of this.taskGraph.tasks) {
+      executionGraphEngine.addNode(graph, {
+        id: task.id,
+        type: 'agent_step',
+        name: task.description,
+        description: task.description,
+        dependencies: task.dependencies,
+      });
     }
+    
+    log.info('Execution graph created', {
+      graphId: graph.id,
+      taskId: this.taskGraph.id,
+      taskCount: this.taskGraph.tasks.length,
+    });
+  }
+
+  /**
+   * Update execution graph node status
+   */
+  private async updateExecutionGraphNode(nodeId: string, status: 'running' | 'completed' | 'failed', result?: any): Promise<void> {
+    if (!this.executionGraphId) return;
+    
+    const graph = executionGraphEngine.getGraph(this.executionGraphId);
+    if (!graph) return;
+    
+    const node = graph.nodes.get(nodeId);
+    if (!node) return;
+    
+    node.status = status;
+    if (status === 'running') {
+      node.startedAt = Date.now();
+    } else if (status === 'completed' || status === 'failed') {
+      node.completedAt = Date.now();
+      if (result) node.result = result;
+    }
+    
+    log.debug('Execution graph node updated', {
+      graphId: this.executionGraphId,
+      nodeId,
+      status,
+    });
   }
 
   /**
@@ -239,7 +276,7 @@ export class StatefulAgent {
 
         this.status = 'completed';
 
-        return {
+        const result: StatefulAgentResult = {
           success: this.errors.length === 0,
           response: `Completed ${this.steps} steps. Modified ${this.transactionLog.length} files.`,
           steps: this.steps,
@@ -247,12 +284,34 @@ export class StatefulAgent {
           vfs: this.vfs,
           metrics: this.toolExecutor.getMetrics(),
         };
+
+        // Log completion metrics
+        log.info('StatefulAgent execution completed', {
+          sessionId: this.sessionId,
+          success: result.success,
+          steps: result.steps,
+          filesModified: this.transactionLog.length,
+          errors: result.errors.length,
+          reflectionEnabled: this.enableReflection,
+          taskDecompositionEnabled: this.enableTaskDecomposition,
+          executionGraphId: this.executionGraphId,
+          duration: Date.now() - (this as any).startTime,
+        });
+
+        return result;
       } catch (error: any) {
         this.status = 'error';
         this.errors.push({
           step: this.steps,
           message: error.message || 'Fatal execution error',
           timestamp: Date.now(),
+        });
+
+        log.error('StatefulAgent execution failed', {
+          sessionId: this.sessionId,
+          error: error.message,
+          steps: this.steps,
+          errors: this.errors.length,
         });
 
         return {
@@ -303,6 +362,38 @@ REQUEST: ${userMessage}
 Respond with a list of file paths, one per line. No other text.`;
 
     try {
+      // First, try to use context pack for comprehensive context gathering
+      if (process.env.STATEFUL_AGENT_USE_CONTEXT_PACK !== 'false') {
+        try {
+          const contextPack = await contextPackService.generateContextPack(
+            this.sessionId,
+            '/',
+            {
+              format: 'plain',
+              includeContents: true,
+              includeTree: true,
+              maxTotalSize: 500 * 1024, // 500KB limit for context
+            }
+          );
+          
+          log.info('Context pack generated for discovery', {
+            fileCount: contextPack.fileCount,
+            directoryCount: contextPack.directoryCount,
+            estimatedTokens: contextPack.estimatedTokens,
+          });
+          
+          // Add key files from context pack to VFS
+          for (const file of contextPack.files.slice(0, 20)) {
+            if (file.content && !this.vfs[file.path]) {
+              this.vfs[file.path] = file.content;
+            }
+          }
+        } catch (error: any) {
+          log.warn('Context pack generation failed, falling back to file discovery', error.message);
+        }
+      }
+
+      // Then use LLM for targeted file discovery
       const { generateText } = await import('ai');
       const result = await generateText({
         model: this.getModel(),
@@ -326,26 +417,30 @@ Respond with a list of file paths, one per line. No other text.`;
             successfulReads.push(filePath);
           } else {
             failedReads.push(filePath);
-            console.warn(`[StatefulAgent] Discovery failed for ${filePath}: ${readResult.error || 'Unknown error'}`);
+            log.warn(`Discovery failed for ${filePath}: ${readResult.error || 'Unknown error'}`);
           }
         } catch (error: any) {
           failedReads.push(filePath);
-          console.warn(`[StatefulAgent] Discovery failed for ${filePath}:`, error.message);
+          log.warn(`Discovery failed for ${filePath}:`, error.message);
         }
       }
 
       // Log summary for debugging
-      console.log(`[StatefulAgent] Discovery complete: ${successfulReads.length} files read, ${failedReads.length} failed`);
-      
+      log.info('Discovery complete', {
+        filesRead: successfulReads.length,
+        filesFailed: failedReads.length,
+        totalInVFS: Object.keys(this.vfs).length,
+      });
+
       if (failedReads.length > 0) {
-        console.warn(`[StatefulAgent] Failed to read files:`, failedReads);
+        log.warn('Failed to read files', failedReads);
       }
-      
+
       if (successfulReads.length === 0 && filePaths.length > 0) {
-        console.error('[StatefulAgent] WARNING: No files were successfully read during discovery phase');
+        log.error('WARNING: No files were successfully read during discovery phase');
       }
     } catch (error: any) {
-      console.error('[StatefulAgent] Discovery error:', error.message);
+      log.error('Discovery error', error.message);
       // Add error to agent errors for tracking
       this.errors.push({
         step: this.steps,
