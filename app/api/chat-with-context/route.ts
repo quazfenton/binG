@@ -3,6 +3,7 @@ import { createClient } from 'webdav';
 import { diffLines } from 'diff';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { FEATURE_FLAGS } from '@/config/features';
 
 export const dynamic = 'force-dynamic';
@@ -18,6 +19,14 @@ function safeCacheFilename(userPath: string): string {
   const stripped = userPath.replace(/[^a-zA-Z0-9.\-_/]/g, '_');
   // Replace path separators with underscores to produce a flat filename
   return stripped.replace(/\//g, '_').replace(/\.{2,}/g, '_');
+}
+
+/**
+ * Generate unique temp file suffix to prevent collisions
+ * Uses crypto.randomBytes for collision resistance
+ */
+function uniqueTempSuffix(): string {
+  return crypto.randomBytes(8).toString('hex');
 }
 
 export async function POST(req: Request) {
@@ -74,11 +83,12 @@ export async function POST(req: Request) {
             )
             .join('');
 
-          // Atomic write: write to tmp then rename
-          await fs.writeFile(`${cachePath}.tmp`,      newContent);
-          await fs.rename(`${cachePath}.tmp`, cachePath);
-          await fs.writeFile(`${cachePath}.etag.tmp`, stats.etag);
-          await fs.rename(`${cachePath}.etag.tmp`, `${cachePath}.etag`);
+          // Atomic write: use unique temp suffix to prevent same-millisecond collisions
+          const tempSuffix = uniqueTempSuffix();
+          await fs.writeFile(`${cachePath}.tmp.${tempSuffix}`, newContent);
+          await fs.rename(`${cachePath}.tmp.${tempSuffix}`, cachePath);
+          await fs.writeFile(`${cachePath}.etag.tmp.${tempSuffix}`, stats.etag);
+          await fs.rename(`${cachePath}.etag.tmp.${tempSuffix}`, `${cachePath}.etag`);
 
           updatedFiles[currentFile] = newContent;
         }
@@ -136,9 +146,18 @@ export async function POST(req: Request) {
     }
 
     try {
+      // Add timeout to prevent hanging if downstream stalls
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
       const chatResponse = await fetch(internalChatUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          // Forward authorization headers to preserve caller identity for rate limiting and auth
+          ...(req.headers.get('authorization') && { 'Authorization': req.headers.get('authorization') }),
+          ...(req.headers.get('cookie') && { 'Cookie': req.headers.get('cookie') }),
+        },
         body: JSON.stringify({
           messages: [
             { role: 'system', content: systemPrompt },
@@ -150,7 +169,10 @@ export async function POST(req: Request) {
           model:    process.env.DEFAULT_MODEL,
           context_signals: llmContextSignals,
         }),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       if (!chatResponse.ok) {
         const errText = await chatResponse.text().catch(() => 'unknown');
@@ -161,6 +183,15 @@ export async function POST(req: Request) {
       // Handle both streaming-event format and direct response format
       llmResponseContent = chatData.content || chatData.response || chatData.choices?.[0]?.message?.content || '';
     } catch (llmError: any) {
+      // Handle timeout errors specifically
+      if (llmError.name === 'AbortError') {
+        console.error('[WebDAV route] LLM call timed out after 30s');
+        return NextResponse.json(
+          { error: 'LLM request timeout', detail: 'The request took too long to process' },
+          { status: 504 },
+        );
+      }
+
       console.error('[WebDAV route] LLM call failed:', llmError.message);
       // Graceful degradation: return a structured error rather than crashing
       return NextResponse.json(
