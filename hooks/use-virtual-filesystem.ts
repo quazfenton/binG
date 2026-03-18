@@ -67,8 +67,9 @@ interface SnapshotCacheEntry {
 }
 
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
-const SNAPSHOT_CACHE_TTL_MS = 5000; // 5 seconds cache TTL
-const SNAPSHOT_CACHE_MAX_ENTRIES = 10; // Limit cache entries
+const SNAPSHOT_CACHE_TTL_MS = 30000; // 30 seconds for snapshots (was 5s)
+const LIST_CACHE_TTL_MS = 15000;     // 15 seconds for directory listings
+const SNAPSHOT_CACHE_MAX_ENTRIES = 50; // Increased from 10
 
 function getCacheKey(path: string, ownerId: string): string {
   return `${ownerId}:${path}`;
@@ -156,6 +157,9 @@ export function useVirtualFilesystem(
   });
 
   const { log, error: logError, warn: logWarn } = vfsLogger;
+
+  // Track in-flight requests to prevent duplicate concurrent calls
+  const inFlightRequests = useRef<Map<string, Promise<any>>>(new Map());
 
   // Initialize OPFS on mount if enabled
   useEffect(() => {
@@ -382,31 +386,49 @@ export function useVirtualFilesystem(
   const getSnapshot = useCallback(async (pathForSnapshot?: string) => {
     const targetPath = pathForSnapshot || currentPathRef.current;
     const ownerId = getOrCreateAnonymousSessionId();
-    
+    const cacheKey = `${ownerId}:${targetPath}`;
+
     // Check shared cache first
     const cached = getCachedSnapshot(targetPath, ownerId);
     if (cached) {
       vfsLogger.log(`getSnapshot: cache hit for "${targetPath}" (fresh: ${cached.isFresh})`);
       return cached.snapshot;
     }
-    
+
+    // Check if request is already in-flight (prevent duplicate concurrent calls)
+    const existingRequest = inFlightRequests.current.get(cacheKey);
+    if (existingRequest) {
+      vfsLogger.log(`getSnapshot: joining in-flight request for "${targetPath}"`);
+      return existingRequest;
+    }
+
     vfsLogger.log(`getSnapshot: cache miss for "${targetPath}", fetching from API`);
-    
-    const data = await request<{
-      root: string;
-      version: number;
-      updatedAt: string;
-      path: string;
-      files: VirtualWorkspaceSnapshot['files'];
-    }>(
-      `/api/filesystem/snapshot?path=${encodeURIComponent(targetPath)}`,
-      { method: 'GET', includeJsonContentType: false },
-    );
-    
-    // Store in shared cache
-    setCachedSnapshot(targetPath, ownerId, data);
-    
-    return data;
+
+    const requestPromise = (async () => {
+      try {
+        const data = await request<{
+          root: string;
+          version: number;
+          updatedAt: string;
+          path: string;
+          files: VirtualWorkspaceSnapshot['files'];
+        }>(
+          `/api/filesystem/snapshot?path=${encodeURIComponent(targetPath)}`,
+          { method: 'GET', includeJsonContentType: false },
+        );
+        setCachedSnapshot(targetPath, ownerId, data);
+        return data;
+      } catch (error) {
+        vfsLogger.logError(`getSnapshot: failed for "${targetPath}"`, error);
+        throw error;
+      } finally {
+        // Always clean up in-flight tracking
+        inFlightRequests.current.delete(cacheKey);
+      }
+    })();
+
+    inFlightRequests.current.set(cacheKey, requestPromise);
+    return requestPromise;
   }, [request]);
 
   /**

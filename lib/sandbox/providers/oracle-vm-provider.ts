@@ -175,7 +175,7 @@ export class OracleVMSandboxHandle implements SandboxHandle {
               success: code === 0,
               output: stdout || stderr,
               exitCode: code,
-              duration,
+              executionTime: duration,
               metadata: {
                 provider: 'oracle-vm',
                 sandboxId: this.sandboxId,
@@ -208,7 +208,7 @@ export class OracleVMSandboxHandle implements SandboxHandle {
         success: false,
         output: error.message || 'SSH execution failed',
         exitCode: -1,
-        duration: Date.now() - startTime,
+        executionTime: Date.now() - startTime,
         metadata: {
           provider: 'oracle-vm',
           sandboxId: this.sandboxId,

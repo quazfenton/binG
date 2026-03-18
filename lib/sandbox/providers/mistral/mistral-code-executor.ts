@@ -98,7 +98,7 @@ export class MistralCodeExecutor {
         response = await this.conversationManager.startConversation(
           'code-interpreter', // Will use agent ID from context
           [{ role: 'user', content: prompt, type: 'message.input', object: 'entry' }],
-          { completionArgs: request.completionArgs }
+          { completionArgs: (request as any).completionArgs }
         )
       } else {
         response = await this.conversationManager.appendMessage(

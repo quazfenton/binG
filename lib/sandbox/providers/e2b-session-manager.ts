@@ -279,8 +279,7 @@ export class E2BSessionManager {
    */
   listActiveSessions(maxAgeMs: number = 60 * 60 * 1000): SessionMetadata[] {
     const now = Date.now();
-    return this.sessions
-      .values()
+    return Array.from(this.sessions.values())
       .filter(session => now - session.lastActivityAt < maxAgeMs);
   }
 

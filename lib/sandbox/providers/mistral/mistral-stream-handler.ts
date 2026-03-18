@@ -79,8 +79,8 @@ export class MistralStreamHandler {
     try {
       const stream = await this.client.beta.conversations.appendStream({
         conversationId,
-        conversationAppendRequest: {
-          inputs: normalizedInputs,
+        conversationAppendStreamRequest: {
+          inputs: normalizedInputs as any,
           store: options?.store ?? true,
         },
       })

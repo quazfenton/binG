@@ -228,7 +228,7 @@ export default function TerminalPanel({
        if (files.length === 0) {
          const existingFs = localFileSystemRef.current;
          const existingKeys = Object.keys(existingFs).filter(k => k !== 'project');
-         
+
          if (existingKeys.length > 0) {
            // VFS is temporarily empty but we have existing files - keep them
            console.log('[TerminalPanel] VFS appears empty but keeping existing', existingKeys.length, 'entries');
@@ -236,7 +236,7 @@ export default function TerminalPanel({
            // Don't reset vfsFileCount - keep showing previous count
            return;
          }
-         
+
          // VFS is truly empty and we have no existing files - create minimal structure
          localFileSystemRef.current = createMinimalProject(filesystemScopePath);
          setIsVfsSynced(true);
@@ -300,14 +300,14 @@ export default function TerminalPanel({
         setVfsFileCount(files.length);
         console.log('[TerminalPanel] Synced VFS files:', Object.keys(fs).length, 'entries');
         console.log('[TerminalPanel] Sample paths:', Object.keys(fs).slice(0, 10));
-        
+
         // Sync VFS to all terminal executors
         Object.values(terminalHandlersRef.current).forEach(handlers => {
           if (handlers?.localFS) {
             handlers.localFS.syncFileSystem(fs);
           }
         });
-        
+
         setIsVfsSynced(true);
      } catch (error) {
        console.error('[TerminalPanel] Failed to sync VFS:', error);
@@ -315,7 +315,12 @@ export default function TerminalPanel({
      }
    };
 
-   syncVfsToLocal();
+   // Debounce initial sync to prevent flood on mount
+   const timeoutId = setTimeout(() => {
+     syncVfsToLocal();
+   }, 500);
+
+   return () => clearTimeout(timeoutId);
   }, [isOpen, filesystemScopePath, getVfsSnapshotMemoized]);
 
   // Update terminal display when VFS sync completes
@@ -446,7 +451,7 @@ export default function TerminalPanel({
       }
     };
 
-    const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 1000, maxDelayMs: 3000 });
+    const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 5000, maxDelayMs: 10000 });
     const unsubscribe = onFilesystemUpdated((event) => scheduler.schedule(event.detail));
     log('[TerminalPanel] registered filesystem-updated event listener');
     return () => {
