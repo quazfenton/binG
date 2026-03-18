@@ -39,6 +39,18 @@ export interface FileOperation {
 }
 
 /**
+ * Detected folder structure from LLM response
+ */
+export interface DetectedFolderStructure {
+  isSingleFolder: boolean;
+  folderName: string | null;
+  totalFiles: number;
+  filesInFolder: number;
+  filesOutsideFolder: string[];
+  isNewProject: boolean;
+}
+
+/**
  * Mode Manager class for handling mode-aware response processing
  */
 export class ModeManager {
@@ -323,6 +335,124 @@ export class ModeManager {
   }
 
   /**
+   * Detect folder structure from file operations
+   * Analyzes if all files are under a single folder (indicating new project with pre-named folder)
+   */
+  detectFolderStructure(fileOperations: FileOperation[]): DetectedFolderStructure {
+    if (fileOperations.length === 0) {
+      return {
+        isSingleFolder: false,
+        folderName: null,
+        totalFiles: 0,
+        filesInFolder: 0,
+        filesOutsideFolder: [],
+        isNewProject: false,
+      };
+    }
+
+    const paths = fileOperations.map(op => op.path);
+    const totalFiles = paths.length;
+    
+    // Extract folder names from paths
+    const folderNames = new Set<string>();
+    const filesOutsideAnyFolder: string[] = [];
+    
+    for (const path of paths) {
+      const parts = path.split('/').filter(Boolean);
+      
+      if (parts.length >= 2) {
+        // Has at least one folder level (e.g., my_vue_app/src/...)
+        folderNames.add(parts[0]);
+      } else if (parts.length === 1) {
+        // File at root level (e.g., package.json directly)
+        filesOutsideAnyFolder.push(path);
+      }
+    }
+
+    // Check if all files are under a single folder with no external files
+    const folderNameArray = Array.from(folderNames);
+    const isSingleFolder = folderNameArray.length === 1;
+    const singleFolderName = isSingleFolder ? folderNameArray[0] : null;
+    
+    // Determine if this looks like a new project
+    // New project = single folder with multiple files inside OR files at root level
+    const isNewProject = isSingleFolder || (paths.length > 1 && filesOutsideAnyFolder.length === 0);
+
+    // Count files inside the single folder
+    let filesInFolder = 0;
+    if (isSingleFolder && singleFolderName) {
+      filesInFolder = paths.filter(p => p.startsWith(singleFolderName + '/')).length;
+    }
+
+    return {
+      isSingleFolder,
+      folderName: singleFolderName,
+      totalFiles,
+      filesInFolder,
+      filesOutsideFolder: filesOutsideAnyFolder,
+      isNewProject,
+    };
+  }
+
+  /**
+   * Extract file paths from code blocks (files with path comments like "// src/App.js")
+   */
+  extractPathsFromCodeBlocks(response: string): string[] {
+    const paths: string[] = [];
+    const codeBlockRegex = /```(?:([a-zA-Z0-9+\-_.]+)(?:\s+(.+?))?)?\n([\s\S]*?)```/g;
+    let match;
+
+    while ((match = codeBlockRegex.exec(response)) !== null) {
+      const [, language, filename, code] = match;
+      
+      // Check if filename looks like a file path (contains /)
+      if (filename?.includes('/')) {
+        paths.push(filename.trim());
+      }
+      
+      // Also check code content for file path patterns
+      const pathInCodeMatch = code.match(/^(?:\/\/\s*)?(?:src|lib|app|package\.json|index\.|app\.)/);
+      if (pathInCodeMatch) {
+        // This is a hint but not a full path - skip for now
+      }
+    }
+
+    return paths;
+  }
+
+  /**
+   * Check if response indicates a new project with single folder structure
+   * Returns folder name if detected, null otherwise
+   */
+  detectNewProjectFolder(response: string): string | null {
+    // First check file operations (diffs and COMMANDS blocks)
+    const fileOperations = this.extractFileOperations(response);
+    const structureFromDiffs = this.detectFolderStructure(fileOperations);
+    
+    // Also check code blocks for file paths
+    const codeBlockPaths = this.extractPathsFromCodeBlocks(response);
+    const structureFromCodeBlocks = this.detectFolderStructure(
+      codeBlockPaths.map(p => ({ type: 'create' as const, path: p }))
+    );
+    
+    // Prefer diffs if available, otherwise use code blocks
+    const structure = fileOperations.length > 0 ? structureFromDiffs : structureFromCodeBlocks;
+    
+    // Rule: New project with single folder AND all files inside it (no external files)
+    // AND at least 2 files (to distinguish from intentional subdirectory writes)
+    if (
+      structure.isSingleFolder &&
+      structure.folderName &&
+      structure.filesInFolder > 1 &&
+      structure.filesOutsideFolder.length === 0
+    ) {
+      return structure.folderName;
+    }
+    
+    return null;
+  }
+
+  /**
    * Check if response should generate diffs based on mode
    */
   shouldGenerateDiffs(response: string, mode?: AppMode): boolean {
@@ -383,4 +513,13 @@ export function shouldShowDiffs(response: string, mode?: AppMode): boolean {
 
 export function shouldOpenCodePreview(response: string, mode?: AppMode): boolean {
   return modeManager.shouldOpenCodePreview(response, mode);
+}
+
+export function detectNewProjectFolder(response: string): string | null {
+  return modeManager.detectNewProjectFolder(response);
+}
+
+export function detectFolderStructure(response: string): DetectedFolderStructure {
+  const fileOperations = modeManager.extractFileOperations(response);
+  return modeManager.detectFolderStructure(fileOperations);
 }

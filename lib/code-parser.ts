@@ -114,6 +114,10 @@ export async function* streamPartsToEdits(parts: AsyncIterable<StreamPart>, curr
 
 /**
  * Parse code blocks from chat messages
+ * LEGACY: This parses LLM response text, NOT actual filesystem files.
+ * The parsed blocks are startup/shell commands (e.g., 'npm run dev'),
+ * not the files written to VFS by the WRITE tool.
+ * Use scopedPreviewFiles from VFS for actual project files.
  */
 export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData {
   const codeBlocks: CodeBlock[] = []
@@ -147,9 +151,8 @@ export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData
         // From ```javascript // src/App.js
         filename = filenameFromComment.trim()
       } else {
-        // Generate default filename
-        const ext = getExtensionForLanguage(language)
-        filename = `file-${blockIndex}.${ext}`
+        // Generate meaningful default filename based on content analysis
+        filename = generateMeaningfulFilename(language, code, blockIndex)
       }
 
       codeBlocks.push({
@@ -219,6 +222,84 @@ function getExtensionForLanguage(language: string | undefined): string {
     md: 'md',
   }
   return extensions[language.toLowerCase()] || 'txt'
+}
+
+/**
+ * Generate a meaningful filename based on code content analysis
+ */
+function generateMeaningfulFilename(language: string | undefined, code: string, index: number): string {
+  const ext = getExtensionForLanguage(language)
+  const lowerCode = code.toLowerCase()
+  
+  // Check for common entry point patterns
+  if (lowerCode.includes('package.json') || lowerCode.includes('"name"')) {
+    return `package.json`
+  }
+  if (lowerCode.includes('<!doctype html') || lowerCode.includes('<html') && ext === 'html') {
+    return `index.html`
+  }
+  if (lowerCode.includes('import react') || lowerCode.includes('from react') || lowerCode.includes('create-react-app')) {
+    return `App.${ext === 'jsx' ? 'jsx' : 'tsx'}`
+  }
+  if (lowerCode.includes('vue.createapp') || lowerCode.includes('createapp')) {
+    return `main.vue`
+  }
+  if (lowerCode.includes('def main') || lowerCode.includes('if __name__')) {
+    return `main.py`
+  }
+  if (lowerCode.includes('function main') || lowerCode.includes('void main')) {
+    return `main.${ext}`
+  }
+  if (lowerCode.includes('express()') || lowerCode.includes('app.get(') || lowerCode.includes('app.post(')) {
+    return `server.${ext}`
+  }
+  if (lowerCode.includes('flask') || lowerCode.includes('@app.route')) {
+    return `app.py`
+  }
+  if (lowerCode.includes('fastapi') || lowerCode.includes('@app.get')) {
+    return `main.py`
+  }
+  if (lowerCode.includes('#!/bin/bash') || lowerCode.includes('#!/bin/sh')) {
+    return index === 0 ? 'start.sh' : `script-${index}.sh`
+  }
+  if (lowerCode.includes('dockerfile') || lowerCode.includes('from ')) {
+    return `Dockerfile`
+  }
+  if (lowerCode.includes('version:') && (ext === 'yml' || ext === 'yaml')) {
+    return `docker-compose.yml`
+  }
+  if (lowerCode.includes('module.exports') || lowerCode.includes('export default')) {
+    return `index.${ext}`
+  }
+  if (lowerCode.includes('class ') && lowerCode.includes('extends')) {
+    // Extract class name if possible
+    const classMatch = code.match(/class\s+(\w+)/)
+    if (classMatch) {
+      return `${classMatch[1]}.${ext}`
+    }
+  }
+  if (lowerCode.includes('const ') || lowerCode.includes('let ') || lowerCode.includes('var ')) {
+    return index === 0 ? `index.${ext}` : `module-${index}.${ext}`
+  }
+  
+  // Default: use meaningful names based on language
+  const nameMap: Record<string, string[]> = {
+    sh: ['start.sh', 'setup.sh', 'deploy.sh', 'build.sh', 'test.sh', 'script.sh'],
+    bash: ['start.sh', 'setup.sh', 'deploy.sh', 'build.sh', 'test.sh', 'script.sh'],
+    shell: ['start.sh', 'setup.sh', 'deploy.sh', 'build.sh', 'test.sh', 'script.sh'],
+    js: ['index.js', 'main.js', 'app.js', 'server.js', 'config.js', 'utils.js'],
+    ts: ['index.ts', 'main.ts', 'app.ts', 'server.ts', 'config.ts', 'utils.ts'],
+    jsx: ['App.jsx', 'index.jsx', 'main.jsx', 'component.jsx'],
+    tsx: ['App.tsx', 'index.tsx', 'main.tsx', 'component.tsx'],
+    py: ['main.py', 'app.py', 'server.py', 'config.py', 'utils.py'],
+    html: ['index.html', 'main.html', 'template.html'],
+    css: ['style.css', 'main.css', 'app.css', 'index.css'],
+    json: ['config.json', 'settings.json', 'data.json'],
+    vue: ['App.vue', 'main.vue', 'component.vue'],
+  }
+  
+  const names = nameMap[language?.toLowerCase() || ''] || ['file']
+  return names[Math.min(index, names.length - 1)]
 }
 
 /**

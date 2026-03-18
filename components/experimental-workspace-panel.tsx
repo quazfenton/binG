@@ -84,6 +84,9 @@ import { VersionHistoryPanel } from "@/components/version-history-panel";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
 import { getOrCreateAnonymousSessionId } from "@/lib/utils";
 import type { Message } from "@/types";
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
+import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
+import { buildApiHeaders } from "@/lib/utils";
 
 interface FileNode {
   name: string;
@@ -327,6 +330,19 @@ export function ExperimentalWorkspacePanel() {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newItemName, setNewItemName] = useState("");
   const [creatingParentPath, setCreatingParentPath] = useState("/");
+
+  // File operations state (cut/copy/paste, rename, drag-drop)
+  const [clipboard, setClipboard] = useState<{ sourcePath: string; operation: 'cut' | 'copy' } | null>(null);
+  const [renamingFile, setRenamingFile] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [draggedFile, setDraggedFile] = useState<string | null>(null);
+  const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [confirmDialogData, setConfirmDialogData] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   // VFS snapshot state
   const [vfsSnapshot, setVfsSnapshot] = useState<{ files: Array<{ path: string; content: string; language: string }> } | null>(null);
@@ -772,16 +788,261 @@ export function ExperimentalWorkspacePanel() {
     setNewItemName("");
   }, []);
 
+  // File operation handlers
+  const handleCutFile = useCallback((path: string) => {
+    setClipboard({ sourcePath: path, operation: 'cut' });
+    toast.info('File cut - click paste in a folder');
+  }, []);
+
+  const handleCopyFile = useCallback((path: string) => {
+    setClipboard({ sourcePath: path, operation: 'copy' });
+    toast.info('File copied - click paste in a folder');
+  }, []);
+
+  const handlePasteToFolder = useCallback(async (targetFolderPath: string) => {
+    if (!clipboard) return;
+
+    const sourceName = clipboard.sourcePath.split('/').pop() || '';
+    const targetPath = targetFolderPath === '/' ? `/${sourceName}` : `${targetFolderPath}/${sourceName}`;
+
+    // Check if target exists
+    const exists = vfsSnapshot?.files.some(f => f.path === targetPath);
+    if (exists) {
+      setConfirmDialogData({
+        title: 'File Exists',
+        message: `A file named "${sourceName}" already exists in this folder. Overwrite?`,
+        onConfirm: async () => {
+          await performPaste(targetPath);
+          setShowConfirmDialog(false);
+          setConfirmDialogData(null);
+        },
+      });
+      setShowConfirmDialog(true);
+      return;
+    }
+
+    await performPaste(targetPath);
+  }, [clipboard, vfsSnapshot?.files]);
+
+  const performPaste = async (targetPath: string) => {
+    if (!clipboard) return;
+
+    try {
+      // Read source file
+      const readResponse = await fetch('/api/filesystem/read', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({ path: resolveScopedPath(clipboard.sourcePath, vfs?.currentPath || '/') }),
+      });
+
+      if (!readResponse.ok) {
+        throw new Error('Failed to read source file');
+      }
+
+      const payload = await readResponse.json().catch(() => null);
+      const content = payload?.data?.content || '';
+
+      // Write to target
+      await writeFile(targetPath, content);
+
+      // If cut, delete source
+      if (clipboard.operation === 'cut') {
+        await fetch('/api/filesystem/delete', {
+          method: 'POST',
+          headers: buildApiHeaders(),
+          body: JSON.stringify({ path: resolveScopedPath(clipboard.sourcePath, vfs?.currentPath || '/') }),
+        });
+      }
+
+      await listDirectory(vfs?.currentPath || '/');
+      toast.success(`File ${clipboard.operation === 'cut' ? 'moved' : 'copied'} successfully`);
+      setClipboard(null);
+    } catch (err: any) {
+      toast.error(`Operation failed: ${err.message}`);
+    }
+  };
+
+  const handleRenameFile = useCallback((path: string, currentName: string) => {
+    setRenamingFile(path);
+    setRenameValue(currentName);
+  }, []);
+
+  const confirmRename = useCallback(async () => {
+    if (!renamingFile || !renameValue.trim()) {
+      setRenamingFile(null);
+      return;
+    }
+
+    const oldName = renamingFile.split('/').pop() || '';
+    if (renameValue.trim() === oldName) {
+      setRenamingFile(null);
+      return;
+    }
+
+    const parentPath = renamingFile.substring(0, renamingFile.lastIndexOf('/')) || '/';
+    const newPath = parentPath === '/' ? `/${renameValue.trim()}` : `${parentPath}/${renameValue.trim()}`;
+
+    // Check if new name exists
+    const exists = vfsSnapshot?.files.some(f => f.path === newPath && f.path !== renamingFile);
+    if (exists) {
+      setConfirmDialogData({
+        title: 'File Exists',
+        message: `A file named "${renameValue.trim()}" already exists. Overwrite?`,
+        onConfirm: async () => {
+          await performRename(newPath);
+          setShowConfirmDialog(false);
+          setConfirmDialogData(null);
+        },
+      });
+      setShowConfirmDialog(true);
+      return;
+    }
+
+    await performRename(newPath);
+  }, [renamingFile, renameValue, vfsSnapshot?.files]);
+
+  const performRename = async (newPath: string) => {
+    if (!renamingFile) return;
+
+    try {
+      // Read source
+      const readResponse = await fetch('/api/filesystem/read', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({ path: resolveScopedPath(renamingFile, vfs?.currentPath || '/') }),
+      });
+
+      if (!readResponse.ok) throw new Error('Failed to read file');
+      const payload = await readResponse.json().catch(() => null);
+      const content = payload?.data?.content || '';
+
+      // Write to new path
+      await writeFile(newPath, content);
+
+      // Delete old
+      await fetch('/api/filesystem/delete', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({ path: resolveScopedPath(renamingFile, vfs?.currentPath || '/') }),
+      });
+
+      await listDirectory(vfs?.currentPath || '/');
+      toast.success('File renamed successfully');
+      setRenamingFile(null);
+      setRenameValue("");
+    } catch (err: any) {
+      toast.error(`Rename failed: ${err.message}`);
+      setRenamingFile(null);
+    }
+  };
+
+  const cancelRename = useCallback(() => {
+    setRenamingFile(null);
+    setRenameValue("");
+  }, []);
+
+  // Drag and drop handlers
+  const handleDragStart = useCallback((path: string) => {
+    setDraggedFile(path);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, folderPath: string) => {
+    e.preventDefault();
+    setDragOverFolder(folderPath);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setDragOverFolder(null);
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent, targetFolderPath: string) => {
+    e.preventDefault();
+    setDragOverFolder(null);
+
+    if (!draggedFile || draggedFile === targetFolderPath) {
+      setDraggedFile(null);
+      return;
+    }
+
+    const fileName = draggedFile.split('/').pop() || '';
+    const targetPath = targetFolderPath === '/' ? `/${fileName}` : `${targetFolderPath}/${fileName}`;
+
+    // Check if target exists
+    const exists = vfsSnapshot?.files.some(f => f.path === targetPath && f.path !== draggedFile);
+    if (exists) {
+      setConfirmDialogData({
+        title: 'File Exists',
+        message: `A file named "${fileName}" already exists in this folder. Overwrite?`,
+        onConfirm: async () => {
+          await performMove(targetPath);
+          setShowConfirmDialog(false);
+          setConfirmDialogData(null);
+        },
+      });
+      setShowConfirmDialog(true);
+      setDraggedFile(null);
+      return;
+    }
+
+    await performMove(targetPath);
+    setDraggedFile(null);
+  }, [draggedFile, vfsSnapshot?.files]);
+
+  const performMove = async (targetPath: string) => {
+    if (!draggedFile) return;
+
+    try {
+      // Read source
+      const readResponse = await fetch('/api/filesystem/read', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({ path: resolveScopedPath(draggedFile, vfs?.currentPath || '/') }),
+      });
+
+      if (!readResponse.ok) throw new Error('Failed to read file');
+      const payload = await readResponse.json().catch(() => null);
+      const content = payload?.data?.content || '';
+
+      // Write to target
+      await writeFile(targetPath, content);
+
+      // Delete source
+      await fetch('/api/filesystem/delete', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({ path: resolveScopedPath(draggedFile, vfs?.currentPath || '/') }),
+      });
+
+      await listDirectory(vfs?.currentPath || '/');
+      toast.success('File moved successfully');
+    } catch (err: any) {
+      toast.error(`Move failed: ${err.message}`);
+    }
+  };
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; isDirectory: boolean } | null>(null);
+
   const renderFileTree = useCallback((node: FileNode, depth = 0) => {
     const isExpanded = expandedFolders.has(node.path);
     const indent = depth * 16;
 
     if (node.type === "directory") {
+      // Check if this folder is drag target
+      const isDragTarget = dragOverFolder === node.path;
+
       return (
-        <div key={node.path} className="group">
-          <div className="flex items-center">
+        <div 
+          key={node.path} 
+          className="group"
+          onDragOver={(e) => handleDragOver(e, node.path)}
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => handleDrop(e, node.path)}
+        >
+          <div className={`flex items-center rounded ${isDragTarget ? 'bg-cyan-500/30 border border-cyan-500/50' : ''}`}>
             <button
               onClick={() => toggleFolder(node.path)}
+              onDoubleClick={() => handleRenameFile(node.path, node.name)}
               className="flex items-center gap-1 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors"
               style={{ paddingLeft: indent + 8 }}
             >
@@ -791,8 +1052,36 @@ export function ExperimentalWorkspacePanel() {
                 <ChevronRight className="h-3 w-3 text-white/60" />
               )}
               <Folder className="h-3 w-3 text-blue-400" />
-              <span className="text-white/80">{node.name}</span>
+              {renamingFile === node.path ? (
+                <Input
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') confirmRename();
+                    if (e.key === 'Escape') cancelRename();
+                  }}
+                  onBlur={confirmRename}
+                  className="h-5 text-xs bg-black/50 border-white/30"
+                  autoFocus
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ) : (
+                <span className="text-white/80">{node.name}</span>
+              )}
             </button>
+            {/* Paste button when clipboard has content */}
+            {clipboard && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlePasteToFolder(node.path);
+                }}
+                className="p-1 hover:bg-white/10 rounded opacity-0 group-hover:opacity-100 transition-opacity text-green-400"
+                title="Paste file here"
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+            )}
             {/* Add file button for folders */}
             <button
               onClick={(e) => {
@@ -821,20 +1110,66 @@ export function ExperimentalWorkspacePanel() {
       );
     }
 
+    // File node
     return (
-      <button
+      <div
         key={node.path}
+        draggable
+        onDragStart={() => handleDragStart(node.path)}
         onClick={() => handleFileSelect(node)}
-        className={`flex items-center gap-2 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors ${
+        onDoubleClick={() => handleRenameFile(node.path, node.name)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setContextMenu({ x: e.clientX, y: e.clientY, path: node.path, isDirectory: false });
+        }}
+        className={`flex items-center gap-2 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors cursor-pointer ${
           selectedFile?.path === node.path ? "bg-white/20" : ""
         }`}
         style={{ paddingLeft: indent + 24 }}
       >
-        <FileCode className="h-3 w-3 text-green-400" />
-        <span className="text-white/80 truncate">{node.name}</span>
-      </button>
+        <FileCode className="h-3 w-3 text-green-400 flex-shrink-0" />
+        {renamingFile === node.path ? (
+          <Input
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') confirmRename();
+              if (e.key === 'Escape') cancelRename();
+            }}
+            onBlur={confirmRename}
+            className="h-5 text-xs bg-black/50 border-white/30 flex-1 min-w-0"
+            autoFocus
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span className="text-white/80 truncate">{node.name}</span>
+        )}
+        {/* Hover actions */}
+        <div className="hidden group-hover:flex gap-1 flex-shrink-0">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCutFile(node.path);
+            }}
+            className="p-0.5 hover:bg-white/10 rounded"
+            title="Cut"
+          >
+            <Edit className="h-3 w-3 text-yellow-400" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCopyFile(node.path);
+            }}
+            className="p-0.5 hover:bg-white/10 rounded"
+            title="Copy"
+          >
+            <Copy className="h-3 w-3 text-blue-400" />
+          </button>
+        </div>
+      </div>
     );
-  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile]);
+  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile, handleRenameFile, renamingFile, renameValue, confirmRename, cancelRename, clipboard, handlePasteToFolder, dragOverFolder, handleDragOver, handleDragLeave, handleDrop, handleDragStart, handleCutFile, handleCopyFile]);
 
   return (
     <>
@@ -1082,6 +1417,18 @@ export function ExperimentalWorkspacePanel() {
                           <Badge variant="secondary" className="text-[10px] bg-white/10">
                             {filesystem?.files?.length || 0} files
                           </Badge>
+                          {/* Paste button when clipboard has content */}
+                          {clipboard && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handlePasteToFolder("/")}
+                              className="h-6 w-6 hover:bg-white/10 text-green-400"
+                              title={`Paste ${clipboard.sourcePath.split('/').pop()}`}
+                            >
+                              <Plus className="h-3 w-3" />
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1162,6 +1509,21 @@ export function ExperimentalWorkspacePanel() {
                             )}
                           </div>
                         </>
+                      )}
+
+                      {/* Clipboard indicator */}
+                      {clipboard && (
+                        <div className="mb-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded flex items-center justify-between">
+                          <span className="text-xs text-yellow-300">
+                            {clipboard.operation === 'cut' ? '✂️ Cut' : '📋 Copied'}: {clipboard.sourcePath.split('/').pop()}
+                          </span>
+                          <button
+                            onClick={() => setClipboard(null)}
+                            className="text-white/60 hover:text-white"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
                       )}
 
                       {/* Version History Integration */}
@@ -2489,7 +2851,68 @@ export function ExperimentalWorkspacePanel() {
             </div>
           </motion.div>
         )}
-      </AnimatePresence>
+      {/* Confirmation Dialog */}
+      {showConfirmDialog && confirmDialogData && (
+        <ConfirmationDialog
+          isOpen={showConfirmDialog}
+          title={confirmDialogData.title}
+          message={confirmDialogData.message}
+          confirmLabel="Confirm"
+          cancelLabel="Cancel"
+          onConfirm={confirmDialogData.onConfirm}
+          onCancel={() => {
+            setShowConfirmDialog(false);
+            setConfirmDialogData(null);
+          }}
+        />
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setContextMenu(null)}
+          />
+          <div
+            className="fixed z-50 bg-black/90 border border-white/20 rounded-lg shadow-xl py-1 min-w-[140px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            {!contextMenu.isDirectory && (
+              <>
+                <button
+                  onClick={() => {
+                    handleCutFile(contextMenu.path);
+                    setContextMenu(null);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
+                >
+                  <Edit className="h-3 w-3 text-yellow-400" /> Cut
+                </button>
+                <button
+                  onClick={() => {
+                    handleCopyFile(contextMenu.path);
+                    setContextMenu(null);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
+                >
+                  <Copy className="h-3 w-3 text-blue-400" /> Copy
+                </button>
+              </>
+            )}
+            <button
+              onClick={() => {
+                const name = contextMenu.path.split('/').pop() || '';
+                handleRenameFile(contextMenu.path, name);
+                setContextMenu(null);
+              }}
+              className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
+            >
+              <FileText className="h-3 w-3 text-purple-400" /> Rename
+            </button>
+          </div>
+        </>
+      )}
     </>
   );
 }

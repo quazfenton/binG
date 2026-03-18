@@ -50,6 +50,8 @@ import {
   type CodeBlock as ParsedCodeBlock,
 } from "../lib/code-parser";
 import { createDebugLogger } from "@/config/features";
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
+import { checkFileConflicts } from "@/lib/session-naming";
 
 // Import live preview offloading functions
 import {
@@ -324,6 +326,33 @@ export default function CodePreviewPanel({
     path: string;
     type: 'file' | 'directory';
   } | null>(null);
+
+  // Double-click rename state
+  const [editingFilePath, setEditingFilePath] = useState<string | null>(null);
+  const [editingFileName, setEditingFileName] = useState("");
+  
+  // Clipboard state for cut/copy/paste
+  const [clipboard, setClipboard] = useState<{
+    path: string;
+    operation: 'cut' | 'copy';
+    sourcePath: string;
+  } | null>(null);
+  
+  // Drag and drop state
+  const [dragOverPath, setDragOverPath] = useState<string | null>(null);
+  const [draggedFile, setDraggedFile] = useState<{ path: string; name: string } | null>(null);
+  
+  // Confirmation dialog state for file operations
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    variant?: 'default' | 'warning' | 'danger';
+    onConfirm: () => void;
+    onCancel: () => void;
+  } | null>(null);
   
   // Monaco editor state (commented out for future use)
   // const [editingFile, setEditingFile] = useState<{ path: string; content: string } | null>(null);
@@ -520,7 +549,7 @@ export default function CodePreviewPanel({
     });
   }, [listFilesystemDirectory, normalizeProjectPath, normalizedFilesystemPath, writeFilesystemFile]);
 
-  const handleRenameFile = useCallback((oldPath: string) => {
+  const handleRenameFile = useCallback(async (oldPath: string) => {
     const oldName = oldPath.split('/').pop() || '';
     const newName = prompt('Rename to:', oldName);
     if (!newName || newName === oldName) return;
@@ -528,23 +557,303 @@ export default function CodePreviewPanel({
     const parentPath = oldPath.split('/').slice(0, -1).join('/');
     const newPath = parentPath ? `${parentPath}/${newName}` : newName;
     
-    // Read old file, write new file, delete old file
-    readFilesystemFile(oldPath).then((file: any) => {
-      return writeFilesystemFile(newPath, file.content).then(() => {
-        return deleteFilesystemPath(oldPath);
-      });
-    }).then(() => {
-      toast.success('Renamed to: ' + newName);
-      void listFilesystemDirectory(filesystemCurrentPath);
-      setContextMenu(null);
-      if (selectedFilesystemPath === oldPath) {
-        setSelectedFilesystemPath('');
-        setSelectedFilesystemContent('');
+    // Check if target already exists
+    try {
+      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
+      
+      if (targetExists && oldPath !== newPath) {
+        // Show confirmation dialog for overwrite
+        setConfirmDialog({
+          isOpen: true,
+          title: 'File Already Exists',
+          message: `A file named "${newName}" already exists in this directory. Do you want to overwrite it?`,
+          confirmLabel: 'Overwrite',
+          cancelLabel: 'Cancel',
+          variant: 'warning',
+          onConfirm: async () => {
+            setConfirmDialog(null);
+            await performRename(oldPath, newPath);
+          },
+          onCancel: () => {
+            setConfirmDialog(null);
+          },
+        });
+        return;
       }
-    }).catch((err: any) => {
+      
+      await performRename(oldPath, newPath);
+    } catch (err: any) {
       toast.error('Failed to rename: ' + err.message);
-    });
+    }
+    
+    async function performRename(sourcePath: string, targetPath: string) {
+      try {
+        const file = await readFilesystemFile(sourcePath);
+        await writeFilesystemFile(targetPath, file.content);
+        await deleteFilesystemPath(sourcePath);
+        
+        toast.success('Renamed to: ' + newName);
+        void listFilesystemDirectory(filesystemCurrentPath);
+        setContextMenu(null);
+        if (selectedFilesystemPath === sourcePath) {
+          setSelectedFilesystemPath('');
+          setSelectedFilesystemContent('');
+        }
+      } catch (err: any) {
+        toast.error('Failed to rename: ' + err.message);
+      }
+    }
   }, [filesystemCurrentPath, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, listFilesystemDirectory, selectedFilesystemPath]);
+
+  // Handle double-click to rename file
+  const handleDoubleClickFile = useCallback((node: { path: string; name: string; type: string }) => {
+    if (node.type === 'file') {
+      setEditingFilePath(node.path);
+      setEditingFileName(node.name);
+    }
+  }, []);
+
+  // Confirm rename from double-click editing
+  const confirmRenameFromEdit = useCallback(async () => {
+    if (!editingFilePath || !editingFileName.trim()) {
+      setEditingFilePath(null);
+      setEditingFileName("");
+      return;
+    }
+    
+    const oldPath = editingFilePath;
+    const oldName = oldPath.split('/').pop() || '';
+    const newName = editingFileName.trim();
+    
+    if (newName === oldName) {
+      setEditingFilePath(null);
+      setEditingFileName("");
+      return;
+    }
+    
+    const parentPath = oldPath.split('/').slice(0, -1).join('/');
+    const newPath = parentPath ? `${parentPath}/${newName}` : newName;
+    
+    // Check if target already exists
+    try {
+      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
+      
+      if (targetExists && oldPath !== newPath) {
+        setConfirmDialog({
+          isOpen: true,
+          title: 'File Already Exists',
+          message: `A file named "${newName}" already exists. Do you want to overwrite it?`,
+          confirmLabel: 'Overwrite',
+          cancelLabel: 'Cancel',
+          variant: 'warning',
+          onConfirm: async () => {
+            setConfirmDialog(null);
+            await performRename(oldPath, newPath);
+            setEditingFilePath(null);
+            setEditingFileName("");
+          },
+          onCancel: () => {
+            setConfirmDialog(null);
+            setEditingFilePath(null);
+            setEditingFileName("");
+          },
+        });
+        return;
+      }
+      
+      await performRename(oldPath, newPath);
+    } catch (err: any) {
+      toast.error('Failed to rename: ' + err.message);
+    }
+    
+    setEditingFilePath(null);
+    setEditingFileName("");
+    
+    async function performRename(sourcePath: string, targetPath: string) {
+      try {
+        const file = await readFilesystemFile(sourcePath);
+        await writeFilesystemFile(targetPath, file.content);
+        await deleteFilesystemPath(sourcePath);
+        toast.success('Renamed to: ' + newName);
+        void listFilesystemDirectory(filesystemCurrentPath);
+        if (selectedFilesystemPath === sourcePath) {
+          setSelectedFilesystemPath(targetPath);
+        }
+        emitFilesystemUpdated({
+          path: targetPath,
+          scopePath: normalizedFilesystemPath,
+          source: 'code-preview',
+          type: 'update',
+        });
+      } catch (err: any) {
+        toast.error('Failed to rename: ' + err.message);
+      }
+    }
+  }, [editingFilePath, editingFileName, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, selectedFilesystemPath, normalizedFilesystemPath]);
+
+  // Cancel rename editing
+  const cancelRenameEdit = useCallback(() => {
+    setEditingFilePath(null);
+    setEditingFileName("");
+  }, []);
+
+  // Handle cut operation
+  const handleCutFile = useCallback((path: string, name: string, sourcePath: string) => {
+    setClipboard({ path, operation: 'cut', sourcePath });
+    setContextMenu(null);
+    toast.info('File cut. Click a folder and paste to move.');
+  }, []);
+
+  // Handle copy operation
+  const handleCopyFile = useCallback((path: string, name: string, sourcePath: string) => {
+    setClipboard({ path, operation: 'copy', sourcePath });
+    setContextMenu(null);
+    toast.info('File copied. Click a folder and paste to copy.');
+  }, []);
+
+  // Handle paste operation
+  const handlePasteFile = useCallback(async (targetPath: string, isDirectory: boolean) => {
+    if (!clipboard) {
+      toast.error('No file in clipboard');
+      return;
+    }
+    
+    const targetDir = isDirectory ? targetPath : targetPath.split('/').slice(0, -1).join('/');
+    const fileName = clipboard.path.split('/').pop() || '';
+    const newPath = `${targetDir.replace(/\/+$/, '')}/${fileName}`;
+    
+    try {
+      // Check if target already exists
+      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
+      
+      if (targetExists && clipboard.path !== newPath) {
+        // Generate unique name
+        const ext = fileName.includes('.') ? '.' + fileName.split('.').pop() : '';
+        const baseName = fileName.replace(ext, '');
+        let counter = 1;
+        let uniquePath = newPath;
+        while (await readFilesystemFile(uniquePath).then(() => true).catch(() => false)) {
+          uniquePath = `${targetDir.replace(/\/+$/, '')}/${baseName}-${counter}${ext}`;
+          counter++;
+        }
+        
+        await performPaste(clipboard.path, uniquePath, targetDir);
+      } else {
+        await performPaste(clipboard.path, newPath, targetDir);
+      }
+    } catch (err: any) {
+      toast.error('Failed to paste: ' + err.message);
+    }
+    
+    async function performPaste(sourcePath: string, destPath: string, targetDir: string) {
+      try {
+        const file = await readFilesystemFile(sourcePath);
+        await writeFilesystemFile(destPath, file.content);
+        
+        // If cut, delete original
+        if (clipboard.operation === 'cut') {
+          await deleteFilesystemPath(sourcePath);
+          setClipboard(null);
+        }
+        
+        toast.success(clipboard.operation === 'cut' ? 'File moved' : 'File copied');
+        await listFilesystemDirectory(filesystemCurrentPath);
+        await listFilesystemDirectory(targetDir);
+        
+        emitFilesystemUpdated({
+          path: destPath,
+          scopePath: normalizedFilesystemPath,
+          source: 'code-preview',
+          type: 'update',
+        });
+      } catch (err: any) {
+        toast.error('Failed to paste: ' + err.message);
+      }
+    }
+  }, [clipboard, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath]);
+
+  // Handle drag start
+  const handleDragStart = useCallback((e: React.DragEvent, node: { path: string; name: string }) => {
+    e.dataTransfer.setData('text/plain', JSON.stringify({ path: node.path, name: node.name }));
+    setDraggedFile({ path: node.path, name: node.name });
+  }, []);
+
+  // Handle drag over (for drop target)
+  const handleDragOver = useCallback((e: React.DragEvent, path: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverPath(path);
+  }, []);
+
+  // Handle drag leave
+  const handleDragLeave = useCallback(() => {
+    setDragOverPath(null);
+  }, []);
+
+  // Handle drop
+  const handleDrop = useCallback(async (e: React.DragEvent, targetPath: string, isDirectory: boolean) => {
+    e.preventDefault();
+    setDragOverPath(null);
+    
+    const data = e.dataTransfer.getData('text/plain');
+    if (!data) return;
+    
+    try {
+      const { path: sourcePath, name } = JSON.parse(data);
+      
+      if (sourcePath === targetPath || sourcePath.split('/').slice(0, -1).join('/') === targetPath) {
+        toast.info('File is already in this location');
+        return;
+      }
+      
+      const targetDir = isDirectory ? targetPath : targetPath.split('/').slice(0, -1).join('/');
+      const newPath = `${targetDir.replace(/\/+$/, '')}/${name}`;
+      
+      // Check if target exists
+      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
+      
+      if (targetExists && sourcePath !== newPath) {
+        // Show confirmation for overwrite
+        setConfirmDialog({
+          isOpen: true,
+          title: 'File Already Exists',
+          message: `A file named "${name}" already exists in this folder. Do you want to overwrite it?`,
+          confirmLabel: 'Overwrite',
+          cancelLabel: 'Cancel',
+          variant: 'warning',
+          onConfirm: async () => {
+            setConfirmDialog(null);
+            await performMove(sourcePath, newPath);
+          },
+          onCancel: () => {
+            setConfirmDialog(null);
+          },
+        });
+      } else {
+        await performMove(sourcePath, newPath);
+      }
+      
+      async function performMove(source: string, dest: string) {
+        const file = await readFilesystemFile(source);
+        await writeFilesystemFile(dest, file.content);
+        await deleteFilesystemPath(source);
+        toast.success(`Moved "${name}" to new location`);
+        await listFilesystemDirectory(filesystemCurrentPath);
+        await listFilesystemDirectory(targetDir);
+        
+        emitFilesystemUpdated({
+          path: dest,
+          scopePath: normalizedFilesystemPath,
+          source: 'code-preview',
+          type: 'update',
+        });
+      }
+    } catch (err: any) {
+      toast.error('Failed to move file: ' + err.message);
+    }
+    
+    setDraggedFile(null);
+  }, [readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath]);
 
   // Helper to detect shell code blocks
   const isShellCodeBlock = useCallback((language: string, code: string): boolean => {
@@ -1002,6 +1311,8 @@ export default function CodePreviewPanel({
   }, [filesystemScopePath, writeFilesystemFile, listFilesystemDirectory, selectedTab, handleManualPreview, normalizeProjectPath]);
 
   // Extract code blocks from messages using centralized parser
+  // LEGACY: These are parsed from LLM response text (startup commands like 'npm run dev')
+  // NOT actual filesystem files - those come from scopedPreviewFiles (VFS)
   const codeBlocks = useMemo(() => {
     const parsedData = parseCodeBlocksFromMessages(messages);
     return parsedData.codeBlocks;
@@ -4786,7 +5097,7 @@ root.render(<App />);` };
                                 selectedFilesystemPath === node.path
                                   ? "bg-gray-700"
                                   : "hover:bg-gray-800"
-                              }`}
+                              } ${dragOverPath === node.path ? 'bg-blue-500/30 border border-blue-500/50' : ''}`}
                               key={node.path}
                               onClick={() => {
                                 if (node.type === "directory") {
@@ -4795,6 +5106,7 @@ root.render(<App />);` };
                                   void selectFilesystemFile(node.path);
                                 }
                               }}
+                              onDoubleClick={() => handleDoubleClickFile(node)}
                               onContextMenu={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -4805,6 +5117,11 @@ root.render(<App />);` };
                                   type: node.type,
                                 });
                               }}
+                              draggable={node.type === 'file'}
+                              onDragStart={(e) => handleDragStart(e, { path: node.path, name: node.name })}
+                              onDragOver={(e) => node.type === 'directory' && handleDragOver(e, node.path)}
+                              onDragLeave={handleDragLeave}
+                              onDrop={(e) => node.type === 'directory' && handleDrop(e, node.path, true)}
                             >
                               <div className="flex items-center flex-1 min-w-0">
                                 {node.type === "directory" ? (
@@ -4812,36 +5129,69 @@ root.render(<App />);` };
                                 ) : (
                                   <FileText className="w-4 h-4 mr-2 flex-shrink-0" />
                                 )}
-                                <span className="truncate flex-1">{node.name}</span>
-                              </div>
-                              <button
-                                className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-all"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const label = node.type === 'directory' ? `Delete folder "${node.name}" and all contents?` : `Delete ${node.name}?`;
-                                  if (confirm(label)) {
-                                    deleteFilesystemPath(node.path).then((deleteResult) => {
-                                      toast.success(`Deleted ${node.name}`);
-                                      void listFilesystemDirectory(filesystemCurrentPath);
-                                      if (selectedFilesystemPath === node.path) {
-                                        setSelectedFilesystemPath('');
-                                        setSelectedFilesystemContent('');
+                                {editingFilePath === node.path ? (
+                                  <input
+                                    type="text"
+                                    value={editingFileName}
+                                    onChange={(e) => setEditingFileName(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        confirmRenameFromEdit();
+                                      } else if (e.key === 'Escape') {
+                                        cancelRenameEdit();
                                       }
-                                      // Dispatch event for cross-panel sync (Terminal, Chat)
-                                      emitFilesystemUpdated({
-                                        path: node.path,
-                                        scopePath: normalizedFilesystemPath,
-                                        source: 'code-preview',
-                                        type: 'delete',
+                                    }}
+                                    onBlur={confirmRenameFromEdit}
+                                    className="bg-black/50 border border-blue-500 rounded px-1 py-0.5 text-xs text-white outline-none flex-1 min-w-0"
+                                    autoFocus
+                                    onClick={(e) => e.stopPropagation()}
+                                  />
+                                ) : (
+                                  <span className="truncate flex-1">{node.name}</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1">
+                                {clipboard && node.type === 'directory' && (
+                                  <button
+                                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-all text-xs"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handlePasteFile(node.path, true);
+                                    }}
+                                    title="Paste file here"
+                                  >
+                                    📋
+                                  </button>
+                                )}
+                                <button
+                                  className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-all"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const label = node.type === 'directory' ? `Delete folder "${node.name}" and all contents?` : `Delete ${node.name}?`;
+                                    if (confirm(label)) {
+                                      deleteFilesystemPath(node.path).then((deleteResult) => {
+                                        toast.success(`Deleted ${node.name}`);
+                                        void listFilesystemDirectory(filesystemCurrentPath);
+                                        if (selectedFilesystemPath === node.path) {
+                                          setSelectedFilesystemPath('');
+                                          setSelectedFilesystemContent('');
+                                        }
+                                        // Dispatch event for cross-panel sync (Terminal, Chat)
+                                        emitFilesystemUpdated({
+                                          path: node.path,
+                                          scopePath: normalizedFilesystemPath,
+                                          source: 'code-preview',
+                                          type: 'delete',
+                                        });
+                                      }).catch((err: any) => {
+                                        toast.error('Failed to delete: ' + err.message);
                                       });
-                                    }).catch((err: any) => {
-                                      toast.error('Failed to delete: ' + err.message);
-                                    });
-                                  }
-                                }}
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
+                                    }
+                                  }}
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -4849,7 +5199,7 @@ root.render(<App />);` };
                         {codeBlocks.length > 0 && (
                           <div className="mt-4 border-t border-white/10 pt-3">
                             <h4 className="text-xs font-medium text-gray-400 mb-2">
-                              Generated Snippets
+                              Legacy Snippets (startup commands, not VFS files)
                             </h4>
                             <div className="space-y-1">
                               {codeBlocks.map((block, index) => (
@@ -5025,7 +5375,7 @@ root.render(<App />);` };
                           Loading file...
                         </div>
                       ) : selectedFileIndex !== null && codeBlocks[selectedFileIndex] ? (
-                        // Render code block from Generated Snippets
+                        // LEGACY: Render parsed code block from LLM response text (startup commands), NOT from VFS
                         <div className="h-full flex flex-col">
                           <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
                             <div className="flex items-center gap-2 min-w-0">
@@ -5297,6 +5647,21 @@ root.render(<App />);` };
             className="fixed z-50 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 min-w-[180px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
+            {/* Paste option if clipboard has content and it's a directory */}
+            {clipboard && contextMenu.type === 'directory' && (
+              <>
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-blue-400 hover:bg-gray-800 flex items-center gap-2"
+                  onClick={() => {
+                    handlePasteFile(contextMenu.path, true);
+                  }}
+                >
+                  <span className="w-4">📋</span> Paste {clipboard.operation === 'cut' ? '(Move)' : '(Copy)'}
+                </button>
+                <hr className="my-1 border-gray-700" />
+              </>
+            )}
+            
             <button
               className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
               onClick={() => {
@@ -5318,6 +5683,26 @@ root.render(<App />);` };
             {contextMenu.type === 'file' && (
               <>
                 <hr className="my-1 border-gray-700" />
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
+                  onClick={() => {
+                    const name = contextMenu.path.split('/').pop() || '';
+                    const parentPath = contextMenu.path.split('/').slice(0, -1).join('/');
+                    handleCutFile(contextMenu.path, name, parentPath);
+                  }}
+                >
+                  <span className="w-4">✂️</span> Cut
+                </button>
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
+                  onClick={() => {
+                    const name = contextMenu.path.split('/').pop() || '';
+                    const parentPath = contextMenu.path.split('/').slice(0, -1).join('/');
+                    handleCopyFile(contextMenu.path, name, parentPath);
+                  }}
+                >
+                  <span className="w-4">📄</span> Copy
+                </button>
                 <button
                   className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
                   onClick={() => {
@@ -5363,6 +5748,20 @@ root.render(<App />);` };
             </button>
           </div>
         </>
+      )}
+      
+      {/* Confirmation Dialog for File Operations */}
+      {confirmDialog && (
+        <ConfirmationDialog
+          isOpen={confirmDialog.isOpen}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmLabel={confirmDialog.confirmLabel}
+          cancelLabel={confirmDialog.cancelLabel}
+          variant={confirmDialog.variant}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={confirmDialog.onCancel}
+        />
       )}
     </AnimatePresence>
   );
