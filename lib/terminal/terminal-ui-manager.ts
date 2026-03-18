@@ -415,11 +415,8 @@ export class TerminalUIManager {
         if (token) {
           headers.Authorization = `Bearer ${token}`
         }
-        
-        const anonymousSessionId = localStorage.getItem('anonymous_session_id')
-        if (anonymousSessionId) {
-          headers['x-anonymous-session-id'] = anonymousSessionId
-        }
+        // Anonymous session is now handled via HttpOnly cookie - no need to send header
+        // The server sets anon-session-id cookie and credentials: 'include' sends it automatically
       } catch (error) {
         logger.warn('Failed to get auth token', error)
       }

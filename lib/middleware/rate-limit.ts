@@ -173,8 +173,9 @@ function getClientIdentifier(req: NextRequest): string {
     return `ip:${ip}`;
   }
 
-  // Fallback to anonymous session ID
-  const anonId = req.headers.get('x-anonymous-session-id');
+  // Fallback to anonymous session ID from HttpOnly cookie only
+  // SECURITY: Never trust client-controlled headers for identity (IDOR vulnerability)
+  const anonId = req.cookies.get('anon-session-id')?.value;
   if (anonId) {
     return `anon:${anonId}`;
   }

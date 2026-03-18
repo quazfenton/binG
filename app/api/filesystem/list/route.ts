@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 
 export const runtime = 'nodejs';
@@ -169,20 +169,26 @@ export async function GET(req: NextRequest) {
       logWarn(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.yellow}SLOW OPERATION:${COLORS.reset} listDirectory took ${COLORS.cyan}${duration}ms${COLORS.reset} for "${COLORS.blue}${validatedPath}${COLORS.reset}"`);
     }
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: {
         path: listing.path,
         nodes: listing.nodes,
       },
     });
+    return withAnonSessionCookie(response, authResolution);
   } catch (error: unknown) {
     const duration = Date.now() - startTime;
     logError(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.red}ERROR${COLORS.reset} after ${COLORS.cyan}${duration}ms${COLORS.reset}:`, error instanceof Error ? error.message : error);
 
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : 'Failed to list directory' },
       { status: 400 },
     );
+    return withAnonSessionCookie(errorResponse, {
+      ownerId: 'unknown',
+      source: 'anonymous',
+      isAuthenticated: false,
+    });
   }
 }

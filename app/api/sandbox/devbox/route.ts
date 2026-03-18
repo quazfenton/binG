@@ -87,9 +87,9 @@ export async function POST(req: NextRequest) {
     // Assign to outer-scoped template variable (don't shadow)
     template = templateFromBody;
 
-    if (!files || typeof files !== 'object') {
+    if (!files || typeof files !== 'object' || Array.isArray(files) || Object.keys(files).length === 0 || !Object.values(files).every(v => typeof v === 'string')) {
       return NextResponse.json(
-        { error: 'Files are required' },
+        { error: 'Files must be a non-empty object with string values' },
         { status: 400 }
       );
     }

@@ -112,6 +112,8 @@ export function buildApiHeaders(options?: { json?: boolean }): Record<string, st
     headers['Content-Type'] = 'application/json';
   }
 
+  // Authentication is handled via HttpOnly cookies sent automatically with credentials: 'include'
+  // We no longer send x-anonymous-session-id header - the server trusts only cookies for identity
   if (typeof window !== 'undefined') {
     // Guard token lookup with try/catch to handle restricted browser storage contexts
     try {
@@ -122,7 +124,8 @@ export function buildApiHeaders(options?: { json?: boolean }): Record<string, st
     } catch {
       // localStorage unavailable; continue without auth token
     }
-    headers['x-anonymous-session-id'] = getOrCreateAnonymousSessionId();
+    // Note: Anonymous session ID is now only managed via HttpOnly cookies
+    // The server sets anon-session-id cookie and we rely on credentials: 'include' to send it
   }
 
   return headers;

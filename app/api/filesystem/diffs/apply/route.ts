@@ -48,8 +48,8 @@ function getSessionId(request: NextRequest, bodySessionId?: string): string {
     throw new ApiError(400, 'Session ID required', 'MISSING_SESSION_ID');
   }
 
-  // Validate session ID format
-  if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+  // Validate session ID format - allow colons to match IDs produced by chat route
+  if (!/^[a-zA-Z0-9:_-]+$/.test(sessionId)) {
     console.warn('[DiffsApply] Invalid session ID format:', sessionId);
     throw new ApiError(400, 'Invalid session ID format', 'INVALID_SESSION_ID_FORMAT');
   }

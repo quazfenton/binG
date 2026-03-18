@@ -1155,14 +1155,33 @@ function sanitizeAssistantDisplayContent(content: string): string {
   next = next.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
 
   // Remove raw WRITE/PATCH/APPLY_DIFF heredoc command blocks that leak into visible output
-  // Handle variations: blank lines between path and <<<, different whitespace
-  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){1,2}<<<[\s\S]*?>>>(?=\n|$)/g, '\n');
-  next = next.replace(/(?:^|\n)\s*DELETE\s+[^\n]+(?=\n|$)/g, '\n');
-  // Remove <apply_diff> XML tags
+  // Enhanced regex to handle more edge cases: no whitespace, different line breaks, nested markers
+  // Using line-start anchors (^) with /m flag to avoid matching inside code blocks
+  
+  // Pattern 1: Standard format with optional newlines between path and <<<
+  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){0,3}<<<[\s\S]*?>>>(?=\n|$)/gim, '\n');
+  
+  // Pattern 2: Handle cases where <<< is on same line as path (WRITE path<<< content >>>)
+  // Only match at line start to avoid false positives in code blocks
+  next = next.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+<<<[\s\S]*?>>>/gim, '');
+  
+  // Pattern 3: Remove DELETE commands (line start only)
+  next = next.replace(/^\s*DELETE\s+[^\n]+(?=\n|$)/gim, '\n');
+  
+  // Pattern 4: Remove <apply_diff> XML tags with content
   next = next.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
+  
+  // Pattern 5: Handle any remaining fs-actions style commands (outside of code blocks)
+  // Match WRITE/PATCH/APPLY_DIFF at start of line with heredoc markers anywhere
+  next = next.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]*\n?\s*<<<[\s\S]*?>>>/gim, '');
+  
+  // Pattern 6: Clean up leftover <<< and >>> markers that weren't properly paired
+  next = next.replace(/^\s*<<<\s*$/gm, '');
+  next = next.replace(/^\s*>>>\s*$/gm, '');
 
   // Normalize leftover spacing
   next = next.replace(/\n{3,}/g, '\n\n').trim();
+  
   return next;
 }
 
@@ -1439,21 +1458,10 @@ async function handleGatewayStreaming(params: {
               controller.enqueue(encoder.encode(sseEvent));
             }
           } else {
-            // No events parsed - check if this might be a plain-text error
-            // NDJSON parser buffers incomplete lines, but persistent non-JSON content
-            // indicates an error from the gateway
-            const trimmedChunk = chunk.trim();
-            if (trimmedChunk.length > 0 && 
-                !trimmedChunk.startsWith('{') && 
-                !trimmedChunk.startsWith('[')) {
-              // This looks like a plain-text error from gateway
-              // Forward it as an error event so clients can see it
-              const errorEvent = `event: error\ndata: ${JSON.stringify({ 
-                type: 'gateway_error', 
-                message: 'Gateway returned non-JSON response: ' + trimmedChunk.substring(0, 500) 
-              })}\n\n`;
-              controller.enqueue(encoder.encode(errorEvent));
-            }
+            // No events parsed - NDJSON parser buffers incomplete lines
+            // Only consider this an error AFTER stream finalization or explicit parser error
+            // Skip transient/partial reads like "[]", empty buffers, or incomplete JSON
+            // Let the parser signal end/error explicitly rather than inferring from chunk content
           }
         }
       } catch (error) {

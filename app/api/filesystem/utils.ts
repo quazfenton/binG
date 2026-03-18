@@ -30,23 +30,26 @@ export async function resolveFilesystemOwnerWithFallback(
       errorMessage
     );
     
-    // Even in fallback, try to use the x-anonymous-session-id header for consistency
-    const headerAnonId = req.headers.get('x-anonymous-session-id')?.trim();
-    if (headerAnonId && headerAnonId.length <= 128) {
-      const normalized = headerAnonId.replace(/[^a-zA-Z0-9:_-]/g, '');
-      if (normalized) {
-        return {
-          ownerId: `anon:${normalized}`,
-          source: 'anonymous' as const,
-          isAuthenticated: false,
-        };
-      }
+    // SECURITY: Only trust the HttpOnly cookie for anonymous identity in fallback too.
+    // Never trust client-controlled headers - they can be forged to impersonate other users.
+    // PRIORITY 1: Use existing anonymous session ID from HttpOnly cookie
+    const anonymousSessionId = req.cookies.get('anon-session-id')?.value;
+    if (anonymousSessionId) {
+      return {
+        ownerId: `anon:${anonymousSessionId}`,
+        source: 'anonymous' as const,
+        isAuthenticated: false,
+      };
     }
     
+    // PRIORITY 2: Generate new anonymous session ID for first-time visitors (fallback case)
+    // This prevents cross-user collisions that would occur with shared 'anon:public'
+    const newAnonId = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
     return {
-      ownerId: 'anon:public',
+      ownerId: `anon:${newAnonId}`,
       source: 'anonymous' as const,
       isAuthenticated: false,
+      anonSessionId: newAnonId,
     };
   }
 }
