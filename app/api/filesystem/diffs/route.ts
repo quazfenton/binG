@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { withAnonSessionCookie } from '@/lib/virtual-filesystem';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { diffTracker } from '@/lib/virtual-filesystem';
 import { createLogger } from '@/lib/utils/logger';
@@ -51,18 +52,24 @@ export async function GET(request: NextRequest) {
     // Get structured diffs for sync
     const changedFiles = diffTracker.getChangedFilesForSync(ownerId, maxFiles);
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       ownerId,
       count: changedFiles.length,
       files: changedFiles,
     });
+    return withAnonSessionCookie(response, ownerResolution);
 
   } catch (error: any) {
     logger.error('Failed to get diffs', error, { requestId });
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       { error: error.message || 'Failed to get diffs' },
       { status: 500 }
     );
+    return withAnonSessionCookie(errorResponse, {
+      ownerId: 'unknown',
+      source: 'anonymous',
+      isAuthenticated: false,
+    });
   }
 }

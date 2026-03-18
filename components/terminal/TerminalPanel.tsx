@@ -100,16 +100,14 @@ function getAnonymousSessionId(): string | null {
 
 function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken();
-  const anonymousSessionId = getAnonymousSessionId();
   const headers: Record<string, string> = {};
 
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  if (anonymousSessionId) {
-    headers['x-anonymous-session-id'] = anonymousSessionId;
-  }
+  // Anonymous session is now handled via HttpOnly cookie - no need to send header
+  // The server sets anon-session-id cookie and credentials: 'include' sends it automatically
 
   return headers;
 }

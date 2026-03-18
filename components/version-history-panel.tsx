@@ -45,6 +45,7 @@ export function VersionHistoryPanel({
     try {
       const response = await fetch(`/api/gateway/git/${sessionId}/versions?limit=20`, {
         headers: buildApiHeaders(),
+        credentials: 'include',
       });
       
       if (!response.ok) throw new Error('Failed to fetch versions');
@@ -73,6 +74,7 @@ export function VersionHistoryPanel({
       const response = await fetch(`/api/gateway/git/${sessionId}/rollback`, {
         method: 'POST',
         headers: buildApiHeaders(),
+        credentials: 'include',
         body: JSON.stringify({ version }),
       });
       
