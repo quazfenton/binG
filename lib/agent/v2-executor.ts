@@ -109,6 +109,9 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
 
   const session = agentSessionManager.getSession(options.userId, options.conversationId);
 
+  // Note: session may be undefined if session was not initialized prior to execution
+  // Using optional chaining to gracefully handle this case - downstream consumers should handle undefined values
+
   // Sanitize the response content to remove heredoc command blocks
   const sanitizedContent = sanitizeV2ResponseContent(result.response || result.content || '');
 

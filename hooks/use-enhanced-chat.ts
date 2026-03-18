@@ -991,7 +991,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
           // Use robust NDJSON parser to handle partial chunks
           // Add newline to ensure complete parsing of SSE payloads
-          const parsedObjects = parser.parse(dataString + '\n');
+          let parsedObjects: any[];
+          try {
+            parsedObjects = parser.parse(dataString + '\n');
+          } catch (parseError) {
+            console.warn('V1 stream parsing error:', parseError);
+            continue;
+          }
           
           for (const parsed of parsedObjects) {
             // Handle OpenAI-compatible streaming format (v1)
@@ -1011,10 +1017,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   : msg
               ));
             }
+            }
           }
         }
-      }
-    } finally {
+      } finally {
       reader.releaseLock();
     }
     

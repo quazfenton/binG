@@ -114,10 +114,15 @@ function applyUnifiedDiffToContent(currentContent: string, path: string, diffBod
   const unifiedDiff = hasHeaders
     ? diffText
     : `--- ${path}\n+++ ${path}\n${diffText}`;
-  const parsed = parsePatch(unifiedDiff);
-  if (!parsed.length) return null;
-  const patched = applyPatch(currentContent, parsed[0]);
-  return patched === false ? null : patched;
+  try {
+    const parsed = parsePatch(unifiedDiff);
+    if (!parsed.length) return null;
+    const patched = applyPatch(currentContent, parsed[0]);
+    return patched === false ? null : patched;
+  } catch (error) {
+    console.error('Failed to apply unified diff:', error);
+    return null;
+  }
 }
 
 function applySimpleLineDiff(currentContent: string, diffBody: string): string | null {
@@ -580,6 +585,12 @@ export default function ConversationInterface() {
     }));
 
     if (newEntries.length === 0) return;
+
+    // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
+    // The diffs will also be stored in commandsByFile for manual review/revert
+    if (applyDiffsRef.current) {
+      void applyDiffsRef.current(newEntries);
+    }
 
     setCommandsByFile((prev) => {
       const next: Record<string, string[]> = { ...prev };
@@ -1046,6 +1057,12 @@ export default function ConversationInterface() {
       toast.error(`Failed to apply ${failedCount} diff${failedCount === 1 ? "" : "s"}.`);
     }
   }, [filesystemScopePath, filesystemSessionId]);
+
+  // Ref to hold applyDiffsToFilesystem for use in useEffect (before callback definition)
+  const applyDiffsRef = useRef(applyDiffsToFilesystem);
+  useEffect(() => {
+    applyDiffsRef.current = applyDiffsToFilesystem;
+  }, [applyDiffsToFilesystem]);
 
   // Apply polled diffs to filesystem (defined after applyDiffsToFilesystem)
   const applyPolledDiffs = useCallback(async (pathsToApply?: string[]) => {
