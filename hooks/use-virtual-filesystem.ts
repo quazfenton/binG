@@ -11,6 +11,7 @@ import type {
 } from '@/lib/virtual-filesystem/filesystem-types';
 import { opfsAdapter, OPFSAdapter } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
 import { opfsCore } from '@/lib/virtual-filesystem/opfs/opfs-core';
+import { onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 
 export interface AttachedVirtualFile {
   path: string;
@@ -231,6 +232,36 @@ export function useVirtualFilesystem(
 
     return () => clearInterval(interval);
   }, [useOPFS]);
+
+  // Listen for filesystem-updated events from other panels (code-preview-panel, conversation-interface, etc.)
+  // and invalidate the snapshot cache to ensure fresh data
+  useEffect(() => {
+    const unsubscribe = onFilesystemUpdated((event) => {
+      const detail = event.detail;
+      
+      // Get current session ID when event fires (not at effect creation time)
+      const ownerId = getOrCreateAnonymousSessionId();
+      
+      // Invalidate cache when files are updated from anywhere in the app
+      // This fixes Bug #4: Stale snapshot cache never invalidated during edit flow
+      if (detail.path || detail.paths || detail.scopePath) {
+        const pathToInvalidate = detail.scopePath || detail.path || (detail.paths && detail.paths[0]);
+        if (pathToInvalidate) {
+          log(`[filesystem-updated] Invalidating snapshot cache for: ${pathToInvalidate}`);
+          invalidateSnapshotCache(pathToInvalidate, ownerId);
+        } else {
+          log(`[filesystem-updated] Invalidating all snapshot caches`);
+          invalidateSnapshotCache(undefined, ownerId);
+        }
+      } else {
+        // No path info - invalidate all caches to be safe
+        log(`[filesystem-updated] Invalidating all snapshot caches (no path info)`);
+        invalidateSnapshotCache(undefined, ownerId);
+      }
+    });
+
+    return unsubscribe;
+  }, [log]);
 
   const request = useCallback(async <TData>(
     url: string,

@@ -381,8 +381,8 @@ export default function CodePreviewPanel({
     const cleanPath = normalizeProjectPath(path);
     log(`openFilesystemDirectory: "${path}" -> "${cleanPath}"`);
     setFilesystemCurrentPath(cleanPath);
-    void listFilesystemDirectory(cleanPath);
-  }, [listFilesystemDirectory, normalizeProjectPath, setFilesystemCurrentPath]);
+    void debouncedListDirectory(cleanPath);
+  }, [debouncedListDirectory, normalizeProjectPath, setFilesystemCurrentPath]);
 
   const openFilesystemParent = useCallback(() => {
     const cleanedCurrentPath = normalizeProjectPath(filesystemCurrentPath);
@@ -489,7 +489,7 @@ export default function CodePreviewPanel({
       const createdPath = normalizeProjectPath(createdFile?.path || newPath);
       log(`handleCreateFile: normalized created path "${createdPath}"`);
       
-      await listFilesystemDirectory(cleanParentPath);
+      await debouncedListDirectory(cleanParentPath);
       log(`handleCreateFile: refreshed directory "${cleanParentPath}"`);
       
       // Select the newly created file
@@ -528,7 +528,7 @@ export default function CodePreviewPanel({
     const newPath = `${cleanParentPath.replace(/\/+$/, '')}/${folderName}/.gitkeep`;
 
     writeFilesystemFile(newPath, '').then(async (createdFolderMarker) => {
-      await listFilesystemDirectory(cleanParentPath);
+      await debouncedListDirectory(cleanParentPath);
       
       // Dispatch event for cross-panel sync
       const folderPath = `${cleanParentPath.replace(/\/+$/, '')}/${folderName}`;
@@ -593,7 +593,7 @@ export default function CodePreviewPanel({
         await deleteFilesystemPath(sourcePath);
         
         toast.success('Renamed to: ' + newName);
-        void listFilesystemDirectory(filesystemCurrentPath);
+        void debouncedListDirectory(filesystemCurrentPath);
         setContextMenu(null);
         if (selectedFilesystemPath === sourcePath) {
           setSelectedFilesystemPath('');
@@ -675,7 +675,7 @@ export default function CodePreviewPanel({
         await writeFilesystemFile(targetPath, file.content);
         await deleteFilesystemPath(sourcePath);
         toast.success('Renamed to: ' + newName);
-        void listFilesystemDirectory(filesystemCurrentPath);
+        void debouncedListDirectory(filesystemCurrentPath);
         if (selectedFilesystemPath === sourcePath) {
           setSelectedFilesystemPath(targetPath);
         }
@@ -757,8 +757,8 @@ export default function CodePreviewPanel({
         }
         
         toast.success(clipboard.operation === 'cut' ? 'File moved' : 'File copied');
-        await listFilesystemDirectory(filesystemCurrentPath);
-        await listFilesystemDirectory(targetDir);
+        await debouncedListDirectory(filesystemCurrentPath);
+        await debouncedListDirectory(targetDir);
         
         emitFilesystemUpdated({
           path: destPath,
@@ -838,8 +838,8 @@ export default function CodePreviewPanel({
         await writeFilesystemFile(dest, file.content);
         await deleteFilesystemPath(source);
         toast.success(`Moved "${name}" to new location`);
-        await listFilesystemDirectory(filesystemCurrentPath);
-        await listFilesystemDirectory(targetDir);
+        await debouncedListDirectory(filesystemCurrentPath);
+        await debouncedListDirectory(targetDir);
         
         emitFilesystemUpdated({
           path: dest,
@@ -1229,7 +1229,7 @@ export default function CodePreviewPanel({
       }
 
       try {
-        await listFilesystemDirectory(normalizedScope);
+        await debouncedListDirectory(normalizedScope);
       } catch (err) {
         logError(`[VFS_SAVE] failed to refresh filesystem`, err);
       }
@@ -1311,8 +1311,6 @@ export default function CodePreviewPanel({
   }, [filesystemScopePath, writeFilesystemFile, listFilesystemDirectory, selectedTab, handleManualPreview, normalizeProjectPath]);
 
   // Extract code blocks from messages using centralized parser
-  // LEGACY: These are parsed from LLM response text (startup commands like 'npm run dev')
-  // NOT actual filesystem files - those come from scopedPreviewFiles (VFS)
   const codeBlocks = useMemo(() => {
     const parsedData = parseCodeBlocksFromMessages(messages);
     return parsedData.codeBlocks;
@@ -1472,6 +1470,24 @@ export default function CodePreviewPanel({
     filesystemScopePathRef.current = filesystemScopePath;
   }, [filesystemScopePath]);
 
+  // Debounce ref for directory listing to prevent polling storms
+  const lastDirectoryListRef = useRef<{ path: string; timestamp: number } | null>(null);
+  const DIRECTORY_LIST_DEBOUNCE_MS = 500;
+
+  // Debounced list directory function to prevent excessive API calls
+  const debouncedListDirectory = useCallback(async (path: string) => {
+    const now = Date.now();
+    const last = lastDirectoryListRef.current;
+    
+    if (last && last.path === path && (now - last.timestamp) < DIRECTORY_LIST_DEBOUNCE_MS) {
+      log(`[debouncedListDirectory] skipping duplicate call for "${path}" (${now - last.timestamp}ms since last)`);
+      return;
+    }
+    
+    lastDirectoryListRef.current = { path, timestamp: now };
+    return listFilesystemDirectory(path);
+  }, [listFilesystemDirectory]);
+
   // Clear preview state on navigation (filesystemScopePath change)
   // This ensures fresh state when user navigates to a different session/directory
   useEffect(() => {
@@ -1491,6 +1507,9 @@ export default function CodePreviewPanel({
       
       // Reset workspace version tracking for new scope
       lastWorkspaceVersionRef.current = 0;
+      
+      // Reset debounce on navigation
+      lastDirectoryListRef.current = null;
       
       previousScopePathRef.current = filesystemScopePath;
     }
@@ -1513,7 +1532,7 @@ export default function CodePreviewPanel({
         const currentPath = filesystemCurrentPathRef.current || filesystemScopePathRef.current || 'project';
         const normalizedScopePath = normalizeProjectPath(currentPath);
         log(`[filesystem-updated] refreshing directory: "${normalizedScopePath}"`);
-        await listFilesystemDirectory(normalizedScopePath);
+        await debouncedListDirectory(normalizedScopePath);
         log(`[filesystem-updated] directory refreshed`);
 
         // Also refresh scoped preview files using ref
@@ -1662,6 +1681,95 @@ export default function CodePreviewPanel({
     return null;
   }, [filesystemScopePath, normalizedFilesystemPath, scopedPreviewFiles, projectStructure, normalizeProjectPath]);
 
+  // Enhanced entry point detection with framework-specific patterns
+  const detectEntryFile = useCallback((filePaths: string[], framework?: string): string | null => {
+    // Framework-specific entry file patterns with higher priority
+    const frameworkEntryPatterns: Record<string, RegExp[]> = {
+      nuxt: [/\/app\.vue$/, /\/src\/main\.(ts|js)$/, /\/pages\/index\.(vue|ts|js)$/, /\/nuxt\.config\.ts$/],
+      vue: [/\/src\/main\.(ts|js)$/, /\/src\/App\.vue$/, /\/main\.(ts|js)$/, /\/App\.vue$/],
+      next: [/\/src\/app\/page\.(tsx|jsx|ts|js)$/, /\/src\/app\/layout\.(tsx|jsx|ts|js)$/, /\/pages\/index\.(tsx|jsx|ts|js)$/, /\/src\/pages\/index\.(tsx|jsx|ts|js)$/],
+      react: [/\/src\/index\.(tsx|jsx|ts|js)$/, /\/src\/main\.(tsx|jsx|ts|js)$/, /\/src\/App\.(tsx|jsx)$/, /\/index\.(tsx|jsx|ts|js)$/],
+      svelte: [/\/src\/main\.(ts|js)$/, /\/src\/App\.svelte$/, /\/main\.(ts|js)$/],
+      angular: [/\/src\/main\.(ts|js)$/, /\/src\/app\/app\.component\.(ts|js)$/],
+      solid: [/\/src\/index\.(tsx|jsx)$/, /\/src\/App\.(tsx|jsx)$/],
+      astro: [/\/src\/pages\/index\.astro$/, /\/pages\/index\.astro$/],
+      vanilla: [/\/index\.html$/, /\/src\/index\.(js|ts)$/, /\/main\.(js|ts)$/],
+    };
+
+    const patterns = framework ? frameworkEntryPatterns[framework] : null;
+    
+    // Try framework-specific patterns first
+    if (patterns) {
+      for (const pattern of patterns) {
+        const match = filePaths.find(path => pattern.test(path));
+        if (match) return match;
+      }
+    }
+
+    // Fallback to common entry patterns (in priority order)
+    const commonPatterns = [
+      /\/src\/index\.(tsx|jsx|ts|js|vue)$/,
+      /\/src\/main\.(tsx|jsx|ts|js|vue)$/,
+      /\/app\.vue$/,
+      /\/App\.vue$/,
+      /\/src\/App\.(tsx|jsx|vue)$/,
+      /\/index\.(tsx|jsx|ts|js|html)$/,
+      /\/main\.(tsx|jsx|ts|js)$/,
+      /\/pages\/index\.(tsx|jsx|ts|js|vue)$/,
+      /\/src\/pages\/index\.(tsx|jsx|ts|js|vue)$/,
+      /\/src\/app\/page\.(tsx|jsx|ts|js)$/,
+      /.*\.html$/,
+    ];
+
+    for (const pattern of commonPatterns) {
+      const match = filePaths.find(path => pattern.test(path));
+      if (match) return match;
+    }
+
+    // Last resort: return first file or null
+    return filePaths[0] || null;
+  }, []);
+
+  // Detect framework from files
+  const detectFrameworkFromFiles = useCallback((filePaths: string[], files: Record<string, string>): string => {
+    const hasNuxtConfig = filePaths.some(p => p.includes('nuxt.config'));
+    const hasNextConfig = filePaths.some(p => p.includes('next.config'));
+    const hasVue = filePaths.some(p => p.endsWith('.vue'));
+    const hasSvelte = filePaths.some(p => p.endsWith('.svelte'));
+    const hasReact = filePaths.some(p => p.endsWith('.tsx') || p.endsWith('.jsx'));
+    const hasAngular = filePaths.some(p => p.includes('.component.') || p.includes('.module.'));
+    const hasAstro = filePaths.some(p => p.endsWith('.astro'));
+    const hasPython = filePaths.some(p => p.endsWith('.py'));
+
+    // Check package.json for framework detection
+    const packageJsonPath = filePaths.find(p => p === 'package.json' || p.endsWith('/package.json'));
+    const packageJson = packageJsonPath ? files[packageJsonPath] : '';
+    if (packageJson) {
+      try {
+        const pkg = JSON.parse(packageJson);
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        if (deps.next || deps['next']) return 'next';
+        if (deps.nuxt || deps['@nuxt/core']) return 'nuxt';
+        if (deps.vue || deps['@vue/core']) return 'vue';
+        if (deps.svelte || deps['@sveltejs/kit']) return 'svelte';
+        if (deps.react) return 'react';
+        if (deps['@angular/core']) return 'angular';
+        if (deps.astro) return 'astro';
+      } catch {}
+    }
+
+    if (hasNuxtConfig) return 'nuxt';
+    if (hasNextConfig) return 'next';
+    if (hasAstro) return 'astro';
+    if (hasAngular) return 'angular';
+    if (hasSvelte) return 'svelte';
+    if (hasVue) return 'vue';
+    if (hasReact) return 'react';
+    if (hasPython) return 'python';
+
+    return 'vanilla';
+  }, []);
+
   const visualEditorProjectData = useMemo(() => {
     let structure = projectStructureWithScopedFiles || projectStructure;
     
@@ -1697,6 +1805,9 @@ export default function CodePreviewPanel({
     const packageJsonPath = filePaths.find((p) => p === 'package.json' || p.endsWith('/package.json'));
     const packageJsonContent = packageJsonPath ? files[packageJsonPath] : '';
 
+    // Detect framework from files
+    const detectedFramework = detectFrameworkFromFiles(filePaths, files);
+
     // Infer bundler from config files or package.json
     const inferredBundler = structure.bundler
       || (filePaths.some((p) => p.includes('vite.config')) || packageJsonContent.includes('"vite"') ? 'vite'
@@ -1705,21 +1816,8 @@ export default function CodePreviewPanel({
             : filePaths.some((p) => p.includes('next.config')) || packageJsonContent.includes('"next"') || filePaths.some((p) => p.startsWith('pages/') || p.startsWith('app/')) ? 'nextjs'
               : undefined);
 
-    // Detect entry file from common patterns
-    const entryCandidates = [
-      'src/main.tsx', 'src/main.jsx', 'src/main.ts', 'src/main.js',
-      'src/index.tsx', 'src/index.jsx', 'src/index.ts', 'src/index.js',
-      'app.tsx', 'app.jsx', 'page.tsx', 'index.tsx', 'index.jsx', 'index.ts', 'index.js', 'index.html',
-      'main.py', 'app.py', 'manage.py', 'server.js', 'app.js', 'index.js'
-    ];
-    
-    const entryFile =
-      entryCandidates.find((candidate) => filePaths.includes(candidate))
-      || filePaths.find((path) => path.endsWith('/index.html'))
-      || filePaths.find((path) => path.endsWith('/main.tsx') || path.endsWith('/main.jsx') || path.endsWith('/main.ts') || path.endsWith('/main.js'))
-      || filePaths.find((path) => path.endsWith('/index.tsx') || path.endsWith('/index.jsx') || path.endsWith('/index.ts') || path.endsWith('/index.js'))
-      || filePaths[0]
-      || null;
+    // Use enhanced entry file detection with framework awareness
+    const entryFile = detectEntryFile(filePaths, detectedFramework);
 
     // Infer preview mode hint
     const nextJsInPackageJson = packageJsonContent && packageJsonContent.includes('"next"');
@@ -2709,7 +2807,13 @@ root.render(<App />);` };
           for (const [path, fileObj] of Object.entries(normalized)) {
             let relativePath = path;
 
+            // First, ensure path has leading slash for consistent handling
+            if (!relativePath.startsWith('/')) {
+              relativePath = '/' + relativePath;
+            }
+
             // Strip VFS scope prefix first (e.g. /project/sessions/draft-chat_xxx/my-vue-app/src/main.js -> /my-vue-app/src/main.js)
+            // Try both with and without leading slash variants
             const prefixVariants = [
               `/${scopePrefix}/`,
               `${scopePrefix}/`,
@@ -2717,10 +2821,10 @@ root.render(<App />);` };
             ];
             for (const prefix of prefixVariants) {
               if (relativePath.startsWith(prefix)) {
-                relativePath = '/' + relativePath.slice(prefix.length);
+                relativePath = relativePath.slice(prefix.length);
                 // If we stripped a sessions prefix, also strip the session ID folder
                 if (prefix === '/project/sessions/' || prefix === 'project/sessions/') {
-                  const slashIdx = relativePath.indexOf('/', 1);
+                  const slashIdx = relativePath.indexOf('/');
                   if (slashIdx > 0) {
                     relativePath = relativePath.slice(slashIdx);
                   }
@@ -2730,6 +2834,7 @@ root.render(<App />);` };
             }
 
             // Try to strip leading project folder if path contains a known subfolder pattern
+            // e.g., /my-vue-app/src/main.js -> /src/main.js
             for (const pattern of projectSubfolderPatterns) {
               const match = relativePath.match(pattern);
               if (match) {
@@ -4998,7 +5103,7 @@ root.render(<App />);` };
                                 if (name?.trim()) {
                                   const fullPath = `${filesystemCurrentPath.replace(/\/+$/, '')}/${name.trim()}/.keep`;
                                   writeFilesystemFile(fullPath, '').then(() => {
-                                    void listFilesystemDirectory(filesystemCurrentPath);
+                                    void debouncedListDirectory(filesystemCurrentPath);
                                     toast.success('Folder created');
                                   });
                                 }
@@ -5068,7 +5173,7 @@ root.render(<App />);` };
                                       setNewFileName('');
                                       setIsCreatingFile(false);
                                       toast.success(`Created ${newFileName.trim()}`);
-                                      void listFilesystemDirectory(filesystemCurrentPath);
+                                      void debouncedListDirectory(filesystemCurrentPath);
                                     }).catch(() => toast.error('Failed to create file'));
                                   } else if (e.key === 'Escape') {
                                     setIsCreatingFile(false);
@@ -5171,7 +5276,7 @@ root.render(<App />);` };
                                     if (confirm(label)) {
                                       deleteFilesystemPath(node.path).then((deleteResult) => {
                                         toast.success(`Deleted ${node.name}`);
-                                        void listFilesystemDirectory(filesystemCurrentPath);
+                                        void debouncedListDirectory(filesystemCurrentPath);
                                         if (selectedFilesystemPath === node.path) {
                                           setSelectedFilesystemPath('');
                                           setSelectedFilesystemContent('');
@@ -5199,7 +5304,7 @@ root.render(<App />);` };
                         {codeBlocks.length > 0 && (
                           <div className="mt-4 border-t border-white/10 pt-3">
                             <h4 className="text-xs font-medium text-gray-400 mb-2">
-                              Legacy Snippets (startup commands, not VFS files)
+                              Generated Snippets
                             </h4>
                             <div className="space-y-1">
                               {codeBlocks.map((block, index) => (
@@ -5369,13 +5474,13 @@ root.render(<App />);` };
                       </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto">
+                    <div className="flex-1 overflow-y-auto min-h-0">
                       {isFilesystemFileLoading ? (
                         <div className="h-full flex items-center justify-center text-sm text-gray-400">
                           Loading file...
                         </div>
                       ) : selectedFileIndex !== null && codeBlocks[selectedFileIndex] ? (
-                        // LEGACY: Render parsed code block from LLM response text (startup commands), NOT from VFS
+                        // Render code block from Generated Snippets
                         <div className="h-full flex flex-col">
                           <div className="p-4 border-b border-white/10 bg-black/40 flex justify-between items-center">
                             <div className="flex items-center gap-2 min-w-0">
@@ -5471,7 +5576,7 @@ root.render(<App />);` };
                                         setIsEditingFile(false);
                                         
                                         // Refresh directory listing
-                                        await listFilesystemDirectory(normalizedFilesystemPath);
+                                        await debouncedListDirectory(normalizedFilesystemPath);
                                         log(`handleSave: refreshed directory`);
                                         
                                         // Dispatch event for cross-panel sync
@@ -5725,7 +5830,7 @@ root.render(<App />);` };
                 if (confirm(label)) {
                   deleteFilesystemPath(contextMenu.path).then((deleteResult) => {
                     toast.success('Deleted ' + contextMenu.path.split('/').pop());
-                    void listFilesystemDirectory(filesystemCurrentPath);
+                    void debouncedListDirectory(filesystemCurrentPath);
                     setContextMenu(null);
                     if (selectedFilesystemPath === contextMenu.path) {
                       setSelectedFilesystemPath('');
