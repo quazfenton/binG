@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import {
-  resolveFilesystemOwner,
+  withAnonSessionCookie,
   filesystemEditSessionService,
 } from '@/lib/virtual-filesystem';
+import { resolveFilesystemOwnerWithFallback } from '../../utils';
 import { transactionIdSchema } from '@/lib/validation/schemas';
 
 export const runtime = 'nodejs';
@@ -32,25 +33,36 @@ export async function POST(req: NextRequest) {
     
     const { transactionId } = parseResult.data;
     
-    const owner = await resolveFilesystemOwner(req);
+    // Resolve auth upfront for cookie wrapping
+    const owner = await resolveFilesystemOwnerWithFallback(req, {
+      route: 'edits-accept',
+      requestId: Math.random().toString(36).slice(2, 8),
+    });
     
     const tx = await filesystemEditSessionService.getTransaction(transactionId);
     if (!tx || tx.ownerId !== owner.ownerId) {
-      return NextResponse.json(
+      const errorResponse = NextResponse.json(
         { success: false, error: 'Edit transaction not found' },
         { status: 404 },
       );
+      return withAnonSessionCookie(errorResponse, owner);
     }
 
     const accepted = filesystemEditSessionService.acceptTransaction(transactionId);
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: {
         transaction: accepted,
       },
     });
+    return withAnonSessionCookie(response, owner);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to accept edit transaction';
-    return NextResponse.json({ success: false, error: message }, { status: 400 });
+    const errorResponse = NextResponse.json({ success: false, error: message }, { status: 400 });
+    return withAnonSessionCookie(errorResponse, {
+      ownerId: 'unknown',
+      source: 'anonymous',
+      isAuthenticated: false,
+    });
   }
 }

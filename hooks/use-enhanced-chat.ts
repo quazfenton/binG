@@ -136,6 +136,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       const response = await fetch(options.api, {
         method: 'POST',
         headers: buildRequestHeaders(),
+        credentials: 'include',
         body: JSON.stringify(requestBody),
         signal: abortController.signal,
       });
@@ -868,6 +869,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       v1Response = await fetch(options.api, {
         method: 'POST',
         headers: buildRequestHeaders(),
+        credentials: 'include',
         body: JSON.stringify(v1RequestBody),
         signal: abortController.signal,
       });

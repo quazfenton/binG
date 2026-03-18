@@ -34,10 +34,12 @@ export function withAnonSessionCookie<T extends NextResponse>(
  * Using a shared 'anon:public' ID would cause all anonymous users to share the same workspace.
  *
  * SESSION PERSISTENCE: Anonymous session IDs are persisted via http-only cookies.
- * To prevent session fragmentation, we use a consistent ID derivation strategy:
- * 1. Use existing cookie if present
- * 2. Generate new ID and mark for cookie setting (caller must set cookie)
- * 3. All routes MUST set the cookie when anonSessionId is returned
+ * To prevent IDOR attacks, we NEVER trust client-controlled headers for identity.
+ * Only the HttpOnly anon-session-id cookie is used as the identity source.
+ *
+ * IDOR PREVENTION: The x-anonymous-session-id header is no longer trusted for identity.
+ * Clients must always send the HttpOnly cookie. If no cookie exists, a new anonymous
+ * session is created and the cookie is set on the response.
  */
 export async function resolveFilesystemOwner(req: NextRequest): Promise<FilesystemOwnerResolution> {
   const auth = await resolveRequestAuth(req, { allowAnonymous: true });
@@ -49,21 +51,9 @@ export async function resolveFilesystemOwner(req: NextRequest): Promise<Filesyst
     };
   }
 
-  // PRIORITY 1: Check x-anonymous-session-id header (sent by client via buildApiHeaders)
-  // This is the primary anonymous identity mechanism and must match what resolveRequestAuth uses
-  const headerAnonId = req.headers.get('x-anonymous-session-id')?.trim();
-  if (headerAnonId && headerAnonId.length <= 128) {
-    const normalized = headerAnonId.replace(/[^a-zA-Z0-9:_-]/g, '');
-    if (normalized) {
-      return {
-        ownerId: `anon:${normalized}`,
-        source: 'anonymous',
-        isAuthenticated: false,
-      };
-    }
-  }
-
-  // PRIORITY 2: Use existing anonymous session ID from cookie if present
+  // SECURITY: Only trust the HttpOnly cookie for anonymous identity.
+  // Never trust client-controlled headers - they can be forged to impersonate other users.
+  // PRIORITY 1: Use existing anonymous session ID from HttpOnly cookie
   const anonymousSessionId = req.cookies.get('anon-session-id')?.value;
 
   if (anonymousSessionId) {
@@ -74,7 +64,7 @@ export async function resolveFilesystemOwner(req: NextRequest): Promise<Filesyst
     };
   }
 
-  // Generate new anonymous session ID for first-time visitors
+  // PRIORITY 2: Generate new anonymous session ID for first-time visitors
   // IMPORTANT: Caller MUST set the cookie when anonSessionId is returned
   // to prevent session fragmentation across requests
   const newAnonId = generateSecureId('anon');

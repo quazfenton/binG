@@ -7,6 +7,37 @@ import { determineExecutionPolicy } from '../sandbox/types';
 
 const logger = createLogger('Agent:V2Executor');
 
+/**
+ * Sanitize message content to remove heredoc command blocks
+ * Mirrors backend sanitization in app/api/chat/route.ts
+ */
+function sanitizeV2ResponseContent(content: string): string {
+  if (!content || typeof content !== 'string') return '';
+  let sanitized = content;
+
+  // Remove explicit command envelopes
+  sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
+  sanitized = sanitized.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
+  sanitized = sanitized.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
+
+  // Remove <fs-actions> XML tag blocks
+  sanitized = sanitized.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
+
+  // Remove heredoc command blocks
+  sanitized = sanitized.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){0,3}<<<[\s\S]*?>>>(?=\n|$)/gim, '\n');
+  sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+<<<[\s\S]*?>>>/gim, '');
+  sanitized = sanitized.replace(/^\s*DELETE\s+[^\n]+(?=\n|$)/gim, '\n');
+  sanitized = sanitized.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
+  sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]*\n?\s*<<<[\s\S]*?>>>/gim, '');
+  sanitized = sanitized.replace(/^\s*<<<\s*$/gm, '');
+  sanitized = sanitized.replace(/^\s*>>>\s*$/gm, '');
+
+  // Normalize spacing
+  sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
+  
+  return sanitized;
+}
+
 export interface V2ExecuteOptions {
   userId: string;
   conversationId: string;
@@ -78,9 +109,13 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
 
   const session = agentSessionManager.getSession(options.userId, options.conversationId);
 
+  // Sanitize the response content to remove heredoc command blocks
+  const sanitizedContent = sanitizeV2ResponseContent(result.response || result.content || '');
+
   return {
     success: result.success ?? true,
     data: result,
+    content: sanitizedContent, // Sanitized content for display
     sessionId: session?.id,
     conversationId: session?.conversationId,
     workspacePath: session?.workspacePath,
@@ -231,9 +266,12 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           })));
         }
 
+        // Sanitize the response content to remove heredoc command blocks
+        const sanitizedContent = sanitizeV2ResponseContent(result.response || result.content || '');
+
         controller.enqueue(encoder.encode(formatEvent('done', {
           success: result.success ?? true,
-          content: result.response || result.content || '',
+          content: sanitizedContent,
           messageMetadata: {
             agent: result.agent || 'opencode',
             sessionId: session?.id,

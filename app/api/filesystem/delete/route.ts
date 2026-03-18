@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { resolveFilesystemOwnerWithFallback } from '../utils';
+import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 import { absolutePathSchema } from '@/lib/validation/schemas';
 
 export const runtime = 'nodejs';
@@ -45,16 +47,26 @@ export async function POST(req: NextRequest) {
 
     // SECURITY: Always derive ownerId from authenticated request context
     // Never trust user-supplied ownerId for delete operations
-    const authResolution = await resolveFilesystemOwner(req);
+    const authResolution = await resolveFilesystemOwnerWithFallback(req, {
+      route: 'delete',
+      requestId: Math.random().toString(36).slice(2, 8),
+    });
     const ownerId = authResolution.ownerId;
 
     const result = await virtualFilesystem.deletePath(ownerId, targetPath);
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: result,
     });
+    return withAnonSessionCookie(response, authResolution);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to delete path';
-    return NextResponse.json({ success: false, error: message }, { status: 400 });
+    const errorResponse = NextResponse.json({ success: false, error: message }, { status: 400 });
+    // We don't have authResolution in catch, so create a basic one
+    return withAnonSessionCookie(errorResponse, {
+      ownerId: 'unknown',
+      source: 'anonymous',
+      isAuthenticated: false,
+    });
   }
 }

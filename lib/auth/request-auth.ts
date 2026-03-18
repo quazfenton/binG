@@ -62,7 +62,9 @@ export async function resolveRequestAuth(
   // Previous implementation only used authorization header, allowing cache poisoning
   const authHeader = req.headers.get('authorization') || ''
   const sessionId = req.cookies.get('session_id')?.value || ''
-  const anonId = options.anonymousSessionId || req.headers.get(anonymousHeaderName) || ''
+  // SECURITY: Only trust HttpOnly cookie for anonymous identity, NOT the client-controlled header
+  // The header was previously used but allowed IDOR attacks - now we only use the cookie
+  const anonId = req.cookies.get('anon-session-id')?.value || ''
 
   // Create unique cache key from all auth factors
   const cacheKey = `auth:${authHeader}:${sessionId}:${anonId}`;
@@ -143,17 +145,18 @@ export async function resolveRequestAuth(
   }
 
   // 3) Optional anonymous mode for dev/non-auth shell usage.
+  // SECURITY: Only use HttpOnly cookie for anonymous identity - never trust client-controlled headers
   if (allowAnonymous) {
-    const anonRaw = options.anonymousSessionId ?? req.headers.get(anonymousHeaderName);
-    if (anonRaw) {
-      const anonId = normalizeAnonymousId(anonRaw);
+    const anonCookie = req.cookies.get('anon-session-id')?.value;
+    if (anonCookie) {
+      const anonId = normalizeAnonymousId(anonCookie);
       if (anonId) {
         const result: ResolvedRequestAuth = { success: true, userId: `anon:${anonId}`, source: 'anonymous' };
         authCache.set(cacheKey, result);
         return result;
       }
     }
-    // If anonymous auth fails or no ID provided, fall through to return error
+    // If anonymous auth fails or no cookie, fall through to return error
   }
 
   const result: ResolvedRequestAuth = {
