@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { e2bDesktopProvider } from '@/lib/computer/e2b-desktop-provider-enhanced';
-import { verifyJWT } from '@/lib/security/jwt-auth';
+import { verifyToken } from '@/lib/security/jwt-auth';
 import { activeDesktops } from '../route';
 
 /**
@@ -23,7 +23,7 @@ async function getUserIdFromRequest(request: NextRequest): Promise<string | null
 
   const token = authHeader.substring(7);
   try {
-    const result = await verifyJWT(token);
+    const result = await verifyToken(token);
     if (result.valid && result.payload) {
       return result.payload.userId;
     }

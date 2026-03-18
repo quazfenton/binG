@@ -8,7 +8,7 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { EventEmitter } from 'events';
 import { createLogger } from './logger';
-import { createNDJSONParser } from '../../utils/ndjson-parser';
+import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 
 const logger = createLogger('Agent:OpenCodeEngine');
 
@@ -40,7 +40,7 @@ export interface OpenCodeExecution {
 class OpenCodeEngine extends EventEmitter {
   private process: ChildProcessWithoutNullStreams | null = null;
   private sessionBuffers: Map<string, string> = new Map();
-  private pendingResolves: Map<string, (events: OpenCodeEvent[]) => void> = new Map();
+  private pendingResolves: Map<string, (error: Error) => void> = new Map();
   private isReady: boolean = false;
   private readyPromise: Promise<void>;
   private config: OpenCodeConfig;
@@ -109,7 +109,7 @@ class OpenCodeEngine extends EventEmitter {
         
         // Reject any pending promises to prevent hanging
         for (const [sessionId, rejectFn] of this.pendingResolves.entries()) {
-          rejectFn(new Error(`OpenCode process error: ${err.message}`));
+          rejectFn(err);
           this.pendingResolves.delete(sessionId);
         }
       });
@@ -186,7 +186,7 @@ class OpenCodeEngine extends EventEmitter {
     const { sessionId, prompt, context, onEvent } = execution;
     const fullPrompt = context ? `${context}\n\nTASK:\n${prompt}` : prompt;
 
-    return new Promise((resolve, reject) => {
+    return new Promise<OpenCodeEvent[]>((resolve, reject) => {
       const events: OpenCodeEvent[] = [];
 
       // Set up event listener

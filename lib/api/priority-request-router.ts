@@ -834,7 +834,7 @@ class PriorityRequestRouter {
           )
         : [];
       return {
-        content: result.content || 'Tool request completed.',
+        content: result.content ?? 'Tool request completed.',
         data: {
           source: 'composio-tools',
           type: 'composio_execution',

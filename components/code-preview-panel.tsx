@@ -1489,7 +1489,7 @@ export default function CodePreviewPanel({
     }
 
     lastDirectoryListRef.current = { path, timestamp: now };
-    return listFilesystemDirectory(path);
+    await listFilesystemDirectory(path);
   }, [listFilesystemDirectory, log]);
   
   // Assign to ref so openFilesystemDirectory can access it

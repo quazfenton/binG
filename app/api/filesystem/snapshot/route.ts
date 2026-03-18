@@ -77,9 +77,10 @@ function trackRequest(path: string): { isPolling: boolean; requestCount: number;
 export async function GET(req: NextRequest) {
   const startTime = Date.now();
   const requestId = Math.random().toString(36).slice(2, 8);
+  let owner: FilesystemOwnerResolution | undefined;
 
   try {
-    const owner = await resolveFilesystemOwner(req);
+    owner = await resolveFilesystemOwner(req);
     const url = new URL(req.url);
     const pathFilter = (url.searchParams.get('path') || 'project').replace(/\/+$/, '');
 
