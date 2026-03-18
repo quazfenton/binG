@@ -87,17 +87,26 @@ class OpenCodeEngine extends EventEmitter {
       let buffer = '';
 
       this.process.stdout?.on('data', (data) => {
-        buffer += data.toString();
-
-        // Use NDJSON parser for robust parsing
-        const parser = createNDJSONParser()
-        const parsedObjects = parser.parse(buffer)
+        const newChunk = data.toString();
         
-        // Update buffer with any remaining incomplete data
-        buffer = parser.getBufferedLines() > 0 ? buffer : ''
-
-        for (const parsed of parsedObjects) {
-          this.handleOutput(parsed);
+        // FIX Bug 22: Append new data and parse only complete lines
+        buffer += newChunk;
+        
+        // Split by newlines and process complete lines only
+        const lines = buffer.split('\n');
+        // Keep last potentially incomplete line in buffer
+        buffer = lines.pop() || '';
+        
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          
+          try {
+            const parsed = JSON.parse(trimmed);
+            this.handleOutput(parsed);
+          } catch (parseError) {
+            logger.warn('Failed to parse NDJSON line:', { line: trimmed.substring(0, 100), error: parseError });
+          }
         }
       });
 
@@ -226,6 +235,7 @@ class OpenCodeEngine extends EventEmitter {
 
   /**
    * Stream events as they come
+   * FIX Bug 23: Replace broken promise chain with proper queue pattern
    */
   async *runStream(execution: OpenCodeExecution): AsyncGenerator<OpenCodeEvent> {
     await this.ready();
@@ -233,30 +243,29 @@ class OpenCodeEngine extends EventEmitter {
     const { sessionId, prompt, context } = execution;
     const fullPrompt = context ? `${context}\n\nTASK:\n${prompt}` : prompt;
 
-    // Create promise-based iterator
-    let resolve: (value: IteratorResult<OpenCodeEvent>) => void;
-    let reject: (error: Error) => void;
-    let buffer: OpenCodeEvent[] = [];
+    // FIX: Use proper queue-based iterator pattern
+    const eventQueue: OpenCodeEvent[] = [];
+    let waitResolve: (() => void) | null = null;
     let done = false;
     let error: Error | null = null;
 
-    const nextPromise = new Promise<IteratorResult<OpenCodeEvent>>((res, rej) => {
-      resolve = res;
-      reject = rej;
-    });
+    const waitForEvent = (): Promise<void> => {
+      if (eventQueue.length > 0) return Promise.resolve();
+      return new Promise(resolve => {
+        waitResolve = resolve;
+      });
+    };
 
     const eventHandler = (event: OpenCodeEvent) => {
       if (event.data.sessionId === sessionId || !event.data.sessionId) {
         if (event.type === 'done') {
           done = true;
         }
-        buffer.push(event);
-        resolve?.({ value: event, done: false });
-        // Get next resolver
-        if (resolve) {
-          nextPromise.then(() => {
-            resolve = undefined as any;
-          });
+        eventQueue.push(event);
+        // Wake up waiting iterator
+        if (waitResolve) {
+          waitResolve();
+          waitResolve = null;
         }
       }
     };
@@ -278,14 +287,21 @@ class OpenCodeEngine extends EventEmitter {
       }
 
       // Yield events until done
-      while (!done) {
-        const result = await nextPromise;
-        if (result.value) {
-          yield result.value;
+      while (!done || eventQueue.length > 0) {
+        await waitForEvent();
+        
+        while (eventQueue.length > 0) {
+          const event = eventQueue.shift()!;
+          yield event;
         }
       }
     } finally {
       this.off('event', eventHandler);
+      
+      // Wake up any waiting iterator on cleanup
+      if (waitResolve) {
+        waitResolve();
+      }
     }
   }
 

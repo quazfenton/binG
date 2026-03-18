@@ -168,8 +168,9 @@ export interface CollaborationResult {
 
 /**
  * Multi-Agent Collaboration Manager
- * 
+ *
  * Coordinates multiple agents working together.
+ * FIX Bug 27: Set maxListeners to prevent memory leak warning
  */
 export class MultiAgentCollaboration extends EventEmitter {
   private agents: Map<string, AgentState> = new Map();
@@ -179,6 +180,8 @@ export class MultiAgentCollaboration extends EventEmitter {
 
   constructor() {
     super();
+    // FIX Bug 27: Allow more than 10 listeners (default Node.js limit)
+    this.setMaxListeners(100);
   }
 
   /**
@@ -270,6 +273,7 @@ export class MultiAgentCollaboration extends EventEmitter {
   }
   /**
    * Execute collaborative task with REAL agent execution
+   * FIX Bugs 15-18: Parallel execution, agent cleanup, real results
    * Falls back to simulation only if real execution fails
    */
   async executeCollaborative(
@@ -277,73 +281,89 @@ export class MultiAgentCollaboration extends EventEmitter {
     agentRoles: AgentRole[],
     context?: any
   ): Promise<CollaborationResult> {
-    const startTime = Date.now()
-    const results: Record<string, any> = {}
-    const taskStatus: Record<string, Task> = {}
+    const startTime = Date.now();
+    const results: Record<string, any> = {};
+    const taskStatus: Record<string, Task> = {};
 
     // Create subtasks for each role
-    const tasks: Task[] = []
+    const tasks: Task[] = [];
+    const agentIds: string[] = [];
+    
     for (const role of agentRoles) {
-      const task = this.createTask(`${role}: ${description}`, { priority: 5 })
-      tasks.push(task)
-      taskStatus[task.id] = task
+      const task = this.createTask(`${role}: ${description}`, { priority: 5 });
+      tasks.push(task);
+      taskStatus[task.id] = task;
     }
 
-    // Execute with real agents for each role
-    for (let i = 0; i < agentRoles.length; i++) {
-      const role = agentRoles[i]
-      const task = tasks[i]
-      const agentId = `agent_${role}_${Date.now()}`
-
-      this.registerAgent(agentId, role)
-      this.assignTask(task.id, agentId)
-
-      try {
-        // ✅ REAL EXECUTION with UnifiedAgent
-        const { createAgent } = await import('@/lib/agent/unified-agent')
-        const agent = await createAgent({
-          provider: context?.provider || 'e2b',
-          capabilities: ['terminal', 'file-ops', 'code-execution'],
-          env: { AGENT_ROLE: role },
-        })
-
-        // Execute task via terminal
-        const output = await agent.terminalSend(task.description)
+    try {
+      // FIX Bug 17: Execute agents in PARALLEL instead of sequential
+      const agentPromises = tasks.map(async (task, index) => {
+        const role = agentRoles[index];
+        const agentId = `agent_${role}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         
-        this.completeTask(task.id, {
-          agentId,
-          completedAt: Date.now(),
-          output: output,
-          role,
-        })
+        this.registerAgent(agentId, role);
+        agentIds.push(agentId);
+        this.assignTask(task.id, agentId);
 
-        await agent.cleanup()
-      } catch (error: any) {
-        console.warn(
-          `[MultiAgent] Real execution failed for ${role}, using simulation:`,
-          error.message
-        )
-        
-        // Fallback to simulation
-        await this.simulateAgentExecution(agentId, task)
+        try {
+          // ✅ REAL EXECUTION with UnifiedAgent
+          const { createAgent } = await import('@/lib/agent/unified-agent');
+          const agent = await createAgent({
+            provider: context?.provider || 'e2b',
+            capabilities: ['terminal', 'file-ops', 'code-execution'],
+            env: { AGENT_ROLE: role },
+          });
+
+          // Execute task via terminal
+          const output = await agent.terminalSend(task.description);
+
+          this.completeTask(task.id, {
+            agentId,
+            completedAt: Date.now(),
+            output: output,
+            role,
+          });
+
+          await agent.cleanup();
+          
+          results[task.id] = task.result;
+        } catch (error: any) {
+          console.warn(
+            `[MultiAgent] Real execution failed for ${role}, using simulation:`,
+            error.message
+          );
+
+          // Fallback to simulation
+          await this.simulateAgentExecution(agentId, task);
+          results[task.id] = task.result;
+        }
+      });
+
+      // Wait for all agents to complete in parallel
+      await Promise.allSettled(agentPromises);
+    } finally {
+      // FIX Bug 18: Cleanup - unregister all agents after completion
+      for (const agentId of agentIds) {
+        this.unregisterAgent(agentId);
       }
     }
 
-    // Aggregate results
-    for (const task of tasks) {
-      results[task.id] = task.result
-    }
+    // FIX Bug 15: Build final snapshot from live tasks (not stale references)
+    const finalTaskStatus = Object.fromEntries(
+      tasks.map(task => [task.id, { ...task }])
+    );
 
-    const allCompleted = Object.values(taskStatus).every(
+    const allCompleted = Object.values(finalTaskStatus).every(
       t => t.status === 'completed'
-    )
+    );
 
+    // FIX Bug 16: Return real results and taskStatus (not hardcoded empty objects)
     return {
       success: allCompleted,
       results,
-      taskStatus,
+      taskStatus: finalTaskStatus,
       duration: Date.now() - startTime,
-    }
+    };
   }
 
   /**
