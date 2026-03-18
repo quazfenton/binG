@@ -17,11 +17,12 @@ import { activeDesktops } from '../route';
  */
 async function getUserIdFromRequest(request: NextRequest): Promise<string | null> {
   const authHeader = request.headers.get('authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  const match = authHeader?.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
     return null;
   }
 
-  const token = authHeader.substring(7);
+  const token = match[1];
   try {
     const result = await verifyJWT(token);
     if (result.valid && result.payload) {
