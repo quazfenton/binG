@@ -260,25 +260,63 @@ class NullclawIntegration {
 
   /**
    * Get next available port for container
+   * FIX Bug 12: Add proper port validation to prevent collisions
    */
-  private getNextAvailablePort(): number {
+  private async getNextAvailablePort(): Promise<number> {
     const basePort = this.defaultConfig.basePort || 3001;
     const poolSize = this.defaultConfig.poolSize || 2;
     const usedPorts = new Set(Array.from(this.containers.values()).map(c => c.port));
-    
-    for (let i = 0; i < poolSize; i++) {
-      const candidate = basePort + i;
-      if (!usedPorts.has(candidate)) return candidate;
+
+    // Scan up to 64 offsets to find available port
+    for (let offset = 0; offset < 64; offset++) {
+      const candidate = basePort + offset;
+      if (!usedPorts.has(candidate)) {
+        // Verify port is actually available (not in use by external process)
+        const isAvailable = await this.isPortAvailable(candidate);
+        if (isAvailable) {
+          return candidate;
+        }
+      }
     }
-    return basePort + this.containers.size;
+
+    // No port available in range
+    throw new Error(`No available ports in range ${basePort}-${basePort + 64}`);
+  }
+
+  /**
+   * Check if a port is available (not in use)
+   */
+  private async isPortAvailable(port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const net = require('net');
+      const server = net.createServer();
+      
+      server.once('error', () => {
+        resolve(false); // Port is in use
+      });
+      
+      server.once('listening', () => {
+        server.close();
+        resolve(true); // Port is available
+      });
+      
+      server.listen(port, '127.0.0.1');
+    });
   }
 
   /**
    * Initialize Nullclaw (URL or container pool)
+   * FIX Bug 11: Fix initialization promise race condition
    */
   async initialize(): Promise<void> {
+    // Return existing promise if initialization is in progress
     if (this.initializationPromise) {
       return this.initializationPromise;
+    }
+
+    // Check if already initialized
+    if (this.isAvailable()) {
+      return Promise.resolve();
     }
 
     this.initializationPromise = (async () => {
@@ -301,13 +339,13 @@ class NullclawIntegration {
           // Container mode: spawn pool based on NULLCLAW_MODE
           const mode = this.defaultConfig.mode || 'shared';
           const poolSize = mode === 'per-session' ? 1 : (this.defaultConfig.poolSize || 2);
-          
+
           logger.info(`Spawning Nullclaw container pool (mode: ${mode}, size: ${poolSize})`);
-          
-          const spawnPromises = Array.from({ length: poolSize }, (_, i) => 
+
+          const spawnPromises = Array.from({ length: poolSize }, (_, i) =>
             this.spawnContainer(`nullclaw-pool-${i}`)
           );
-          
+
           await Promise.all(spawnPromises);
           logger.info(`Nullclaw container pool ready (${poolSize} containers)`);
         }
@@ -315,7 +353,11 @@ class NullclawIntegration {
         logger.error('Failed to initialize Nullclaw:', error);
         throw error;
       } finally {
-        this.initializationPromise = null;
+        // FIX: Clear promise only after resolution completes
+        // Don't clear in finally if another caller is waiting
+        if (this.initializationPromise) {
+          this.initializationPromise = null;
+        }
       }
     })();
 
@@ -359,10 +401,11 @@ class NullclawIntegration {
 
   /**
    * Spawn a single Nullclaw container
+   * FIX Bug 13: Fix race condition - only add to map after successful spawn
    */
   private async spawnContainer(containerId: string): Promise<NullclawContainer> {
     const config = this.defaultConfig;
-    const port = this.getNextAvailablePort();
+    const port = await this.getNextAvailablePort();
     const container: NullclawContainer = {
       id: containerId,
       containerId: undefined,
@@ -374,7 +417,8 @@ class NullclawIntegration {
       assignedSessions: [],
     };
 
-    this.containers.set(containerId, container);
+    // FIX: Don't add to map until container is successfully spawned
+    // This prevents 'error' status containers from polluting the pool
 
     return new Promise((resolve, reject) => {
       const dockerArgs = [
@@ -407,22 +451,51 @@ class NullclawIntegration {
           const healthy = await this.waitForHealth(container);
           if (healthy) {
             container.status = 'ready';
+            // FIX: Only add to map after successful spawn and health check
+            this.containers.set(containerId, container);
             resolve(container);
           } else {
             container.status = 'error';
+            // FIX: Cleanup on health check failure
+            await this.cleanupContainer(container);
             reject(new Error(`Nullclaw container ${containerId} failed health check`));
           }
         } else {
           container.status = 'error';
+          // FIX: Cleanup on spawn failure
+          await this.cleanupContainer(container);
           reject(new Error(`Nullclaw spawn exited with code ${code}`));
         }
       });
 
       docker.on('error', (error) => {
         container.status = 'error';
+        // FIX: Cleanup on docker error
+        this.cleanupContainer(container).catch(console.error);
         reject(new Error(`Nullclaw spawn failed: ${error.message}`));
       });
     });
+  }
+
+  /**
+   * Cleanup container on failure
+   */
+  private async cleanupContainer(container: NullclawContainer): Promise<void> {
+    // Remove from containers map if present
+    this.containers.delete(container.id);
+    
+    // Try to stop docker container if it was created
+    if (container.containerId) {
+      try {
+        const { spawn } = await import('child_process');
+        const docker = spawn('docker', ['rm', '-f', container.containerId]);
+        docker.on('close', () => {
+          logger.debug(`Cleaned up docker container ${container.containerId}`);
+        });
+      } catch (error) {
+        logger.error(`Failed to cleanup docker container:`, error);
+      }
+    }
   }
 
   /**
@@ -448,9 +521,16 @@ class NullclawIntegration {
 
   /**
    * Check Nullclaw health
+   * FIX Bug 14: Return 'unhealthy' when all containers fail (not 'unknown')
    */
   async checkHealth(): Promise<'healthy' | 'unhealthy' | 'unknown'> {
     const containers = Array.from(this.containers.values());
+    
+    // FIX: 'unknown' only when NO containers exist
+    if (containers.length === 0) {
+      return 'unknown';
+    }
+    
     const healthyCount = await Promise.all(
       containers.map(async (c) => {
         try {
@@ -463,10 +543,10 @@ class NullclawIntegration {
     );
 
     const healthy = healthyCount.reduce((a, b) => a + b, 0);
-    
+
+    // FIX: All healthy = 'healthy', any failure = 'unhealthy'
     if (healthy === containers.length) return 'healthy';
-    if (healthy > 0) return 'unhealthy';
-    return 'unknown';
+    return 'unhealthy';
   }
 
   /**

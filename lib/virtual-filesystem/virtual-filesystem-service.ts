@@ -331,6 +331,10 @@ export class VirtualFilesystemService {
     const normalizedPrefix = `${normalizedPath}/`;
     let deletedCount = 0;
 
+    // FIX Bug 20: Increment version ONCE before the loop
+    workspace.version += 1;
+    workspace.updatedAt = new Date().toISOString();
+
     for (const existingPath of Array.from(workspace.files.keys())) {
       if (existingPath === normalizedPath || existingPath.startsWith(normalizedPrefix)) {
         const deletedFile = workspace.files.get(existingPath);
@@ -339,13 +343,12 @@ export class VirtualFilesystemService {
         if (deletedFile) {
           diffTracker.trackDeletion(existingPath, ownerId, deletedFile.content);
         }
-        this.emitFileChange(ownerId, existingPath, 'delete', workspace.version + 1);
+        // FIX: All events now carry the correct final version
+        this.emitFileChange(ownerId, existingPath, 'delete', workspace.version);
       }
     }
 
     if (deletedCount > 0) {
-      workspace.version += 1;
-      workspace.updatedAt = new Date().toISOString();
       this.emitSnapshotChange(ownerId, workspace.version);
       await this.persistWorkspace(ownerId, workspace);
     }
@@ -996,9 +999,10 @@ class GitBackedVFSProxy {
 
   /**
    * Clear workspace (for testing)
+   * FIX Bug 19: Delegate to real VFS clearWorkspace (not just deletePath)
    */
   async clearWorkspace(ownerId: string): Promise<void> {
-    await this.vfs.deletePath(ownerId, 'project');
+    await this.vfs.clearWorkspace(ownerId);
   }
 }
 
