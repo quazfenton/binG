@@ -635,10 +635,15 @@ export class ResponseRouter {
             enableSandbox: false,  // Disable sandbox for fallback
             isSandboxCommand: false,
           } as EnhancedLLMRequest)
+          
+          // Preserve normalized metadata (usage, model, provider) while adding fallback flags
+          const normalized = this.normalizeOriginalResponse(response)
           return {
-            ...this.normalizeOriginalResponse(response),
+            ...normalized,
             data: {
-              ...response.data,
+              ...normalized.data,
+              // Include any additional metadata from response if present
+              ...(response as any).metadata,
               isFallback: true,
               fallbackReason: 'Specialized endpoints unavailable, using LLM text response',
             },

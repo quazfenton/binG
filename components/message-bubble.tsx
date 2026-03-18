@@ -207,7 +207,7 @@ export default function MessageBubble({
     } finally {
       setIsApplyingEditAction(false);
     }
-  }, [buildRequestHeaders, fileEditInfo?.transactionId, isApplyingEditAction, fileEditInfo.applied.length]);
+  }, [buildRequestHeaders, fileEditInfo?.transactionId, isApplyingEditAction, fileEditInfo?.applied?.length]);
   
   const layout = useResponsiveLayout()
   

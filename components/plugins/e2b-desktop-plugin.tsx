@@ -61,7 +61,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [error, setError] = useState<string>('')
-  const [desktop, setDesktop] = useState<any>(null)
+  const desktop = desktopId // Use desktopId directly instead of separate state
 
   // Agent state
   const [isAgentRunning, setIsAgentRunning] = useState(false)
@@ -228,12 +228,12 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
     }
   }, [desktopId, disconnectFromDesktop])
 
-  // Auto-connect on mount
+  // Auto-connect on mount (only if no error)
   useEffect(() => {
-    if (isVisible && !desktopId && !isConnecting) {
+    if (isVisible && !desktopId && !isConnecting && !error) {
       connectToDesktop()
     }
-  }, [isVisible, desktopId, isConnecting, connectToDesktop])
+  }, [isVisible, desktopId, isConnecting, error, connectToDesktop])
 
   // Scroll terminal to bottom
   useEffect(() => {

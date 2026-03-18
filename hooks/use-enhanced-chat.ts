@@ -380,9 +380,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             if (!dataString) continue;
 
             // Use robust NDJSON parser to handle partial chunks
+            // Add newline to ensure complete parsing of SSE payloads
             let parsedObjects: any[];
             try {
-              parsedObjects = parser.parse(dataString);
+              parsedObjects = parser.parse(dataString + '\n');
             } catch (parseError) {
               // Handle parsing errors gracefully - use streaming error handler
               const streamingError = streamingErrorHandler.processError(
@@ -987,7 +988,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           }
 
           // Use robust NDJSON parser to handle partial chunks
-          const parsedObjects = parser.parse(dataString);
+          // Add newline to ensure complete parsing of SSE payloads
+          const parsedObjects = parser.parse(dataString + '\n');
           
           for (const parsed of parsedObjects) {
             // Handle OpenAI-compatible streaming format (v1)

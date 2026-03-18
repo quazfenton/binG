@@ -82,6 +82,7 @@ import {
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
+import { getOrCreateAnonymousSessionId } from "@/lib/utils";
 import type { Message } from "@/types";
 
 interface FileNode {
@@ -344,9 +345,11 @@ export function ExperimentalWorkspacePanel() {
         const snapshot = await vfs.getSnapshot();
         setVfsSnapshot(snapshot);
         // Initialize filesystem state with snapshot data
+        // Use stable session ID from user session (not Date.now() which changes on refresh)
+        const stableSessionId = `session-${getOrCreateAnonymousSessionId()}`;
         setFilesystem({
-          sessionId: `session-${Date.now()}`,
-          version: 1,
+          sessionId: stableSessionId,
+          version: snapshot?.version || 1,
           files: snapshot?.files || [],
         });
       } catch (error) {

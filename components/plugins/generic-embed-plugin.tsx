@@ -434,8 +434,14 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                       url={currentUrl}
                       reason={failureReason || 'failed'}
                       errorMessage={errorMessage || iframeError || undefined}
-                      onRetry={handleRetry}
-                      onTryFallback={handleFallback}
+                      onRetry={() => {
+                        setIframeError(null);
+                        handleRetry();
+                      }}
+                      onTryFallback={() => {
+                        setIframeError(null);
+                        handleFallback();
+                      }}
                       onOpenExternal={handleOpenExternal}
                       onClose={onClose}
                       autoRetryCount={retryCount}
@@ -451,6 +457,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                     onLoad={() => {
                       setIsReloading(false);
                       setIframeError(null);
+                      handleLoad(); // Sync with useIframeLoader hook
                     }}
                     onError={() => {
                       setIframeError('Failed to load content. This site may block embedding. Try opening externally.');

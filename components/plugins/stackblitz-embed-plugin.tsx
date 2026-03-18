@@ -333,7 +333,10 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                     src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
                     className="w-full h-full border-0"
                     title="StackBlitz"
-                    onLoad={() => setIsReloading(false)}
+                    onLoad={() => {
+                      setIsReloading(false);
+                      handleLoad(); // Sync with useIframeLoader hook
+                    }}
                     onError={() => {
                       setIframeError('Failed to load StackBlitz. Note: StackBlitz requires valid project URLs.');
                       setIsReloading(false);
