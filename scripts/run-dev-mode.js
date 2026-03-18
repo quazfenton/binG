@@ -12,7 +12,7 @@ if (!allowedModes.has(mode)) {
 
 const modeEnv = mode === 'opencode'
   ? {
-      LLM_PROVIDER: 'opencode',
+      LLM_PROVIDER: 'zen',
       OPENCODE_CONTAINERIZED: 'true',
       ENABLE_CODE_EXECUTION: 'true',
     }

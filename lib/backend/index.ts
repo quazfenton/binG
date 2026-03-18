@@ -6,6 +6,7 @@
 // Backend Service (NEW - centralized initialization)
 export {
   backendService,
+  BackendService,
   initializeBackend,
   getBackendStatus,
   type BackendConfig,
@@ -33,7 +34,7 @@ export {
   previewRouter,
   type PreviewTarget,
   type PreviewRegistration,
-} from './preview-router';
+} from '../previews/preview-router';
 
 // Sandbox Manager
 export {
@@ -43,7 +44,7 @@ export {
   type SandboxConfig,
   type ExecResult as SandboxExecResult,
   type FileEntry,
-} from './sandbox-manager';
+} from '../sandbox/sandbox-manager';
 
 // Adapters
 export {
@@ -59,14 +60,14 @@ export {
   type DjangoASGIApp,
   type QuickJSRuntime,
   type PreviewMount,
-} from './adapters';
+} from '../previews/adapters';
 
 // WebSocket Terminal
 export {
   WebSocketTerminalServer,
   webSocketTerminalServer,
   type TerminalSession,
-} from './websocket-terminal';
+} from '../terminal/websocket-terminal';
 
 // Storage Backend
 export {
@@ -79,7 +80,7 @@ export {
   type StorageConfig,
   type StorageObject,
   type UploadResult,
-} from './storage-backend';
+} from '../storage/storage-backend';
 
 // Firecracker Runtime
 export {
@@ -94,7 +95,7 @@ export {
   type ResourceLimits,
   type ContainerInfo,
   type ExecResult as FirecrackerExecResult,
-} from './firecracker-runtime';
+} from '../sandbox/firecracker-runtime';
 
 // Metrics
 export {
@@ -119,14 +120,14 @@ export {
   type QuotaConfig,
   type UsageRecord,
   type QuotaViolation,
-} from './quota';
+} from '../management/quota';
 
 // Virtual FS
 export {
   VirtualFS,
   virtualFS,
   type MountPoint,
-} from './virtual-fs';
+} from '../virtual-filesystem/virtual-fs';
 
 // Background Jobs
 export {
@@ -136,7 +137,7 @@ export {
   type BackgroundJob,
   type JobExecutionResult,
   type JobExecutor,
-} from './background-jobs';
+} from '../agent/background-jobs';
 
 // Snapshot Manager
 export {
@@ -145,7 +146,7 @@ export {
   type RetryConfig,
   type SnapshotResult,
   type SnapshotInfo,
-} from './snapshot-manager';
+} from '../virtual-filesystem/sync/snapshot-manager';
 
 // Agent Workspace
 export {
@@ -157,4 +158,4 @@ export {
   type WorkerListing,
   type PublishWorkerRequest,
   type ExecRequest,
-} from './agent-workspace';
+} from '../agent/agent-workspace';

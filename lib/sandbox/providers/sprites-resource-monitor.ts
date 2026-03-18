@@ -11,7 +11,7 @@
  * - Resource alerts
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 /**
  * Resource metrics

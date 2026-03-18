@@ -18,8 +18,6 @@ services:
       - "8080:8080"
     env_file:
       - .env
-      - .env.local
-      - .env.development
     environment:
       - NODE_ENV=development
       - PORT=3000
@@ -30,7 +28,9 @@ services:
       - RUNTIME_TYPE=process
 
       # Authentication (dev keys - overridden by .env if present)
-      - JWT_SECRET=${JWT_SECRET:-dev-secret-key-change-in-production}
+      # ⚠️ SECURITY: These are DEFAULT values only. Generate your own secure keys!
+      # Generate with: openssl rand -hex 32
+      - JWT_SECRET=${JWT_SECRET:-dev-secret-key-change-in-production-see-env-example}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
 
@@ -78,6 +78,8 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
 
       # Encryption keys (dev defaults - CHANGE FOR PRODUCTION)
+      # ⚠️ SECURITY: Generate secure random keys for production!
+      # Generate with: openssl rand -hex 32
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-dev-encryption-key-must-be-32-chars-min}
       - BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY:-dev-blaxel-secret-key-32-chars-min}
 
@@ -465,7 +467,6 @@ services:
       - "9001:9001"
     env_file:
       - .env
-      - .env.local
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -561,6 +562,19 @@ services:
       - MICROSANDBOX_ALLOW_LOCAL_FALLBACK=true
     volumes:
       - microsandbox-workspaces:/workspace
+      # ⚠️ SECURITY: Docker socket mount - gives container full control over host Docker daemon
+      # This is required for microsandbox to create child containers, but poses security risks:
+      # - Container escape possible
+      # - Host compromise possible
+      # - All containers accessible
+      #
+      # MITIGATION OPTIONS:
+      # 1. Use Docker socket proxy (docker-socket-proxy or dind-wrapper)
+      # 2. Implement rootless Docker
+      # 3. Use user namespaces
+      # 4. Restrict to development environments only
+      #
+      # For production: Remove this mount and use a socket proxy with limited permissions
       - /var/run/docker.sock:/var/run/docker.sock
     command: >
       sh -c "
@@ -669,7 +683,6 @@ services:
       - "7882:7882/udp"
     env_file:
       - .env
-      - .env.local
     environment:
       - "LIVEKIT_KEYS=${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-devsecret}"
     command: >
@@ -692,7 +705,6 @@ services:
       - "8082:8080"
     env_file:
       - .env
-      - .env.local
     environment:
       - NODE_ENV=development
       - PORT=8080
@@ -700,6 +712,9 @@ services:
       - JWT_SECRET=${JWT_SECRET:-dev-secret-key-change-in-production}
     volumes:
       - terminal-workspaces:/workspace
+      # ⚠️ SECURITY: Docker socket mount - gives container full control over host Docker daemon
+      # Required for terminal sandbox creation. See security warnings above.
+      # For production: Use socket proxy with limited permissions
       - /var/run/docker.sock:/var/run/docker.sock
     command: >
       sh -c "

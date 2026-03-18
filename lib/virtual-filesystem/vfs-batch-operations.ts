@@ -9,7 +9,7 @@
 
 import type { VirtualFile } from './filesystem-types';
 import { virtualFilesystem } from './virtual-filesystem-service';
-import { sandboxPersistenceManager } from '@/lib/sandbox/persistence-manager';
+import { sandboxPersistenceManager } from '@/lib/storage/persistence-manager';
 
 /**
  * Batch file operation

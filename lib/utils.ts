@@ -66,6 +66,68 @@ export function generateSecureId(prefix: string = 'id'): string {
   return `${prefix}_${timestamp}_${randomPart}`;
 }
 
+// ---------------------------------------------------------------------------
+// Client-side session & auth header helpers
+// ---------------------------------------------------------------------------
+
+const ANONYMOUS_SESSION_KEY = 'anonymous_session_id';
+const AUTH_TOKEN_KEY = 'token';
+
+/**
+ * Get-or-create the anonymous session ID persisted in localStorage.
+ *
+ * This is the **single source of truth** for anonymous identity on the client.
+ * Every hook / component that needs an anonymous session ID MUST call this
+ * function instead of reimplementing the localStorage logic.
+ */
+export function getOrCreateAnonymousSessionId(): string {
+  if (typeof window === 'undefined') return 'server-session';
+
+  try {
+    let sessionId = localStorage.getItem(ANONYMOUS_SESSION_KEY);
+    if (!sessionId) {
+      sessionId = generateSecureId('anon');
+      localStorage.setItem(ANONYMOUS_SESSION_KEY, sessionId);
+    }
+    return sessionId;
+  } catch {
+    // localStorage unavailable (Safari private, etc.)
+    return generateSecureId('anon');
+  }
+}
+
+/**
+ * Build standard request headers for API calls.
+ *
+ * Includes:
+ * - `Authorization: Bearer <token>` when the user is authenticated
+ * - `x-anonymous-session-id` for unauthenticated requests
+ * - `Content-Type: application/json` when `json` is true (default)
+ */
+export function buildApiHeaders(options?: { json?: boolean }): Record<string, string> {
+  const json = options?.json !== false;
+  const headers: Record<string, string> = {};
+
+  if (json) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  if (typeof window !== 'undefined') {
+    // Guard token lookup with try/catch to handle restricted browser storage contexts
+    try {
+      const token = localStorage.getItem(AUTH_TOKEN_KEY);
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+    } catch {
+      // localStorage unavailable; continue without auth token
+    }
+    headers['x-anonymous-session-id'] = getOrCreateAnonymousSessionId();
+  }
+
+  return headers;
+}
+
 /**
  * Generate a UUID v4 using crypto.randomUUID or crypto.getRandomValues
  */

@@ -10,7 +10,7 @@
  * - Iterative workflow management with diff-based updates
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { diff_match_patch } from 'diff-match-patch';
 import { z } from 'zod';
 import { llmIntegration } from './llm-integration';
@@ -31,12 +31,12 @@ const EnhancedResponseSchema = z.object({
     line_range: z.tuple([z.number(), z.number()]),
     content: z.string(),
     description: z.string().optional(),
-    confidence: z.number().min(0).max(1).optional()
+    confidence: z.number().min(0).refine((val) => val <= 1, 'Confidence must be at most 1').optional()
   })),
   next_file_request: z.string().nullable(),
   workflow_state: z.enum(['in_progress', 'needs_approval', 'completed', 'failed']),
   technical_depth: z.object({
-    complexity_score: z.number().min(1).max(10),
+    complexity_score: z.number().min(1).refine((val) => val <= 10, 'Complexity score must be at most 10'),
     requires_streaming: z.boolean(),
     estimated_tokens: z.number(),
     dependencies: z.array(z.string()).optional()
@@ -44,7 +44,7 @@ const EnhancedResponseSchema = z.object({
   agentic_metadata: z.object({
     agent_type: z.enum(['single', 'crew', 'multi_step']).optional(),
     iteration_count: z.number().default(1),
-    quality_score: z.number().min(0).max(1).optional(),
+    quality_score: z.number().min(0).refine((val) => val <= 1, 'Quality score must be at most 1').optional(),
     framework: z.enum(['crewai', 'praisonai', 'ag2', 'custom']).optional()
   }).optional()
 });

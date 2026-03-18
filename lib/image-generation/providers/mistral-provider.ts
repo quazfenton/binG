@@ -224,6 +224,7 @@ export class MistralImageProvider implements ImageGenerationProvider {
         {
           type: 'image_generation' as any,
           // Explicitly configure the image_generation connector
+          // @ts-ignore - config is supported by the API but not in the type definition
           config: {
             model: 'flux-pro-1.1-ultra',
           }
@@ -368,7 +369,7 @@ export class MistralImageProvider implements ImageGenerationProvider {
               // Otherwise try to download the actual file content
               const fileResponse = await this.client!.files.download({
                 fileId: chunk.fileId
-              });
+              }) as unknown as string | Uint8Array | ArrayBuffer;
 
               let imageUrl: string;
               let mimeType = 'image/png';

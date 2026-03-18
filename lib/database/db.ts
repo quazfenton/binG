@@ -1,10 +1,12 @@
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
 
-const DATABASE_PATH = './database.sqlite';
-let dbInstance: Database.Database | null = null;
+export type BetterSqlite3Database = ReturnType<typeof Database>;
 
-export async function initializeDatabase() {
+const DATABASE_PATH = './database.sqlite';
+let dbInstance: BetterSqlite3Database | null = null;
+
+export async function initializeDatabase(): Promise<BetterSqlite3Database> {
   if (dbInstance) {
     return dbInstance;
   }

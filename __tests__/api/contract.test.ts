@@ -13,7 +13,7 @@ const ChatRequestSchema = z.object({
   messages: z.array(z.object({
     role: z.enum(['user', 'assistant', 'system']),
     content: z.string(),
-  })),
+  })).min(1),
   provider: z.string(),
   model: z.string(),
   temperature: z.number().min(0).max(2).optional(),

@@ -1,19 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from 'zod';
-import { llmService, PROVIDERS } from "@/lib/api/llm-providers";
-import { errorHandler } from "@/lib/api/error-handler";
-import { priorityRequestRouter } from "@/lib/api/priority-request-router";
-import { unifiedResponseHandler } from "@/lib/api/unified-response-handler";
+import { llmService, PROVIDERS } from "@/lib/chat/llm-providers";
+import { errorHandler } from "@/lib/chat/error-handler";
+import { responseRouter } from "@/lib/api/response-router";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
 import { generateSecureId } from '@/lib/utils';
-import { chatRequestLogger } from '@/lib/api/chat-request-logger';
+import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
+import { chatLogger } from '@/lib/chat/chat-logger';
 import { parsePatch, applyPatch } from 'diff';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
-import type { LLMMessage } from "@/lib/api/llm-providers";
+import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
+import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
+import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil } from '@/lib/virtual-filesystem/scope-utils';
+import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
+import type { LLMMessage } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
-import { getFilesystemTools, createAgentLoop } from '@/lib/mastra';
+import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
+import { executeV2Task, executeV2TaskStreaming } from '@/lib/agent/v2-executor';
+import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
+import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
+import { workforceManager } from '@/lib/agent/workforce-manager';
+import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
+import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -31,6 +41,9 @@ const CHAT_RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
 const CHAT_RATE_LIMIT_MAX_AUTHENTICATED = 60;
 const CHAT_RATE_LIMIT_MAX_ANONYMOUS = 10;
 
+const CHAT_AGENTIC_PIPELINE = (process.env.CHAT_AGENTIC_PIPELINE || 'auto').toLowerCase();
+const WORKFORCE_ENABLED = process.env.WORKFORCE_ENABLED === 'true';
+
 const chatMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
   content: z.union([z.string(), z.array(z.any())]),
@@ -40,12 +53,13 @@ const chatRequestSchema = z.object({
   messages: z.array(chatMessageSchema).min(1, 'Messages array cannot be empty'),
   provider: z.string().min(1, 'Provider is required'),
   model: z.string().min(1, 'Model is required'),
-  temperature: z.number().min(0).max(2).optional().default(0.7),
-  maxTokens: z.number().int().min(1).max(200000).optional().default(10096),
+  temperature: z.number().min(0).refine((val) => val <= 2, 'Temperature must be at most 2').optional().default(0.7),
+  maxTokens: z.number().int().min(1).refine((val) => val <= 200000, 'Max tokens must be at most 200000').optional().default(100096),
   stream: z.boolean().optional().default(true),
   apiKeys: z.record(z.string()).optional().default({}),
   requestId: z.string().optional(),
   conversationId: z.string().optional(),
+  agentMode: z.enum(['v1', 'v2', 'auto']).optional().default('auto'),
   filesystemContext: z.object({
     attachedFiles: z.any().optional(),
     applyFileEdits: z.boolean().optional(),
@@ -57,16 +71,14 @@ export async function POST(request: NextRequest) {
   const requestStartTime = Date.now();
   const requestId = generateSecureId('chat');
 
-  console.log('[DEBUG] Chat API: Incoming request', { requestId });
-
   // Extract user authentication (JWT or session cookie).
   // Anonymous chat is allowed, but tools/sandbox require authenticated userId.
   const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
   const userId = authResult.userId || 'anonymous';
 
-  if (!authResult.success || !authResult.userId) {
-    console.log('[DEBUG] Chat API: Anonymous request (no auth token/session)');
-  }
+  chatLogger.debug('Anonymous request (no auth token/session)', { requestId, userId }, {
+    authSuccess: authResult.success,
+  });
 
   // RATE LIMITING: Use tighter limits for anonymous users
   const isAuthenticated = authResult.success && authResult.userId && !authResult.userId.startsWith('anon:');
@@ -111,7 +123,10 @@ export async function POST(request: NextRequest) {
     const parseResult = chatRequestSchema.safeParse(rawBody);
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];
-      console.error('[DEBUG] Chat API: Schema validation failed:', firstError);
+      chatLogger.error('Schema validation failed', { requestId }, {
+        error: firstError.message,
+        fieldErrors: parseResult.error.flatten().fieldErrors,
+      });
       return NextResponse.json(
         { error: firstError.message, details: parseResult.error.flatten().fieldErrors },
         { status: 400 },
@@ -119,7 +134,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = parseResult.data;
-    console.log('[DEBUG] Chat API: Request body validated:', {
+    chatLogger.debug('Request body validated', { requestId }, {
       messageCount: body.messages.length,
       provider: body.provider,
       model: body.model,
@@ -137,6 +152,7 @@ export async function POST(request: NextRequest) {
       apiKeys,
       requestId: incomingRequestId,
       conversationId,
+      agentMode,
       filesystemContext,
     } = body as {
       messages: LLMMessage[];
@@ -148,6 +164,7 @@ export async function POST(request: NextRequest) {
       apiKeys: Record<string, string>;
       requestId?: string;
       conversationId?: string;
+      agentMode?: 'v1' | 'v2' | 'auto';
       filesystemContext?: ChatFilesystemContextPayload;
     };
     provider = requestedProvider;
@@ -165,7 +182,9 @@ export async function POST(request: NextRequest) {
 
     // Check if provider is valid (exists in our PROVIDERS constant)
     if (!(provider in PROVIDERS)) {
-      console.error('[DEBUG] Chat API: Invalid provider:', provider);
+      chatLogger.error('Invalid provider', { requestId, provider }, {
+        availableProviders: Object.keys(PROVIDERS),
+      });
       return NextResponse.json(
         {
           error: `Provider ${provider} is not supported.`,
@@ -177,7 +196,9 @@ export async function POST(request: NextRequest) {
 
     // Get provider info from PROVIDERS constant
     const selectedProvider = PROVIDERS[provider as keyof typeof PROVIDERS];
-    console.log('[DEBUG] Chat API: Selected provider:', provider, 'supports streaming:', selectedProvider.supportsStreaming);
+    chatLogger.debug('Selected provider', { requestId, provider, model }, {
+      supportsStreaming: selectedProvider.supportsStreaming,
+    });
 
     // Check if model is supported by the provider (allow partial matches for models like "z-ai/glm-4.5-air" vs "z-ai/glm-4.5-air:free")
     const isModelSupported = selectedProvider.models.some(
@@ -185,7 +206,9 @@ export async function POST(request: NextRequest) {
     );
     
     if (!isModelSupported) {
-      console.error('[DEBUG] Chat API: Model not supported:', model, 'Available:', selectedProvider.models);
+      chatLogger.error('Model not supported', { requestId, provider, model }, {
+        availableModels: selectedProvider.models,
+      });
       return NextResponse.json(
         {
           error: `Model ${model} is not supported by ${provider}`,
@@ -210,7 +233,7 @@ export async function POST(request: NextRequest) {
         ? filesystemContext.scopePath.trim()
         : defaultScopePath;
     const filesystemOwnerId = authResult.success && authResult.userId ? authResult.userId : 'anon:public';
-    const denialContext = filesystemEditSessionService.getRecentDenials(
+    const denialContext = await filesystemEditSessionService.getRecentDenials(
       `${filesystemOwnerId}:${resolvedConversationId}`,
       4,
     );
@@ -219,8 +242,15 @@ export async function POST(request: NextRequest) {
       attachedFilesystemFiles,
       filesystemContext,
     );
+    const useContextPack = shouldUseContextPack(messages);
+    const isCodeRequest = isCodeOrAgenticRequest(messages, attachedFilesystemFiles);
+    const useContextPackForAgentic = enableFilesystemEdits && isCodeRequest;
+    const shouldUseContextPackFinal = useContextPack || useContextPackForAgentic;
     const workspaceSessionContext = enableFilesystemEdits
-      ? await buildWorkspaceSessionContext(filesystemOwnerId, requestedScopePath)
+      ? await buildWorkspaceSessionContext(filesystemOwnerId, requestedScopePath, {
+          useContextPack: shouldUseContextPackFinal,
+          maxTokens: body.maxTokens,
+        })
       : '';
     const contextualMessages = appendFilesystemContextMessages(
       messages,
@@ -230,12 +260,284 @@ export async function POST(request: NextRequest) {
       workspaceSessionContext,
     );
 
-    console.log('[DEBUG] Chat API: Validation passed, routing through priority chain');
+    chatLogger.debug('Validation passed, routing through priority chain', { requestId, provider, model });
 
     // NEW: Add tool/sandbox detection
     const requestType = detectRequestType(messages);
     const authenticatedUserId =
       authResult.success && authResult.source !== 'anonymous' ? authResult.userId : undefined;
+
+    // V2 Agent Mode: route to OpenCode/Nullclaw workflow
+    // Auto-detect V2 for code-intensive requests
+    const isCodeRequestAuto = isCodeOrAgenticRequest(messages, attachedFilesystemFiles);
+    const wantsV2 =
+      agentMode === 'v2' ||
+      (agentMode === 'auto' && (
+        process.env.V2_AGENT_ENABLED === 'true' ||
+        process.env.OPENCODE_CONTAINERIZED === 'true' ||
+        isCodeRequestAuto  // Auto-detect code requests and route to V2
+      ));
+
+    if (wantsV2) {
+      // Allow unauthenticated users to send up to 3 messages before requiring login
+      const userMessageCount = messages.filter((m) => m.role === 'user').length;
+      const MAX_GUEST_MESSAGES = 3;
+
+      if (!authenticatedUserId && userMessageCount > MAX_GUEST_MESSAGES) {
+        return NextResponse.json({
+          success: false,
+          status: 'auth_required',
+          loginRequired: true,
+          error: {
+            type: 'auth_required',
+            message: `You've reached the ${MAX_GUEST_MESSAGES}-message limit for V2 Agent. Please create an account or log in to continue.`,
+          },
+        }, { status: 401 });
+      }
+
+        // For unauthenticated users, use "guest" as the userId
+        // Don't include conversationId in userId as it causes duplicate paths in workspace
+        const effectiveUserId = authenticatedUserId || 'guest';
+
+      const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content;
+      const task = typeof lastUserMessage === 'string'
+        ? lastUserMessage
+        : JSON.stringify(lastUserMessage || '');
+
+      const context = buildAgenticContext(contextualMessages);
+
+      // Check if we should use the agent gateway
+      const gatewayUrl = process.env.V2_GATEWAY_URL;
+
+      // Try V2 execution with fallback to v1/regular LLM chat on failure
+      try {
+        if (stream && gatewayUrl) {
+          // Use agent gateway for streaming
+          return await handleGatewayStreaming({
+            gatewayUrl,
+            userId: effectiveUserId,
+            conversationId: resolvedConversationId,
+            task,
+            context,
+            requestId,
+          });
+        }
+
+        if (gatewayUrl) {
+          // Use agent gateway for non-streaming
+          const gatewayResult = await handleGatewayRequest({
+            gatewayUrl,
+            userId: effectiveUserId,
+            conversationId: resolvedConversationId,
+            task,
+            context,
+            model,
+          });
+
+          if (gatewayResult.success) {
+            return NextResponse.json(gatewayResult);
+          }
+          // Fall through to v1 if gateway failed
+          chatLogger.warn('Gateway execution failed, falling back to v1', { requestId });
+        } else {
+          // Fallback to local V2 execution (no gateway configured)
+          if (stream) {
+            const streamBody = executeV2TaskStreaming({
+              userId: effectiveUserId,
+              conversationId: resolvedConversationId,
+              task,
+              context,
+              stream: true,
+            });
+
+            return new Response(streamBody, {
+              headers: {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                Pragma: 'no-cache',
+                Expires: '0',
+                Connection: 'keep-alive',
+                'X-Accel-Buffering': 'no',
+              },
+            });
+          }
+
+          const v2Result = await executeV2Task({
+            userId: effectiveUserId,
+            conversationId: resolvedConversationId,
+            task,
+            context,
+          });
+
+          if (v2Result.fallbackToV1) {
+            chatLogger.warn('V2 execution failed, falling back to v1/regular LLM chat', { requestId }, {
+              error: v2Result.error,
+              errorCode: v2Result.errorCode,
+            });
+          } else {
+            return NextResponse.json(v2Result);
+          }
+        }
+      } catch (v2Error: any) {
+        chatLogger.error('V2 execution failed, falling back to v1', { requestId }, {
+          error: v2Error.message,
+          stack: v2Error.stack,
+        });
+      }
+      
+      // FALLBACK: V2 failed, use regular v1/priority router chat path
+      chatLogger.info('Using v1 fallback path after V2 failure', { requestId, provider, model });
+    }
+
+    // Agentic pipeline (non-V2) for code-centric requests
+    // Only route to agentic pipeline if it's actually an integration request (OAuth needed)
+    // Regular coding requests should use V2 (handled above) or regular chat
+    const isIntegrationRequest = requiresThirdPartyOAuth(messages);
+    if (isCodeRequest && !isIntegrationRequest && CHAT_AGENTIC_PIPELINE !== 'off') {
+      // For non-integration code requests that don't want V2, fall through to regular chat
+      // This allows "code a nextjs app" to get regular LLM response instead of agentic pipeline
+    } else if (isCodeRequest && isIntegrationRequest && CHAT_AGENTIC_PIPELINE !== 'off') {
+      // This is an integration request that needs OAuth
+      if (!authenticatedUserId) {
+        return NextResponse.json({
+          success: false,
+          status: 'auth_required',
+          authUrl: '/api/auth/signin', // Site login for integration OAuth
+          toolName: 'integration',
+          provider: 'integration',
+          error: {
+            type: 'auth_required',
+            message: 'This request requires connecting to an external service. Please log in.',
+          },
+        }, { status: 401 });
+      }
+
+      const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content;
+      const task = typeof lastUserMessage === 'string'
+        ? lastUserMessage
+        : JSON.stringify(lastUserMessage || '');
+
+      const context = buildAgenticContext(contextualMessages);
+
+      if (WORKFORCE_ENABLED && /parallel|multi-agent|agents|crew|swarm/i.test(task)) {
+        await workforceManager.spawnTask(authenticatedUserId, resolvedConversationId, {
+          title: 'Research & context gathering',
+          description: `Gather context and research for: ${task}`,
+          agent: 'nullclaw',
+        });
+        await workforceManager.spawnTask(authenticatedUserId, resolvedConversationId, {
+          title: 'Implementation',
+          description: task,
+          agent: 'opencode',
+        });
+      }
+
+      const config: UnifiedAgentConfig = {
+        userMessage: context ? `${context}\n\nTASK:\n${task}` : task,
+        conversationHistory: contextualMessages.map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        })),
+        systemPrompt: process.env.OPENCODE_SYSTEM_PROMPT,
+        maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
+        temperature,
+        maxTokens,
+        mode: 'auto',
+      };
+
+      const tools = await getMCPToolsForAI_SDK(authenticatedUserId);
+      config.tools = tools.map(t => ({
+        name: t.function.name,
+        description: t.function.description,
+        parameters: t.function.parameters,
+      }));
+      config.executeTool = async (name: string, args: Record<string, any>) => {
+        const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId);
+        return {
+          success: result.success,
+          output: result.output,
+          exitCode: result.success ? 0 : 1,
+        };
+      };
+
+      if (stream) {
+        const streamBody = new ReadableStream({
+          async start(controller) {
+            const emit = createSSEEmitter(controller);
+            const processingSteps: Array<{
+              step: string;
+              status: 'started' | 'completed' | 'failed';
+              timestamp: number;
+              stepIndex: number;
+              toolName?: string;
+              toolCallId?: string;
+              result?: any;
+            }> = [];
+
+            const sendStep = (step: string, status: 'started' | 'completed' | 'failed', detail?: Partial<typeof processingSteps[number]>) => {
+              const payload = {
+                step,
+                status,
+                timestamp: Date.now(),
+                stepIndex: processingSteps.length,
+                ...detail,
+              };
+              processingSteps.push(payload);
+              emit(SSE_EVENT_TYPES.STEP, payload);
+            };
+
+            try {
+              sendStep('Start agentic pipeline', 'started');
+              config.onStreamChunk = (chunk: string) => {
+                emit(SSE_EVENT_TYPES.TOKEN, { content: chunk, timestamp: Date.now() });
+              };
+              config.onToolExecution = (toolName: string, args: any, result: any) => {
+                const toolCallId = `${toolName}-${Date.now()}`;
+                sendStep(`Tool ${toolName}`, result?.success === false ? 'failed' : 'completed', {
+                  toolName,
+                  toolCallId,
+                  result,
+                });
+                emit(SSE_EVENT_TYPES.TOOL_INVOCATION, {
+                  toolCallId,
+                  toolName,
+                  state: 'result',
+                  args,
+                  result,
+                  timestamp: Date.now(),
+                });
+              };
+
+              const result = await processUnifiedAgentRequest(config);
+              sendStep('Start agentic pipeline', result.success ? 'completed' : 'failed');
+              emit(SSE_EVENT_TYPES.DONE, {
+                success: result.success,
+                content: result.response,
+                messageMetadata: {
+                  agent: 'unified',
+                  mode: result.mode,
+                  processingSteps,
+                },
+                data: result,
+              });
+            } catch (error: any) {
+              emit(SSE_EVENT_TYPES.ERROR, { message: error.message || 'Agentic execution failed' });
+            } finally {
+              controller.close();
+            }
+          },
+        });
+
+        return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
+      }
+
+      const result = await processUnifiedAgentRequest(config);
+      return NextResponse.json({
+        success: result.success,
+        content: result.response,
+        data: result,
+      });
+    }
 
     // Tool/sandbox actions require authenticated user identity for authorization and ownership checks.
     if ((requestType === 'tool' || requestType === 'sandbox') && !authenticatedUserId) {
@@ -267,37 +569,49 @@ export async function POST(request: NextRequest) {
       enableComposio: requestType === 'tool' ? !!authenticatedUserId : undefined,
     };
 
-    console.log('[DEBUG] Chat API: Routing request through priority chain');
+    chatLogger.debug('Routing request through priority chain', { requestId, provider, model }, {
+      requestType,
+      enableTools: routerRequest.enableTools,
+      enableSandbox: routerRequest.enableSandbox,
+      enableComposio: routerRequest.enableComposio,
+    });
 
-    // Route through priority chain (Fast-Agent → n8n → Custom Fallback → Original System)
+    // Route through priority chain and format response using consolidated router
     try {
-      const routerResponse = await priorityRequestRouter.route(routerRequest);
+      const unifiedResponse = await responseRouter.routeAndFormat(routerRequest);
 
-      const actualProvider = routerResponse.metadata?.actualProvider || routerResponse.source;
-      const actualModel = routerResponse.metadata?.actualModel || routerRequest.model;
-      
-      console.log(`[DEBUG] Chat API: Request handled by ${routerResponse.source} (priority ${routerResponse.priority}) - Actual: ${actualProvider}/${actualModel}`);
-      
-// Check for auth_required in response
-if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
+      const actualProvider = unifiedResponse.metadata?.actualProvider || unifiedResponse.source;
+      const actualModel = unifiedResponse.metadata?.actualModel || routerRequest.model;
+
+      chatLogger.info('Request handled by response router', { requestId, provider: actualProvider, model: actualModel }, {
+        source: unifiedResponse.source,
+        priority: unifiedResponse.priority,
+        fallbackChain: unifiedResponse.metadata?.fallbackChain,
+      });
+
+      // Check for auth_required in response
+      if (unifiedResponse.data?.requiresAuth && unifiedResponse.data?.authUrl) {
         return NextResponse.json({
           status: 'auth_required',
-          authUrl: routerResponse.data.authUrl,
-          toolName: routerResponse.data.toolName,
-          provider: routerResponse.data.provider || 'unknown',
-          message: `Please authorize ${routerResponse.data.toolName} to continue`
+          authUrl: unifiedResponse.data.authUrl,
+          toolName: unifiedResponse.data.toolName,
+          provider: unifiedResponse.data.provider || 'unknown',
+          message: `Please authorize ${unifiedResponse.data.toolName} to continue`
         }, { status: 401 });
       }
-      
-      // Process response through unified handler
-      const unifiedResponse = unifiedResponseHandler.processResponse(routerResponse, requestId);
+
       let rawResponseContent = unifiedResponse.content || '';
-      
+
       // LLM Agent Tools: Execute filesystem tools if enabled and user is authenticated
       let agentToolResults = null;
+      let agentToolStreamingResult: any = null;
+      
       if (LLM_AGENT_TOOLS_ENABLED && authenticatedUserId && requestType === 'tool') {
         try {
-          console.log('[LLM Agent Tools] Executing filesystem tools for user:', authenticatedUserId);
+          chatLogger.info('Executing filesystem tools', { requestId, userId: authenticatedUserId }, {
+            scopePath: requestedScopePath,
+            maxIterations: LLM_AGENT_TOOLS_MAX_ITERATIONS,
+          });
 
           const agentLoop = createAgentLoop(
             authenticatedUserId,
@@ -305,36 +619,54 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
             LLM_AGENT_TOOLS_MAX_ITERATIONS
           );
 
-          // Set timeout for agent execution with proper cleanup
-          let agentTimeoutId: NodeJS.Timeout | null = null;
-          const agentPromise = agentLoop.executeTask(rawResponseContent);
-          const timeoutPromise = new Promise((_, reject) => {
-            agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), LLM_AGENT_TOOLS_TIMEOUT_MS);
-          });
+          // Check if agent supports streaming (ToolLoopAgent integration)
+          const supportsStreaming = 'executeTaskStreaming' in agentLoop;
+          
+          if (supportsStreaming && stream) {
+            // Use streaming execution for real-time tool invocations and reasoning
+            chatLogger.info('Using ToolLoopAgent streaming execution', { requestId });
+            
+            // Store streaming result for later processing in stream handler
+            agentToolStreamingResult = {
+              agentLoop,
+              task: rawResponseContent,
+              timeout: LLM_AGENT_TOOLS_TIMEOUT_MS,
+            };
+          } else {
+            // Use non-streaming execution (backward compatible)
+            // Set timeout for agent execution with proper cleanup
+            let agentTimeoutId: NodeJS.Timeout | null = null;
+            const agentPromise = agentLoop.executeTask(rawResponseContent);
+            const timeoutPromise = new Promise((_, reject) => {
+              agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), LLM_AGENT_TOOLS_TIMEOUT_MS);
+            });
 
-          try {
-            agentToolResults = await Promise.race([agentPromise, timeoutPromise]) as any;
-          } finally {
-            if (agentTimeoutId) clearTimeout(agentTimeoutId);
-          }
+            try {
+              agentToolResults = await Promise.race([agentPromise, timeoutPromise]) as any;
+            } finally {
+              if (agentTimeoutId) clearTimeout(agentTimeoutId);
+            }
 
-          console.log('[LLM Agent Tools] Execution completed:', {
-            success: agentToolResults.success,
-            iterations: agentToolResults.iterations,
-            results: agentToolResults.results?.length,
-          });
+            chatLogger.info('Agent tools execution completed', { requestId }, {
+              success: agentToolResults.success,
+              iterations: agentToolResults.iterations,
+              resultsCount: agentToolResults.results?.length,
+            });
 
-          // Append agent tool results to response
-          if (agentToolResults.success && agentToolResults.results?.length > 0) {
-            const toolSummary = agentToolResults.results
-              .map((r: any) => `${r.tool}: ${JSON.stringify(r.result)}`)
-              .join('\n');
-            unifiedResponse.content = `${rawResponseContent}\n\n[Agent Tools Executed]\n${toolSummary}`;
-            // Sync rawResponseContent so subsequent rendering uses updated content
-            rawResponseContent = unifiedResponse.content;
+            // Append agent tool results to response
+            if (agentToolResults.success && agentToolResults.results?.length > 0) {
+              const toolSummary = agentToolResults.results
+                .map((r: any) => `${r.tool}: ${JSON.stringify(r.result)}`)
+                .join('\n');
+              unifiedResponse.content = `${rawResponseContent}\n\n[Agent Tools Executed]\n${toolSummary}`;
+              // Sync rawResponseContent so subsequent rendering uses updated content
+              rawResponseContent = unifiedResponse.content;
+            }
           }
         } catch (error: any) {
-          console.error('[LLM Agent Tools] Execution failed:', error.message);
+          chatLogger.error('Agent tools execution failed', { requestId }, {
+            error: error.message,
+          });
           // Continue with normal response even if agent tools fail
         }
       }
@@ -371,12 +703,195 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
         sanitizedResponseContent,
       );
 
+      if (filesystemEdits && filesystemEdits.applied.length > 0) {
+        const codeArtifacts = filesystemEdits.applied
+          .filter((edit) => edit.operation !== 'delete')
+          .map((edit) => {
+            const requestedFile = filesystemEdits.requestedFiles.find(f => f.path === edit.path);
+            return {
+              path: edit.path,
+              operation: edit.operation,
+              content: requestedFile?.content || '',
+              language: requestedFile?.language || (
+                edit.path.endsWith('.ts') || edit.path.endsWith('.tsx') ? 'typescript' :
+                edit.path.endsWith('.js') || edit.path.endsWith('.jsx') ? 'javascript' :
+                edit.path.endsWith('.json') ? 'json' :
+                edit.path.endsWith('.css') ? 'css' :
+                edit.path.endsWith('.html') ? 'html' : 'text'
+              ),
+              previousContent: undefined,
+              newVersion: edit.version,
+              previousVersion: edit.previousVersion,
+            };
+          });
+        
+        if (codeArtifacts.length > 0) {
+          clientResponse.metadata = {
+            ...clientResponse.metadata,
+            codeArtifacts,
+          };
+        }
+      }
+
       // Handle streaming response
       if (stream && selectedProvider.supportsStreaming) {
         const streamRequestId = requestId || generateSecureId('stream');
-        
+        const streamStartTime = Date.now();
+        let chunkCount = 0;
+
+        // Check if we have ToolLoopAgent streaming available
+        const hasToolLoopStreaming = agentToolStreamingResult && stream;
+
+        if (hasToolLoopStreaming) {
+          // Handle ToolLoopAgent real-time streaming
+          chatLogger.info('Streaming with ToolLoopAgent real-time events', { requestId: streamRequestId });
+          
+          const encoder = new TextEncoder();
+          let encoderRef = encoder;
+
+          const readableStream = new ReadableStream({
+            async start(controller) {
+              const cleanup = () => {
+                encoderRef = null;
+              };
+
+              if (request.signal) {
+                request.signal.addEventListener('abort', () => {
+                  cleanup();
+                  chatLogger.warn('Stream cancelled by client', { requestId: streamRequestId });
+                });
+              }
+
+              try {
+                const { agentLoop, task, timeout } = agentToolStreamingResult;
+                let agentTimeoutId: NodeJS.Timeout | null = null;
+
+                // Set up timeout for entire streaming operation
+                const timeoutPromise = new Promise((_, reject) => {
+                  agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), timeout);
+                });
+
+                // Stream from agent
+                const streamPromise = (async () => {
+                  // First, send initial token events from base response
+                  const baseEvents = responseRouter.createStreamingEvents(clientResponse, streamRequestId);
+                  for (const event of baseEvents) {
+                    if (request.signal?.aborted) return;
+                    controller.enqueue(encoderRef.encode(event));
+                    chunkCount++;
+                    await new Promise(resolve => setTimeout(resolve, 30));
+                  }
+
+                  // Now stream tool invocations and reasoning in real-time
+                  for await (const chunk of agentLoop.executeTaskStreaming(task)) {
+                    if (request.signal?.aborted) return;
+
+                    // Transform chunk to SSE format
+                    if (chunk.type === 'tool-invocation') {
+                      const toolEvent = `event: tool_invocation\ndata: ${JSON.stringify({
+                        requestId: streamRequestId,
+                        toolCallId: chunk.toolInvocation.toolCallId,
+                        toolName: chunk.toolInvocation.toolName,
+                        state: chunk.toolInvocation.state,
+                        args: chunk.toolInvocation.args,
+                        result: chunk.toolInvocation.result,
+                        timestamp: Date.now(),
+                      })}\n\n`;
+                      controller.enqueue(encoderRef.encode(toolEvent));
+                      chunkCount++;
+                    } else if (chunk.type === 'reasoning') {
+                      const reasoningEvent = `event: reasoning\ndata: ${JSON.stringify({
+                        requestId: streamRequestId,
+                        reasoning: chunk.reasoning,
+                        timestamp: Date.now(),
+                      })}\n\n`;
+                      controller.enqueue(encoderRef.encode(reasoningEvent));
+                      chunkCount++;
+                    } else if (chunk.type === 'text-delta') {
+                      // Stream text response
+                      const tokenEvent = `event: token\ndata: ${JSON.stringify({
+                        content: chunk.textDelta,
+                        timestamp: Date.now(),
+                      })}\n\n`;
+                      controller.enqueue(encoderRef.encode(tokenEvent));
+                      chunkCount++;
+                    }
+
+                    // Small delay for smooth streaming
+                    await new Promise(resolve => setTimeout(resolve, 30));
+                  }
+
+                  // Send completion event
+                  const doneEvent = `event: done\ndata: ${JSON.stringify({
+                    requestId: streamRequestId,
+                    timestamp: Date.now(),
+                  })}\n\n`;
+                  controller.enqueue(encoderRef.encode(doneEvent));
+                  chunkCount++;
+                })();
+
+                try {
+                  await Promise.race([streamPromise, timeoutPromise]);
+                } finally {
+                  if (agentTimeoutId) clearTimeout(agentTimeoutId);
+                }
+
+                const streamDuration = Date.now() - streamStartTime;
+                chatLogger.info('ToolLoopAgent stream completed', { requestId: streamRequestId }, {
+                  chunkCount,
+                  latencyMs: streamDuration,
+                });
+
+                controller.close();
+              } catch (error) {
+                const streamDuration = Date.now() - streamStartTime;
+                chatLogger.error('ToolLoopAgent streaming error', { requestId: streamRequestId }, {
+                  error: error instanceof Error ? error.message : String(error),
+                  chunkCount,
+                  latencyMs: streamDuration,
+                });
+
+                if (!request.signal?.aborted) {
+                  const errorEvent = `event: error\ndata: ${JSON.stringify({
+                    requestId: streamRequestId,
+                    message: 'Streaming error occurred',
+                    canRetry: true,
+                  })}\n\n`;
+                  controller.enqueue(encoderRef.encode(errorEvent));
+                }
+                controller.close();
+              } finally {
+                cleanup();
+              }
+            },
+            cancel() {
+              const streamDuration = Date.now() - streamStartTime;
+              chatLogger.warn('Stream cancelled (cancel callback)', { requestId: streamRequestId }, {
+                chunkCount,
+                latencyMs: streamDuration,
+              });
+            }
+          });
+
+          return new Response(readableStream, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache, no-store, must-revalidate",
+              Pragma: "no-cache",
+              Expires: "0",
+              Connection: "keep-alive",
+              "X-Accel-Buffering": "no",
+              "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || "",
+              "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+              "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
+              "Vary": "Origin",
+            },
+          });
+        }
+
+        // Fallback: Standard streaming (non-agent or ToolLoopAgent not available)
         // Create streaming events from unified response
-        const events = unifiedResponseHandler.createStreamingEvents(clientResponse, streamRequestId);
+        const events = responseRouter.createStreamingEvents(clientResponse, streamRequestId);
         const supplementalAgenticEvents = buildSupplementalAgenticEvents(clientResponse, streamRequestId, events);
         if (supplementalAgenticEvents.length > 0) {
           events.splice(Math.max(0, events.length - 1), 0, ...supplementalAgenticEvents);
@@ -394,13 +909,22 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
             applied: filesystemEdits.applied,
             errors: filesystemEdits.errors,
             requestedFiles: filesystemEdits.requestedFiles,
+            scopePath: filesystemEdits.scopePath,
+            workspaceVersion: filesystemEdits.workspaceVersion,
+            commitId: filesystemEdits.commitId,
+            sessionId: filesystemEdits.sessionId,
           })}\n\n`;
           events.splice(Math.max(0, events.length - 1), 0, filesystemEvent);
         }
-        
+
+        chatLogger.info('Starting streaming response', { requestId: streamRequestId, provider, model }, {
+          eventsCount: events.length,
+          hasFilesystemEdits: !!filesystemEdits,
+        });
+
         const encoder = new TextEncoder();
         let encoderRef = encoder;  // Reference for cleanup
-        
+
         const readableStream = new ReadableStream({
           async start(controller) {
             // Cleanup function for resource management
@@ -412,7 +936,11 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
             if (request.signal) {
               request.signal.addEventListener('abort', () => {
                 cleanup();
-                console.log(`[DEBUG] Chat API: Stream cancelled by client: ${streamRequestId}`);
+                const streamDuration = Date.now() - streamStartTime;
+                chatLogger.warn('Stream cancelled by client', { requestId: streamRequestId, provider, model }, {
+                  chunkCount,
+                  latencyMs: streamDuration,
+                });
               });
             }
 
@@ -424,9 +952,10 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
                   cleanup();
                   return;
                 }
-                
+
                 const event = events[i];
                 controller.enqueue(encoderRef.encode(event));
+                chunkCount++;
 
                 // Add small delays between events for smooth streaming
                 if (i < events.length - 1) {
@@ -434,10 +963,22 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
                 }
               }
 
+              const streamDuration = Date.now() - streamStartTime;
+              chatLogger.info('Stream completed successfully', { requestId: streamRequestId, provider, model }, {
+                chunkCount,
+                latencyMs: streamDuration,
+                eventsCount: events.length,
+              });
+
               controller.close();
             } catch (error) {
-              console.error('[DEBUG] Chat API: Streaming error:', error);
-              
+              const streamDuration = Date.now() - streamStartTime;
+              chatLogger.error('Streaming error', { requestId: streamRequestId, provider, model }, {
+                error: error instanceof Error ? error.message : String(error),
+                chunkCount,
+                latencyMs: streamDuration,
+              });
+
               // Only send error event if client hasn't disconnected
               if (!request.signal?.aborted) {
                 const errorEvent = `event: error\ndata: ${JSON.stringify({
@@ -453,7 +994,11 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
             }
           },
           cancel() {
-            console.log(`[DEBUG] Chat API: Stream cancelled by client: ${streamRequestId}`);
+            const streamDuration = Date.now() - streamStartTime;
+            chatLogger.warn('Stream cancelled (cancel callback)', { requestId: streamRequestId, provider, model }, {
+              chunkCount,
+              latencyMs: streamDuration,
+            });
           }
         });
 
@@ -474,6 +1019,18 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
       }
 
       // Handle non-streaming response
+      const responseLatency = Date.now() - requestStartTime;
+      chatLogger.info('Non-streaming response completed', { requestId, provider, model }, {
+        latencyMs: responseLatency,
+        contentLength: clientResponse.content?.length || 0,
+        success: clientResponse.success,
+      });
+      
+      // Record successful latency for provider router
+      try {
+        llmProviderRouter.recordRequest(provider as LLMProviderType, responseLatency, clientResponse.success !== false);
+      } catch {}
+
       const responseStatus = clientResponse.success ? 200 : 500;
       return NextResponse.json(
         {
@@ -488,14 +1045,18 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
       );
     } catch (routerError) {
       const routerErrorObj = routerError as Error;
-      // Log which providers were tried from the fallback chain
-      const errorMessage = routerErrorObj.message;
-      const isNotConfigured = errorMessage.includes('not configured');
+      const routerLatency = Date.now() - requestStartTime;
+      const isNotConfigured = routerErrorObj.message.includes('not configured');
 
       if (!isNotConfigured) {
-        console.error('[DEBUG] Chat API: Router error:', errorMessage);
+        chatLogger.error('Router error', { requestId, provider, model }, {
+          error: routerErrorObj.message,
+          latencyMs: routerLatency,
+        });
       } else {
-        console.log(`[DEBUG] Chat API: No providers configured for request (tried: ${provider}/${model})`);
+        chatLogger.warn('No providers configured', { requestId, provider, model }, {
+          latencyMs: routerLatency,
+        });
       }
 
       // Emergency fallback - return friendly error with proper status
@@ -517,15 +1078,31 @@ if (routerResponse.data?.requiresAuth && routerResponse.data?.authUrl) {
     }
   }
   catch (error) {
-    // Skip verbose logging for expected "not configured" errors
+    const errorLatency = Date.now() - requestStartTime;
     const errorMessage = error instanceof Error ? error.message : String(error);
     const isNotConfiguredError = errorMessage.includes('not configured');
 
     if (!isNotConfiguredError) {
-      console.error("Chat API error:", errorMessage);
-      console.error('[CRITICAL] Chat API: All fallback mechanisms failed');
+      chatLogger.error('Critical chat API error', { requestId, provider, model }, {
+        error: errorMessage,
+        latencyMs: errorLatency,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      
+      // Record error latency for provider router
+      try {
+        llmProviderRouter.recordRequest(provider as LLMProviderType, errorLatency, false);
+      } catch {}
     } else {
-      console.log(`[Chat API] Provider not available: ${errorMessage}`);
+      chatLogger.warn('Provider not available', { requestId, provider, model }, {
+        error: errorMessage,
+        latencyMs: errorLatency,
+      });
+      
+      // Record error latency for provider router
+      try {
+        llmProviderRouter.recordRequest(provider as LLMProviderType, errorLatency, false);
+      } catch {}
     }
 
     // Process error with enhanced error handler for logging
@@ -573,13 +1150,16 @@ function sanitizeAssistantDisplayContent(content: string): string {
   next = next.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
   next = next.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
   next = next.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
-  
+
   // Remove <fs-actions>...</fs-actions> XML tag blocks (LLM sometimes uses XML instead of code blocks)
   next = next.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
 
-  // Remove raw WRITE/PATCH heredoc command blocks that leak into visible output
-  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH)\s+[^\n]+\n<<<\n[\s\S]*?\n>>>(?=\n|$)/g, '\n');
+  // Remove raw WRITE/PATCH/APPLY_DIFF heredoc command blocks that leak into visible output
+  // Handle variations: blank lines between path and <<<, different whitespace
+  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){1,2}<<<[\s\S]*?>>>(?=\n|$)/g, '\n');
   next = next.replace(/(?:^|\n)\s*DELETE\s+[^\n]+(?=\n|$)/g, '\n');
+  // Remove <apply_diff> XML tags
+  next = next.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
 
   // Normalize leftover spacing
   next = next.replace(/\n{3,}/g, '\n\n').trim();
@@ -623,6 +1203,10 @@ interface FilesystemEditResult {
   applied: FilesystemEditSummary[];
   errors: string[];
   requestedFiles: Array<{ path: string; content: string; language: string; version: number }>;
+  scopePath?: string;
+  workspaceVersion?: number;
+  commitId?: string;
+  sessionId?: string;
 }
 
 function normalizeFilesystemContext(
@@ -676,7 +1260,245 @@ function shouldHandleFilesystemEdits(
   return /\b(file|files|code|edit|patch|create|write|update|project|program|build|run|execute|install|scaffold|component|page|app|module|function|class)\b/i.test(lastUserMessage);
 }
 
-async function buildWorkspaceSessionContext(ownerId: string, scopePath?: string): Promise<string> {
+/**
+ * Detect if user is requesting a comprehensive context pack
+ * Look for keywords suggesting they want full project context
+ */
+function shouldUseContextPack(messages: LLMMessage[]): boolean {
+  const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user')?.content;
+  if (typeof lastUserMessage !== 'string') {
+    return false;
+  }
+
+  // Keywords that suggest user wants comprehensive project context
+  const contextPackKeywords = [
+    'full project',
+    'entire project',
+    'whole project',
+    'complete codebase',
+    'full codebase',
+    'entire codebase',
+    'project structure',
+    'codebase structure',
+    'project overview',
+    'codebase overview',
+    'all files',
+    'everything in',
+    'context pack',
+    'repomix',
+    'gitingest',
+    'bundle.*context',
+    'pack.*files',
+    'scaffold.*project',
+    'understand.*project',
+    'analyze.*project',
+    'review.*codebase',
+  ];
+
+  const pattern = new RegExp(contextPackKeywords.join('|'), 'i');
+  return pattern.test(lastUserMessage);
+}
+
+/**
+ * Handle non-streaming request via agent gateway
+ */
+async function handleGatewayRequest(params: {
+  gatewayUrl: string;
+  userId: string;
+  conversationId: string;
+  task: string;
+  context?: string;
+  model?: string;
+}): Promise<any> {
+  const { gatewayUrl, userId, conversationId, task, context, model } = params;
+
+  try {
+    // Create job via gateway
+    const jobResponse = await fetch(`${gatewayUrl}/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        conversationId,
+        prompt: task,
+        context,
+        model,
+      }),
+    });
+
+    if (!jobResponse.ok) {
+      throw new Error(`Gateway error: ${jobResponse.statusText}`);
+    }
+
+    const { jobId, sessionId } = await jobResponse.json();
+
+    // Poll for completion
+    const maxWaitMs = 120000; // 2 minutes
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitMs) {
+      const statusResponse = await fetch(`${gatewayUrl}/jobs/${jobId}`);
+      
+      if (!statusResponse.ok) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+
+      const jobStatus = await statusResponse.json();
+
+      if (jobStatus.status === 'completed') {
+        return {
+          success: true,
+          data: jobStatus,
+          sessionId,
+          jobId,
+        };
+      }
+
+      if (jobStatus.status === 'failed') {
+        throw new Error(jobStatus.error || 'Job failed');
+      }
+
+      // Still processing, wait a bit
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    throw new Error('Job timed out');
+  } catch (error: any) {
+    chatLogger.error('Gateway request failed', {}, { error: error.message });
+    throw error;
+  }
+}
+
+/**
+ * Handle streaming request via agent gateway
+ */
+async function handleGatewayStreaming(params: {
+  gatewayUrl: string;
+  userId: string;
+  conversationId: string;
+  task: string;
+  context?: string;
+  requestId: string;
+}): Promise<Response> {
+  const { gatewayUrl, userId, conversationId, task, context, requestId } = params;
+
+  // Create job first
+  const jobResponse = await fetch(`${gatewayUrl}/jobs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId,
+      conversationId,
+      prompt: task,
+      context,
+    }),
+  });
+
+  if (!jobResponse.ok) {
+    throw new Error(`Gateway error: ${jobResponse.statusText}`);
+  }
+
+  const { sessionId } = await jobResponse.json();
+  chatLogger.info('Created gateway job', { requestId, sessionId });
+
+  // Stream events from gateway
+  const streamResponse = await fetch(`${gatewayUrl}/stream/${sessionId}`);
+
+  if (!streamResponse.ok || !streamResponse.body) {
+    throw new Error(`Gateway stream error: ${streamResponse.statusText}`);
+  }
+
+  // Transform gateway events to our SSE format
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const parser = createNDJSONParser();
+
+  const readableStream = new ReadableStream({
+    async start(controller) {
+      const reader = streamResponse.body.getReader();
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+
+          if (done) break;
+
+          // Decode chunk and parse complete NDJSON lines
+          const chunk = decoder.decode(value, { stream: true });
+          
+          // Parse NDJSON and re-emit as SSE
+          const events = parser.parse(chunk);
+          for (const event of events) {
+            // Gateway sends NDJSON events, convert to SSE format
+            const eventType = event.type || 'message';
+            const sseEvent = `event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`;
+            controller.enqueue(encoder.encode(sseEvent));
+          }
+        }
+      } catch (error) {
+        chatLogger.error('Stream error', { requestId }, { error: String(error) });
+        controller.error(error);
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(readableStream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+}
+
+async function buildWorkspaceSessionContext(
+  ownerId: string,
+  scopePath?: string,
+  options?: { useContextPack?: boolean; maxTokens?: number }
+): Promise<string> {
+  // Use context pack if requested and available
+  if (options?.useContextPack) {
+    try {
+      const contextPack = await contextPackService.generateContextPack(ownerId, scopePath || '/', {
+        format: 'plain',
+        includeContents: true,
+        includeTree: true,
+        maxFileSize: 50 * 1024, // 50KB per file
+        maxLinesPerFile: 200,
+        maxTotalSize: options.maxTokens ? options.maxTokens * 4 : 500 * 1024, // ~500KB default
+        excludePatterns: [
+          'node_modules/**',
+          '.git/**',
+          '.next/**',
+          'dist/**',
+          'build/**',
+          '*.log',
+          '*.lock',
+          '.env*',
+        ],
+      });
+      
+      return [
+        `=== WORKSPACE CONTEXT (Context Pack) ===`,
+        `Root: ${scopePath || '/'}`,
+        `Files: ${contextPack.fileCount}`,
+        `Directories: ${contextPack.directoryCount}`,
+        `Estimated Tokens: ${contextPack.estimatedTokens}`,
+        contextPack.hasTruncation ? `⚠️ Some files were truncated` : '',
+        '',
+        contextPack.bundle,
+      ].filter(Boolean).join('\n');
+    } catch (error: unknown) {
+      console.warn('[Chat] Context pack generation failed, falling back to basic context:', error);
+      // Fall through to basic context
+    }
+  }
+  
+  // Basic workspace context (existing implementation)
   try {
     const snapshot = await virtualFilesystem.exportWorkspace(ownerId);
     const scopedFiles = scopePath
@@ -764,6 +1586,25 @@ function appendFilesystemContextMessages(
       allowFileEdits
         ? [
             'For file changes, prefer one of these parseable schemas:',
+            '',
+            'FOR EXISTING FILES, prefer surgical edits (APPLY_DIFF) over full rewrites:',
+            '  <apply_diff path="src/utils.ts">',
+            '    <search>function oldName() {',
+            '      return 1;',
+            '    }</search>',
+            '    <replace>function newName() {',
+            '      return 2;',
+            '    }</replace>',
+            '  </apply_diff>',
+            'Or in fs-actions blocks:',
+            '  APPLY_DIFF <path>',
+            '  <<<',
+            '  <exact code to find>',
+            '  ===',
+            '  <replacement code>',
+            '  >>>',
+            '',
+            'FOR NEW FILES, use full writes:',
             '1) <file_edit path="...">...</file_edit>',
             '2) COMMANDS write_diffs',
             '3) ```fs-actions ...``` blocks with:',
@@ -776,6 +1617,10 @@ function appendFilesystemContextMessages(
             '   <unified diff body>',
             '   >>>',
             '   DELETE <path>',
+            '',
+            'IMPORTANT: For edits to existing files, ALWAYS use APPLY_DIFF instead of WRITE.',
+            'APPLY_DIFF only replaces the exact block you specify, preventing context truncation.',
+            'Use WRITE only when creating new files or when a complete rewrite is explicitly needed.',
             'Prefer concrete multi-file edits when user requests full project scaffolding.',
             '',
             'To read a file from the workspace, use: <file_read path="..." />',
@@ -808,6 +1653,60 @@ function appendFilesystemContextMessages(
   }
 
   return [filesystemContextMessage, ...messages];
+}
+
+function isCodeOrAgenticRequest(
+  messages: LLMMessage[],
+  attachedFiles: ChatFilesystemFileContext[],
+): boolean {
+  if (attachedFiles.length > 0) return true;
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const content =
+    typeof lastUser?.content === 'string'
+      ? lastUser.content
+      : JSON.stringify(lastUser?.content || '');
+
+  // Strong signals — unambiguous coding/agentic keywords (single match sufficient)
+  // These are for V2/OpenCode execution, NOT for 3rd party OAuth
+  // "code a nextjs app" should route to V2 for interactive coding session
+  const strongPattern = /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|vue\.js|angular|node\.?js|endpoint|database|schema|compile|lint|migrations?|docker|kubernetes|k8s|redis|mongodb|postgresql|mysql|sqlite|express|fastapi|flask|django|spring|rails|laravel|symfony|golang|rust|java|c\+\+|cpp|c#|dotnet|swift|kotlin|flutter|react\s*native|electron|code|build|implement|create\s+app|create\s+project|scaffold|generate\s+app)\b/i;
+  if (strongPattern.test(content)) return true;
+
+  // Weak signals — require 2+ signals to trigger (lower threshold, not higher)
+  // We WANT coding requests to use V2 (OpenCode) for interactive sessioning
+  const weakKeywords = ['app', 'project', 'component', 'file', 'api', 'function', 'class', 'module', 'package', 'implement', 'build', 'develop'];
+  const weakMatches = weakKeywords.filter(kw => new RegExp(`\\b${kw}\\b`, 'i').test(content));
+  if (weakMatches.length >= 2) return true;
+
+  return false;
+}
+
+/**
+ * Check if request specifically needs 3rd party OAuth integration (not just general coding)
+ * This is separate from isCodeOrAgenticRequest - it returns true ONLY for actual integrations
+ */
+function requiresThirdPartyOAuth(messages: LLMMessage[]): boolean {
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const content =
+    typeof lastUser?.content === 'string'
+      ? lastUser.content
+      : JSON.stringify(lastUser?.content || '');
+
+  // EXPLICIT 3RD PARTY INTEGRATION SIGNALS - these require OAuth to external services
+  // Must have specific service names that are known 3rd party integrations
+  // Use possessive/contextual patterns to avoid false positives like "github clone"
+  const thirdPartyServicePattern = /\b(my\s+)?gmail|(my\s+)?google\s+(drive|sheets|docs|calendar)|slack|discord|twitter|x\s*api|notion|zoom|hubspot|salesforce|shopify|stripe|pipedrive|airtable|jira|confluence|trello|dropbox|onedrive|box\s*file|aws\s*s3|s3\s*bucket|heroku|vercel|netlify|railway|render\s*static|cloudflare\s*pages|figma|miro|miroboard|(my|our)\s+github\s+(repo|branch|pr|issue|organization|team)/i;
+  return thirdPartyServicePattern.test(content);
+}
+
+function buildAgenticContext(messages: LLMMessage[]): string {
+  const systemMessages = messages.filter(m => m.role === 'system');
+  const recent = messages.slice(-8);
+  const parts = [
+    ...systemMessages.map(m => `SYSTEM: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`),
+    ...recent.map(m => `${m.role.toUpperCase()}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`),
+  ];
+  return parts.join('\n\n');
 }
 
 function extractTaggedFileEdits(content: string): Array<{ path: string; content: string }> {
@@ -899,6 +1798,59 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
   return writes;
 }
 
+function extractTopLevelWrites(content: string): Array<{ path: string; content: string }> {
+  const writes: Array<{ path: string; content: string }> = [];
+
+  const topLevelWriteRegex = /^WRITE\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  let match: RegExpExecArray | null;
+  while ((match = topLevelWriteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!path) continue;
+    writes.push({ path, content: fileContent });
+  }
+
+  const altWriteRegex = /^WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)>>>/gim;
+  while ((match = altWriteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!path) continue;
+    if (!writes.some(w => w.path === path && w.content === fileContent)) {
+      writes.push({ path, content: fileContent });
+    }
+  }
+
+  return writes;
+}
+
+function extractTopLevelDeletes(content: string): string[] {
+  const deletes: string[] = [];
+
+  const deleteRegex = /^DELETE\s+([^\n]+)/gim;
+  let match: RegExpExecArray | null;
+  while ((match = deleteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path) deletes.push(path);
+  }
+
+  return deletes;
+}
+
+function extractTopLevelPatches(content: string): Array<{ path: string; diff: string }> {
+  const patches: Array<{ path: string; diff: string }> = [];
+
+  const patchRegex = /^PATCH\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  let match: RegExpExecArray | null;
+  while ((match = patchRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const diff = match[2] ?? '';
+    if (!path) continue;
+    patches.push({ path, diff });
+  }
+
+  return patches;
+}
+
 function extractFsActionDeletes(content: string): string[] {
   const deletes: string[] = [];
 
@@ -973,6 +1925,59 @@ function extractFsActionPatches(content: string): Array<{ path: string; diff: st
   return patches;
 }
 
+function extractApplyDiffOperations(content: string): Array<{ path: string; search: string; replace: string; thought?: string }> {
+  const diffs: Array<{ path: string; search: string; replace: string; thought?: string }> = [];
+
+  // Extract from ```fs-actions ... ``` blocks: APPLY_DIFF path <<< search === replace >>>
+  const blockRegex = /```fs-actions\s*([\s\S]*?)```/gi;
+  let blockMatch: RegExpExecArray | null;
+
+  while ((blockMatch = blockRegex.exec(content)) !== null) {
+    const blockContent = blockMatch[1] || '';
+    const diffRegex = /APPLY_DIFF\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*===\s*([\s\S]*?)\s*>>>/gi;
+    let diffMatch: RegExpExecArray | null;
+    while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
+      const path = diffMatch[1]?.trim();
+      const search = diffMatch[2] ?? '';
+      const replace = diffMatch[3] ?? '';
+      if (!path || !search) continue;
+      diffs.push({ path, search, replace });
+    }
+  }
+
+  // Extract from <fs-actions>...</fs-actions> XML tags
+  const xmlBlockRegex = /<fs-actions>([\s\S]*?)<\/fs-actions>/gi;
+  let xmlBlockMatch: RegExpExecArray | null;
+
+  while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
+    const blockContent = xmlBlockMatch[1] || '';
+    const diffRegex = /APPLY_DIFF\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*===\s*([\s\S]*?)\s*>>>/gi;
+    let diffMatch: RegExpExecArray | null;
+    while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
+      const path = diffMatch[1]?.trim();
+      const search = diffMatch[2] ?? '';
+      const replace = diffMatch[3] ?? '';
+      if (!path || !search) continue;
+      diffs.push({ path, search, replace });
+    }
+  }
+
+  // Extract from <apply_diff> XML tags: <apply_diff path="..."><search>...</search><replace>...</replace></apply_diff>
+  const xmlDiffRegex = /<apply_diff\s+path=["']([^"']+)["']\s*>\s*<search>([\s\S]*?)<\/search>\s*<replace>([\s\S]*?)<\/replace>\s*(?:<thought>([\s\S]*?)<\/thought>\s*)?<\/apply_diff>/gi;
+  let xmlDiffMatch: RegExpExecArray | null;
+
+  while ((xmlDiffMatch = xmlDiffRegex.exec(content)) !== null) {
+    const path = xmlDiffMatch[1]?.trim();
+    const search = xmlDiffMatch[2] ?? '';
+    const replace = xmlDiffMatch[3] ?? '';
+    const thought = xmlDiffMatch[4]?.trim();
+    if (!path || !search) continue;
+    diffs.push({ path, search, replace, thought });
+  }
+
+  return diffs;
+}
+
 function extractBashHereDocWrites(content: string): Array<{ path: string; content: string }> {
   const writes: Array<{ path: string; content: string }> = [];
   const bashBlockRegex = /```bash\s*([\s\S]*?)```/gi;
@@ -1008,6 +2013,33 @@ function extractFilenameHintCodeBlocks(content: string): Array<{ path: string; c
   return writes;
 }
 
+function extractFileWriteFolderCreateTags(content: string): {
+  writes: Array<{ path: string; content: string }>;
+  folders: string[];
+} {
+  const writes: Array<{ path: string; content: string }> = []
+  const folders: string[] = []
+
+  const fileWriteRegex = /<file_write\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_write>/gi
+  let fileWriteMatch: RegExpExecArray | null
+  while ((fileWriteMatch = fileWriteRegex.exec(content)) !== null) {
+    const path = fileWriteMatch[1]?.trim()
+    const fileContent = fileWriteMatch[2] ?? ''
+    if (!path) continue
+    writes.push({ path, content: fileContent })
+  }
+
+  const folderCreateRegex = /<folder_create\s+path=["']([^"']+)["']\s*\/?>/gi
+  let folderCreateMatch: RegExpExecArray | null
+  while ((folderCreateMatch = folderCreateRegex.exec(content)) !== null) {
+    const path = folderCreateMatch[1]?.trim()
+    if (!path) continue
+    folders.push(path)
+  }
+
+  return { writes, folders }
+}
+
 function sanitizePathSegment(input: string): string {
   return input.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'session';
 }
@@ -1020,33 +2052,33 @@ function resolveScopedPath(input: {
 }): string {
   const rawPath = (input.requestedPath || '').trim().replace(/^\/+/, '');
   if (!rawPath) {
-    return input.scopePath;
+    return resolveScopeUtil('', input.scopePath);
   }
 
   const attachedSet = new Set((input.attachedPaths || []).map((path) => path.replace(/^\/+/, '')));
   if (attachedSet.has(rawPath)) {
-    return rawPath;
+    return resolveScopeUtil(rawPath, input.scopePath);
   }
 
   const escapedPath = rawPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   if (new RegExp(`\\b${escapedPath}\\b`, 'i').test(input.lastUserMessage || '')) {
-    return rawPath;
+    return resolveScopeUtil(rawPath, input.scopePath);
   }
 
   const baseName = rawPath.split('/').pop() || rawPath;
   const escapedBaseName = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   if (new RegExp(`\\b${escapedBaseName}\\b`, 'i').test(input.lastUserMessage || '')) {
-    return rawPath;
+    return resolveScopeUtil(rawPath, input.scopePath);
   }
 
   if (rawPath.startsWith(`${input.scopePath}/`) || rawPath === input.scopePath) {
-    return rawPath;
+    return resolveScopeUtil(rawPath, input.scopePath);
   }
 
   const normalizedRelative = rawPath.startsWith('project/')
     ? rawPath.slice('project/'.length)
     : rawPath;
-  return `${input.scopePath}/${normalizedRelative}`.replace(/\/{2,}/g, '/');
+  return resolveScopeUtil(normalizedRelative, input.scopePath);
 }
 
 function applyUnifiedDiff(currentContent: string, targetPath: string, rawDiff: string): string {
@@ -1193,26 +2225,37 @@ async function applyFilesystemEditsFromResponse(input: {
   };
 }): Promise<FilesystemEditResult> {
   // Extract all operations first to check if there's anything to do
+  const fileWriteFolderCreateOps = extractFileWriteFolderCreateTags(input.responseContent || '');
   const combinedWriteEdits = [
     ...extractTaggedFileEdits(input.responseContent || ''),
     ...extractFsActionWrites(input.responseContent || ''),
+    ...extractTopLevelWrites(input.responseContent || ''),
     ...extractBashHereDocWrites(input.responseContent || ''),
     ...extractFilenameHintCodeBlocks(input.responseContent || ''),
+    ...fileWriteFolderCreateOps.writes.map(w => ({ path: w.path, content: w.content })),
   ];
   const combinedDiffOperations = [
     ...extractFencedDiffEdits(input.responseContent || ''),
     ...extractFsActionPatches(input.responseContent || ''),
+    ...extractTopLevelPatches(input.responseContent || ''),
     ...(input.commands?.write_diffs || []),
   ];
-  const deleteTargets = extractFsActionDeletes(input.responseContent || '');
+  const applyDiffOperations = extractApplyDiffOperations(input.responseContent || '');
+  const deleteTargets = [
+    ...extractFsActionDeletes(input.responseContent || ''),
+    ...extractTopLevelDeletes(input.responseContent || ''),
+  ];
+  const folderCreateTargets = fileWriteFolderCreateOps.folders; // Separate folder creation targets
   const requestFiles = input.commands?.request_files || [];
 
-  // Only create transaction if there are mutating operations (write/patch/delete)
+  // Only create transaction if there are mutating operations (write/patch/delete/apply_diff)
   // This prevents memory leaks from accumulating no-op transactions
   const hasMutatingOperations =
     combinedWriteEdits.length > 0 ||
     combinedDiffOperations.length > 0 ||
-    deleteTargets.length > 0;
+    applyDiffOperations.length > 0 ||
+    deleteTargets.length > 0 ||
+    folderCreateTargets.length > 0;
 
   const transaction = hasMutatingOperations
     ? filesystemEditSessionService.createTransaction({
@@ -1228,6 +2271,8 @@ async function applyFilesystemEditsFromResponse(input: {
     applied: [],
     errors: [],
     requestedFiles: [],
+    scopePath: input.scopePath,
+    sessionId: extractSessionIdFromPath(input.scopePath) || input.conversationId,
   };
 
   // Process write operations only if we have a transaction
@@ -1339,6 +2384,72 @@ async function applyFilesystemEditsFromResponse(input: {
       }
     }
 
+    // Process APPLY_DIFF operations (surgical search & replace)
+    const seenApplyDiffKey = new Set<string>();
+    for (const diffOp of applyDiffOperations) {
+      const targetPath = resolveScopedPath({
+        requestedPath: diffOp.path,
+        scopePath: input.scopePath,
+        attachedPaths: input.attachedPaths,
+        lastUserMessage: input.lastUserMessage,
+      });
+      const diffKey = `${targetPath}::${diffOp.search}::${diffOp.replace}`;
+      if (seenApplyDiffKey.has(diffKey)) continue;
+      seenApplyDiffKey.add(diffKey);
+
+      try {
+        let currentContent = '';
+        let previousVersion: number | null = null;
+        let previousContent: string | null = null;
+        let existedBefore = false;
+        try {
+          const existingFile = await virtualFilesystem.readFile(input.ownerId, targetPath);
+          currentContent = existingFile.content;
+          previousVersion = existingFile.version;
+          previousContent = existingFile.content;
+          existedBefore = true;
+        } catch {
+          currentContent = '';
+          existedBefore = false;
+        }
+
+        if (!existedBefore) {
+          result.errors.push(`APPLY_DIFF failed for ${targetPath}: file does not exist. Use WRITE for new files.`);
+          continue;
+        }
+
+        // Perform search & replace
+        if (!currentContent.includes(diffOp.search)) {
+          result.errors.push(`APPLY_DIFF failed for ${targetPath}: search block not found in file.`);
+          continue;
+        }
+
+        const updatedContent = currentContent.replace(diffOp.search, diffOp.replace);
+        const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, updatedContent);
+
+        result.applied.push({
+          path: file.path,
+          operation: 'patch',
+          version: file.version,
+          previousVersion,
+          existedBefore,
+        });
+        filesystemEditSessionService.recordOperation(transaction.id, {
+          path: file.path,
+          operation: 'patch',
+          newVersion: file.version,
+          previousVersion,
+          previousContent,
+          existedBefore,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        const err = `Failed to apply_diff for ${targetPath}: ${message}`;
+        result.errors.push(err);
+        filesystemEditSessionService.addError(transaction.id, err);
+      }
+    }
+
     // Process delete operations
     const seenDeleteTargets = new Set<string>();
     for (const deletePath of deleteTargets) {
@@ -1394,9 +2505,130 @@ async function applyFilesystemEditsFromResponse(input: {
       }
     }
 
+    // Process folder creation operations
+    const seenFolderCreates = new Set<string>();
+    for (const folderPath of folderCreateTargets) {
+      const normalizedPath = resolveScopedPath({
+        requestedPath: folderPath.trim(),
+        scopePath: input.scopePath,
+        attachedPaths: input.attachedPaths,
+        lastUserMessage: input.lastUserMessage,
+      });
+      if (!normalizedPath || seenFolderCreates.has(normalizedPath)) {
+        continue;
+      }
+      seenFolderCreates.add(normalizedPath);
+
+      try {
+        // Check if folder already exists (by checking if any file has this path prefix)
+        let existedBefore = false;
+        try {
+          const listing = await virtualFilesystem.listDirectory(input.ownerId, normalizedPath);
+          // If we can list it, the directory exists (has files or subdirs under it)
+          existedBefore = listing.nodes.length > 0;
+        } catch {
+          existedBefore = false;
+        }
+
+        // In VFS, directories are implicit - they exist when files are in them
+        // To create an empty directory, we create a .gitkeep marker file
+        // This ensures the directory structure is preserved
+        const gitkeepPath = `${normalizedPath}/.gitkeep`;
+        
+        try {
+          // Check if .gitkeep already exists
+          await virtualFilesystem.readFile(input.ownerId, gitkeepPath);
+          existedBefore = true;
+        } catch {
+          // .gitkeep doesn't exist, create it
+          await virtualFilesystem.writeFile(input.ownerId, gitkeepPath, '');
+        }
+
+        result.applied.push({
+          path: normalizedPath,
+          operation: 'write', // Use 'write' since folder creation is via marker file
+          version: 1,
+          previousVersion: null,
+          existedBefore,
+        });
+        filesystemEditSessionService.recordOperation(transaction.id, {
+          path: normalizedPath,
+          operation: 'write',
+          newVersion: 1,
+          previousVersion: null,
+          previousContent: null,
+          existedBefore,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        const err = `Failed to create folder ${normalizedPath}: ${message}`;
+        result.errors.push(err);
+        filesystemEditSessionService.addError(transaction.id, err);
+      }
+    }
+
     // Update status if no operations succeeded
     if (result.applied.length === 0 && result.errors.length === 0) {
       result.status = 'none';
+    }
+
+    // Auto-commit: create a git-backed snapshot after successful edits
+    if (result.applied.length > 0) {
+      try {
+        const commitManager = new ShadowCommitManager();
+
+        // Get recorded operations from the edit session (includes previousContent)
+        const editTx = transaction ? filesystemEditSessionService.getTransactionSync(transaction.id) : null;
+        const recordedOps = editTx?.operations || [];
+
+        // Build transaction entries with original + new content for rollback support
+        const transactions = result.applied.map(op => {
+          const recorded = recordedOps.find((r: any) => r.path === op.path);
+          return {
+            path: op.path,
+            type: (op.operation === 'delete' ? 'DELETE' : op.existedBefore ? 'UPDATE' : 'CREATE') as 'UPDATE' | 'CREATE' | 'DELETE',
+            timestamp: Date.now(),
+            originalContent: recorded?.previousContent ?? undefined,
+            newContent: undefined as string | undefined,
+          };
+        });
+
+        const vfs: Record<string, string> = {};
+        for (const op of result.applied) {
+          if (op.operation !== 'delete') {
+            try {
+              const file = await virtualFilesystem.readFile(input.ownerId, op.path);
+              vfs[op.path] = file.content;
+              const txn = transactions.find(t => t.path === op.path);
+              if (txn) txn.newContent = file.content;
+            } catch (readError) {
+              void readError;
+            }
+          }
+        }
+
+        const filesSummary = result.applied
+          .map(op => `${op.operation} ${op.path}`)
+          .join(', ');
+        const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(input.ownerId);
+        result.workspaceVersion = workspaceVersion;
+
+        const commitResult = await commitManager.commit(vfs, transactions, {
+          sessionId: result.sessionId || input.conversationId,
+          message: `Auto-commit: ${filesSummary}`,
+          author: input.ownerId,
+          source: 'chat',
+          integration: 'chat',
+          workspaceVersion,
+        });
+
+        if (commitResult.success) {
+          result.commitId = commitResult.commitId;
+        }
+      } catch (commitError) {
+        // Non-fatal: edits were applied even if commit fails
+        console.error('[Chat] Auto-commit failed:', commitError);
+      }
     }
   }
 
@@ -1450,7 +2682,7 @@ export async function GET() {
         defaultTemperature: parseFloat(
           process.env.DEFAULT_TEMPERATURE || "0.7",
         ),
-        defaultMaxTokens: Number.parseInt(process.env.DEFAULT_MAX_TOKENS || "80000"),
+        defaultMaxTokens: Number.parseInt(process.env.DEFAULT_MAX_TOKENS || "100000"),
         features: {
           voiceEnabled: process.env.ENABLE_VOICE_FEATURES === "true",
           imageGeneration: process.env.ENABLE_IMAGE_GENERATION === "true",

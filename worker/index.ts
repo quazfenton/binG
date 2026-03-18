@@ -13,8 +13,8 @@
 import { Worker, Job } from 'bullmq';
 import { Mastra } from '@mastra/core';
 import Redis from 'ioredis';
-import { agentQueue, resultQueue, type JobData, type JobResult } from '../infra/queue';
-import { getMastra } from '../lib/mastra';
+import { agentQueue, resultQueue, type JobData, type JobResult } from '@/infra/queue';
+import { getMastra } from '@/lib/mastra';
 
 const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 

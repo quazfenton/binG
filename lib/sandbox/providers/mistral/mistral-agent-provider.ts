@@ -19,7 +19,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { Mistral } from '@mistralai/mistralai'
-import type { ToolResult } from '../types'
+import type { ToolResult } from '../../types'
 import type {
   SandboxProvider,
   SandboxHandle,
@@ -33,6 +33,7 @@ import type {
   AgentConfig,
   AgentUpdate,
   ConversationEntry,
+  WorkspaceState,
 } from './mistral-types'
 
 // Session store
@@ -92,10 +93,12 @@ export class MistralAgentProvider implements SandboxProvider {
   private workspacePersistence: Map<string, WorkspaceState> = new Map()
 
   constructor(config?: Partial<MistralProviderConfig>) {
-    const apiKey = process.env.MISTRAL_API_KEY
+    const rawApiKey = process.env.MISTRAL_API_KEY || process.env.MISTRAL_KEY || ''
+    const apiKey = rawApiKey.trim().replace(/^['"]+|['"]+$/g, '')
     if (!apiKey) {
       throw new Error('MISTRAL_API_KEY environment variable is required for mistral-agent provider')
     }
+    process.env.MISTRAL_API_KEY = apiKey
 
     this.config = {
       apiKey,
@@ -131,9 +134,8 @@ export class MistralAgentProvider implements SandboxProvider {
 
     // Initialize persistent workspace state
     this.workspacePersistence.set(sandboxId, {
-      files: new Map(),
-      environment: { ...config.envVars },
-      history: [],
+      files: {} as Record<string, string>,
+      ...config.envVars,
     })
 
     try {
@@ -184,7 +186,7 @@ export class MistralAgentProvider implements SandboxProvider {
       )
     }
 
-    return new MistralAgentSandboxHandle(sandboxId, this.client, this.config, session, this.workspacePersistence)
+    return new MistralAgentSandboxHandle(sandboxId, this.client, this.config, session)
   }
 
   /**
@@ -279,12 +281,32 @@ export class MistralAgentProvider implements SandboxProvider {
    * Create a custom agent (advanced usage)
    */
   async createAgent(agentConfig: AgentConfig) {
+    // Build tools array with proper types for Mistral SDK
+    const tools = agentConfig.tools?.map(type => {
+      switch (type) {
+        case 'code_interpreter':
+          return { type: 'code_interpreter' as const }
+        case 'web_search':
+          return { type: 'web_search' as const }
+        case 'web_search_premium':
+          return { type: 'web_search_premium' as const }
+        case 'image_generation':
+          return { type: 'image_generation' as const }
+        case 'document_library':
+          // DocumentLibraryTool requires libraryIds array
+          return { type: 'document_library' as const, libraryIds: [] }
+        case 'function':
+        default:
+          return { type: 'function' as const }
+      }
+    }) || []
+
     const agent = await this.client.beta.agents.create({
       model: agentConfig.model || this.config.model,
       name: agentConfig.name,
       description: agentConfig.description,
       instructions: agentConfig.instructions,
-      tools: agentConfig.tools?.map(type => ({ type })) || [],
+      tools: tools as any,
       completionArgs: (agentConfig.completionArgs || {
         temperature: this.config.defaultTemperature,
         topP: this.config.defaultTopP,
@@ -297,12 +319,32 @@ export class MistralAgentProvider implements SandboxProvider {
    * Update an agent
    */
   async updateAgent(agentId: string, update: AgentUpdate) {
+    // Build tools array with proper types for Mistral SDK
+    const tools = update.tools?.map(type => {
+      switch (type) {
+        case 'code_interpreter':
+          return { type: 'code_interpreter' as const }
+        case 'web_search':
+          return { type: 'web_search' as const }
+        case 'web_search_premium':
+          return { type: 'web_search_premium' as const }
+        case 'image_generation':
+          return { type: 'image_generation' as const }
+        case 'document_library':
+          // DocumentLibraryTool requires libraryIds array
+          return { type: 'document_library' as const, libraryIds: [] }
+        case 'function':
+        default:
+          return { type: 'function' as const }
+      }
+    })
+
     return this.client.beta.agents.update({
       agentId,
       agentUpdateRequest: {
         description: update.description,
         instructions: update.instructions,
-        tools: update.tools?.map(type => ({ type })),
+        tools: tools as any,
         completionArgs: update.completionArgs as any,
       },
     })
@@ -530,7 +572,8 @@ except FileNotFoundError:
       // Start new conversation to clear history
       const response = await this.client.beta.conversations.start({
         agentId: this.session.agentId,
-        inputs: [{ role: 'system', content: 'New conversation started' }],
+        // Use text input instead of structured role-based input
+        inputs: 'New conversation started',
       })
       this.session.conversationId = response.conversationId
     }
