@@ -113,7 +113,7 @@ export async function GET(req: NextRequest) {
 
     if (owner.anonSessionId) {
       // Set secure, http-only cookie for anonymous session
-      responseInit.headers!['set-cookie'] = `anon-session-id=${owner.anonSessionId}; Path=/; Max-Age=31536000; SameSite=Lax`;
+      responseInit.headers!['set-cookie'] = `anon-session-id=${owner.anonSessionId}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`;
     }
 
     // Check server-side cache first
