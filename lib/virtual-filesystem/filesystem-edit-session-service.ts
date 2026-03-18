@@ -304,18 +304,32 @@ class FilesystemEditSessionService {
       try {
         // Get the target version (minimum previousVersion across all operations)
         const versionsWithPrevious = tx.operations.filter(op => op.previousVersion != null);
-        
+
         if (versionsWithPrevious.length === 0) {
           // No previous versions to rollback to, use manual revert
           throw new Error('No previous versions available for rollback');
         }
-        
+
         const targetVersion = Math.min(
           ...versionsWithPrevious.map(op => op.previousVersion!)
         );
 
         // Get current workspace version
         const currentVersion = await virtualFilesystem.getWorkspaceVersion(tx.ownerId);
+        
+        // CRITICAL: Check if workspace has newer edits after this transaction
+        // If current version > transaction's highest version, other edits exist
+        const transactionTip = Math.max(...tx.operations.map((op) => op.newVersion));
+        
+        if (currentVersion > transactionTip) {
+          // Workspace has been modified since this transaction - manual revert is safer
+          logger.warn('[FilesystemEditSession] Workspace has newer edits, using manual revert to avoid collateral damage', {
+            transactionId: input.transactionId,
+            transactionTip,
+            currentVersion,
+          });
+          throw new Error('Workspace has newer edits, using manual revert');
+        }
 
         // Only rollback if target version is different from current
         if (targetVersion < currentVersion) {

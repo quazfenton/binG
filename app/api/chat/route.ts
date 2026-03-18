@@ -1429,16 +1429,32 @@ async function handleGatewayStreaming(params: {
 
           // Parse NDJSON and re-emit as SSE
           const events = parser.parse(chunk);
-          for (const event of events) {
-            // Gateway sends NDJSON events, convert to SSE format
-            const eventType = event.type || 'message';
-            const sseEvent = `event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`;
-            controller.enqueue(encoder.encode(sseEvent));
+          
+          if (events.length > 0) {
+            // Successfully parsed NDJSON events
+            for (const event of events) {
+              // Gateway sends NDJSON events, convert to SSE format
+              const eventType = event.type || 'message';
+              const sseEvent = `event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`;
+              controller.enqueue(encoder.encode(sseEvent));
+            }
+          } else {
+            // No events parsed - check if this might be a plain-text error
+            // NDJSON parser buffers incomplete lines, but persistent non-JSON content
+            // indicates an error from the gateway
+            const trimmedChunk = chunk.trim();
+            if (trimmedChunk.length > 0 && 
+                !trimmedChunk.startsWith('{') && 
+                !trimmedChunk.startsWith('[')) {
+              // This looks like a plain-text error from gateway
+              // Forward it as an error event so clients can see it
+              const errorEvent = `event: error\ndata: ${JSON.stringify({ 
+                type: 'gateway_error', 
+                message: 'Gateway returned non-JSON response: ' + trimmedChunk.substring(0, 500) 
+              })}\n\n`;
+              controller.enqueue(encoder.encode(errorEvent));
+            }
           }
-
-          // NOTE: No fallback for non-JSON chunks needed
-          // The NDJSON parser buffers incomplete chunks automatically
-          // and emits them when complete on the next iteration
         }
       } catch (error) {
         chatLogger.error('Stream error', { requestId }, { error: String(error) });
