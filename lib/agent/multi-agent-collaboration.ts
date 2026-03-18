@@ -133,10 +133,13 @@ export class MultiAgentCollaboration extends EventEmitter {
           });
 
           const output = await agent.terminalSend(task.description);
-          
+
           // Mark proposal as completed in Mastra
-          mastraWorkflowIntegration.getProposal(task.id);
-          
+          const proposal = mastraWorkflowIntegration.getProposal(task.id);
+          if (proposal) {
+            proposal.status = 'completed';  // Actually update the status
+          }
+
           this.completeTask(localTask.id, output);
           results[task.id] = output;
           // Snapshot final state
@@ -208,18 +211,27 @@ export class MultiAgentCollaboration extends EventEmitter {
               output,
               role,
             });
+          } catch (error: any) {
+            console.warn(
+              `[MultiAgent] Real execution failed for ${role}, using simulation:`,
+              error.message,
+            );
+            // FIX: Don't let cleanup failures trigger simulation
+            // Only simulate if real execution failed, not if cleanup failed
+            await this.simulateAgentExecution(agentId, task);
           } finally {
             // FIX: Ensure agent cleanup runs even when execution fails
-            await agent.cleanup();
+            // But don't let cleanup failures affect the task result
+            try {
+              await agent.cleanup();
+            } catch (cleanupError: any) {
+              console.warn(`[MultiAgent] Cleanup failed for ${role}:`, cleanupError.message);
+            }
+            // FIX (Bug 18): always clean up the agent after its task
+            this.unregisterAgent(agentId);
           }
-        } catch (error: any) {
-          console.warn(
-            `[MultiAgent] Real execution failed for ${role}, using simulation:`,
-            error.message,
-          );
-          await this.simulateAgentExecution(agentId, task);
-        } finally {
-          // FIX (Bug 18): always clean up the agent after its task
+        } catch (setupError: any) {
+          console.error(`[MultiAgent] Agent setup failed for ${role}:`, setupError.message);
           this.unregisterAgent(agentId);
         }
       }),

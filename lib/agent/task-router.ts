@@ -100,36 +100,39 @@ class TaskRouter {
       automation: this.AUTOMATION_KEYWORDS,
     };
     const totalKeywordsInWinningSet = keywordSets[primaryType]?.length ?? 1;
-    const confidence = maxScore > 0
-      ? Math.min(1, maxScore / totalKeywordsInWinningSet)
-      : 0;
 
     // FIX (Bug 5 & 7): Explicit target assignment with no fall-through ambiguity.
     let target: RoutingTarget;
     let reasoning: string;
 
-    switch (primaryType) {
-      case 'coding':
-        target = 'opencode';
-        reasoning = 'Task involves coding, file operations, or shell commands';
-        break;
-      case 'messaging':
-      case 'browsing':
-        target = 'nullclaw';
-        reasoning = `Task involves ${primaryType} which requires external API access`;
-        break;
-      case 'automation':
-        if (scores.coding > 0) {
+    // FIX: If no keywords matched (all scores are 0), classify as 'unknown' instead of defaulting to 'coding'
+    if (maxScore === 0) {
+      target = 'cli';
+      reasoning = 'No specific keywords detected, task may be a simple query or command';
+    } else {
+      switch (primaryType) {
+        case 'coding':
           target = 'opencode';
-          reasoning = 'Automation task with coding components';
-        } else {
+          reasoning = 'Task involves coding, file operations, or shell commands';
+          break;
+        case 'messaging':
+        case 'browsing':
           target = 'nullclaw';
-          reasoning = 'Automation task requiring external services';
-        }
-        break;
-      default:
-        target = 'opencode';
-        reasoning = 'Unknown task type, defaulting to coding agent';
+          reasoning = `Task involves ${primaryType} which requires external API access`;
+          break;
+        case 'automation':
+          if (scores.coding > 0) {
+            target = 'opencode';
+            reasoning = 'Automation task with coding components';
+          } else {
+            target = 'nullclaw';
+            reasoning = 'Automation task requiring external services';
+          }
+          break;
+        default:
+          target = 'cli';
+          reasoning = 'Unknown task type, using CLI agent';
+      }
     }
 
     // FIX Bug 6: Normalize confidence against keyword count, not character length
@@ -140,7 +143,9 @@ class TaskRouter {
       this.AUTOMATION_KEYWORDS.length,
     );
     // Confidence is now meaningful [0, 1] range
-    const confidence = Math.min(1, maxScore / Math.max(maxPossibleScore * 0.3, 1));
+    const confidence = maxScore > 0
+      ? Math.min(1, maxScore / Math.max(maxPossibleScore * 0.3, 1))
+      : 0;
 
     const result: TaskRoutingResult = { type: primaryType, confidence, target, reasoning };
 

@@ -131,6 +131,7 @@ class NullclawIntegration {
   private sessionContainers = new Map<string, string>(); // sessionKey -> containerId
   private tasks = new Map<string, NullclawTask>();
   private initializationPromise: Promise<void> | null = null;
+  private allocatingPorts = new Set<number>(); // Track ports being allocated to prevent races
 
   /**
    * Check if URL-based configuration is available
@@ -260,24 +261,36 @@ class NullclawIntegration {
 
   /**
    * Get next available port for container
-   * 
+   *
    * FIX (Bug 12): Scans up to 64 ports to find free slot, avoiding collisions
    * with error-state containers and pools larger than poolSize.
+   * FIX: Track allocatingPorts to prevent race conditions during concurrent spawns.
    */
   private getNextAvailablePort(): number {
     const basePort = this.defaultConfig.basePort || 3001;
-    const usedPorts = new Set(
-      Array.from(this.containers.values()).map((c) => c.port),
-    );
+    const usedPorts = new Set([
+      ...Array.from(this.containers.values()).map((c) => c.port),
+      ...this.allocatingPorts, // Include ports being allocated
+    ]);
 
     // Scan up to basePort + 64 to find a free slot; never blindly use
     // basePort + containers.size which can alias an occupied port.
     for (let offset = 0; offset < 64; offset++) {
       const candidate = basePort + offset;
-      if (!usedPorts.has(candidate)) return candidate;
+      if (!usedPorts.has(candidate)) {
+        this.allocatingPorts.add(candidate); // Reserve the port
+        return candidate;
+      }
     }
 
     throw new Error('No available ports for Nullclaw container (all 64 slots occupied)');
+  }
+  
+  /**
+   * Release a reserved port (called after container spawn completes or fails)
+   */
+  private releaseReservedPort(port: number): void {
+    this.allocatingPorts.delete(port);
   }
 
   /**
@@ -426,6 +439,9 @@ class NullclawIntegration {
       });
 
       docker.on('close', async (code) => {
+        // Release the reserved port regardless of success/failure
+        this.releaseReservedPort(port);
+        
         if (code === 0) {
           // Wait for health check
           const healthy = await this.waitForHealth(container);
@@ -436,18 +452,33 @@ class NullclawIntegration {
             // FIX: remove error containers so the pool stays clean
             container.status = 'error';
             this.containers.delete(containerId);
+            // Cleanup the failed container
+            await this.cleanupContainer(container).catch(err => {
+              logger.error('Failed to cleanup failed health check container:', err);
+            });
             reject(new Error(`Nullclaw container ${containerId} failed health check`));
           }
         } else {
           container.status = 'error';
           this.containers.delete(containerId); // FIX: clean up
+          // Cleanup the failed container
+          this.cleanupContainer(container).catch(err => {
+            logger.error('Failed to cleanup failed spawn container:', err);
+          });
           reject(new Error(`Nullclaw spawn exited with code ${code}`));
         }
       });
 
       docker.on('error', async (error) => {
+        // Release the reserved port on error
+        this.releaseReservedPort(port);
+        
         container.status = 'error';
         this.containers.delete(containerId); // FIX: clean up
+        // Cleanup the failed container
+        this.cleanupContainer(container).catch(err => {
+          logger.error('Failed to cleanup error container:', err);
+        });
         reject(new Error(`Nullclaw spawn failed: ${error.message}`));
       });
     });
@@ -459,13 +490,25 @@ class NullclawIntegration {
   private async cleanupContainer(container: NullclawContainer): Promise<void> {
     // Remove from containers map if present
     this.containers.delete(container.id);
-    
-    // Try to stop docker container if it was created
+
+    // Try to stop and remove docker container if it was created
     if (container.containerId) {
       try {
         const { spawn } = await import('child_process');
-        const docker = spawn('docker', ['rm', '-f', container.containerId]);
-        docker.on('close', () => {
+        
+        // First stop the container (in case it's still running from health check)
+        const stopDocker = spawn('docker', ['stop', '-t', '5', container.containerId]);
+        await new Promise<void>((resolve) => {
+          stopDocker.on('close', () => {
+            logger.debug(`Stopped docker container ${container.containerId}`);
+            resolve();
+          });
+          stopDocker.on('error', () => resolve()); // Continue even if stop fails
+        });
+        
+        // Then remove the container
+        const rmDocker = spawn('docker', ['rm', '-f', container.containerId]);
+        rmDocker.on('close', () => {
           logger.debug(`Cleaned up docker container ${container.containerId}`);
         });
       } catch (error) {

@@ -144,20 +144,16 @@ afterAll(() => {
   vi.useRealTimers();
 });
 
-// Helper to advance time
-export function advanceTime(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    vi.advanceTimersByTime(ms);
-    setTimeout(() => resolve(), 0);
-  });
+// Helper to advance time (works with fake timers)
+export async function advanceTime(ms: number): Promise<void> {
+  vi.advanceTimersByTime(ms);
+  await new Promise(resolve => process.nextTick(resolve));
 }
 
-// Helper to run all pending timers
-export function runAllTimers(): Promise<void> {
-  return new Promise((resolve) => {
-    vi.runAllTimers();
-    setTimeout(() => resolve(), 0);
-  });
+// Helper to run all pending timers (works with fake timers)
+export async function runAllTimers(): Promise<void> {
+  vi.runAllTimers();
+  await new Promise(resolve => process.nextTick(resolve));
 }
 
 // ============================================================================
@@ -166,11 +162,11 @@ export function runAllTimers(): Promise<void> {
 
 const localStorageMock = {
   store: new Map<string, string>(),
-  getItem: vi.fn((key: string) => this.store.get(key) || null),
-  setItem: vi.fn((key: string, value: string) => { this.store.set(key, value); }),
-  removeItem: vi.fn((key: string) => { this.store.delete(key); }),
-  clear: vi.fn(() => { this.store.clear(); }),
-  key: vi.fn((index: number) => Array.from(this.store.keys())[index] || null),
+  getItem: vi.fn(function(key: string) { return this.store.get(key) || null; }),
+  setItem: vi.fn(function(key: string, value: string) { this.store.set(key, value); }),
+  removeItem: vi.fn(function(key: string) { this.store.delete(key); }),
+  clear: vi.fn(function() { this.store.clear(); }),
+  key: vi.fn(function(index: number) { return Array.from(this.store.keys())[index] || null; }),
   get length() { return this.store.size; },
 };
 
@@ -189,11 +185,11 @@ beforeEach(() => {
 
 const sessionStorageMock = {
   store: new Map<string, string>(),
-  getItem: vi.fn((key: string) => this.store.get(key) || null),
-  setItem: vi.fn((key: string, value: string) => { this.store.set(key, value); }),
-  removeItem: vi.fn((key: string) => { this.store.delete(key); }),
-  clear: vi.fn(() => { this.store.clear(); }),
-  key: vi.fn((index: number) => Array.from(this.store.keys())[index] || null),
+  getItem: vi.fn(function(key: string) { return this.store.get(key) || null; }),
+  setItem: vi.fn(function(key: string, value: string) { this.store.set(key, value); }),
+  removeItem: vi.fn(function(key: string) { this.store.delete(key); }),
+  clear: vi.fn(function() { this.store.clear(); }),
+  key: vi.fn(function(index: number) { return Array.from(this.store.keys())[index] || null; }),
   get length() { return this.store.size; },
 };
 
@@ -381,16 +377,16 @@ export function createMockPreviewRequest(overrides?: Partial<any>): any {
 // ============================================================================
 
 /**
- * Wait for a condition to be true
+ * Wait for a condition to be true (works with fake timers)
  */
 export async function waitFor(condition: () => boolean, timeout: number = 1000): Promise<void> {
-  const start = Date.now();
-  while (!condition()) {
-    if (Date.now() - start > timeout) {
-      throw new Error('waitFor timeout');
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  const maxAttempts = timeout / 10;
+  for (let i = 0; i < maxAttempts; i++) {
+    if (condition()) return;
+    vi.advanceTimersByTime(10);
+    await new Promise(resolve => process.nextTick(resolve));
   }
+  throw new Error('waitFor timeout');
 }
 
 /**

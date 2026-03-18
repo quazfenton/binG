@@ -32,6 +32,12 @@ import {
 import { createLogger } from '@/lib/utils/logger';
 import { mastraWorkflowIntegration } from '../agent/mastra-workflow-integration';
 
+import { 
+  AgentOrchestrator, 
+  type OrchestratorConfig,
+  type OrchestratorEvent 
+} from '../agent/orchestration/agent-orchestrator';
+
 const log = createLogger('UnifiedAgentService');
 
 export interface UnifiedAgentConfig {
@@ -217,6 +223,10 @@ export async function processUnifiedAgentRequest(
  */
 async function runV2Native(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
+  log.info('Running V2 Native mode', { 
+    userMessageLength: config.userMessage.length,
+    maxSteps: config.maxSteps,
+  });
 
   // For complex multi-step tasks, use StatefulAgent (Plan-Act-Verify workflow)
   // Enhanced pattern matching for better detection
@@ -236,6 +246,8 @@ async function runV2Native(config: UnifiedAgentConfig): Promise<UnifiedAgentResu
     });
     return await runStatefulAgentMode(config);
   }
+
+  log.info('Simple task detected, using OpenCode Engine', { isComplexTask, hasMultipleSteps, mentionsFiles });
 
   // Use OpenCode Engine for simpler tasks
   const engineConfig: OpenCodeEngineConfig = {
@@ -302,7 +314,7 @@ async function runV2Native(config: UnifiedAgentConfig): Promise<UnifiedAgentResu
  */
 async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
-  
+
   try {
     const agentOptions: StatefulAgentOptions = {
       sessionId: `unified-${Date.now()}`,
@@ -321,6 +333,12 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
       args: { path, content },
       result: { success: true, output: `Written ${path}` },
     })) : [];
+
+    // FIX: Throw on failure to trigger fallback instead of returning unsuccessful result
+    if (!result.success) {
+      const error = result.errors?.[0] || 'StatefulAgent failed';
+      throw new Error(error);
+    }
 
     return {
       success: result.success,
@@ -479,6 +497,7 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
       maxSteps: config.maxSteps,
     });
 
+    // FIX: Throw on failure to trigger fallback instead of returning unsuccessful result
     if (!workflowResult.success) {
       throw new Error(workflowResult.error || 'Mastra workflow execution failed');
     }
@@ -512,18 +531,7 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
     };
   } catch (error: any) {
     log.error('Mastra workflow execution failed', { workflowId, error: error.message });
-    
-    return {
-      success: false,
-      response: '',
-      mode: 'mastra-workflow',
-      error: error.message,
-      metadata: {
-        provider: 'mastra',
-        workflowId,
-        duration: Date.now() - startTime,
-      },
-    };
+    throw error; // Re-throw to trigger fallback
   }
 }
 
@@ -567,13 +575,85 @@ async function runV1ApiWithTools(
 /**
  * Run V1 API simple completion (no tools)
  */
+async function runV1Orchestrated(
+  config: UnifiedAgentConfig,
+  messages: any[],
+  startTime: number
+): Promise<UnifiedAgentResult> {
+  const orchestratorConfig: OrchestratorConfig = {
+    iterationConfig: {
+      maxIterations: config.maxSteps || parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '10', 10),
+      maxTokens: config.maxTokens || 32000,
+      maxDurationMs: parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '60000', 10),
+    },
+    tools: config.tools || [],
+    executeTool: config.executeTool || (async () => ({ success: false, output: 'No tool executor provided' })),
+  };
+
+  const orchestrator = new AgentOrchestrator(orchestratorConfig);
+  let content = '';
+  let stepsCount = 0;
+  const steps: any[] = [];
+
+  try {
+    for await (const event of orchestrator.execute(config.userMessage, messages)) {
+      if (config.onStreamChunk) {
+        if (event.type === 'token') {
+          config.onStreamChunk((event as any).content);
+        } else if (event.type === 'phase_change') {
+          config.onStreamChunk(`\n[Phase: ${event.phase}]\n`);
+        } else if (event.type === 'tool_result') {
+          config.onStreamChunk(`\n[Tool Result: ${event.tool}]\n`);
+        } else if (event.type === 'verification_failed') {
+          config.onStreamChunk(`\n[Verification Failed: retrying...]\n`);
+        }
+      }
+
+      if (event.type === 'done') {
+        content = event.response;
+        stepsCount = event.stats?.iterations || 0;
+      } else if (event.type === 'tool_result') {
+        steps.push({
+          toolName: event.tool,
+          args: {},
+          result: { success: true, output: JSON.stringify(event.result), exitCode: 0 },
+        });
+      }
+    }
+
+    return {
+      success: true,
+      response: content,
+      steps,
+      totalSteps: stepsCount,
+      mode: 'v1-api',
+      metadata: {
+        provider: process.env.LLM_PROVIDER || 'unknown',
+        duration: Date.now() - startTime,
+        orchestrator: true,
+      },
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      response: content || 'Orchestration failed',
+      mode: 'v1-api',
+      error: err.message,
+      metadata: { duration: Date.now() - startTime },
+    };
+  }
+}
+
 async function runV1ApiCompletion(
   config: UnifiedAgentConfig,
   messages: any[],
   llmProvider: LLMProvider,
   startTime: number
 ): Promise<UnifiedAgentResult> {
-  // Use LLM service for simple completion
+  if (process.env.ENABLE_V1_ORCHESTRATOR === 'true') {
+    return runV1Orchestrated(config, messages, startTime);
+  }
+
   const llmRequest: LLMRequest = {
     messages: messages as any,
     model: process.env.LLM_MODEL || 'gpt-4o',

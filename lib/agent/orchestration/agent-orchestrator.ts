@@ -12,9 +12,9 @@
  * 4. Streaming: Native SSE event emission at every state transition.
  */
 
-import { llmService, type LLMRequest } from '@/lib/chat/llm-providers';
-import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
-import { SelfHealingExecutor } from '@/lib/crewai/runtime/self-healing';
+import { llmService, type LLMRequest } from '../../chat/llm-providers';
+import { verifyChanges } from '../../orchestra/stateful-agent/agents/verification';
+import { SelfHealingExecutor } from '../../crewai/runtime/self-healing';
 
 export interface IterationConfig {
   maxIterations: number;
@@ -72,6 +72,7 @@ export type OrchestratorEvent =
   | { type: 'tool_call'; tool: string; args: any }
   | { type: 'tool_result'; tool: string; result: any }
   | { type: 'tool_error'; tool: string; error: string }
+  | { type: 'token'; content: string }
   | { type: 'verification_failed'; errors: any[] }
   | { type: 'verification_passed' }
   | { type: 'warning'; message: string }
@@ -110,7 +111,7 @@ export class AgentOrchestrator {
 
       // Call LLM for next action (Coder Agent)
       const llmResponse = await this.callLLM(task, conversationHistory);
-      controller.recordTokens(llmResponse.usage?.totalTokens || 0);
+      controller.recordTokens(llmResponse.usage?.total_tokens || 0);
 
       if (llmResponse.done || !llmResponse.toolCalls?.length) {
         conversationHistory.push({ role: 'assistant', content: llmResponse.text });
@@ -160,9 +161,27 @@ export class AgentOrchestrator {
       }
     }
 
-    // 4. RESPOND PHASE
+    // 4. RESPOND PHASE (with budget check - do not exceed budgets even for summarization)
     yield { type: 'phase_change', phase: 'responding' };
+    
+    // Check budgets before final summarization call to prevent budget bypass
+    const finalCheck = controller.canContinue();
+    if (!finalCheck.allowed) {
+      // Budgets exhausted - return partial result without final summarization
+      yield { 
+        type: 'warning', 
+        message: `Final summarization skipped: ${finalCheck.reason}. Returning partial results.` 
+      };
+      yield { 
+        type: 'done', 
+        response: 'Execution completed with partial results due to budget constraints.', 
+        stats: controller.getStats() 
+      };
+      return;
+    }
+    
     const finalResponse = await this.callLLM("Summarize the final outcome based on the execution history.", conversationHistory);
+    controller.recordTokens(finalResponse.usage?.total_tokens || 0);
     yield { type: 'done', response: finalResponse.text, stats: controller.getStats() };
   }
 
@@ -176,7 +195,7 @@ TASK: ${task}
 Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"}]`;
     const response = await this.callLLM(planPrompt, []);
     try {
-      const parsed = JSON.parse(response.text.match(/\[.*\]/s)?.[0] || '[]');
+      const parsed = JSON.parse(response.text.match(/\[[\s\S]*\]/)?.[0] || '[]');
       return parsed.length ? parsed : [{ action: task }];
     } catch {
       return [{ action: task }];
@@ -195,11 +214,16 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
       ]
     };
     const response = await llmService.generateResponse(request);
+    const result = response as any;
+
+    // FIX: Tool calls are stored on response.metadata.toolCalls, not response.toolCalls
+    const toolCalls = result.metadata?.toolCalls || result.toolCalls || [];
+
     return {
-      text: response.content || '',
-      done: !response.toolCalls || response.toolCalls.length === 0,
-      toolCalls: response.toolCalls || [],
-      usage: response.usage || { totalTokens: 0 }
+      text: result.content || '',
+      done: toolCalls.length === 0,
+      toolCalls: toolCalls,
+      usage: result.usage || { totalTokens: 0 }
     };
   }
 
