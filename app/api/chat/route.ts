@@ -1544,13 +1544,24 @@ async function buildWorkspaceSessionContext(
     }
 
     // Identify key files that might need editing (source code, config, etc.)
+    // Exclude ALL .env files to prevent secret leakage into LLM prompts
     const keyExtensions = ['.ts', '.tsx', '.js', '.jsx', '.json', '.py', '.vue', '.svelte', '.html', '.css', '.md', '.yaml', '.yml', 'Dockerfile', 'docker-compose.yml', '.env.example'];
     const keyFiles = scopedFiles
-      .filter(f => keyExtensions.some(ext => f.path.toLowerCase().endsWith(ext) || f.path.toLowerCase().includes('dockerfile') || f.path.toLowerCase().includes('.env')))
+      .filter(f => keyExtensions.some(ext => f.path.toLowerCase().endsWith(ext) || f.path.toLowerCase().includes('dockerfile')))
+      .filter(f => {
+        // Block all .env* files including .env, .env.local, .env.production, etc.
+        const pathLower = f.path.toLowerCase();
+        if (pathLower.includes('.env')) {
+          // Allow .env.example but block all other .env files
+          return pathLower.endsWith('.env.example');
+        }
+        return true;
+      })
       .sort((a, b) => a.path.localeCompare(b.path))
       .slice(0, 30); // Limit to 30 key files to avoid token explosion
 
     const MAX_FILE_SIZE = 8000; // Max chars per file to include
+    const MAX_TOTAL_CHARS = options?.maxTokens ? options.maxTokens * 4 : 50000; // Respect maxTokens if provided (4 chars ≈ 1 token)
     const fileContents: string[] = [];
     
     // Read files in parallel for better performance

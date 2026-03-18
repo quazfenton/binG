@@ -57,7 +57,12 @@ export interface EnhancedJobConfig {
   stopCondition?: string; // LLM-evaluated condition to stop job
 }
 
-export interface EnhancedJob extends EnhancedJobConfig {
+/**
+ * Enhanced job interface with separated time units
+ * - Public API uses seconds (interval, timeout)
+ * - Internal timers use milliseconds (intervalMs, timeoutMs)
+ */
+export interface EnhancedJob extends Omit<EnhancedJobConfig, 'interval' | 'timeout'> {
   jobId: string;
   status: 'running' | 'paused' | 'stopped' | 'completed' | 'failed';
   createdAt: Date;
@@ -68,6 +73,12 @@ export interface EnhancedJob extends EnhancedJobConfig {
   lastResult?: JobExecutionResult;
   executionGraphId?: string;
   executionGraphNodeId?: string;
+  // Public API: seconds
+  interval: number;
+  timeout?: number;
+  // Internal: milliseconds (not exposed in public API)
+  intervalMs: number;
+  timeoutMs?: number;
 }
 
 export interface JobExecutionResult {
@@ -165,6 +176,21 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
    */
   async startJob(config: EnhancedJobConfig): Promise<EnhancedJob> {
     const jobId = config.jobId || randomUUID();
+    
+    logger.debug('Starting background job', {
+      jobId,
+      sandboxId: config.sandboxId,
+      command: config.command.substring(0, 100),
+      interval: config.interval,
+      timeout: config.timeout,
+    });
+
+    // Validate: reject duplicate jobId to avoid orphaned concurrent jobs
+    if (this.jobs.has(jobId)) {
+      logger.error('Attempted to start job with duplicate ID', { jobId });
+      throw new Error(`Background job already exists: ${jobId}`);
+    }
+
     const {
       sessionId,
       sandboxId,
@@ -179,14 +205,72 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
       stopCondition,
     } = config;
 
+    // Validate schedule inputs before creating the job
+    if (!Number.isFinite(interval) || interval <= 0) {
+      logger.error('Invalid interval for background job', { jobId, interval });
+      throw new Error('interval must be a positive number of seconds');
+    }
+    if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
+      logger.error('Invalid timeout for background job', { jobId, timeout });
+      throw new Error('timeout must be a positive number of seconds');
+    }
+    if (maxExecutions !== undefined && (!Number.isInteger(maxExecutions) || maxExecutions <= 0)) {
+      logger.error('Invalid maxExecutions for background job', { jobId, maxExecutions });
+      throw new Error('maxExecutions must be a positive integer');
+    }
+
+    // Edge case: Warn about very short intervals that could cause high load
+    if (interval < 5) {
+      logger.warn('Very short interval detected - this may cause high system load', {
+        jobId,
+        interval,
+        recommendation: 'Consider using interval >= 5 seconds',
+      });
+    }
+
+    // Edge case: Warn about very long timeouts
+    if (timeout && timeout > 3600) {
+      logger.warn('Very long timeout detected - job may run for extended period', {
+        jobId,
+        timeout,
+        timeoutHours: timeout / 3600,
+      });
+    }
+
     // Check quota before starting
     if (this.sessionManager && sessionId) {
-      const session = await this.sessionManager.getSession(sessionId);
-      if (session && !this.checkQuotaAvailable(session, quotaCategory)) {
-        logger.warn('Insufficient quota for background job', { jobId, sessionId, quotaCategory });
-        throw new Error(`Insufficient ${quotaCategory} quota for background job`);
+      try {
+        const session = await this.sessionManager.getSession(sessionId);
+        if (session && !this.checkQuotaAvailable(session, quotaCategory)) {
+          logger.warn('Insufficient quota for background job', {
+            jobId,
+            sessionId,
+            quotaCategory,
+            sessionQuota: session.quota,
+          });
+          throw new Error(`Insufficient ${quotaCategory} quota for background job`);
+        }
+      } catch (quotaError: any) {
+        logger.error('Quota check failed for background job', {
+          jobId,
+          sessionId,
+          error: quotaError.message,
+        });
+        throw quotaError;
       }
     }
+
+    // Convert to milliseconds for internal timers
+    const intervalMs = interval * 1000;
+    const timeoutMs = timeout * 1000;
+
+    logger.debug('Creating job object', {
+      jobId,
+      intervalMs,
+      timeoutMs,
+      maxExecutions,
+      hasStopCondition: !!stopCondition,
+    });
 
     const job: EnhancedJob = {
       jobId,
@@ -194,8 +278,12 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
       sandboxId,
       command,
       args,
-      interval: interval * 1000,
-      timeout: timeout * 1000,
+      // Public API: seconds
+      interval,
+      timeout,
+      // Internal: milliseconds
+      intervalMs,
+      timeoutMs,
       description,
       tags,
       quotaCategory,
@@ -208,23 +296,36 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
 
     // Create execution graph node if engine available
     if (this.executionGraphEngine && sessionId) {
-      const graph = this.executionGraphEngine.createGraph(sessionId);
-      const node = this.executionGraphEngine.addNode(graph, {
-        id: `job-${jobId}`,
-        type: 'sandbox_action',
-        name: description || `Background Job: ${command}`,
-        description: `Interval: ${interval}s, Timeout: ${timeout}s`,
-        dependencies: [],
-        metadata: {
+      try {
+        const graph = this.executionGraphEngine.createGraph(sessionId);
+        const node = this.executionGraphEngine.addNode(graph, {
+          id: `job-${jobId}`,
+          type: 'sandbox_action',
+          name: description || `Background Job: ${command}`,
+          description: `Interval: ${interval}s, Timeout: ${timeout}s`,
+          dependencies: [],
+          metadata: {
+            jobId,
+            sandboxId,
+            command,
+            interval,
+            quotaCategory,
+          },
+        });
+        job.executionGraphId = graph.id;
+        job.executionGraphNodeId = node.id;
+        logger.debug('Execution graph node created', {
           jobId,
-          sandboxId,
-          command,
-          interval,
-          quotaCategory,
-        },
-      });
-      job.executionGraphId = graph.id;
-      job.executionGraphNodeId = node.id;
+          graphId: graph.id,
+          nodeId: node.id,
+        });
+      } catch (graphError: any) {
+        logger.warn('Failed to create execution graph node - job will run without graph tracking', {
+          jobId,
+          error: graphError.message,
+        });
+        // Continue without graph tracking - not fatal
+      }
     }
 
     // Start execution loop
@@ -233,12 +334,15 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     this.jobs.set(jobId, job);
     this.emit('job:started', job);
 
-    logger.info('Background job started', {
+    logger.info('Background job started successfully', {
       jobId,
       sessionId,
       sandboxId,
-      command,
+      command: command.substring(0, 100),
       interval,
+      timeout,
+      maxExecutions,
+      quotaCategory,
     });
 
     return job;
@@ -248,74 +352,60 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
    * Execute job loop with comprehensive tracking
    */
   private async executeJobLoop(job: EnhancedJob): Promise<void> {
+    logger.debug('Starting job execution loop', {
+      jobId: job.jobId,
+      command: job.command.substring(0, 100),
+      interval: job.interval,
+      maxExecutions: job.maxExecutions,
+    });
+
     const executeLoop = async () => {
+      let executionAttempt = 0;
+      
       while (job.status === 'running') {
+        executionAttempt++;
+        const startTime = Date.now();
+
         try {
-          const startTime = Date.now();
+          logger.debug('Executing job iteration', {
+            jobId: job.jobId,
+            executionAttempt,
+            command: job.command.substring(0, 100),
+          });
 
           // Execute command
           let result: { stdout: string; stderr: string; exitCode: number | null };
 
           if (this.executor) {
+            // Use internal timeoutMs, convert to seconds for executor API
             result = await this.executor.execCommand(
               job.sandboxId,
               job.command,
               job.args,
-              job.timeout / 1000
+              job.timeoutMs / 1000
             );
           } else {
-            // Fallback to direct child_process
-            const { spawn } = require('child_process');
-            result = await new Promise((resolve) => {
-              const proc = spawn(job.command, job.args, {
-                timeout: job.timeout,
-                stdio: ['pipe', 'pipe', 'pipe'],
-              });
-
-              let stdout = '';
-              let stderr = '';
-
-              proc.stdout?.on('data', (data: Buffer) => (stdout += data.toString()));
-              proc.stderr?.on('data', (data: Buffer) => (stderr += data.toString()));
-
-              proc.on('close', (exitCode) => resolve({ stdout, stderr, exitCode }));
-              proc.on('error', (error: Error) =>
-                resolve({ stdout: '', stderr: error.message, exitCode: null })
-              );
+            // SECURITY: Removed child_process.spawn fallback to prevent arbitrary code execution
+            // Jobs MUST run in sandboxed environment for security
+            logger.error('Background job requires sandbox executor - job cannot run without sandbox', {
+              jobId: job.jobId,
+              sandboxId: job.sandboxId,
             });
+            result = {
+              stdout: '',
+              stderr: 'Sandbox executor not available - job requires sandboxed environment',
+              exitCode: 1,
+            };
           }
 
           const duration = Date.now() - startTime;
           job.lastExecuted = new Date();
-          job.nextExecution = new Date(Date.now() + job.interval);
+          // Use internal intervalMs for next execution calculation
+          job.nextExecution = new Date(Date.now() + job.intervalMs);
           job.executionCount++;
 
-          // Calculate quota usage
-          const quotaUsed = this.calculateQuotaUsage(duration, job.quotaCategory || 'compute');
-
-          // Track quota
-          if (this.sessionManager && job.sessionId) {
-            await this.sessionManager.recordMetric(job.sessionId, {
-              type: 'background_job',
-              jobId: job.jobId,
-              computeTime: quotaUsed.computeMs,
-              ioOps: quotaUsed.ioOps,
-              apiCalls: quotaUsed.apiCalls,
-              duration,
-            });
-
-            // Check if quota exceeded
-            const session = await this.sessionManager.getSession(job.sessionId);
-            if (session && !this.checkQuotaAvailable(session, job.quotaCategory || 'compute')) {
-              logger.warn('Job exceeded quota, stopping', { jobId: job.jobId });
-              job.status = 'completed';
-              this.emit('job:quota-exceeded', job.jobId);
-              break;
-            }
-          }
-
-          // Create execution result
-          const execResult: JobExecutionResult = {
+          // Track stderr in job result for error observation
+          const jobResult: JobExecutionResult = {
             jobId: job.jobId,
             sandboxId: job.sandboxId,
             command: job.command,
@@ -323,23 +413,47 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
             stderr: result.stderr,
             exitCode: result.exitCode,
             duration,
-            quotaUsed,
+            quotaUsed: this.calculateQuotaUsage(duration, job.quotaCategory || 'compute'),
           };
 
-          job.lastResult = execResult;
+          job.lastResult = jobResult;
+
+          // Log execution results
+          if (result.exitCode === 0) {
+            logger.debug('Job execution completed successfully', {
+              jobId: job.jobId,
+              executionAttempt,
+              duration,
+              exitCode: result.exitCode,
+              stdoutLength: result.stdout.length,
+              stderrLength: result.stderr.length,
+            });
+          } else {
+            logger.warn('Job execution completed with non-zero exit code', {
+              jobId: job.jobId,
+              executionAttempt,
+              duration,
+              exitCode: result.exitCode,
+              stderr: result.stderr.substring(0, 500),
+            });
+          }
 
           // Update execution graph node
-          this.updateExecutionGraphNode(job, execResult);
+          this.updateExecutionGraphNode(job, jobResult);
 
           // Update state if manager available
-          this.updateStateForResult(job, execResult);
+          this.updateStateForResult(job, jobResult);
 
           // Emit execution event
-          this.emit('job:executed', execResult);
+          this.emit('job:executed', jobResult);
 
           // Check max executions
           if (job.executionCount >= job.maxExecutions) {
-            logger.info('Job reached max executions', { jobId: job.jobId, count: job.executionCount });
+            logger.info('Job reached max executions - marking as completed', {
+              jobId: job.jobId,
+              executionCount: job.executionCount,
+              maxExecutions: job.maxExecutions,
+            });
             job.status = 'completed';
             this.emit('job:max-executions', job.jobId);
             break;
@@ -347,12 +461,22 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
 
           // Check stop condition (LLM-evaluated)
           if (job.stopCondition && this.stateManager) {
-            const shouldStop = await this.evaluateStopCondition(job, result.stdout);
-            if (shouldStop) {
-              logger.info('Job stop condition met', { jobId: job.jobId, condition: job.stopCondition });
-              job.status = 'completed';
-              this.emit('job:stop-condition', job.jobId, job.stopCondition);
-              break;
+            try {
+              const shouldStop = await this.evaluateStopCondition(job, result.stdout);
+              if (shouldStop) {
+                logger.info('Job stop condition evaluated to true - marking as completed', {
+                  jobId: job.jobId,
+                  condition: job.stopCondition.substring(0, 100),
+                });
+                job.status = 'completed';
+                this.emit('job:stop-condition', job.jobId, job.stopCondition);
+                break;
+              }
+            } catch (conditionError: any) {
+              logger.warn('Stop condition evaluation failed - continuing job', {
+                jobId: job.jobId,
+                error: conditionError.message,
+              });
             }
           }
 
@@ -363,19 +487,45 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
           // Update execution graph with error
           this.updateExecutionGraphNodeError(job, error);
 
-          logger.error('Background job execution error', {
+          logger.error('Background job execution error - will retry on next interval', {
             jobId: job.jobId,
+            executionAttempt,
             error: error.message,
+            stack: error.stack?.substring(0, 500),
           });
 
           // Continue loop on error (jobs are resilient)
+          // Edge case: Track consecutive failures
+          if (executionAttempt > 10) {
+            logger.warn('Job has failed 10+ consecutive times', {
+              jobId: job.jobId,
+              executionAttempt,
+              recommendation: 'Consider stopping this job and investigating the issue',
+            });
+          }
         }
 
-        // Wait for next interval
+        // Wait for next interval - use internal intervalMs
         if (job.status === 'running') {
-          await this.sleep(job.interval);
+          logger.debug('Job sleeping until next interval', {
+            jobId: job.jobId,
+            nextExecution: job.nextExecution.toISOString(),
+            intervalMs: job.intervalMs,
+          });
+          await this.sleep(job.intervalMs);
+        } else {
+          logger.debug('Job loop exiting - job no longer in running status', {
+            jobId: job.jobId,
+            status: job.status,
+          });
         }
       }
+      
+      logger.info('Job execution loop terminated', {
+        jobId: job.jobId,
+        finalStatus: job.status,
+        totalExecutions: job.executionCount,
+      });
     };
 
     // Start the loop
@@ -512,8 +662,15 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
       const { generateObject } = await import('ai');
       const { z } = await import('zod');
 
+      // generateObject requires a LanguageModel provider object, not a string
+      const model = this.stateManager.getModel?.();
+      if (!model) {
+        logger.warn('Stop condition evaluation skipped: no model configured', { jobId: job.jobId });
+        return false;
+      }
+
       const result = await generateObject({
-        model: this.stateManager.getModel?.() || 'gpt-4o-mini',
+        model,
         schema: z.object({
           shouldStop: z.boolean().describe('Whether the job should stop based on the condition'),
           reason: z.string().describe('Reason for the decision'),
@@ -541,31 +698,69 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
    * Stop a background job
    */
   async stopJob(jobId: string, reason: string = 'Manual stop'): Promise<boolean> {
+    logger.info('Stopping background job', { jobId, reason });
+
     const job = this.jobs.get(jobId);
-    if (!job) return false;
+    if (!job) {
+      logger.warn('Attempted to stop non-existent job', { jobId });
+      return false;
+    }
+
+    logger.debug('Stopping job execution', {
+      jobId,
+      currentStatus: job.status,
+      executionCount: job.executionCount,
+      lastExecuted: job.lastExecuted?.toISOString(),
+    });
 
     job.status = 'stopped';
 
     // Update execution graph
     if (this.executionGraphEngine && job.executionGraphId && job.executionGraphNodeId) {
-      const graph = this.executionGraphEngine.getGraph(job.executionGraphId);
-      if (graph) {
-        const node = graph.nodes.get(job.executionGraphNodeId);
-        if (node) {
-          node.status = 'cancelled';
-          node.metadata = { ...node.metadata, stopReason: reason };
+      try {
+        const graph = this.executionGraphEngine.getGraph(job.executionGraphId);
+        if (graph) {
+          const node = graph.nodes.get(job.executionGraphNodeId);
+          if (node) {
+            node.status = 'cancelled';
+            node.metadata = { ...node.metadata, stopReason: reason };
+            logger.debug('Execution graph node updated', {
+              jobId,
+              graphId: job.executionGraphId,
+              nodeId: job.executionGraphNodeId,
+            });
+          }
         }
+      } catch (graphError: any) {
+        logger.warn('Failed to update execution graph on stop', { jobId, error: graphError.message });
       }
     }
 
     this.jobs.delete(jobId);
     this.emit('job:stopped', jobId, reason);
 
-    logger.info('Background job stopped', { jobId, reason });
+    logger.info('Background job stopped locally', {
+      jobId,
+      reason,
+      finalExecutionCount: job.executionCount,
+      totalRuntime: Date.now() - job.createdAt.getTime(),
+    });
 
-    // Notify executor if available
+    // Notify executor if available - handle cleanup failures without breaking stop semantics
     if (this.executor?.removeBackground) {
-      await this.executor.removeBackground(job.sandboxId, jobId);
+      try {
+        logger.debug('Requesting executor to remove background process', { jobId, sandboxId: job.sandboxId });
+        await this.executor.removeBackground(job.sandboxId, jobId);
+        logger.debug('Executor successfully removed background process', { jobId });
+      } catch (error: any) {
+        logger.warn('Failed to remove background process in executor - job stopped locally but external cleanup failed', {
+          jobId,
+          sandboxId: job.sandboxId,
+          error: error?.message,
+        });
+      }
+    } else {
+      logger.debug('No executor configured for external cleanup', { jobId });
     }
 
     return true;
@@ -594,7 +789,8 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     if (!job || job.status !== 'paused') return false;
 
     job.status = 'running';
-    job.nextExecution = new Date(Date.now() + job.interval);
+    // Use internal intervalMs for next execution calculation
+    job.nextExecution = new Date(Date.now() + job.intervalMs);
 
     // Restart execution loop
     this.executeJobLoop(job);

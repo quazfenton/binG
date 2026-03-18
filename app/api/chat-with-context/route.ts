@@ -176,6 +176,10 @@ export async function POST(req: Request) {
 
       if (!chatResponse.ok) {
         const errText = await chatResponse.text().catch(() => 'unknown');
+        // Preserve the original status code instead of always returning 503
+        const status = chatResponse.status >= 400 && chatResponse.status < 600 
+          ? chatResponse.status 
+          : 500;
         throw new Error(`Internal chat API error ${chatResponse.status}: ${errText}`);
       }
 

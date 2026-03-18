@@ -4,6 +4,42 @@
 
 This document describes the comprehensive improvements made to integrate underutilized modules in the agent system, replacing deprecated implementations with production-ready alternatives.
 
+**Status**: ✅ Core integrations complete
+
+## Quick Start
+
+```typescript
+import {
+  sessionManager,
+  executionGraphEngine,
+  workforceManager,
+  mastraWorkflowIntegration,
+  initializeOrchestration,
+} from '@/lib/agent/orchestration';
+
+// Initialize at app startup
+await initializeOrchestration();
+
+// Create session with full orchestration support
+const session = await sessionManager.getOrCreateSession(userId, conversationId);
+
+// Start background job with quota tracking
+await sessionManager.startBackgroundJob(session.id, {
+  command: 'npm run dev',
+  interval: 30,
+  quotaCategory: 'compute',
+});
+
+// Execute Mastra workflow
+const result = await mastraWorkflowIntegration.executeWorkflow('code-agent', {
+  task: 'Implement authentication',
+  ownerId: userId,
+});
+
+// Get comprehensive stats
+const stats = getOrchestrationStats();
+```
+
 ## Key Improvements
 
 ### 1. Enhanced Background Jobs System
