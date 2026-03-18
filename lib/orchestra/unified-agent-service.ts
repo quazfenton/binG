@@ -1,13 +1,14 @@
 /**
  * Unified Agent Service
- * 
- * Unifies V1 (LLM Chat API) and V2 (OpenCode Containerized) into a single interface.
- * Automatically routes requests based on configuration and availability.
- * 
+ *
+ * Unifies V1 (LLM Chat API), V2 (OpenCode Containerized), and StatefulAgent (Plan-Act-Verify)
+ * into a single interface with intelligent routing.
+ *
  * Features:
- * - Automatic V1 ↔ V2 routing based on LLM_PROVIDER and OPENCODE_CONTAINERIZED
- * - Fallback chain: V2 (containerized) → V2 (local) → V1 (API)
- * - Tool execution support for both modes
+ * - Automatic routing based on task complexity and configuration
+ * - StatefulAgent for complex multi-step tasks (primary for agentic work)
+ * - Fallback chain: StatefulAgent → V2 Native → V2 Local → V1 API
+ * - Tool execution support for all modes
  * - Streaming support
  * - Health checking for provider availability
  */
@@ -18,11 +19,19 @@ import { getLLMProvider } from '../sandbox/providers/llm-factory';
 
 import { runAgentLoop as runV2AgentLoop } from './agent-loop';
 import { llmService, type LLMRequest } from '../chat/llm-providers';
-import { 
-  createOpenCodeEngine, 
+import {
+  createOpenCodeEngine,
   type OpenCodeEngineResult,
   type OpenCodeEngineConfig,
 } from '../session/agent/opencode-engine-service';
+import {
+  StatefulAgent,
+  type StatefulAgentOptions,
+  type StatefulAgentResult,
+} from './stateful-agent/agents/stateful-agent';
+import { createLogger } from '@/lib/utils/logger';
+
+const log = createLogger('UnifiedAgentService');
 
 export interface UnifiedAgentConfig {
   // Core
@@ -193,7 +202,15 @@ export async function processUnifiedAgentRequest(
 async function runV2Native(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
 
-  // Use OpenCode Engine as primary agentic engine
+  // For complex multi-step tasks, use StatefulAgent (Plan-Act-Verify workflow)
+  const isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure/i.test(config.userMessage);
+  
+  if (isComplexTask && process.env.ENABLE_STATEFUL_AGENT !== 'false') {
+    log.info('Complex task detected, using StatefulAgent for Plan-Act-Verify workflow');
+    return await runStatefulAgentMode(config);
+  }
+
+  // Use OpenCode Engine for simpler tasks
   const engineConfig: OpenCodeEngineConfig = {
     model: process.env.OPENCODE_MODEL,
     systemPrompt: config.systemPrompt || 'You are an expert software engineer with full bash and file system access. Use tools to complete tasks efficiently.',
@@ -250,6 +267,52 @@ async function runV2Native(config: UnifiedAgentConfig): Promise<UnifiedAgentResu
       tokensUsed: result.metadata?.tokensUsed,
     },
   };
+}
+
+/**
+ * Run StatefulAgent mode - Plan-Act-Verify workflow for complex tasks
+ * Uses comprehensive orchestration with task decomposition, self-healing, and verification
+ */
+async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
+  const startTime = Date.now();
+  
+  try {
+    const agentOptions: StatefulAgentOptions = {
+      sessionId: `unified-${Date.now()}`,
+      maxSelfHealAttempts: 3,
+      enforcePlanActVerify: true,
+      enableReflection: process.env.ENABLE_REFLECTION !== 'false',
+      enableTaskDecomposition: true,
+    };
+
+    const agent = new StatefulAgent(agentOptions);
+    const result: StatefulAgentResult = await agent.run(config.userMessage);
+
+    // Convert StatefulAgent result to unified format
+    const steps = result.vfs ? Object.entries(result.vfs).map(([path, content]) => ({
+      toolName: 'write_file' as const,
+      args: { path, content },
+      result: { success: true, output: `Written ${path}` },
+    })) : [];
+
+    return {
+      success: result.success,
+      response: result.response,
+      steps,
+      totalSteps: result.steps,
+      mode: 'v2-native',  // StatefulAgent runs as V2 native
+      metadata: {
+        provider: 'stateful-agent',
+        duration: Date.now() - startTime,
+        filesModified: result.vfs ? Object.keys(result.vfs).length : 0,
+        errors: result.errors?.length || 0,
+        reflectionEnabled: agentOptions.enableReflection,
+      },
+    };
+  } catch (error: any) {
+    log.error('StatefulAgent mode failed:', error.message);
+    throw error;  // Let fallback handle it
+  }
 }
 
 /**

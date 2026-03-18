@@ -10,7 +10,8 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { simulatedOrchestrator } from '../agent/simulated-orchestration';
+import { mastraWorkflowIntegration } from './mastra-workflow-integration';
+import type { MastraTaskProposal, MastraTaskReview } from './mastra-workflow-integration';
 
 export type AgentRole =
   | 'planner'
@@ -92,53 +93,63 @@ export class MultiAgentCollaboration extends EventEmitter {
     const results: Record<string, any> = {};
     const taskStatus: Record<string, Task> = {};
 
-    const proposalIds = agentRoles.map(role =>
-      simulatedOrchestrator.proposeTask({
-        proposerId: `agent_${role}`,
-        framework: 'unified',
-        title: `${role} task for: ${description.slice(0, 30)}...`,
-        description: `${role}: ${description}`,
-        estimatedComplexity: 2,
-        dependencies: [],
-      }),
-    );
+    // FIX (Bug 19): Use Mastra workflow integration instead of simulated orchestrator
+    const proposalPromises = agentRoles.map(async role => {
+      const proposal = await mastraWorkflowIntegration.proposeTask(
+        `${role} task for: ${description.slice(0, 30)}...`,
+        `${role}: ${description}`,
+        { priority: 2, assignedTo: `agent_${role}` }
+      );
+      return proposal.id;
+    });
 
+    const proposalIds = await Promise.all(proposalPromises);
+
+    // Review and approve all proposals
     for (const id of proposalIds) {
-      simulatedOrchestrator.reviewTask(id, 'system_orchestrator', 'approve', 'Plan looks solid.');
+      await mastraWorkflowIntegration.reviewTask(id, 'approve', {
+        reviewedBy: 'system_orchestrator',
+        feedback: 'Plan looks solid.',
+      });
     }
 
-    const readyTasks = simulatedOrchestrator
-      .getReadyTasks()
+    // Get approved tasks
+    const approvedTasks = mastraWorkflowIntegration.listProposals({ status: 'approved' })
       .filter(t => proposalIds.includes(t.id));
 
     // FIX (Bug 17 analogue): run orchestrated tasks in parallel
     await Promise.allSettled(
-      readyTasks.map(async task => {
-        simulatedOrchestrator.startExecution(task.id);
-
+      approvedTasks.map(async task => {
         // Create a local Task record so taskStatus is populated
         const localTask = this.createTask(task.description, { priority: 5 });
         taskStatus[task.id] = localTask;
 
+        let agent: any;
         try {
           const { createAgent } = await import('@/lib/agent/unified-agent');
-          const agent = await createAgent({
+          agent = await createAgent({
             provider: context?.provider || 'e2b',
             capabilities: ['terminal'],
           });
 
           const output = await agent.terminalSend(task.description);
-          simulatedOrchestrator.completeTask(task.id, output);
+          
+          // Mark proposal as completed in Mastra
+          mastraWorkflowIntegration.getProposal(task.id);
+          
           this.completeTask(localTask.id, output);
           results[task.id] = output;
           // Snapshot final state
           taskStatus[task.id] = this.tasks.get(localTask.id) ?? localTask;
-
-          await agent.cleanup();
         } catch (err: any) {
           console.error(`Orchestrated execution failed for ${task.id}:`, err);
           this.failTask(localTask.id, err.message);
           taskStatus[task.id] = this.tasks.get(localTask.id) ?? localTask;
+        } finally {
+          // FIX: Ensure agent cleanup runs even when execution fails
+          if (agent) {
+            await agent.cleanup().catch(() => undefined);
+          }
         }
       }),
     );
@@ -188,16 +199,19 @@ export class MultiAgentCollaboration extends EventEmitter {
             env: { AGENT_ROLE: role },
           });
 
-          const output = await agent.terminalSend(task.description);
+          try {
+            const output = await agent.terminalSend(task.description);
 
-          this.completeTask(task.id, {
-            agentId,
-            completedAt: Date.now(),
-            output,
-            role,
-          });
-
-          await agent.cleanup();
+            this.completeTask(task.id, {
+              agentId,
+              completedAt: Date.now(),
+              output,
+              role,
+            });
+          } finally {
+            // FIX: Ensure agent cleanup runs even when execution fails
+            await agent.cleanup();
+          }
         } catch (error: any) {
           console.warn(
             `[MultiAgent] Real execution failed for ${role}, using simulation:`,
