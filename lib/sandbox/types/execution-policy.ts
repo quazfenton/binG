@@ -10,16 +10,18 @@
  */
 
 // Re-export all from main types file
-export {
+export type {
   ExecutionPolicy,
   RiskLevel,
   RiskFactor,
   RiskAssessment,
+  ExecutionPolicyConfig,
+} from '../types';
+
+export {
   RISK_PATTERNS,
   RISK_THRESHOLDS,
   assessRisk,
-  // Also re-export existing types
-  ExecutionPolicyConfig,
   EXECUTION_POLICY_CONFIGS,
   getExecutionPolicyConfig,
   determineExecutionPolicy,

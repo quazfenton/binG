@@ -921,17 +921,17 @@ class GitBackedVFSProxy {
     dirPath: string
   ): Promise<{ path: string; createdAt: string }> {
     const result = await this.vfs.createDirectory(ownerId, dirPath);
-    
+
     // Track directory creation in git
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
-    gitVFS['trackTransaction'](ownerId, {
+    gitVFS.trackTransaction(ownerId, {
       path: dirPath,
       type: 'CREATE',
       timestamp: Date.now(),
       newContent: '',
     });
     await gitVFS.commitChanges(ownerId, `Create directory ${dirPath}`);
-    
+
     return result;
   }
 

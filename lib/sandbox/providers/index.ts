@@ -463,7 +463,8 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
         const initDuration = (Date.now() - initStartTime) / 1000;
         log.info(`Provider ${providerType} initialized successfully in ${initDuration}s`)
         sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'success' });
-        sandboxMetrics.providerInitDuration.observe({ provider: providerType }, initDuration);
+        sandboxMetrics.providerInitDuration.observe(initDuration);
+
         // Circuit breaker success is recorded via the execute() wrapper, not here
 
         return entry.provider
@@ -476,7 +477,7 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
         // Record failed initialization metrics
         const initDuration = (Date.now() - initStartTime) / 1000;
         sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'failure' });
-        sandboxMetrics.providerInitDuration.observe({ provider: providerType }, initDuration);
+        sandboxMetrics.providerInitDuration.observe(initDuration);
 
         if (attempt < MAX_RETRIES) {
           await delay(Math.pow(2, attempt) * 100) // exponential backoff: 200ms, 400ms

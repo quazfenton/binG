@@ -1275,7 +1275,7 @@ export default function CodePreviewPanel({
       }
     };
 
-    const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 1000, maxDelayMs: 3000 });
+    const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 5000, maxDelayMs: 10000 });
     const unsubscribe = onFilesystemUpdated((event) => scheduler.schedule(event.detail));
     log('[CodePreviewPanel] registered filesystem-updated event listener');
     return () => {

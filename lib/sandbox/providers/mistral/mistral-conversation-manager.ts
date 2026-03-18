@@ -71,16 +71,15 @@ export class MistralConversationManager {
 
     const response = await this.client.beta.conversations.start({
       agentId,
-      inputs: normalizedInputs,
+      inputs: normalizedInputs as any,
       store: options?.store ?? true,
-      handoffExecution: options?.handoffExecution ?? 'server',
-      completionArgs: options?.completionArgs,
+      ...(options?.completionArgs && { completionArgs: options.completionArgs }),
     })
 
     return {
       conversationId: response.conversationId,
       outputs: response.outputs || [],
-      usage: response.usage as TokenUsage,
+      usage: response.usage as unknown as TokenUsage,
       createdAt: new Date(),
     }
   }
@@ -123,17 +122,17 @@ export class MistralConversationManager {
 
     const response = await this.client.beta.conversations.append({
       conversationId,
-      conversationAppendStreamRequest: {
-        inputs: normalizedInputs,
+      conversationAppendRequest: {
+        inputs: normalizedInputs as any,
         store: options?.store ?? true,
-        completionArgs: options?.completionArgs,
+        ...(options?.completionArgs && { completionArgs: options.completionArgs }),
       },
     })
 
     return {
       conversationId: response.conversationId,
       outputs: response.outputs || [],
-      usage: response.usage as TokenUsage,
+      usage: response.usage as unknown as TokenUsage,
       createdAt: new Date(),
     }
   }
@@ -151,7 +150,7 @@ export class MistralConversationManager {
     const stream = await this.client.beta.conversations.appendStream({
       conversationId,
       conversationAppendStreamRequest: {
-        inputs: normalizedInputs,
+        inputs: normalizedInputs as any,
         store: options?.store ?? true,
       },
     })
@@ -263,9 +262,9 @@ export class MistralConversationManager {
 
     return {
       id: response.id,
-      createdAt: new Date(response.created_at),
-      updatedAt: new Date(response.updated_at),
-      agentId: (response as any).agent_id,
+      createdAt: new Date((response as any).createdAt || response.created_at),
+      updatedAt: new Date((response as any).updatedAt || response.updated_at),
+      agentId: (response as any).agentId || (response as any).agent_id,
       model: (response as any).model,
     }
   }
@@ -287,18 +286,19 @@ export class MistralConversationManager {
     const executions: any[] = []
 
     for (const entry of conversation.outputs) {
-      if (entry.type === 'tool.execution') {
+      const entryAny = entry as any
+      if (entryAny.type === 'tool.execution') {
         const execution: any = {
-          name: entry.name,
+          name: entryAny.name,
         }
 
-        if (entry.info) {
-          if (entry.name === 'code_interpreter') {
-            execution.code = entry.info.code
-            execution.codeOutput = entry.info.code_output
+        if (entryAny.info) {
+          if (entryAny.name === 'code_interpreter') {
+            execution.code = entryAny.info.code
+            execution.codeOutput = entryAny.info.code_output
           }
-          if (entry.name === 'image_generation') {
-            execution.fileId = entry.info.file_id
+          if (entryAny.name === 'image_generation') {
+            execution.fileId = entryAny.info.file_id
           }
         }
 
@@ -306,8 +306,8 @@ export class MistralConversationManager {
       }
 
       // Also check message outputs for tool_file chunks
-      if (entry.type === 'message.output' && Array.isArray(entry.content)) {
-        for (const chunk of entry.content) {
+      if (entryAny.type === 'message.output' && Array.isArray(entryAny.content)) {
+        for (const chunk of entryAny.content) {
           if (chunk.type === 'tool_file') {
             executions.push({
               name: chunk.tool,
