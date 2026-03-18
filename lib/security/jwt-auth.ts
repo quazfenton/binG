@@ -170,12 +170,26 @@ export async function verifyToken(
     });
     
     // Check token blacklist for revoked tokens
+    // Note: In distributed environments, use RedisTokenBlacklist for consistent checks
     const jti = payload.jti;
-    if (jti && globalBlacklist.isRevoked(jti)) {
-      return {
-        valid: false,
-        error: 'Token has been revoked',
-      };
+    if (jti) {
+      const revoked = globalBlacklist.isRevoked(jti);
+      
+      // Handle both sync and async blacklist implementations
+      if (revoked instanceof Promise) {
+        const isRevoked = await revoked;
+        if (isRevoked) {
+          return {
+            valid: false,
+            error: 'Token has been revoked',
+          };
+        }
+      } else if (revoked) {
+        return {
+          valid: false,
+          error: 'Token has been revoked',
+        };
+      }
     }
     
     // Validate required userId claim
@@ -291,7 +305,7 @@ export async function revokeToken(
   config: Partial<JWTConfig> = {}
 ): Promise<void> {
   const fullConfig = { ...DEFAULT_CONFIG, ...config };
-  
+
   try {
     const { payload } = await jwtVerify(token, getSigningKey(fullConfig.secretKey), {
       issuer: fullConfig.issuer,
@@ -302,7 +316,13 @@ export async function revokeToken(
     const exp = payload.exp;
 
     if (jti && exp) {
-      globalBlacklist.revoke(jti, exp * 1000); // exp is in seconds, convert to ms
+      // Revoke in blacklist (supports both sync and async implementations)
+      const result = globalBlacklist.revoke(jti, exp * 1000); // exp is in seconds, convert to ms
+      
+      // Handle async blacklist implementations (e.g., Redis)
+      if (result instanceof Promise) {
+        await result;
+      }
     }
   } catch (error) {
     // Token is already expired or invalid — no need to blacklist
@@ -419,36 +439,82 @@ export function isValidApiKeyFormat(apiKey: string): boolean {
 }
 
 /**
- * Create token blacklist for revoked tokens
+ * Token Blacklist Interface
  * 
- * In production, use Redis for distributed blacklist
+ * Abstract interface for token revocation storage.
+ * 
+ * IMPORTANT: For production/distributed environments, use Redis-backed implementation
+ * to ensure consistent revocation checks across all server instances.
+ * 
+ * @example
+ * ```typescript
+ * // Single instance (development)
+ * const blacklist = new InMemoryTokenBlacklist();
+ * 
+ * // Distributed (production)
+ * const blacklist = new RedisTokenBlacklist(redisClient);
+ * ```
  */
-export class TokenBlacklist {
-  private revoked = new Map<string, number>(); // token JTI -> expiry timestamp
+export interface TokenBlacklistProvider {
+  /**
+   * Revoke a token by JTI
+   * @param tokenJti - Token JTI identifier
+   * @param expiryTimestamp - When the revocation expires (ms)
+   */
+  revoke(tokenJti: string, expiryTimestamp: number): Promise<void> | void;
   
+  /**
+   * Check if token is revoked
+   * @param tokenJti - Token JTI identifier
+   * @returns true if revoked, false otherwise
+   */
+  isRevoked(tokenJti: string): Promise<boolean> | boolean;
+  
+  /**
+   * Clean up expired entries
+   */
+  cleanup(): Promise<void> | void;
+}
+
+/**
+ * In-Memory Token Blacklist (Development Only)
+ * 
+ * ⚠️ WARNING: This implementation is NOT suitable for production/distributed environments.
+ * - Data is lost on process restart
+ * - No synchronization across multiple server instances
+ * - Race conditions possible with concurrent revocation checks
+ * 
+ * For production, use RedisTokenBlacklist or similar distributed store.
+ */
+export class InMemoryTokenBlacklist implements TokenBlacklistProvider {
+  private revoked = new Map<string, number>(); // token JTI -> expiry timestamp
+
   /**
    * Revoke a token
    */
   revoke(tokenJti: string, expiryTimestamp: number): void {
     this.revoked.set(tokenJti, expiryTimestamp);
   }
-  
+
   /**
    * Check if token is revoked
+   * 
+   * ⚠️ Note: In distributed environments, this check may be stale
+   * if another instance revoked the token concurrently.
    */
   isRevoked(tokenJti: string): boolean {
     const expiry = this.revoked.get(tokenJti);
     if (!expiry) return false;
-    
+
     // Clean up expired entries
     if (Date.now() > expiry) {
       this.revoked.delete(tokenJti);
       return false;
     }
-    
+
     return true;
   }
-  
+
   /**
    * Clean up all expired entries
    */
@@ -463,7 +529,7 @@ export class TokenBlacklist {
 }
 
 // Export singleton instances
-export const globalBlacklist = new TokenBlacklist();
+export const globalBlacklist = new InMemoryTokenBlacklist();
 
 // Periodic cleanup (every hour)
 if (typeof global !== 'undefined') {

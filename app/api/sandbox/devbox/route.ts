@@ -76,10 +76,16 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { files, template: requestedTemplate = 'node' } = body;
+    const { files } = body;
+    
+    // Handle template with explicit default (don't use destructuring default)
+    let templateFromBody = body.template;
+    if (typeof templateFromBody !== 'string' || !templateFromBody.trim()) {
+      templateFromBody = 'node';
+    }
     
     // Assign to outer-scoped template variable (don't shadow)
-    template = requestedTemplate;
+    template = templateFromBody;
 
     if (!files || typeof files !== 'object') {
       return NextResponse.json(
