@@ -10,7 +10,9 @@ import type {
   VirtualWorkspaceSnapshot,
 } from './filesystem-types';
 import { diffTracker } from './filesystem-diffs';
+import { stripWorkspacePrefixes } from './scope-utils';
 import { VFSBatchOperations } from './vfs-batch-operations';
+import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
 
 // Default configuration
 const DEFAULT_WORKSPACE_ROOT = process.env.DEFAULT_WORKSPACE_ROOT || 'project';
@@ -127,12 +129,22 @@ export class VirtualFilesystemService {
     return file;
   }
 
-  async writeFile(ownerId: string, filePath: string, content: string, language?: string): Promise<VirtualFile> {
+  async writeFile(
+    ownerId: string,
+    filePath: string,
+    content: string,
+    language?: string,
+    options?: { failIfExists?: boolean },
+  ): Promise<VirtualFile> {
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
     const previous = workspace.files.get(normalizedPath);
     const now = new Date().toISOString();
     const normalizedContent = typeof content === 'string' ? content : String(content ?? '');
+
+    if (previous && options?.failIfExists) {
+      throw new Error(`File already exists: ${normalizedPath}`);
+    }
 
     // Check for concurrent modification (conflict detection)
     if (previous) {
@@ -203,6 +215,60 @@ export class VirtualFilesystemService {
     await this.persistWorkspace(ownerId, workspace);
 
     return file;
+  }
+
+  /**
+   * Create a directory (ensures parent directories exist)
+   * Directories are implicit in the VFS (created when files are written),
+   * but this method allows explicit directory creation for empty folders.
+   */
+  async createDirectory(ownerId: string, dirPath: string): Promise<{ path: string; createdAt: string }> {
+    const workspace = await this.ensureWorkspace(ownerId);
+    const normalizedPath = this.normalizePath(dirPath);
+    const now = new Date().toISOString();
+
+    // Validate directory path
+    if (!normalizedPath || normalizedPath === '.') {
+      throw new Error('Directory path is required');
+    }
+
+    // Check if a file already exists at this path
+    const existingFile = workspace.files.get(normalizedPath);
+    if (existingFile) {
+      throw new Error(`A file already exists at this path: ${normalizedPath}`);
+    }
+
+    // Check if directory already exists (by checking if any file has this as parent)
+    const hasChildFiles = Array.from(workspace.files.keys()).some(
+      filePath => filePath.startsWith(normalizedPath + '/')
+    );
+
+    // Create a marker file to represent the directory
+    // Directories are implicit in VFS, but we create a .gitkeep-like marker for empty dirs
+    const dirMarkerPath = `${normalizedPath}/.directory`;
+    const dirMarker: VirtualFile = {
+      path: dirMarkerPath,
+      content: '',
+      language: 'markdown',
+      lastModified: now,
+      version: 1,
+      size: 0,
+      isDirectoryMarker: true,
+    };
+
+    workspace.files.set(dirMarkerPath, dirMarker);
+    workspace.version += 1;
+    workspace.updatedAt = now;
+
+    this.emitFileChange(ownerId, normalizedPath, 'create', workspace.version);
+    this.emitSnapshotChange(ownerId, workspace.version);
+
+    await this.persistWorkspace(ownerId, workspace);
+
+    return {
+      path: normalizedPath,
+      createdAt: now,
+    };
   }
 
   /**
@@ -295,6 +361,22 @@ export class VirtualFilesystemService {
     const directoryPrefix = `${normalizedDirectoryPath}/`;
 
     for (const file of workspace.files.values()) {
+      // Skip .directory marker files (used to track empty directories)
+      if (file.isDirectoryMarker || file.path.endsWith('/.directory')) {
+        // But still use them to detect directory existence
+        const dirPath = file.path.slice(0, -'/'.length - '.directory'.length);
+        const dirName = path.posix.basename(dirPath);
+        if (dirPath.startsWith(directoryPrefix) && !directoryNodes.has(dirName)) {
+          directoryNodes.set(dirName, {
+            type: 'directory',
+            name: dirName,
+            path: dirPath,
+            isExplicit: true, // Mark as explicitly created directory
+          });
+        }
+        continue;
+      }
+
       if (file.path === normalizedDirectoryPath) {
         fileNodes.push(this.toFileNode(file));
         continue;
@@ -319,6 +401,7 @@ export class VirtualFilesystemService {
             type: 'directory',
             name: directoryName,
             path: `${normalizedDirectoryPath}/${directoryName}`,
+            isExplicit: false, // Implicit directory from file paths
           });
         }
       }
@@ -478,27 +561,10 @@ export class VirtualFilesystemService {
       return this.workspaceRoot;
     }
 
-    // Strip common sandbox/workspace prefixes to prevent path accumulation
-    // This prevents issues like /tmp/workspaces/tmp/workspaces/...
-    // Handle both absolute and relative paths
-    let strippedPath = rawPath
-      .replace(/^\/tmp\/workspaces\//i, '')
-      .replace(/^\/tmp\/workspaces/i, '')
-      .replace(/^tmp\/workspaces\//i, '')
-      .replace(/^tmp\/workspaces/i, '')
-      .replace(/^\/workspace\//i, '')
-      .replace(/^\/workspace/i, '')
-      .replace(/^workspace\//i, '')
-      .replace(/^workspace/i, '')
-      .replace(/^\/home\/[^/]+\/workspace\//i, '')
-      .replace(/^\/home\/[^/]+\/workspace/i, '')
-      .replace(/^home\/[^/]+\/workspace\//i, '')
-      .replace(/^home\/[^/]+\/workspace/i, '')
-      .replace(/^project\//, '')
-      .replace(/^\/project\//, '');
-
-    // Remove any leading slashes after stripping
-    strippedPath = strippedPath.replace(/^\/+/, '');
+    // Strip common sandbox/workspace prefixes (single source of truth in scope-utils)
+    let strippedPath = stripWorkspacePrefixes(rawPath);
+    // Also strip project/ prefix for server-side resolution
+    strippedPath = strippedPath.replace(/^project\//, '');
 
     // Handle empty path after stripping
     if (!strippedPath) {
@@ -735,6 +801,206 @@ export class VirtualFilesystemService {
   getDiffTracker() {
     return diffTracker;
   }
+
+  /**
+   * Get git-backed VFS wrapper for owner
+   * Enables automatic commits, rollbacks, and version tracking
+   */
+  getGitBackedVFS(ownerId: string, options?: GitVFSOptions): GitBackedVFS {
+    return getGitBackedVFSForOwner(ownerId, this, options);
+  }
 }
 
-export const virtualFilesystem = new VirtualFilesystemService();
+// =============================================================================
+// Git-Backed VFS Proxy
+// =============================================================================
+// The main export now automatically wraps VFS operations with Git-backed
+// functionality for automatic commits, version tracking, and rollbacks.
+// This ensures all file operations are tracked without requiring code changes.
+// =============================================================================
+
+/**
+ * Git-backed VFS proxy that wraps VirtualFilesystemService methods
+ * to automatically create git commits for every filesystem operation.
+ */
+class GitBackedVFSProxy {
+  private vfs: VirtualFilesystemService;
+
+  constructor(vfs: VirtualFilesystemService) {
+    this.vfs = vfs;
+  }
+
+  /**
+   * Get the underlying VFS instance (for advanced operations)
+   */
+  get underlying(): VirtualFilesystemService {
+    return this.vfs;
+  }
+
+  /**
+   * Get git-backed VFS for specific owner (full-featured wrapper)
+   */
+  forOwner(ownerId: string, options?: GitVFSOptions): GitBackedVFS {
+    return this.vfs.getGitBackedVFS(ownerId, options);
+  }
+
+  // Delegate all VFS methods with automatic git tracking
+
+  async readFile(ownerId: string, filePath: string): Promise<VirtualFile> {
+    return this.vfs.readFile(ownerId, filePath);
+  }
+
+  async writeFile(
+    ownerId: string,
+    filePath: string,
+    content: string,
+    language?: string,
+    options?: { failIfExists?: boolean }
+  ): Promise<VirtualFile> {
+    const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    return gitVFS.writeFile(ownerId, filePath, content, language, options);
+  }
+
+  async deletePath(ownerId: string, targetPath: string): Promise<{ deletedCount: number }> {
+    // Track deletion in git
+    const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    const listing = await this.vfs.listDirectory(ownerId, targetPath);
+    
+    // Record deletions
+    for (const node of listing.nodes) {
+      if (node.type === 'file') {
+        try {
+          const file = await this.vfs.readFile(ownerId, node.path);
+          gitVFS.trackTransaction(ownerId, {
+            path: node.path,
+            type: 'DELETE',
+            timestamp: Date.now(),
+            originalContent: file.content,
+          });
+        } catch {
+          // File may not exist
+        }
+      }
+    }
+    
+    const result = await this.vfs.deletePath(ownerId, targetPath);
+    
+    // Commit the deletion
+    if (result.deletedCount > 0) {
+      await gitVFS.commitChanges(ownerId, `Delete ${targetPath}`);
+    }
+    
+    return result;
+  }
+
+  async listDirectory(
+    ownerId: string,
+    directoryPath?: string
+  ): Promise<import('./filesystem-types').VirtualFilesystemDirectoryListing> {
+    return this.vfs.listDirectory(ownerId, directoryPath);
+  }
+
+  async search(
+    ownerId: string,
+    query: string,
+    options?: { path?: string; limit?: number }
+  ): Promise<import('./filesystem-types').VirtualFilesystemSearchResult[]> {
+    return this.vfs.search(ownerId, query, options);
+  }
+
+  async getWorkspaceVersion(ownerId: string): Promise<number> {
+    return this.vfs.getWorkspaceVersion(ownerId);
+  }
+
+  async exportWorkspace(ownerId: string): Promise<import('./filesystem-types').VirtualWorkspaceSnapshot> {
+    return this.vfs.exportWorkspace(ownerId);
+  }
+
+  async createDirectory(
+    ownerId: string,
+    dirPath: string
+  ): Promise<{ path: string; createdAt: string }> {
+    const result = await this.vfs.createDirectory(ownerId, dirPath);
+
+    // Track directory creation in git
+    const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    gitVFS.trackTransaction(ownerId, {
+      path: dirPath,
+      type: 'CREATE',
+      timestamp: Date.now(),
+      newContent: '',
+    });
+    await gitVFS.commitChanges(ownerId, `Create directory ${dirPath}`);
+
+    return result;
+  }
+
+  async getWorkspaceStats(ownerId: string): Promise<{
+    totalSize: number;
+    totalSizeFormatted: string;
+    fileCount: number;
+    largestFile?: { path: string; size: number; sizeFormatted: string };
+    quotaUsage: {
+      sizePercent: number;
+      fileCountPercent: number;
+    };
+  }> {
+    return this.vfs.getWorkspaceStats(ownerId);
+  }
+
+  batch(ownerId: string): import('./vfs-batch-operations').VFSBatchOperations {
+    return this.vfs.batch(ownerId);
+  }
+
+  onFileChange(
+    listener: (event: import('./virtual-filesystem-service').FilesystemChangeEvent) => void
+  ): () => void {
+    return this.vfs.onFileChange(listener);
+  }
+
+  onSnapshotChange(
+    listener: (ownerId: string, version: number) => void
+  ): () => void {
+    return this.vfs.onSnapshotChange(listener);
+  }
+
+  onConflict(
+    listener: (event: import('./virtual-filesystem-service').ConflictEvent) => void
+  ): () => void {
+    return this.vfs.onConflict(listener);
+  }
+
+  getDiffSummary(ownerId: string, maxDiffs?: number): string {
+    return this.vfs.getDiffSummary(ownerId, maxDiffs);
+  }
+
+  async rollbackToVersion(
+    ownerId: string,
+    targetVersion: number
+  ): Promise<{
+    success: boolean;
+    restoredFiles: number;
+    deletedFiles: number;
+    errors: string[];
+  }> {
+    return this.vfs.rollbackToVersion(ownerId, targetVersion);
+  }
+
+  getDiffTracker(): import('./filesystem-diffs').FilesystemDiffTracker {
+    return this.vfs.getDiffTracker();
+  }
+
+  getFilesAtVersion(ownerId: string, targetVersion: number): Map<string, string> {
+    return this.vfs.getFilesAtVersion(ownerId, targetVersion);
+  }
+
+  /**
+   * Clear workspace (for testing)
+   */
+  async clearWorkspace(ownerId: string): Promise<void> {
+    await this.vfs.deletePath(ownerId, 'project');
+  }
+}
+
+// Export singleton instance with Git-backed proxy
+export const virtualFilesystem = new GitBackedVFSProxy(new VirtualFilesystemService());

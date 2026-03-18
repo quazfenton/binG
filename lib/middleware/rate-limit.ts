@@ -167,6 +167,7 @@ function getClientIdentifier(req: NextRequest): string {
 
   // Try to get real IP from Next.js request (works in some environments)
   // This is safer as it's populated by the framework, not headers
+  // @ts-ignore - ip property may exist on extended NextRequest
   const ip = req.ip;
   if (ip && isValidIp(ip)) {
     return `ip:${ip}`;
@@ -349,10 +350,12 @@ export function checkRateLimitMiddleware(
     if (forwardedFor) {
       clientIp = forwardedFor.split(',')[0].trim();
     } else {
+      // @ts-ignore - ip property may exist on extended NextRequest
       clientIp = request.ip || 'unknown';
     }
   } else {
     // Don't trust headers - use Next.js request.ip if available
+    // @ts-ignore - ip property may exist on extended NextRequest
     clientIp = request.ip || 'unknown';
   }
 

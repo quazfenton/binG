@@ -16,10 +16,12 @@ import {
   getSessionByUserId as storeGetSessionByUserId,
   getAllActiveSessions,
   deleteSession as deleteSessionFromStore,
-} from './session-store';
+  clearUserSessions as clearUserSessionsFromStore,
+  clearStaleSessions as clearStaleSessionsFromStore,
+} from '../storage/session-store';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
-import { sandboxFilesystemSync } from './sandbox-filesystem-sync';
-import { sandboxPersistenceManager } from './persistence-manager';
+import { sandboxFilesystemSync } from '../virtual-filesystem/sync/sandbox-filesystem-sync';
+import { sandboxPersistenceManager } from '../storage/persistence-manager';
 
 // Track pending session creations to prevent race conditions
 const pendingCreations = new Map<string, Promise<WorkspaceSession>>();
@@ -139,22 +141,38 @@ export class SandboxServiceBridge {
 
   /**
    * Infer provider type from sandbox ID
+   * P1 FIX: Extended to include more providers and return null for unknown instead of defaulting to e2b
    */
   inferProviderFromSandboxId(sandboxId: string): string | null {
-    if (sandboxId.startsWith('blaxel-')) return 'blaxel';
+    // E2B new format: some IDs don't have the 'e2b-' prefix (e.g., 'ii8938a6cyxwggwamxh1k')
+    // These are alphanumeric strings, typically 18-20 chars
+    const isE2BFormat = /^[a-z0-9]{15,25}$/i.test(sandboxId);
+    if (isE2BFormat) return 'e2b';
+    
+    if (sandboxId.startsWith('blaxel-') || sandboxId.startsWith('blaxel-mcp-')) return 'blaxel';
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites';
+    if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent';
     if (sandboxId.startsWith('mistral-')) return 'mistral';
     if (sandboxId.startsWith('e2b-')) return 'e2b';
     if (sandboxId.startsWith('daytona-')) return 'daytona';
     if (sandboxId.startsWith('runloop-')) return 'runloop';
     if (sandboxId.startsWith('microsandbox-')) return 'microsandbox';
     if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox';
+    if (sandboxId.startsWith('webcontainer-')) return 'webcontainer';
+    if (sandboxId.startsWith('opensandbox-')) return 'opensandbox';
+    if (sandboxId.startsWith('vercel-')) return 'vercel';
+    if (sandboxId.startsWith('codespace-')) return 'codespaces';
+    // P1 FIX: Return null instead of defaulting to e2b - let caller decide how to handle unknown
     return null;
   }
 
   async getProvider(name: string | null) {
     const { getSandboxProvider } = await import('./providers');
-    return getSandboxProvider((name as any) || 'e2b');
+    // P1 FIX: Don't silently default to e2b - throw error for unknown providers
+    if (!name) {
+      throw new Error('Cannot determine sandbox provider: sandbox ID format not recognized');
+    }
+    return getSandboxProvider(name as any);
   }
 
   /**
@@ -162,6 +180,20 @@ export class SandboxServiceBridge {
    */
   deleteSession(sessionId: string): void {
     deleteSessionFromStore(sessionId);
+  }
+
+  /**
+   * Clear all sessions for a user (e.g., to recover from failures)
+   */
+  clearUserSessions(userId: string): void {
+    clearUserSessionsFromStore(userId);
+  }
+
+  /**
+   * Clear stale sessions (expired or stuck in 'creating' status)
+   */
+  clearStaleSessions(): void {
+    clearStaleSessionsFromStore();
   }
 
   /**

@@ -22,14 +22,14 @@ import { EnhancedResponse, ProjectItem } from "../core/enhanced-prompt-engine";
 
 // Streaming configuration schema
 const StreamingConfigSchema = z.object({
-  chunkSize: z.number().min(100).max(8000).default(1000),
-  maxTokens: z.number().min(1000).max(128000).default(32000),
-  contextWindowSize: z.number().min(4000).max(200000).default(32000),
+  chunkSize: z.number().min(100).refine((val) => val <= 8000, 'Chunk size must be at most 8000').default(1000),
+  maxTokens: z.number().min(1000).refine((val) => val <= 128000, 'Max tokens must be at most 128000').default(32000),
+  contextWindowSize: z.number().min(4000).refine((val) => val <= 200000, 'Context window size must be at most 200000').default(32000),
   enablePartialValidation: z.boolean().default(true),
   enableErrorRecovery: z.boolean().default(true),
-  progressUpdateInterval: z.number().min(100).max(5000).default(500),
-  timeoutMs: z.number().min(5000).max(300000).default(60000),
-  retryAttempts: z.number().min(0).max(5).default(3),
+  progressUpdateInterval: z.number().min(100).refine((val) => val <= 5000, 'Progress update interval must be at most 5000').default(500),
+  timeoutMs: z.number().min(5000).refine((val) => val <= 300000, 'Timeout must be at most 300000').default(60000),
+  retryAttempts: z.number().min(0).refine((val) => val <= 5, 'Retry attempts must be at most 5').default(3),
   streamingStrategy: z
     .enum(["incremental", "block_based", "semantic_chunks"])
     .default("semantic_chunks"),
@@ -69,7 +69,7 @@ const StreamStateSchema = z.object({
   totalChunks: z.number().optional(),
   processedChunks: z.number(),
   currentChunk: z.number(),
-  progressPercentage: z.number().min(0).max(100),
+  progressPercentage: z.number().min(0).refine((val) => val <= 100, 'Progress percentage must be at most 100'),
   estimatedTimeRemaining: z.number().optional(),
   assembledContent: z.string(),
   contextTokensUsed: z.number(),

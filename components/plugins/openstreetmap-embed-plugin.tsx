@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Input } from '../ui/input';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
 import { ScrollArea } from '../ui/scroll-area';
+import useIframeLoader from '@/hooks/use-iframe-loader';
+import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 import {
   Map as MapIcon,
   X,
@@ -53,6 +55,38 @@ const OpenStreetMapEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }
   const [iframeKey, setIframeKey] = useState(0);
   const [activeTab, setActiveTab] = useState<'map' | 'bookmarks' | 'locations'>('map');
   const [coordinates, setCoordinates] = useState({ lat: 51.505, lon: -0.09, zoom: 12 });
+
+  // Use iframe loader hook with fallback
+  const {
+    isLoading: hookIsLoading,
+    isLoaded,
+    isFailed,
+    failureReason,
+    errorMessage,
+    retryCount,
+    canRetry,
+    isUsingFallback,
+    fallbackUrl,
+    handleLoad,
+    handleRetry,
+    handleReset,
+    handleFallback,
+  } = useIframeLoader({
+    url: iframeUrl,
+    timeout: 30000,
+    maxRetries: 3,
+    retryDelay: 5000,
+    enableAutoRetry: true,
+    enableFallback: true,
+    onLoaded: () => {
+      setIsLoading(false);
+      setIframeError(null);
+    },
+    onFailed: (reason, error) => {
+      setIsLoading(false);
+      setIframeError(error || 'Failed to load OpenStreetMap');
+    },
+  });
 
   const defaultLocations: LocationEntry[] = [
     { name: 'London, UK', lat: 51.5074, lon: -0.1278, zoom: 12 },
@@ -339,22 +373,25 @@ const OpenStreetMapEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }
                     </div>
                   </div>
                 )}
-                
-                {iframeError ? (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="text-center space-y-4 max-w-md p-6">
-                      <MapIcon className="w-12 h-12 mx-auto text-emerald-500/60" />
-                      <p className="text-emerald-200/60">{iframeError}</p>
-                      <Button onClick={handleReload} className="bg-emerald-600 hover:bg-emerald-500">
-                        <RefreshCw className="w-4 h-4 mr-2" />
-                        Retry
-                      </Button>
-                    </div>
+
+                {isFailed || iframeError ? (
+                  <div className="absolute inset-0">
+                    <IframeUnavailableScreen
+                      url={iframeUrl}
+                      reason={failureReason || 'failed'}
+                      errorMessage={errorMessage || iframeError || undefined}
+                      onRetry={handleRetry}
+                      onTryFallback={handleFallback}
+                      onOpenExternal={handleOpenExternal}
+                      onClose={onClose}
+                      autoRetryCount={retryCount}
+                      maxRetries={3}
+                    />
                   </div>
                 ) : (
                   <iframe
                     key={iframeKey}
-                    src={iframeUrl}
+                    src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
                     className="w-full h-full border-0"
                     title="OpenStreetMap"
                     onLoad={() => setIsLoading(false)}

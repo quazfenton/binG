@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { VFSBatchOperations, createVFSBatchOperations, quickBatchWrite } from '@/lib/virtual-filesystem/vfs-batch-operations';
 import { VFSFileWatcher, createFileWatcher, watchFiles } from '@/lib/virtual-filesystem/vfs-file-watcher';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';

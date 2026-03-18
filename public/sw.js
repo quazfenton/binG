@@ -5,8 +5,15 @@ const STATIC_ASSETS = [
   '/offline',
 ];
 
+// Detect development mode
+const isDevelopment = typeof window !== 'undefined' && window.location.hostname === 'localhost';
+
 // Install event - cache static assets
 self.addEventListener('install', (event) => {
+  // Skip waiting only in production - in dev, let the page reload naturally
+  if (!isDevelopment) {
+    self.skipWaiting();
+  }
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(STATIC_ASSETS).catch((err) => {
@@ -14,7 +21,6 @@ self.addEventListener('install', (event) => {
       });
     })
   );
-  self.skipWaiting();
 });
 
 // Activate event - clean up old caches
@@ -28,7 +34,10 @@ self.addEventListener('activate', (event) => {
       );
     })
   );
-  self.clients.claim();
+  // Only claim clients in production - in dev, this can cause reload loops
+  if (!isDevelopment) {
+    self.clients.claim();
+  }
 });
 
 // Fetch event - network first, fallback to cache

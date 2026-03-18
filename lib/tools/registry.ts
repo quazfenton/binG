@@ -1,25 +1,34 @@
 /**
- * Unified Tool Registry
+ * Tool Registry
  *
- * Central registry for all tool providers.
- * Provides unified interface for tool discovery and execution.
+ * Central registry for all tools and capabilities.
+ * Supports dynamic tool registration at runtime.
  *
- * Features:
- * - Multi-provider support
- * - Automatic provider selection
- * - Fallback chain execution
- * - Centralized error handling
- * - Tool discovery across providers
+ * @example
+ * ```typescript
+ * import { ToolRegistry } from '@/lib/tools/registry';
+ *
+ * const registry = ToolRegistry.getInstance();
+ *
+ * await registry.registerTool({
+ *   name: 'filesystem.read_file',
+ *   capability: 'file.read',
+ *   provider: 'mcp',
+ *   handler: async (args) => { ... },
+ *   metadata: { latency: 'low', cost: 'low', reliability: 0.99 },
+ *   permissions: ['file:read'],
+ * });
+ * ```
  */
 
-import { z } from 'zod';
-import type { ToolProvider, ProviderExecutionRequest, ToolExecutionResult, ToolExecutionContext } from '../tool-integration/types';
-import { SmitheryProvider } from '../tool-integration/providers/smithery';
-import { getArcadeService } from '../api/arcade-service';
-import { getNangoService } from '../api/nango-service';
-import { getTamboService } from '../tambo/tambo-service';
-import { getToolManager } from '../tools';
+import { createLogger } from '../utils/logger';
+import type { z } from 'zod';
 
+const logger = createLogger('Tools:Registry');
+
+/**
+ * Tool info for backwards compatibility
+ */
 export interface ToolInfo {
   name: string;
   description: string;
@@ -30,19 +39,202 @@ export interface ToolInfo {
   category?: string;
 }
 
-export interface UnifiedToolRegistryConfig {
-  providers?: ToolProvider[];
-  defaultProvider?: string;
-  fallbackChain?: string[];
-  enableDiscovery?: boolean;
+/**
+ * Tool definition for registry
+ */
+export interface RegisteredTool {
+  name: string;
+  capability: string;
+  provider: string;
+  handler: (args: any, context: any) => Promise<any>;
+  inputSchema?: z.ZodSchema;  // For schema lookup
+  outputSchema?: z.ZodSchema;
+  metadata?: {
+    latency?: 'low' | 'medium' | 'high';
+    cost?: 'low' | 'medium' | 'high';
+    reliability?: number;
+    tags?: string[];
+  };
+  permissions?: string[];
 }
 
 /**
- * Unified Tool Registry Class
+ * Tool Registry Class
+ */
+export class ToolRegistry {
+  private static instance: ToolRegistry;
+  private tools = new Map<string, RegisteredTool>();
+  private toolsByCapability = new Map<string, RegisteredTool[]>();
+
+  /**
+   * Get singleton instance
+   */
+  static getInstance(): ToolRegistry {
+    if (!ToolRegistry.instance) {
+      ToolRegistry.instance = new ToolRegistry();
+    }
+    return ToolRegistry.instance;
+  }
+
+  /**
+   * Register a tool
+   *
+   * @param tool - Tool definition
+   */
+  async registerTool(tool: RegisteredTool): Promise<void> {
+    // Register by name
+    this.tools.set(tool.name, tool);
+
+    // Register by capability
+    const existingTools = this.toolsByCapability.get(tool.capability) || [];
+    const existingIndex = existingTools.findIndex(t => t.name === tool.name);
+
+    if (existingIndex >= 0) {
+      // Update existing tool
+      existingTools[existingIndex] = tool;
+      logger.debug(`Updated tool: ${tool.name}`);
+    } else {
+      // Add new tool
+      existingTools.push(tool);
+      this.toolsByCapability.set(tool.capability, existingTools);
+      logger.debug(`Registered tool: ${tool.name} → ${tool.capability}`);
+    }
+  }
+
+  /**
+   * Register a capability (alias for registerTool for backwards compatibility)
+   *
+   * @param capability - Capability definition
+   */
+  async registerCapability(capability: any): Promise<void> {
+    // For capabilities, we just ensure they're available
+    // The actual tools are registered separately
+    logger.debug(`Registered capability: ${capability.id}`);
+  }
+
+  /**
+   * Get a tool by name
+   *
+   * @param name - Tool name
+   * @returns Tool definition or undefined
+   */
+  getTool(name: string): RegisteredTool | undefined {
+    return this.tools.get(name);
+  }
+
+  /**
+   * Get all tools for a capability
+   *
+   * @param capability - Capability ID
+   * @returns Array of tool definitions
+   */
+  getToolsForCapability(capability: string): RegisteredTool[] {
+    return this.toolsByCapability.get(capability) || [];
+  }
+
+  /**
+   * Get all registered tools
+   *
+   * @returns Array of all tool definitions
+   */
+  getAllTools(): RegisteredTool[] {
+    return Array.from(this.tools.values());
+  }
+
+  /**
+   * Get all capabilities
+   *
+   * @returns Array of capability IDs
+   */
+  getAllCapabilities(): string[] {
+    return Array.from(this.toolsByCapability.keys());
+  }
+
+  /**
+   * Get tool schema by name
+   *
+   * @param toolName - Tool name
+   * @returns Input schema or undefined
+   */
+  getToolSchema(toolName: string): z.ZodSchema | undefined {
+    const tool = this.tools.get(toolName);
+    return tool?.inputSchema;
+  }
+
+  /**
+   * Unregister a tool
+   *
+   * @param name - Tool name
+   */
+  async unregisterTool(name: string): Promise<void> {
+    const tool = this.tools.get(name);
+    if (!tool) {
+      logger.warn(`Tool not found: ${name}`);
+      return;
+    }
+
+    // Remove from name index
+    this.tools.delete(name);
+
+    // Remove from capability index
+    const tools = this.toolsByCapability.get(tool.capability) || [];
+    const filtered = tools.filter(t => t.name !== name);
+
+    if (filtered.length === 0) {
+      this.toolsByCapability.delete(tool.capability);
+    } else {
+      this.toolsByCapability.set(tool.capability, filtered);
+    }
+
+    logger.debug(`Unregistered tool: ${name}`);
+  }
+
+  /**
+   * Clear all registered tools
+   */
+  async clearAllTools(): Promise<void> {
+    this.tools.clear();
+    this.toolsByCapability.clear();
+    logger.info('Cleared all tools');
+  }
+
+  /**
+   * Get registry statistics
+   */
+  getStats(): {
+    totalTools: number;
+    totalCapabilities: number;
+    toolsByProvider: Record<string, number>;
+  } {
+    const toolsByProvider: Record<string, number> = {};
+
+    for (const tool of this.tools.values()) {
+      toolsByProvider[tool.provider] = (toolsByProvider[tool.provider] || 0) + 1;
+    }
+
+    return {
+      totalTools: this.tools.size,
+      totalCapabilities: this.toolsByCapability.size,
+      toolsByProvider,
+    };
+  }
+}
+
+// ============================================================================
+// BACKWARDS COMPATIBILITY
+// ============================================================================
+
+/**
+ * Unified Tool Registry (Backwards Compatibility)
+ *
+ * @deprecated Use ToolIntegrationManager (getToolManager()) instead
+ * This class wraps ToolIntegrationManager for backwards compatibility.
+ * 
+ * NOTE: The provider registration and fallback chain execution logic
+ * is preserved in lib/tools/tool-integration/ and used by ToolIntegrationManager.
  */
 export class UnifiedToolRegistry {
-  private providers = new Map<string, ToolProvider>();
-  private tools = new Map<string, ToolInfo>();
+  private toolManager: any;
   private config: UnifiedToolRegistryConfig;
   private initialized = false;
 
@@ -53,361 +245,132 @@ export class UnifiedToolRegistry {
       enableDiscovery: true,
       ...config,
     };
-
-    // Register configured providers
-    if (config.providers) {
-      for (const provider of config.providers) {
-        this.registerProvider(provider);
-      }
-    }
   }
 
   /**
-   * Initialize registry with all available providers
+   * Initialize registry - delegates to ToolIntegrationManager
+   * @deprecated Use getToolManager() instead
    */
   async initialize(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
+    if (this.initialized) return;
 
-    // Register Smithery if available
-    const smitheryApiKey = process.env.SMITHERY_API_KEY;
-    if (smitheryApiKey) {
-      const smithery = new SmitheryProvider({ apiKey: smitheryApiKey });
-      this.registerProvider(smithery);
-    }
-
-    // Register Arcade if available
-    const arcadeService = getArcadeService();
-    if (arcadeService) {
-      this.registerProvider({
-        name: 'arcade',
-        isAvailable: () => true,
-        supports: (request) => request.toolKey.startsWith('arcade:'),
-        execute: async (request) => {
-          const result = await arcadeService.executeTool(
-            request.toolKey.replace('arcade:', ''),
-            request.input,
-            request.context.userId
-          );
-          return {
-            success: result.success,
-            output: result.output,
-            error: result.error,
-            authRequired: result.requiresAuth,
-            authUrl: result.authUrl,
-          };
-        },
-      });
-    }
-
-    // Register Nango if available
-    const nangoService = getNangoService();
-    if (nangoService) {
-      this.registerProvider({
-        name: 'nango',
-        isAvailable: () => true,
-        supports: (request) => request.toolKey.startsWith('nango:'),
-        execute: async (request) => {
-          const [providerConfigKey, ...endpointParts] = request.toolKey.replace('nango:', '').split(':');
-          const endpoint = endpointParts.join(':');
-          
-          const result = await nangoService.executeTool(
-            providerConfigKey,
-            endpoint,
-            request.input,
-            request.context.userId
-          );
-          return {
-            success: result.success,
-            output: result.output,
-            error: result.error,
-            authRequired: result.requiresAuth,
-            authUrl: result.authUrl,
-          };
-        },
-      });
-    }
-
-    // Register Tambo if available
-    const tamboService = getTamboService();
-    if (tamboService) {
-      this.registerProvider({
-        name: 'tambo',
-        isAvailable: () => true,
-        supports: (request) => request.toolKey.startsWith('tambo:'),
-        execute: async (request) => {
-          const result = await tamboService.executeTool(
-            request.context.userId,
-            request.toolKey.replace('tambo:', ''),
-            request.input
-          );
-          return {
-            success: result.success,
-            output: result.output,
-            error: result.error,
-          };
-        },
-      });
-    }
-
-    // Register MCP if available
-    this.registerProvider({
-      name: 'mcp',
-      isAvailable: () => true,
-      supports: (request) => request.toolKey.startsWith('mcp:'),
-      execute: async (request) => {
-        const toolManager = getToolManager();
-        const result = await toolManager.executeTool(
-          request.toolKey.replace('mcp:', ''),
-          request.input,
-          request.context
-        );
-        return result;
-      },
-    });
-
-    // Register Composio if available
-    this.registerProvider({
-      name: 'composio',
-      isAvailable: () => true,
-      supports: () => true, // Composio is default fallback
-      execute: async (request) => {
-        const toolManager = getToolManager();
-        const result = await toolManager.executeTool(
-          request.toolKey,
-          request.input,
-          request.context
-        );
-        return result;
-      },
-    });
-
+    // Lazy import to avoid circular dependency
+    const { getToolManager } = await import('./index');
+    this.toolManager = getToolManager();
     this.initialized = true;
-    console.log(`[UnifiedToolRegistry] Initialized with ${this.providers.size} providers`);
   }
 
   /**
-   * Register a provider
+   * Register a provider - no-op (providers registered by ToolIntegrationManager)
+   * @deprecated Providers are auto-registered by bootstrap system
    */
-  registerProvider(provider: ToolProvider): void {
-    this.providers.set(provider.name, provider);
-    console.log(`[UnifiedToolRegistry] Registered provider: ${provider.name}`);
+  registerProvider(_provider: any): void {
+    // Providers are now auto-registered by bootstrap system
   }
 
   /**
-   * Unregister a provider
+   * Unregister a provider - no-op
+   * @deprecated Providers are managed by bootstrap system
    */
-  unregisterProvider(providerName: string): void {
-    this.providers.delete(providerName);
+  unregisterProvider(_providerName: string): void {
+    // No-op
   }
 
   /**
-   * Register a tool
+   * Register a tool - delegates to ToolRegistry
    */
   registerTool(tool: ToolInfo): void {
-    this.tools.set(`${tool.provider}:${tool.name}`, tool);
+    const registry = ToolRegistry.getInstance();
+    registry.registerTool({
+      name: tool.name,
+      capability: tool.category || 'unknown',
+      provider: tool.provider,
+      handler: async () => {
+        throw new Error('Tool registered via UnifiedToolRegistry cannot be executed directly');
+      },
+    });
   }
 
   /**
-   * Execute a tool
+   * Execute a tool - delegates to ToolIntegrationManager
+   * @deprecated Use getToolManager().executeTool() instead
    */
   async executeTool(
     toolName: string,
     input: any,
-    context: ToolExecutionContext
-  ): Promise<ToolExecutionResult> {
+    context: any
+  ): Promise<any> {
     await this.initialize();
 
-    const request: ProviderExecutionRequest = {
-      toolKey: toolName,
-      config: {
-        provider: this.extractProvider(toolName),
-        toolName: this.extractToolName(toolName),
-        description: '',
-        category: '',
-        requiresAuth: false,
-      },
-      input,
-      context,
-    };
-
-    // Try providers in fallback chain order
-    const fallbackChain = this.config.fallbackChain || [];
-    const errors: string[] = [];
-
-    for (const providerName of fallbackChain) {
-      const provider = this.providers.get(providerName);
-      if (!provider || !provider.isAvailable()) {
-        continue;
-      }
-
-      if (!provider.supports(request)) {
-        continue;
-      }
-
-      try {
-        const result = await provider.execute(request);
-        if (result.success) {
-          return result;
-        }
-
-        if (result.error) {
-          errors.push(`${providerName}: ${result.error}`);
-        }
-
-        // If auth required, return immediately
-        if (result.authRequired) {
-          return result;
-        }
-      } catch (error: any) {
-        errors.push(`${providerName}: ${error.message}`);
-      }
+    if (!this.toolManager) {
+      return {
+        success: false,
+        error: 'ToolManager not initialized',
+      };
     }
 
-    // All providers failed
-    return {
-      success: false,
-      error: errors.length > 0 ? errors.join('; ') : 'No provider could execute this tool',
-    };
+    return await this.toolManager.executeTool(toolName, input, context);
   }
 
   /**
-   * Search for tools
+   * Search for tools - delegates to ToolIntegrationManager with dynamic discovery
+   * @deprecated Use getToolManager().searchTools() instead
    */
   async searchTools(query: string, userId?: string): Promise<ToolInfo[]> {
     await this.initialize();
 
-    const results: ToolInfo[] = [];
-    const queryLower = query.toLowerCase();
-
-    // Search cached tools
-    for (const tool of this.tools.values()) {
-      if (
-        tool.name.toLowerCase().includes(queryLower) ||
-        tool.description.toLowerCase().includes(queryLower)
-      ) {
-        results.push(tool);
-      }
+    if (!this.toolManager) {
+      return [];
     }
 
-    // Search provider-specific tools
-    for (const [providerName, provider] of this.providers.entries()) {
-      try {
-        if (providerName === 'smithery') {
-          const smithery = provider as SmitheryProvider;
-          const tools = await smithery.discoverAllTools();
-          for (const tool of tools) {
-            if (
-              tool.name.toLowerCase().includes(queryLower) ||
-              tool.description.toLowerCase().includes(queryLower)
-            ) {
-              results.push({
-                name: tool.name,
-                description: tool.description,
-                provider: providerName,
-                inputSchema: tool.inputSchema || z.object({}),
-                requiresAuth: false,
-              });
-            }
-          }
-        } else if (providerName === 'arcade') {
-          const arcadeService = getArcadeService();
-          if (arcadeService) {
-            const arcadeTools = await arcadeService.searchTools(query);
-            for (const tool of arcadeTools) {
-              results.push({
-                name: tool.name,
-                description: tool.description,
-                provider: providerName,
-                inputSchema: tool.inputSchema || z.object({}),
-                requiresAuth: tool.requiresAuth,
-                category: tool.toolkit,
-              });
-            }
-          }
-        }
-      } catch (error: any) {
-        console.error(`[UnifiedToolRegistry] searchTools failed for ${providerName}:`, error.message);
-      }
-    }
-
-    return results;
+    const tools = await this.toolManager.searchTools(query, userId);
+    return tools.map(t => ({
+      name: t.toolName || t.name,
+      description: t.description || '',
+      provider: t.provider || 'unknown',
+      requiresAuth: false,
+      category: t.category,
+    }));
   }
 
   /**
-   * Get available tools
+   * Get available tools - delegates to ToolIntegrationManager with dynamic discovery
+   * @deprecated Use getToolManager().getAllTools() instead
    */
   async getAvailableTools(userId?: string): Promise<ToolInfo[]> {
     await this.initialize();
 
-    const results: ToolInfo[] = [];
-
-    for (const [providerName, provider] of this.providers.entries()) {
-      try {
-        if (providerName === 'arcade') {
-          const arcadeService = getArcadeService();
-          if (arcadeService) {
-            const arcadeTools = await arcadeService.getTools();
-            for (const tool of arcadeTools) {
-              results.push({
-                name: tool.name,
-                description: tool.description,
-                provider: providerName,
-                inputSchema: z.object(tool.inputSchema as any),
-                requiresAuth: tool.requiresAuth,
-                category: tool.toolkit,
-              });
-            }
-          }
-        }
-      } catch (error: any) {
-        console.error(`[UnifiedToolRegistry] getAvailableTools failed for ${providerName}:`, error.message);
-      }
+    if (!this.toolManager) {
+      return [];
     }
 
-    // Add cached tools
-    for (const tool of this.tools.values()) {
-      results.push(tool);
-    }
-
-    return results;
+    const tools = await this.toolManager.getAllTools(userId);
+    return tools.map(t => ({
+      name: t.toolName || t.name,
+      description: t.description || '',
+      provider: t.provider || 'unknown',
+      requiresAuth: false,
+      category: t.category,
+    }));
   }
 
   /**
-   * Get tool schema
+   * Get tool schema - delegates to ToolRegistry
    */
-  getToolSchema(toolName: string): z.ZodSchema | undefined {
-    const key = toolName.includes(':') ? toolName : `composio:${toolName}`;
-    const tool = this.tools.get(key);
-    return tool?.inputSchema;
-  }
-
-  /**
-   * Extract provider from tool name
-   */
-  private extractProvider(toolName: string): string {
-    if (toolName.includes(':')) {
-      return toolName.split(':')[0];
-    }
-    return this.config.defaultProvider || 'composio';
-  }
-
-  /**
-   * Extract tool name from qualified name
-   */
-  private extractToolName(toolName: string): string {
-    if (toolName.includes(':')) {
-      return toolName.split(':').slice(1).join(':');
-    }
-    return toolName;
+  getToolSchema(toolName: string): any {
+    const registry = ToolRegistry.getInstance();
+    return registry.getToolSchema(toolName);
   }
 
   /**
    * Get registered providers
    */
   getProviders(): string[] {
-    return Array.from(this.providers.keys());
+    if (!this.toolManager) {
+      return [];
+    }
+    // Get providers from tool manager
+    return Object.keys(this.toolManager.providers || {});
   }
 
   /**
@@ -418,22 +381,19 @@ export class UnifiedToolRegistry {
     providersCount: number;
     toolsCount: number;
   } {
+    const registry = ToolRegistry.getInstance();
+    const stats = registry.getStats();
+
     return {
       initialized: this.initialized,
-      providersCount: this.providers.size,
-      toolsCount: this.tools.size,
+      providersCount: stats.toolsByProvider ? Object.keys(stats.toolsByProvider).length : 0,
+      toolsCount: stats.totalTools,
     };
   }
 }
 
-/**
- * Singleton instance
- */
 let unifiedToolRegistryInstance: UnifiedToolRegistry | null = null;
 
-/**
- * Get or create unified tool registry instance
- */
 export function getUnifiedToolRegistry(): UnifiedToolRegistry {
   if (!unifiedToolRegistryInstance) {
     unifiedToolRegistryInstance = new UnifiedToolRegistry();
@@ -441,14 +401,23 @@ export function getUnifiedToolRegistry(): UnifiedToolRegistry {
   return unifiedToolRegistryInstance;
 }
 
-/**
- * Initialize unified tool registry
- */
 export function initializeUnifiedToolRegistry(config?: UnifiedToolRegistryConfig): UnifiedToolRegistry {
-  if (unifiedToolRegistryInstance) {
-    return unifiedToolRegistryInstance;
+  if (!unifiedToolRegistryInstance) {
+    unifiedToolRegistryInstance = new UnifiedToolRegistry(config);
   }
-
-  unifiedToolRegistryInstance = new UnifiedToolRegistry(config);
   return unifiedToolRegistryInstance;
+}
+
+export interface UnifiedToolRegistryConfig {
+  providers?: any[];
+  defaultProvider?: string;
+  fallbackChain?: string[];
+  enableDiscovery?: boolean;
+}
+
+/**
+ * Get tool registry instance (alias for ToolRegistry.getInstance())
+ */
+export function getToolRegistry(): ToolRegistry {
+  return ToolRegistry.getInstance();
 }
