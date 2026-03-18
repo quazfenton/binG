@@ -1,5 +1,24 @@
 #Production Dockerfile for binG Backend
 # Multi-stage build for optimal image size
+#
+# SECURITY: This Dockerfile uses BuildKit --secret mounts for sensitive data.
+# Secrets are NEVER passed via ARG/ENV as they would leak through build cache.
+#
+# Build with secrets (requires DOCKER_BUILDKIT=1):
+#   DOCKER_BUILDKIT=1 docker build \
+#     --secret id=encryption_key,env=ENCRYPTION_KEY \
+#     --secret id=jwt_secret,env=JWT_SECRET \
+#     --secret id=blaxel_encryption_key,env=BLAXEL_SECRET_ENCRYPTION_KEY \
+#     --secret id=nango_secret_key,env=NANGO_SECRET_KEY \
+#     --secret id=database_url,env=DATABASE_URL \
+#     -t bing-backend .
+#
+# Or from .env file:
+#   DOCKER_BUILDKIT=1 docker build \
+#     --secret id=encryption_key,src=.env.encryption_key \
+#     ... \
+#     -t bing-backend .
+# ===========================================
 
 # ===========================================
 # Stage 1: Dependencies
@@ -35,16 +54,29 @@ COPY --from=deps /app/node_modules ./node_modules
 # Copy source files
 COPY . .
 
+# Build-time arguments for required environment variables
+# SECURITY: Using BuildKit --secret mounts instead of ARG/ENV to prevent secret leakage
+# Secrets are mounted at /run/secrets/<secret_name> during build only
+# They do NOT appear in build cache, intermediate layers, or final image
+# Usage: docker build --secret id=encryption_key,env=ENCRYPTION_KEY ...
+
 # Build Next.js application
 # Skip telemetry and use standalone output for Docker
 ENV NEXT_TELEMETRY_DISABLED=1
-# Provide minimal required env vars for build (NOT for production use!)
-ENV ENCRYPTION_KEY=build-time-temporary-key-32chars!!
-ENV JWT_SECRET=build-time-temporary-secret-key-for-build-only
-ENV BLAXEL_SECRET_ENCRYPTION_KEY=build-time-blaxel-key-32chars!
-ENV NANGO_SECRET_KEY=nango_build_temp_key
-ENV DATABASE_URL=postgresql://build:build@localhost:5432/build_temp
-RUN npm run build
+
+# Use BuildKit secrets for build-time secret access
+# Secrets are accessed via /run/secrets/<secret_name> and never stored in image
+RUN --mount=type=secret,id=encryption_key \
+    --mount=type=secret,id=jwt_secret \
+    --mount=type=secret,id=blaxel_encryption_key \
+    --mount=type=secret,id=nango_secret_key \
+    --mount=type=secret,id=database_url \
+    export ENCRYPTION_KEY=$(cat /run/secrets/encryption_key) && \
+    export JWT_SECRET=$(cat /run/secrets/jwt_secret) && \
+    export BLAXEL_SECRET_ENCRYPTION_KEY=$(cat /run/secrets/blaxel_encryption_key) && \
+    export NANGO_SECRET_KEY=$(cat /run/secrets/nango_secret_key) && \
+    export DATABASE_URL=$(cat /run/secrets/database_url) && \
+    npm run build
 
 # ===========================================
 # Stage 3: Runner
@@ -84,7 +116,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/scripts/init-backend.js ./scripts
 USER nextjs
 
 # Expose ports
-EXPOSE 3000 8080
+EXPOSE 3000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
@@ -92,12 +124,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Set environment variables
 ENV PORT=3000
-ENV WEBSOCKET_PORT=8080
 ENV STORAGE_TYPE=local
 ENV LOCAL_SNAPSHOT_DIR=/tmp/snapshots
 ENV WORKSPACE_DIR=/tmp/workspaces
 ENV RUNTIME_TYPE=process
 
 # Start application
-# Note: Backend services (WebSocket, etc.) are initialized lazily on first API call
+# Note: WebSocket server runs on same port as HTTP (port 3000)
+# WebSocket connections upgrade from HTTP at ws://localhost:3000
 CMD ["node", "server.js"]

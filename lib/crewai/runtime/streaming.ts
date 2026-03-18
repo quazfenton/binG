@@ -7,7 +7,7 @@
  * @see https://docs.crewai.com/en/enterprise/features/webhook-streaming.md
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import type { Crew } from '../crew/crew';
 import type { CrewOutput } from '../crew/crew';
 

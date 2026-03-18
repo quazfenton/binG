@@ -7,6 +7,8 @@ import { Badge } from '../ui/badge';
 import { Input } from '../ui/input';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
 import { ScrollArea } from '../ui/scroll-area';
+import useIframeLoader from '@/hooks/use-iframe-loader';
+import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 import {
   Globe,
   X,
@@ -58,6 +60,38 @@ const WorldMonitorEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [isReloading, setIsReloading] = useState(false);
   const [iframeKey, setIframeKey] = useState(0);
+
+  // Use iframe loader hook with fallback
+  const {
+    isLoading: hookIsLoading,
+    isLoaded,
+    isFailed,
+    failureReason,
+    errorMessage,
+    retryCount,
+    canRetry,
+    isUsingFallback,
+    fallbackUrl,
+    handleLoad,
+    handleRetry,
+    handleReset,
+    handleFallback,
+  } = useIframeLoader({
+    url: iframeUrl,
+    timeout: 30000,
+    maxRetries: 3,
+    retryDelay: 5000,
+    enableAutoRetry: true,
+    enableFallback: true,
+    onLoaded: () => {
+      setIsLoading(false);
+      setIframeError(null);
+    },
+    onFailed: (reason, error) => {
+      setIsLoading(false);
+      setIframeError(error || 'Failed to load World Monitor');
+    },
+  });
 
   // Sample status data (in production, this would be fetched from an API)
   const [countryData, setCountryData] = useState<CountryData[]>([
@@ -257,22 +291,25 @@ const WorldMonitorEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
                     </div>
                   </div>
                 )}
-                
-                {iframeError ? (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="text-center space-y-4 max-w-md p-6">
-                      <AlertCircle className="w-12 h-12 mx-auto text-red-500" />
-                      <p className="text-red-400">{iframeError}</p>
-                      <Button onClick={handleReload} className="bg-blue-600 hover:bg-blue-500">
-                        <RefreshCw className="w-4 h-4 mr-2" />
-                        Retry
-                      </Button>
-                    </div>
+
+                {isFailed || iframeError ? (
+                  <div className="absolute inset-0">
+                    <IframeUnavailableScreen
+                      url={iframeUrl}
+                      reason={failureReason || 'failed'}
+                      errorMessage={errorMessage || iframeError || undefined}
+                      onRetry={handleRetry}
+                      onTryFallback={handleFallback}
+                      onOpenExternal={handleOpenExternal}
+                      onClose={onClose}
+                      autoRetryCount={retryCount}
+                      maxRetries={3}
+                    />
                   </div>
                 ) : iframeUrl ? (
                   <iframe
                     key={iframeKey}
-                    src={iframeUrl}
+                    src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
                     className="w-full h-full border-0"
                     title="World Monitor"
                     onLoad={() => setIsLoading(false)}

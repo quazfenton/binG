@@ -1,70 +1,329 @@
-﻿name: ðŸ§  Autobot
+name: 🧠 jarvis
 on:
-  pull_request:
-    types: [labeled]
+  pull_request_review_comment:
+    types: [created]
 
 jobs:
+  # Job 1: Collect and batch trigger comments
+  collect-comments:
+    if: (contains(github.event.comment.body, 'Prompt for AI Agent') || contains(github.event.comment.body, 'Prompt for AI agent')) && github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+      actions: read
+    outputs:
+      should_run: ${{ steps.batch.outputs.should_run }}
+      comment_ids: ${{ steps.batch.outputs.comment_ids }}
+      comment_count: ${{ steps.batch.outputs.comment_count }}
+      pr_number: ${{ steps.batch.outputs.pr_number }}
+      skip: ${{ steps.check_running.outputs.skip }}
+    steps:
+      - name: Check for In-Progress Runs (Skip if Already Running)
+        id: check_running
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          CURRENT_RUN_ID=${{ github.run_id }}
+
+          # Check for other in-progress runs of this workflow on the same PR
+          # Exclude current run from the check
+          # Use workflow file path instead of name to avoid emoji/quote issues
+          RUNNING_RUNS=$(gh api repos/${{ github.repository }}/actions/runs \
+            --jq '[.workflow_runs[] | select(.path == ".github/workflows/jarvis.yml") | select(.status == "in_progress" or .status == "queued") | select(.id != '"$CURRENT_RUN_ID"')] | length')
+
+          if [ "$RUNNING_RUNS" -gt 0 ]; then
+            echo "⏭️ Another run is already in progress (run #$CURRENT_RUN_ID skipping)"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "No other runs in progress, proceeding..."
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Skip - Upload Empty Artifact (Another Run In Progress)
+        if: steps.check_running.outputs.skip == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: trigger-comments
+          path: /dev/null
+          retention-days: 1
+          overwrite: true
+
+      - name: Get PR and Batch Info
+        id: batch
+        if: steps.check_running.outputs.skip != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          # For pull_request_review_comment events, the PR number is in github.event.pull_request.number
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          TRIGGER_COMMENT_ID=${{ github.event.comment.id }}
+          QUEUE_BRANCH="jarvis-queue"
+
+          echo "PR_NUMBER: $PR_NUMBER"
+          echo "TRIGGER_COMMENT_ID: $TRIGGER_COMMENT_ID"
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+          # Fetch the persistent queue file (contains comment objects from failed runs)
+          # Queue is scoped to PR number to prevent cross-PR contamination
+          # Write directly to file to avoid "argument list too long" errors
+          QUEUE_FILE=".jarvis/queue-pr-${PR_NUMBER}.json"
+          if gh api repos/${{ github.repository }}/git/ref/heads/$QUEUE_BRANCH >/dev/null 2>&1; then
+            gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" --jq '.content' 2>/dev/null | base64 -d > /tmp/pending_queue.json 2>/dev/null || echo "[]" > /tmp/pending_queue.json
+            # Validate JSON, write empty array if invalid
+            if ! jq '.' /tmp/pending_queue.json > /tmp/pending_queue_validated.json 2>/dev/null || [ ! -s /tmp/pending_queue_validated.json ]; then
+              echo "[]" > /tmp/pending_queue_validated.json
+            fi
+            mv /tmp/pending_queue_validated.json /tmp/pending_queue.json
+            echo "Loaded pending queue for PR $PR_NUMBER: $(jq 'length' /tmp/pending_queue.json) comments"
+          else
+            echo "[]" > /tmp/pending_queue.json
+          fi
+
+          # IMPORTANT: Build the triggering comment JSON safely from github.event context
+          # Use jq to safely construct JSON object (prevents command injection from comment body)
+          # Note: github.event.comment.body is passed via env to handle special chars safely
+          jq -n \
+            --argjson id "${{ github.event.comment.id }}" \
+            --arg body "$COMMENT_BODY" \
+            --arg created_at "${{ github.event.comment.created_at }}" \
+            '{id: $id, body: $body, reactions: {rocket: 0}, created_at: $created_at}' > /tmp/trigger_event.json
+          echo "Triggering comment from event: ID=${{ github.event.comment.id }}"
+
+          # Fetch ALL review comments on this PR (paginate to combine pages into single array)
+          # Note: gh api --slurp is incompatible with --jq, so we pipe to jq -s instead
+          # Write to file to avoid "argument list too long" errors
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER/comments" --paginate | jq -s 'add // []' > /tmp/all_review_comments.json || echo "[]" > /tmp/all_review_comments.json
+
+          echo "Total review comments on PR: $(jq 'length' /tmp/all_review_comments.json)"
+
+          # Filter for trigger comments (case-insensitive match for "Prompt for AI Agent")
+          # Combine API results with the triggering comment from event
+          # Note: Filter out null bodies (deleted comments) before regex match
+          # Use --slurpfile to read files instead of passing as arguments
+          jq --slurpfile event /tmp/trigger_event.json '
+            [.[] | select(.body != null) | select(.body | test("Prompt for AI Agent"; "i"))] + $event | unique_by(.id)
+          ' /tmp/all_review_comments.json > /tmp/trigger_comments_filtered.json || echo "[]" > /tmp/trigger_comments_filtered.json
+
+          echo "Comments matching trigger pattern (including event comment): $(jq 'length' /tmp/trigger_comments_filtered.json)"
+
+          # Filter out comments that already have 🚀 reaction (already processed)
+          jq -c '[.[] | select((.reactions.rocket // 0) == 0)]' /tmp/trigger_comments_filtered.json > /tmp/unprocessed_new.json || echo "[]" > /tmp/unprocessed_new.json
+
+          echo "Unprocessed (no rocket reaction): $(jq 'length' /tmp/unprocessed_new.json)"
+
+          # Combine pending queue with new unprocessed comments (deduplicate by ID)
+          # Use --slurpfile to read both files
+          jq --slurpfile pending /tmp/pending_queue.json '
+            ($pending[0] | map({id, body})) as $pending_objs |
+            (. + $pending_objs) | unique_by(.id)
+          ' /tmp/unprocessed_new.json > /tmp/all_unprocessed.json || echo "[]" > /tmp/all_unprocessed.json
+
+          COMMENT_COUNT=$(jq 'length' /tmp/all_unprocessed.json)
+          COMMENT_IDS=$(jq -r '[.[].id | tostring] | join(",")' /tmp/all_unprocessed.json)
+          PENDING_COUNT=$(jq 'length' /tmp/pending_queue.json)
+
+          # Save trigger comments to file (too large for job outputs)
+          # Store as compact JSON to save space
+          # Ensure file always exists, even if empty
+          jq -c '.' /tmp/all_unprocessed.json > /tmp/trigger_comments.json 2>/dev/null || echo "[]" > /tmp/trigger_comments.json
+          
+          # Verify file exists and has content
+          if [ ! -s /tmp/trigger_comments.json ]; then
+            echo "[]" > /tmp/trigger_comments.json
+          fi
+          
+          # Debug: show file status
+          echo "Artifact file created: $(ls -la /tmp/trigger_comments.json 2>/dev/null || echo 'NOT FOUND')"
+          
+          echo "comment_count=$COMMENT_COUNT" >> $GITHUB_OUTPUT
+          echo "comment_ids=$COMMENT_IDS" >> $GITHUB_OUTPUT
+
+          echo "Found $COMMENT_COUNT unprocessed trigger comments ($PENDING_COUNT from failed runs)"
+
+          # Batch mode: Run only if we have 7+ comments OR if this is the oldest comment (batch leader)
+          # Or run immediately if only 1 comment exists (no batching for single comments)
+          if [ "$COMMENT_COUNT" -ge 7 ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "✓ Running agent with $COMMENT_COUNT batched comments (threshold: 7)"
+          elif [ "$COMMENT_COUNT" -eq 1 ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "✓ Single comment - running immediately"
+          elif [ "$COMMENT_COUNT" -eq 0 ]; then
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "No unprocessed comments found"
+          else
+            # Check if we're the oldest (should run) or waiting for more
+            # Read from file instead of variable
+            OLDEST_ID=$(jq -r '.[0].id' /tmp/all_unprocessed.json)
+            if [ "$TRIGGER_COMMENT_ID" = "$OLDEST_ID" ]; then
+              echo "should_run=true" >> $GITHUB_OUTPUT
+              echo "✓ Oldest comment - running agent (timeout fallback)"
+            else
+              echo "should_run=false" >> $GITHUB_OUTPUT
+              echo "⏳ Waiting for more comments to reach batch of 7..."
+            fi
+          fi
+
+      - name: Upload Trigger Comments Artifact
+        if: steps.check_running.outputs.skip != 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: trigger-comments
+          path: /tmp/trigger_comments.json
+          retention-days: 1
+          if-no-files-found: warn
+
+  # Job 2: Run agent with batched context
   multi-iteration-fix:
-    if: github.event.label.name == 'autofix'
+    needs: collect-comments
+    if: needs.collect-comments.outputs.should_run == 'true' && needs.collect-comments.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
-      actions: write
+      actions: read
 
     steps:
-      - name: Checkout Full Repository
-        uses: actions/checkout@v4
+      - name: Download Trigger Comments Artifact
+        uses: actions/download-artifact@v5
         with:
-          ref: ${{ github.head_ref }}
+          name: trigger-comments
+          path: /tmp/
+
+      - name: Get Pull Request Data
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ needs.collect-comments.outputs.pr_number }}
+          PR_DATA=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER)
+          echo "head_ref=$(echo "$PR_DATA" | jq -r '.head.ref')" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(echo "$PR_DATA" | jq -r '.head.sha')" >> "$GITHUB_OUTPUT"
+          echo "base_ref=$(echo "$PR_DATA" | jq -r '.base.ref')" >> "$GITHUB_OUTPUT"
+
+          # Note: github.event.comment.* is not available in jobs triggered by workflow dependency
+          # Use needs.collect-comments.outputs for data from parent job
+
+      - name: Checkout Full Repository (Latest HEAD)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}  # Use SHA for exact commit, not branch name
           fetch-depth: 0 # CRITICAL: Required for AST Repo Mapping
 
       - name: Setup Python & Agent Tooling
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: Install Aider (Agent Engine)
+        shell: bash
         run: python -m pip install aider-chat
 
       - name: Extract CodeRabbit Context
         id: context
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          PR_NUMBER=${{ needs.collect-comments.outputs.pr_number }}
           # Grabs the last 100 lines of CodeRabbit feedback to give the agent its mission
           # SECURITY: Uses gh api to fetch only verified bot reviews, preventing prompt injection from malicious PR comments
-          # SECURITY: Anchored regex with optional [bot] suffix to prevent substring matches
-          BOT_PATTERN="^(coderabbitai|qodo-code-review|cubic-dev-ai|codeant-ai)(\\[bot\\])?$"
+          # Note: jq regex doesn't need escape for literal brackets, use [bot] directly
+          BOT_PATTERN='^(coderabbitai|qodo-code-review|cubic-dev-ai|codeant-ai)(\\[bot\\])?$'
 
           # Fetch only NEW unprocessed reviews from verified bot accounts
           # Filters out reviews that already contain the agent applied marker
           # Gets last 10 complete reviews (not line-count limited to avoid truncation)
-          RAW_FEEDBACK=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
-            --jq '[.[] | select(.user.login | test("'"$BOT_PATTERN"'"; "i")) | select(.state == "COMMENTED" or .state == "CHANGES_REQUESTED") | select(.body | contains("Agent:") | not)] | .[-10:] | .[].body' \
+          # Note: select(.body != null) filters out deleted/empty reviews
+          RAW_FEEDBACK=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews \
+            --jq "[.[] | select(.body != null) | select(.user.login | test(\"$BOT_PATTERN\"; \"i\")) | select(.state == \"COMMENTED\" or .state == \"CHANGES_REQUESTED\") | select(.body | contains(\"Agent:\") | not)] | .[-10:] | .[].body" \
             | tac)
-          SUGGESTIONS=${RAW_FEEDBACK:-Review the suggestion if there is any for optimizations.}
+          SUGGESTIONS="${RAW_FEEDBACK:-Review the suggestion if there is any for optimizations.}"
 
-          # Sanitize string for bash multiline
-          echo "suggestions<<EOF" >> $GITHUB_OUTPUT
-          echo "$SUGGESTIONS" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Write suggestions to file and use file-based output (avoids heredoc delimiter issues)
+          printf '%s\n' "$SUGGESTIONS" > /tmp/suggestions.txt
+          # Use GITHUB_OUTPUT file syntax with unique delimiter
+          DELIM="GHA_OUTPUT_DELIM_$$"
+          {
+            echo "suggestions<<$DELIM"
+            cat /tmp/suggestions.txt
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Manage Shadow Branch
+        id: branch
+        shell: bash
         run: |
-          FIX_BRANCH="ai-fixes-${{ github.head_ref }}"
+          FIX_BRANCH="jarvis-fixes-${{ steps.pr.outputs.head_ref }}"
+          PR_HEAD_SHA="${{ steps.pr.outputs.head_sha }}"
           git config user.name "jarvis"
           git config user.email "fullmetal@solo-dev.internal"
 
-          # If the branch exists remotely, fetch it and hard reset to the current PR state
-          if git ls-remote --heads origin $FIX_BRANCH | grep -q $FIX_BRANCH; then
-            echo "Shadow branch exists. Syncing..."
-            git fetch origin $FIX_BRANCH
-            git checkout $FIX_BRANCH
-            git reset --hard origin/${{ github.head_ref }}
+          MERGE_RESULT="none"
+
+          # Fetch the latest PR HEAD first (always needed)
+          git fetch origin "$PR_HEAD_SHA"
+
+          # If the fix branch exists remotely, rebase unmerged commits onto latest PR HEAD
+          if git ls-remote --heads origin "$FIX_BRANCH" | grep -q "$FIX_BRANCH"; then
+            echo "Shadow branch exists. Fetching and rebasing onto PR HEAD..."
+            git fetch origin "$FIX_BRANCH"
+
+            # Get the commit range: commits on fix branch not in PR HEAD
+            # These are the agent-generated commits we want to preserve
+            git checkout "$FIX_BRANCH"
+
+            # Find commits on fix branch that are not in PR HEAD (our agent fixes)
+            # Store them for potential cherry-pick if rebase fails
+            FIX_COMMITS=$(git rev-list "$PR_HEAD_SHA".."$FIX_BRANCH" 2>/dev/null | tac || echo "")
+
+            if [ -n "$FIX_COMMITS" ]; then
+              echo "Found $(echo "$FIX_COMMITS" | wc -l | tr -d ' ') agent commits to preserve"
+            fi
+
+            # Try to rebase fix commits onto latest PR HEAD
+            if git rebase --onto "$PR_HEAD_SHA" "$PR_HEAD_SHA" "$FIX_BRANCH" 2>/dev/null; then
+              echo "✓ Rebased fix commits onto latest PR HEAD"
+              MERGE_RESULT="rebased"
+            else
+              # Rebase failed (conflicts). Cherry-pick commits one by one with --skip on conflicts
+              echo "Rebase had conflicts, cherry-picking individual commits..."
+              git checkout "$PR_HEAD_SHA"
+              git checkout -B "$FIX_BRANCH"
+
+              CHERRY_PICK_SUCCESS=true
+              for commit in $FIX_COMMITS; do
+                if ! git cherry-pick "$commit" --no-commit 2>/dev/null; then
+                  echo "⚠️ Cherry-pick failed for $commit, skipping..."
+                  # CRITICAL: Abort or skip the failed cherry-pick to clear repo state
+                  # This prevents leaving the repo in a conflicted cherry-pick-in-progress state
+                  if git rev-parse --git-dir >/dev/null 2>&1 && [ -f ".git/CHERRY_PICK_HEAD" ]; then
+                    git cherry-pick --abort 2>/dev/null || git cherry-pick --skip 2>/dev/null || true
+                  fi
+                  CHERRY_PICK_SUCCESS=false
+                fi
+              done
+
+              if [ "$CHERRY_PICK_SUCCESS" = "true" ] && [ -n "$FIX_COMMITS" ]; then
+                git commit -m "🔄 Reapplied fixes onto updated PR HEAD" || echo "Nothing to commit"
+                MERGE_RESULT="cherry_picked"
+              else
+                echo "⚠️ Could not preserve previous fixes, starting fresh from PR HEAD"
+                MERGE_RESULT="reset"
+              fi
+            fi
           else
-            echo "Creating new shadow branch..."
-            git checkout -b $FIX_BRANCH
+            echo "Creating new shadow branch from PR HEAD..."
+            git checkout -b "$FIX_BRANCH"
+            MERGE_RESULT="new"
           fi
+
+          echo "merge_result=$MERGE_RESULT" >> "$GITHUB_OUTPUT"
 
       - name: Multi-Iteration Agent Execution & Fallback Routing
         env:
@@ -72,54 +331,407 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          PROMPT: |
-            "You are an expert Staff Engineer. Analyze the whole repo context. 
-            Here is the CodeRabbit review context: ${{ steps.context.outputs.suggestions }}
-            Apply these fixes, ensure Postgres/Terraform logic is intact, and verify type safety."
+          SUGGESTIONS: ${{ steps.context.outputs.suggestions }}
         run: |
+          # Read trigger comments from downloaded artifact and write to file
+          # Use file-based approach to avoid "argument list too long" errors
+          jq -r '[.[].body] | join("\n\n---\n\n")' /tmp/trigger_comments.json > /tmp/batch_comments.txt
+
+          # Write base prompt to file (use printf to avoid heredoc YAML issues)
+          printf '%s\n' "You are an expert Staff Engineer. Analyze the whole repo context." > /tmp/base_prompt.txt
+          printf '%s\n' "Here is the CodeRabbit review context: $SUGGESTIONS" >> /tmp/base_prompt.txt
+          printf '%s\n' "" >> /tmp/base_prompt.txt
+          printf '%s\n' "Apply these fixes, ensure Postgres/Terraform logic is intact, and verify type safety." >> /tmp/base_prompt.txt
+          printf '%s\n' "Group related changes together logically." >> /tmp/base_prompt.txt
+
           # Function to run the agent in CI mode (no user prompt, auto-apply, repo map enabled)
           run_agent() {
-            local MODEL=$1
-            local API_BASE_ARG=$2
+            local MODEL="$1"
+            local EXTRA_ARGS="$2"
             echo "Attempting execution with model: $MODEL"
-            
+
+            # Build full prompt by combining files (avoids shell variable limits)
+            {
+              cat /tmp/base_prompt.txt
+              echo ""
+              echo "Additional batched trigger comments:"
+              echo ""
+              cat /tmp/batch_comments.txt
+            } > /tmp/full_prompt.txt
+
             # Aider runs multiple iterations under the hood if it needs to fix lint errors it caused
-            aider --model "$MODEL" $API_BASE_ARG --message "$PROMPT" --yes --no-auto-commits --dark-mode
+            aider --model "$MODEL" --yes --no-auto-commits --dark-mode $EXTRA_ARGS --message-file /tmp/full_prompt.txt
           }
 
-          # 1. Primary: Gemini 3.1 Pro
-          if ! run_agent "gemini/gemini-3.1-pro" ""; then
-            echo "Gemini 3.1 Pro failed or hit rate limit. Fallback 1: Gemini Flash"
-            
-            # 2. Fallback: Gemini 3.0 Flash
-            if ! run_agent "gemini/gemini-3.0-flash" ""; then
+          # 1. Primary: Gemini 2.5 Pro
+          if ! run_agent "gemini/gemini-2.5-pro" ""; then
+            echo "Gemini 2.5 Pro failed or hit rate limit. Fallback 1: Gemini Flash"
+
+            # 2. Fallback: Gemini 2.0 Flash
+            if ! run_agent "gemini/gemini-2.0-flash" ""; then
               echo "Gemini Flash failed. Fallback 2: Mistral Large"
-              
+
               # 3. Fallback: Mistral
               if ! run_agent "mistral/mistral-large-latest" ""; then
                 echo "Mistral failed. Fallback 3: Minimax (OpenCode Zen)"
-                
-                # 4. Fallback: Minimax 2.5 Max (Using OpenAI compatible routing)
-                export OPENAI_API_KEY=$OPENCODE_API_KEY
-                run_agent "opencode/minimax-m2.5-free" "--openai-api-base https://opencode.ai/zen/v1/chat/completions"
+
+                # 4. Fallback: Minimax M2.5 (Using OpenAI compatible routing)
+                export OPENAI_API_KEY="$OPENCODE_API_KEY"
+                run_agent "openai/minimax-minimax-01" "--openai-api-base https://opencode.ai/zen/v1"
               fi
             fi
           fi
 
       - name: Commit and Force-Push Fixes
+        id: commit
+        shell: bash
         run: |
           git add .
 
           # Only commit and push if the Agent actually changed files
-          if ! git diff-index --quiet HEAD; then
-            git commit -m "ðŸ¤– Agent: Multi-iteration applied fixes & optimizations"
-            git push origin HEAD --force
-            
-            # Post a comment back to the PR
-            gh pr comment ${{ github.event.pull_request.number }} \
-              --body "ðŸš€ **Agent Workflow Complete!** I analyzed the repo and pushed fixes to \`ai-fixes-${{ github.head_ref }}\`."
+          # Use git diff --cached to check staged changes (no HEAD reference needed)
+          if ! git diff --cached --quiet; then
+            # Get list of changed files from staged area
+            # Write to file to avoid variable overflow
+            git diff --cached --name-only > /tmp/changed_files.txt
+            CHANGED_FILES=$(cat /tmp/changed_files.txt | jq -R -s -c 'split("\n")[:-1]')
+
+            # Get all trigger comment IDs for reference
+            # Write to file to avoid "argument list too long" errors
+            echo "${{ needs.collect-comments.outputs.comment_ids }}" | tr ',' '\n' > /tmp/comment_ids.txt
+            COMMENT_COUNT=$(wc -l < /tmp/comment_ids.txt | tr -d ' ')
+
+            # Build commit message with all comment references
+            git commit -m "🤖 Agent: Batch applied fixes from $COMMENT_COUNT review comments"
+
+            # Graceful push with retry logic (handles remote updates without losing work)
+            FIX_BRANCH="jarvis-fixes-${{ steps.pr.outputs.head_ref }}"
+            MAX_RETRIES=3
+            RETRY_COUNT=0
+            PUSH_SUCCESS=false
+
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$PUSH_SUCCESS" = "false" ]; do
+              # Try to push first
+              if git push origin "$FIX_BRANCH" 2>/dev/null; then
+                echo "✓ Push succeeded"
+                PUSH_SUCCESS=true
+              else
+                # Push failed - fetch remote and try to rebase
+                echo "Push failed (possible remote update). Fetching and rebasing..."
+                git fetch origin "$FIX_BRANCH"
+
+                # Rebase local commits on top of remote branch
+                if git rebase "origin/$FIX_BRANCH" "$FIX_BRANCH" 2>/dev/null; then
+                  echo "✓ Rebased onto remote, retrying push..."
+                  RETRY_COUNT=$((RETRY_COUNT + 1))
+                else
+                  # Rebase failed - reset to remote and re-apply changes
+                  echo "⚠️ Rebase failed, resetting to remote and re-applying changes..."
+                  git checkout "$FIX_BRANCH"
+                  git reset --hard "origin/$FIX_BRANCH"
+                  
+                  # Re-stage and re-commit the agent changes
+                  git add .
+                  if ! git diff --cached --quiet; then
+                    git commit -m "🤖 Agent: Batch applied fixes (re-applied after conflict)"
+                    RETRY_COUNT=$((RETRY_COUNT + 1))
+                  else
+                    echo "⚠️ No changes to commit after reset"
+                    RETRY_COUNT=$MAX_RETRIES
+                  fi
+                fi
+              fi
+            done
+
+            if [ "$PUSH_SUCCESS" = "false" ]; then
+              echo "❌ Push failed after $MAX_RETRIES attempts"
+              exit 1
+            fi
+
+            # Write changed files to output using unique delimiter
+            echo "changed_files<<CHANGED_FILES_EOF" >> "$GITHUB_OUTPUT"
+            echo "$CHANGED_FILES" >> "$GITHUB_OUTPUT"
+            echo "CHANGED_FILES_EOF" >> "$GITHUB_OUTPUT"
+
+            echo "success=true" >> "$GITHUB_OUTPUT"
+            echo "comment_count=$COMMENT_COUNT" >> "$GITHUB_OUTPUT"
           else
-            echo "No changes were made by the agent."
+            echo "success=false" >> "$GITHUB_OUTPUT"
+            echo "comment_count=0" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Post Summary Comment
+        if: steps.commit.outputs.success == 'true'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGE_RESULT: ${{ steps.branch.outputs.merge_result }}
+        run: |
+          PR_NUMBER=${{ needs.collect-comments.outputs.pr_number }}
+
+          # Parse changed files and format as markdown list with links
+          # Write to file to avoid heredoc delimiter issues
+          echo '${{ steps.commit.outputs.changed_files }}' | jq -r '.[]' > /tmp/files_list.txt
+          FIX_BRANCH="jarvis-fixes-${{ steps.pr.outputs.head_ref }}"
+          FILES_LIST=""
+          while IFS= read -r file; do
+            if [ -n "$file" ]; then
+              FILES_LIST="${FILES_LIST}- [\`$file\`](https://github.com/${{ github.repository }}/blob/$FIX_BRANCH/$file)"$'\n'
+            fi
+          done < /tmp/files_list.txt
+
+          # Build list of trigger comment links (review comments use rcomment-id format)
+          # Write to file to avoid "argument list too long" errors
+          echo "${{ needs.collect-comments.outputs.comment_ids }}" | tr ',' '\n' > /tmp/comment_ids.txt
+          COMMENT_LINKS=""
+          while IFS= read -r id; do
+            if [ -n "$id" ]; then
+              COMMENT_LINKS="${COMMENT_LINKS}- [Comment #$id](https://github.com/${{ github.repository }}/pull/$PR_NUMBER#discussioncomment-r$id)"$'\n'
+            fi
+          done < /tmp/comment_ids.txt
+
+          # Determine previous fixes status
+          case "$MERGE_RESULT" in
+            "rebased") PREV_FIXES="✅ Preserved (rebased onto PR HEAD)" ;;
+            "cherry_picked") PREV_FIXES="✅ Preserved (cherry-picked onto PR HEAD)" ;;
+            "merged") PREV_FIXES="✅ Preserved (merged PR HEAD)" ;;
+            "reset") PREV_FIXES="⚠️ Reset (merge/rebase conflicts)" ;;
+            *) PREV_FIXES="🆕 New branch" ;;
+          esac
+
+          # Build the comment body in a temp file
+          {
+            echo "### 🚀 Agent Workflow Complete! (Batch: ${{ steps.commit.outputs.comment_count }} comments)"
+            echo ""
+            echo "**Triggered by:**"
+            if [ -n "$COMMENT_LINKS" ]; then echo "$COMMENT_LINKS"; else echo "No trigger comments"; fi
+            echo ""
+            echo "**Base PR:** \`${{ steps.pr.outputs.head_ref }}\`@[\`${{ steps.pr.outputs.head_sha }}\`](https://github.com/${{ github.repository }}/commit/${{ steps.pr.outputs.head_sha }})"
+            echo "**Fix Branch:** \`jarvis-fixes-${{ steps.pr.outputs.head_ref }}\`"
+            echo "**Previous Fixes:** ${PREV_FIXES:-N/A}"
+            echo ""
+            echo "**Files Modified:**"
+            if [ -n "$FILES_LIST" ]; then echo "$FILES_LIST"; else echo "No files modified"; fi
+            echo ""
+            echo "**Agent Commit:** [\`$(git rev-parse --short HEAD)\`](https://github.com/${{ github.repository }}/commit/$(git rev-parse HEAD))"
+            echo ""
+            echo "---"
+            echo "*This is an automated response from the Jarvis agent. All batched review comments have been addressed in this commit.*"
+          } > /tmp/comment.md
+
+          # Post the comment
+          gh pr comment $PR_NUMBER --body-file /tmp/comment.md
+
+  # Job 3: Mark processed comments with rocket reaction AND clear queue on success
+  mark-comments-processed:
+    needs: [collect-comments, multi-iteration-fix]
+    if: always() && needs.collect-comments.outputs.comment_ids != '' && needs.multi-iteration-fix.result == 'success' && needs.collect-comments.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - name: Add Rocket Reaction AND Clear Queue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=${{ needs.collect-comments.outputs.pr_number }}
+          COMMENT_IDS="${{ needs.collect-comments.outputs.comment_ids }}"
+          QUEUE_BRANCH="jarvis-queue"
+          QUEUE_FILE=".jarvis/queue-pr-${PR_NUMBER}.json"
+
+          # Add 🚀 reaction to all processed comments
+          # Write IDs to file to avoid "argument list too long" errors
+          echo "$COMMENT_IDS" | tr ',' '\n' > /tmp/comment_ids.txt
+          while IFS= read -r id; do
+            if [ -n "$id" ]; then
+              gh api repos/${{ github.repository }}/pulls/comments/$id/reactions \
+                -f content=rocket || true
+            fi
+          done < /tmp/comment_ids.txt
+
+          # Clear the queue file on success (delete the branch or empty the file)
+          if gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" >/dev/null 2>&1; then
+            # Delete the queue file for this PR
+            FILE_SHA=$(gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" --jq '.sha')
+            gh api -X DELETE "repos/${{ github.repository }}/contents/$QUEUE_FILE" \
+              -f branch="$QUEUE_BRANCH" \
+              -f message="🗑️ Clear queue for PR #$PR_NUMBER" \
+              -f sha="$FILE_SHA" || true
+            echo "Cleared queue file for PR $PR_NUMBER (success)"
+          fi
+
+  # Job 4: Persist pending queue when waiting for more comments (should_run=false)
+  persist-queue-waiting:
+    needs: collect-comments
+    if: needs.collect-comments.outputs.should_run == 'false' && needs.collect-comments.outputs.comment_ids != '' && needs.collect-comments.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Trigger Comments Artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: trigger-comments
+          path: /tmp/
+
+      - name: Save Pending Queue to Branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          QUEUE_BRANCH="jarvis-queue"
+          PR_NUMBER=${{ needs.collect-comments.outputs.pr_number }}
+          QUEUE_FILE=".jarvis/queue-pr-${PR_NUMBER}.json"
+
+          # Read trigger comments from downloaded artifact (already in JSON format)
+          jq -c '[.[] | {id, body}]' /tmp/trigger_comments.json > /tmp/queue.json || echo "[]" > /tmp/queue.json
+
+          # Fallback: if jq failed, create empty array
+          if [ ! -s /tmp/queue.json ]; then
+            echo "[]" > /tmp/queue.json
+          fi
+
+          echo "Saving pending queue with $(jq 'length' /tmp/queue.json) comments for PR $PR_NUMBER (waiting for more comments)"
+
+          # Get the default branch name dynamically
+          DEFAULT_BRANCH=$(gh api repos/${{ github.repository }} --jq '.default_branch')
+
+          # Checkout or create the queue branch
+          if gh api repos/${{ github.repository }}/git/ref/heads/$QUEUE_BRANCH >/dev/null 2>&1; then
+            echo "Queue branch exists, updating..."
+          else
+            MAIN_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/$DEFAULT_BRANCH --jq '.object.sha')
+            gh api -X POST repos/${{ github.repository }}/git/refs \
+              -f ref="refs/heads/$QUEUE_BRANCH" \
+              -f sha="$MAIN_SHA" || true
+          fi
+
+          # Encode file content as base64 and write to temp file
+          base64 -w 0 < /tmp/queue.json > /tmp/content.b64
+
+          EXISTING_SHA=""
+          if gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" >/dev/null 2>&1; then
+            EXISTING_SHA=$(gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" --jq '.sha')
+          fi
+
+          # Build JSON payload by writing parts to file (avoids arg list limits)
+          if [ -n "$EXISTING_SHA" ]; then
+            {
+              printf '{"message":"🔄 Update pending queue (PR #%s)","branch":"%s","content":"' "$PR_NUMBER" "$QUEUE_BRANCH"
+              cat /tmp/content.b64
+              printf '","sha":"%s"}' "$EXISTING_SHA"
+            } > /tmp/payload.json
+            gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json
+          else
+            {
+              printf '{"message":"📝 Create pending queue (PR #%s)","branch":"%s","content":"' "$PR_NUMBER" "$QUEUE_BRANCH"
+              cat /tmp/content.b64
+              printf '"}'
+            } > /tmp/payload.json
+            gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json
+          fi
+
+          echo "✅ Queue persisted with $(jq 'length' /tmp/queue.json) comments for PR $PR_NUMBER. Will retry on next trigger."
+
+  # Job 5: Persist pending queue on failure (save unprocessed comments for next run)
+  persist-queue-on-failure:
+    needs: [collect-comments, multi-iteration-fix]
+    if: always() && needs.collect-comments.outputs.comment_ids != '' && needs.multi-iteration-fix.result == 'failure' && needs.collect-comments.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Trigger Comments Artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: trigger-comments
+          path: /tmp/
+
+      - name: Save Pending Queue to Branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_IDS: ${{ needs.collect-comments.outputs.comment_ids }}
+        run: |
+          QUEUE_BRANCH="jarvis-queue"
+          PR_NUMBER=${{ needs.collect-comments.outputs.pr_number }}
+          QUEUE_FILE=".jarvis/queue-pr-${PR_NUMBER}.json"
+
+          # Read trigger comments from downloaded artifact (already in JSON format)
+          # Write directly to temp file to avoid "argument list too long" error
+          jq -c '[.[] | {id, body}]' /tmp/trigger_comments.json > /tmp/queue.json
+
+          # Fallback: if jq failed, create empty array
+          if [ ! -s /tmp/queue.json ]; then
+            echo "[]" > /tmp/queue.json
+          fi
+
+          echo "Saving pending queue with $(jq 'length' /tmp/queue.json) comments for PR $PR_NUMBER"
+
+          # Get the default branch name dynamically
+          DEFAULT_BRANCH=$(gh api repos/${{ github.repository }} --jq '.default_branch')
+
+          # Checkout or create the queue branch
+          if gh api repos/${{ github.repository }}/git/ref/heads/$QUEUE_BRANCH >/dev/null 2>&1; then
+            echo "Queue branch exists, updating..."
+          else
+            MAIN_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/$DEFAULT_BRANCH --jq '.object.sha')
+            gh api -X POST repos/${{ github.repository }}/git/refs \
+              -f ref="refs/heads/$QUEUE_BRANCH" \
+              -f sha="$MAIN_SHA" || true
+          fi
+
+          # Encode file content as base64 and write to temp file
+          base64 -w 0 < /tmp/queue.json > /tmp/content.b64
+
+          # Retry logic for SHA conflicts (concurrent updates to queue file)
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          SUCCESS=false
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SUCCESS" = "false" ]; do
+            EXISTING_SHA=""
+            if gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" >/dev/null 2>&1; then
+              EXISTING_SHA=$(gh api "repos/${{ github.repository }}/contents/$QUEUE_FILE?ref=$QUEUE_BRANCH" --jq '.sha')
+            fi
+
+            # Build JSON payload by writing parts to file (avoids arg list limits)
+            if [ -n "$EXISTING_SHA" ]; then
+              {
+                printf '{"message":"🔄 Update pending queue (PR #%s)","branch":"%s","content":"' "$PR_NUMBER" "$QUEUE_BRANCH"
+                cat /tmp/content.b64
+                printf '","sha":"%s"}' "$EXISTING_SHA"
+              } > /tmp/payload.json
+              if gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json 2>/dev/null; then
+                SUCCESS=true
+                echo "✅ Queue updated successfully"
+              fi
+            else
+              {
+                printf '{"message":"📝 Create pending queue (PR #%s)","branch":"%s","content":"' "$PR_NUMBER" "$QUEUE_BRANCH"
+                cat /tmp/content.b64
+                printf '"}'
+              } > /tmp/payload.json
+              if gh api -X PUT "repos/${{ github.repository }}/contents/$QUEUE_FILE" --input /tmp/payload.json 2>/dev/null; then
+                SUCCESS=true
+                echo "✅ Queue created successfully"
+              fi
+            fi
+
+            if [ "$SUCCESS" = "false" ]; then
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "SHA conflict detected, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
+                sleep 2
+              fi
+            fi
+          done
+
+          if [ "$SUCCESS" = "false" ]; then
+            echo "❌ Failed to update queue after $MAX_RETRIES retries"
+            exit 1
+          fi
+
+          echo "✅ Queue persisted with $(jq 'length' /tmp/queue.json) comments for PR $PR_NUMBER. Will retry on next trigger."

@@ -117,27 +117,22 @@ export function useReasoningStream({
   useEffect(() => {
     if (!sandboxId) return;
 
-    const handleReasoningStart = () => {
-      setIsStreaming(true);
-      setHasAdditionalThoughts(true);
+    const handleEvent = (event: any) => {
+      if (event.type === 'agent:reasoning_start') {
+        setIsStreaming(true);
+        setHasAdditionalThoughts(true);
+      } else if (event.type === 'agent:reasoning_chunk') {
+        const { text, type } = event.data || {};
+        processReasoningChunk(text, type || 'thought');
+      } else if (event.type === 'agent:reasoning_complete') {
+        completeReasoning();
+      }
     };
 
-    const handleReasoningChunk = ({ text, type }: { text: string; type?: ReasoningChunk['type'] }) => {
-      processReasoningChunk(text, type || 'thought');
-    };
-
-    const handleReasoningComplete = () => {
-      completeReasoning();
-    };
-
-    sandboxEvents.on(sandboxId, 'agent:reasoning_start', handleReasoningStart);
-    sandboxEvents.on(sandboxId, 'agent:reasoning_chunk', handleReasoningChunk);
-    sandboxEvents.on(sandboxId, 'agent:reasoning_complete', handleReasoningComplete);
+    const unsubscribe = sandboxEvents.subscribe(sandboxId, handleEvent);
 
     return () => {
-      sandboxEvents.off(sandboxId, 'agent:reasoning_start', handleReasoningStart);
-      sandboxEvents.off(sandboxId, 'agent:reasoning_chunk', handleReasoningChunk);
-      sandboxEvents.off(sandboxId, 'agent:reasoning_complete', handleReasoningComplete);
+      unsubscribe();
     };
   }, [sandboxId, processReasoningChunk, completeReasoning]);
 
