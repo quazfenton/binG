@@ -24,7 +24,7 @@ let _webSocketTerminalServer: any = null;
 async function getWebSocketTerminalServer() {
   if (!_webSocketTerminalServer) {
     try {
-      const { webSocketTerminalServer } = await import('@/lib/backend/websocket-terminal');
+      const { webSocketTerminalServer } = await import('@/lib/terminal/websocket-terminal');
       _webSocketTerminalServer = webSocketTerminalServer;
     } catch (error) {
       console.warn('[Backend] Failed to load WebSocket terminal server:', (error as Error).message);
@@ -84,6 +84,28 @@ async function initializeBackend() {
   } catch (error: any) {
     console.error('[Backend] Initialization failed:', error.message);
     throw error;
+  }
+}
+
+// POST /api/backend - Initialize backend and WebSocket server
+export async function POST(request: NextRequest) {
+  try {
+    await initializeBackend();
+    
+    const wsServer = await getWebSocketTerminalServer();
+    const result = {
+      success: true,
+      initialized: true,
+      websocket: !!wsServer,
+      activeSessions: wsServer ? wsServer.getActiveSessions() : 0,
+      timestamp: new Date().toISOString(),
+    };
+    
+    sandboxMetrics.httpRequestsTotal.inc({ method: 'POST', path: '/api/backend', status: '200' });
+    return NextResponse.json(result);
+  } catch (error: any) {
+    sandboxMetrics.httpRequestsTotal.inc({ method: 'POST', path: '/api/backend', status: '500' });
+    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
 

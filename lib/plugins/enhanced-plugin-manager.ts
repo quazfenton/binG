@@ -31,9 +31,9 @@ export interface EnhancedPlugin {
   defaultSize: { width: number; height: number };
   minSize: { width: number; height: number };
   maxSize?: { width: number; height: number };
-  
+
   // Enhanced properties
-  dependencies?: string[];
+  dependencies?: string[] | PluginDependency[];
   resourceLimits?: Partial<PluginResourceLimits>;
   isolationConfig?: Partial<PluginIsolationConfig>;
   errorHandler?: (error: PluginError) => void;

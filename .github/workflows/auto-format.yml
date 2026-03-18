@@ -1,7 +1,7 @@
 name: 3. Auto-Format & Fix
 on:
-  push:
-    branches-ignore: [main] # Don't auto-commit directly to main
+  pull_request:
+    types: [opened, reopened]  # Only on first open/reopen, not every commit push
 permissions:
   contents: write
   pull-requests: write

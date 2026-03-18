@@ -1,7 +1,7 @@
 import type { SandboxHandle } from './providers/sandbox-provider'
 import { getSandboxProvider } from './providers'
 import { setupCacheVolumes } from './dep-cache'
-import { quotaManager } from '../services/quota-manager'
+import { quotaManager } from '../management/quota-manager'
 
 // ---------------------------------------------------------------------------
 // Part 1 – Base Package Manifest

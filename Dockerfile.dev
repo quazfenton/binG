@@ -1,33 +1,153 @@
 # Development Dockerfile for binG Backend
 # Optimized for fast iteration and hot-reload
+# V2 Enhanced: Includes OpenCode
+# Node.js 22+ required for Mastra, Tambo, and other dependencies
 
-FROM node:20-alpine AS development
+FROM node:22-alpine AS development
 
+# Install pnpm globally
+RUN npm install -g pnpm
+
+# Set PNPM_HOME for global packages (pnpm setup doesn't work well in Alpine)
+ENV PNPM_HOME=/root/.local/share/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+
+# Install system dependencies
 RUN apk add --no-cache \
     libc6-compat \
     libstdc++ \
     curl \
-    git
+    git \
+    python3 \
+    py3-pip \
+    openssh-client \
+    docker \
+    docker-compose
+
+# Create non-root user for security
+# This prevents the container from running as root, reducing attack surface
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001 -G nodejs
 
 WORKDIR /app
 
 # Copy package files
-COPY package.json package-lock.json* ./
+COPY package.json pnpm-lock.yaml* ./
 
-# Install ALL dependencies (including devDependencies)
-RUN npm install --legacy-peer-deps && npm cache clean --force
+# Install dependencies with pnpm (uses persistent cache)
+RUN pnpm install --no-frozen-lockfile
+
+# Install OpenCode CLI globally (cached in /root/.npm)
+RUN pnpm add -g opencode-ai || npm install -g opencode-ai
+
+# Note: Nullclaw runs as a separate Docker container (see docker-compose.v2.yml)
+# No pip installation needed - Python cache available for other tools
 
 # Copy source files
 COPY . .
 
+# Set proper ownership to non-root user
+RUN chown -R nodejs:nodejs /app
+
+# Create workspace directories
+RUN mkdir -p /workspace/users && chown -R nodejs:nodejs /workspace
+
+# Create MCP config directory
+RUN mkdir -p /app/.mcp && chown -R nodejs:nodejs /app/.mcp
+
+# Create docker socket directory (for managing Nullclaw container)
+RUN mkdir -p /var/run && touch /var/run/docker.sock
+
+# Create cache directories with proper permissions
+RUN mkdir -p /root/.cache/pip /root/.npm /root/.opencode /root/.nullclaw && \
+    chown -R nodejs:nodejs /root/.cache/pip /root/.npm /root/.opencode /root/.nullclaw
+
+# Create .next directory with proper permissions
+RUN mkdir -p /app/.next && chown -R nodejs:nodejs /app/.next
+
+# Build-time arguments for required environment variables
+ARG ENCRYPTION_KEY
+ARG JWT_SECRET
+ARG BLAXEL_SECRET_ENCRYPTION_KEY
+ARG NANGO_SECRET_KEY
+ARG DATABASE_URL
+
+# Set environment variables for build
+ENV ENCRYPTION_KEY=${ENCRYPTION_KEY}
+ENV JWT_SECRET=${JWT_SECRET}
+ENV BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY}
+ENV NANGO_SECRET_KEY=${NANGO_SECRET_KEY}
+ENV DATABASE_URL=${DATABASE_URL}
+
+# Note: pip cache is available for other Python tools, but Nullclaw runs as container
+
+# Switch to non-root user
+USER nodejs
+
 # Expose ports
-EXPOSE 3000 8080
+# 5555: Next.js dev server
+# 3001: Nullclaw container
+# 8888: MCP HTTP server for Architecture 2
+# 8080: WebSocket terminal server
+EXPOSE 5555 3001 8888 8080
 
 # Set development environment
 ENV NODE_ENV=development
-ENV PORT=3000
-ENV WEBSOCKET_PORT=8080
+ENV PORT=5555
 ENV WATCHPACK_POLLING=true
 
-# Start development server
-CMD ["npm", "run", "dev"]
+# V2 Agent environment variables
+ENV OPENCODE_CONTAINERIZED=true
+ENV V2_AGENT_ENABLED=true
+ENV OPENCODE_MODEL=claude-3-5-sonnet
+ENV OPENCODE_BIN=/usr/local/bin/opencode
+ENV OPENCODE_MAX_SESSIONS_PER_USER=10
+ENV OPENCODE_DEFAULT_TIMEOUT=300000
+ENV OPENCODE_ENFORCE_QUOTA=false
+ENV CHAT_AGENTIC_PIPELINE=auto
+ENV WORKFORCE_ENABLED=true
+
+# Nullclaw Configuration
+ENV NULLCLAW_ENABLED=true
+ENV NULLCLAW_IMAGE=ghcr.io/nullclaw/nullclaw:latest
+ENV NULLCLAW_MODE=per-session
+ENV NULLCLAW_MAX_CONTAINERS=4
+ENV NULLCLAW_PORT=3001
+ENV NULLCLAW_PORT=3001
+ENV NULLCLAW_TIMEOUT=3600
+ENV NULLCLAW_ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
+ENV NULLCLAW_NETWORK=bing-network
+ENV NULLCLAW_POOL_SIZE=2
+
+# MCP Server for Architecture 2
+ENV MCP_ENABLED=true
+ENV MCP_CLI_PORT=8888
+ENV MCP_CLI_AUTH_TOKEN=
+
+# Cloud Provider Configuration (priority-based fallback)
+ENV CLOUD_FS_PRIORITY=sprites,e2b,daytona,codesandbox
+ENV PREVIEW_OFFLOAD_THRESHOLD_FILES=50
+ENV PREVIEW_OFFLOAD_THRESHOLD_MB=5
+
+# Cloud Agent Spawner
+ENV MAX_CLOUD_AGENTS=10
+ENV CLOUD_AGENT_IDLE_TIMEOUT=1800000
+ENV CLOUD_AGENT_MAX_UPTIME=3600000
+
+# Workspace Configuration
+ENV WORKSPACE_DIR=/workspace
+ENV USER_WORKSPACE_ROOT=/workspace/users
+
+# Cache environment variables
+ENV PIP_CACHE_DIR=/root/.cache/pip
+ENV NPM_CONFIG_CACHE=/root/.npm
+
+# Health check for container monitoring
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:5555/api/health || exit 1
+
+# Build Next.js for production (avoids .next write issues in dev mode)
+RUN pnpm run build
+
+# Start development server (will use pre-built .next)
+CMD ["pnpm", "run", "dev"]

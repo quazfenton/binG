@@ -77,6 +77,11 @@ export interface SandboxHandle {
   restartService?(serviceName: string): Promise<{ success: boolean; error?: string }>
   configureHttpService?(port: number): Promise<{ success: boolean; url: string; message?: string }>
   getCheckpointManager?(policy?: Partial<any>): any
+
+  // Provider-specific service accessors (optional, provider-dependent)
+  getAmpService?(): { run(config: { prompt: string; workingDir?: string; streamJson?: boolean; model?: string }): Promise<{ output?: string; cost?: number; tokens?: number }> } | undefined
+  getCodexService?(): { run(config: { prompt: string; workingDir?: string; fullAuto?: boolean; outputSchemaPath?: string }): Promise<{ output?: string; cost?: number; tokens?: number }> } | undefined
+  getComputerUseService?(): { takeRegion?(config: { x?: number; y?: number; width?: number; height?: number }): Promise<{ image: string }>; startRecording?(): Promise<{ recordingId: string }>; stopRecording?(recordingId: string): Promise<{ video: string }> } | undefined
 }
 
 /**
