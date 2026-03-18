@@ -143,7 +143,7 @@ describe('ImageProviderRegistry', () => {
     ).rejects.toThrow();
   });
 
-  it('should enable/disable providers', () => {
+  it('should enable/disable providers', async () => {
     const provider = {
       id: 'test',
       name: 'Test',
@@ -251,3 +251,4 @@ describe('Image Generation Types', () => {
     expect(STYLE_PRESETS).toContain('Digital Art');
   });
 });
+

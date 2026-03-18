@@ -45,7 +45,7 @@ export function useEnhancedStreamingDisplay({
   });
 
   const sessionIdRef = useRef<string | null>(null);
-  const animationFrameRef = useRef<number>();
+  const animationFrameRef = useRef<number | undefined>(undefined);
   const lastContentRef = useRef<string>('');
   const displayIndexRef = useRef<number>(0);
 
@@ -54,7 +54,7 @@ export function useEnhancedStreamingDisplay({
     if (isStreaming && !sessionIdRef.current) {
       const sessionId = `display-${messageId}-${Date.now()}`;
       sessionIdRef.current = sessionId;
-      
+
       enhancedBufferManager.createSession(sessionId);
       
       setState(prev => ({

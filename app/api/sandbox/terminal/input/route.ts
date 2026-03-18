@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
-import { terminalManager } from '@/lib/sandbox/terminal-manager';
-import { checkCommandSecurity } from '@/lib/terminal/terminal-security';
+import { terminalManager } from '@/lib/terminal/terminal-manager';
+import { checkCommandSecurity } from '@/lib/terminal/security/terminal-security';
 import { terminalCommandRateLimiter } from '@/lib/utils/rate-limiter';
 import { TERMINAL_LIMITS } from '@/lib/terminal/terminal-constants';
 import { createLogger } from '@/lib/utils/logger';

@@ -4,7 +4,7 @@
  * Tests for database-backed filesystem edit transaction persistence
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { filesystemEditDatabase } from '@/lib/virtual-filesystem/filesystem-edit-database';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
@@ -490,10 +490,11 @@ describe('FilesystemEditSessionService - Integration', () => {
       await new Promise(resolve => setTimeout(resolve, 100));
 
       // Retrieve denials from database
-      const denials = filesystemEditSessionService.getRecentDenials(testConversationId);
+      const denials = await filesystemEditSessionService.getRecentDenials(testConversationId);
 
       expect(denials.length).toBeGreaterThan(0);
       expect(denials[0].reason).toBe('Integration test denial');
     });
   });
 });
+

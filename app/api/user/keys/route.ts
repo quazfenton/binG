@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { initializeDatabase } from '@/lib/database/db';
+import { initializeDatabase, BetterSqlite3Database } from '@/lib/database/db';
 import jwt from 'jsonwebtoken';
 import { encryptSecret, decryptSecret, isEncryptedFormat } from '@/lib/utils/crypto';
 
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid provider name format' }, { status: 400 });
     }
 
-    const db = await initializeDatabase();
+    const db: any = await initializeDatabase();
 
     // SECURITY: Encrypt API key before storing
     let encryptedKey: string;
@@ -80,8 +80,8 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const db = await initializeDatabase();
-    const keys = await db.all('SELECT provider, api_key FROM user_api_keys WHERE user_id = ?', [userId]);
+    const db: any = await initializeDatabase();
+    const keys: any = await db.all('SELECT provider, api_key FROM user_api_keys WHERE user_id = ?', [userId]);
 
     const apiKeys: Record<string, string> = {};
     for (const row of keys) {

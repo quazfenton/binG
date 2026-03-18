@@ -11,7 +11,7 @@
  * - Performance monitoring
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 /**
  * Execution metrics

@@ -143,7 +143,7 @@ export default function IntegrationAuthPrompt({
 
     // Fallback: detect if popup was closed without completing OAuth
     // Only poll if a popup is actually open
-    let interval: number | undefined;
+    let interval: ReturnType<typeof setInterval> | undefined;
     if (popupWindow) {
       interval = setInterval(() => {
         if (popupWindow.closed) {

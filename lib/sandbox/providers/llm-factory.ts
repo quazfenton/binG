@@ -17,7 +17,7 @@ export function getLLMProvider(type?: LLMProviderType): LLMProvider {
       cachedLLMProvider = new GeminiProvider()
       break
     case 'opencode': {
-      const { OpencodeProvider } = require('./opencode-provider')
+      const { OpencodeProvider } = require('../spawn/opencode-spawn')
       cachedLLMProvider = new OpencodeProvider()
       break
     }

@@ -314,6 +314,49 @@ export class FilesystemDiffTracker {
     return latestDiffs;
   }
 
+  /**
+   * Get structured diff output for client sync
+   * Returns files with path and unified diff format for efficient transfer
+   */
+  getChangedFilesForSync(ownerId: string = 'default', maxFiles = 50): Array<{
+    path: string;
+    diff: string;
+    changeType: 'create' | 'update' | 'delete';
+  }> {
+    const latestDiffs = this.getAllDiffsForContext(maxFiles, ownerId);
+    
+    return latestDiffs.map(diff => {
+      let diffText = '';
+      
+      if (diff.changeType === 'delete') {
+        diffText = `--- a/${diff.path}\n+++ /dev/null`;
+        if (diff.hunks && diff.hunks.length > 0) {
+          for (const hunk of diff.hunks) {
+            diffText += `\n@@ -${hunk.oldStart},${hunk.oldLines} +0,0 @@`;
+            for (const line of hunk.lines) diffText += `\n${line}`;
+          }
+        } else {
+          diffText += `\n${diff.oldContent.split('\n').map(l => `-${l}`).join('\n')}`;
+        }
+      } else {
+        diffText = `--- a/${diff.path}\n+++ b/${diff.path}`;
+        if (diff.hunks && diff.hunks.length > 0) {
+          for (const hunk of diff.hunks) {
+            diffText += `\n@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
+            for (const line of hunk.lines) diffText += `\n${line}`;
+          }
+        } else if (diff.changeType === 'create') {
+          diffText += `\n${diff.newContent.split('\n').map(l => `+${l}`).join('\n')}`;
+        } else if (diff.changeType === 'update' && (!diff.hunks || diff.hunks.length === 0)) {
+          // Update with no hunks - show full new content
+          diffText += `\n${diff.newContent.split('\n').map(l => `+${l}`).join('\n')}`;
+        }
+      }
+      
+      return { path: diff.path, diff: diffText, changeType: diff.changeType };
+    });
+  }
+
   private computeHunks(oldContent: string | undefined, newContent: string | undefined): DiffHunk[] {
     const oc = oldContent || '';
     const nc = newContent || '';

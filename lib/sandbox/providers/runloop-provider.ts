@@ -15,23 +15,58 @@ export class RunloopProvider implements SandboxProvider {
   private client: any;
 
   constructor() {
-    const { RunloopSDK } = require("@runloop/api-client");
-    const apiKey = process.env.RUNLOOP_API_KEY;
-    if (!apiKey) {
-      console.warn("[RunloopProvider] RUNLOOP_API_KEY not set.");
+    try {
+      const runloopModule = require("@runloop/api-client");
+
+      // The SDK may export as default or named export
+      // Try: import Runloop from '@runloop/api-client' -> runloopModule.default
+      // Try: import { Runloop } from '@runloop/api-client' -> runloopModule.Runloop
+      // The SDK class is typically imported as default and instantiated with token property
+      let RunloopClient = runloopModule.default || runloopModule.Runloop || runloopModule;
+
+      const apiKey = process.env.RUNLOOP_API_KEY || process.env.RUNLOOP_TOKEN;
+      if (!apiKey) {
+        console.warn("[RunloopProvider] RUNLOOP_API_KEY or RUNLOOP_TOKEN not set.");
+      }
+
+      // Validate that we got a constructor-like function
+      if (RunloopClient && typeof RunloopClient === 'function') {
+        this.client = apiKey ? new RunloopClient({ token: apiKey }) : null;
+        if (!this.client && apiKey) {
+          // Try alternative constructor format
+          this.client = new RunloopClient(apiKey);
+        }
+      } else {
+        console.warn("[RunloopProvider] Runloop client not found in module. Available exports:", Object.keys(runloopModule));
+        this.client = null;
+      }
+      
+      console.log(`[RunloopProvider] Initialized - Client configured: ${!!this.client}`)
+    } catch (err: any) {
+      console.warn("[RunloopProvider] Failed to import @runloop/api-client:", err.message);
+      this.client = null;
     }
-    this.client = apiKey ? new RunloopSDK({ apiKey }) : null;
   }
 
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
     if (!this.client) throw new Error("Runloop API key not configured");
-    const devbox = await this.client.devbox.create({
-      blueprint: "standard",
-    });
+    
+    console.log(`[Runloop] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Language: ${config.language || 'default'}`)
+    
+    try {
+      const devbox = await this.client.devbox.create({
+        blueprint: "standard",
+      });
 
-    const handle = new RunloopSandboxHandle(devbox, this.client);
-    await handle.executeCommand(`mkdir -p ${WORKSPACE_DIR}`);
-    return handle;
+      console.log(`[Runloop] ✓ Created sandbox ${devbox.id}`)
+
+      const handle = new RunloopSandboxHandle(devbox, this.client);
+      await handle.executeCommand(`mkdir -p ${WORKSPACE_DIR}`);
+      return handle;
+    } catch (error: any) {
+      console.error(`[Runloop] ✗ Failed to create sandbox:`, error.message)
+      throw error
+    }
   }
 
   async getSandbox(sandboxId: string): Promise<SandboxHandle> {

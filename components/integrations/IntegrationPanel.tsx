@@ -186,7 +186,7 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     window.addEventListener('message', handleMessage);
 
     // Only poll for popup close if a popup is actually open
-    let interval: number | undefined;
+    let interval: ReturnType<typeof setInterval> | undefined;
     if (popupWindow) {
       interval = setInterval(() => {
         if (popupWindow.closed) {

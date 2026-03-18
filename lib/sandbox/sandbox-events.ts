@@ -1,15 +1,15 @@
 /**
  * Sandbox Event System
- * 
+ *
  * Provides event emission and subscription for sandbox events
- * 
+ *
  * @deprecated Use enhancedSandboxEvents from sandbox-events-enhanced.ts instead
  * This module is kept for backward compatibility
- * 
+ *
  * @see lib/sandbox/sandbox-events-enhanced.ts - Enhanced event system with persistence
  */
 
-import { EventEmitter } from 'events'
+import { UniversalEventEmitter } from '@/lib/utils/universal-event-emitter'
 
 // Re-export enhanced events for backward compatibility
 export {
@@ -27,9 +27,7 @@ export type SandboxEventType = EnhancedSandboxEventType
 export type SandboxEvent = EnhancedSandboxEvent
 
 // Legacy event emitter (kept for backward compatibility)
-class LegacySandboxEventEmitter {
-  private emitter = new EventEmitter()
-
+class LegacySandboxEventEmitter extends UniversalEventEmitter {
   emit(sandboxId: string, type: SandboxEventType, data: any): void {
     // Delegate to enhanced events
     emitEvent(sandboxId, type, data)

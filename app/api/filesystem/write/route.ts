@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem } from '@/lib/virtual-filesystem';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
+import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
+import { extractSessionIdFromPath } from '@/lib/virtual-filesystem/scope-utils';
+import { fileContentSchema, languageSchema } from '@/lib/validation/schemas';
 
 export const runtime = 'nodejs';
 
 /**
  * Schema for filesystem write requests
  * Validates path, content, and prevents path traversal attacks
+ * Accepts both relative paths (project/sessions/...) and absolute paths (/home/..., /workspace/...)
  */
 const writeRequestSchema = z.object({
   path: z.string()
@@ -18,13 +22,19 @@ const writeRequestSchema = z.object({
       'Path contains invalid characters'
     )
     .refine(
-      (path) => !path.startsWith('/') || path.startsWith('/home/') || path.startsWith('/workspace/'),
-      'Absolute paths must start with /home/ or /workspace/'
+      (path) => {
+        // Allow relative paths (project, project/sessions, etc.)
+        if (!path.startsWith('/')) return true;
+        // If absolute, must start with /home/, /workspace/, or /tmp/
+        return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/');
+      },
+      'Invalid path format'
     ),
-  content: z.string()
-    .max(10 * 1024 * 1024, 'Content too large (max 10MB)'),
-  ownerId: z.string().optional(),
-  language: z.string().optional(),
+  content: fileContentSchema,
+  language: languageSchema.optional(),
+  sessionId: z.string().min(1).max(200).optional(),
+  source: z.string().min(1).max(100).optional(),
+  integration: z.string().min(1).max(100).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -56,19 +66,73 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { path: filePath, content, language } = validation.data;
+    const {
+      path: filePath,
+      content,
+      language,
+      sessionId: requestedSessionId,
+      source,
+      integration,
+    } = validation.data;
 
-    // SECURITY: Always derive ownerId from authenticated request context
-    // Never trust user-supplied ownerId for write operations
-    const ownerId = `user:${authResult.userId}`;
+    const ownerId = authResult.userId;
+
+    let previousContent: string | undefined;
+    let previousVersion: number | null = null;
+    let existedBefore = false;
+
+    try {
+      const previousFile = await virtualFilesystem.readFile(ownerId, filePath);
+      previousContent = previousFile.content;
+      previousVersion = previousFile.version;
+      existedBefore = true;
+    } catch {
+      previousContent = undefined;
+      previousVersion = null;
+      existedBefore = false;
+    }
 
     const file = await virtualFilesystem.writeFile(ownerId, filePath, content, language);
+    const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
+
+    const resolvedSessionId = requestedSessionId || extractSessionIdFromPath(filePath);
+    let commitId: string | undefined;
+
+    if (resolvedSessionId) {
+      const commitManager = new ShadowCommitManager();
+      const commitResult = await commitManager.commit(
+        { [file.path]: file.content },
+        [{
+          path: file.path,
+          type: existedBefore ? 'UPDATE' : 'CREATE',
+          timestamp: Date.now(),
+          originalContent: previousContent,
+          newContent: file.content,
+        }],
+        {
+          sessionId: `${ownerId}:${resolvedSessionId}`,
+          message: `${source || 'filesystem'} write: ${file.path}`,
+          author: ownerId,
+          source: source || 'filesystem-write',
+          integration: integration || source || 'filesystem',
+          workspaceVersion,
+        },
+      );
+
+      if (commitResult.success) {
+        commitId = commitResult.commitId;
+      }
+    }
 
     return NextResponse.json({
       success: true,
       data: {
         path: file.path,
         version: file.version,
+        previousVersion,
+        workspaceVersion,
+        sessionId: resolvedSessionId,
+        commitId,
         language: file.language,
         size: file.size,
         lastModified: file.lastModified,

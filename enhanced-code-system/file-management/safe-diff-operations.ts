@@ -10,7 +10,7 @@
  * - Conflict detection and resolution
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { z } from 'zod';
 import { 
   createSafeDiffError,
@@ -25,7 +25,7 @@ const ValidationResultSchema = z.object({
   isValid: z.boolean(),
   errors: z.array(z.string()),
   warnings: z.array(z.string()),
-  confidence: z.number().min(0).max(1),
+  confidence: z.number().min(0).refine((val) => val <= 1, 'Confidence must be at most 1'),
   suggestions: z.array(z.string()).optional()
 });
 
