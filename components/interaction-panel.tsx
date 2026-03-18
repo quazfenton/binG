@@ -1406,15 +1406,17 @@ export default function InteractionPanel({
           ref={dragHandleRef}
           className={`w-full absolute top-0 left-0 right-0 h-[40px] transition-all duration-200 pointer-events-none ${
             isDragging
-              ? 'bg-white/40'
-              : 'bg-gradient-to-b from-white/10 to-transparent sm:from-transparent sm:bg-transparent'
+              ? 'bg-white/5 shadow-[0_0_12px_rgba(255,255,255,0.1)]'
+              : 'bg-gradient-to-b from-white/10 to-transparent hover:from-white/15'
           }`}
           style={{ zIndex: 40 }}
           onDoubleClick={toggleMinimized}
         >
-          {/* Touch target for drag - only enabled when actively dragging or on mobile */}
+          {/* Touch target for drag - enabled on all screen sizes */}
           <div
-            className="absolute inset-0 pointer-events-auto sm:pointer-events-none"
+            className={`absolute inset-0 pointer-events-auto cursor-ns-resize ${
+              isDragging ? 'bg-gradient-to-b from-blue-400/8 to-transparent' : ''
+            }`}
             onMouseDown={(e) => {
               // Only allow dragging from the very top area, not the button area
               if (e.clientX < 64) return; // Skip left 64px where button is
@@ -1485,8 +1487,10 @@ export default function InteractionPanel({
               document.addEventListener("touchend", touchEndHandler.current);
             }}
           >
-            {/* Visual indicator for mobile drag area */}
-            <div className="w-full h-[4px] bg-white/30 rounded-full mx-auto mt-1 sm:hidden" />
+            {/* Visual indicator for drag area */}
+            <div className={`w-12 h-[4px] rounded-full mx-auto mt-2 transition-all duration-200 ${
+              isDragging ? 'bg-blue-400/40 shadow-[0_0_6px_rgba(96,165,250,0.2)] w-16' : 'bg-white/30'
+            }`} />
           </div>
         </div>
 

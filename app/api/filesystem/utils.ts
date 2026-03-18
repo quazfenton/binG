@@ -30,9 +30,22 @@ export async function resolveFilesystemOwnerWithFallback(
       errorMessage
     );
     
+    // Even in fallback, try to use the x-anonymous-session-id header for consistency
+    const headerAnonId = req.headers.get('x-anonymous-session-id')?.trim();
+    if (headerAnonId && headerAnonId.length <= 128) {
+      const normalized = headerAnonId.replace(/[^a-zA-Z0-9:_-]/g, '');
+      if (normalized) {
+        return {
+          ownerId: `anon:${normalized}`,
+          source: 'anonymous' as const,
+          isAuthenticated: false,
+        };
+      }
+    }
+    
     return {
       ownerId: 'anon:public',
-      source: 'fallback',
+      source: 'anonymous' as const,
       isAuthenticated: false,
     };
   }
