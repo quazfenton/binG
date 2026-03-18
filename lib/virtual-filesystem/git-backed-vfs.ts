@@ -271,10 +271,10 @@ export class GitBackedVFS {
       // Get shadow commit history
       const history = await this.shadowCommitManager.getCommitHistory(this.options.sessionId, 100);
 
-      // Find commit at target version
+      // Find commit at target version using workspaceVersion (NOT filesChanged)
       const targetCommit = history.find(c => {
-        // Match by version or commit metadata
-        return c.filesChanged === targetVersion ||
+        // Match by explicit workspace version (reliable version tracking)
+        return c.workspaceVersion === targetVersion ||
                c.message?.includes(`v${targetVersion}`);
       });
 
@@ -315,10 +315,14 @@ export class GitBackedVFS {
     const history = await this.shadowCommitManager.getCommitHistory(this.options.sessionId, 1);
     const lastCommit = history[0];
 
+    // Use workspaceVersion from last commit (reliable version tracking)
+    // NOT filesChanged which is just a count of changed files
     return {
-      version: this.changeBuffer.length > 0
-        ? Math.max(...this.changeBuffer.map(c => c.version))
-        : 0,
+      version: lastCommit?.workspaceVersion ?? (
+        this.changeBuffer.length > 0
+          ? Math.max(...this.changeBuffer.map(c => c.version))
+          : 0
+      ),
       lastCommitId: lastCommit?.commitId,
       pendingChanges: this.changeBuffer.length,
       isClean: this.changeBuffer.length === 0,
@@ -378,7 +382,7 @@ export class GitBackedVFS {
 
     return history.map(commit => ({
       commitId: commit.commitId,
-      version: commit.filesChanged,
+      version: commit.workspaceVersion ?? commit.filesChanged, // Use workspaceVersion when available
       message: commit.message,
       author: commit.author,
       timestamp: commit.createdAt,

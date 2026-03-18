@@ -29,7 +29,7 @@ export type {
   FilesystemEditDenialRecord as EditSessionResult,
 } from './filesystem-edit-session-service';
 
-export { resolveFilesystemOwner } from './resolve-filesystem-owner';
+export { resolveFilesystemOwner, withAnonSessionCookie } from './resolve-filesystem-owner';
 
 // Git-backed VFS (auto-enabled by default)
 export {
