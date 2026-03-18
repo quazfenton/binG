@@ -9,30 +9,52 @@ const logger = createLogger('Agent:V2Executor');
 
 /**
  * Sanitize message content to remove heredoc command blocks
+ * FIX Bug 9: Replace regex with O(n) line-by-line state machine
  * Mirrors backend sanitization in app/api/chat/route.ts
  */
 function sanitizeV2ResponseContent(content: string): string {
   if (!content || typeof content !== 'string') return '';
-  let sanitized = content;
-
-  // Remove explicit command envelopes
-  sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
-  sanitized = sanitized.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
-  sanitized = sanitized.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
-
-  // Remove <fs-actions> XML tag blocks
-  sanitized = sanitized.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
-
-  // Remove heredoc command blocks
-  sanitized = sanitized.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){0,3}<<<[\s\S]*?>>>(?=\n|$)/gim, '\n');
-  sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+<<<[\s\S]*?>>>/gim, '');
-  sanitized = sanitized.replace(/^\s*DELETE\s+[^\n]+(?=\n|$)/gim, '\n');
-  sanitized = sanitized.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
-  sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]*\n?\s*<<<[\s\S]*?>>>/gim, '');
-  sanitized = sanitized.replace(/^\s*<<<\s*$/gm, '');
-  sanitized = sanitized.replace(/^\s*>>>\s*$/gm, '');
-
+  
+  // Use line-by-line state machine instead of regex to prevent ReDoS
+  const lines = content.split('\n');
+  const output: string[] = [];
+  let inHeredoc = false;
+  let heredocDepth = 0;
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    
+    // Check for heredoc start (WRITE/PATCH/APPLY_DIFF followed by <<<)
+    if (/^\s*(WRITE|PATCH|APPLY_DIFF)\s+\S+\s*<<<\s*$/.test(line)) {
+      inHeredoc = true;
+      heredocDepth++;
+      continue;
+    }
+    
+    // Check for heredoc end
+    if (inHeredoc && trimmed === '>>>') {
+      heredocDepth--;
+      if (heredocDepth === 0) {
+        inHeredoc = false;
+      }
+      continue;
+    }
+    
+    // Skip lines inside heredoc blocks
+    if (!inHeredoc) {
+      // Also filter out other command block markers
+      if (!trimmed.startsWith('===') && 
+          !trimmed.startsWith('```fs-actions') &&
+          !trimmed.startsWith('<file_edit') &&
+          !trimmed.startsWith('<apply_diff') &&
+          !trimmed.startsWith('<fs-actions>')) {
+        output.push(line);
+      }
+    }
+  }
+  
   // Normalize spacing
+  let sanitized = output.join('\n');
   sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
   
   return sanitized;
@@ -56,18 +78,30 @@ export interface V2ExecuteOptions {
   };
 }
 
-export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
+/**
+ * FIX Bug 10: Shared execution policy builder
+ * Ensures consistent policy across all scopes
+ */
+function buildExecutionPolicy(options: V2ExecuteOptions): ExecutionPolicy {
   const taskWithContext = options.context
     ? `${options.context}\n\nTASK:\n${options.task}`
     : options.task;
 
-  // Auto-detect execution policy if not specified
-  const executionPolicy = options.executionPolicy || determineExecutionPolicy({
+  return options.executionPolicy || determineExecutionPolicy({
     task: taskWithContext,
     requiresBash: /bash|shell|command|execute|run\s+\w+/i.test(taskWithContext),
     requiresFileWrite: /write|create|save|edit|modify|delete\s+(file|\w+\.\w+)/i.test(taskWithContext),
     requiresBackend: /server|api|database|backend|express|fastapi|flask|django/i.test(taskWithContext),
   });
+}
+
+export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
+  const taskWithContext = options.context
+    ? `${options.context}\n\nTASK:\n${options.task}`
+    : options.task;
+
+  // FIX Bug 10: Use shared execution policy builder
+  const executionPolicy = buildExecutionPolicy(options);
 
   let result: any;
   try {
@@ -84,14 +118,14 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
     } else {
       // Use ToolIntegrationManager for tool execution with OpenCode
       const toolManager = getToolManager();
-      
-      // Get or create session first
+
+      // FIX Bug 8: Get or create session BEFORE execution and reuse it
       const session = await agentSessionManager.getOrCreateSession(
         options.userId,
         options.conversationId,
         { enableMCP: true, mode: 'opencode', executionPolicy }
       );
-      
+
       // Execute via OpenCode with tool integration
       const { runOpenCodeDirect } = await import('./opencode-direct');
       result = await runOpenCodeDirect({
@@ -101,24 +135,34 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
         executionPolicy,
         toolManager,  // Pass tool manager for integrated tool execution
       });
+
+      // Use session directly (no need to fetch again - prevents undefined)
+      return {
+        success: result.success ?? true,
+        data: result,
+        content: sanitizeV2ResponseContent(result.response || result.content || ''),
+        sessionId: session.id,  // Use session from before execution
+        conversationId: session.conversationId,
+        workspacePath: session.workspacePath,
+        executionPolicy: session.executionPolicy,
+      };
     }
   } catch (error: any) {
     console.error('[V2Executor] Task execution failed:', error.message);
     throw error;
   }
 
-  const session = agentSessionManager.getSession(options.userId, options.conversationId);
-
-  // Note: session may be undefined if session was not initialized prior to execution
-  // Using optional chaining to gracefully handle this case - downstream consumers should handle undefined values
-
-  // Sanitize the response content to remove heredoc command blocks
-  const sanitizedContent = sanitizeV2ResponseContent(result.response || result.content || '');
+  // Fallback for nullclaw path (session may not exist)
+  const session = await agentSessionManager.getOrCreateSession(
+    options.userId,
+    options.conversationId,
+    { enableMCP: true, mode: 'opencode' }
+  ).catch(() => null);
 
   return {
     success: result.success ?? true,
     data: result,
-    content: sanitizedContent, // Sanitized content for display
+    content: sanitizeV2ResponseContent(result.response || result.content || ''),
     sessionId: session?.id,
     conversationId: session?.conversationId,
     workspacePath: session?.workspacePath,
@@ -139,19 +183,14 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           ? `${options.context}\n\nTASK:\n${options.task}`
           : options.task;
 
-        // Auto-detect execution policy if not specified
-        const executionPolicy = options.executionPolicy || determineExecutionPolicy({
-          task: taskWithContext,
-          requiresBash: /bash|shell|command|execute|run\s+\w+/i.test(taskWithContext),
-          requiresFileWrite: /write|create|save|edit|modify|delete\s+(file|\w+\.\w+)/i.test(taskWithContext),
-          requiresBackend: /server|api|database|backend|express|fastapi|flask|django/i.test(taskWithContext),
-        });
+        // FIX Bug 10: Use shared execution policy builder (consistent with executeV2Task)
+        const executionPolicy = buildExecutionPolicy(options);
 
         // Send init event IMMEDIATELY to start the session - don't wait for anything
         controller.enqueue(encoder.encode(formatEvent('init', {
           agent: 'v2',
           conversationId: options.conversationId,
-          executionPolicy,
+          executionPolicy,  // Now uses shared builder
           timestamp: Date.now(),
         })));
 

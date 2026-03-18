@@ -93,7 +93,7 @@ class TaskRouter {
    */
   analyzeTask(task: string): TaskRoutingResult {
     const lowerTask = task.toLowerCase();
-    
+
     const scores = {
       coding: this.scoreKeywords(lowerTask, this.CODING_KEYWORDS),
       messaging: this.scoreKeywords(lowerTask, this.MESSAGING_KEYWORDS),
@@ -131,9 +131,19 @@ class TaskRouter {
       reasoning = 'Unknown task type, defaulting to coding agent';
     }
 
+    // FIX Bug 6: Normalize confidence against keyword count, not character length
+    const maxPossibleScore = Math.max(
+      this.CODING_KEYWORDS.length,
+      this.MESSAGING_KEYWORDS.length,
+      this.BROWSING_KEYWORDS.length,
+      this.AUTOMATION_KEYWORDS.length,
+    );
+    // Confidence is now meaningful [0, 1] range
+    const confidence = Math.min(1, maxScore / Math.max(maxPossibleScore * 0.3, 1));
+
     const result: TaskRoutingResult = {
       type: primaryType,
-      confidence: maxScore / Math.max(lowerTask.length, 1),
+      confidence,
       target,
       reasoning,
     };
@@ -160,25 +170,44 @@ class TaskRouter {
 
   /**
    * Execute task with appropriate agent
+   * FIX Bug 5 & 7: Explicit switch with exhaustiveness checking
    */
   async executeTask(request: TaskRequest): Promise<any> {
-    const routing = request.preferredAgent
-      ? {
-          type: 'unknown' as TaskType,
-          confidence: 1,
-          target: request.preferredAgent,
-          reasoning: 'Preferred agent override',
-        }
-      : this.analyzeTask(request.task);
+    // FIX: Handle preferred agent override FIRST with explicit validation
+    if (request.preferredAgent) {
+      switch (request.preferredAgent) {
+        case 'opencode':
+          logger.info('Using preferred agent: opencode');
+          return this.executeWithOpenCode(request);
+        case 'nullclaw':
+          logger.info('Using preferred agent: nullclaw');
+          return this.executeWithNullclaw(request, 'unknown');
+        case 'cli':
+          logger.info('Using preferred agent: cli');
+          return this.executeWithCliAgent(request);
+        default:
+          // Exhaustiveness check - reject unknown agents
+          const _exhaustive: never = request.preferredAgent;
+          throw new Error(`Unknown preferred agent: ${_exhaustive}`);
+      }
+    }
+
+    // Normal routing based on task analysis
+    const routing = this.analyzeTask(request.task);
 
     logger.info(`Routing task to ${routing.target} (${routing.type})`);
 
-    if (routing.target === 'opencode') {
-      return this.executeWithOpenCode(request);
-    } else if (routing.target === 'nullclaw') {
-      return this.executeWithNullclaw(request, routing.type);
-    } else {
-      return this.executeWithCliAgent(request);
+    // FIX: Explicit switch with exhaustiveness checking
+    switch (routing.target) {
+      case 'opencode':
+        return this.executeWithOpenCode(request);
+      case 'nullclaw':
+        return this.executeWithNullclaw(request, routing.type);
+      default:
+        // This should never happen due to TypeScript exhaustiveness
+        const _exhaustive: never = routing.target;
+        logger.error(`Unhandled routing target: ${_exhaustive}`);
+        throw new Error(`Unhandled routing target: ${_exhaustive}`);
     }
   }
 
