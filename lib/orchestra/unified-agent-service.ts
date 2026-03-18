@@ -30,6 +30,7 @@ import {
   type StatefulAgentResult,
 } from './stateful-agent/agents/stateful-agent';
 import { createLogger } from '@/lib/utils/logger';
+import { mastraWorkflowIntegration } from '../agent/mastra-workflow-integration';
 
 const log = createLogger('UnifiedAgentService');
 
@@ -39,22 +40,26 @@ export interface UnifiedAgentConfig {
   sandboxId?: string;
   systemPrompt?: string;
   conversationHistory?: Array<{ role: string; content: string }>;
-  
+
   // Tools
   tools?: any[];
   executeTool?: (name: string, args: Record<string, any>) => Promise<ToolResult>;
   onToolExecution?: (name: string, args: Record<string, any>, result: ToolResult) => void;
-  
+
   // Streaming
   onStreamChunk?: (chunk: string) => void;
-  
+
   // Agent settings
   maxSteps?: number;
   temperature?: number;
   maxTokens?: number;
-  
+
   // Mode override (optional - auto-detected from env if not specified)
-  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'auto';
+  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'auto';
+  
+  // Mastra workflow options
+  workflowId?: string; // Use specific Mastra workflow
+  enableMastraWorkflows?: boolean; // Enable Mastra workflow routing
 }
 
 export interface UnifiedAgentResult {
@@ -66,12 +71,14 @@ export interface UnifiedAgentResult {
     result: ToolResult;
   }>;
   totalSteps?: number;
-  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native';
+  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow';
   error?: string;
   metadata?: {
     model?: string;
     provider?: string;
     duration?: number;
+    workflowId?: string;
+    workflowSteps?: Array<{ id: string; name: string; status: string }>;
     [key: string]: any;
   };
 }
@@ -130,10 +137,16 @@ export function checkProviderHealth(): ProviderHealth {
 /**
  * Determine which mode to use based on config and health
  */
-function determineMode(config: UnifiedAgentConfig): 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' {
+function determineMode(config: UnifiedAgentConfig): 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' {
   // Explicit mode override
   if (config.mode && config.mode !== 'auto') {
     return config.mode;
+  }
+
+  // Check if Mastra workflow should be used
+  if (config.enableMastraWorkflows !== false && config.workflowId) {
+    // Use Mastra workflow if workflow ID is specified
+    return 'mastra-workflow';
   }
 
   // Auto-detect from environment
@@ -163,6 +176,9 @@ export async function processUnifiedAgentRequest(
 
       case 'v2-local':
         return await runV2Local(config);
+
+      case 'mastra-workflow':
+        return await runMastraWorkflow(config);
 
       case 'v1-api':
       default:
@@ -203,10 +219,21 @@ async function runV2Native(config: UnifiedAgentConfig): Promise<UnifiedAgentResu
   const startTime = Date.now();
 
   // For complex multi-step tasks, use StatefulAgent (Plan-Act-Verify workflow)
-  const isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure/i.test(config.userMessage);
+  // Enhanced pattern matching for better detection
+  const isComplexTask = /(create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page|dashboard|authentication|database|integration|deployment|setup|initialize|scaffold|generate|boilerplate)/i.test(config.userMessage);
   
-  if (isComplexTask && process.env.ENABLE_STATEFUL_AGENT !== 'false') {
-    log.info('Complex task detected, using StatefulAgent for Plan-Act-Verify workflow');
+  // Also check for task indicators (multiple steps implied)
+  const hasMultipleSteps = /\b(and|then|after|before|first|next|finally|also|plus)\b/i.test(config.userMessage);
+  const mentionsFiles = /\b(file|files|folder|directory|component|page|module|service|api)\b/i.test(config.userMessage);
+  
+  const shouldUseStatefulAgent = isComplexTask || (hasMultipleSteps && mentionsFiles);
+  
+  if (shouldUseStatefulAgent && process.env.ENABLE_STATEFUL_AGENT !== 'false') {
+    log.info('Complex task detected, using StatefulAgent for Plan-Act-Verify workflow', {
+      isComplexTask,
+      hasMultipleSteps,
+      mentionsFiles,
+    });
     return await runStatefulAgentMode(config);
   }
 
@@ -279,10 +306,10 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
   try {
     const agentOptions: StatefulAgentOptions = {
       sessionId: `unified-${Date.now()}`,
-      maxSelfHealAttempts: 3,
+      maxSelfHealAttempts: parseInt(process.env.STATEFUL_AGENT_MAX_SELF_HEAL_ATTEMPTS || '3'),
       enforcePlanActVerify: true,
-      enableReflection: process.env.ENABLE_REFLECTION !== 'false',
-      enableTaskDecomposition: true,
+      enableReflection: process.env.STATEFUL_AGENT_ENABLE_REFLECTION !== 'false',
+      enableTaskDecomposition: process.env.STATEFUL_AGENT_ENABLE_TASK_DECOMPOSITION !== 'false',
     };
 
     const agent = new StatefulAgent(agentOptions);
@@ -307,6 +334,7 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
         filesModified: result.vfs ? Object.keys(result.vfs).length : 0,
         errors: result.errors?.length || 0,
         reflectionEnabled: agentOptions.enableReflection,
+        taskDecompositionEnabled: agentOptions.enableTaskDecomposition,
       },
     };
   } catch (error: any) {
@@ -409,26 +437,93 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
  */
 async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
-  
+
   // Build messages from conversation history + current message
   const messages: any[] = [
     ...(config.conversationHistory || []),
     { role: 'user', content: config.userMessage },
   ];
 
-  
+
   // Get LLM provider
   const llmProvider = getLLMProvider();
-  
+
   // Check if provider supports tools
   const supportsTools = 'supportsTools' in llmProvider && (llmProvider as any).supportsTools();
-  
+
   if (supportsTools && config.tools && config.tools.length > 0 && config.executeTool) {
     // Use agent loop with tools
     return await runV1ApiWithTools(config, messages, llmProvider, startTime);
   } else {
     // Simple completion without tools
     return await runV1ApiCompletion(config, messages, llmProvider, startTime);
+  }
+}
+
+/**
+ * Run Mastra Workflow mode
+ * Executes task via Mastra workflow engine with proper tracking
+ */
+async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
+  const startTime = Date.now();
+  const workflowId = config.workflowId || 'code-agent';
+
+  try {
+    log.info('Executing Mastra workflow', { workflowId, userMessage: config.userMessage.substring(0, 100) });
+
+    // Execute workflow via Mastra integration
+    const workflowResult = await mastraWorkflowIntegration.executeWorkflow(workflowId, {
+      task: config.userMessage,
+      ownerId: config.sandboxId || 'default',
+      systemPrompt: config.systemPrompt,
+      maxSteps: config.maxSteps,
+    });
+
+    if (!workflowResult.success) {
+      throw new Error(workflowResult.error || 'Mastra workflow execution failed');
+    }
+
+    // Convert workflow result to unified format
+    const steps = workflowResult.steps?.map(step => ({
+      toolName: step.id,
+      args: step.result || {},
+      result: {
+        success: step.status === 'completed',
+        output: JSON.stringify(step.result),
+      },
+    })) || [];
+
+    return {
+      success: true,
+      response: workflowResult.result?.response || 'Workflow executed successfully',
+      steps,
+      totalSteps: steps.length,
+      mode: 'mastra-workflow',
+      metadata: {
+        provider: 'mastra',
+        workflowId,
+        duration: Date.now() - startTime,
+        workflowSteps: workflowResult.steps?.map(s => ({
+          id: s.id,
+          name: s.name,
+          status: s.status,
+        })),
+      },
+    };
+  } catch (error: any) {
+    log.error('Mastra workflow execution failed', { workflowId, error: error.message });
+    
+    return {
+      success: false,
+      response: '',
+      mode: 'mastra-workflow',
+      error: error.message,
+      metadata: {
+        provider: 'mastra',
+        workflowId,
+        duration: Date.now() - startTime,
+      },
+    };
   }
 }
 
@@ -520,6 +615,10 @@ async function runV1ApiCompletion(
 
 /**
  * Attempt fallback to other modes on error
+ * 
+ * Fallback chain respects task complexity:
+ * - Complex tasks: StatefulAgent → OpenCode Engine → V1 API
+ * - Simple tasks: OpenCode Engine → V1 API
  */
 async function attemptFallback(
   config: UnifiedAgentConfig,
@@ -527,9 +626,12 @@ async function attemptFallback(
   error: any
 ): Promise<UnifiedAgentResult | null> {
   const health = checkProviderHealth();
+  
+  // Detect if this is a complex task that should use StatefulAgent
+  const isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(config.userMessage);
 
   // Try fallback chain based on what failed
-  // Priority: V2 Native → V2 Containerized → V2 Local → V1 API
+  // Priority: V2 Native (with StatefulAgent for complex) → V2 Containerized → V2 Local → V1 API
   const fallbackOrder: Array<'v2-native' | 'v2-containerized' | 'v2-local' | 'v1-api'> = [];
 
   if (failedMode !== 'v2-native' && health.v2Native) {
@@ -549,6 +651,21 @@ async function attemptFallback(
   for (const fallbackMode of fallbackOrder) {
     try {
       console.log(`[UnifiedAgent] Falling back to ${fallbackMode} after ${failedMode} failed`);
+
+      // For complex tasks, try StatefulAgent first in v2-native mode
+      if (fallbackMode === 'v2-native' && isComplexTask && process.env.ENABLE_STATEFUL_AGENT !== 'false') {
+        log.info(`Fallback: Complex task detected, using StatefulAgent in ${fallbackMode}`);
+        const result = await runStatefulAgentMode(config);
+        if (result.success) {
+          return {
+            ...result,
+            metadata: {
+              ...result.metadata,
+              fallbackFrom: failedMode,
+            },
+          };
+        }
+      }
 
       const result = await processUnifiedAgentRequest({
         ...config,
