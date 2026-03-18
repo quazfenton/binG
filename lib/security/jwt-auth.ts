@@ -529,10 +529,30 @@ export class InMemoryTokenBlacklist implements TokenBlacklistProvider {
 }
 
 // Export singleton instances
-export const globalBlacklist = new InMemoryTokenBlacklist();
+// SECURITY: Use Redis blacklist in production for distributed token revocation
+// Falls back to in-memory for development/single-instance deployments
+export const globalBlacklist: TokenBlacklistProvider = (() => {
+  // Check if Redis is available (production environment)
+  const redisUrl = process.env.REDIS_URL;
+  if (redisUrl && process.env.NODE_ENV === 'production') {
+    try {
+      const { RedisTokenBlacklist } = require('./redis-token-blacklist');
+      const redis = new (require('ioredis'))(redisUrl);
+      const blacklist = new RedisTokenBlacklist(redis);
+      console.log('[Security] Using Redis token blacklist for distributed revocation');
+      return blacklist;
+    } catch (error) {
+      console.warn('[Security] Failed to initialize Redis blacklist, falling back to in-memory:', error);
+    }
+  }
+  
+  // Fallback to in-memory (development or Redis unavailable)
+  console.log('[Security] Using in-memory token blacklist');
+  return new InMemoryTokenBlacklist();
+})();
 
-// Periodic cleanup (every hour)
-if (typeof global !== 'undefined') {
+// Periodic cleanup (every hour) - only for in-memory blacklist
+if (typeof global !== 'undefined' && globalBlacklist instanceof InMemoryTokenBlacklist) {
   setInterval(() => {
     globalBlacklist.cleanup();
   }, 60 * 60 * 1000);

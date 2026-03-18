@@ -4,6 +4,21 @@ import { resolveScopedPath } from '@/lib/virtual-filesystem/scope-utils';
 import { parsePatch, applyPatch } from 'diff';
 
 /**
+ * Custom error class for authentication/validation failures
+ * Allows proper HTTP status code handling (401/400 instead of 500)
+ */
+class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    public code?: string
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+/**
  * Extract user identity from server-side headers
  * CRITICAL: Never use buildApiHeaders() in server routes - it's client-only
  * SECURITY: Reject requests with invalid or missing user IDs to prevent anonymous access
@@ -18,13 +33,13 @@ function getUserIdFromRequest(request: NextRequest): string {
 
   // SECURITY: Reject requests without valid user ID
   if (!userId) {
-    throw new Error('Authentication required: Missing user ID');
+    throw new ApiError(401, 'Authentication required: Missing user ID', 'MISSING_USER_ID');
   }
 
   // Validate userId format (prevent injection)
   if (!/^[a-zA-Z0-9_:-]+$/.test(userId)) {
     console.warn('[DiffsApply] Invalid user ID format:', userId);
-    throw new Error('Invalid user ID format');
+    throw new ApiError(400, 'Invalid user ID format', 'INVALID_USER_ID_FORMAT');
   }
 
   return userId;
@@ -42,13 +57,13 @@ function getSessionId(request: NextRequest, bodySessionId?: string): string {
 
   // SECURITY: Require valid session ID
   if (!sessionId) {
-    throw new Error('Session ID required');
+    throw new ApiError(400, 'Session ID required', 'MISSING_SESSION_ID');
   }
 
   // Validate session ID format
   if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
     console.warn('[DiffsApply] Invalid session ID format:', sessionId);
-    throw new Error('Invalid session ID format');
+    throw new ApiError(400, 'Invalid session ID format', 'INVALID_SESSION_ID_FORMAT');
   }
 
   return sessionId;
@@ -168,6 +183,20 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('[DiffsApply] Error:', error);
+    
+    // Handle ApiError with proper status code
+    if (error instanceof ApiError) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: error.message,
+          code: error.code,
+        },
+        { status: error.status }
+      );
+    }
+    
+    // Generic error handler for unexpected errors (500)
     return NextResponse.json(
       { success: false, error: error.message || 'Internal server error' },
       { status: 500 }
