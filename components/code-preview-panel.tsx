@@ -2155,7 +2155,7 @@ export default app;`,
           const buildDirs = ['dist', 'build', '.next', '.nuxt', '.output', 'public'];
           
           for (const [path, fileObj] of Object.entries(files)) {
-            const content = fileObj?.code || '';
+            let content = fileObj?.code || '';
             
             // Skip build output files - they shouldn't be in source
             const isBuildOutput = buildDirs.some(dir => path.startsWith(dir + '/') || path.startsWith('/' + dir + '/'));
@@ -2171,6 +2171,32 @@ export default app;`,
             if (path.includes('.cache/') || path.includes('__pycache__/')) continue;
             
             if (typeof content === 'string' && content.trim()) {
+              // Strip leaked heredoc markers (<<<, >>>) from WRITE command artifacts
+              content = content.replace(/^\s*<<<\s*\n?/, '').replace(/\n?\s*>>>\s*$/, '');
+              
+              // For JSON files, validate and fix content to prevent Sandpack parse errors
+              if (path.endsWith('.json') || path.endsWith('.json5')) {
+                try {
+                  JSON.parse(content);
+                } catch {
+                  // Try to extract valid JSON from corrupted content
+                  const jsonStart = content.indexOf('{');
+                  const jsonEnd = content.lastIndexOf('}');
+                  if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                    const extracted = content.slice(jsonStart, jsonEnd + 1);
+                    try {
+                      JSON.parse(extracted);
+                      content = extracted;
+                    } catch {
+                      // Still invalid — skip this file to prevent Sandpack crash
+                      continue;
+                    }
+                  } else {
+                    continue;
+                  }
+                }
+              }
+              
               const sandpackPath = path.startsWith('/') ? path : `/${path}`;
               normalized[sandpackPath] = { code: content };
             }

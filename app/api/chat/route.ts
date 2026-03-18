@@ -1768,9 +1768,9 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
 
   while ((blockMatch = blockRegex.exec(content)) !== null) {
     const blockContent = blockMatch[1] || '';
-    // FIX: Support both "WRITE path <<<" and "WRITE path\n<<<" formats
-    // Also support optional whitespace before <<<
-    const writeRegex = /WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    // FIX: Support "WRITE<path>", "WRITE <path>", "WRITE path", etc.
+    // Make whitespace optional between WRITE and path
+    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
@@ -1786,8 +1786,8 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
 
   while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
     const blockContent = xmlBlockMatch[1] || '';
-    // FIX: Support both "WRITE path <<<" and "WRITE path\n<<<" formats
-    const writeRegex = /WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    // FIX: Support "WRITE<path>", "WRITE <path>", "WRITE path", etc.
+    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
@@ -1805,7 +1805,8 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
   while ((regularBlockMatch = regularBlockRegex.exec(content)) !== null) {
     const blockContent = regularBlockMatch[1] || '';
     // Only match if it looks like a WRITE command (not actual code that happens to contain WRITE)
-    const writeRegex = /^WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
+    // Support "WRITE<path>", "WRITE <path>", etc.
+    const writeRegex = /^WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
@@ -2025,12 +2026,29 @@ function extractFilenameHintCodeBlocks(content: string): Array<{ path: string; c
 
   while ((match = regex.exec(content)) !== null) {
     const path = match[1]?.trim();
-    const fileContent = match[2] ?? '';
+    let fileContent = match[2] ?? '';
     if (!path) continue;
+    // Strip heredoc markers that may wrap the content (WRITE path <<< content >>>)
+    fileContent = stripHeredocMarkers(fileContent);
     writes.push({ path, content: fileContent });
   }
 
   return writes;
+}
+
+/**
+ * Strip heredoc markers (<<<, >>>) that may wrap file content.
+ * Also strips a leading WRITE/PATCH command line if present.
+ */
+function stripHeredocMarkers(content: string): string {
+  let cleaned = content;
+  // Remove leading "WRITE path" or "PATCH path" line if the whole block is a command
+  cleaned = cleaned.replace(/^\s*(?:WRITE|PATCH)\s+\S+\s*\n/, '');
+  // Strip leading <<< marker (with optional whitespace/newline)
+  cleaned = cleaned.replace(/^\s*<<<\s*\n?/, '');
+  // Strip trailing >>> marker (with optional whitespace/newline)
+  cleaned = cleaned.replace(/\n?\s*>>>\s*$/, '');
+  return cleaned;
 }
 
 function extractFileWriteFolderCreateTags(content: string): {
@@ -2253,7 +2271,11 @@ async function applyFilesystemEditsFromResponse(input: {
     ...extractBashHereDocWrites(input.responseContent || ''),
     ...extractFilenameHintCodeBlocks(input.responseContent || ''),
     ...fileWriteFolderCreateOps.writes.map(w => ({ path: w.path, content: w.content })),
-  ];
+  ].map(edit => ({
+    ...edit,
+    // Universal sanitization: strip any leaked heredoc markers from all extractors
+    content: stripHeredocMarkers(edit.content),
+  }));
   const combinedDiffOperations = [
     ...extractFencedDiffEdits(input.responseContent || ''),
     ...extractFsActionPatches(input.responseContent || ''),
