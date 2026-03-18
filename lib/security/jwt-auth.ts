@@ -179,7 +179,7 @@ export async function verifyToken(
     }
     
     // Validate required userId claim
-    if (!payload.userId) {
+    if (typeof payload.userId !== 'string' || payload.userId.trim() === '') {
       return {
         valid: false,
         error: 'Token missing required userId claim',
