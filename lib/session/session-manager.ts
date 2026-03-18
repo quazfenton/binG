@@ -264,6 +264,33 @@ export class SessionManager {
     try {
       logger.info(`Destroying session ${key}`);
 
+      // Stop all background jobs
+      if (session.backgroundJobs && session.backgroundJobs.size > 0) {
+        logger.info(`Stopping ${session.backgroundJobs.size} background jobs for session ${key}`);
+        const jobIds = Array.from(session.backgroundJobs.keys());
+        for (const jobId of jobIds) {
+          try {
+            await enhancedBackgroundJobsManager.stopJob(jobId, 'Session destroyed');
+          } catch (error: any) {
+            logger.warn(`Failed to stop background job ${jobId}:`, error.message);
+          }
+        }
+        session.backgroundJobs.clear();
+      }
+
+      // Cleanup execution graph
+      if (session.executionGraphId) {
+        try {
+          const graph = executionGraphEngine.getGraph(session.executionGraphId);
+          if (graph) {
+            graph.status = 'cancelled';
+            logger.debug(`Execution graph ${session.executionGraphId} marked as cancelled`);
+          }
+        } catch (error: any) {
+          logger.warn(`Failed to cleanup execution graph:`, error.message);
+        }
+      }
+
       // Cleanup sandbox if exists
       if (session.sandboxHandle) {
         try {
@@ -276,7 +303,7 @@ export class SessionManager {
       // Remove from tracking maps
       this.sessions.delete(key);
       this.sessionsById.delete(session.id);
-      
+
       // Cleanup session from session-naming.ts tracking
       try {
         unregisterActiveSession(conversationId);
@@ -284,7 +311,7 @@ export class SessionManager {
         // Non-fatal - session naming cleanup is optional
         logger.debug(`Failed to cleanup session name for ${conversationId}:`, e);
       }
-      
+
       const userSessionIds = this.userSessions.get(userId);
       if (userSessionIds) {
         userSessionIds.delete(session.id);
@@ -482,6 +509,110 @@ export class SessionManager {
     logger.info(`Created checkpoint ${checkpointId} for session ${sessionId}`);
 
     return { checkpointId, timestamp };
+  }
+
+  // ============================================================================
+  // Public API - Background Jobs Management
+  // ============================================================================
+
+  /**
+   * Start a background job for session
+   */
+  async startBackgroundJob(
+    sessionId: string,
+    config: Omit<EnhancedJobConfig, 'sessionId'>
+  ): Promise<{ jobId: string; status: string }> {
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    // Check quota before starting job
+    const quotaCheck = this.checkQuota(sessionId, 0, 0);
+    if (!quotaCheck.allowed) {
+      throw new Error(`Cannot start background job: ${quotaCheck.reason}`);
+    }
+
+    // Start job with enhanced manager
+    const job = await enhancedBackgroundJobsManager.startJob({
+      ...config,
+      sessionId,
+    });
+
+    // Track job in session
+    if (!session.backgroundJobs) {
+      session.backgroundJobs = new Map();
+    }
+    session.backgroundJobs.set(job.jobId, job);
+
+    logger.info(`Background job started for session ${sessionId}`, {
+      jobId: job.jobId,
+      command: job.command,
+      interval: job.interval,
+    });
+
+    return { jobId: job.jobId, status: job.status };
+  }
+
+  /**
+   * Stop a background job for session
+   */
+  async stopBackgroundJob(sessionId: string, jobId: string, reason?: string): Promise<boolean> {
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    const success = await enhancedBackgroundJobsManager.stopJob(jobId, reason || 'Manual stop');
+
+    if (success && session.backgroundJobs) {
+      session.backgroundJobs.delete(jobId);
+    }
+
+    logger.info(`Background job stopped for session ${sessionId}`, { jobId, success });
+
+    return success;
+  }
+
+  /**
+   * Get background job status
+   */
+  getBackgroundJobStatus(sessionId: string, jobId: string): EnhancedJob | null {
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      return null;
+    }
+
+    return enhancedBackgroundJobsManager.getJob(jobId);
+  }
+
+  /**
+   * List background jobs for session
+   */
+  listBackgroundJobs(sessionId: string, filters?: { status?: string }): EnhancedJob[] {
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      return [];
+    }
+
+    return enhancedBackgroundJobsManager.listJobs({
+      sessionId,
+      ...filters,
+    });
+  }
+
+  /**
+   * Get background jobs statistics for session
+   */
+  getBackgroundJobsStats(sessionId: string): {
+    total: number;
+    running: number;
+    paused: number;
+    stopped: number;
+    completed: number;
+    totalExecutions: number;
+  } {
+    return enhancedBackgroundJobsManager.getStats(sessionId);
   }
 
   // ============================================================================
@@ -689,6 +820,9 @@ export class SessionManager {
 
       const sessionId = uuidv4();
 
+      // Create execution graph for session tracking
+      const executionGraph = executionGraphEngine.createGraph(sessionId);
+
       const session: Session = {
         id: sessionId,
         userId,
@@ -716,7 +850,14 @@ export class SessionManager {
           cloudOffloadEnabled: config.enableCloudOffload || false,
           mcpEnabled: config.enableMcp || false,
         },
+        // Initialize background jobs tracking
+        backgroundJobs: new Map(),
+        executionGraphId: executionGraph.id,
       };
+
+      // Initialize enhanced background jobs manager with session integration
+      enhancedBackgroundJobsManager.setSessionManager(this);
+      enhancedBackgroundJobsManager.setExecutionGraphEngine(executionGraphEngine);
 
       // Track session
       this.sessions.set(this.getSessionKey(userId, conversationId), session);
