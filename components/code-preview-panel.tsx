@@ -377,12 +377,16 @@ export default function CodePreviewPanel({
     return normalized;
   }, []);
 
+  // Use ref for debounced function to avoid forward reference issues
+  const debouncedListDirectoryRef = useRef<(path: string) => Promise<void>>();
+  
   const openFilesystemDirectory = useCallback((path: string) => {
     const cleanPath = normalizeProjectPath(path);
     log(`openFilesystemDirectory: "${path}" -> "${cleanPath}"`);
     setFilesystemCurrentPath(cleanPath);
-    void debouncedListDirectory(cleanPath);
-  }, [debouncedListDirectory, normalizeProjectPath, setFilesystemCurrentPath]);
+    // Use ref to avoid forward reference
+    debouncedListDirectoryRef.current?.(cleanPath);
+  }, [normalizeProjectPath, setFilesystemCurrentPath, log]);
 
   const openFilesystemParent = useCallback(() => {
     const cleanedCurrentPath = normalizeProjectPath(filesystemCurrentPath);
@@ -1478,15 +1482,20 @@ export default function CodePreviewPanel({
   const debouncedListDirectory = useCallback(async (path: string) => {
     const now = Date.now();
     const last = lastDirectoryListRef.current;
-    
+
     if (last && last.path === path && (now - last.timestamp) < DIRECTORY_LIST_DEBOUNCE_MS) {
       log(`[debouncedListDirectory] skipping duplicate call for "${path}" (${now - last.timestamp}ms since last)`);
       return;
     }
-    
+
     lastDirectoryListRef.current = { path, timestamp: now };
     return listFilesystemDirectory(path);
-  }, [listFilesystemDirectory]);
+  }, [listFilesystemDirectory, log]);
+  
+  // Assign to ref so openFilesystemDirectory can access it
+  useEffect(() => {
+    debouncedListDirectoryRef.current = debouncedListDirectory;
+  }, [debouncedListDirectory]);
 
   // Clear preview state on navigation (filesystemScopePath change)
   // This ensures fresh state when user navigates to a different session/directory

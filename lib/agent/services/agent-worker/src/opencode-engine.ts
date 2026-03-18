@@ -84,30 +84,16 @@ class OpenCodeEngine extends EventEmitter {
         shell: false,
       });
 
-      let buffer = '';
+      // Create NDJSON parser once and feed incrementally
+      const parser = createNDJSONParser();
 
-      this.process.stdout?.on('data', (data) => {
-        const newChunk = data.toString();
-        
-        // FIX Bug 22: Append new data and parse only complete lines
-        buffer += newChunk;
-        
-        // Split by newlines and process complete lines only
-        const lines = buffer.split('\n');
-        // Keep last potentially incomplete line in buffer
-        buffer = lines.pop() || '';
-        
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          
-          try {
-            const parsed = JSON.parse(trimmed);
-            this.handleOutput(parsed);
-          } catch (parseError) {
-            logger.warn('Failed to parse NDJSON line:', { line: trimmed.substring(0, 100), error: parseError });
-          }
+      this.process.stdout?.on('data', (data: Buffer) => {
+        // Feed only the NEW chunk; the parser retains any incomplete line
+        const parsed = parser.parse(data.toString());
+        for (const obj of parsed) {
+          this.handleOutput(obj);
         }
+        // Do NOT touch the buffer - the parser owns it entirely
       });
 
       this.process.stderr?.on('data', (data) => {
@@ -243,37 +229,28 @@ class OpenCodeEngine extends EventEmitter {
     const { sessionId, prompt, context } = execution;
     const fullPrompt = context ? `${context}\n\nTASK:\n${prompt}` : prompt;
 
-    // FIX: Use proper queue-based iterator pattern
-    const eventQueue: OpenCodeEvent[] = [];
+    // FIX: Use a proper async queue (lightweight EventEmitter + async iteration)
+    // instead of a single promise that never gets re-created
+    const queue: OpenCodeEvent[] = [];
+    let finished = false;
     let waitResolve: (() => void) | null = null;
-    let done = false;
-    let error: Error | null = null;
 
-    const waitForEvent = (): Promise<void> => {
-      if (eventQueue.length > 0) return Promise.resolve();
-      return new Promise(resolve => {
-        waitResolve = resolve;
-      });
+    const enqueue = (event: OpenCodeEvent) => {
+      queue.push(event);
+      waitResolve?.();
+      waitResolve = null;
     };
 
     const eventHandler = (event: OpenCodeEvent) => {
       if (event.data.sessionId === sessionId || !event.data.sessionId) {
-        if (event.type === 'done') {
-          done = true;
-        }
-        eventQueue.push(event);
-        // Wake up waiting iterator
-        if (waitResolve) {
-          waitResolve();
-          waitResolve = null;
-        }
+        if (event.type === 'done') finished = true;
+        enqueue(event);
       }
     };
 
     this.on('event', eventHandler);
 
     try {
-      // Send prompt
       const promptPayload = {
         sessionId,
         prompt: fullPrompt,
@@ -282,17 +259,23 @@ class OpenCodeEngine extends EventEmitter {
         tools: this.config.tools,
       };
 
-      if (this.process && this.process.stdin) {
+      if (this.process?.stdin) {
         this.process.stdin.write(JSON.stringify(promptPayload) + '\n');
       }
 
-      // Yield events until done
-      while (!done || eventQueue.length > 0) {
-        await waitForEvent();
-        
-        while (eventQueue.length > 0) {
-          const event = eventQueue.shift()!;
+      while (!finished || queue.length > 0) {
+        if (queue.length === 0) {
+          // Wait for the next event to arrive
+          await new Promise<void>(resolve => { waitResolve = resolve; });
+        }
+
+        while (queue.length > 0) {
+          const event = queue.shift()!;
           yield event;
+          if (event.type === 'done') {
+            finished = true;
+            break;
+          }
         }
       }
     } finally {

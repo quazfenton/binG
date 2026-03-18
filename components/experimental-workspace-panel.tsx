@@ -61,6 +61,7 @@ import {
   FileText as FileDoc,
   Clock,
   Youtube,
+  Paperclip,
   Maximize2,
   Minimize2,
   Users,
@@ -114,6 +115,8 @@ export function ExperimentalWorkspacePanel() {
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<Array<{ path: string; content: string }>>([]);
+  const [showFilePicker, setShowFilePicker] = useState(false);
   
   // Resizable panel width
   const [panelWidth, setPanelWidth] = useState(400);
@@ -505,18 +508,19 @@ export function ExperimentalWorkspacePanel() {
     });
   }, []);
 
-  const handleSendChat = useCallback(async () => {
-    if (!chatInput.trim() || isChatLoading) return;
+  const handleSendChat = useCallback(async (customPrompt?: string) => {
+    const promptToSend = customPrompt || chatInput.trim();
+    if (!promptToSend && !isChatLoading) return;
+    if (isChatLoading) return;
 
     const userMessage: Message = {
       id: `exp-chat-${Date.now()}`,
       role: "user",
-      content: chatInput.trim(),
+      content: promptToSend,
       timestamp: new Date().toISOString(),
     };
 
     setChatMessages((prev) => [...prev, userMessage]);
-    const currentInput = chatInput.trim();
     setChatInput("");
     setIsChatLoading(true);
 
@@ -525,7 +529,12 @@ export function ExperimentalWorkspacePanel() {
       // Get the current chat messages as the messages array
       const messagesPayload = [
         ...chatMessages.map(m => ({ role: m.role, content: m.content })),
-        { role: 'user' as const, content: currentInput }
+        { 
+          role: 'user' as const, 
+          content: attachedFiles.length > 0 
+            ? `${promptToSend}\n\n--- Attached Files for Context ---\n${attachedFiles.map(f => `File: ${f.path}\n\`\`\`\n${f.content.slice(0, 4000)}\n\`\`\``).join('\n\n')}`
+            : promptToSend 
+        }
       ];
 
       // Get filesystem scope from the VFS
@@ -535,15 +544,20 @@ export function ExperimentalWorkspacePanel() {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          // Add auth headers if available
         },
         body: JSON.stringify({
           messages: messagesPayload,
           provider: 'openrouter',
           model: 'nvidia/nemotron-3-nano-30b-a3b:free',
           conversationId: `exp-workspace-${vfsScope}`,
+          agentMode: 'auto', // Allow agentic behaviors
           filesystemContext: {
             scopePath: vfsScope,
+            attachedFiles: attachedFiles.map(f => ({
+              path: f.path,
+              content: f.content,
+            })),
+            applyFileEdits: true,
           },
         }),
       });
@@ -552,18 +566,23 @@ export function ExperimentalWorkspacePanel() {
         const data = await response.json();
         const content = data?.data?.response || data?.data?.content || data?.content || data?.response || "Response received";
         
-        // Debug: log filesystem operations if present
         const fsData = data?.data?.filesystem || data?.filesystem;
-        if (fsData) {
-          console.log('[ExperimentalWorkspace] Filesystem operations in response:', fsData);
-          // Refresh VFS after potential file writes
+        if (fsData && fsData.applied && fsData.applied.length > 0) {
+          console.log('[ExperimentalWorkspace] Filesystem operations applied:', fsData.applied);
+          toast.success(`Applied ${fsData.applied.length} file changes`);
+          
           const snapshot = await vfs.getSnapshot();
           setVfsSnapshot(snapshot);
           setFilesystem({
-            sessionId: filesystem?.sessionId || "default",
+            sessionId: vfsScope,
             version: snapshot?.version || 1,
             files: snapshot?.files || [],
           });
+        }
+        
+        if (fsData && fsData.errors && fsData.errors.length > 0) {
+          console.warn('[ExperimentalWorkspace] Filesystem errors:', fsData.errors);
+          toast.error(`Errors applying some changes: ${fsData.errors[0]}`);
         }
         
         const assistantMessage: Message = {
@@ -578,68 +597,44 @@ export function ExperimentalWorkspacePanel() {
       }
     } catch (error) {
       console.error('[ExperimentalWorkspace] Chat error:', error);
-      // Fallback to simulated response if API fails
-      setTimeout(() => {
-        const assistantMessage: Message = {
-          id: `exp-chat-${Date.now()}`,
-          role: "assistant",
-          content: "Thanks for your message! This is experimental chat with localStorage persistence.",
-          timestamp: new Date().toISOString(),
-        };
-        setChatMessages((prev) => [...prev, assistantMessage]);
-      }, 1000);
+      toast.error('Chat failed. Check console for details.');
     } finally {
       setIsChatLoading(false);
     }
-  }, [chatInput, isChatLoading, chatMessages, filesystem, vfs]);
+  }, [chatInput, isChatLoading, chatMessages, filesystem, vfs, attachedFiles]);
 
   // YouTube helper functions
-  const getYouTubeVideoId = useCallback((urlOrId: string): string => {
-    // If it's already a video ID (11 characters), return it
-    if (/^[a-zA-Z0-9_-]{11}$/.test(urlOrId)) {
-      return urlOrId;
+  const getYouTubeEmbedUrl = useCallback((urlOrId: string): string => {
+    const playlistMatch = urlOrId.match(/[&?]list=([a-zA-Z0-9_-]+)/) || urlOrId.match(/playlist\?list=([a-zA-Z0-9_-]+)/);
+    if (playlistMatch) {
+      return `https://www.youtube.com/embed?listType=playlist&list=${playlistMatch[1]}&autoplay=1`;
     }
-    
-    // Try to extract from various YouTube URL formats
-    const patterns = [
-      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
-    ];
-    
-    for (const pattern of patterns) {
-      const match = urlOrId.match(pattern);
-      if (match) {
-        return match[1];
+
+    let videoId = urlOrId;
+    if (urlOrId.includes('youtube.com') || urlOrId.includes('youtu.be')) {
+      const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+        /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/,
+        /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+      ];
+      for (const pattern of patterns) {
+        const match = urlOrId.match(pattern);
+        if (match) {
+          videoId = match[1];
+          break;
+        }
       }
     }
     
-    // Default fallback video (lofi hip hop radio)
-    return 'jfKfPfyJRdk';
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+      videoId = 'jfKfPfyJRdk';
+    }
+    
+    return `https://www.youtube.com/embed/${videoId}?autoplay=1&loop=1&playlist=${videoId}`;
   }, []);
 
-  const extractYouTubeId = useCallback((urlOrId: string): string | null => {
-    // If it's already a video ID
-    if (/^[a-zA-Z0-9_-]{11}$/.test(urlOrId)) {
-      return urlOrId;
-    }
-    
-    // Try to extract from URL
-    const patterns = [
-      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/playlist\?list=([a-zA-Z0-9_-]+)/,
-    ];
-    
-    for (const pattern of patterns) {
-      const match = urlOrId.match(pattern);
-      if (match) {
-        return match[1];
-      }
-    }
-    
-    return null;
+  const extractYouTubeId = useCallback((urlOrId: string): string => {
+    return urlOrId;
   }, []);
 
   const clearChatHistory = useCallback(() => {
@@ -1673,6 +1668,17 @@ export function ExperimentalWorkspacePanel() {
                       <Button
                         variant="ghost"
                         size="sm"
+                        onClick={() => handleSendChat("Please continue the work. If there are more files to edit or improvements to make, proceed with them.")}
+                        disabled={chatMessages.length === 0 || isChatLoading}
+                        className="h-6 text-[10px] bg-green-500/10 hover:bg-green-500/20 text-green-400 border border-green-500/20"
+                        title="Request AI to continue its previous task"
+                      >
+                        <RotateCcw className="h-3 w-3 mr-1" />
+                        Continue
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={exportChatHistory}
                         disabled={chatMessages.length === 0}
                         className="h-6 text-xs hover:bg-blue-500/20 disabled:opacity-50"
@@ -1739,14 +1745,23 @@ export function ExperimentalWorkspacePanel() {
                         onKeyDown={(e) => {
                           if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();
-                            handleSendChat();
+                            void handleSendChat();
                           }
                         }}
-                        placeholder="Send message..."
+                        placeholder="Send message... (with attached files for context)"
                         className="flex-1 min-h-[60px] bg-white/5 border-white/10 text-white/90 placeholder:text-white/40 text-sm resize-none"
                       />
                       <Button
-                        onClick={handleSendChat}
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setShowFilePicker(!showFilePicker)}
+                        className="h-[60px] w-10 text-white/60 hover:text-white hover:bg-white/10"
+                        title="Attach files from VFS"
+                      >
+                        <Paperclip className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        onClick={() => void handleSendChat()}
                         disabled={!chatInput.trim() || isChatLoading}
                         className="h-[60px] w-[60px] bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30"
                       >
@@ -1757,6 +1772,59 @@ export function ExperimentalWorkspacePanel() {
                         )}
                       </Button>
                     </div>
+                    
+                    {/* Attached Files Display */}
+                    {attachedFiles.length > 0 && (
+                      <div className="flex flex-wrap gap-2 p-2 border-t border-white/10">
+                        {attachedFiles.map((file, idx) => (
+                          <div key={idx} className="flex items-center gap-1 px-2 py-1 bg-blue-500/20 border border-blue-500/30 rounded text-xs text-white/80">
+                            <FileCode className="h-3 w-3" />
+                            <span className="max-w-[100px] truncate">{file.path.split('/').pop()}</span>
+                            <button
+                              onClick={() => setAttachedFiles(attachedFiles.filter((_, i) => i !== idx))}
+                              className="ml-1 hover:text-red-400"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {/* File Picker Dropdown */}
+                    {showFilePicker && (
+                      <div className="border-t border-white/10 p-2 max-h-48 overflow-y-auto bg-black/60">
+                        <div className="text-xs text-white/60 mb-2">Click files to attach (they'll be sent as context):</div>
+                        {vfsSnapshot?.files?.slice(0, 20).map((file: { path: string; content?: string }, idx: number) => (
+                          <button
+                            key={idx}
+                            onClick={() => {
+                              const isAttached = attachedFiles.some(f => f.path === file.path);
+                              if (isAttached) {
+                                setAttachedFiles(attachedFiles.filter(f => f.path !== file.path));
+                              } else {
+                                setAttachedFiles([...attachedFiles, { path: file.path, content: file.content || '' }]);
+                              }
+                            }}
+                            className={`flex items-center gap-2 w-full px-2 py-1 text-left text-xs rounded ${
+                              attachedFiles.some(f => f.path === file.path)
+                                ? 'bg-blue-500/30 text-blue-300'
+                                : 'hover:bg-white/10 text-white/70'
+                            }`}
+                          >
+                            {attachedFiles.some(f => f.path === file.path) && <CheckCircle className="h-3 w-3" />}
+                            <FileCode className="h-3 w-3 text-blue-400" />
+                            <span className="truncate">{file.path}</span>
+                          </button>
+                        ))}
+                        <button
+                          onClick={() => setShowFilePicker(false)}
+                          className="mt-2 w-full text-center text-xs text-white/40 hover:text-white"
+                        >
+                          Done
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </TabsContent>
 
@@ -2336,7 +2404,7 @@ export function ExperimentalWorkspacePanel() {
                       {/* YouTube Iframe */}
                       <iframe
                         className="absolute inset-0 w-full h-full"
-                        src={`https://www.youtube.com/embed/${getYouTubeVideoId(youtubeVideoId)}?autoplay=1&loop=1&modestbranding=1&rel=0&iv_load_policy=3&playlist=${getYouTubeVideoId(youtubeVideoId)}&controls=1`}
+                        src={getYouTubeEmbedUrl(youtubeVideoId)}
                         title="YouTube video player"
                         frameBorder="0"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -2388,7 +2456,7 @@ export function ExperimentalWorkspacePanel() {
                         <span>Now Playing</span>
                       </div>
                     </div>
-                  </ScrollArea>
+                  </div>
                 </TabsContent>
 
                 {/* Forum Tab */}
