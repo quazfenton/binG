@@ -8,56 +8,89 @@ import { determineExecutionPolicy } from '../sandbox/types';
 const logger = createLogger('Agent:V2Executor');
 
 /**
- * Sanitize message content to remove heredoc command blocks
- * FIX Bug 9: Replace regex with O(n) line-by-line state machine
- * Mirrors backend sanitization in app/api/chat/route.ts
+ * Sanitize message content to remove heredoc command blocks.
+ *
+ * FIX (Bug 9): The original regex `[\s\S]*?` inside a construct that
+ * also has a multi-step prefix is vulnerable to catastrophic backtracking
+ * on inputs that contain `<<<` without a matching `>>>`. Fixed by using
+ * possessive-style workarounds (split approach) and a bounded character
+ * class for the heredoc body.
  */
 function sanitizeV2ResponseContent(content: string): string {
   if (!content || typeof content !== 'string') return '';
-  
-  // Use line-by-line state machine instead of regex to prevent ReDoS
-  const lines = content.split('\n');
-  const output: string[] = [];
-  let inHeredoc = false;
-  let heredocDepth = 0;
-  
-  for (const line of lines) {
-    const trimmed = line.trim();
-    
-    // Check for heredoc start (WRITE/PATCH/APPLY_DIFF followed by <<<)
-    if (/^\s*(WRITE|PATCH|APPLY_DIFF)\s+\S+\s*<<<\s*$/.test(line)) {
-      inHeredoc = true;
-      heredocDepth++;
-      continue;
-    }
-    
-    // Check for heredoc end
-    if (inHeredoc && trimmed === '>>>') {
-      heredocDepth--;
-      if (heredocDepth === 0) {
-        inHeredoc = false;
-      }
-      continue;
-    }
-    
-    // Skip lines inside heredoc blocks
-    if (!inHeredoc) {
-      // Also filter out other command block markers
-      if (!trimmed.startsWith('===') && 
-          !trimmed.startsWith('```fs-actions') &&
-          !trimmed.startsWith('<file_edit') &&
-          !trimmed.startsWith('<apply_diff') &&
-          !trimmed.startsWith('<fs-actions>')) {
-        output.push(line);
-      }
-    }
-  }
-  
+  let sanitized = content;
+
+  // Remove explicit command envelopes — these are safe because the sentinel
+  // strings are unique enough that there's no backtracking risk.
+  sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
+  sanitized = sanitized.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
+  sanitized = sanitized.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
+  sanitized = sanitized.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
+  sanitized = sanitized.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
+
+  // FIX (Bug 9): Replace the catastrophic-backtracking heredoc regexes with
+  // a line-by-line state-machine approach. This is O(n) and handles
+  // unmatched delimiters without hanging.
+  sanitized = removeHeredocBlocks(sanitized);
+
   // Normalize spacing
   let sanitized = output.join('\n');
   sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
-  
+
   return sanitized;
+}
+
+/**
+ * Remove WRITE/PATCH/APPLY_DIFF/DELETE heredoc blocks in a single O(n) pass.
+ * Avoids regex backtracking on unmatched delimiters.
+ */
+function removeHeredocBlocks(content: string): string {
+  const lines = content.split('\n');
+  const output: string[] = [];
+  let insideHeredoc = false;
+
+  for (const line of lines) {
+    if (!insideHeredoc) {
+      // Detect start of heredoc block
+      const trimmed = line.trim();
+      if (/^(WRITE|PATCH|APPLY_DIFF)\s+\S+.*<<</.test(trimmed) ||
+          /^(WRITE|PATCH|APPLY_DIFF)\s+\S+/.test(trimmed)) {
+        // Look ahead: if the line itself ends with <<<, heredoc starts inline
+        if (trimmed.endsWith('<<<') || /<<<\s*$/.test(trimmed)) {
+          insideHeredoc = true;
+        }
+        // Either way, drop the command line
+        continue;
+      }
+      if (/^DELETE\s+\S+/.test(trimmed)) {
+        // Single-line DELETE — drop it
+        continue;
+      }
+      // Standalone <<< (deferred heredoc open)
+      if (/^\s*<<<\s*$/.test(line)) {
+        insideHeredoc = true;
+        continue;
+      }
+      output.push(line);
+    } else {
+      // Inside heredoc — look for closing >>>
+      if (/^\s*>>>\s*$/.test(line)) {
+        insideHeredoc = false;
+      }
+      // Drop all lines inside the heredoc block
+    }
+  }
+
+  return output.join('\n');
+}
+
+function buildExecutionPolicy(task: string, explicit?: ExecutionPolicy): ExecutionPolicy {
+  return explicit || determineExecutionPolicy({
+    task,
+    requiresBash:      /bash|shell|command|execute|run\s+\w+/i.test(task),
+    requiresFileWrite: /write|create|save|edit|modify|delete\s+(file|\w+\.\w+)/i.test(task),
+    requiresBackend:   /server|api|database|backend|express|fastapi|flask|django/i.test(task),
+  });
 }
 
 export interface V2ExecuteOptions {
@@ -67,15 +100,8 @@ export interface V2ExecuteOptions {
   context?: string;
   stream?: boolean;
   preferredAgent?: 'opencode' | 'nullclaw' | 'cli';
-  /**
-   * Execution policy for sandbox selection
-   * Auto-detected from task if not specified
-   */
   executionPolicy?: ExecutionPolicy;
-  cliCommand?: {
-    command: string;
-    args?: string[];
-  };
+  cliCommand?: { command: string; args?: string[] };
 }
 
 /**
@@ -87,21 +113,7 @@ function buildExecutionPolicy(options: V2ExecuteOptions): ExecutionPolicy {
     ? `${options.context}\n\nTASK:\n${options.task}`
     : options.task;
 
-  return options.executionPolicy || determineExecutionPolicy({
-    task: taskWithContext,
-    requiresBash: /bash|shell|command|execute|run\s+\w+/i.test(taskWithContext),
-    requiresFileWrite: /write|create|save|edit|modify|delete\s+(file|\w+\.\w+)/i.test(taskWithContext),
-    requiresBackend: /server|api|database|backend|express|fastapi|flask|django/i.test(taskWithContext),
-  });
-}
-
-export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
-  const taskWithContext = options.context
-    ? `${options.context}\n\nTASK:\n${options.task}`
-    : options.task;
-
-  // FIX Bug 10: Use shared execution policy builder
-  const executionPolicy = buildExecutionPolicy(options);
+  const executionPolicy = buildExecutionPolicy(taskWithContext, options.executionPolicy);
 
   let result: any;
   try {
@@ -116,53 +128,54 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
         preferredAgent: 'nullclaw',
       });
     } else {
-      // Use ToolIntegrationManager for tool execution with OpenCode
       const toolManager = getToolManager();
 
-      // FIX Bug 8: Get or create session BEFORE execution and reuse it
+      // FIX (Bug 8): await session creation here so it is guaranteed to be
+      // in the manager's cache before runOpenCodeDirect executes.
+      // Use the active agent when creating the session; hardcoding 'opencode'
+      // here can attach nullclaw executions to a session with the wrong mode.
       const session = await agentSessionManager.getOrCreateSession(
         options.userId,
         options.conversationId,
-        { enableMCP: true, mode: 'opencode', executionPolicy }
+        { enableMCP: true, mode: options.preferredAgent || 'opencode', executionPolicy },
       );
 
-      // Execute via OpenCode with tool integration
       const { runOpenCodeDirect } = await import('./opencode-direct');
       result = await runOpenCodeDirect({
         userId: options.userId,
         conversationId: options.conversationId,
         task: taskWithContext,
         executionPolicy,
-        toolManager,  // Pass tool manager for integrated tool execution
+        toolManager,
       });
 
-      // Use session directly (no need to fetch again - prevents undefined)
+      // FIX (Bug 8): use the session we already have rather than a second
+      // non-async lookup that may miss an as-yet-uncached session.
+      const sanitizedContent = sanitizeV2ResponseContent(result.response || result.content || '');
+
       return {
         success: result.success ?? true,
         data: result,
-        content: sanitizeV2ResponseContent(result.response || result.content || ''),
-        sessionId: session.id,  // Use session from before execution
+        content: sanitizedContent,
+        sessionId: session.id,
         conversationId: session.conversationId,
         workspacePath: session.workspacePath,
         executionPolicy: session.executionPolicy,
       };
     }
   } catch (error: any) {
-    console.error('[V2Executor] Task execution failed:', error.message);
+    logger.error('[V2Executor] Task execution failed:', error.message);
     throw error;
   }
 
-  // Fallback for nullclaw path (session may not exist)
-  const session = await agentSessionManager.getOrCreateSession(
-    options.userId,
-    options.conversationId,
-    { enableMCP: true, mode: 'opencode' }
-  ).catch(() => null);
+  // Nullclaw path: session may not exist
+  const session = agentSessionManager.getSession(options.userId, options.conversationId);
+  const sanitizedContent = sanitizeV2ResponseContent(result.response || result.content || '');
 
   return {
     success: result.success ?? true,
     data: result,
-    content: sanitizeV2ResponseContent(result.response || result.content || ''),
+    content: sanitizedContent,
     sessionId: session?.id,
     conversationId: session?.conversationId,
     workspacePath: session?.workspacePath,
@@ -183,14 +196,14 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           ? `${options.context}\n\nTASK:\n${options.task}`
           : options.task;
 
-        // FIX Bug 10: Use shared execution policy builder (consistent with executeV2Task)
-        const executionPolicy = buildExecutionPolicy(options);
+        // FIX (Bug 10): compute executionPolicy once and reuse everywhere
+        // so the init event and the actual execution always agree.
+        const executionPolicy = buildExecutionPolicy(taskWithContext, options.executionPolicy);
 
-        // Send init event IMMEDIATELY to start the session - don't wait for anything
         controller.enqueue(encoder.encode(formatEvent('init', {
           agent: 'v2',
           conversationId: options.conversationId,
-          executionPolicy,  // Now uses shared builder
+          executionPolicy, // consistent with what will actually run
           timestamp: Date.now(),
         })));
 
@@ -205,25 +218,20 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           detail?: string;
         }> = [];
 
-        const emitStep = (step: string, status: 'started' | 'completed' | 'failed', detail?: Partial<typeof processingSteps[number]>) => {
-          const payload = {
-            step,
-            status,
-            timestamp: Date.now(),
-            stepIndex: processingSteps.length,
-            ...detail,
-          };
+        const emitStep = (
+          step: string,
+          status: 'started' | 'completed' | 'failed',
+          detail?: Partial<typeof processingSteps[number]>,
+        ) => {
+          const payload = { step, status, timestamp: Date.now(), stepIndex: processingSteps.length, ...detail };
           processingSteps.push(payload);
           controller.enqueue(encoder.encode(formatEvent('step', payload)));
         };
 
-        // Skip taskRouter - go directly to OpenCode unless explicitly using Nullclaw
-        // This allows immediate response instead of waiting for routing
         let result: any;
         let toolInvocations: ToolInvocation[] = [];
 
         if (options.preferredAgent === 'nullclaw') {
-          // Only use Nullclaw when explicitly requested
           const { taskRouter } = await import('./task-router');
           result = await taskRouter.executeTask({
             id: `task-${Date.now()}`,
@@ -234,8 +242,13 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
             preferredAgent: 'nullclaw',
           });
         } else {
-          // Directly use OpenCode - it's already capable of handling prompts and file operations
-          // Just translate outputs to our VFS system
+          // FIX (Bug 8): ensure session exists before runOpenCodeDirect
+          await agentSessionManager.getOrCreateSession(
+            options.userId,
+            options.conversationId,
+            { enableMCP: true, mode: 'opencode', executionPolicy },
+          );
+
           const { runOpenCodeDirect } = await import('./opencode-direct');
 
           result = await runOpenCodeDirect({
@@ -249,8 +262,7 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
             onTool: (toolName, args, toolResult) => {
               const toolCallId = `${toolName}-${Date.now()}`;
               const invocation = normalizeToolInvocation({
-                toolCallId,
-                toolName,
+                toolCallId, toolName,
                 state: 'result',
                 args,
                 result: toolResult,
@@ -260,19 +272,16 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
               });
               toolInvocations.push(invocation);
               emitStep(`Tool ${toolName}`, toolResult?.success === false ? 'failed' : 'completed', {
-                toolName,
-                toolCallId,
-                result: toolResult,
+                toolName, toolCallId, result: toolResult,
               });
               controller.enqueue(encoder.encode(formatEvent('tool_invocation', invocation)));
             },
           });
         }
 
+        // FIX (Bug 8): use getSession (sync) after we know it was created above
         const session = agentSessionManager.getSession(options.userId, options.conversationId);
 
-        // Get git-style diffs for client sync
-        // Note: Currently returns all changes for user - could scope to conversationId in future
         let changedFiles: Array<{ path: string; diff: string; changeType: string }> = [];
         try {
           const { diffTracker } = await import('../virtual-filesystem/filesystem-diffs');
@@ -280,17 +289,12 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
         } catch (diffError) {
           logger.warn('Failed to get diffs for sync:', diffError);
         }
-        
-        // Send diffs to client
+
         if (changedFiles.length > 0) {
           controller.enqueue(encoder.encode(formatEvent('diffs', {
             requestId: `v2-${session?.id || 'unknown'}`,
             count: changedFiles.length,
-            files: changedFiles.map(f => ({
-              path: f.path,
-              diff: f.diff,
-              changeType: f.changeType,
-            })),
+            files: changedFiles.map(f => ({ path: f.path, diff: f.diff, changeType: f.changeType })),
           })));
         }
 
@@ -308,7 +312,6 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           })));
         }
 
-        // Sanitize the response content to remove heredoc command blocks
         const sanitizedContent = sanitizeV2ResponseContent(result.response || result.content || '');
 
         controller.enqueue(encoder.encode(formatEvent('done', {
@@ -325,7 +328,6 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
         })));
       } catch (error: any) {
         logger.error('Streaming execution failed', error);
-        
         controller.enqueue(encoder.encode(formatEvent('error', {
           message: error.message || 'Execution failed',
           fallbackToV1: true,

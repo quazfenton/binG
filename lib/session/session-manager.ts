@@ -18,6 +18,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '../utils/logger';
 import type { ExecutionPolicy } from '../sandbox/types';
+import { registerActiveSession, unregisterActiveSession } from '../session-naming';
 import {
   getExecutionPolicyConfig,
   requiresCloudSandbox,
@@ -269,6 +270,14 @@ export class SessionManager {
       // Remove from tracking maps
       this.sessions.delete(key);
       this.sessionsById.delete(session.id);
+      
+      // Cleanup session from session-naming.ts tracking
+      try {
+        unregisterActiveSession(conversationId);
+      } catch (e) {
+        // Non-fatal - session naming cleanup is optional
+        logger.debug(`Failed to cleanup session name for ${conversationId}:`, e);
+      }
       
       const userSessionIds = this.userSessions.get(userId);
       if (userSessionIds) {
@@ -706,6 +715,9 @@ export class SessionManager {
       // Track session
       this.sessions.set(this.getSessionKey(userId, conversationId), session);
       this.sessionsById.set(sessionId, session);
+
+      // Register session as active for cleanup tracking
+      registerActiveSession(conversationId);
 
       if (!this.userSessions.has(userId)) {
         this.userSessions.set(userId, new Set());

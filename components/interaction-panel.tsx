@@ -1857,13 +1857,24 @@ export default function InteractionPanel({
                           <h4 className="text-sm font-medium text-white/80">
                             Attach Files ({selectedFilePaths.length})
                           </h4>
-                          <button
-                            type="button"
-                            onClick={() => setShowFileSelector(false)}
-                            className="text-white/50 hover:text-white/80"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center gap-2">
+                            {selectedFilePaths.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => virtualFilesystem.clearAttachedFiles()}
+                                className="text-[10px] text-red-400 hover:text-red-300 transition-colors mr-2"
+                              >
+                                Clear All
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setShowFileSelector(false)}
+                              className="text-white/50 hover:text-white/80"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
 
                         {/* Quick Upload Section */}
@@ -1917,6 +1928,22 @@ export default function InteractionPanel({
                                 <RefreshCw className="w-3 h-3 text-white/70" />
                               </button>
                             </div>
+                          </div>
+                          
+                          <div className="flex justify-between items-center mb-1 px-1">
+                            <span className="text-[9px] text-white/40 uppercase font-medium">Workspace Files</span>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const filesOnly = virtualFileNodes.filter(n => n.type === 'file');
+                                for (const file of filesOnly) {
+                                  await virtualFilesystem.attachFile(file.path);
+                                }
+                              }}
+                              className="text-[9px] text-blue-400 hover:text-blue-300 transition-colors"
+                            >
+                              Select All
+                            </button>
                           </div>
                         </div>
 

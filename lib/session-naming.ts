@@ -27,6 +27,26 @@ let usedNames = new Set<string>();
 let currentIndex = 0;
 
 /**
+ * Register a session as used (for tracking active sessions)
+ * This stores the conversationId in usedNames so it can be cleaned up later
+ */
+export function registerActiveSession(conversationId: string): void {
+  usedNames.add(conversationId.toLowerCase());
+}
+
+/**
+ * Unregister a session by conversationId (for cleanup when sessions are deleted)
+ * Frees up the conversationId from usedNames
+ */
+export function unregisterActiveSession(conversationId: string): void {
+  const lowerId = conversationId.toLowerCase();
+  if (usedNames.has(lowerId)) {
+    usedNames.delete(lowerId);
+    logger.debug(`Unregistered session: ${lowerId}`);
+  }
+}
+
+/**
  * Reset the naming counter (for testing or fresh starts)
  */
 export function resetSessionNaming(): void {
@@ -164,6 +184,32 @@ export async function sessionNameExists(name: string): Promise<boolean> {
 export function registerSessionName(name: string): void {
   usedNames.add(name.toLowerCase());
 }
+
+/**
+ * Unregister a session name (for cleanup when sessions are deleted)
+ * Frees up the name for reuse
+ */
+export function unregisterSessionName(name: string): void {
+  const lowerName = name.toLowerCase();
+  if (usedNames.has(lowerName)) {
+    usedNames.delete(lowerName);
+    // Adjust currentIndex to allow reuse of names if we're at the end
+    // This is a simple heuristic - names can be reused if we've cycled through
+    const stockWordNames = [...STOCK_WORDS.map(w => w.toLowerCase()), ...FIRST_THREE.map(f => f.toLowerCase())];
+    if (!stockWordNames.includes(lowerName)) {
+      // It's a generated name with suffix, safe to allow reuse
+      logger.debug(`Unregistered session name: ${lowerName}`);
+    }
+  }
+}
+
+// Simple logger for session naming
+const logger = {
+  debug: (msg: string) => console.debug(`[SessionNaming] ${msg}`),
+  info: (msg: string) => console.info(`[SessionNaming] ${msg}`),
+  warn: (msg: string) => console.warn(`[SessionNaming] ${msg}`),
+  error: (msg: string, err?: Error) => console.error(`[SessionNaming] ${msg}`, err),
+};
 
 /**
  * Check if writes would potentially overwrite existing files
