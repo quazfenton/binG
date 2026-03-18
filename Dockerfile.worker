@@ -1,0 +1,60 @@
+# Dockerfile for Agent Worker Service
+# Runs OpenCode engine loops, tool execution, and background jobs
+# Based on existing Dockerfile.agent pattern
+
+FROM node:20-alpine
+
+# Install system dependencies including git for repo operations
+RUN apk add --no-cache \
+    docker \
+    git \
+    python3 \
+    py3-pip \
+    build-base \
+    linux-headers \
+    curl
+
+# Enable corepack for pnpm
+RUN corepack enable
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package.json pnpm-lock.yaml ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy all agent-related libraries
+COPY lib/agent ./lib/agent
+COPY lib/orchestra ./lib/orchestra
+COPY lib/session ./lib/session
+COPY lib/redis ./lib/redis
+COPY lib/utils ./lib/utils
+COPY lib/types ./lib/types
+COPY lib/management ./lib/management
+COPY lib/tools ./lib/tools
+COPY lib/sandbox ./lib/sandbox
+COPY lib/virtual-filesystem ./lib/virtual-filesystem
+COPY lib/previews ./lib/previews
+COPY lib/opencode ./lib/opencode
+
+# Copy worker service entry point
+COPY services/agent-worker ./services/agent-worker
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV SERVICE_NAME=worker
+ENV PORT=3003
+ENV WORKER_CONCURRENCY=4
+
+# Expose worker port
+EXPOSE 3003
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD wget -q --spider http://localhost:${PORT}/health || exit 1
+
+# Start the worker service
+CMD ["node", "services/agent-worker/index.js"]

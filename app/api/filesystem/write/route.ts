@@ -40,11 +40,13 @@ const writeRequestSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  let filesystemOwnerResolution: FilesystemOwnerResolution | undefined;
+  let authResult: AuthResult | undefined;
+  let ownerId: string | undefined;
+
   try {
     // Resolve owner: authenticated users via JWT/session, anonymous via x-anonymous-session-id header
-    const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
-    let filesystemOwnerResolution: FilesystemOwnerResolution | undefined;
-    let ownerId: string;
+    authResult = await resolveRequestAuth(req, { allowAnonymous: true });
     
     if (!authResult.success || !authResult.userId) {
       // Fallback: resolve via resolveFilesystemOwner (checks header + cookie)
@@ -173,16 +175,16 @@ export async function POST(req: NextRequest) {
     });
     
     return withAnonSessionCookie(response, filesystemOwnerResolution || {
-      ownerId,
-      source: authResult.source || 'jwt',
+      ownerId: ownerId || 'unknown',
+      source: authResult?.source || 'jwt',
       isAuthenticated: true,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to write file';
     const errorResponse = NextResponse.json({ success: false, error: message }, { status: 400 });
     return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
-      ownerId,
-      source: authResult.source || 'jwt',
+      ownerId: ownerId || 'unknown',
+      source: authResult?.source || 'jwt',
       isAuthenticated: true,
     });
   }

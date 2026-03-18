@@ -27,7 +27,12 @@ export async function GET(req: NextRequest) {
       },
       cache: 'no-store',
     });
-    const data = await upstream.json().catch(() => ({}));
+    let data;
+    try {
+      data = await upstream.json();
+    } catch {
+      data = {};
+    }
     if (!upstream.ok) {
       return NextResponse.json({ error: data?.error || 'Failed to fetch pipelines' }, { status: upstream.status });
     }

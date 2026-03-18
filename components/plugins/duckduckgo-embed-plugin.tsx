@@ -412,7 +412,7 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                     title="DuckDuckGo"
                     onLoad={() => {
                       setIsReloading(false);
-                      handleLoad(); // Update useIframeLoader state to mark as loaded
+                      handleLoad(iframeUrl); // Update useIframeLoader state to mark as loaded
                     }}
                     onError={() => {
                       setIframeError('Failed to load DuckDuckGo. Note: DuckDuckGo limits iframe embedding. Try using the external link button.');

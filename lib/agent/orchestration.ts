@@ -1,6 +1,6 @@
 /**
  * Agent Orchestration Module - Consolidated Index
- * 
+ *
  * Unified exports for all agent orchestration components including:
  * - Session management with background jobs
  * - Execution graph for task tracking
@@ -9,9 +9,9 @@
  * - Multi-agent collaboration
  * - Stateful agent with Plan-Act-Verify
  * - HITL (Human-in-the-Loop) system
- * 
+ *
  * This index provides a single import point for all orchestration functionality.
- * 
+ *
  * @example
  * ```typescript
  * import {
@@ -23,14 +23,14 @@
  *   statefulAgent,
  *   hitlManager,
  * } from '@/lib/agent/orchestration';
- * 
+ *
  * // Start session with background jobs
  * const session = await sessionManager.getOrCreateSession(userId, conversationId);
  * await sessionManager.startBackgroundJob(session.id, {
  *   command: 'npm run dev',
  *   interval: 30,
  * });
- * 
+ *
  * // Execute workflow
  * const result = await mastraWorkflowIntegration.executeWorkflow('code-agent', {
  *   task: 'Implement authentication',
@@ -38,6 +38,12 @@
  * });
  * ```
  */
+
+import { sessionManager } from '../session/session-manager';
+import { executionGraphEngine } from './execution-graph';
+import { enhancedBackgroundJobsManager } from './enhanced-background-jobs';
+import { workforceManager } from './workforce-manager';
+import { mastraWorkflowIntegration } from './mastra-workflow-integration';
 
 // ============================================================================
 // Session Management
@@ -51,7 +57,6 @@ export {
   type Session,
   type SessionConfig,
   type SessionQuota,
-  type SessionMetrics,
 } from '../session/session-manager';
 
 export {
@@ -82,20 +87,12 @@ export {
 
 export {
   enhancedBackgroundJobsManager,
-  backgroundExecutor, // Deprecated backward compatibility
   EnhancedBackgroundJobsManager,
-  BackgroundExecutor,
   type EnhancedJobConfig,
   type EnhancedJob,
   type JobExecutionResult,
   type JobExecutor,
-  type BackgroundJobConfig,
-  type BackgroundJob,
 } from './enhanced-background-jobs';
-export {
-  backgroundExecutor as simpleBackgroundExecutor,
-  type BackgroundJobConfig as SimpleBackgroundJobConfig,
-} from './background-jobs';
 
 // ============================================================================
 // Workforce Management
@@ -103,7 +100,6 @@ export {
 
 export {
   workforceManager,
-  type WorkforceManager,
   type SpawnTaskInput,
 } from './workforce-manager';
 
@@ -135,10 +131,9 @@ export {
 // ============================================================================
 
 export {
-  multiAgentCollaboration,
+  MultiAgentCollaboration,
   createMultiAgentCollaboration,
   quickCollaborativeExecute,
-  MultiAgentCollaboration,
   type AgentRole,
   type AgentState,
   type Task,
@@ -152,10 +147,8 @@ export {
 
 export {
   taskRouter,
-  TaskRouter,
   type TaskRequest,
-  type TaskRoutingResult,
-  type RoutingTarget,
+  type TaskType,
 } from './task-router';
 
 // ============================================================================
@@ -163,9 +156,8 @@ export {
 // ============================================================================
 
 export {
-  unifiedAgent,
-  createUnifiedAgent,
   UnifiedAgent,
+  createAgent,
   type UnifiedAgentConfig,
   type AgentSession,
   type TerminalOutput,
@@ -200,19 +192,9 @@ export {
   evaluateWorkflow,
   evaluateActiveWorkflow,
   HITLWorkflowManager,
-  type HITLApproval,
-  type HITLReview,
-  type HITLWorkflow,
-  type HITLRule,
-  type HITLConditionMatcher,
-  type HITLDecision,
 } from '@/lib/orchestra/stateful-agent/human-in-the-loop';
 
-export {
-  hitlAuditLogger,
-  type HITLAuditLog,
-  type HITLAuditEvent,
-} from '@/lib/orchestra/stateful-agent/human-in-the-loop';
+// HITL audit logger is available via hitlManager
 
 // ============================================================================
 // Unified Agent Service
@@ -222,7 +204,6 @@ export {
   processUnifiedAgentRequest,
   checkProviderHealth,
   getAvailableModes,
-  type UnifiedAgentConfig,
   type UnifiedAgentResult,
   type ProviderHealth,
 } from '@/lib/orchestra/unified-agent-service';
@@ -233,10 +214,6 @@ export {
 
 export {
   runAgentLoop,
-  AgentLoop,
-  type AgentLoopConfig,
-  type AgentLoopResult,
-  type ToolExecutionRequest,
 } from '@/lib/orchestra/agent-loop';
 
 // ============================================================================
@@ -245,7 +222,6 @@ export {
 
 export {
   reflectionEngine,
-  ReflectionEngine,
   type ReflectionPerspective,
   type ReflectionResult,
   type ReflectionConfig,
@@ -257,7 +233,6 @@ export {
 
 export {
   simulatedOrchestrator,
-  SimulatedOrchestrator,
   type TaskProposal,
   type TaskReview,
 } from './simulated-orchestration';

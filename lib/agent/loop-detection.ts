@@ -119,20 +119,20 @@ export class LoopDetector {
     this.callHistory = this.callHistory.filter(record => record.timestamp > windowStart);
 
     // Check for loops
-    const result = this.detectLoop(toolName, argsHash);
+    const loopResult = this.detectLoop(toolName, argsHash);
 
-    if (result.isLoop) {
+    if (loopResult.isLoop) {
       log.warn('Loop detected', {
         toolName,
         argsHash,
         consecutiveSimilar: this.consecutiveSimilar,
         historySize: this.callHistory.length,
-        reason: result.reason,
-        severity: result.severity,
+        reason: loopResult.reason,
+        severity: loopResult.severity,
       });
     }
 
-    return result;
+    return loopResult;
   }
 
   /**

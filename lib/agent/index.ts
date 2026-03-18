@@ -24,7 +24,6 @@ export {
 // Nullclaw Integration
 export {
   nullclawIntegration,
-  NullclawIntegration,
   type NullclawConfig,
   type NullclawTask,
   type NullclawStatus,
@@ -48,7 +47,6 @@ export {
 
 // V2 Executor
 export {
-  executeV2Task,
   executeV2TaskStreaming,
   type V2ExecuteOptions,
 } from './v2-executor';

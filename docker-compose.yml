@@ -4,6 +4,118 @@
 
 services:
   # ===========================================
+  # Agent Gateway (Session Management + SSE)
+  # ===========================================
+  # NEW SERVICE: Handles session orchestration and event streaming
+  # Runs separately from Next.js for horizontal scaling
+  agent-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+      target: runner
+    container_name: bing-agent-gateway
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=production
+      - PORT=3002
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - WORKER_URL=${WORKER_URL:-http://agent-worker:3003}
+      - SESSION_TTL_MINUTES=${SESSION_TTL_MINUTES:-30}
+      - MAX_CONCURRENT_JOBS=${MAX_CONCURRENT_JOBS:-100}
+      
+      # JWT for gateway-worker auth
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET required}
+      
+      # Database
+      - DATABASE_URL=${DATABASE_URL:-postgresql://bing:bing_secure_password_change_me@postgres:5432/bing}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+  # ===========================================
+  # Agent Workers (OpenCode Engine + Tools)
+  # ===========================================
+  # NEW SERVICE: Runs agent loops and tool execution
+  # Can scale horizontally based on load
+  agent-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+      target: runner
+    container_name: bing-agent-worker
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      - NODE_ENV=production
+      - PORT=3003
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - NULLCLAW_URL=${NULLCLAW_URL:-http://nullclaw:3000}
+      - MICROSANDBOX_URL=${MICROSANDBOX_URL:-http://microsandbox:5555}
+      
+      # OpenCode settings
+      - OPENCODE_MODEL=${OPENCODE_MODEL:-claude-3-5-sonnet}
+      - OPENCODE_MAX_STEPS=${OPENCODE_MAX_STEPS:-15}
+      - OPENCODE_CONTAINERIZED=${OPENCODE_CONTAINERIZED:-false}
+      
+      # LLM Provider API Keys
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      
+      # Sandbox Provider API Keys
+      - DAYTONA_API_KEY=${DAYTONA_API_KEY}
+      - E2B_API_KEY=${E2B_API_KEY}
+      - BLAXEL_API_KEY=${BLAXEL_API_KEY}
+      - CSB_API_KEY=${CSB_API_KEY}
+      
+      # Worker settings
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-4}
+      - MAX_EXECUTIONS_PER_HOUR=${MAX_EXECUTIONS_PER_HOUR:-1000}
+      
+      # Database
+      - DATABASE_URL=${DATABASE_URL:-postgresql://bing:bing_secure_password_change_me@postgres:5432/bing}
+    depends_on:
+      redis:
+        condition: service_healthy
+      nullclaw:
+        condition: service_healthy
+      microsandbox:
+        condition: service_healthy
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      replicas: ${WORKER_REPLICAS:-3}  # Scale horizontally
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+
+  # ===========================================
   # Next.js Application
   # ===========================================
   app:
@@ -20,99 +132,61 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - WEBSOCKET_PORT=8080
+      
+      # Gateway connection
+      - AGENT_GATEWAY_URL=${AGENT_GATEWAY_URL:-http://agent-gateway:3002}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      
+      # Storage
       - STORAGE_TYPE=${STORAGE_TYPE:-local}
       - LOCAL_SNAPSHOT_DIR=/tmp/snapshots
       - WORKSPACE_DIR=/tmp/workspaces
       - RUNTIME_TYPE=${RUNTIME_TYPE:-process}
 
-      # Authentication - MUST be overridden in production
-      # Generate secure secrets with: openssl rand -hex 32
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET environment variable is required. Generate with: openssl rand -hex 32}
+      # Authentication
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET required}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY required}
+      - BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY:?BLAXEL_SECRET_ENCRYPTION_KEY required}
 
-      # Encryption keys - MUST be overridden in production
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY environment variable is required. Generate with: openssl rand -hex 32}
-      - BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY:?BLAXEL_SECRET_ENCRYPTION_KEY environment variable is required. Generate with: openssl rand -hex 32}
-
-      # Nango integration
-      - NANGO_SECRET_KEY=${NANGO_SECRET_KEY:-}
-
-      # Database (PostgreSQL for Mastra + App)
+      # Database
       - DATABASE_URL=${DATABASE_URL:-postgresql://bing:bing_secure_password_change_me@postgres:5432/bing}
-      
-      # Mastra configuration
-      - MASTRA_TELEMETRY_ENABLED=${MASTRA_TELEMETRY_ENABLED:-false}
-      - MASTRA_SCHEMA=${MASTRA_SCHEMA:-mastra}
 
-      # LLM Provider API Keys (loaded from .env)
+      # LLM Provider API Keys
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - OPENCODE_API_KEY=${OPENCODE_API_KEY}
 
-      # Sandbox Provider API Keys (loaded from .env)
+      # Sandbox Provider API Keys
       - DAYTONA_API_KEY=${DAYTONA_API_KEY}
       - E2B_API_KEY=${E2B_API_KEY}
       - BLAXEL_API_KEY=${BLAXEL_API_KEY}
       - CSB_API_KEY=${CSB_API_KEY}
       - SANDBOX_PROVIDER=${SANDBOX_PROVIDER:-daytona}
 
-      # Other Integration API Keys (loaded from .env)
-      - BREVO_API_KEY=${BREVO_API_KEY}
-      - MAILERSEND_API_KEY=${MAILERSEND_API_KEY}
-      - ARCADE_API_KEY=${ARCADE_API_KEY}
-      - SMITHERY_API_KEY=${SMITHERY_API_KEY}
-      - NEXT_PUBLIC_TAMBO_API_KEY=${NEXT_PUBLIC_TAMBO_API_KEY}
-      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
-      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
-      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
-      - MODAL_API_TOKEN=${MODAL_API_TOKEN}
-      - COMPOSIO_API_KEY=${COMPOSIO_API_KEY}
-
-      # Nullclaw Integration (Non-Coding Agency)
+      # Nullclaw
       - NULLCLAW_ENABLED=${NULLCLAW_ENABLED:-true}
-      - NULLCLAW_URL=${NULLCLAW_URL:-}  # Set to use external Nullclaw service
-      - NULLCLAW_API_KEY=${NULLCLAW_API_KEY:-}
-      - NULLCLAW_MODE=${NULLCLAW_MODE:-shared}  # shared | per-session
-      - NULLCLAW_POOL_SIZE=${NULLCLAW_POOL_SIZE:-2}
-      - NULLCLAW_MAX_CONTAINERS=${NULLCLAW_MAX_CONTAINERS:-4}
-      - NULLCLAW_PORT=${NULLCLAW_PORT:-3001}
-      - NULLCLAW_IMAGE=${NULLCLAW_IMAGE:-ghcr.io/nullclaw/nullclaw:latest}
-      - NULLCLAW_TIMEOUT=${NULLCLAW_TIMEOUT:-300000}
-      - NULLCLAW_ALLOWED_DOMAINS=${NULLCLAW_ALLOWED_DOMAINS:-openrouter.ai,api.discord.com,api.telegram.org}
-      - NULLCLAW_HEALTH_TIMEOUT=${NULLCLAW_HEALTH_TIMEOUT:-30000}
-      - NULLCLAW_NETWORK=${NULLCLAW_NETWORK:-bing-network}
-
-      # S3 Storage (optional)
-      - S3_ENDPOINT=${S3_ENDPOINT}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
-      - S3_SECRET_KEY=${S3_SECRET_KEY}
-      - S3_BUCKET=${S3_BUCKET:-ephemeral-snapshots}
-      - S3_REGION=${S3_REGION:-us-east-1}
+      - NULLCLAW_URL=${NULLCLAW_URL:-http://nullclaw:3000}
+      - NULLCLAW_MODE=${NULLCLAW_MODE:-shared}
 
       # Quotas
       - MAX_EXECUTIONS_PER_HOUR=${MAX_EXECUTIONS_PER_HOUR:-1000}
       - MAX_CONCURRENT_SANDBOXES=${MAX_CONCURRENT_SANDBOXES:-10}
       - MAX_MEMORY_MB=${MAX_MEMORY_MB:-2048}
       - MAX_STORAGE_MB=${MAX_STORAGE_MB:-10240}
-
-      # Logging
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - LOG_FORMAT=${LOG_FORMAT:-json}
     volumes:
       - app-workspaces:/tmp/workspaces
       - app-snapshots:/tmp/snapshots
-      - app-firecracker:/tmp/firecracker
     depends_on:
+      agent-gateway:
+        condition: service_healthy
       postgres:
         condition: service_healthy
-      minio:
+      redis:
         condition: service_healthy
-      prometheus:
-        condition: service_started
     networks:
       - bing-network
     healthcheck:
@@ -126,9 +200,6 @@ services:
         limits:
           cpus: '4'
           memory: 4G
-        reservations:
-          cpus: '2'
-          memory: 2G
 
   # ===========================================
   # PostgreSQL Database (for Mastra & App)
