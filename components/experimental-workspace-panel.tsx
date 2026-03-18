@@ -28,6 +28,7 @@ import {
   ExternalLink,
   LucideHistory,
   RotateCcw,
+  RefreshCw,
   Code,
   FileCode,
   Folder,
@@ -113,6 +114,42 @@ export function ExperimentalWorkspacePanel() {
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
+  
+  // Resizable panel width
+  const [panelWidth, setPanelWidth] = useState(400);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartX = useRef(0);
+  const resizeStartWidth = useRef(400);
+  
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    resizeStartX.current = e.clientX;
+    resizeStartWidth.current = panelWidth;
+  }, [panelWidth]);
+  
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const delta = e.clientX - resizeStartX.current;
+      const newWidth = Math.max(300, Math.min(800, resizeStartWidth.current + delta));
+      setPanelWidth(newWidth);
+    };
+    
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+    
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    }
+    
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
 
   // Load chat history from localStorage on mount
   useEffect(() => {
@@ -360,6 +397,21 @@ export function ExperimentalWorkspacePanel() {
       try {
         const snapshot = await vfs.getSnapshot();
         setVfsSnapshot(snapshot);
+        
+        // Auto-expand all folders on initial load
+        if (snapshot?.files) {
+          const folders = new Set<string>();
+          snapshot.files.forEach((file: { path: string }) => {
+            const parts = file.path.split("/").filter(Boolean);
+            // Add each folder path to expanded set
+            for (let i = 1; i < parts.length; i++) {
+              const folderPath = "/" + parts.slice(0, i).join("/");
+              folders.add(folderPath);
+            }
+          });
+          setExpandedFolders(folders);
+        }
+        
         // Initialize filesystem state with snapshot data
         // Use stable session ID from user session (not Date.now() which changes on refresh)
         const stableSessionId = `session-${getOrCreateAnonymousSessionId()}`;
@@ -464,26 +516,60 @@ export function ExperimentalWorkspacePanel() {
     };
 
     setChatMessages((prev) => [...prev, userMessage]);
+    const currentInput = chatInput.trim();
     setChatInput("");
     setIsChatLoading(true);
 
     // Try to call the actual chat API
     try {
+      // Get the current chat messages as the messages array
+      const messagesPayload = [
+        ...chatMessages.map(m => ({ role: m.role, content: m.content })),
+        { role: 'user' as const, content: currentInput }
+      ];
+
+      // Get filesystem scope from the VFS
+      const vfsScope = filesystem?.sessionId || 'project/sessions/default';
+      
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          // Add auth headers if available
+        },
         body: JSON.stringify({
-          message: chatInput.trim(),
-          conversationId: 'experimental-panel',
+          messages: messagesPayload,
+          provider: 'openrouter',
+          model: 'nvidia/nemotron-3-nano-30b-a3b:free',
+          conversationId: `exp-workspace-${vfsScope}`,
+          filesystemContext: {
+            scopePath: vfsScope,
+          },
         }),
       });
 
       if (response.ok) {
         const data = await response.json();
+        const content = data?.data?.response || data?.data?.content || data?.content || data?.response || "Response received";
+        
+        // Debug: log filesystem operations if present
+        const fsData = data?.data?.filesystem || data?.filesystem;
+        if (fsData) {
+          console.log('[ExperimentalWorkspace] Filesystem operations in response:', fsData);
+          // Refresh VFS after potential file writes
+          const snapshot = await vfs.getSnapshot();
+          setVfsSnapshot(snapshot);
+          setFilesystem({
+            sessionId: filesystem?.sessionId || "default",
+            version: snapshot?.version || 1,
+            files: snapshot?.files || [],
+          });
+        }
+        
         const assistantMessage: Message = {
           id: `exp-chat-${Date.now()}`,
           role: "assistant",
-          content: data.response || data.content || "Response received",
+          content: typeof content === 'string' ? content : JSON.stringify(content),
           timestamp: new Date().toISOString(),
         };
         setChatMessages((prev) => [...prev, assistantMessage]);
@@ -491,6 +577,7 @@ export function ExperimentalWorkspacePanel() {
         throw new Error('API request failed');
       }
     } catch (error) {
+      console.error('[ExperimentalWorkspace] Chat error:', error);
       // Fallback to simulated response if API fails
       setTimeout(() => {
         const assistantMessage: Message = {
@@ -504,7 +591,7 @@ export function ExperimentalWorkspacePanel() {
     } finally {
       setIsChatLoading(false);
     }
-  }, [chatInput, isChatLoading]);
+  }, [chatInput, isChatLoading, chatMessages, filesystem, vfs]);
 
   // YouTube helper functions
   const getYouTubeVideoId = useCallback((urlOrId: string): string => {
@@ -1180,25 +1267,33 @@ export function ExperimentalWorkspacePanel() {
         onEnded={nextSong}
       />
 
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ x: "-100%", opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: "-100%", opacity: 0 }}
-            transition={{ type: "spring", damping: 25, stiffness: 200 }}
-            className="fixed inset-y-0 left-0 z-0 w-[400px] md:w-[450px] pointer-events-auto"
-            style={{
-              top: "200px", // Below interaction-panel
-              bottom: 0,
-              left: 0,
-            }}
-          >
-            {/* Glassmorphism background */}
-            <div className="absolute inset-0 bg-black/40 backdrop-blur-xl border-r border-white/10" />
+      <div className="pointer-events-auto">
+        <AnimatePresence>
+          {isOpen && (
+            <motion.div
+              initial={{ x: "-100%", opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: "-100%", opacity: 0 }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="fixed inset-y-0 left-0 z-[60] pointer-events-auto flex flex-col"
+              style={{
+                top: "60px",
+                bottom: 0,
+                left: 0,
+                width: panelWidth,
+              }}
+            >
+              {/* Resize handle on right edge */}
+              <div
+                className="absolute right-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-blue-400/50 transition-colors z-10"
+                onMouseDown={handleMouseDown}
+              />
+              
+              {/* Glassmorphism background */}
+              <div className="absolute inset-0 bg-black/60 backdrop-blur-xl border-r border-white/10" />
 
-            {/* Content */}
-            <div className="relative h-full flex flex-col">
+              {/* Content - full height with proper overflow */}
+              <div className="relative flex-1 flex flex-col overflow-hidden">
               {/* Header */}
               <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
                 <div className="flex items-center gap-2">
@@ -1438,6 +1533,24 @@ export function ExperimentalWorkspacePanel() {
                           >
                             <Plus className="h-3 w-3" />
                           </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={async () => {
+                              const snapshot = await vfs.getSnapshot();
+                              setVfsSnapshot(snapshot);
+                              // Also refresh the filesystem state
+                              setFilesystem({
+                                sessionId: filesystem?.sessionId || "default",
+                                version: snapshot?.version || 1,
+                                files: snapshot?.files || [],
+                              });
+                            }}
+                            className="h-6 w-6 hover:bg-white/10"
+                            title="Refresh Files"
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                          </Button>
                         </div>
                       </div>
                       
@@ -1503,9 +1616,11 @@ export function ExperimentalWorkspacePanel() {
                             </div>
                             <p className="text-[10px] text-white/50">{selectedFile.path}</p>
                             {selectedFile.content && (
-                              <pre className="mt-2 p-2 bg-black/50 rounded text-[10px] text-white/70 overflow-x-auto max-h-48">
-                                <code>{selectedFile.content.slice(0, 500)}{selectedFile.content.length > 500 ? "..." : ""}</code>
-                              </pre>
+                              <div className="w-full overflow-x-auto">
+                                <pre className="mt-2 p-2 bg-black/50 rounded text-[10px] text-white/70 whitespace-pre-wrap break-all min-h-[200px] max-h-[60vh] overflow-y-auto">
+                                  <code>{selectedFile.content}</code>
+                                </pre>
+                              </div>
                             )}
                           </div>
                         </>
@@ -2273,7 +2388,7 @@ export function ExperimentalWorkspacePanel() {
                         <span>Now Playing</span>
                       </div>
                     </div>
-                  </div>
+                  </ScrollArea>
                 </TabsContent>
 
                 {/* Forum Tab */}
@@ -2851,6 +2966,9 @@ export function ExperimentalWorkspacePanel() {
             </div>
           </motion.div>
         )}
+      </AnimatePresence>
+      </div>
+
       {/* Confirmation Dialog */}
       {showConfirmDialog && confirmDialogData && (
         <ConfirmationDialog

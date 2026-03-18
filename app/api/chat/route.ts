@@ -917,9 +917,15 @@ export async function POST(request: NextRequest) {
           events.splice(Math.max(0, events.length - 1), 0, filesystemEvent);
         }
 
+        // Bug #9 Fix: hasFilesystemEdits should be true only when there are actual filesystem write events
+        // Not just when the function ran (enableFilesystemEdits was true)
+        const hasActualFilesystemEdits = filesystemEdits && 
+          (filesystemEdits.applied.length > 0 || filesystemEdits.requestedFiles.length > 0);
         chatLogger.info('Starting streaming response', { requestId: streamRequestId, provider, model }, {
           eventsCount: events.length,
-          hasFilesystemEdits: !!filesystemEdits,
+          hasFilesystemEdits: hasActualFilesystemEdits,
+          appliedEditsCount: filesystemEdits?.applied?.length || 0,
+          requestedFilesCount: filesystemEdits?.requestedFiles?.length || 0,
         });
 
         const encoder = new TextEncoder();

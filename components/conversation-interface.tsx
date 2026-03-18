@@ -617,41 +617,64 @@ export default function ConversationInterface() {
       // Query actual filesystem state for accurate conflict detection
       let existingFilePaths: string[] = [];
       
-      try {
-        const listResponse = await fetch('/api/filesystem/list', {
-          method: 'POST',
-          headers: buildFilesystemHeaders(),
-          body: JSON.stringify({ 
-            path: filesystemScopePath,
-            recursive: true 
-          }),
-        });
-        
-        if (listResponse.ok) {
-          const payload = await listResponse.json().catch(() => null);
-          if (payload?.success && payload?.data?.nodes) {
-            // Get file paths from the actual filesystem
-            existingFilePaths = payload.data.nodes
-              .filter((node: any) => node.type === 'file')
-              .map((node: any) => node.path);
+      // Wrap async code in an async IIFE since useEffect can't be async
+      const checkConflicts = async () => {
+        try {
+          const listResponse = await fetch('/api/filesystem/list', {
+            method: 'POST',
+            headers: buildFilesystemHeaders(),
+            body: JSON.stringify({ 
+              path: filesystemScopePath,
+              recursive: true 
+            }),
+          });
+          
+          if (listResponse.ok) {
+            const payload = await listResponse.json().catch(() => null);
+            if (payload?.success && payload?.data?.nodes) {
+              // Get file paths from the actual filesystem
+              existingFilePaths = payload.data.nodes
+                .filter((node: any) => node.type === 'file')
+                .map((node: any) => node.path);
+            }
           }
+        } catch (listError) {
+          console.warn('Failed to query filesystem for conflict detection:', listError);
+          // Fall back to attached files if API fails
+          existingFilePaths = Object.keys(attachedFilesystemFiles);
         }
-      } catch (listError) {
-        console.warn('Failed to query filesystem for conflict detection:', listError);
-        // Fall back to attached files if API fails
-        existingFilePaths = Object.keys(attachedFilesystemFiles);
-      }
-      
-      const newFilePaths = newEntries.map(e => e.path);
-      const conflictCheck = checkFileConflicts(existingFilePaths, newFilePaths, true);
-      
-      if (conflictCheck.needsApproval) {
-        // Store pending diffs for approval instead of auto-applying
-        setPendingApprovalDiffs(newEntries);
-        setShowApprovalDialog(true);
-        toast.info(`${conflictCheck.existingFiles.length} file(s) would be overwritten. Review required.`);
         
-        // Still store in commandsByFile for manual review
+        const newFilePaths = newEntries.map(e => e.path);
+        const conflictCheck = checkFileConflicts(existingFilePaths, newFilePaths, true);
+        
+        if (conflictCheck.needsApproval) {
+          // Store pending diffs for approval instead of auto-applying
+          setPendingApprovalDiffs(newEntries);
+          setShowApprovalDialog(true);
+          toast.info(`${conflictCheck.existingFiles.length} file(s) would be overwritten. Review required.`);
+          
+          // Still store in commandsByFile for manual review
+          setCommandsByFile((prev) => {
+            const next: Record<string, string[]> = { ...prev };
+            for (const { path, diff } of newEntries) {
+              if (!path) continue;
+              const list = next[path] ? [...next[path]] : [];
+              if (list.length === 0 || list[list.length - 1] !== diff) {
+                list.push(diff);
+                next[path] = list;
+              }
+            }
+            return next;
+          });
+          return; // Don't auto-apply - require approval
+        }
+
+        // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
+        // The diffs will also be stored in commandsByFile for manual review/revert
+        if (applyDiffsRef.current) {
+          void applyDiffsRef.current(newEntries);
+        }
+
         setCommandsByFile((prev) => {
           const next: Record<string, string[]> = { ...prev };
           for (const { path, diff } of newEntries) {
@@ -664,8 +687,10 @@ export default function ConversationInterface() {
           }
           return next;
         });
-        return; // Don't auto-apply - require approval
-      }
+      };
+      
+      void checkConflicts();
+      return;
     }
 
     // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
