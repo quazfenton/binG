@@ -131,29 +131,30 @@ function isIncompleteJSON(str: string): boolean {
 }
 
 /**
- * Validate JSON structure before parsing (early error detection)
+ * Validate JSON structure before parsing (basic checks only)
+ * 
+ * Note: We rely on JSON.parse() as the authoritative validity check.
+ * This function only does minimal validation to catch obvious issues early.
+ * We do NOT count braces/brackets because they may appear inside string literals.
  */
 function validateJSONStructure(str: string): { valid: boolean; error?: string } {
   const trimmed = str.trim();
 
-  // Must start with { or [ for valid JSON
+  // Must start with { or [ for valid JSON objects/arrays
   if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
     return { valid: false, error: 'Invalid JSON: must start with { or [' };
   }
 
-  // Check for basic structure issues
-  const openBraces = (trimmed.match(/{/g) || []).length;
-  const closeBraces = (trimmed.match(/}/g) || []).length;
-  const openBrackets = (trimmed.match(/\[/g) || []).length;
-  const closeBrackets = (trimmed.match(/]/g) || []).length;
-
-  if (openBraces !== closeBraces) {
-    return { valid: false, error: `Unbalanced braces: ${openBraces} open, ${closeBraces} close` };
+  // Basic length check (prevent extremely long lines)
+  if (trimmed.length > 1024 * 1024) { // 1MB limit
+    return { valid: false, error: 'JSON line exceeds maximum length' };
   }
 
-  if (openBrackets !== closeBrackets) {
-    return { valid: false, error: `Unbalanced brackets: ${openBrackets} open, ${closeBrackets} close` };
-  }
+  // That's it - let JSON.parse() do the real validation
+  // We intentionally don't count braces/brackets because:
+  // 1. They can appear inside string literals: {"text": "Hello } world"}
+  // 2. They can be escaped: {"escape": "\{bracket\}"}
+  // 3. JSON.parse() is the authoritative check anyway
 
   return { valid: true };
 }

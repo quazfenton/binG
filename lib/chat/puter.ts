@@ -97,12 +97,12 @@ export function getPuterAdapter(
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        
+
         const chunk = dec.decode(value, { stream: true })
-        
+
         // Parse NDJSON with robust error handling
         const parsedObjects = parser.parse(chunk)
-        
+
         for (const json of parsedObjects) {
           let part: any = {}
           if (typeof json === 'string') {
@@ -116,8 +116,18 @@ export function getPuterAdapter(
           }
           yield part
         }
+
+        // Handle non-JSON chunks (plain text, errors, etc.)
+        // If parser found nothing but chunk has content, emit as text
+        if (parsedObjects.length === 0 && chunk.trim()) {
+          // Check if it's not an SSE data line (those are handled by parser)
+          const trimmed = chunk.trim()
+          if (!trimmed.startsWith('data:') && !trimmed.startsWith('event:')) {
+            yield { text: trimmed }
+          }
+        }
       }
-      
+
       // Finalize to process any remaining buffered data
       const final = parser.finalize()
       for (const json of final) {

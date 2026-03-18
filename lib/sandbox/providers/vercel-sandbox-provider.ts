@@ -270,8 +270,12 @@ export class VercelSandboxProvider implements SandboxProvider {
 
   async createSnapshot(sandboxId: string, label?: string): Promise<string> {
     const sandbox = await this.getSandbox(sandboxId)
-    const snapshot = await (sandbox as any).snapshot()
-    return (snapshot as any).snapshotId
+    // Use VercelSandboxHandle's createSnapshot method
+    const snapshot = await sandbox.createSnapshot(label)
+    if (!snapshot) {
+      throw new Error('Snapshot creation not supported')
+    }
+    return snapshot.id
   }
 
   async restoreSnapshot(snapshotId: string): Promise<SandboxHandle> {
