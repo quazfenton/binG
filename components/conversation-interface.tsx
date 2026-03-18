@@ -1,20 +1,22 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react"; // Import useCallback and useMemo
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"; // Import useCallback, useMemo, and useRef
 import { useEnhancedChat } from "@/hooks/use-enhanced-chat"; // Import enhanced chat hook
+import { useDiffsPoller } from "@/hooks/use-diffs-poller";
 import type { ChatHistory } from "@/types";
 
 import InteractionPanel from "@/components/interaction-panel";
 import Settings from "@/components/settings";
 import ChatHistoryModal from "@/components/chat-history-modal";
 import { ChatPanel } from "@/components/chat-panel";
+import { HorizontalSpaceFiller } from "@/components/space-filler";
 import CodePreviewPanel from "@/components/code-preview-panel";
 import TerminalPanel from "@/components/terminal/TerminalPanel";
 // import { useConversation } from "@/hooks/use-conversation"; // No longer needed
 import { useChatHistory } from "@/hooks/use-chat-history";
 import { voiceService } from "@/lib/voice/voice-service";
 import { toast } from "sonner";
-import type { LLMProvider } from "@/lib/api/llm-providers";
+import type { LLMProvider } from "@/lib/chat/llm-providers";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
 import { setCurrentMode } from "@/lib/mode-manager";
@@ -25,23 +27,17 @@ import {
   debugContentProcessing
 } from "@/lib/input-response-separator";
 import { useAuth } from "@/contexts/auth-context";
-import { generateSecureId } from "@/lib/utils";
+import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from "@/lib/utils";
 import type { AttachedVirtualFile } from "@/hooks/use-virtual-filesystem";
+import { parsePatch, applyPatch } from "diff";
+import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
+import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 
 /**
  * Render the main conversation interface with chat, filesystem attachments, providers/models selection,
  * history, voice integration, streaming state, code previews, and terminal visibility.
  */
-function getStableSessionId(): string {
-  if (typeof window === 'undefined') return 'server-session';
-  
-  let sessionId = localStorage.getItem('anonymous_session_id');
-  if (!sessionId) {
-    sessionId = generateSecureId('anon');
-    localStorage.setItem('anonymous_session_id', sessionId);
-  }
-  return sessionId;
-}
+const getStableSessionId = getOrCreateAnonymousSessionId;
 
 function getFilesystemScopeMappingKey(chatId: string): string {
   return `chat_filesystem_scope_${chatId}`;
@@ -61,6 +57,92 @@ function restoreFilesystemScope(chatId: string): string | null {
   } catch {
     return null;
   }
+}
+
+const CONVERSATION_UI_STATE_KEY = "conversation_ui_state_v1";
+const CONVERSATION_UI_STATE_VERSION = 1;
+
+interface PersistedConversationUiState {
+  version: number;
+  currentConversationId: string | null;
+  filesystemSessionId: string | null;
+  currentProvider: string | null;
+  currentModel: string | null;
+  updatedAt: number;
+}
+
+function readPersistedConversationUiState(): PersistedConversationUiState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(CONVERSATION_UI_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PersistedConversationUiState>;
+    if (parsed?.version !== CONVERSATION_UI_STATE_VERSION) return null;
+    return {
+      version: CONVERSATION_UI_STATE_VERSION,
+      currentConversationId: typeof parsed.currentConversationId === "string" ? parsed.currentConversationId : null,
+      filesystemSessionId: typeof parsed.filesystemSessionId === "string" ? parsed.filesystemSessionId : null,
+      currentProvider: typeof parsed.currentProvider === "string" ? parsed.currentProvider : null,
+      currentModel: typeof parsed.currentModel === "string" ? parsed.currentModel : null,
+      updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedConversationUiState(state: Omit<PersistedConversationUiState, "version" | "updatedAt">): PersistedConversationUiState | null {
+  if (typeof window === "undefined") return null;
+  const nextState: PersistedConversationUiState = {
+    version: CONVERSATION_UI_STATE_VERSION,
+    updatedAt: Date.now(),
+    ...state,
+  };
+  try {
+    localStorage.setItem(CONVERSATION_UI_STATE_KEY, JSON.stringify(nextState));
+    return nextState;
+  } catch {
+    return null;
+  }
+}
+
+const buildFilesystemHeaders = (): HeadersInit => buildApiHeaders();
+
+function applyUnifiedDiffToContent(currentContent: string, path: string, diffBody: string): string | null {
+  const diffText = diffBody.endsWith("\n") ? diffBody : `${diffBody}\n`;
+  const hasHeaders = diffText.includes("--- ") && diffText.includes("+++ ");
+  const unifiedDiff = hasHeaders
+    ? diffText
+    : `--- ${path}\n+++ ${path}\n${diffText}`;
+  const parsed = parsePatch(unifiedDiff);
+  if (!parsed.length) return null;
+  const patched = applyPatch(currentContent, parsed[0]);
+  return patched === false ? null : patched;
+}
+
+function applySimpleLineDiff(currentContent: string, diffBody: string): string | null {
+  // For new files (empty content), still try to apply the diff as it may contain the full file content
+  // Only skip if there's existing content that would be overwritten
+  if (currentContent && currentContent.trim().length > 0) {
+    // Still try to apply - the diff might be for modifying existing content
+  }
+  const lines = diffBody
+    .split("\n")
+    .filter((l) => /^(\+\s|\-\s|\s\s)/.test(l.trimStart()))
+    .map((l) => l.replace(/^\s+/, ""));
+  if (!lines.length) return null;
+  const resultLines: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("+ ")) {
+      resultLines.push(line.slice(2));
+    } else if (line.startsWith("- ")) {
+      continue;
+    } else if (line.startsWith("  ")) {
+      resultLines.push(line.slice(2));
+    }
+  }
+  const result = resultLines.join("\n");
+  return result && result !== currentContent ? result : null;
 }
 
 export default function ConversationInterface() {
@@ -103,24 +185,60 @@ export default function ConversationInterface() {
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
     [],
   );
-  const [currentProvider, setCurrentProvider] = useState<string>(
-    typeof window !== 'undefined' 
-      ? (localStorage.getItem("chat_provider") || "openrouter")
-      : "openrouter"
-  );
-  const [currentModel, setCurrentModel] = useState<string>(
-    typeof window !== 'undefined'
-      ? (localStorage.getItem("chat_model") || "nvidia/nemotron-3-nano-30b-a3b:free")
-      : "nvidia/nemotron-3-nano-30b-a3b:free"
-  );
+  const [currentProvider, setCurrentProvider] = useState<string>(() => {
+    const persisted = readPersistedConversationUiState();
+    if (persisted?.currentProvider) {
+      return persisted.currentProvider;
+    }
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem("chat_provider") || "openrouter";
+    }
+    return "openrouter";
+  });
+  const [currentModel, setCurrentModel] = useState<string>(() => {
+    const persisted = readPersistedConversationUiState();
+    if (persisted?.currentModel) {
+      return persisted.currentModel;
+    }
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem("chat_model") || "nvidia/nemotron-3-nano-30b-a3b:free";
+    }
+    return "nvidia/nemotron-3-nano-30b-a3b:free";
+  });
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
     string | null
-  >(null);
+  >(() => {
+    const persisted = readPersistedConversationUiState();
+    if (persisted?.currentConversationId) {
+      return persisted.currentConversationId;
+    }
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('current_conversation_id') || null;
+    }
+    return null;
+  });
   const [filesystemSessionId, setFilesystemSessionId] = useState<string>(
-    () => `draft-chat_${Date.now()}_${generateSecureId("chat")}`,
+    () => {
+      const persisted = readPersistedConversationUiState();
+      if (persisted?.filesystemSessionId) {
+        return persisted.filesystemSessionId;
+      }
+      if (typeof window !== 'undefined') {
+        const saved = sessionStorage.getItem('current_filesystem_session_id');
+        if (saved) return saved;
+      }
+      return `draft-chat_${Date.now()}_${generateSecureId("chat")}`;
+    },
   );
+
+  // Persist filesystemSessionId to sessionStorage so page refresh restores it
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('current_filesystem_session_id', filesystemSessionId);
+    }
+  }, [filesystemSessionId]);
   
   // Project name for simpler terminal paths (e.g., "webGame" instead of long session ID)
   const [projectName, setProjectName] = useState<string>('workspace');
@@ -129,7 +247,86 @@ export default function ConversationInterface() {
     () => `project/sessions/${filesystemSessionId}`,
     [filesystemSessionId],
   );
+
+  const providerRef = useRef(currentProvider);
+  const modelRef = useRef(currentModel);
+  const filesystemContextRef = useRef<{ attachedFiles: AttachedVirtualFile[]; applyFileEdits: boolean; scopePath: string }>({
+    attachedFiles: [],
+    applyFileEdits: true,
+    scopePath: filesystemScopePath,
+  });
+  const filesystemSessionIdRef = useRef(filesystemSessionId);
+  const persistedUiStateUpdatedAtRef = useRef(0);
+
+  useEffect(() => {
+    providerRef.current = currentProvider;
+  }, [currentProvider]);
+
+  useEffect(() => {
+    modelRef.current = currentModel;
+  }, [currentModel]);
+
+  useEffect(() => {
+    filesystemSessionIdRef.current = filesystemSessionId;
+  }, [filesystemSessionId]);
   
+  // Persist currentConversationId to sessionStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (currentConversationId) {
+        sessionStorage.setItem('current_conversation_id', currentConversationId);
+      } else {
+        sessionStorage.removeItem('current_conversation_id');
+      }
+    }
+  }, [currentConversationId]);
+  
+  useEffect(() => {
+    const persisted = writePersistedConversationUiState({
+      currentConversationId,
+      filesystemSessionId,
+      currentProvider,
+      currentModel,
+    });
+    if (persisted) {
+      persistedUiStateUpdatedAtRef.current = persisted.updatedAt;
+    }
+  }, [currentConversationId, filesystemSessionId, currentProvider, currentModel]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== CONVERSATION_UI_STATE_KEY || !event.newValue) {
+        return;
+      }
+
+      const persisted = readPersistedConversationUiState();
+      if (!persisted || persisted.updatedAt <= persistedUiStateUpdatedAtRef.current) {
+        return;
+      }
+
+      persistedUiStateUpdatedAtRef.current = persisted.updatedAt;
+      if (persisted.currentConversationId !== null) {
+        setCurrentConversationId(persisted.currentConversationId);
+      }
+      if (persisted.filesystemSessionId) {
+        setFilesystemSessionId(persisted.filesystemSessionId);
+      }
+      if (persisted.currentProvider) {
+        setCurrentProvider(persisted.currentProvider);
+      }
+      if (persisted.currentModel) {
+        setCurrentModel(persisted.currentModel);
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
   // Expose project name setter globally for LLM/chat to update
   useEffect(() => {
     (window as any).__setProjectName = setProjectName;
@@ -180,6 +377,20 @@ export default function ConversationInterface() {
     }
   });
 
+  // Diffs poller - manual refresh option for file changes
+  const diffsPoller = useDiffsPoller({
+    pollInterval: 8000,
+    maxFiles: 50,
+    autoShowNotification: false, // We'll handle notifications ourselves
+    onDiffsFetched: (diffs) => {
+      if (diffs.length > 0) {
+        toast.info(`${diffs.length} new file change${diffs.length === 1 ? '' : 's'} from polling`);
+      }
+    },
+  });
+
+
+
   // Advertisement system
   const [, setPromptCount] = useState(0);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -194,6 +405,14 @@ export default function ConversationInterface() {
     applyFileEdits: true,
     scopePath: filesystemScopePath,
   }), [attachedFilesystemFiles, filesystemScopePath]);
+
+  useEffect(() => {
+    filesystemContextRef.current = {
+      attachedFiles: Object.values(attachedFilesystemFiles),
+      applyFileEdits: true,
+      scopePath: filesystemScopePath,
+    };
+  }, [attachedFilesystemFiles, filesystemScopePath]);
 
   // ESC key handler for closing temporary panels
   useEffect(() => {
@@ -227,13 +446,23 @@ export default function ConversationInterface() {
     setInput, // Destructure setInput from enhanced chat hook
   } = useEnhancedChat({
     api: "/api/chat",
-    body: {
-      provider: currentProvider,
-      model: currentModel,
+    body: () => ({
+      provider: providerRef.current,
+      model: modelRef.current,
       stream: true,
-      conversationId: filesystemSessionId,
-      filesystemContext,
-    },
+      conversationId: filesystemSessionIdRef.current,
+      filesystemContext: {
+        attachedFiles: filesystemContextRef.current.attachedFiles.map((file) => ({
+          path: file.path,
+          content: file.content,
+          language: file.language,
+          version: file.version,
+          lastModified: file.lastModified,
+        })),
+        applyFileEdits: true,
+        scopePath: filesystemContextRef.current.scopePath,
+      },
+    }),
     onResponse: async (response) => {
       if (response.status === 401) {
         toast.error(
@@ -279,6 +508,17 @@ export default function ConversationInterface() {
     downloadAllHistory,
     // clearAllChats, // Removed as it does not exist in useChatHistory
   } = useChatHistory();
+
+  // Restore chat on mount if there's a saved conversation
+  useEffect(() => {
+    if (currentConversationId && messages.length === 0) {
+      const chat = loadChat(currentConversationId);
+      if (chat) {
+        setMessages(chat.messages);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on mount
 
   // Save chat history whenever messages change (after AI responses)
   useEffect(() => {
@@ -666,31 +906,14 @@ export default function ConversationInterface() {
       toast.info("No pending command diffs to apply.");
       return;
     }
-    const diffMessages = entries.map((d, idx) => ({
-      id: `cmd-diff-${Date.now()}-${idx}`,
-      role: "assistant" as const,
-      content: `\`\`\`diff ${d.path}\n${d.diff}\n\`\`\``,
-    }));
-    setMessages((prev) => [...prev, ...diffMessages]);
-    setCommandsByFile({});
-    toast.success(`Applied ${entries.length} diff(s) to preview.`);
+    void applyDiffsToFilesystem(entries);
   };
 
   const applyDiffsForFile = (path: string) => {
     const diffs = commandsByFile[path] || [];
     if (diffs.length === 0) return;
-    const diffMessages = diffs.map((diff, idx) => ({
-      id: `cmd-file-diff-${Date.now()}-${idx}`,
-      role: "assistant" as const,
-      content: `\`\`\`diff ${path}\n${diff}\n\`\`\``,
-    }));
-    setMessages((prev) => [...prev, ...diffMessages]);
-    setCommandsByFile((prev) => {
-      const next = { ...prev };
-      delete next[path];
-      return next;
-    });
-    toast.success(`Applied ${diffs.length} diff(s) for ${path}.`);
+    const entries = diffs.map((diff) => ({ path, diff }));
+    void applyDiffsToFilesystem(entries);
   };
 
   const clearAllCommandDiffs = () => {
@@ -716,11 +939,265 @@ export default function ConversationInterface() {
     toast.success(`Squashed diffs for ${path}.`);
   };
 
+  const applyDiffsToFilesystem = useCallback(async (entries: Array<{ path: string; diff: string }>) => {
+    if (!entries.length) return;
+    const scopePath = filesystemScopePath || "project";
+    const failed: Record<string, string[]> = {};
+    let appliedCount = 0;
+    let lastWriteMetadata: {
+      workspaceVersion?: number;
+      commitId?: string;
+      sessionId?: string | null;
+    } | null = null;
+
+    for (const entry of entries) {
+      const resolvedPath = resolveScopedPath(entry.path, scopePath);
+      let currentContent = "";
+      try {
+        const readResponse = await fetch("/api/filesystem/read", {
+          method: "POST",
+          headers: buildFilesystemHeaders(),
+          body: JSON.stringify({ path: resolvedPath }),
+        });
+        if (readResponse.ok) {
+          const payload = await readResponse.json().catch(() => null);
+          if (payload?.success && payload?.data?.content != null) {
+            currentContent = payload.data.content;
+          }
+        }
+      } catch (readError) {
+        // If read fails, try applying diff to empty content
+        currentContent = "";
+      }
+
+      const nextContent =
+        applyUnifiedDiffToContent(currentContent, resolvedPath, entry.diff) ??
+        applySimpleLineDiff(currentContent, entry.diff);
+
+      if (nextContent == null) {
+        failed[entry.path] = failed[entry.path] || [];
+        failed[entry.path].push(entry.diff);
+        continue;
+      }
+
+      try {
+        const writeResponse = await fetch("/api/filesystem/write", {
+          method: "POST",
+          headers: buildFilesystemHeaders(),
+          body: JSON.stringify({
+            path: resolvedPath,
+            content: nextContent,
+            sessionId: filesystemSessionId,
+            source: "command-diff",
+            integration: "command-diff",
+          }),
+        });
+        if (!writeResponse.ok) {
+          const text = await writeResponse.text().catch(() => "");
+          throw new Error(text || `Write failed (${writeResponse.status})`);
+        }
+        const payload = await writeResponse.json().catch(() => null);
+        if (!payload?.success) {
+          throw new Error(payload?.error || "Write failed");
+        }
+        lastWriteMetadata = {
+          workspaceVersion: payload?.data?.workspaceVersion,
+          commitId: payload?.data?.commitId,
+          sessionId: payload?.data?.sessionId,
+        };
+        appliedCount += 1;
+      } catch (writeError: any) {
+        failed[entry.path] = failed[entry.path] || [];
+        failed[entry.path].push(entry.diff);
+      }
+    }
+
+    if (appliedCount > 0) {
+      emitFilesystemUpdated({
+        scopePath: filesystemScopePath || "project",
+        source: "command-diff",
+        workspaceVersion: lastWriteMetadata?.workspaceVersion,
+        commitId: lastWriteMetadata?.commitId,
+        sessionId: lastWriteMetadata?.sessionId || filesystemSessionId,
+      });
+    }
+
+    setCommandsByFile((prev) => {
+      const attemptedPaths = new Set(entries.map((entry) => entry.path));
+      const next: Record<string, string[]> = {};
+      for (const [path, diffs] of Object.entries(prev)) {
+        const remaining = failed[path] || [];
+        if (attemptedPaths.has(path)) {
+          if (remaining.length > 0) {
+            next[path] = remaining;
+          }
+        } else {
+          next[path] = diffs;
+        }
+      }
+      return next;
+    });
+
+    if (appliedCount > 0) {
+      toast.success(`Applied ${appliedCount} diff${appliedCount === 1 ? "" : "s"} to filesystem.`);
+    }
+    const failedCount = Object.values(failed).reduce((sum, list) => sum + list.length, 0);
+    if (failedCount > 0) {
+      toast.error(`Failed to apply ${failedCount} diff${failedCount === 1 ? "" : "s"}.`);
+    }
+  }, [filesystemScopePath, filesystemSessionId]);
+
+  // Apply polled diffs to filesystem (defined after applyDiffsToFilesystem)
+  const applyPolledDiffs = useCallback(async (pathsToApply?: string[]) => {
+    const diffsToApply = pathsToApply
+      ? diffsPoller.diffs.filter(d => pathsToApply.includes(d.path))
+      : diffsPoller.diffs;
+
+    if (diffsToApply.length === 0) {
+      toast.info("No polled diffs to apply.");
+      return;
+    }
+
+    const entries = diffsToApply.map(d => ({ path: d.path, diff: d.diff }));
+    try {
+      await applyDiffsToFilesystem(entries);
+    } finally {
+      // Clear the applied diffs from the poller after apply completes
+      diffsPoller.clearDiffs();
+    }
+  }, [diffsPoller.diffs, applyDiffsToFilesystem, diffsPoller.clearDiffs]);
+
   // Handle chat submission - no login restrictions
-  const handleChatSubmit = (content: string) => {
+  const refreshAttachedFiles = useCallback(async (
+    files: Record<string, AttachedVirtualFile>,
+    scopePath: string,
+  ): Promise<Record<string, AttachedVirtualFile>> => {
+    const entries = Object.values(files);
+    if (entries.length === 0) return files;
+
+    const headers = buildFilesystemHeaders();
+    const refreshed = await Promise.all(entries.map(async (file) => {
+      const resolvedPath = resolveScopedPath(file.path, scopePath);
+      try {
+        const response = await fetch("/api/filesystem/read", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ path: resolvedPath }),
+        });
+        if (!response.ok) {
+          return file;
+        }
+        const payload = await response.json().catch(() => null);
+        if (!payload?.success || !payload?.data) {
+          return file;
+        }
+        const data = payload.data;
+        return {
+          path: data.path || resolvedPath,
+          content: typeof data.content === "string" ? data.content : file.content,
+          language: data.language || file.language,
+          version: typeof data.version === "number" ? data.version : file.version,
+          lastModified: data.lastModified || file.lastModified,
+        } as AttachedVirtualFile;
+      } catch {
+        return file;
+      }
+    }));
+
+    const next: Record<string, AttachedVirtualFile> = {};
+    for (const entry of refreshed) {
+      next[entry.path] = entry;
+    }
+    return next;
+  }, []);
+
+  const attachmentRefreshState = useRef({
+    lastRefreshAt: 0,
+    inFlight: false,
+    timer: null as ReturnType<typeof setTimeout> | null,
+  });
+  const lastAttachmentWorkspaceVersionRef = useRef(0);
+
+  const scheduleAttachmentRefresh = useCallback((reason: string) => {
+    if (Object.keys(attachedFilesystemFiles).length === 0) return;
+
+    const now = Date.now();
+    const MIN_REFRESH_MS = 3000;
+    const state = attachmentRefreshState.current;
+    const elapsed = now - state.lastRefreshAt;
+    const delay = Math.max(0, MIN_REFRESH_MS - elapsed);
+
+    if (state.timer) {
+      return;
+    }
+
+    state.timer = setTimeout(async () => {
+      state.timer = null;
+      if (state.inFlight) return;
+      state.inFlight = true;
+      try {
+        const refreshed = await refreshAttachedFiles(attachedFilesystemFiles, filesystemScopePath);
+        setAttachedFilesystemFiles(refreshed);
+        filesystemContextRef.current = {
+          attachedFiles: Object.values(refreshed),
+          applyFileEdits: true,
+          scopePath: filesystemScopePath,
+        };
+      } finally {
+        state.inFlight = false;
+        state.lastRefreshAt = Date.now();
+      }
+    }, delay);
+  }, [attachedFilesystemFiles, filesystemScopePath, refreshAttachedFiles]);
+
+  useEffect(() => {
+    const unsubscribe = onFilesystemUpdated((event) => {
+      const scopePath = event?.detail?.scopePath;
+      if (scopePath && scopePath !== filesystemScopePath) {
+        return;
+      }
+      const workspaceVersion = event?.detail?.workspaceVersion;
+      if (typeof workspaceVersion === 'number') {
+        if (workspaceVersion <= lastAttachmentWorkspaceVersionRef.current) {
+          return;
+        }
+        lastAttachmentWorkspaceVersionRef.current = workspaceVersion;
+      }
+      scheduleAttachmentRefresh('filesystem-updated');
+    });
+    return () => {
+      unsubscribe();
+      const state = attachmentRefreshState.current;
+      if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+    };
+  }, [filesystemScopePath, scheduleAttachmentRefresh]);
+
+  useEffect(() => {
+    if (Object.keys(attachedFilesystemFiles).length === 0) return;
+    const interval = setInterval(() => {
+      scheduleAttachmentRefresh('interval');
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [attachedFilesystemFiles, scheduleAttachmentRefresh]);
+
+  const handleChatSubmit = async (content: string) => {
     // Increment prompt count for tracking (no restrictions)
     if (!isLoggedIn) {
       setPromptCount((prev) => prev + 1);
+    }
+
+    let refreshedFiles = attachedFilesystemFiles;
+    if (Object.keys(attachedFilesystemFiles).length > 0) {
+      refreshedFiles = await refreshAttachedFiles(attachedFilesystemFiles, filesystemScopePath);
+      setAttachedFilesystemFiles(refreshedFiles);
+      filesystemContextRef.current = {
+        attachedFiles: Object.values(refreshedFiles),
+        applyFileEdits: true,
+        scopePath: filesystemScopePath,
+      };
     }
 
     setInput(content);
@@ -816,6 +1293,9 @@ export default function ConversationInterface() {
         </div>
       </div>
       <div className="flex flex-col md:flex-row h-full min-h-0">
+        {/* Horizontal space filler - allows ChatPanel to expand on desktop */}
+        <HorizontalSpaceFiller />
+        
         {/* Main content area - hidden on mobile when chat is active */}
         <div className="hidden md:flex flex-1 flex-col">
           <div className="flex-1 relative">
@@ -893,9 +1373,16 @@ export default function ConversationInterface() {
         onProviderChange={handleProviderChange}
         hasCodeBlocks={hasCodeBlocks}
         activeTab={activeTab}
-        onActiveTabChange={setActiveTab}
+        onActiveTabChange={setActiveTab as any}
         userId={user?.id?.toString() || getStableSessionId()} // Use stable user ID or session ID
         onAttachedFilesChange={handleAttachedFilesChange}
+        filesystemScopePath={filesystemScopePath}
+        // Diffs poller controls
+        isPollingDiffs={diffsPoller.isPolling}
+        pollCount={diffsPoller.pollCount}
+        onStartPollingDiffs={diffsPoller.startPolling}
+        onStopPollingDiffs={diffsPoller.stopPolling}
+        onPollDiffsNow={diffsPoller.pollNow}
       />
 
       {/* Chat History Modal */}
@@ -933,6 +1420,10 @@ export default function ConversationInterface() {
           onClearAllCommandDiffs={clearAllCommandDiffs}
           onClearFileCommandDiffs={clearCommandDiffsForFile}
           onSquashFileCommandDiffs={squashCommandDiffsForFile}
+          // Polled diffs integration
+          polledDiffs={diffsPoller.diffs}
+          onApplyPolledDiffs={applyPolledDiffs}
+          onClearPolledDiffs={diffsPoller.clearDiffs}
         />
       )}
 

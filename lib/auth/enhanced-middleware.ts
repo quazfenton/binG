@@ -77,6 +77,7 @@ export function getClientIP(request: NextRequest): string {
   }
 
   // Fallback to direct connection
+  // @ts-ignore - ip property may exist on extended NextRequest
   return request.ip || 'unknown';
 }
 

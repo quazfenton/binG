@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createCloudStorageService } from '@/lib/services/cloud-storage';
+import { createCloudStorageService } from '@/lib/storage/cloud-storage';
 import { verifyAuth } from '@/lib/auth/jwt';
 
 export async function GET(request: NextRequest) {

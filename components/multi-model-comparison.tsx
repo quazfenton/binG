@@ -16,7 +16,7 @@ import {
   AlertCircle,
   Loader2
 } from 'lucide-react';
-import type { LLMProvider } from '../lib/api/llm-providers';
+import type { LLMProvider } from '../lib/chat/llm-providers';
 
 interface ModelResponse {
   provider: string;

@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server';
 import { verifyAuth } from './jwt';
 import { authService } from './auth-service';
-import { authCache, type ResolvedRequestAuth } from './auth-cache';
+import { authCache, AuthCache, type ResolvedRequestAuth } from './auth-cache';
 
-export { authCache };
+export { authCache, AuthCache };
 
 /**
  * Get cached user auth result

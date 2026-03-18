@@ -1,8 +1,51 @@
 "use client";
 
-import { EventEmitter } from 'events';
 import { generateSecureId } from '@/lib/utils';
 import { streamingErrorHandler } from './streaming-error-handler';
+
+// Browser-compatible EventEmitter implementation
+type EventListener = (...args: any[]) => void;
+
+class BrowserEventEmitter {
+  private events: Map<string, EventListener[]> = new Map();
+
+  on(event: string, listener: EventListener): this {
+    if (!this.events.has(event)) {
+      this.events.set(event, []);
+    }
+    this.events.get(event)!.push(listener);
+    return this;
+  }
+
+  off(event: string, listener: EventListener): this {
+    const listeners = this.events.get(event);
+    if (listeners) {
+      const index = listeners.indexOf(listener);
+      if (index > -1) {
+        listeners.splice(index, 1);
+      }
+    }
+    return this;
+  }
+
+  emit(event: string, ...args: any[]): boolean {
+    const listeners = this.events.get(event);
+    if (listeners) {
+      listeners.forEach(listener => listener(...args));
+      return true;
+    }
+    return false;
+  }
+
+  removeAllListeners(event?: string): this {
+    if (event) {
+      this.events.delete(event);
+    } else {
+      this.events.clear();
+    }
+    return this;
+  }
+}
 
 // Enhanced streaming interfaces
 export interface StreamChunk {
@@ -50,11 +93,11 @@ export interface RenderFrame {
 
 /**
  * Enhanced Streaming Buffer Manager
- * 
+ *
  * Provides intelligent chunk buffering, coalescing, and smooth rendering
  * with backpressure handling and connection recovery mechanisms.
  */
-export class EnhancedBufferManager extends EventEmitter {
+export class EnhancedBufferManager extends BrowserEventEmitter {
   private config: BufferConfig;
   private sessions: Map<string, StreamSession> = new Map();
   private renderScheduler: RenderScheduler;
@@ -363,7 +406,7 @@ export class EnhancedBufferManager extends EventEmitter {
 /**
  * Individual streaming session
  */
-class StreamSession extends EventEmitter {
+class StreamSession extends BrowserEventEmitter {
   private sessionId: string;
   private config: BufferConfig;
   private buffer: StreamChunk[] = [];
@@ -597,7 +640,7 @@ class StreamSession extends EventEmitter {
 /**
  * Render scheduler with requestAnimationFrame throttling
  */
-class RenderScheduler extends EventEmitter {
+class RenderScheduler extends BrowserEventEmitter {
   private throttleMs: number;
   private renderQueue: Map<string, StreamChunk[]> = new Map();
   private scheduledFrames: Set<string> = new Set();

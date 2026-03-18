@@ -1,6 +1,7 @@
-import Database from 'better-sqlite3';
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import type Database from 'better-sqlite3';
+import DatabaseConstructor from 'better-sqlite3';
+import { readFileSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
 import * as crypto from 'crypto';
 
 // Database configuration
@@ -51,8 +52,8 @@ function getMockDatabase(): Database.Database {
     exec: () => mockDb as Database.Database,
     pragma: () => {},
     transaction: (fn: any) => fn,
-    close: () => {},
-    backup: () => Promise.resolve({ progress: () => {} }),
+    close: function() { return this as Database.Database; },
+    backup: () => Promise.resolve({ totalPages: 0, remainingPages: 0 }),
     defaultSafeIntegers: () => mockDb as Database.Database,
     register: () => mockDb as Database.Database,
     loadExtension: () => mockDb as Database.Database,
@@ -83,11 +84,10 @@ export function getDatabase(): Database.Database {
 
     try {
       // Create data directory if it doesn't exist
-      const { mkdirSync } = require('fs');
-      const { dirname } = require('path');
+      // Using pre-imported functions from top-level imports
       mkdirSync(dirname(DB_PATH), { recursive: true });
 
-      db = new Database(DB_PATH);
+      db = new DatabaseConstructor(DB_PATH);
 
       // Enable WAL mode for better performance
       db.pragma('journal_mode = WAL');
@@ -106,24 +106,26 @@ export function getDatabase(): Database.Database {
         // SECURITY: Run migrations SYNCHRONOUSLY to prevent race conditions
         // Without this, requests can execute before migrations complete, causing
         // "no such column" errors for migration-added columns like email_verification_token
-        try {
-          // Respect AUTO_RUN_MIGRATIONS environment variable
-          if (process.env.AUTO_RUN_MIGRATIONS !== 'false') {
-            // Require here to avoid circular import at module load time
-            const { migrationRunner } = require('./migration-runner');
-            if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
-              // Use synchronous migration runner
-              migrationRunner.runMigrationsSync();
-              console.log('[database] Migrations completed successfully');
+        (async () => {
+          try {
+            // Respect AUTO_RUN_MIGRATIONS environment variable
+            if (process.env.AUTO_RUN_MIGRATIONS !== 'false') {
+              // Dynamic import to avoid circular import at module load time
+              const { migrationRunner } = await import('./migration-runner');
+              if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
+                // Use synchronous migration runner
+                migrationRunner.runMigrationsSync();
+                console.log('[database] Migrations completed successfully');
+              } else {
+                console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
+              }
             } else {
-              console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
+              console.log('[database] Auto-run migrations disabled via environment variable');
             }
-          } else {
-            console.log('[database] Auto-run migrations disabled via environment variable');
+          } catch (error) {
+            console.warn('[database] Migrations failed (continuing with base schema):', error);
           }
-        } catch (error) {
-          console.warn('[database] Migrations failed (continuing with base schema):', error);
-        }
+        })();
 
         dbInitialized = true;
       }
@@ -231,6 +233,8 @@ export function decryptApiKey(encryptedData: string): string {
   // Try legacy format (no IV, uses deprecated createDecipher)
   try {
     // Legacy format used createDecipher which derived IV from password
+    // Note: This is deprecated but kept for backward compatibility with existing encrypted data
+    // @ts-ignore - createDecipher is deprecated but needed for legacy data
     const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
     let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
     decrypted += decipher.final('utf8');
@@ -276,6 +280,7 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
           continue;
         } catch {
           // New format failed, this is legacy - migrate it
+          // @ts-ignore - createDecipher is deprecated but needed for legacy data migration
           const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
           let decrypted = decipher.update(encrypted, 'hex', 'utf8');
           decrypted += decipher.final('utf8');

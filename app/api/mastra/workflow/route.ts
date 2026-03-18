@@ -18,7 +18,7 @@ let _mastra: any = null;
 async function getMastra() {
   if (!_mastra) {
     try {
-      const { mastra } = await import('@/lib/mastra/mastra-instance');
+      const { mastra } = await import('@/lib/orchestra/mastra/mastra-instance');
       _mastra = mastra;
     } catch (error) {
       console.error('[Mastra API] Failed to load Mastra:', error);
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
 
     // Execute workflow
     const run = await workflow.createRun();
-    const result = await run.start({ data: inputData || {} });
+    const result = await run.start({ inputData: inputData || {} });
 
     return NextResponse.json({
       success: true,

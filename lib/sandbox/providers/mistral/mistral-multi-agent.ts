@@ -9,7 +9,7 @@
 
 import { Mistral } from '@mistralai/mistralai'
 import { randomUUID } from 'node:crypto'
-import type { ToolResult } from '../types'
+import type { ToolResult } from '../../types'
 import type { ToolType } from './mistral-types'
 
 export interface AgentSpec {
@@ -98,7 +98,7 @@ export class MistralMultiAgentCollaboration {
         name: agent.name,
         description: agent.description,
         instructions: agent.instructions,
-        tools: agent.tools.map(t => ({ type: t })),
+        tools: agent.tools.map(t => ({ type: t })) as any,
       })
       
       agent.id = mistralAgent.id

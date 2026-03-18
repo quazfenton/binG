@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import type { Sandbox } from '@e2b/code-interpreter'
 import { 
   createCodexService, 
   getCodexService,
@@ -18,7 +19,7 @@ import {
 } from '@/lib/sandbox/providers/e2b-codex-service'
 
 // Mock sandbox
-const createMockSandbox = () => ({
+const createMockSandbox = (): Sandbox => ({
   sandboxId: 'test-sandbox-codex',
   commands: {
     run: vi.fn(),
@@ -583,3 +584,4 @@ describe('E2B Codex Service', () => {
     })
   })
 })
+
