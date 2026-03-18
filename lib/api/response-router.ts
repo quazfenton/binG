@@ -948,41 +948,111 @@ export class ResponseRouter {
   /**
    * Extract commands from content
    */
+  /**
+   * Extract commands from content
+   * Enhanced with fallback parser for raw code blocks (Bug #1 fix)
+   * Fixed regex to handle ] in content (Bug #8 fix)
+   */
   private extractCommands(content: string): { request_files?: string[]; write_diffs?: Array<{ path: string; diff: string }> } | undefined {
     try {
+      // Primary: Parse structured command block format
       const match = content.match(/=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/)
-      if (!match) return undefined
+      if (match) {
+        return this.parseStructuredCommands(match[1])
+      }
 
-      const block = match[1]
+      // Fallback: Parse raw markdown code blocks with filenames (Bug #1 fix)
+      const rawDiffs = this.parseRawCodeBlocks(content)
+      if (rawDiffs && rawDiffs.length > 0) {
+        return { write_diffs: rawDiffs }
+      }
 
+      return undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Parse structured command block format
+   */
+  private parseStructuredCommands(block: string): { request_files?: string[]; write_diffs?: Array<{ path: string; diff: string }> } | undefined {
+    try {
       const reqMatch = block.match(/request_files:\s*\[(.*?)\]/s)
       const request_files = reqMatch
         ? JSON.parse(`[${reqMatch[1]}]`.replace(/([a-zA-Z0-9_./-]+)(?=\s*[\],])/g, '"$1"'))
         : []
 
       let write_diffs: Array<{ path: string; diff: string }> = []
-      const diffsMatch = block.match(/write_diffs:\s*\[([\s\S]*?)\]/)
-      if (diffsMatch) {
-        const items = diffsMatch[1]
-          .split(/},/)
-          .map(s => (s.endsWith('}') ? s : s + '}'))
+      // Bug #8 fix: Use bracket counting to find the end of the array properly
+      const diffsSectionMatch = block.match(/write_diffs:\s*\[/)
+      if (diffsSectionMatch) {
+        const startIdx = block.indexOf('[', diffsSectionMatch.index)
+        let bracketDepth = 0
+        let endIdx = startIdx + 1
+        
+        for (let i = startIdx + 1; i < block.length; i++) {
+          if (block[i] === '[') bracketDepth++
+          else if (block[i] === ']') {
+            if (bracketDepth === 0) {
+              endIdx = i
+              break
+            }
+            bracketDepth--
+          }
+        }
+        
+        const diffsContent = block.substring(startIdx + 1, endIdx)
+        const items = diffsContent.split(/\},\s*\{/)
+          .map((s, idx) => {
+            if (idx === 0) return s + '}'
+            if (idx === items.length - 1) return '{' + s
+            return '{' + s + '}'
+          })
           .map(s => s.trim())
           .filter(Boolean)
 
         write_diffs = items.map(raw => {
           const pathMatch = raw.match(/path:\s*"([^"]+)"/)
-          const diffMatch = raw.match(/diff:\s*"([\s\S]*)"/)
+          const diffMatch = raw.match(/diff:\s*"([\s\S]*?)"\s*$/)
           return {
             path: pathMatch?.[1] || '',
             diff: (diffMatch?.[1] || '').replace(/\\n/g, '\n'),
           }
-        })
+        }).filter(d => d.path)
       }
 
       return { request_files, write_diffs }
     } catch {
       return undefined
     }
+  }
+
+  /**
+   * Fallback parser for raw markdown code blocks (Bug #1 fix)
+   */
+  private parseRawCodeBlocks(content: string): Array<{ path: string; diff: string }> | undefined {
+    const write_diffs: Array<{ path: string; diff: string }> = []
+    
+    const codeBlockRegex = /```(\w+)\s+(?:\/?([^\s]+(?:\/[^\s]+)*))?\s*\n([\s\S]*?)```/g
+    let match
+    
+    while ((match = codeBlockRegex.exec(content)) !== null) {
+      const [, language, filePath, code] = match
+      
+      if (['bash', 'sh', 'shell', 'zsh'].includes(language.toLowerCase())) continue
+      if (!filePath || filePath.includes('.') === false) continue
+      
+      const validExtensions = ['.ts', '.tsx', '.js', '.jsx', '.vue', '.py', '.html', '.css', '.json', '.md', '.yaml', '.yml', '.toml', '.config']
+      if (!validExtensions.some(ext => filePath.toLowerCase().endsWith(ext))) continue
+      
+      let cleanPath = filePath.replace(/^\//, '').trim()
+      if (cleanPath.includes('://') || cleanPath.startsWith('http')) continue
+      
+      write_diffs.push({ path: cleanPath, diff: code.trim() })
+    }
+    
+    return write_diffs.length > 0 ? write_diffs : undefined
   }
 
   /**

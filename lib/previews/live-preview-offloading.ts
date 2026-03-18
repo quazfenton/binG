@@ -276,8 +276,10 @@ const FRAMEWORK_ENTRY_POINTS: Record<AppFramework, string[]> = {
   ],
   // Vue-based
   nuxt: [
-    '/src/main.ts', '/src/main.js', '/src/App.vue', '/app.vue',
-    '/pages/index.ts', '/pages/index.js', '/nuxt.config.ts'
+    '/app.vue', '/App.vue', '/src/app.vue',
+    '/src/main.ts', '/src/main.js', '/nuxt.config.ts',
+    '/pages/index.vue', '/pages/index.ts', '/pages/index.js',
+    '/pages/index.page.vue'
   ],
   vue: [
     '/src/main.ts', '/src/main.js', '/src/App.vue', '/main.ts', '/main.js',
@@ -980,6 +982,7 @@ export class LivePreviewOffloading {
 
   /**
    * Compute root directory scores based on config files
+   * Enhanced to properly detect subdirectory projects (e.g., nuxt-app/)
    */
   computeRootScores(files: Record<string, string>): Map<string, number> {
     const scores = new Map<string, number>();
@@ -989,6 +992,26 @@ export class LivePreviewOffloading {
       scores.set(root, (scores.get(root) || 0) + score);
     };
 
+    // First pass: Identify all potential project roots (directories with config files)
+    const projectRoots = new Set<string>();
+    for (const filePath of Object.keys(files)) {
+      const cleanPath = filePath.replace(/^\/+/, '');
+      const parts = cleanPath.split('/').filter(Boolean);
+      if (parts.length < 2) continue;
+
+      const fileName = parts[parts.length - 1];
+      const dir = parts.slice(0, -1).join('/');
+
+      // High-value config files indicate a project root
+      if (fileName === 'package.json' || 
+          CONFIG_FILES.nuxtConfig.includes(fileName) ||
+          CONFIG_FILES.nextConfig.includes(fileName) ||
+          CONFIG_FILES.astroConfig.includes(fileName) ||
+          CONFIG_FILES.viteConfig.includes(fileName)) {
+        projectRoots.add(dir);
+      }
+    }
+
     for (const filePath of Object.keys(files)) {
       const cleanPath = filePath.replace(/^\/+/, '');
       const parts = cleanPath.split('/').filter(Boolean);
@@ -997,24 +1020,79 @@ export class LivePreviewOffloading {
       const fileName = parts[parts.length - 1];
       const dir = parts.slice(0, -1).join('/');
 
-      // Score based on config files presence
+      // Check if this file's directory is a known project root
+      const isInProjectRoot = projectRoots.has(dir);
+
+      // Score based on config files presence - highest priority for framework configs
       if (fileName === 'package.json') addScore(dir, 8);
-      if (fileName === 'index.html') addScore(dir, 6);
+      if (fileName === 'index.html') {
+        // Only score index.html in root if no other project root exists
+        if (!projectRoots.size || dir === '') addScore(dir, 6);
+      }
       if (CONFIG_FILES.viteConfig.includes(fileName)) addScore(dir, 6);
       if (CONFIG_FILES.webpackConfig.includes(fileName)) addScore(dir, 6);
       if (CONFIG_FILES.parcelConfig.includes(fileName)) addScore(dir, 6);
-      if (CONFIG_FILES.nextConfig.includes(fileName)) addScore(dir, 6);
+      if (CONFIG_FILES.nextConfig.includes(fileName)) addScore(dir, 8);
+      
+      // Nuxt config - highest score for Nuxt projects
+      if (CONFIG_FILES.nuxtConfig.includes(fileName)) {
+        addScore(dir, 10); // Nuxt config gets highest priority
+      }
+      if (CONFIG_FILES.astroConfig.includes(fileName)) addScore(dir, 8);
 
-      // Entry point scoring
+      // Docker files - moderate score but indicate a runnable project
+      if (fileName === 'Dockerfile' || fileName === 'docker-compose.yml' || fileName === 'docker-compose.yaml') {
+        // If in a known project root, give higher score; otherwise lower
+        if (isInProjectRoot) {
+          addScore(dir, 6);
+        } else {
+          addScore(dir, 3);
+        }
+      }
+
+      // Entry point scoring - prioritize framework-specific entry files
       if (/^main\.(js|jsx|ts|tsx)$/.test(fileName)) {
         if (dir.endsWith('/src')) addScore(dir.replace(/\/src$/, ''), 5);
         addScore(dir, 2);
       }
-      if (/^index\.(js|jsx|ts|tsx|html)$/.test(fileName)) {
-        addScore(dir, 3);
+      
+      // Nuxt/Vue specific entry points - higher score
+      if (fileName === 'app.vue' || fileName === 'App.vue') {
+        addScore(dir, 7); // Higher score for app.vue
+        // If app.vue is in a subdirectory and that directory has a project root, boost it
+        if (dir && !projectRoots.has(dir)) {
+          const parentDir = dir.split('/').slice(0, -1).join('/');
+          if (projectRoots.has(parentDir)) {
+            addScore(parentDir, 5);
+          }
+        }
+      }
+      
+      // Pages directory indicates a framework app
+      if (parts.includes('pages')) {
+        const pagesIdx = parts.indexOf('pages');
+        const appRoot = parts.slice(0, pagesIdx).join('/');
+        addScore(appRoot, 6);
+      }
+      
+      // Components directory also indicates a framework
+      if (parts.includes('components') && !parts.includes('node_modules')) {
+        const componentsIdx = parts.indexOf('components');
+        const appRoot = parts.slice(0, componentsIdx).join('/');
+        if (appRoot) addScore(appRoot, 5);
+      }
+
+      if (/^index\.(js|jsx|ts|tsx|html|vue)$/.test(fileName)) {
+        // Don't score index files in hidden/dot directories as project roots
+        if (!fileName.startsWith('.') && !dir.startsWith('.')) {
+          addScore(dir, 3);
+        }
       }
     }
 
+    // Debug: Log scores for diagnosis
+    logger.debug(`[computeRootScores] projectRoots: ${Array.from(projectRoots).join(', ')}`);
+    
     return scores;
   }
 
@@ -1178,6 +1256,11 @@ export class LivePreviewOffloading {
     if (framework === 'node') {
       if (hasDocker || hasComplexDeps) return 'devbox';  // Cloud for Docker/complex
       return 'webcontainer';  // Local Node.js
+    }
+
+    // Nuxt with Docker -> DevBox (cloud)
+    if (framework === 'nuxt' && hasDocker) {
+      return 'devbox';
     }
 
     // Vue, Nuxt -> Sandpack

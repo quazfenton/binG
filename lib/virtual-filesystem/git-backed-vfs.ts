@@ -186,7 +186,7 @@ export class GitBackedVFS {
         timestamp: Date.now(),
         originalContent: previousContent,
         newContent: file.content,
-      });
+      }, transactionId);
     }
 
     // Single commit for all changes
@@ -198,11 +198,24 @@ export class GitBackedVFS {
   /**
    * Track transaction entry (public method for proxy access)
    */
-  trackTransaction(ownerId: string, entry: TransactionEntry): void {
-    if (!this.transactionLog.has(ownerId)) {
-      this.transactionLog.set(ownerId, []);
+  trackTransaction(ownerId: string, entry: TransactionEntry, transactionId?: string): void {
+    // Use transactionId if provided (for batch operations), otherwise use ownerId
+    const key = transactionId || ownerId;
+    if (!this.transactionLog.has(key)) {
+      this.transactionLog.set(key, []);
     }
-    this.transactionLog.get(ownerId)!.push(entry);
+    this.transactionLog.get(key)!.push(entry);
+    
+    // Also track in changeBuffer for auto-commit events
+    const change: GitVFSChange = {
+      path: entry.path,
+      type: entry.type === 'DELETE' ? 'delete' : (entry.originalContent ? 'update' : 'create'),
+      version: 0, // Will be set by VFS
+      previousContent: entry.originalContent,
+      newContent: entry.newContent,
+      timestamp: new Date().toISOString(),
+    };
+    this.changeBuffer.push(change);
   }
 
   /**
@@ -213,11 +226,16 @@ export class GitBackedVFS {
     message?: string,
     transactionId?: string
   ): Promise<CommitResult> {
-    const transactions = transactionId
-      ? this.transactionLog.get(transactionId) || []
-      : this.transactionLog.get(ownerId) || [];
+    // Get transactions - use transactionId for batch operations, ownerId for single ops
+    const key = transactionId || ownerId;
+    const transactions = this.transactionLog.get(key) || [];
+    
+    // Also include any changes from changeBuffer that aren't in transactions
+    const bufferedChanges = this.changeBuffer.filter(change => 
+      !transactions.some(tx => tx.path === change.path)
+    );
 
-    if (transactions.length === 0 && this.changeBuffer.length === 0) {
+    if (transactions.length === 0 && bufferedChanges.length === 0) {
       return { success: true, committedFiles: 0 };
     }
 
