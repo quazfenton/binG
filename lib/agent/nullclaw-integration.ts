@@ -320,11 +320,13 @@ class NullclawIntegration {
 
           logger.info(`Spawning Nullclaw container pool (mode: ${mode}, size: ${poolSize})`);
 
-          const spawnPromises = Array.from({ length: poolSize }, (_, i) =>
-            this.spawnContainer(`nullclaw-pool-${i}`)
-          );
+          // FIX (Bug 12): Spawn sequentially to prevent port collisions
+          // Parallel spawning can allocate the same port to multiple containers
+          // because getNextAvailablePort() is called synchronously before any completes
+          for (let i = 0; i < poolSize; i++) {
+            await this.spawnContainer(`nullclaw-pool-${i}`);
+          }
 
-          await Promise.all(spawnPromises);
           logger.info(`Nullclaw container pool ready (${poolSize} containers)`);
         }
       } catch (error) {

@@ -28,6 +28,8 @@ import {
 import { getSandboxProvider, getSandboxProviderWithFallback } from '../sandbox/providers';
 import type { SandboxHandle, SandboxCreateConfig } from '../sandbox/providers/sandbox-provider';
 import { createOpencodeSessionManager, type OpencodeSessionManager } from '@/lib/opencode';
+import { enhancedBackgroundJobsManager, type EnhancedJobConfig, type EnhancedJob } from '../agent/enhanced-background-jobs';
+import { executionGraphEngine } from '../agent/execution-graph';
 
 const logger = createLogger('Session:Manager');
 
@@ -71,35 +73,35 @@ export interface Session {
   createdAt: number;
   lastActivity: number;
   status: 'starting' | 'active' | 'idle' | 'stopping' | 'stopped';
-  
+
   // Sandbox info
   sandboxId?: string;
   sandboxProvider?: string;
   sandboxHandle?: SandboxHandle;
   workspaceDir: string;
   workspacePath: string;
-  
+
   // Nullclaw integration
   nullclawEnabled: boolean;
   nullclawEndpoint?: string;
-  
+
   // MCP integration
   mcpEnabled: boolean;
   mcpServerUrl?: string;
-  
+
   // Quota tracking
   quota: SessionQuota;
-  
+
   // Metrics
   totalSteps: number;
   totalBashCommands: number;
   totalFileChanges: number;
   totalCost?: number;
-  
+
   // Checkpointing
   lastCheckpoint?: number;
   checkpointCount: number;
-  
+
   // Agent-specific (backward compatible)
   state: 'initializing' | 'ready' | 'busy' | 'idle' | 'error';
   executionPolicy: ExecutionPolicy;
@@ -108,6 +110,10 @@ export interface Session {
     cloudOffloadEnabled: boolean;
     mcpEnabled: boolean;
   };
+
+  // Background Jobs tracking
+  backgroundJobs?: Map<string, EnhancedJob>;
+  executionGraphId?: string;
 }
 
 interface SessionMetrics {

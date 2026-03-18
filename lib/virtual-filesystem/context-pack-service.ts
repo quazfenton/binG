@@ -190,8 +190,14 @@ class ContextPackService {
 
         // Recurse into directories (max depth 10)
         if (entry.type === 'directory' && depth < 10) {
-          // FIX Bug 24: Use VFS normalizePath for consistent path construction
-          const childPath = virtualFilesystem.normalizePath(
+          // FIX Bug 24: Use consistent path construction matching VFS internal logic
+          // Since normalizePath is private, we replicate its logic here for consistency
+          const normalizePath = (p: string): string => {
+            const rawPath = (p || '').replace(/\\/g, '/').trim();
+            if (!rawPath || rawPath === '/') return '/';
+            return rawPath.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+          };
+          const childPath = normalizePath(
             rootPath === '/' ? `/${entry.name}` : `${rootPath}/${entry.name}`
           );
           tree += await this.buildDirectoryTree(
