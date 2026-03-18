@@ -132,11 +132,10 @@ export class MistralAgentProvider implements SandboxProvider {
       workspaceDir: WORKSPACE_DIR,
     }
 
-    // Initialize persistent workspace state with proper Record type
+    // Initialize persistent workspace state
     this.workspacePersistence.set(sandboxId, {
       files: {} as Record<string, string>,
-      environment: { ...config.envVars },
-      history: [],
+      ...config.envVars,
     })
 
     try {
@@ -307,7 +306,7 @@ export class MistralAgentProvider implements SandboxProvider {
       name: agentConfig.name,
       description: agentConfig.description,
       instructions: agentConfig.instructions,
-      tools,
+      tools: tools as any,
       completionArgs: (agentConfig.completionArgs || {
         temperature: this.config.defaultTemperature,
         topP: this.config.defaultTopP,
@@ -345,7 +344,7 @@ export class MistralAgentProvider implements SandboxProvider {
       agentUpdateRequest: {
         description: update.description,
         instructions: update.instructions,
-        tools,
+        tools: tools as any,
         completionArgs: update.completionArgs as any,
       },
     })

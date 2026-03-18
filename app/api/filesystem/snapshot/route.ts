@@ -4,6 +4,14 @@ import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesys
 
 export const runtime = 'nodejs';
 
+// Server-side LRU cache for snapshots
+const snapshotCache = new Map<string, {
+  data: any;
+  timestamp: number;
+  etag: string;
+}>();
+const CACHE_TTL_MS = 30000; // 30 seconds server-side cache
+
 // Request tracking for detecting polling loops
 const requestTracker = new Map<string, { count: number; lastRequest: number; firstRequest: number }>();
 const REQUEST_WINDOW_MS = 5000; // 5 second window for tracking
@@ -77,44 +85,115 @@ export async function GET(req: NextRequest) {
     
     // Track request frequency
     const tracking = trackRequest(pathFilter);
-    
+
     // Log polling detection
     if (tracking.isPolling) {
       logWarn(`POLLING DETECTED: ${tracking.requestCount} requests in ${tracking.windowMs}ms for path "${pathFilter}"`);
     }
-    
+
     log(`[${requestId}] GET /api/filesystem/snapshot path="${pathFilter}" (polling=${tracking.isPolling}, count=${tracking.requestCount})`);
+
+    // Check server-side cache first
+    const cacheKey = `${owner.ownerId}:${pathFilter}`;
+    const cached = snapshotCache.get(cacheKey);
+    const now = Date.now();
+
+    if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+      // Check If-None-Match header for conditional request
+      const ifNoneMatch = req.headers.get('if-none-match');
+      if (ifNoneMatch === cached.etag) {
+        log(`[${requestId}] Cache hit with matching ETag, returning 304`);
+        return new NextResponse(null, { 
+          status: 304,
+          headers: { 
+            etag: cached.etag,
+            'cache-control': 'public, max-age=30',
+          }
+        });
+      }
+
+      log(`[${requestId}] Cache hit (age: ${Math.round((now - cached.timestamp) / 1000)}s)`);
+      const response = NextResponse.json({
+        success: true,
+        data: cached.data,
+        cached: true,
+      }, {
+        headers: {
+          etag: cached.etag,
+          'cache-control': 'public, max-age=30',
+        }
+      });
+      return response;
+    }
+
+    // Generate new snapshot
+    let snapshot;
+    try {
+      snapshot = await virtualFilesystem.exportWorkspace(owner.ownerId);
+    } catch (error: unknown) {
+      const duration = Date.now() - startTime;
+      logError(`[${requestId}] exportWorkspace failed:`, error instanceof Error ? error.message : error);
+      throw error;
+    }
     
-    const snapshot = await virtualFilesystem.exportWorkspace(owner.ownerId);
     const prefix = `${pathFilter}/`;
     const files = snapshot.files.filter(
       (file) => file.path === pathFilter || file.path.startsWith(prefix),
     );
-    
+
     const duration = Date.now() - startTime;
-    
+
     log(`[${requestId}] Snapshot: ${files.length} files in ${duration}ms (total workspace: ${snapshot.files.length} files)`);
-    
+
     if (duration > 200) {
       logWarn(`[${requestId}] SLOW OPERATION: exportWorkspace took ${duration}ms for "${pathFilter}"`);
     }
-    
+
     // Log if snapshot is stale (older than 5 minutes)
     const snapshotAge = Date.now() - new Date(snapshot.updatedAt).getTime();
     if (snapshotAge > 5 * 60 * 1000) {
       logWarn(`[${requestId}] STALE SNAPSHOT: last updated ${Math.round(snapshotAge / 1000)}s ago`);
     }
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        root: snapshot.root,
-        version: snapshot.version,
-        updatedAt: snapshot.updatedAt,
-        path: pathFilter,
-        files,
-      },
+    // Cache with ETag
+    const etag = `"${snapshot.version}-${snapshot.updatedAt}"`;
+    const responseData = {
+      root: snapshot.root,
+      version: snapshot.version,
+      updatedAt: snapshot.updatedAt,
+      path: pathFilter,
+      files,
+    };
+    
+    snapshotCache.set(cacheKey, {
+      data: responseData,
+      timestamp: now,
+      etag,
     });
+
+    // Clean up old cache entries (limit to 100 entries)
+    if (snapshotCache.size > 100) {
+      let deleted = 0;
+      for (const [key, value] of snapshotCache.entries()) {
+        if (deleted >= 20) break; // Delete max 20 old entries at a time
+        if (now - value.timestamp > CACHE_TTL_MS * 2) {
+          snapshotCache.delete(key);
+          deleted++;
+        }
+      }
+    }
+
+    const response = NextResponse.json({
+      success: true,
+      data: responseData,
+      cached: false,
+    }, {
+      headers: {
+        etag,
+        'cache-control': 'public, max-age=30',
+      }
+    });
+    return response;
   } catch (error: unknown) {
     const duration = Date.now() - startTime;
     logError(`[${requestId}] ERROR after ${duration}ms:`, error instanceof Error ? error.message : error);

@@ -278,7 +278,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
     const service = this.getComputerUseService()
     if (!service) throw new Error('Computer Use Service not available')
     const result = await service.startRecording()
-    return { recordingId: result.output }
+    return { recordingId: result.output || '' }
   }
 
   /**
@@ -288,7 +288,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
     const service = this.getComputerUseService()
     if (!service) throw new Error('Computer Use Service not available')
     const result = await service.stopRecording(recordingId)
-    return { video: result.output }
+    return { video: result.output || '' }
   }
 
   /**
@@ -298,7 +298,7 @@ class DaytonaSandboxHandle implements SandboxHandle {
     const service = this.getComputerUseService()
     if (!service) throw new Error('Computer Use Service not available')
     const result = await service.takeRegion({ x, y, width, height })
-    return { image: result.binary ? Buffer.from(result.binary).toString('base64') : result.output }
+    return { image: result.binary ? Buffer.from(result.binary).toString('base64') : (result.output || '') }
   }
 
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
