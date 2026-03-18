@@ -23,6 +23,8 @@ import {
   Settings,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import useIframeLoader from '@/hooks/use-iframe-loader';
+import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 
 interface BookmarkEntry {
   url: string;
@@ -42,7 +44,6 @@ type Region = 'wt-wt' | 'en-us' | 'en-gb' | 'de-de' | 'fr-fr' | 'es-es' | 'it-it
 const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [iframeUrl, setIframeUrl] = useState('https://duckduckgo.com/html');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
   const [iframeError, setIframeError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
@@ -50,11 +51,43 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
   const [isReloading, setIsReloading] = useState(false);
   const [iframeKey, setIframeKey] = useState(0);
   const [activeTab, setActiveTab] = useState<'search' | 'bookmarks' | 'history'>('search');
-  
+
   // Settings
   const [safeSearch, setSafeSearch] = useState<SafeSearch>('moderate');
   const [region, setRegion] = useState<Region>('wt-wt');
   const [showSettings, setShowSettings] = useState(false);
+
+  // Use iframe loader hook with fallback
+  const {
+    isLoading,
+    isLoaded,
+    isFailed,
+    failureReason,
+    errorMessage,
+    retryCount,
+    canRetry,
+    isUsingFallback,
+    fallbackUrl,
+    handleLoad,
+    handleRetry,
+    handleReset,
+    handleFallback,
+  } = useIframeLoader({
+    url: iframeUrl,
+    timeout: 30000,
+    maxRetries: 3,
+    retryDelay: 5000,
+    enableAutoRetry: true,
+    enableFallback: true,
+    onLoaded: () => {
+      setIsReloading(false);
+      setIframeError(null);
+    },
+    onFailed: (reason, error) => {
+      setIsReloading(false);
+      setIframeError(error || 'Failed to load content');
+    },
+  });
 
   const regions: { code: Region; name: string }[] = [
     { code: 'wt-wt', name: 'All Regions' },
@@ -87,7 +120,7 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setIsLoading(false);
+      setIsReloading(false);
     }, 2000);
     return () => clearTimeout(timer);
   }, [iframeKey]);
@@ -126,7 +159,7 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
 
   const handleReload = () => {
     setIframeError(null);
-    setIsLoading(true);
+    setIsReloading(true);
     setIsReloading(true);
     setIframeKey(prev => prev + 1);
     setTimeout(() => setIsReloading(false), 1000);
@@ -357,27 +390,30 @@ const DuckDuckGoEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                   </div>
                 )}
                 
-                {iframeError ? (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="text-center space-y-4 max-w-md p-6">
-                      <SearchIcon className="w-12 h-12 mx-auto text-orange-500/60" />
-                      <p className="text-orange-200/60">{iframeError}</p>
-                      <Button onClick={handleReload} className="bg-orange-600 hover:bg-orange-500">
-                        <RefreshCw className="w-4 h-4 mr-2" />
-                        Retry
-                      </Button>
-                    </div>
+                {isFailed || iframeError ? (
+                  <div className="absolute inset-0">
+                    <IframeUnavailableScreen
+                      url={iframeUrl}
+                      reason={failureReason || 'failed'}
+                      errorMessage={errorMessage || iframeError || undefined}
+                      onRetry={handleRetry}
+                      onTryFallback={handleFallback}
+                      onOpenExternal={handleOpenExternal}
+                      onClose={onClose}
+                      autoRetryCount={retryCount}
+                      maxRetries={3}
+                    />
                   </div>
                 ) : (
                   <iframe
                     key={iframeKey}
-                    src={iframeUrl}
+                    src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
                     className="w-full h-full border-0"
                     title="DuckDuckGo"
-                    onLoad={() => setIsLoading(false)}
+                    onLoad={() => setIsReloading(false)}
                     onError={() => {
                       setIframeError('Failed to load DuckDuckGo. Note: DuckDuckGo limits iframe embedding. Try using the external link button.');
-                      setIsLoading(false);
+                      setIsReloading(false);
                     }}
                     sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
                     allow="fullscreen"

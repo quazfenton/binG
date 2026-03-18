@@ -91,7 +91,7 @@ export class LLMIntegration {
     try {
       // Dynamically import the main application's LLM service
       // This assumes the llm-providers module exists in the main application
-      const mainModule = await import('../../lib/api/llm-providers');
+      const mainModule = await import('../../lib/chat/llm-providers');
       this.llmService = mainModule.llmService || mainModule.default;
       
       if (!this.llmService) {

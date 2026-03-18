@@ -1,5 +1,9 @@
 import { virtualFilesystem } from './virtual-filesystem-service';
 import { filesystemEditDatabase } from './filesystem-edit-database';
+import { getDatabase } from '@/lib/database/connection';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('FilesystemEditSession');
 
 export type FilesystemEditOperationType = 'write' | 'patch' | 'delete';
 export type FilesystemEditTransactionStatus =
@@ -286,12 +290,99 @@ class FilesystemEditSessionService {
     transactionId: string;
     reason?: string;
   }): Promise<DenyFilesystemEditResult | null> {
-    const tx = this.transactions.get(input.transactionId);
+    // Use getTransaction to support both in-memory and database-persisted transactions
+    const tx = await this.getTransaction(input.transactionId);
     if (!tx) return null;
 
     const revertedPaths: string[] = [];
     const conflicts: string[] = [];
 
+    // Try Git-backed VFS rollback first (if previous version is available)
+    const useGitRollback = tx.operations.length > 0 && tx.operations[0].previousVersion != null;
+    
+    if (useGitRollback) {
+      try {
+        // Get the target version (minimum previousVersion across all operations)
+        const versionsWithPrevious = tx.operations.filter(op => op.previousVersion != null);
+        
+        if (versionsWithPrevious.length === 0) {
+          // No previous versions to rollback to, use manual revert
+          throw new Error('No previous versions available for rollback');
+        }
+        
+        const targetVersion = Math.min(
+          ...versionsWithPrevious.map(op => op.previousVersion!)
+        );
+
+        // Get current workspace version
+        const currentVersion = await virtualFilesystem.getWorkspaceVersion(tx.ownerId);
+
+        // Only rollback if target version is different from current
+        if (targetVersion < currentVersion) {
+          logger.info('[FilesystemEditSession] Using Git-backed rollback', {
+            transactionId: input.transactionId,
+            targetVersion,
+            currentVersion,
+            operationCount: versionsWithPrevious.length,
+          });
+
+          // Use the existing VFS rollback method
+          const rollbackResult = await virtualFilesystem.rollbackToVersion(tx.ownerId, targetVersion);
+
+          if (rollbackResult.success && rollbackResult.restoredFiles > 0) {
+            // Mark all successfully rolled back files
+            revertedPaths.push(
+              ...versionsWithPrevious.map(op => op.path)
+            );
+
+            tx.deniedReason = input.reason?.trim() || 'User denied AI file edits';
+            tx.status = 'denied';
+
+            const denialRecord: FilesystemEditDenialRecord = {
+              transactionId: tx.id,
+              conversationId: tx.conversationId,
+              timestamp: new Date().toISOString(),
+              reason: tx.deniedReason,
+              paths: tx.operations.map((op) => op.path),
+            };
+
+            // Persist transaction and denial to database
+            filesystemEditDatabase.persistTransaction(tx);
+            filesystemEditDatabase.persistDenial(denialRecord);
+
+            const denialList = this.denialHistoryByConversation.get(tx.conversationId) || [];
+            denialList.push(denialRecord);
+            this.denialHistoryByConversation.set(
+              tx.conversationId,
+              denialList.slice(-20),
+            );
+
+            logger.info('[FilesystemEditSession] Git rollback successful', {
+              restoredFiles: rollbackResult.restoredFiles,
+              deletedFiles: rollbackResult.deletedFiles,
+              conflicts: rollbackResult.errors?.length || 0,
+            });
+
+            return {
+              transaction: tx,
+              revertedPaths,
+              conflicts: rollbackResult.errors || [],
+            };
+          } else {
+            // Rollback returned no restored files, fall back to manual
+            logger.warn('[FilesystemEditSession] Git rollback returned no restored files, using manual revert');
+          }
+        } else {
+          logger.info('[FilesystemEditSession] Target version equals current version, using manual revert');
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'unknown error';
+        logger.warn('[FilesystemEditSession] Git rollback failed, falling back to manual revert:', message);
+        // Fall through to manual revert logic below
+      }
+    }
+
+    // Manual revert (fallback for when Git rollback is not available)
     for (let i = tx.operations.length - 1; i >= 0; i -= 1) {
       const op = tx.operations[i];
 
@@ -345,11 +436,11 @@ class FilesystemEditSessionService {
       reason: tx.deniedReason,
       paths: tx.operations.map((op) => op.path),
     };
-    
+
     // Persist transaction and denial to database
     filesystemEditDatabase.persistTransaction(tx);
     filesystemEditDatabase.persistDenial(denialRecord);
-    
+
     const denialList = this.denialHistoryByConversation.get(tx.conversationId) || [];
     denialList.push(denialRecord);
     this.denialHistoryByConversation.set(
@@ -364,18 +455,25 @@ class FilesystemEditSessionService {
     };
   }
 
-  getRecentDenials(conversationId: string, limit = 3): FilesystemEditDenialRecord[] {
+  async getRecentDenials(conversationId: string, limit = 3): Promise<FilesystemEditDenialRecord[]> {
     // Try database first for persistence
-    const dbDenials = filesystemEditDatabase.getDenialsByConversation(conversationId);
+    const dbDenials = await filesystemEditDatabase.getDenialsByConversation(conversationId);
     if (dbDenials.length > 0) {
       return dbDenials.slice(-Math.max(1, limit));
     }
-    
+
     // Fallback to in-memory
     const list = this.denialHistoryByConversation.get(conversationId) || [];
     return list.slice(-Math.max(1, limit));
   }
   
+  /**
+   * Get transaction by ID synchronously (in-memory only, for auto-commit)
+   */
+  getTransactionSync(transactionId: string): FilesystemEditTransaction | null {
+    return this.transactions.get(transactionId) || null;
+  }
+
   /**
    * Get transaction by ID (from database or memory)
    */

@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { quotaManager } from '@/lib/services/quota-manager';
+import { quotaManager } from '@/lib/management/quota-manager';
 
 /**
  * Quota status response

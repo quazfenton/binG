@@ -21,23 +21,23 @@
 
 import { resolve, relative, join, dirname } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import { quotaManager } from '../../services/quota-manager'
+import { quotaManager } from '../../management/quota-manager'
 import { SandboxSecurityManager } from '../security-manager'
-import { E2BDesktopProvider, type DesktopSandboxHandle as DesktopHandle } from './e2b-desktop-provider-enhanced'
+import { E2BDesktopProvider, type DesktopSandboxHandle as DesktopHandle } from '../../computer/e2b-desktop-provider-enhanced'
 import {
   createAmpService,
   type E2BAmpService,
   type AmpExecutionConfig,
   type AmpExecutionResult,
   type AmpEvent,
-} from './e2b-amp-service'
+} from '../spawn/e2b-amp-service'
 import {
   createCodexService,
   type E2BCodexService,
   type CodexExecutionConfig,
   type CodexExecutionResult,
   type CodexEvent,
-} from './e2b-codex-service'
+} from '../spawn/e2b-codex-service'
 import type { ToolResult, PreviewInfo } from '../types'
 import type {
   SandboxProvider,
@@ -96,13 +96,22 @@ export class E2BProvider implements SandboxProvider {
   private moduleLoadError?: string
 
   constructor() {
-    this.apiKey = process.env.E2B_API_KEY
-    this.defaultTemplate = process.env.E2B_DEFAULT_TEMPLATE || 'base'
-    this.defaultTimeout = parseInt(process.env.E2B_DEFAULT_TIMEOUT || E2B_DEFAULT_TIMEOUT.toString())
-
-    if (!this.apiKey) {
+    const rawApiKey = process.env.E2B_API_KEY
+      || process.env.E2B_API_TOKEN
+      || process.env.NEXT_PUBLIC_E2B_API_KEY
+      || ''
+    const normalizedApiKey = rawApiKey.trim().replace(/^['"]+|['"]+$/g, '')
+    this.apiKey = normalizedApiKey || undefined
+    if (this.apiKey) {
+      process.env.E2B_API_KEY = this.apiKey
+    } else {
       console.warn('[E2BProvider] E2B_API_KEY not set. E2B sandboxes will not be available.')
     }
+
+    this.defaultTemplate = process.env.E2B_DEFAULT_TEMPLATE || 'base'
+    this.defaultTimeout = parseInt(process.env.E2B_DEFAULT_TIMEOUT || E2B_DEFAULT_TIMEOUT.toString())
+    
+    console.log(`[E2BProvider] Initialized - Template: "${this.defaultTemplate}", Timeout: ${this.defaultTimeout}ms`)
   }
 
   /**
@@ -160,9 +169,11 @@ export class E2BProvider implements SandboxProvider {
       const Sandbox = this.e2bModule.Sandbox
 
       // Map language to E2B template
-      const template = config.language 
+      const template = config.language
         ? (E2B_TEMPLATE_MAP[config.language] || this.defaultTemplate)
         : this.defaultTemplate
+
+      console.log(`[E2BProvider] Creating sandbox - Language: "${config.language || 'default'}", Template: "${template}", User: ${config.labels?.userId || 'unknown'}`)
 
       // Build sandbox options
       const sandboxOpts: E2BSandboxOpts = {
@@ -176,25 +187,32 @@ export class E2BProvider implements SandboxProvider {
         },
       }
 
+      console.log(`[E2BProvider] Sandbox options:`, JSON.stringify({ template, timeout: this.defaultTimeout, hasMetadata: !!config.labels, hasEnvVars: !!config.envVars }, null, 2))
+
       // Create sandbox
       const sandbox: E2BSandboxType = await Sandbox.create(sandboxOpts)
 
       // Record sandbox creation in quota (count as 1 session)
       quotaManager.recordUsage('e2b', 1)
 
-      console.log(`[E2BProvider] Created sandbox ${sandbox.sandboxId} with template: ${template}`)
+      console.log(`[E2BProvider] ✓ Created sandbox ${sandbox.sandboxId} (template: ${template}, timeout: ${this.defaultTimeout}ms)`)
 
       return new E2BSandboxHandle(sandbox, config, this.e2bModule)
     } catch (error: any) {
-      console.error('[E2BProvider] Failed to create sandbox:', error)
-      
+      console.error(`[E2BProvider] ✗ Failed to create sandbox:`, error.message)
+      console.error(`[E2BProvider] Error details:`, {
+        name: error.name,
+        message: error.message,
+        stack: error.stack?.split('\n').slice(0, 3).join('\n'),
+      })
+
       // Disable provider on authentication/template errors
-      if (error.message?.includes('authentication') || 
+      if (error.message?.includes('authentication') ||
           error.message?.includes('template') ||
           error.message?.includes('unauthorized')) {
         quotaManager.findAlternative('sandbox', 'e2b')
       }
-      
+
       throw error
     }
   }
@@ -439,7 +457,15 @@ class E2BSandboxHandle implements SandboxHandle {
       // ✅ ENHANCED: Use centralized security validation
       const sanitized = SandboxSecurityManager.validateAndSanitizeCommand(command)
       
-      const workingDir = cwd || this.workspaceDir
+      // Validate and resolve working directory
+      let workingDir = cwd || this.workspaceDir;
+      if (workingDir) {
+        // Handle Windows paths that may slip through
+        workingDir = workingDir.replace(/\\/g, '/');
+        // Resolve to ensure it's within workspace
+        workingDir = SandboxSecurityManager.resolvePath(this.workspaceDir, workingDir);
+      }
+      
       const cmdTimeout = Math.min(timeout || E2B_MAX_COMMAND_TIMEOUT, E2B_MAX_COMMAND_TIMEOUT)
 
       // Run command via sandbox.commands
@@ -582,20 +608,22 @@ class E2BSandboxHandle implements SandboxHandle {
       // ✅ ENHANCED: Validate path before listing
       const resolved = SandboxSecurityManager.resolvePath(this.workspaceDir, dirPath)
 
-      // Use ls command for directory listing with shell-escaped path
-      const escapedPath = resolved.replace(/'/g, "'\\''")
-      const result = await this.sandbox.commands.run(`ls -la '${escapedPath}'`)
+      // Use native E2B files.list() API
+      const files = await this.sandbox.files.list(resolved)
 
-      if (result.exitCode !== 0) {
-        return {
-          success: false,
-          output: result.stderr || 'Failed to list directory',
-        }
-      }
+      // Format output similar to ls -la
+      const formatted = files
+        .map((f: any) => {
+          const type = f.type === 'directory' ? 'd' : '-'
+          const size = f.size?.toString() || '0'
+          const name = f.name || f.split('/').pop() || f
+          return `${type}  ${size}  ${name}`
+        })
+        .join('\n')
 
       return {
         success: true,
-        output: result.stdout || '(empty directory)',
+        output: formatted || '(empty directory)',
       }
     } catch (error: any) {
       // Security exceptions should be logged but not expose details
@@ -606,7 +634,7 @@ class E2BSandboxHandle implements SandboxHandle {
           output: 'Security validation failed',
         }
       }
-      
+
       console.error('[E2B] List directory error:', error)
       return {
         success: false,

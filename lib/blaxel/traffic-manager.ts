@@ -7,7 +7,7 @@
  * @see https://docs.blaxel.ai/Functions/Manage-functions Blaxel Function Management
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 /**
  * Traffic distribution configuration

@@ -71,6 +71,51 @@ scrape_configs:
     scrape_interval: 30s
 
   # ===========================================
+  # Scheduler Service
+  # ===========================================
+  - job_name: 'bing-scheduler'
+    static_configs:
+      - targets: ['scheduler:3007']
+    metrics_path: '/stats'
+    scrape_interval: 15s
+
+  # ===========================================
+  # OpenSandbox Server
+  # ===========================================
+  - job_name: 'opensandbox'
+    static_configs:
+      - targets: ['opensandbox:8080']
+    metrics_path: '/health'
+    scrape_interval: 15s
+
+  # ===========================================
+  # Sandbox Pool
+  # ===========================================
+  - job_name: 'sandbox-pool'
+    static_configs:
+      - targets: ['sandbox:3005']
+    metrics_path: '/stats'
+    scrape_interval: 15s
+
+  # ===========================================
+  # Agent Gateway
+  # ===========================================
+  - job_name: 'agent-gateway'
+    static_configs:
+      - targets: ['gateway:3002']
+    metrics_path: '/health'
+    scrape_interval: 15s
+
+  # ===========================================
+  # Nullclaw
+  # ===========================================
+  - job_name: 'nullclaw'
+    static_configs:
+      - targets: ['nullclaw:3000']
+    metrics_path: '/health'
+    scrape_interval: 15s
+
+  # ===========================================
   # Redis Metrics (if enabled)
   # ===========================================
   # - job_name: 'redis'

@@ -59,15 +59,15 @@ const OrchestratorConfigSchema = z.object({
   enableAgenticFrameworks: z.boolean().default(true),
   enableFileManagement: z.boolean().default(true),
   enableAutoWorkflows: z.boolean().default(true),
-  maxConcurrentSessions: z.number().min(1).max(10).default(3),
-  defaultTimeoutMs: z.number().min(10000).max(600000).default(120000),
-  qualityThreshold: z.number().min(0).max(1).default(0.8),
-  maxIterations: z.number().min(1).max(10).default(5),
+  maxConcurrentSessions: z.number().min(1).refine((val) => val <= 10, 'Max concurrent sessions must be at most 10').default(3),
+  defaultTimeoutMs: z.number().min(10000).refine((val) => val <= 600000, 'Default timeout must be at most 600000').default(120000),
+  qualityThreshold: z.number().min(0).refine((val) => val <= 1, 'Quality threshold must be at most 1').default(0.8),
+  maxIterations: z.number().min(1).refine((val) => val <= 10, 'Max iterations must be at most 10').default(5),
   contextOptimization: z.boolean().default(true),
   errorRecovery: z.boolean().default(true),
   promptEngineering: z
     .object({
-      depthLevel: z.number().min(1).max(10).default(8),
+      depthLevel: z.number().min(1).refine((val) => val <= 10, 'Depth level must be at most 10').default(8),
       verbosityLevel: z
         .enum(["minimal", "standard", "verbose", "exhaustive"])
         .default("verbose"),
@@ -88,7 +88,7 @@ const OrchestratorConfigSchema = z.object({
       defaultFramework: z
         .enum(["crewai", "praisonai", "ag2", "custom"])
         .default("crewai"),
-      maxAgents: z.number().min(1).max(10).default(5),
+      maxAgents: z.number().min(1).refine((val) => val <= 10, 'Max agents must be at most 10').default(5),
       collaborationMode: z
         .enum(["sequential", "parallel", "hierarchical"])
         .default("sequential"),
@@ -123,7 +123,7 @@ const EnhancedRequestSchema = z.object({
         .optional(),
       customAgents: z.array(z.any()).optional(),
       timeoutMs: z.number().optional(),
-      qualityThreshold: z.number().min(0).max(1).optional(),
+      qualityThreshold: z.number().min(0).refine((val) => val <= 1, 'Quality threshold must be at most 1').optional(),
     })
     .default({}),
 });
@@ -144,7 +144,7 @@ const SessionStateSchema = z.object({
   mode: z.enum(["streaming", "agentic", "hybrid", "standard"]),
   startTime: z.date(),
   lastActivity: z.date(),
-  progress: z.number().min(0).max(100),
+  progress: z.number().min(0).refine((val) => val <= 100, 'Progress must be at most 100'),
   currentStep: z.string().optional(),
   totalSteps: z.number().optional(),
   estimatedTimeRemaining: z.number().optional(),

@@ -1,127 +1,167 @@
 /**
- * Simulated Orchestration Layer
+ * Simulated Orchestration
  * 
- * Enables multi-framework agent collaboration by providing a shared 
- * "planning board" where agents can propose, review, and finalize tasks
- * before physical execution in a sandbox.
+ * Lightweight task orchestration for multi-agent collaboration.
+ * Provides task proposal, review, and execution tracking.
  * 
- * Features:
- * - Cross-framework task delegation (CrewAI <-> Mastra <-> LangGraph)
- * - Proposal/Review cycle with consensus voting
- * - Dependency tracking across frameworks
+ * @deprecated This is an MVP stub. Use lib/orchestra/mastra/workflows/ for production.
  */
 
-import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('Agent:SimulatedOrchestration');
 
 export interface TaskProposal {
   id: string;
-  proposerId: string;
-  framework: 'crewai' | 'mastra' | 'langgraph' | 'unified';
   title: string;
   description: string;
-  estimatedComplexity: 1 | 2 | 3 | 4 | 5;
-  dependencies: string[];
-  status: 'proposed' | 'under_review' | 'approved' | 'rejected' | 'executing' | 'completed' | 'failed';
-  reviews: Array<{
-    reviewerId: string;
-    decision: 'approve' | 'request_changes' | 'reject';
-    feedback: string;
-    timestamp: number;
-  }>;
+  status: 'proposed' | 'approved' | 'rejected' | 'in_progress' | 'completed';
+  createdAt: number;
+  createdBy: string;
+  approvedBy?: string;
+  approvedAt?: number;
+  completedAt?: number;
+  result?: any;
 }
 
-export class SimulatedOrchestrator extends EventEmitter {
-  private proposals: Map<string, TaskProposal> = new Map();
-  private agentCapabilities: Map<string, string[]> = new Map();
+export interface TaskReview {
+  taskId: string;
+  reviewerId: string;
+  decision: 'approve' | 'reject' | 'request_changes';
+  comment?: string;
+  reviewedAt: number;
+}
+
+class SimulatedOrchestrator {
+  private proposals = new Map<string, TaskProposal>();
+  private reviews = new Map<string, TaskReview[]>();
+  private executions = new Map<string, any>();
 
   /**
-   * Propose a new task for the collective
+   * Propose a new task
    */
-  proposeTask(proposal: Omit<TaskProposal, 'id' | 'status' | 'reviews'>): string {
-    const id = `prop_${randomUUID()}`;
-    const fullProposal: TaskProposal = {
-      ...proposal,
+  proposeTask(options: {
+    title: string;
+    description: string;
+    createdBy?: string;
+  }): TaskProposal {
+    const id = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const proposal: TaskProposal = {
       id,
+      title: options.title,
+      description: options.description,
       status: 'proposed',
-      reviews: [],
+      createdAt: Date.now(),
+      createdBy: options.createdBy || 'system',
     };
-
-    this.proposals.set(id, fullProposal);
-    this.emit('task:proposed', fullProposal);
-    return id;
+    
+    this.proposals.set(id, proposal);
+    this.reviews.set(id, []);
+    
+    logger.info(`Task proposed: ${id} - ${options.title}`);
+    return proposal;
   }
 
   /**
-   * Submit a review for a proposal
+   * Review a task
    */
   reviewTask(
-    proposalId: string, 
-    reviewerId: string, 
-    decision: 'approve' | 'request_changes' | 'reject', 
-    feedback: string
-  ): void {
-    const proposal = this.proposals.get(proposalId);
-    if (!proposal) throw new Error(`Proposal ${proposalId} not found`);
+    taskId: string,
+    reviewerId: string,
+    decision: 'approve' | 'reject' | 'request_changes',
+    comment?: string
+  ): TaskReview {
+    const proposal = this.proposals.get(taskId);
+    if (!proposal) {
+      throw new Error(`Task ${taskId} not found`);
+    }
 
-    proposal.reviews.push({
+    const review: TaskReview = {
+      taskId,
       reviewerId,
       decision,
-      feedback,
-      timestamp: Date.now(),
-    });
+      comment,
+      reviewedAt: Date.now(),
+    };
 
-    // Simple consensus logic: If 2+ approvals and no rejections, approve
-    const approvals = proposal.reviews.filter(r => r.decision === 'approve').length;
-    const rejections = proposal.reviews.filter(r => r.decision === 'reject').length;
+    const taskReviews = this.reviews.get(taskId) || [];
+    taskReviews.push(review);
+    this.reviews.set(taskId, taskReviews);
 
-    if (rejections > 0) {
-      proposal.status = 'rejected';
-    } else if (approvals >= 1) { // Reduced threshold for MVP
+    // Auto-approve if single reviewer approves
+    if (decision === 'approve' && proposal.status === 'proposed') {
       proposal.status = 'approved';
+      proposal.approvedBy = reviewerId;
+      proposal.approvedAt = Date.now();
+      this.proposals.set(taskId, proposal);
     }
 
-    this.emit('task:reviewed', proposal);
-    
-    if (proposal.status === 'approved') {
-      this.emit('task:ready', proposal);
-    }
+    logger.info(`Task reviewed: ${taskId} - ${decision} by ${reviewerId}`);
+    return review;
   }
 
   /**
-   * Get all proposals
+   * Get ready tasks (approved but not started)
+   */
+  getReadyTasks(): TaskProposal[] {
+    return Array.from(this.proposals.values()).filter(
+      p => p.status === 'approved'
+    );
+  }
+
+  /**
+   * Start task execution
+   */
+  startExecution(taskId: string): void {
+    const proposal = this.proposals.get(taskId);
+    if (!proposal) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+    
+    proposal.status = 'in_progress';
+    this.proposals.set(taskId, proposal);
+    this.executions.set(taskId, { startedAt: Date.now() });
+    
+    logger.info(`Task execution started: ${taskId}`);
+  }
+
+  /**
+   * Complete task execution
+   */
+  completeTask(taskId: string, result: any): void {
+    const proposal = this.proposals.get(taskId);
+    if (!proposal) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+    
+    proposal.status = 'completed';
+    proposal.completedAt = Date.now();
+    proposal.result = result;
+    this.proposals.set(taskId, proposal);
+    this.executions.delete(taskId);
+    
+    logger.info(`Task completed: ${taskId}`);
+  }
+
+  /**
+   * List all proposals
    */
   listProposals(): TaskProposal[] {
     return Array.from(this.proposals.values());
   }
 
   /**
-   * Get proposals ready for execution
+   * Get proposal by ID
    */
-  getReadyTasks(): TaskProposal[] {
-    return this.listProposals().filter(p => p.status === 'approved');
+  getProposal(taskId: string): TaskProposal | undefined {
+    return this.proposals.get(taskId);
   }
 
   /**
-   * Mark task as starting execution
+   * Get reviews for a task
    */
-  startExecution(proposalId: string): void {
-    const proposal = this.proposals.get(proposalId);
-    if (proposal) {
-      proposal.status = 'executing';
-      this.emit('task:executing', proposal);
-    }
-  }
-
-  /**
-   * Complete task
-   */
-  completeTask(proposalId: string, result?: any): void {
-    const proposal = this.proposals.get(proposalId);
-    if (proposal) {
-      proposal.status = 'completed';
-      this.emit('task:completed', { proposal, result });
-    }
+  getReviews(taskId: string): TaskReview[] {
+    return this.reviews.get(taskId) || [];
   }
 }
 

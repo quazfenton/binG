@@ -1,0 +1,95 @@
+# Docker Compose for V2 Agent Production
+# Single entry point with reverse proxy
+# All internal services isolated
+
+version: '3.8'
+
+services:
+  # Traefik Reverse Proxy (Single Entry Point)
+  proxy:
+    image: traefik:v2.10
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+    networks:
+      - bing-network
+    labels:
+      - "traefik.enable=true"
+
+  # Main binG application (Next.js + OpenCode)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    volumes:
+      - workspace_data:/workspace
+      - pnpm_store:/root/.local/share/pnpm/store
+      - pip_cache:/root/.cache/pip
+    environment:
+      - NODE_ENV=production
+      - OPENCODE_CONTAINERIZED=true
+      - NULLCLAW_URL=http://nullclaw:3000  # Internal network URL
+    networks:
+      - bing-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.rule=Host(`example.com`)"
+      - "traefik.http.services.app.loadbalancer.server.port=3000"
+    depends_on:
+      - nullclaw
+
+  # Nullclaw task assistant (Internal Only)
+  nullclaw:
+    image: ghcr.io/nullclaw/nullclaw:latest
+    environment:
+      - NULLCLAW_TIMEOUT=3600
+      - ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
+    networks:
+      - bing-network
+    # No ports exposed - only accessible via app service
+    volumes:
+      - nullclaw_config:/root/.nullclaw
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=false"  # Not directly accessible
+
+  # WebSocket PTY Backend (Internal Only)
+  pty:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    command: ["node", "server.ts"]  # WebSocket server only
+    environment:
+      - WEBSOCKET_PORT=8080
+      - NODE_ENV=production
+    networks:
+      - bing-network
+    # No ports exposed - proxied through app
+    labels:
+      - "traefik.enable=false"
+
+networks:
+  bing-network:
+    driver: bridge
+    internal: false  # Allow external access via proxy
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  workspace_data:
+    driver: local
+  pnpm_store:
+    driver: local
+  pip_cache:
+    driver: local
+  nullclaw_config:
+    driver: local
