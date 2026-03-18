@@ -645,6 +645,13 @@ export class DesktopSandboxHandle {
       case 'screenshot':
         const base64 = await this.screenshotBase64()
         return { success: true, output: `Screenshot taken (${base64.length} bytes)` }
+      case 'middle_click':
+        return this.leftClick(action.x, action.y, 'middle')
+      case 'wait':
+        await new Promise((resolve) => setTimeout(resolve, action.duration))
+        return { success: true, output: `Waited ${action.duration}ms` }
+      case 'terminal_command':
+        return this.runCommand(action.command, action.cwd, action.timeout)
       default:
         return { success: false, output: `Unknown action type: ${(action as any).type}` }
     }
