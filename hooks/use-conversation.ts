@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { v4 as uuidv4 } from 'uuid';
+import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 
 export interface Message {
   id: string;
@@ -125,8 +126,8 @@ export function useConversation() {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    const parser = createNDJSONParser();
     let fullContent = "";
-    let buffer = "";
     let isComplete = false;
     const lastUpdateTime = { current: 0 };
 
@@ -135,47 +136,48 @@ export function useConversation() {
         const { done, value } = await reader.read();
         if (done) break;
 
+        // Decode chunk and parse complete NDJSON lines
         const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk;
-
-        // Process complete lines
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
+        
+        // Handle SSE format (data: {...})
+        const lines = chunk.split('\n');
         for (const line of lines) {
           if (!line.trim() || !line.startsWith('data: ')) continue;
-
+          
           const data = line.slice(6).trim();
           if (data === '[DONE]') {
             isComplete = true;
             break;
           }
-
+          
+          // Parse the JSON data
           try {
-            const parsed = JSON.parse(data);
-            if (parsed.choices?.[0]?.delta?.content) {
-              fullContent += parsed.choices[0].delta.content;
+            const parsedObjects = parser.parse(data);
+            for (const parsed of parsedObjects) {
+              if (parsed.choices?.[0]?.delta?.content) {
+                fullContent += parsed.choices[0].delta.content;
 
-              // Throttle updates to once every 100ms
-              const now = Date.now();
-              if (now - lastUpdateTime.current > 100) {
-                lastUpdateTime.current = now;
-                setMessages(prev => {
-                  const existing = prev.find(m => m.id === messageId);
-                  if (existing) {
-                    return prev.map(m =>
-                      m.id === messageId
-                        ? { ...m, content: fullContent }
-                        : m
-                    );
-                  }
-                  return [...prev, {
-                    id: messageId,
-                    role: 'assistant',
-                    content: fullContent,
-                    timestamp: new Date().toISOString(),
-                  }];
-                });
+                // Throttle updates to once every 100ms
+                const now = Date.now();
+                if (now - lastUpdateTime.current > 100) {
+                  lastUpdateTime.current = now;
+                  setMessages(prev => {
+                    const existing = prev.find(m => m.id === messageId);
+                    if (existing) {
+                      return prev.map(m =>
+                        m.id === messageId
+                          ? { ...m, content: fullContent }
+                          : m
+                      );
+                    }
+                    return [...prev, {
+                      id: messageId,
+                      role: 'assistant',
+                      content: fullContent,
+                      timestamp: new Date().toISOString(),
+                    }];
+                  });
+                }
               }
             }
           } catch (e) {

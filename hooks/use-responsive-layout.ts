@@ -62,8 +62,8 @@ const defaultConfig: ResponsiveConfig = {
       sm: 90,  // Small phones
       md: 85,  // Standard phones
       lg: 85,  // Large phones
-      xl: 85,  // Tablets
-      '2xl': 85 // Desktop - allow more width
+      xl: 90,  // Tablets - more width available
+      '2xl': 95 // Desktop - maximize width usage
     },
     padding: {
       xs: '12px 16px',

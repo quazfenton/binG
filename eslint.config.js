@@ -28,11 +28,6 @@ export default tseslint.config(
         ...globals.browser,
         ...globals.node,
       },
-      parser: tseslint.parser,
-      parserOptions: {
-        projectService: true,
-        tsconfigRootDir: import.meta.dirname,
-      },
     },
   },
   js.configs.recommended,

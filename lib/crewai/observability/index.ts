@@ -6,7 +6,7 @@
  * @see https://docs.crewai.com/en/enterprise/features/traces.md
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 export interface TokenUsage {
   prompt_tokens: number;

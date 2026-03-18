@@ -11,7 +11,7 @@
  * - Real-time progress tracking
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import { EnhancedCodeOrchestrator } from '../enhanced-code-orchestrator';
 import { ProjectItem } from '../core/enhanced-prompt-engine';
 

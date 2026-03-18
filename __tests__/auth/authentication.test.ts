@@ -321,9 +321,9 @@ describe('Authentication System', () => {
     });
 
     it('should validate state parameter on callback', () => {
-      const storedState = 'abc123';
-      const receivedState = 'abc123';
-      const wrongState = 'xyz789';
+      const storedState: string = 'abc123';
+      const receivedState: string = 'abc123';
+      const wrongState: string = 'xyz789';
 
       expect(receivedState === storedState).toBe(true);
       expect(wrongState === storedState).toBe(false);
@@ -568,3 +568,4 @@ describe('Authentication System', () => {
     });
   });
 });
+

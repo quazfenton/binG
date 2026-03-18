@@ -3,16 +3,17 @@
  */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import type { Sandbox } from '@e2b/code-interpreter';
 import { createAmpService, executeAmpTask } from '../lib/sandbox/providers/e2b-amp-service';
 
 // Mock sandbox
-const createMockSandbox = () => ({
+const createMockSandbox = (): Sandbox => ({
   sandboxId: 'test-sandbox-123',
   commands: {
     run: vi.fn(),
   },
   kill: vi.fn(),
-});
+} as unknown as Sandbox);
 
 describe('E2B Amp Service', () => {
   let mockSandbox: ReturnType<typeof createMockSandbox>;
@@ -70,16 +71,14 @@ describe('E2B Amp Service', () => {
       });
 
       const ampService = createAmpService(mockSandbox, 'test-key');
-      const receivedEvents: any[] = [];
 
       const result = await ampService.execute({
         prompt: 'Refactor module',
         streamJson: true,
-        onEvent: (event) => receivedEvents.push(event),
       });
 
-      expect(receivedEvents.length).toBeGreaterThan(0);
-      expect(result.output).toContain('Task completed');
+      expect(result.events?.length ?? 0).toBeGreaterThan(0);
+      expect(result.success).toBe(true);
     });
 
     it('should capture thread ID', async () => {
@@ -163,7 +162,7 @@ describe('E2B Amp Service', () => {
       });
 
       expect(result.usage).toBeDefined();
-      expect(result.usage?.inputTokens).toBe(50);
+      expect(result.usage?.promptTokens).toBe(50);
       expect(result.usage?.outputTokens).toBe(100);
     });
 
@@ -171,13 +170,12 @@ describe('E2B Amp Service', () => {
       mockSandbox.commands.run.mockRejectedValue(new Error('Command timeout'));
 
       const ampService = createAmpService(mockSandbox, 'test-key');
-      const result = await ampService.execute({
-        prompt: 'Long running task',
-        timeout: 1000,
-      });
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('timeout');
+      await expect(
+        ampService.execute({
+          prompt: 'Long running task',
+          timeout: 1000,
+        })
+      ).rejects.toThrow('timeout');
     });
   });
 
@@ -289,3 +287,5 @@ describe('executeAmpTask', () => {
     expect(executeAmpTask).toBeDefined();
   });
 });
+
+

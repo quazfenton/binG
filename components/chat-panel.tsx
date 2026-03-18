@@ -189,14 +189,13 @@ export function ChatPanel({
         onScroll={handleScroll}
       >
         {messages.length === 0 && !hasUserInteracted && showWelcomeMessage && (
-          <div 
+          <div
             className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground pointer-events-none transition-opacity ease-in-out"
-            style={{ 
+            style={{
               opacity: isFading ? 0 : 0.25,
               transitionDuration: '4000ms'
             }}
           >
-            <p className="text-lg">Let's talk !</p>
             <p className="text-sm">Type a message or use voice input</p>
           </div>
         )}

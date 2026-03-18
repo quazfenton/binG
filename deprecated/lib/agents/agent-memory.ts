@@ -11,7 +11,7 @@
  * - Context retrieval
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 /**
  * Memory item

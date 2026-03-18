@@ -3,13 +3,7 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp, Terminal, CheckCircle, XCircle, Loader2, AlertCircle } from 'lucide-react';
 
-interface ToolInvocation {
-  toolCallId: string;
-  toolName: string;
-  state: 'partial-call' | 'call' | 'result';
-  args?: Record<string, any>;
-  result?: any;
-}
+import type { ToolInvocation } from '@/lib/types/tool-invocation';
 
 interface ToolInvocationCardProps {
   tool: ToolInvocation;
@@ -47,7 +41,8 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
           showProgress: true,
         };
       case 'result':
-        if (tool.result?.error) {
+        const result = tool.result as any;
+        if (result?.error) {
           return {
             icon: <XCircle className="h-3 w-3" />,
             label: 'Failed',
@@ -70,7 +65,7 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
 
   const config = getStatusConfig();
   const isToolCall = tool.toolName === 'execute_python' || tool.toolName === 'run_code';
-  const codeContent = tool.args?.code;
+  const codeContent = tool.args?.code as string | undefined;
 
   return (
     <div
@@ -97,7 +92,7 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
         <div className="flex items-center gap-2">
           {tool.state === 'result' && (
             <span className="text-[10px] opacity-50">
-              {tool.result?.error ? 'Error' : 'Success'}
+              {(tool.result as any)?.error ? 'Error' : 'Success'}
             </span>
           )}
           {expanded ? (
@@ -148,14 +143,14 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
               <span className="text-[10px] uppercase tracking-wider opacity-60">
                 Result
               </span>
-              {tool.result.error ? (
+              {(tool.result as any).error ? (
                 <div className="mt-1 rounded border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 p-2">
                   <div className="flex items-center gap-1 text-red-700 dark:text-red-300 text-xs font-medium mb-1">
                     <AlertCircle className="h-3 w-3" />
                     Execution Error
                   </div>
                   <pre className="whitespace-pre-wrap text-xs text-red-600 dark:text-red-400 font-mono">
-                    {tool.result.error}
+                    {(tool.result as any).error}
                   </pre>
                 </div>
               ) : (
@@ -164,9 +159,9 @@ export function ToolInvocationCard({ tool, compact = false }: ToolInvocationCard
                     <CheckCircle className="h-3 w-3" />
                     Execution Success
                   </div>
-                  {tool.result.output ? (
+                  {(tool.result as any).output ? (
                     <pre className="whitespace-pre-wrap text-xs text-emerald-600 dark:text-emerald-400 font-mono">
-                      {tool.result.output}
+                      {(tool.result as any).output}
                     </pre>
                   ) : (
                     <pre className="whitespace-pre-wrap text-xs text-emerald-600 dark:text-emerald-400 font-mono">

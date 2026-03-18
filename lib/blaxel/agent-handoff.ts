@@ -11,7 +11,7 @@
  * - Multi-agent workflows
  */
 
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 
 /**
  * Handoff state

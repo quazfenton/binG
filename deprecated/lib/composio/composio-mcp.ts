@@ -1,15 +1,22 @@
 /**
- * Composio MCP Integration
- * 
- * MCP (Model Context Protocol) is the RECOMMENDED way to integrate Composio
- * - Works with ANY LLM provider (Claude, GPT, Gemini, etc.)
- * - No provider-specific SDK dependencies
- * - Standardized protocol
- * - Better for multi-tenant deployments
- * 
- * Documentation: docs/sdk/composio-llms-full.txt
+ * Composio MCP Integration (DEPRECATED)
+ *
+ * This file is deprecated. Use the new implementation in:
+ * lib/mcp/architecture-integration.ts
+ *
+ * The new implementation provides:
+ * - Multi-strategy tool loading (tools.get, tools.list, session.tools, getRawComposioTools)
+ * - Toolkit filtering
+ * - Proper error handling and logging
+ * - AI SDK compatible tool format
+ *
+ * @deprecated Use getComposioMCPTools() from lib/mcp/architecture-integration.ts
  */
 
+// Re-export from new implementation for backward compatibility
+export { getComposioMCPTools } from '../../lib/mcp/architecture-integration'
+
+// Keep old exports for backward compatibility but mark as deprecated
 import { Composio } from '@composio/core';
 
 export interface ComposioMCPIntegration {
@@ -21,7 +28,7 @@ export interface ComposioMCPIntegration {
 }
 
 /**
- * Create Composio MCP integration for user
+ * @deprecated Use getComposioMCPTools() from lib/mcp/architecture-integration.ts
  */
 export async function createComposioMCPIntegration(
   userId: string,
@@ -29,6 +36,8 @@ export async function createComposioMCPIntegration(
     apiKey?: string;
   } = {}
 ): Promise<ComposioMCPIntegration> {
+  console.warn('[ComposioMCP] createComposioMCPIntegration is deprecated. Use getComposioMCPTools() from lib/mcp/architecture-integration.ts')
+  
   const composio = new Composio({
     apiKey: opts.apiKey || process.env.COMPOSIO_API_KEY,
   });
@@ -43,14 +52,16 @@ export async function createComposioMCPIntegration(
     mcpHeaders: mcpConfig.headers || {},
     session,
     userId,
-    toolsCount: 0, // Tools count not available in new API
+    toolsCount: 0,
   };
 }
 
 /**
- * Get MCP server info
+ * @deprecated Use getComposioMCPTools() from lib/mcp/architecture-integration.ts
  */
 export async function getComposioMCPServerInfo(userId: string) {
+  console.warn('[ComposioMCP] getComposioMCPServerInfo is deprecated. Use getComposioMCPTools() from lib/mcp/architecture-integration.ts')
+  
   const composio = new Composio();
   const session = await composio.create(userId);
 
@@ -66,27 +77,16 @@ export async function getComposioMCPServerInfo(userId: string) {
 }
 
 /**
- * Get available MCP tools for user
- */
-export async function getComposioMCPTools(userId: string) {
-  const composio = new Composio();
-  const session = await composio.create(userId);
-
-  // New API doesn't expose tools directly
-  return [];
-}
-
-/**
- * Search MCP tools
+ * @deprecated Use getComposioMCPTools() from lib/mcp/architecture-integration.ts
  */
 export async function searchComposioMCPTools(
   userId: string,
   query: string,
   options?: { toolkit?: string }
 ) {
-  const composio = new Composio();
-  const session = await composio.create(userId);
+  console.warn('[ComposioMCP] searchComposioMCPTools is deprecated. Use getComposioMCPTools() with toolkit filter from lib/mcp/architecture-integration.ts')
   
-  // New API doesn't expose tools directly
-  return [];
+  // Delegate to new implementation with toolkit filter
+  const toolkits = options?.toolkit ? [options.toolkit] : undefined
+  return getComposioMCPTools(userId, toolkits)
 }
