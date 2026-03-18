@@ -1426,7 +1426,7 @@ async function handleGatewayStreaming(params: {
 
           // Decode chunk and parse complete NDJSON lines
           const chunk = decoder.decode(value, { stream: true });
-          
+
           // Parse NDJSON and re-emit as SSE
           const events = parser.parse(chunk);
           for (const event of events) {
@@ -1434,6 +1434,16 @@ async function handleGatewayStreaming(params: {
             const eventType = event.type || 'message';
             const sseEvent = `event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`;
             controller.enqueue(encoder.encode(sseEvent));
+          }
+
+          // Handle non-JSON chunks (errors, plain text)
+          if (events.length === 0 && chunk.trim()) {
+            const trimmed = chunk.trim();
+            if (!trimmed.startsWith('data:') && !trimmed.startsWith('event:')) {
+              // Forward as SSE data event
+              const sseEvent = `event: message\ndata: ${JSON.stringify({ text: trimmed })}\n\n`;
+              controller.enqueue(encoder.encode(sseEvent));
+            }
           }
         }
       } catch (error) {

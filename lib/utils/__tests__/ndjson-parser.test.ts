@@ -44,10 +44,49 @@ describe('NDJSON Parser', () => {
     it('should handle whitespace trimming', () => {
       const parser = createNDJSONParser();
       const result = parser.parse('  {"id":1}  \n  {"id":2}  \n');
-      
+
       expect(result).toHaveLength(2);
       expect(result[0]).toEqual({ id: 1 });
       expect(result[1]).toEqual({ id: 2 });
+    });
+
+    it('should handle braces/brackets inside string values', () => {
+      const parser = createNDJSONParser();
+      const result = parser.parse('{"text":"Hello } world [test]"}\n');
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({ text: 'Hello } world [test]' });
+    });
+
+    it('should handle multiple braces/brackets in strings', () => {
+      const parser = createNDJSONParser();
+      const json = '{"code":"function test() { return [1,2,3]; }","regex":"/^[a-z]+$/"}\n';
+      const result = parser.parse(json);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        code: 'function test() { return [1,2,3]; }',
+        regex: '/^[a-z]+$/',
+      });
+    });
+
+    it('should handle escaped characters in strings', () => {
+      const parser = createNDJSONParser();
+      const result = parser.parse('{"text":"Line1\\nLine2\\tTabbed"}\n');
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({ text: 'Line1\nLine2\tTabbed' });
+    });
+
+    it('should handle nested JSON strings with braces', () => {
+      const parser = createNDJSONParser();
+      const json = '{"message":"Error: { \\"code\\": 404, \\"text\\": \\"Not found\\" }"}\n';
+      const result = parser.parse(json);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({
+        message: 'Error: { "code": 404, "text": "Not found" }',
+      });
     });
   });
 

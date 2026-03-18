@@ -6,6 +6,7 @@ import { parsePatch, applyPatch } from 'diff';
 /**
  * Extract user identity from server-side headers
  * CRITICAL: Never use buildApiHeaders() in server routes - it's client-only
+ * SECURITY: Reject requests with invalid or missing user IDs to prevent anonymous access
  */
 function getUserIdFromRequest(request: NextRequest): string {
   // Try multiple header sources for user identity
@@ -13,13 +14,17 @@ function getUserIdFromRequest(request: NextRequest): string {
     request.headers.get('x-user-id') ||
     request.headers.get('x-auth-user-id') ||
     request.headers.get('x-vercel-user-id') ||
-    request.headers.get('x-authenticated-user-id') ||
-    'default-user';
+    request.headers.get('x-authenticated-user-id');
+
+  // SECURITY: Reject requests without valid user ID
+  if (!userId) {
+    throw new Error('Authentication required: Missing user ID');
+  }
 
   // Validate userId format (prevent injection)
   if (!/^[a-zA-Z0-9_:-]+$/.test(userId)) {
-    console.warn('[DiffsApply] Invalid user ID format, using default:', userId);
-    return 'default-user';
+    console.warn('[DiffsApply] Invalid user ID format:', userId);
+    throw new Error('Invalid user ID format');
   }
 
   return userId;
@@ -27,18 +32,23 @@ function getUserIdFromRequest(request: NextRequest): string {
 
 /**
  * Extract session ID from request with validation
+ * SECURITY: Reject requests with invalid session IDs to prevent unauthorized access
  */
 function getSessionId(request: NextRequest, bodySessionId?: string): string {
   const sessionId =
     bodySessionId ||
     request.headers.get('x-session-id') ||
-    request.headers.get('x-conversation-id') ||
-    'default';
+    request.headers.get('x-conversation-id');
+
+  // SECURITY: Require valid session ID
+  if (!sessionId) {
+    throw new Error('Session ID required');
+  }
 
   // Validate session ID format
   if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-    console.warn('[DiffsApply] Invalid session ID format, using default:', sessionId);
-    return 'default';
+    console.warn('[DiffsApply] Invalid session ID format:', sessionId);
+    throw new Error('Invalid session ID format');
   }
 
   return sessionId;

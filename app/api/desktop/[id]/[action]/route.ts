@@ -2,20 +2,53 @@
  * Desktop API Endpoint - Dynamic Route for /api/desktop/:id/:action
  *
  * Handles POST operations for desktop actions (screenshot, terminal, computer use)
+ * 
+ * SECURITY: All endpoints require authentication and enforce ownership verification
+ * to prevent IDOR (Insecure Direct Object Reference) attacks.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { e2bDesktopProvider, type DesktopAction } from '@/lib/computer/e2b-desktop-provider-enhanced';
+import { verifyJWT } from '@/lib/security/jwt-auth';
 import { activeDesktops } from '../route';
 
 /**
+ * Extract userId from request authorization header
+ */
+async function getUserIdFromRequest(request: NextRequest): Promise<string | null> {
+  const authHeader = request.headers.get('authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+
+  const token = authHeader.substring(7);
+  try {
+    const result = await verifyJWT(token);
+    if (result.valid && result.payload) {
+      return result.payload.userId;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verify user owns the desktop session
+ */
+function verifyOwnership(session: any, userId: string): boolean {
+  return session && session.userId === userId;
+}
+
+/**
  * POST /api/desktop/:id/:action
- * Execute action on desktop sandbox
- * 
+ * Execute action on desktop sandbox (requires authentication + ownership)
+ *
  * Actions:
  * - action - Execute computer use action
  * - screenshot - Take screenshot
  * - terminal - Execute terminal command
+ * - agent - Run agent loop
  */
 export async function POST(
   request: NextRequest,
@@ -24,12 +57,29 @@ export async function POST(
   try {
     const { id, action } = await params;
 
+    // Require authentication
+    const userId = await getUserIdFromRequest(request);
+    if (!userId) {
+      return NextResponse.json(
+        { success: false, error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
     // Check if desktop exists
     const activeDesktop = activeDesktops.get(id);
     if (!activeDesktop) {
       return NextResponse.json(
         { success: false, error: 'Desktop not found or expired' },
         { status: 404 }
+      );
+    }
+
+    // SECURITY: Verify ownership
+    if (!verifyOwnership(activeDesktop, userId)) {
+      return NextResponse.json(
+        { success: false, error: 'Access denied: You do not own this desktop session' },
+        { status: 403 }
       );
     }
 

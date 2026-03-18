@@ -174,9 +174,11 @@ export default function MessageBubble({
       if (!response.ok || !payload?.success) {
         throw new Error(payload?.error || `Failed to deny edits (${response.status})`);
       }
-      const txStatus = payload?.data?.transaction?.status;
-      const conflicts = payload?.data?.conflicts || [];
-      const revertedPaths = payload?.data?.revertedPaths || [];
+      
+      // SECURITY: Add explicit checks for expected response structure
+      const txStatus = payload?.data?.transaction?.status ?? 'unknown';
+      const conflicts = Array.isArray(payload?.data?.conflicts) ? payload.data.conflicts : [];
+      const revertedPaths = Array.isArray(payload?.data?.revertedPaths) ? payload.data.revertedPaths : [];
 
       if (txStatus === "reverted_with_conflicts") {
         setFileEditDecision("reverted_with_conflicts");

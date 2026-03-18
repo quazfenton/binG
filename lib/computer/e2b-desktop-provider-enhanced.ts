@@ -622,6 +622,84 @@ export class DesktopSandboxHandle {
   }
 
   /**
+   * Execute desktop action (mouse, keyboard, screenshot)
+   */
+  async executeAction(action: DesktopAction): Promise<ToolResult> {
+    switch (action.type) {
+      case 'mouse_move':
+        return this.moveMouse(action.x, action.y)
+      case 'left_click':
+        return this.leftClick(action.x, action.y)
+      case 'right_click':
+        return this.rightClick(action.x, action.y)
+      case 'double_click':
+        return this.doubleClick(action.x, action.y)
+      case 'drag':
+        return this.dragMouse(action.startX, action.startY, action.endX, action.endY)
+      case 'scroll':
+        return this.scroll(action.scrollY > 0 ? 'down' : 'up', Math.abs(action.scrollY))
+      case 'type':
+        return this.type(action.text)
+      case 'keypress':
+        return this.pressKeys(action.keys)
+      case 'screenshot':
+        const base64 = await this.screenshotBase64()
+        return { success: true, output: `Screenshot taken (${base64.length} bytes)` }
+      default:
+        return { success: false, output: `Unknown action type: ${(action as any).type}` }
+    }
+  }
+
+  /**
+   * Execute terminal command in the desktop sandbox
+   */
+  async runCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
+    try {
+      const result = await this.sandbox.commands.run(command, {
+        cwd,
+        timeout,
+      })
+      return {
+        success: result.exitCode === 0,
+        output: result.stdout || result.stderr,
+        exitCode: result.exitCode,
+      }
+    } catch (error: any) {
+      console.error('[E2B Desktop] Command error:', error)
+      return {
+        success: false,
+        output: error.message,
+        exitCode: -1,
+      }
+    }
+  }
+
+  /**
+   * Run agent loop with task and iterations
+   * TODO: Implement full agent iteration logic
+   */
+  async *runAgentLoop(task: string, options?: { maxIterations?: number }): AsyncGenerator<any> {
+    // Placeholder implementation - yields task acknowledgment
+    yield {
+      type: 'agent_start',
+      task,
+      maxIterations: options?.maxIterations || 50,
+    }
+
+    // TODO: Implement full agent loop with:
+    // 1. Take screenshot
+    // 2. Send to LLM with task
+    // 3. Parse tool calls
+    // 4. Execute actions
+    // 5. Repeat until task complete or max iterations
+
+    yield {
+      type: 'agent_complete',
+      message: 'Agent loop not yet fully implemented. Use /action endpoint for individual actions.',
+    }
+  }
+
+  /**
    * Kill the desktop sandbox
    */
   async kill(): Promise<void> {

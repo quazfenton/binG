@@ -60,23 +60,34 @@ async function getUserPreferences(userId: string): Promise<Record<string, boolea
 }
 
 /**
- * Save user preference to database
+ * Save user preferences to database (atomic batch update)
  */
-async function saveUserPreference(
+async function saveUserPreferences(
   userId: string,
-  key: string,
-  value: boolean
+  preferences: Record<string, boolean>
 ): Promise<void> {
   try {
     const db = getDatabase();
 
-    // Upsert preference using INSERT OR REPLACE
-    db.prepare(
-      `INSERT OR REPLACE INTO user_preferences (user_id, preference_key, preference_value, updated_at)
-       VALUES (?, ?, ?, CURRENT_TIMESTAMP)`
-    ).run([userId, key, JSON.stringify(value)]);
+    // Use transaction for atomic batch update
+    const transaction = db.transaction((updates: Array<[string, string]>) => {
+      for (const [key, value] of updates) {
+        db.prepare(
+          `INSERT OR REPLACE INTO user_preferences (user_id, preference_key, preference_value, updated_at)
+           VALUES (?, ?, ?, CURRENT_TIMESTAMP)`
+        ).run([userId, key, value]);
+      }
+    });
+
+    // Convert preferences to array for transaction
+    const updates: Array<[string, string]> = Object.entries(preferences).map(
+      ([key, value]) => [key, JSON.stringify(value)]
+    );
+
+    // Execute transaction
+    transaction(updates);
   } catch (error) {
-    console.error('[UserPreferences] Failed to save preference:', error);
+    console.error('[UserPreferences] Failed to save preferences:', error);
     throw error;
   }
 }
@@ -105,7 +116,7 @@ export const GET = withAuth(
 
 /**
  * POST /api/user/preferences
- * Save a user preference override
+ * Save user preference overrides (atomic batch update)
  *
  * Body: { [key: string]: boolean }
  * Example: { "OPENCODE_ENABLED": true }
@@ -123,9 +134,9 @@ export const POST = withAuth(
         );
       }
 
-      // Validate and save each key-value pair
+      // Validate all keys and values first
       const allowedKeys = ['OPENCODE_ENABLED', 'NULLCLAW_ENABLED'];
-      const updates: Record<string, boolean> = {};
+      const validatedUpdates: Record<string, boolean> = {};
 
       for (const [key, value] of Object.entries(body)) {
         // Only allow specific keys
@@ -144,13 +155,15 @@ export const POST = withAuth(
           );
         }
 
-        updates[key] = value;
-        await saveUserPreference(auth.userId || 'anonymous', key, value);
+        validatedUpdates[key] = value;
       }
+
+      // Save all preferences atomically in single transaction
+      await saveUserPreferences(auth.userId || 'anonymous', validatedUpdates);
 
       return NextResponse.json({
         success: true,
-        preferences: updates,
+        preferences: validatedUpdates,
         message: 'Preferences saved successfully',
       });
     } catch (error: any) {
