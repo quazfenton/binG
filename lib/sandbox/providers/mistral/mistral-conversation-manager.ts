@@ -73,6 +73,7 @@ export class MistralConversationManager {
       agentId,
       inputs: normalizedInputs as any,
       store: options?.store ?? true,
+      handoffExecution: options?.handoffExecution ?? 'server',
       ...(options?.completionArgs && { completionArgs: options.completionArgs }),
     })
 

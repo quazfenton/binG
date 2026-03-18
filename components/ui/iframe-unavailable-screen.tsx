@@ -73,11 +73,24 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
     }
   }, [autoRetryCount, maxRetries]);
 
-  const handleCopyUrl = () => {
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    toast.success('URL copied to clipboard');
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopyUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      toast.success('URL copied to clipboard');
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error: any) {
+      console.error('Failed to copy URL to clipboard:', error.message);
+      toast.error('Failed to copy URL. Please copy it manually.');
+      // Fallback: select the URL text if available
+      const urlElement = document.getElementById('preview-url-text');
+      if (urlElement) {
+        const range = document.createRange();
+        range.selectNode(urlElement);
+        window.getSelection()?.removeAllRanges();
+        window.getSelection()?.addRange(range);
+      }
+    }
   };
 
   const handleRetry = () => {
@@ -90,8 +103,18 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
   const handleOpenExternal = () => {
     if (onOpenExternal) {
       onOpenExternal();
-    } else {
-      window.open(url, '_blank', 'noopener,noreferrer');
+    } else if (url) {
+      // Validate URL scheme before opening (prevent javascript:, data:, etc.)
+      try {
+        const urlObj = new URL(url);
+        if (urlObj.protocol === 'http:' || urlObj.protocol === 'https:') {
+          window.open(url, '_blank', 'noopener,noreferrer');
+        } else {
+          console.warn('[iframe-unavailable-screen] Blocked unsafe URL:', url);
+        }
+      } catch {
+        console.warn('[iframe-unavailable-screen] Invalid URL:', url);
+      }
     }
   };
 

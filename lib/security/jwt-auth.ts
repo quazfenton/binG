@@ -178,11 +178,11 @@ export async function verifyToken(
       };
     }
     
-    // Validate required userId claim
-    if (!payload.userId) {
+    // Validate required userId claim with strict type checking
+    if (typeof payload.userId !== 'string' || payload.userId.trim().length === 0) {
       return {
         valid: false,
-        error: 'Token missing required userId claim',
+        error: 'Token contains invalid userId claim',
       };
     }
     

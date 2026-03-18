@@ -19,19 +19,35 @@ async function getUserPreferences(userId: string): Promise<Record<string, boolea
   try {
     const db = getDatabase();
 
-    // Check if user has preferences record
-    const existing = db.prepare(
-      'SELECT preferences FROM user_preferences WHERE user_id = ?'
-    ).get([userId]) as any;
+    // Get all preferences as key-value pairs
+    const rows = db.prepare(
+      'SELECT preference_key, preference_value FROM user_preferences WHERE user_id = ?'
+    ).all([userId]) as any[];
 
-    if (existing?.preferences) {
-      return JSON.parse(existing.preferences);
+    if (!rows || rows.length === 0) {
+      // Return defaults
+      return {
+        OPENCODE_ENABLED: false,
+        NULLCLAW_ENABLED: false,
+      };
     }
 
-    // Return defaults
+    // Convert rows to object
+    const preferences: Record<string, boolean> = {};
+    for (const row of rows) {
+      try {
+        preferences[row.preference_key] = JSON.parse(row.preference_value);
+      } catch {
+        // If parsing fails, try as string boolean
+        preferences[row.preference_key] = row.preference_value === 'true';
+      }
+    }
+
+    // Ensure defaults exist
     return {
       OPENCODE_ENABLED: false,
       NULLCLAW_ENABLED: false,
+      ...preferences,
     };
   } catch (error) {
     console.error('[UserPreferences] Failed to get preferences:', error);
@@ -54,31 +70,11 @@ async function saveUserPreference(
   try {
     const db = getDatabase();
 
-    // Get existing preferences
-    const existing = db.prepare(
-      'SELECT preferences FROM user_preferences WHERE user_id = ?'
-    ).get([userId]) as any;
-
-    let preferences: Record<string, boolean> = {
-      OPENCODE_ENABLED: false,
-      NULLCLAW_ENABLED: false,
-    };
-
-    if (existing?.preferences) {
-      preferences = JSON.parse(existing.preferences);
-    }
-
-    // Update the specific key
-    preferences[key] = value;
-
-    // Upsert preferences
+    // Upsert preference using INSERT OR REPLACE
     db.prepare(
-      `INSERT INTO user_preferences (user_id, preferences, updated_at)
-       VALUES (?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(user_id) DO UPDATE SET
-         preferences = excluded.preferences,
-         updated_at = CURRENT_TIMESTAMP`
-    ).run([userId, JSON.stringify(preferences)]);
+      `INSERT OR REPLACE INTO user_preferences (user_id, preference_key, preference_value, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)`
+    ).run([userId, key, JSON.stringify(value)]);
   } catch (error) {
     console.error('[UserPreferences] Failed to save preference:', error);
     throw error;

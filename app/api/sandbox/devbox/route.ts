@@ -48,10 +48,10 @@ function checkRateLimit(userId: string): { allowed: boolean; remaining: number; 
 export async function POST(req: NextRequest) {
   // Initialize variables that need to be accessed in catch block
   let authResult: Awaited<ReturnType<typeof resolveRequestAuth>> | null = null;
-  let template = 'node';
+  let template: string = 'node';
   let validTemplates: string[] = [];
   let detail = '';
-  
+
   try {
     // SECURITY: Require authentication - no anonymous sandbox creation allowed
     authResult = await resolveRequestAuth(req, { allowAnonymous: false });
@@ -76,7 +76,10 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { files, template = 'node' } = body;
+    const { files, template: requestedTemplate = 'node' } = body;
+    
+    // Assign to outer-scoped template variable (don't shadow)
+    template = requestedTemplate;
 
     if (!files || typeof files !== 'object') {
       return NextResponse.json(

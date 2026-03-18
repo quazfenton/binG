@@ -100,13 +100,18 @@ export function useIframeLoader({
   const handleLoad = useCallback((newUrl: string) => {
     if (!newUrl) return;
 
+    // Only reset retry count if this is a completely new URL (not a retry)
+    const isNewUrl = newUrl !== currentUrlRef.current;
+    
     // Reset state
     setIsLoading(true);
     setIsLoaded(false);
     setIsFailed(false);
     setFailureReason(null);
     setErrorMessage(null);
-    setRetryCount(0);
+    if (isNewUrl) {
+      setRetryCount(0);  // Only reset on new URL, not retries
+    }
     setIsUsingFallback(false);
     setFallbackUrl(null);
     currentUrlRef.current = newUrl;
@@ -238,12 +243,12 @@ export function useIframeLoader({
     };
   }, []);
 
-  // Auto-load when URL changes
+  // Auto-load when URL changes (only trigger on actual URL change, not state changes)
   useEffect(() => {
-    if (url) {
+    if (url && url !== currentUrlRef.current) {
       handleLoad(url);
     }
-  }, [url, handleLoad]);
+  }, [url]); // Only depend on URL, not handleLoad
 
   return {
     isLoading,
