@@ -5,6 +5,7 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { extractSessionIdFromPath } from '@/lib/virtual-filesystem/scope-utils';
 import { fileContentSchema, languageSchema } from '@/lib/validation/schemas';
+import { resolveFilesystemOwnerWithFallback } from '../utils';
 
 export const runtime = 'nodejs';
 
@@ -39,13 +40,23 @@ const writeRequestSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    // SECURITY: Require authentication for write operations
-    const authResult = await resolveRequestAuth(req, { allowAnonymous: false });
+    // Resolve owner: authenticated users via JWT/session, anonymous via x-anonymous-session-id header
+    const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
     if (!authResult.success || !authResult.userId) {
-      return NextResponse.json(
-        { error: 'Authentication required for file write operations' },
-        { status: 401 }
-      );
+      // Fallback: resolve via resolveFilesystemOwner (checks header + cookie)
+      const fallback = await resolveFilesystemOwnerWithFallback(req, {
+        route: 'write',
+        requestId: Math.random().toString(36).slice(2, 8),
+      });
+      if (!fallback.ownerId) {
+        return NextResponse.json(
+          { error: 'Authentication required for file write operations' },
+          { status: 401 }
+        );
+      }
+      // Patch authResult so downstream code works
+      (authResult as any).success = true;
+      (authResult as any).userId = fallback.ownerId;
     }
 
     const body = await req.json();

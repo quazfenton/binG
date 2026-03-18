@@ -319,11 +319,23 @@ export function useVirtualFilesystem(
     // Invalidate snapshot cache on write
     invalidateSnapshotCache();
     
-    // OPFS-first strategy
+    // OPFS write-through strategy: write to OPFS for instant local reads,
+    // then also write to server so listDirectory (server-backed) stays in sync
     if (useOPFS && !offlineMode) {
-      // Write to OPFS instantly
+      // Write to OPFS instantly for local cache
       const opfsFile = await opfsAdapter.writeFile('current-user', filePath, content);
       log(`writeFile: OPFS write complete for "${filePath}", version=${opfsFile.version}`);
+      
+      // Also write to server so list/snapshot APIs reflect the change
+      try {
+        await request<any>('/api/filesystem/write', {
+          method: 'POST',
+          body: JSON.stringify({ path: filePath, content, source: 'use-virtual-filesystem-opfs' }),
+        });
+        log(`writeFile: server write-through complete for "${filePath}"`);
+      } catch (err) {
+        logWarn(`writeFile: server write-through failed for "${filePath}", OPFS has the data`, err);
+      }
       
       // Update local state immediately
       await listDirectory(currentPathRef.current);
@@ -349,7 +361,7 @@ export function useVirtualFilesystem(
     log(`writeFile: server write complete for "${data.path}", version=${data.version}`);
     await listDirectory(currentPathRef.current);
     return data;
-  }, [listDirectory, request, useOPFS, offlineMode, log]);
+  }, [listDirectory, request, useOPFS, offlineMode, log, logWarn]);
 
   const deletePath = useCallback(async (targetPath: string) => {
     // Invalidate snapshot cache on delete

@@ -14,7 +14,7 @@ export interface FilesystemOwnerResolution {
  * Helper to add anonymous session cookie to response
  * Call this for ALL routes that use resolveFilesystemOwner
  */
-response.headers.set('set-cookie', `anon-session-id=${owner.anonSessionId}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly; Secure`)
+export function withAnonSessionCookie<T extends NextResponse>(
   response: T,
   owner: FilesystemOwnerResolution
 ): T {
@@ -49,7 +49,21 @@ export async function resolveFilesystemOwner(req: NextRequest): Promise<Filesyst
     };
   }
 
-  // SECURITY: Use existing anonymous session ID from cookie if present
+  // PRIORITY 1: Check x-anonymous-session-id header (sent by client via buildApiHeaders)
+  // This is the primary anonymous identity mechanism and must match what resolveRequestAuth uses
+  const headerAnonId = req.headers.get('x-anonymous-session-id')?.trim();
+  if (headerAnonId && headerAnonId.length <= 128) {
+    const normalized = headerAnonId.replace(/[^a-zA-Z0-9:_-]/g, '');
+    if (normalized) {
+      return {
+        ownerId: `anon:${normalized}`,
+        source: 'anonymous',
+        isAuthenticated: false,
+      };
+    }
+  }
+
+  // PRIORITY 2: Use existing anonymous session ID from cookie if present
   const anonymousSessionId = req.cookies.get('anon-session-id')?.value;
 
   if (anonymousSessionId) {
