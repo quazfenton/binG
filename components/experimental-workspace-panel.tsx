@@ -357,7 +357,7 @@ export function ExperimentalWorkspacePanel() {
       }
     };
     fetchSnapshot();
-  }, [vfs]);
+  }, [vfs.getSnapshot]);
 
   // Build file tree from filesystem
   const fileTree = React.useMemo(() => {
