@@ -183,6 +183,9 @@ describe('JWT Auth Flow Integration', () => {
     it('should reject tokens with missing required fields', async () => {
       // The generateToken function requires userId, so we test by creating directly with jose
       const { SignJWT } = await import('jose');
+      const testSecret = process.env.JWT_SECRET || 'fallback-test-secret-min-16-chars';
+      const testIssuer = process.env.JWT_ISSUER || 'test-bing';
+      const testAudience = process.env.JWT_AUDIENCE || 'test-bing-app';
       
       // Create a token with proper structure but missing userId (use our test secret)
       const testSecret = 'test-secret-key-for-integration-testing-min-16-chars';

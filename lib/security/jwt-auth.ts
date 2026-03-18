@@ -5,7 +5,8 @@
  * using the jose library for cryptographic operations.
  */
 
-import { SignJWT, jwtVerify, JWTPayload } from 'jose';
+import { SignJWT, jwtVerify, JWTPayload, errors } from 'jose';
+const { JWTExpired, JWTInvalid, JOSEError } = errors;
 import { createSecureHash } from './crypto-utils';
 
 /**
@@ -177,28 +178,43 @@ export async function verifyToken(
       };
     }
     
+    // Validate required userId claim
+    if (!payload.userId) {
+      return {
+        valid: false,
+        error: 'Token missing required userId claim',
+      };
+    }
+    
     return {
       valid: true,
       payload: payload as TokenPayload,
     };
   } catch (error) {
-    if (error instanceof Error) {
-      if (error.message.includes('expired')) {
-        return {
-          valid: false,
-          error: 'Token has expired',
-          expired: true,
-        };
-      }
-      
-      if (error.message.includes('invalid')) {
+    if (error instanceof JWTExpired) {
+      return {
+        valid: false,
+        error: 'Token has expired',
+        expired: true,
+      };
+    }
+
+    if (error instanceof JWTInvalid || error instanceof JOSEError) {
+      const err = error as InstanceType<typeof JOSEError>;
+      if (err.code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') {
         return {
           valid: false,
           error: 'Invalid token signature',
         };
       }
+      if (err.code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') {
+        return {
+          valid: false,
+          error: 'Token claim validation failed',
+        };
+      }
     }
-    
+
     return {
       valid: false,
       error: error instanceof Error ? error.message : 'Unknown verification error',
