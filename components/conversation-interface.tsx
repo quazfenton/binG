@@ -559,6 +559,24 @@ export default function ConversationInterface() {
         if (isVoiceEnabled && voiceService.getSettings().autoSpeak) {
           voiceService.speak(lastMessage.content).catch(console.error);
         }
+
+        if (lastMessage.content.includes('[CONTINUE_REQUESTED]')) {
+          console.log('[Continuance] Auto-triggering next request');
+          toast.info('Continuance requested by AI - sending next message');
+          
+          setTimeout(() => {
+            const fakeEvent = {
+              preventDefault: () => {},
+              currentTarget: { reset: () => {} },
+            } as React.FormEvent<HTMLFormElement>;
+            
+            setInput('Please continue with the remaining tasks or improvements.');
+            
+            setTimeout(() => {
+              handleSubmit(fakeEvent);
+            }, 50);
+          }, 1000);
+        }
       }
     }
   }, [
@@ -568,7 +586,9 @@ export default function ConversationInterface() {
     currentConversationId,
     filesystemSessionId,
     isVoiceEnabled,
-    getAllChats, // Added dependency
+    getAllChats,
+    handleSubmit,
+    setInput
   ]);
 
   // Extract and persist streamed COMMANDS blocks into a per-file map
@@ -1188,7 +1208,22 @@ export default function ConversationInterface() {
     }
     const failedCount = Object.values(failed).reduce((sum, list) => sum + list.length, 0);
     if (failedCount > 0) {
-      toast.error(`Failed to apply ${failedCount} diff${failedCount === 1 ? "" : "s"}.`);
+      // Group errors by type for better user feedback
+      const allErrors = Object.values(failed).flat();
+      const searchNotFoundErrors = allErrors.filter(e => e.includes('search block not found') || e.includes('Patch could not be applied'));
+      const fileNotExistErrors = allErrors.filter(e => e.includes('file does not exist') || e.includes('not found') || e.includes('ENOENT'));
+      const otherErrors = allErrors.filter(e => !searchNotFoundErrors.includes(e) && !fileNotExistErrors.includes(e));
+      
+      if (searchNotFoundErrors.length > 0) {
+        toast.error(`Diff failed: ${searchNotFoundErrors.length} edit(s) - search text not found. The file may have changed since the diff was generated.`);
+      }
+      if (fileNotExistErrors.length > 0) {
+        toast.error(`Diff failed: ${fileNotExistErrors.length} file(s) don't exist. Use WRITE to create new files.`);
+      }
+      if (otherErrors.length > 0) {
+        toast.error(`File operation failed: ${otherErrors.length} error(s). Check console for details.`);
+        console.error('[Diff Errors]', otherErrors);
+      }
     }
   }, [filesystemScopePath, filesystemSessionId]);
 

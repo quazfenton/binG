@@ -1494,7 +1494,7 @@ async function buildWorkspaceSessionContext(
   scopePath?: string,
   options?: { useContextPack?: boolean; maxTokens?: number }
 ): Promise<string> {
-  // Use context pack if requested and available
+  // Use context pack if requested and available - includes file contents!
   if (options?.useContextPack) {
     try {
       const contextPack = await contextPackService.generateContextPack(ownerId, scopePath || '/', {
@@ -1517,7 +1517,7 @@ async function buildWorkspaceSessionContext(
       });
       
       return [
-        `=== WORKSPACE CONTEXT (Context Pack) ===`,
+        `=== WORKSPACE CONTEXT (Context Pack - Full File Contents) ===`,
         `Root: ${scopePath || '/'}`,
         `Files: ${contextPack.fileCount}`,
         `Directories: ${contextPack.directoryCount}`,
@@ -1528,34 +1528,85 @@ async function buildWorkspaceSessionContext(
       ].filter(Boolean).join('\n');
     } catch (error: unknown) {
       console.warn('[Chat] Context pack generation failed, falling back to basic context:', error);
-      // Fall through to basic context
+      // Fall through to enhanced context with key file contents
     }
   }
   
-  // Basic workspace context (existing implementation)
+  // Enhanced workspace context with key file contents for editing
   try {
     const snapshot = await virtualFilesystem.exportWorkspace(ownerId);
     const scopedFiles = scopePath
       ? snapshot.files.filter((file) => file.path === scopePath || file.path.startsWith(`${scopePath}/`))
       : snapshot.files;
+    
     if (scopedFiles.length === 0) {
       return 'Workspace is currently empty.';
     }
 
-    const MAX_PATHS = 120;
-    const filePaths = scopedFiles
+    // Identify key files that might need editing (source code, config, etc.)
+    const keyExtensions = ['.ts', '.tsx', '.js', '.jsx', '.json', '.py', '.vue', '.svelte', '.html', '.css', '.md', '.yaml', '.yml', 'Dockerfile', 'docker-compose.yml', '.env.example'];
+    const keyFiles = scopedFiles
+      .filter(f => keyExtensions.some(ext => f.path.toLowerCase().endsWith(ext) || f.path.toLowerCase().includes('dockerfile') || f.path.toLowerCase().includes('.env')))
+      .sort((a, b) => a.path.localeCompare(b.path))
+      .slice(0, 30); // Limit to 30 key files to avoid token explosion
+
+    const MAX_FILE_SIZE = 8000; // Max chars per file to include
+    const fileContents: string[] = [];
+    
+    // Read files in parallel for better performance
+    const fileReadResults = await Promise.allSettled(
+      keyFiles.map(async (file) => {
+        const fileData = await virtualFilesystem.readFile(ownerId, file.path);
+        const content = fileData.content || '';
+        const truncatedContent = content.length > MAX_FILE_SIZE 
+          ? content.slice(0, MAX_FILE_SIZE) + '\n\n[...truncated...]'
+          : content;
+        return {
+          path: file.path,
+          content: truncatedContent,
+          success: true
+        };
+      })
+    );
+    
+    let failedReads = 0;
+    for (const result of fileReadResults) {
+      if (result.status === 'fulfilled') {
+        const { path, content } = result.value;
+        fileContents.push(
+          `### FILE: ${path}`,
+          '```' + (path.endsWith('.json') ? 'json' : path.endsWith('.ts') || path.endsWith('.tsx') ? 'typescript' : path.endsWith('.py') ? 'python' : ''),
+          content,
+          '```'
+        );
+      } else {
+        failedReads++;
+      }
+    }
+    if (failedReads > 0) {
+      fileContents.push(`\n(${failedReads} additional files could not be read)`);
+    }
+
+    // Also include file tree for remaining files
+    const remainingFiles = scopedFiles
+      .filter(f => !keyFiles.includes(f))
       .map((file) => file.path)
       .sort((a, b) => a.localeCompare(b))
-      .slice(0, MAX_PATHS);
+      .slice(0, 100);
 
-    const clipped = scopedFiles.length > MAX_PATHS;
+    const clipped = scopedFiles.length > 130;
     return [
+      `=== WORKSPACE CONTEXT (Files with Contents + Tree) ===`,
       `Workspace root: ${snapshot.root}`,
       `Workspace version: ${snapshot.version}`,
       scopePath ? `Active scope: ${scopePath}` : '',
-      `Files (${scopedFiles.length} total):`,
-      ...filePaths.map((path) => `- ${path}`),
-      clipped ? `- ... (${scopedFiles.length - MAX_PATHS} more files)` : '',
+      `Key source files (${keyFiles.length} - full contents for editing):`,
+      '',
+      ...fileContents,
+      '',
+      remainingFiles.length > 0 ? `Other files (${remainingFiles.length}):` : '',
+      ...remainingFiles.map((path) => `- ${path}`),
+      clipped ? `- ... (${scopedFiles.length - 130} more files)` : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -1662,6 +1713,7 @@ function appendFilesystemContextMessages(
             'When the user asks how to run code, include shell commands in ```bash blocks.',
             'The user has a terminal that can execute these commands.',
             'For multi-step setups, provide all commands in a single bash block so they can be run together.',
+            'If a task is too large for a single response, end with the exact token: [CONTINUE_REQUESTED]',
             'Example: ```bash',
             'npm install',
             'npm run dev',

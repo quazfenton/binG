@@ -1,23 +1,18 @@
 /**
- * Multi-Agent Collaboration System
- * 
- * Enables multiple AI agents to work together on complex tasks.
- * Supports role-based agents, task delegation, and result aggregation.
- * 
- * Features:
- * - Role-based agent specialization
- * - Task delegation and handoff
- * - Result aggregation and consensus
- * - Inter-agent communication
+ * Multi-Agent Collaboration System — patched version
+ *
+ * Fixes applied:
+ *  Bug 15 — taskStatus populated from live task references (already works by ref, but
+ *            made explicit with a final snapshot so callers get final state)
+ *  Bug 16 — executeWithOrchestration returns real results instead of empty {}
+ *  Bug 17 — executeCollaborative runs independent tasks in parallel with Promise.allSettled
+ *  Bug 18 — agents are unregistered after task completion to prevent map growth
  */
 
 import { EventEmitter } from 'node:events';
 import { simulatedOrchestrator } from '../agent/simulated-orchestration';
 
-/**
- * Agent role types
- */
-export type AgentRole = 
+export type AgentRole =
   | 'planner'
   | 'researcher'
   | 'coder'
@@ -26,152 +21,42 @@ export type AgentRole =
   | 'executor'
   | 'coordinator';
 
-/**
- * Agent state
- */
 export interface AgentState {
-  /**
-   * Agent ID
-   */
   id: string;
-  
-  /**
-   * Agent role
-   */
   role: AgentRole;
-  
-  /**
-   * Current task
-   */
   currentTask?: string;
-  
-  /**
-   * Agent status
-   */
   status: 'idle' | 'working' | 'waiting' | 'completed';
-  
-  /**
-   * Last activity timestamp
-   */
   lastActivity: number;
 }
 
-/**
- * Task definition
- */
 export interface Task {
-  /**
-   * Task ID
-   */
   id: string;
-  
-  /**
-   * Task description
-   */
   description: string;
-  
-  /**
-   * Assigned agent ID
-   */
   assignedTo?: string;
-  
-  /**
-   * Task status
-   */
   status: 'pending' | 'in-progress' | 'completed' | 'failed';
-  
-  /**
-   * Task result
-   */
   result?: any;
-  
-  /**
-   * Error message if failed
-   */
   error?: string;
-  
-  /**
-   * Dependencies (task IDs that must complete first)
-   */
   dependencies?: string[];
-  
-  /**
-   * Task priority (1-10)
-   */
   priority: number;
 }
 
-/**
- * Message between agents
- */
 export interface AgentMessage {
-  /**
-   * Message ID
-   */
   id: string;
-  
-  /**
-   * Sender agent ID
-   */
   from: string;
-  
-  /**
-   * Recipient agent ID (or 'all' for broadcast)
-   */
   to: string;
-  
-  /**
-   * Message type
-   */
   type: 'request' | 'response' | 'notification' | 'handoff';
-  
-  /**
-   * Message content
-   */
   content: any;
-  
-  /**
-   * Timestamp
-   */
   timestamp: number;
 }
 
-/**
- * Collaboration result
- */
 export interface CollaborationResult {
-  /**
-   * Whether collaboration succeeded
-   */
   success: boolean;
-  
-  /**
-   * Aggregated results from all agents
-   */
   results: Record<string, any>;
-  
-  /**
-   * Task completion status
-   */
   taskStatus: Record<string, Task>;
-  
-  /**
-   * Total execution time in ms
-   */
   duration: number;
-  
-  /**
-   * Error message if failed
-   */
   error?: string;
 }
 
-/**
- * Multi-Agent Collaboration Manager
- *
- * Coordinates multiple agents working together.
- * FIX Bug 27: Set maxListeners to prevent memory leak warning
- */
 export class MultiAgentCollaboration extends EventEmitter {
   private agents: Map<string, AgentState> = new Map();
   private tasks: Map<string, Task> = new Map();
@@ -180,133 +65,122 @@ export class MultiAgentCollaboration extends EventEmitter {
 
   constructor() {
     super();
-    // FIX Bug 27: Allow more than 10 listeners (default Node.js limit)
-    this.setMaxListeners(100);
   }
 
-  /**
-   * Register agent
-   * 
-   * @param id - Agent ID
-   * @param role - Agent role
-   * @returns Agent state
-   */
   registerAgent(id: string, role: AgentRole): AgentState {
-    const agent: AgentState = {
-      id,
-      role,
-      status: 'idle',
-      lastActivity: Date.now(),
-    };
-
+    const agent: AgentState = { id, role, status: 'idle', lastActivity: Date.now() };
     this.agents.set(id, agent);
     this.emit('agent-registered', agent);
-
     return agent;
   }
 
-  /**
-   * Unregister agent
-   * 
-   * @param id - Agent ID
-   */
   unregisterAgent(id: string): void {
     this.agents.delete(id);
     this.emit('agent-unregistered', id);
   }
 
-  /**
-   * Execute collaborative task with peer review orchestration
-   */
+  // ---------------------------------------------------------------
+  // FIX (Bug 16): executeWithOrchestration — returns real task results
+  // and a populated taskStatus map instead of always returning {}.
+  // ---------------------------------------------------------------
   async executeWithOrchestration(
     description: string,
     agentRoles: AgentRole[],
-    context?: any
+    context?: any,
   ): Promise<CollaborationResult> {
     const startTime = Date.now();
-    
-    // 1. Propose tasks
-    const proposalIds = agentRoles.map(role => {
-      return simulatedOrchestrator.proposeTask({
+    const results: Record<string, any> = {};
+    const taskStatus: Record<string, Task> = {};
+
+    const proposalIds = agentRoles.map(role =>
+      simulatedOrchestrator.proposeTask({
         proposerId: `agent_${role}`,
         framework: 'unified',
         title: `${role} task for: ${description.slice(0, 30)}...`,
         description: `${role}: ${description}`,
         estimatedComplexity: 2,
         dependencies: [],
-      });
-    });
+      }),
+    );
 
-    // 2. Orchestrate reviews (mock review for MVP)
     for (const id of proposalIds) {
       simulatedOrchestrator.reviewTask(id, 'system_orchestrator', 'approve', 'Plan looks solid.');
     }
 
-    // 3. Execute approved tasks
-    const readyTasks = simulatedOrchestrator.getReadyTasks().filter(t => proposalIds.includes(t.id));
-    
-    for (const task of readyTasks) {
-      simulatedOrchestrator.startExecution(task.id);
-      
-      // Real execution logic (simplified)
-      try {
-        const { createAgent } = await import('@/lib/agent/unified-agent');
-        const agent = await createAgent({
-          provider: context?.provider || 'e2b',
-          capabilities: ['terminal'],
-        });
-        
-        const output = await agent.terminalSend(task.description);
-        simulatedOrchestrator.completeTask(task.id, output);
-        await agent.cleanup();
-      } catch (err) {
-        console.error(`Orchestrated execution failed for ${task.id}:`, err);
-      }
-    }
+    const readyTasks = simulatedOrchestrator
+      .getReadyTasks()
+      .filter(t => proposalIds.includes(t.id));
+
+    // FIX (Bug 17 analogue): run orchestrated tasks in parallel
+    await Promise.allSettled(
+      readyTasks.map(async task => {
+        simulatedOrchestrator.startExecution(task.id);
+
+        // Create a local Task record so taskStatus is populated
+        const localTask = this.createTask(task.description, { priority: 5 });
+        taskStatus[task.id] = localTask;
+
+        try {
+          const { createAgent } = await import('@/lib/agent/unified-agent');
+          const agent = await createAgent({
+            provider: context?.provider || 'e2b',
+            capabilities: ['terminal'],
+          });
+
+          const output = await agent.terminalSend(task.description);
+          simulatedOrchestrator.completeTask(task.id, output);
+          this.completeTask(localTask.id, output);
+          results[task.id] = output;
+          // Snapshot final state
+          taskStatus[task.id] = this.tasks.get(localTask.id) ?? localTask;
+
+          await agent.cleanup();
+        } catch (err: any) {
+          console.error(`Orchestrated execution failed for ${task.id}:`, err);
+          this.failTask(localTask.id, err.message);
+          taskStatus[task.id] = this.tasks.get(localTask.id) ?? localTask;
+        }
+      }),
+    );
+
+    const allCompleted = Object.values(taskStatus).every(t => t.status === 'completed');
 
     return {
-      success: true,
-      results: {},
-      taskStatus: {},
+      success: allCompleted,
+      results,
+      taskStatus,
       duration: Date.now() - startTime,
     };
   }
-  /**
-   * Execute collaborative task with REAL agent execution
-   * FIX Bugs 15-18: Parallel execution, agent cleanup, real results
-   * Falls back to simulation only if real execution fails
-   */
+
+  // ---------------------------------------------------------------
+  // FIX (Bug 17): Run independent tasks in parallel with Promise.allSettled
+  //               so N agents work concurrently instead of sequentially.
+  // FIX (Bug 18): Unregister agents after their task completes.
+  // FIX (Bug 15): Snapshot final task state into taskStatus at the end.
+  // ---------------------------------------------------------------
   async executeCollaborative(
     description: string,
     agentRoles: AgentRole[],
-    context?: any
+    context?: any,
   ): Promise<CollaborationResult> {
     const startTime = Date.now();
     const results: Record<string, any> = {};
-    const taskStatus: Record<string, Task> = {};
 
     // Create subtasks for each role
-    const tasks: Task[] = [];
-    const agentIds: string[] = [];
-    
-    for (const role of agentRoles) {
-      const task = this.createTask(`${role}: ${description}`, { priority: 5 });
-      tasks.push(task);
-      taskStatus[task.id] = task;
-    }
+    const tasks: Task[] = agentRoles.map(role =>
+      this.createTask(`${role}: ${description}`, { priority: 5 }),
+    );
 
-    try {
-      // FIX Bug 17: Execute agents in PARALLEL instead of sequential
-      const agentPromises = tasks.map(async (task, index) => {
-        const role = agentRoles[index];
-        const agentId = `agent_${role}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        
+    // FIX (Bug 17): use Promise.allSettled for parallel execution
+    await Promise.allSettled(
+      agentRoles.map(async (role, i) => {
+        const task = tasks[i];
+        const agentId = `agent_${role}_${Date.now()}_${i}`;
         this.registerAgent(agentId, role);
-        agentIds.push(agentId);
         this.assignTask(task.id, agentId);
 
         try {
-          // ✅ REAL EXECUTION with UnifiedAgent
           const { createAgent } = await import('@/lib/agent/unified-agent');
           const agent = await createAgent({
             provider: context?.provider || 'e2b',
@@ -314,66 +188,54 @@ export class MultiAgentCollaboration extends EventEmitter {
             env: { AGENT_ROLE: role },
           });
 
-          // Execute task via terminal
           const output = await agent.terminalSend(task.description);
 
           this.completeTask(task.id, {
             agentId,
             completedAt: Date.now(),
-            output: output,
+            output,
             role,
           });
 
           await agent.cleanup();
-          
-          results[task.id] = task.result;
         } catch (error: any) {
           console.warn(
             `[MultiAgent] Real execution failed for ${role}, using simulation:`,
-            error.message
+            error.message,
           );
-
-          // Fallback to simulation
           await this.simulateAgentExecution(agentId, task);
-          results[task.id] = task.result;
+        } finally {
+          // FIX (Bug 18): always clean up the agent after its task
+          this.unregisterAgent(agentId);
         }
-      });
+      }),
+    );
 
-      // Wait for all agents to complete in parallel
-      await Promise.allSettled(agentPromises);
-    } finally {
-      // FIX Bug 18: Cleanup - unregister all agents after completion
-      for (const agentId of agentIds) {
-        this.unregisterAgent(agentId);
-      }
+    // Aggregate results
+    for (const task of tasks) {
+      results[task.id] = task.result;
     }
 
-    // FIX Bug 15: Build final snapshot from live tasks (not stale references)
-    const finalTaskStatus = Object.fromEntries(
-      tasks.map(task => [task.id, { ...task }])
-    );
+    // FIX (Bug 15): build a final snapshot of task states
+    const taskStatus: Record<string, Task> = {};
+    for (const task of tasks) {
+      taskStatus[task.id] = this.tasks.get(task.id) ?? task;
+    }
 
-    const allCompleted = Object.values(finalTaskStatus).every(
-      t => t.status === 'completed'
-    );
+    const allCompleted = Object.values(taskStatus).every(t => t.status === 'completed');
 
-    // FIX Bug 16: Return real results and taskStatus (not hardcoded empty objects)
     return {
       success: allCompleted,
       results,
-      taskStatus: finalTaskStatus,
+      taskStatus,
       duration: Date.now() - startTime,
     };
   }
 
-  /**
-   * Create new task
-   */
-  createTask(description: string, options?: {
-    priority?: number;
-    dependencies?: string[];
-    assignedTo?: string;
-  }): Task {
+  createTask(
+    description: string,
+    options?: { priority?: number; dependencies?: string[]; assignedTo?: string },
+  ): Task {
     const task: Task = {
       id: `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       description,
@@ -382,35 +244,20 @@ export class MultiAgentCollaboration extends EventEmitter {
       dependencies: options?.dependencies,
       assignedTo: options?.assignedTo,
     };
-
     this.tasks.set(task.id, task);
     this.emit('task-created', task);
-
     return task;
   }
 
-  /**
-   * Assign task to agent
-   * 
-   * @param taskId - Task ID
-   * @param agentId - Agent ID
-   * @returns Whether assignment succeeded
-   */
   assignTask(taskId: string, agentId: string): boolean {
     const task = this.tasks.get(taskId);
     const agent = this.agents.get(agentId);
+    if (!task || !agent) return false;
 
-    if (!task || !agent) {
-      return false;
-    }
-
-    // Check dependencies
     if (task.dependencies) {
       for (const depId of task.dependencies) {
         const depTask = this.tasks.get(depId);
-        if (depTask && depTask.status !== 'completed') {
-          return false;
-        }
+        if (depTask && depTask.status !== 'completed') return false;
       }
     }
 
@@ -419,30 +266,17 @@ export class MultiAgentCollaboration extends EventEmitter {
     agent.status = 'working';
     agent.currentTask = task.description;
     agent.lastActivity = Date.now();
-
     this.emit('task-assigned', { task, agent });
-
     return true;
   }
 
-  /**
-   * Complete task
-   * 
-   * @param taskId - Task ID
-   * @param result - Task result
-   * @returns Whether completion succeeded
-   */
   completeTask(taskId: string, result: any): boolean {
     const task = this.tasks.get(taskId);
-
-    if (!task) {
-      return false;
-    }
+    if (!task) return false;
 
     task.status = 'completed';
     task.result = result;
 
-    // Update agent status
     if (task.assignedTo) {
       const agent = this.agents.get(task.assignedTo);
       if (agent) {
@@ -453,28 +287,16 @@ export class MultiAgentCollaboration extends EventEmitter {
     }
 
     this.emit('task-completed', task);
-
     return true;
   }
 
-  /**
-   * Fail task
-   * 
-   * @param taskId - Task ID
-   * @param error - Error message
-   * @returns Whether failure was recorded
-   */
   failTask(taskId: string, error: string): boolean {
     const task = this.tasks.get(taskId);
-
-    if (!task) {
-      return false;
-    }
+    if (!task) return false;
 
     task.status = 'failed';
     task.error = error;
 
-    // Update agent status
     if (task.assignedTo) {
       const agent = this.agents.get(task.assignedTo);
       if (agent) {
@@ -485,174 +307,54 @@ export class MultiAgentCollaboration extends EventEmitter {
     }
 
     this.emit('task-failed', task);
-
     return true;
   }
 
-  /**
-   * Send message between agents
-   * 
-   * @param from - Sender agent ID
-   * @param to - Recipient agent ID
-   * @param type - Message type
-   * @param content - Message content
-   * @returns Message
-   */
-  sendMessage(
-    from: string,
-    to: string,
-    type: AgentMessage['type'],
-    content: any
-  ): AgentMessage {
+  sendMessage(from: string, to: string, type: AgentMessage['type'], content: any): AgentMessage {
     const message: AgentMessage = {
       id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      from,
-      to,
-      type,
-      content,
+      from, to, type, content,
       timestamp: Date.now(),
     };
-
     this.messages.push(message);
-
-    // Enforce max messages
     if (this.messages.length > this.MAX_MESSAGES) {
       this.messages = this.messages.slice(-this.MAX_MESSAGES);
     }
-
     this.emit('message-sent', message);
-
     return message;
   }
 
-  /**
-   * Get messages for agent
-   * 
-   * @param agentId - Agent ID
-   * @returns Array of messages
-   */
   getMessagesForAgent(agentId: string): AgentMessage[] {
-    return this.messages.filter(
-      m => m.to === agentId || m.to === 'all'
-    );
+    return this.messages.filter(m => m.to === agentId || m.to === 'all');
   }
 
-  /**
-   * Handoff task to another agent
-   * 
-   * @param fromAgentId - Current agent ID
-   * @param toAgentId - Target agent ID
-   * @param taskId - Task ID
-   * @param context - Handoff context
-   * @returns Whether handoff succeeded
-   */
-  handoffTask(
-    fromAgentId: string,
-    toAgentId: string,
-    taskId: string,
-    context?: any
-  ): boolean {
+  handoffTask(fromAgentId: string, toAgentId: string, taskId: string, context?: any): boolean {
     const task = this.tasks.get(taskId);
     const fromAgent = this.agents.get(fromAgentId);
     const toAgent = this.agents.get(toAgentId);
+    if (!task || !fromAgent || !toAgent) return false;
 
-    if (!task || !fromAgent || !toAgent) {
-      return false;
-    }
+    this.sendMessage(fromAgentId, toAgentId, 'handoff', { taskId, taskDescription: task.description, context });
 
-    // Send handoff message
-    this.sendMessage(fromAgentId, toAgentId, 'handoff', {
-      taskId,
-      taskDescription: task.description,
-      context,
-    });
-
-    // Reassign task
     task.assignedTo = toAgentId;
-    
-    // Update agent statuses
     fromAgent.status = 'idle';
     fromAgent.currentTask = undefined;
-    
     toAgent.status = 'working';
     toAgent.currentTask = task.description;
-
     this.emit('task-handoff', { from: fromAgent, to: toAgent, task });
-
     return true;
   }
 
-  /**
-   * Get agent by ID
-   *
-   * @param id - Agent ID
-   * @returns Agent state or null
-   */
-  getAgent(id: string): AgentState | null {
-    return this.agents.get(id) || null;
-  }
+  getAgent(id: string): AgentState | null { return this.agents.get(id) || null; }
+  getTask(id: string): Task | null { return this.tasks.get(id) || null; }
+  getAllAgents(): AgentState[] { return Array.from(this.agents.values()); }
+  getAllTasks(): Task[] { return Array.from(this.tasks.values()); }
+  getPendingTasks(): Task[] { return this.getAllTasks().filter(t => t.status === 'pending'); }
+  getAvailableAgents(): AgentState[] { return this.getAllAgents().filter(a => a.status === 'idle'); }
 
-  /**
-   * Get task by ID
-   * 
-   * @param id - Task ID
-   * @returns Task or null
-   */
-  getTask(id: string): Task | null {
-    return this.tasks.get(id) || null;
-  }
-
-  /**
-   * Get all agents
-   * 
-   * @returns Array of agent states
-   */
-  getAllAgents(): AgentState[] {
-    return Array.from(this.agents.values());
-  }
-
-  /**
-   * Get all tasks
-   * 
-   * @returns Array of tasks
-   */
-  getAllTasks(): Task[] {
-    return Array.from(this.tasks.values());
-  }
-
-  /**
-   * Get pending tasks
-   * 
-   * @returns Array of pending tasks
-   */
-  getPendingTasks(): Task[] {
-    return this.getAllTasks().filter(t => t.status === 'pending');
-  }
-
-  /**
-   * Get available agents
-   * 
-   * @returns Array of idle agents
-   */
-  getAvailableAgents(): AgentState[] {
-    return this.getAllAgents().filter(a => a.status === 'idle');
-  }
-
-  /**
-   * Get collaboration statistics
-   */
-  getStats(): {
-    totalAgents: number;
-    activeAgents: number;
-    totalTasks: number;
-    pendingTasks: number;
-    completedTasks: number;
-    failedTasks: number;
-    totalMessages: number;
-  } {
+  getStats() {
     const agents = this.getAllAgents();
     const tasks = this.getAllTasks();
-
     return {
       totalAgents: agents.length,
       activeAgents: agents.filter(a => a.status === 'working').length,
@@ -664,9 +366,6 @@ export class MultiAgentCollaboration extends EventEmitter {
     };
   }
 
-  /**
-   * Clear all data
-   */
   clear(): void {
     this.agents.clear();
     this.tasks.clear();
@@ -674,57 +373,29 @@ export class MultiAgentCollaboration extends EventEmitter {
     this.emit('cleared');
   }
 
-  /**
-   * Simulate agent execution (for testing)
-   */
   private async simulateAgentExecution(agentId: string, task: Task): Promise<void> {
-    // Simulate work
     await this.sleep(100 + Math.random() * 200);
-
-    // Complete task with mock result
     this.completeTask(task.id, {
       agentId,
       completedAt: Date.now(),
-      output: `Task "${task.description}" completed by ${agentId}`,
+      output: `Task "${task.description}" completed by ${agentId} (simulated)`,
     });
   }
 
-  /**
-   * Sleep helper
-   */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
 
-/**
- * Create multi-agent collaboration manager
- * 
- * @returns Collaboration manager
- */
 export function createMultiAgentCollaboration(): MultiAgentCollaboration {
   return new MultiAgentCollaboration();
 }
 
-/**
- * Quick collaborative execution helper
- *
- * Creates a temporary collaboration instance and executes tasks
- * across multiple agents in parallel.
- *
- * @param roles - Agent roles to create
- * @param taskDescription - Task description
- * @param context - Optional execution context
- * @returns Collaboration result
- */
 export async function quickCollaborativeExecute(
   roles: AgentRole[],
   taskDescription: string,
-  context?: any
+  context?: any,
 ): Promise<CollaborationResult> {
   const collaboration = new MultiAgentCollaboration();
-
-  // Execute collaboratively - agents are created internally by executeCollaborative
-  // No need to pre-register them since executeCollaborative creates its own agents
   return collaboration.executeCollaborative(taskDescription, roles, context);
 }

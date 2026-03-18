@@ -329,26 +329,34 @@ export class VirtualFilesystemService {
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(targetPath);
     const normalizedPrefix = `${normalizedPath}/`;
-    let deletedCount = 0;
-
-    // FIX Bug 20: Increment version ONCE before the loop
-    workspace.version += 1;
-    workspace.updatedAt = new Date().toISOString();
-
+    
+    // Collect paths to delete first so we can increment version once
+    const toDelete: string[] = [];
     for (const existingPath of Array.from(workspace.files.keys())) {
       if (existingPath === normalizedPath || existingPath.startsWith(normalizedPrefix)) {
+        toDelete.push(existingPath);
+      }
+    }
+
+    let deletedCount = 0;
+    
+    if (toDelete.length > 0) {
+      // FIX: Increment version ONCE before emitting events so all events
+      // carry the same correct post-deletion version number.
+      workspace.version += 1;
+      workspace.updatedAt = new Date().toISOString();
+
+      for (const existingPath of toDelete) {
         const deletedFile = workspace.files.get(existingPath);
         workspace.files.delete(existingPath);
         deletedCount += 1;
         if (deletedFile) {
           diffTracker.trackDeletion(existingPath, ownerId, deletedFile.content);
         }
-        // FIX: All events now carry the correct final version
+        // FIX: emit with the already-incremented version
         this.emitFileChange(ownerId, existingPath, 'delete', workspace.version);
       }
-    }
 
-    if (deletedCount > 0) {
       this.emitSnapshotChange(ownerId, workspace.version);
       await this.persistWorkspace(ownerId, workspace);
     }
@@ -1002,7 +1010,8 @@ class GitBackedVFSProxy {
    * FIX Bug 19: Delegate to real VFS clearWorkspace (not just deletePath)
    */
   async clearWorkspace(ownerId: string): Promise<void> {
-    await this.vfs.clearWorkspace(ownerId);
+    // Delegate to the proper clear (wipes in-memory map + diff tracker + disk file)
+    await (this as any).vfs.clearWorkspace(ownerId);
   }
 }
 
