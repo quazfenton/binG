@@ -335,7 +335,7 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                     title="StackBlitz"
                     onLoad={() => {
                       setIsReloading(false);
-                      handleLoad(); // Sync with useIframeLoader hook
+                      handleLoad(iframeUrl); // Sync with useIframeLoader hook
                     }}
                     onError={() => {
                       setIframeError('Failed to load StackBlitz. Note: StackBlitz requires valid project URLs.');

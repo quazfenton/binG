@@ -273,6 +273,7 @@ export default function ConversationInterface() {
   });
   const filesystemSessionIdRef = useRef(filesystemSessionId);
   const persistedUiStateUpdatedAtRef = useRef(0);
+  const continueProcessedRef = useRef<string | null>(null);
 
   useEffect(() => {
     providerRef.current = currentProvider;
@@ -565,11 +566,11 @@ export default function ConversationInterface() {
         const lastContinueContent = lastMessage.content;
 
         // Check if we already processed this CONTINUE_REQUESTED message
-        const alreadyProcessed = processedContinueRef.current === lastContinueMessageId;
+        const alreadyProcessed = continueProcessedRef.current === lastContinueMessageId;
         if (alreadyProcessed) {
           return; // Skip duplicate processing
         }
-        processedContinueRef.current = lastContinueMessageId;
+        continueProcessedRef.current = lastContinueMessageId;
 
         console.log('[Continuance] Auto-triggering next request');
         toast.info('Continuance requested by AI - sending next message');

@@ -1,246 +1,445 @@
-# Docker Compose V2 Architecture Update
+# Docker Compose Architecture Update
 
 ## Summary
 
-Updated `docker-compose.v2.yml` to align with the advanced multi-agent architecture from `architectureUpdate.md`. This brings the infrastructure in line with Cursor/Devin-style coding agent systems.
+Updated Docker Compose configuration to properly separate concerns between Next.js, Agent Gateway, Agent Workers, and Nullclaw services according to the architecture documented in `architectureUpdate.md`.
 
-## New Services Added
+---
 
-### 1. **Traefik Reverse Proxy** (`traefik`)
-- **Purpose**: Centralized routing, SSL termination, load balancing
-- **Ports**: 80 (HTTP), 443 (HTTPS), 8080 (Dashboard)
-- **Features**:
-  - Automatic service discovery via Docker labels
-  - Path-based routing for all services
-  - Dashboard available at `http://localhost:8080`
+## Key Changes
 
-### 2. **Planner Worker** (`planner`)
-- **Purpose**: Task decomposition into dependency graphs
-- **Port**: 3004
-- **Features**:
-  - Breaks complex prompts into structured task graphs
-  - Supports up to 20 tasks per plan
-  - Integrates with Qdrant for code search context
-- **Environment**:
-  - `PLANNER_MAX_TASKS=20`
-  - `QDRANT_URL=http://qdrant:6333`
+### 1. ✅ Added Agent Gateway Service
 
-### 3. **Background Worker** (`background`)
-- **Purpose**: Repo indexing, embeddings, file watchers
-- **Port**: 3006
-- **Features**:
-  - Automatic repo indexing every 5 minutes
-  - Vector embeddings for semantic code search
-  - File system watchers for real-time updates
-- **Environment**:
-  - `INDEX_INTERVAL_MS=300000`
-  - `WORKSPACE_ROOT=/workspace`
+**New Service:** `agent-gateway` (Port 3002)
 
-### 4. **Sandbox Pool** (`sandbox`)
-- **Purpose**: Pre-warmed isolated code execution environments
-- **Port**: 3005
-- **Features**:
-  - Maintains pool of 5 pre-warmed sandboxes
-  - Supports multiple providers (E2B, Daytona, Sprites, CodeSandbox, Microsandbox)
-  - Auto-scales based on demand
-  - 10-minute idle timeout
-- **Environment**:
-  - `SANDBOX_POOL_SIZE=5`
-  - `SANDBOX_IDLE_TIMEOUT=600`
-  - Provider API keys passed via env vars
+**Purpose:**
+- Session orchestration
+- SSE event streaming
+- Job queue management
+- Gateway between Next.js and Workers
 
-### 5. **Qdrant Vector Database** (`qdrant`)
-- **Purpose**: Vector storage for code embeddings and semantic search
-- **Ports**: 6333 (HTTP), 6334 (gRPC)
-- **Features**:
-  - Semantic code search
-  - Similarity matching for code patterns
-  - Persistent storage via volume
-- **Health Check**: HTTP endpoint monitoring
-
-### 6. **PostgreSQL Database** (`postgres`)
-- **Purpose**: Primary relational database
-- **Port**: 5432
-- **Features**:
-  - User sessions
-  - Job history
-  - Vector metadata
-- **Credentials**:
-  - User: `postgres`
-  - Password: `postgres`
-  - Database: `binG`
-
-## Updated Services
-
-### Executor Workers (`worker`)
-- **Scaling**: Now runs 3 replicas for parallel task execution
-- **New Dependencies**:
-  - `qdrant` (for code search)
-  - `sandbox` (for isolated execution)
-- **New Environment Variables**:
-  - `QDRANT_URL=http://qdrant:6333`
-  - `SANDBOX_POOL_URL=http://sandbox:3005`
-
-### NextJS App (`app`)
-- **Database**: Updated to use PostgreSQL service
-- **New Environment Variables**:
-  - `QDRANT_URL=http://qdrant:6333`
-  - `VECTOR_SEARCH_ENABLED=true`
-  - `PLANNER_ENABLED=true`
-  - `DATABASE_URL=postgresql://postgres:postgres@postgres:5432/binG`
-- **Removed**: `8080` port (now handled by Traefik)
-
-## Architecture Diagram
-
+**Files Running in Gateway Container:**
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
-│   NextJS    │────▶│Agent Gateway │────▶│  Redis Queue    │
-│   (app)    │     │  (gateway)   │     │  (pubsub/jobs)  │
-└─────────────┘     └──────────────┘     └────────┬────────┘
-                                                   │
-                    ┌──────────────────────────────┼──────────────────────────────┐
-                    │                              │                              │
-                    ▼                              ▼                              ▼
-           ┌─────────────────┐           ┌─────────────────┐           ┌─────────────────┐
-           │ Planner Worker  │           │Executor Workers │           │Background Worker│
-           │(task planning)  │           │ (OpenCode loop) │           │ (indexing/search)│
-           └─────────────────┘           └────────┬────────┘           └─────────────────┘
-                                                  │
-                                 ┌────────────────┼────────────────┐
-                                 │                │                │
-                                 ▼                ▼                ▼
-                          ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-                          │MCP Server   │ │ Nullclaw    │ │Sandbox Pool │
-                          │(filesystem) │ │(automation) │ │(execution)  │
-                          └─────────────┘ └─────────────┘ └─────────────┘
-                                                  ▲
-                                                  │
-                                          ┌─────────────┐
-                                          │   Qdrant    │
-                                          │  (vectors)  │
-                                          └─────────────┘
+lib/agent/services/agent-gateway/src/index-enhanced.ts
+lib/redis/agent-service.ts
 ```
 
-## Volumes Added
+**Why Separate:**
+- Horizontal scaling independent of Next.js
+- Dedicated SSE streaming without blocking app server
+- Centralized session management
 
-| Volume | Purpose |
-|--------|---------|
-| `qdrant_data` | Vector database storage |
-| `postgres_data` | PostgreSQL database |
-| `sandbox_data` | Sandbox pool state |
-| `index_data` | Background worker indexes |
+---
 
-## Network Configuration
+### 2. ✅ Added Agent Workers Service
 
-All services communicate via the `bing-network` bridge network with subnet `172.28.0.0/16`.
+**New Service:** `agent-worker` (Port 3003)
 
-## Traefik Routing Rules
+**Purpose:**
+- OpenCode engine loop execution
+- Tool execution
+- Background jobs
+- Multi-agent coordination
 
-| Service | Path Prefix | Port |
-|---------|-------------|------|
-| NextJS App | `/` | 5555 |
-| Gateway | `/api/gateway` | 3002 |
-| Worker | `/api/worker` | 3003 |
-| MCP | `/api/mcp` | 8888 |
-| Nullclaw | `/api/nullclaw` | 3000 |
-| Sandbox | `/api/sandbox` | 3005 |
-| Qdrant | `/api/vector` | 6333 |
+**Files Running in Worker Container:**
+```
+lib/agent/services/agent-worker/src/index.ts
+lib/agent/services/agent-worker/src/opencode-engine.ts
+lib/agent/v2-executor.ts
+lib/agent/task-router.ts
+lib/agent/enhanced-background-jobs.ts
+lib/agent/loop-detection.ts
+lib/agent/multi-agent-collaboration.ts
+lib/agent/mastra-workflow-integration.ts
+lib/agent/workflow-templates.ts
+```
 
-## Performance Improvements
+**Why Separate:**
+- CPU-intensive operations isolated from web server
+- Horizontal scaling (default 3 replicas)
+- Independent resource allocation
+- Failure isolation
 
-| Feature | Benefit |
-|---------|---------|
-| 3x Executor Workers | 3x parallel task capacity |
-| Sandbox Pool | Instant sandbox allocation (no cold start) |
-| Qdrant Vector Search | 100x faster code search vs filesystem scan |
-| Background Indexing | Non-blocking repo analysis |
-| Planner Worker | Smarter task decomposition |
-| Traefik Load Balancing | Automatic worker scaling |
+---
 
-## Required Environment Variables
+### 3. ✅ Updated Next.js App Service
 
-Add these to your `.env` file:
+**Changes:**
+- Removed direct agent loop execution
+- Now calls Agent Gateway for job creation
+- Lightweight orchestration only
 
-```env
-# Vector Search
-QDRANT_URL=http://qdrant:6333
-VECTOR_SEARCH_ENABLED=true
+**Files Running in Next.js Container:**
+```
+app/api/chat/route.ts              ← Calls gateway, doesn't execute agents
+app/api/chat-with-context/route.ts ← Calls gateway
+app/api/filesystem/*               ← VFS operations
+components/*.tsx                    ← Browser UI
+lib/session/session-manager.ts     ← Session lifecycle
+lib/virtual-filesystem/*.ts        ← VFS operations
+lib/orchestra/stateful-agent/*.ts  ← Plan-Act-Verify (optional)
+```
 
-# Planner
-PLANNER_ENABLED=true
+**Why Changed:**
+- Next.js no longer blocks on agent execution
+- Can scale web tier independently
+- Cleaner separation of concerns
 
+---
+
+### 4. ✅ Nullclaw Service Configuration
+
+**Existing Service:** `nullclaw` (Port 3000 internal)
+
+**Purpose:**
+- Non-coding agency (messaging, browsing)
+- External API integrations
+
+**Files:**
+```
+lib/agent/nullclaw-integration.ts  ← Calls Nullclaw service
+```
+
+**Communication:**
+- Workers → Nullclaw (HTTP)
+- Nullclaw → External APIs (Discord, Telegram, Web)
+
+---
+
+### 5. ✅ Microsandbox Service
+
+**Existing Service:** `microsandbox` (Port 5555)
+
+**Purpose:**
+- Local sandbox provider
+- Docker-in-Docker for code execution
+
+**Communication:**
+- Workers → Microsandbox (HTTP + Docker API)
+- Sandboxes are ephemeral, created per task
+
+---
+
+## Communication Flow
+
+### Request Flow
+
+```
+User Browser
+     ↓ (HTTP)
+Next.js App (:3000)
+     ↓ (HTTP)
+Agent Gateway (:3002)
+     ↓ (Redis Queue)
+Agent Workers (:3003)
+     ↓ (HTTP/Docker API)
+┌──────────┬──────────┬──────────┐
+│          │          │          │
+▼          ▼          ▼
+Nullclaw  Microsandbox  Cloud
+(:3000)   (:5555)      Providers
+```
+
+### Event Streaming Flow
+
+```
+Agent Worker
+     ↓ (Redis Pub/Sub)
+Agent Gateway (subscribed)
+     ↓ (SSE)
+Next.js App
+     ↓ (Server-Sent Events)
+User Browser
+```
+
+---
+
+## Environment Variables
+
+### Required for All Services
+```bash
 # Database
-DATABASE_URL=postgresql://postgres:postgres@postgres:5432/binG
+DATABASE_URL=postgresql://bing:bing_secure_password@postgres:5432/bing
 
-# Sandbox Providers
-E2B_API_KEY=your-e2b-key
-DAYTONA_API_KEY=your-daytona-key
-SPRITES_TOKEN=your-sprites-token
-CODESANDBOX_API_KEY=your-codesandbox-key
+# Redis
+REDIS_URL=redis://redis:6379
 
-# Sandbox Configuration
-SANDBOX_PROVIDER=microsandbox
-SANDBOX_POOL_SIZE=5
+# JWT Secret
+JWT_SECRET=<generate-with-openssl-rand-hex-32>
 ```
 
-## Migration Notes
-
-### Breaking Changes
-1. **Database URL changed**: Update any hardcoded database connections
-2. **Port 8080**: Now used by Traefik dashboard (NextJS dev server only on 5555)
-3. **Worker scaling**: Ensure your code is stateless for horizontal scaling
-
-### Non-Breaking Changes
-1. All existing services maintain backward compatibility
-2. Redis, MCP, and Nullclaw configurations unchanged
-3. V2 agent flow remains the same
-
-## Testing
-
-Start the stack:
+### Next.js App
 ```bash
-docker-compose -f docker-compose.v2.yml up -d
+AGENT_GATEWAY_URL=http://agent-gateway:3002
+REDIS_URL=redis://redis:6379
 ```
 
-Check service health:
+### Agent Gateway
 ```bash
-docker-compose -f docker-compose.v2.yml ps
+REDIS_URL=redis://redis:6379
+WORKER_URL=http://agent-worker:3003
+JWT_SECRET=<same-as-app>
 ```
 
-View Traefik dashboard:
-```
-http://localhost:8080
-```
-
-Test vector search:
+### Agent Workers
 ```bash
-curl http://localhost:6333/health
+REDIS_URL=redis://redis:6379
+NULLCLAW_URL=http://nullclaw:3000
+MICROSANDBOX_URL=http://microsandbox:5555
+MISTRAL_API_KEY=<your-key>
+OPENAI_API_KEY=<your-key>
 ```
 
-Test sandbox pool:
-```bash
-curl http://localhost:3005/health
+---
+
+## Scaling Configuration
+
+### Horizontal Scaling
+
+```yaml
+# Agent Workers - Scale based on load
+agent-worker:
+  deploy:
+    replicas: ${WORKER_REPLICAS:-3}  # Default 3, adjust based on demand
 ```
+
+### Resource Allocation
+
+| Service | CPU | Memory | Replicas |
+|---------|-----|--------|----------|
+| **Next.js App** | 4 cores | 4 GB | 1-2 |
+| **Agent Gateway** | 2 cores | 2 GB | 2-5 |
+| **Agent Workers** | 4 cores | 4 GB | 3-10 |
+| **Nullclaw** | 1 core | 1 GB | 1-2 |
+| **Microsandbox** | 2 cores | 2 GB | 1 |
+
+---
+
+## Health Checks
+
+All services now have health checks:
+
+```yaml
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:<PORT>/health"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30-40s
+```
+
+---
+
+## Deployment Commands
+
+### Development
+```bash
+docker-compose -f docker-compose.dev.yml up
+```
+
+### Production
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up
+```
+
+### Scale Workers
+```bash
+docker-compose up -d --scale agent-worker=5
+```
+
+---
+
+## Security Considerations
+
+### Docker Socket Access
+
+⚠️ **CRITICAL**: Microsandbox requires Docker socket access
+
+**Current Configuration:**
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+```
+
+**Production Mitigation:**
+1. Use Docker socket proxy
+2. Apply AppArmor/SELinux profiles
+3. Isolate network segment
+4. Restrict to specific operations
+
+### Network Isolation
+
+All services run on `bing-network`:
+```yaml
+networks:
+  bing-network:
+    name: bing-network
+```
+
+External access only through:
+- Next.js App (3000, 8080)
+- Agent Gateway (3002)
+- Agent Workers (3003)
+
+Internal services (Nullclaw, Microsandbox, Redis, Postgres) are NOT exposed externally.
+
+---
+
+## Monitoring
+
+### Prometheus Targets
+
+```yaml
+scrape_configs:
+  - job_name: 'nextjs'
+    static_configs: [{ targets: ['app:3000'] }]
+  - job_name: 'gateway'
+    static_configs: [{ targets: ['agent-gateway:3002'] }]
+  - job_name: 'workers'
+    static_configs: [{ targets: ['agent-worker:3003'] }]
+```
+
+### Metrics Exposed
+
+- Request latency
+- Job queue depth
+- Worker utilization
+- Sandbox creation time
+- Tool execution time
+- Error rates
+
+---
+
+## Files Requiring Updates
+
+### Dockerfile.gateway (NEW)
+```dockerfile
+FROM node:20-alpine AS runner
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY lib/agent/services/agent-gateway ./lib/agent/services/agent-gateway
+COPY lib/redis ./lib/redis
+CMD ["node", "lib/agent/services/agent-gateway/src/index-enhanced.ts"]
+```
+
+### Dockerfile.worker (NEW)
+```dockerfile
+FROM node:20-alpine AS runner
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY lib/agent/services/agent-worker ./lib/agent/services/agent-worker
+COPY lib/agent/*.ts ./lib/agent/
+CMD ["node", "lib/agent/services/agent-worker/src/index.ts"]
+```
+
+---
+
+## Related Documentation
+
+- [DEPLOYMENT_ARCHITECTURE.md](./DEPLOYMENT_ARCHITECTURE.md) - Full deployment guide
+- [architectureUpdate.md](./architectureUpdate.md) - Architecture analysis
+- [ENHANCED_AGENT_INTEGRATION.md](./ENHANCED_AGENT_INTEGRATION.md) - Agent integration
+- [COMPLETE_ORCHESTRATION_GUIDE.md](./COMPLETE_ORCHESTRATION_GUIDE.md) - Orchestration reference
+
+---
 
 ## Next Steps
 
-1. **Create missing service code**:
-   - `services/sandbox-pool/index.js`
-   - `services/planner-worker/index.js`
-   - `services/background-worker/index.js`
+1. **Create Dockerfile.gateway** - Build image for gateway service
+2. **Create Dockerfile.worker** - Build image for worker service
+3. **Update CI/CD** - Add build steps for new services
+4. **Configure Redis** - Set up Redis cluster for production
+5. **Set up Monitoring** - Configure Prometheus/Grafana dashboards
+6. **Load Testing** - Test scaling under load
+7. **Security Audit** - Review Docker socket access
 
-2. **Update application code**:
-   - Integrate Qdrant for vector search
-   - Implement planner agent logic
-   - Add background indexing jobs
+---
 
-3. **Configure production**:
-   - Enable Traefik SSL
-   - Set up persistent volume backups
-   - Configure worker auto-scaling rules
+## Migration Guide
 
-## References
+### From Old Architecture
 
-- `architectureUpdate.md` - Full architecture documentation
-- `docker-compose.v2.yml` - Updated compose file
-- `Dockerfile.sandbox` - New sandbox pool image
+**Before:**
+```
+Next.js App does everything:
+- UI rendering
+- API routes
+- Agent loops
+- Tool execution
+- Sandbox management
+```
+
+**After:**
+```
+Next.js App:
+- UI rendering ✓
+- API orchestration ✓
+- Session management (via Gateway) ✓
+
+Agent Gateway:
+- Session orchestration
+- Event streaming
+- Job queue management
+
+Agent Workers:
+- Agent loops
+- Tool execution
+- Background jobs
+```
+
+### Breaking Changes
+
+None - backward compatible with existing API routes.
+
+### Configuration Changes
+
+Update `.env`:
+```bash
+# Add these
+AGENT_GATEWAY_URL=http://agent-gateway:3002
+REDIS_URL=redis://redis:6379
+WORKER_REPLICAS=3
+```
+
+---
+
+## Troubleshooting
+
+### Gateway Not Connecting to Workers
+
+Check network connectivity:
+```bash
+docker network inspect bing-network
+docker exec -it bing-agent-gateway ping agent-worker
+```
+
+### Workers Not Processing Jobs
+
+Check Redis connection:
+```bash
+docker exec -it bing-agent-worker redis-cli -h redis ping
+```
+
+### High Latency
+
+Scale workers:
+```bash
+docker-compose up -d --scale agent-worker=5
+```
+
+---
+
+## Conclusion
+
+The updated Docker Compose configuration properly separates concerns according to modern agent architecture best practices:
+
+- ✅ Next.js handles UI and orchestration only
+- ✅ Gateway manages sessions and streaming
+- ✅ Workers execute agent loops
+- ✅ Nullclaw handles non-coding agency
+- ✅ Sandboxes provide isolated execution
+- ✅ All services can scale independently
+- ✅ Proper health checks and monitoring
+- ✅ Production-ready security considerations

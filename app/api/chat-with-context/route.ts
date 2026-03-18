@@ -114,7 +114,7 @@ export async function POST(req: Request) {
     ].join('\n');
 
     // Merge contextSignals with detected signals
-    const llmContextSignals = {
+    let llmContextSignals: any = {
       attached_files: Object.keys(fileContexts || {}),
       current_file: currentFile,
       file_changes: fileChanges ? currentFile : undefined,
@@ -134,17 +134,8 @@ export async function POST(req: Request) {
     const internalChatUrl = process.env.INTERNAL_CHAT_URL || 'http://localhost:3000/api/chat';
 
     let llmResponseContent: string;
-    let llmContextSignals: any = {
-      attached_files: Object.keys(fileContexts || {}),
-      current_file:  currentFile,
-      file_changes:  fileChanges ? currentFile : undefined,
-    };
 
-    // Merge incoming contextSignals if provided (Bug 3 usage)
-    if (contextSignals && typeof contextSignals === 'object') {
-      llmContextSignals = { ...llmContextSignals, ...contextSignals };
-    }
-
+    // FIX: Remove duplicate llmContextSignals declaration
     try {
       // Add timeout to prevent hanging if downstream stalls
       const controller = new AbortController();

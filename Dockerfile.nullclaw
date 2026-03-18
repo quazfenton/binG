@@ -1,0 +1,70 @@
+# Dockerfile for Nullclaw Service
+# Non-coding agency: messaging, browsing, automation
+# Note: Nullclaw is typically deployed as a separate service
+# This Dockerfile is for reference if self-hosting
+
+# For production use, either:
+# 1. Use official Nullclaw image: ghcr.io/nullclaw/nullclaw:latest
+# 2. Set NULLCLAW_URL to external instance
+# 3. Deploy Nullclaw separately following their documentation
+
+# This is a placeholder showing the integration pattern
+FROM node:20-alpine
+
+# Install system dependencies
+RUN apk add --no-cache \
+    git \
+    python3 \
+    py3-pip \
+    build-base \
+    curl
+
+# Enable corepack for pnpm
+RUN corepack enable
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package.json pnpm-lock.yaml ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy Nullclaw integration code
+COPY lib/agent/nullclaw-integration.ts ./lib/agent/
+COPY lib/utils ./lib/utils
+COPY lib/types ./lib/types
+
+# Copy Nullclaw service entry point (if exists)
+COPY services/nullclaw ./services/nullclaw 2>/dev/null || true
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV NULLCLAW_TIMEOUT=3600
+ENV NULLCLAW_ALLOWED_DOMAINS=openrouter.ai,api.discord.com,api.telegram.org
+
+# Expose Nullclaw port
+EXPOSE 3000
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD wget -q --spider http://localhost:${PORT}/health || exit 1
+
+# Start the Nullclaw service
+CMD ["node", "services/nullclaw/index.js"]
+
+# ===========================================
+# ALTERNATIVE: Use official Nullclaw image
+# ===========================================
+# In docker-compose.yml, use:
+#
+# nullclaw:
+#   image: ghcr.io/nullclaw/nullclaw:latest
+#   ports:
+#     - "3000:3000"
+#   environment:
+#     - NULLCLAW_TIMEOUT=3600
+#     - NULLCLAW_ALLOWED_DOMAINS=openrouter.ai,api.discord.com
+# ===========================================

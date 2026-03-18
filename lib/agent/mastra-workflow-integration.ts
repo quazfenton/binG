@@ -424,8 +424,10 @@ export class MastraWorkflowIntegration extends EventEmitter {
 
       // Execute the workflow
       const result = await codeAgentWorkflow.execute({
-        taskId: data.task || data.taskId,
-        ownerId: data.ownerId,
+        inputData: {
+          task: data.task || data.taskId,
+          ownerId: data.ownerId,
+        },
       });
 
       return {
@@ -447,8 +449,11 @@ export class MastraWorkflowIntegration extends EventEmitter {
       const { hitlWorkflow } = await import('../orchestra/mastra/workflows/hitl-workflow');
 
       const result = await hitlWorkflow.execute({
-        taskId: data.task,
-        approvalRequired: data.approvalRequired,
+        inputData: {
+          ownerId: data.ownerId,
+          code: data.code,
+          description: data.description,
+        },
       });
 
       return {
@@ -470,8 +475,10 @@ export class MastraWorkflowIntegration extends EventEmitter {
       const { parallelWorkflow } = await import('../orchestra/mastra/workflows/parallel-workflow');
 
       const result = await parallelWorkflow.execute({
-        tasks: data.tasks,
-        maxConcurrency: data.maxConcurrency,
+        inputData: {
+          ownerId: data.ownerId,
+          paths: data.paths,
+        },
       });
 
       return {

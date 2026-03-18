@@ -104,10 +104,9 @@ export interface V2ExecuteOptions {
 }
 
 /**
- * FIX Bug 10: Shared execution policy builder
- * Ensures consistent policy across all scopes
+ * Execute V2 task (non-streaming)
  */
-function buildExecutionPolicy(options: V2ExecuteOptions): ExecutionPolicy {
+export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
   const taskWithContext = options.context
     ? `${options.context}\n\nTASK:\n${options.task}`
     : options.task;
