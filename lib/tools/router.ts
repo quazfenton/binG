@@ -1,9 +1,9 @@
 /**
  * Capability Router - Maps capabilities to actual tool providers
- * 
+ *
  * This is the middle layer between capabilities and providers:
  *   Agent → Capability → Router → Provider → Execution
- * 
+ *
  * The router:
  * - Selects the best available provider for a capability
  * - Handles provider fallback if primary fails
@@ -22,6 +22,7 @@ import type { ToolExecutionContext, ToolExecutionResult } from './tool-integrati
 import { getToolManager } from './index';
 import { getArcadeService } from '../platforms/arcade-service';
 import { getNangoService } from '../platforms/nango-service';
+import path from 'path';
 
 const logger = createLogger('Tools:CapabilityRouter');
 
@@ -260,14 +261,53 @@ class MCPFilesystemProvider implements CapabilityProvider {
 
 /**
  * Local Filesystem Provider - handles file operations directly
+ * SECURITY: Validates paths to prevent traversal attacks
  */
 class LocalFilesystemProvider implements CapabilityProvider {
   readonly id = 'local-fs';
   readonly name = 'Local Filesystem';
   readonly capabilities = ['file.read', 'file.write', 'file.delete', 'file.list', 'file.search'];
+  
+  // SECURITY: Base directory restriction for file operations
+  private readonly workspaceRoot: string;
+
+  constructor() {
+    // Default to workspace directory, fall back to temp if not configured
+    this.workspaceRoot = process.env.WORKSPACE_DIR ||
+                         process.env.USER_WORKSPACE_ROOT ||
+                         path.join(process.cwd(), 'workspace');
+  }
 
   isAvailable(): boolean {
     return true; // Always available on server
+  }
+
+  /**
+   * SECURITY: Validate and resolve path to prevent traversal attacks
+   * Ensures all paths stay within the workspace root
+   */
+  private validatePath(inputPath: string): { valid: boolean; resolvedPath?: string; error?: string } {
+    // Reject null bytes
+    if (inputPath.includes('\0')) {
+      return { valid: false, error: 'Invalid path: contains null bytes' };
+    }
+
+    // Resolve the path to absolute
+    const resolvedPath = path.resolve(inputPath);
+
+    // Ensure path is within workspace root
+    const normalizedWorkspace = path.resolve(this.workspaceRoot);
+
+    // Check if resolved path starts with workspace root
+    if (!resolvedPath.startsWith(normalizedWorkspace + path.sep) &&
+        resolvedPath !== normalizedWorkspace) {
+      return {
+        valid: false,
+        error: `Path traversal detected: ${inputPath}. Paths must be within ${this.workspaceRoot}`
+      };
+    }
+
+    return { valid: true, resolvedPath };
   }
 
   async execute(
@@ -276,13 +316,19 @@ class LocalFilesystemProvider implements CapabilityProvider {
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
     const fs = await import('fs/promises');
-    const path = await import('path');
 
     try {
       switch (capabilityId) {
         case 'file.read': {
-          const content = await fs.readFile(input.path, input.encoding || 'utf-8');
-          const stats = await fs.stat(input.path);
+          // SECURITY: Validate path
+          const pathValidation = this.validatePath(input.path);
+          if (!pathValidation.valid) {
+            return { success: false, error: pathValidation.error };
+          }
+          const safePath = pathValidation.resolvedPath!;
+
+          const content = await fs.readFile(safePath, input.encoding || 'utf-8');
+          const stats = await fs.stat(safePath);
           return {
             success: true,
             output: {
@@ -290,43 +336,65 @@ class LocalFilesystemProvider implements CapabilityProvider {
               encoding: input.encoding || 'utf-8',
               size: stats.size,
               exists: true,
+              path: safePath,
             },
           };
         }
 
         case 'file.write': {
+          // SECURITY: Validate path
+          const pathValidation = this.validatePath(input.path);
+          if (!pathValidation.valid) {
+            return { success: false, error: pathValidation.error };
+          }
+          const safePath = pathValidation.resolvedPath!;
+
           if (input.createDirs) {
-            const dir = path.dirname(input.path);
+            const dir = path.dirname(safePath);
             await fs.mkdir(dir, { recursive: true });
           }
-          const bytesWritten = await fs.writeFile(input.path, input.content, input.encoding || 'utf-8');
+          const bytesWritten = await fs.writeFile(safePath, input.content, input.encoding || 'utf-8');
           return {
             success: true,
             output: {
               success: true,
-              path: input.path,
+              path: safePath,
               bytesWritten: typeof bytesWritten === 'number' ? bytesWritten : input.content.length,
             },
           };
         }
 
         case 'file.delete': {
+          // SECURITY: Validate path
+          const pathValidation = this.validatePath(input.path);
+          if (!pathValidation.valid) {
+            return { success: false, error: pathValidation.error };
+          }
+          const safePath = pathValidation.resolvedPath!;
+          
           if (input.recursive) {
-            await fs.rm(input.path, { force: input.force, recursive: true });
+            await fs.rm(safePath, { force: input.force, recursive: true });
           } else {
-            await fs.unlink(input.path);
+            await fs.unlink(safePath);
           }
           return {
             success: true,
-            output: { success: true, path: input.path },
+            output: { success: true, path: safePath },
           };
         }
 
         case 'file.list': {
-          const entries = await fs.readdir(input.path, { withFileTypes: true });
+          // SECURITY: Validate path
+          const pathValidation = this.validatePath(input.path || this.workspaceRoot);
+          if (!pathValidation.valid) {
+            return { success: false, error: pathValidation.error };
+          }
+          const safePath = pathValidation.resolvedPath!;
+
+          const entries = await fs.readdir(safePath, { withFileTypes: true });
           let results = entries.map(entry => ({
             name: entry.name,
-            path: path.join(input.path, entry.name),
+            path: path.join(safePath, entry.name),
             type: entry.isDirectory() ? 'directory' : entry.isSymbolicLink() ? 'symlink' : 'file',
           }));
 
@@ -345,17 +413,27 @@ class LocalFilesystemProvider implements CapabilityProvider {
         }
 
         case 'file.search': {
-          // Simple file name search
-          const searchDir = input.path || process.cwd();
+          // SECURITY: Validate search directory
+          const searchInput = input.path || this.workspaceRoot;
+          const pathValidation = this.validatePath(searchInput);
+          if (!pathValidation.valid) {
+            return { success: false, error: pathValidation.error };
+          }
+          const searchDir = pathValidation.resolvedPath!;
           const results: any[] = [];
-          
+
           const searchRecursive = async (dir: string, depth: number) => {
             if (depth > 5 || results.length >= (input.maxResults || 50)) return;
-            
+
             try {
               const entries = await fs.readdir(dir, { withFileTypes: true });
               for (const entry of entries) {
                 const fullPath = path.join(dir, entry.name);
+
+                // SECURITY: Ensure we don't traverse outside workspace during recursion
+                const childValidation = this.validatePath(fullPath);
+                if (!childValidation.valid) continue;
+
                 if (entry.name.toLowerCase().includes(input.query.toLowerCase())) {
                   results.push({ path: fullPath });
                   if (results.length >= (input.maxResults || 50)) break;
@@ -954,6 +1032,7 @@ class MemoryServiceProvider implements CapabilityProvider {
 
 /**
  * Ripgrep Provider - handles text search in files
+ * SECURITY: Uses execFileSync to prevent command injection
  */
 class RipgrepProvider implements CapabilityProvider {
   readonly id = 'ripgrep';
@@ -965,12 +1044,12 @@ class RipgrepProvider implements CapabilityProvider {
     try {
       const { execSync } = await import('child_process');
       const isWindows = process.platform === 'win32';
-      
+
       // Try different commands based on platform
       const checkCmd = isWindows
         ? 'where rg 2>nul || echo FAIL'
         : 'which rg || command -v rg || echo FAIL';
-      
+
       const result = execSync(checkCmd, { stdio: 'pipe', encoding: 'utf-8' });
       return !result.includes('FAIL') && result.trim().length > 0;
     } catch {
@@ -983,15 +1062,20 @@ class RipgrepProvider implements CapabilityProvider {
     input: any,
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
-    const { execSync } = await import('child_process');
+    const { execFileSync } = await import('child_process');
 
     try {
       const searchPath = input.path || '.';
       const maxResults = input.maxResults || 50;
-      
-      // Use ripgrep for content search
-      const cmd = `rg -n --max-count ${maxResults} "${input.query}" "${searchPath}"`;
-      const output = execSync(cmd, { encoding: 'utf-8', timeout: 30000 });
+
+      // SECURITY: Use execFileSync with arguments array to prevent command injection
+      const output = execFileSync('rg', [
+        '-n',
+        '--max-count',
+        String(maxResults),
+        input.query,
+        searchPath,
+      ], { encoding: 'utf-8', timeout: 30000 });
 
       const results = output.split('\n')
         .filter(line => line.trim())

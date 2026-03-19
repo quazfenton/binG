@@ -65,20 +65,9 @@ RUN mkdir -p /root/.cache/pip /root/.npm /root/.opencode /root/.nullclaw && \
 # Create .next directory with proper permissions
 RUN mkdir -p /app/.next && chown -R nodejs:nodejs /app/.next
 
-# Build-time arguments for required environment variables
-ARG ENCRYPTION_KEY
-ARG JWT_SECRET
-ARG BLAXEL_SECRET_ENCRYPTION_KEY
-ARG NANGO_SECRET_KEY
-ARG DATABASE_URL
-
-# Set environment variables for build
-ENV ENCRYPTION_KEY=${ENCRYPTION_KEY}
-ENV JWT_SECRET=${JWT_SECRET}
-ENV BLAXEL_SECRET_ENCRYPTION_KEY=${BLAXEL_SECRET_ENCRYPTION_KEY}
-ENV NANGO_SECRET_KEY=${NANGO_SECRET_KEY}
-ENV DATABASE_URL=${DATABASE_URL}
-
+# SECURITY: Secrets are loaded at runtime via docker-compose env_file or environment variables
+# Do NOT use ARG/ENV for secrets as they persist in image layers
+# For build-time secrets, use BuildKit --secret mounts instead
 # Note: pip cache is available for other Python tools, but Nullclaw runs as container
 
 # Switch to non-root user

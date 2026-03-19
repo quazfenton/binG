@@ -22,6 +22,7 @@ import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
 import { buildApiHeaders } from "@/lib/utils"
+import { sanitizeFileEditTags } from "@/lib/chat/file-edit-parser"
 
 /**
  * Client-side sanitization for message content
@@ -32,10 +33,12 @@ function sanitizeMessageContent(content: string): string {
   if (!content || typeof content !== 'string') return '';
   let sanitized = content;
 
+  // Use shared parser for file_edit tags
+  sanitized = sanitizeFileEditTags(sanitized);
+
   // Remove explicit command envelopes
   sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
   sanitized = sanitized.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
-  sanitized = sanitized.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
 
   // Remove <fs-actions> XML tag blocks
   sanitized = sanitized.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');

@@ -306,7 +306,8 @@ export async function validateCommandExecution(
 
   // Validate working directory if provided
   if (cwd) {
-    const { validatePath } = await import('./filesystem-security');
+    // Use static import to keep function synchronous
+    const { validatePath } = require('./filesystem-security');
     const cwdValidation = validatePath(cwd);
     if (!cwdValidation.valid) {
       return {

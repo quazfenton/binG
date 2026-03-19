@@ -278,6 +278,20 @@ export class ToolExecutor {
     return this.context.sandboxHandle.writeFile(path, content);
   }
 
+  /**
+   * Execute a search/replace diff operation on sandbox/VFS.
+   * 
+   * ARCHITECTURE: Server-side tool execution (Orchestra framework integration)
+   * This is NOT response parsing - it receives STRUCTURED parameters from the tool system.
+   * 
+   * DIFFERENT FROM:
+   * - file-edit-parser.ts: Parses LLM text to extract edit commands
+   * - file-diff-utils.ts: Client-side preview of diffs (UI only)
+   * - safe-diff-operations.ts: Enterprise validation (not wired in, 59% tests passing)
+   * 
+   * This function receives {path, search, replace} as structured tool parameters,
+   * NOT raw LLM text. It applies the change to sandbox or VFS with validation.
+   */
   private async executeApplyDiff({
     path,
     search,

@@ -276,9 +276,10 @@ class NullclawMCPBridge {
       }
     }
 
-    // No available container - ensure Nullclaw is initialized
-    // This will use URL mode or spawn containers based on config
-    await this.ensureInitializedForSession(sessionId);
+    // No available container - initialize session-specific container
+    // For per-session mode, this spawns a dedicated container
+    // For shared mode, this ensures the global pool is initialized
+    await nullclawIntegration.initializeForSession(sessionId, sessionId);
 
     // Try to find a ready container again after initialization
     for (const [id, container] of this.containerPool) {

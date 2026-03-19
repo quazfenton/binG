@@ -79,6 +79,10 @@ export class OracleVMSandboxHandle implements SandboxHandle {
 
   async writeFile(path: string, content: string): Promise<ToolResult> {
     try {
+      // Validate path is within workspace
+      if (!this.isPathInWorkspace(path)) {
+        return { success: false, error: 'Path outside workspace directory' };
+      }
       await this.uploadFile(path, content);
       return { success: true, output: `File written: ${path}` };
     } catch (error: any) {
@@ -88,6 +92,10 @@ export class OracleVMSandboxHandle implements SandboxHandle {
 
   async readFile(path: string): Promise<ToolResult> {
     try {
+      // Validate path is within workspace
+      if (!this.isPathInWorkspace(path)) {
+        return { success: false, error: 'Path outside workspace directory' };
+      }
       const content = await this.downloadFile(path);
       return { success: true, output: content };
     } catch (error: any) {
@@ -97,7 +105,8 @@ export class OracleVMSandboxHandle implements SandboxHandle {
 
   async listDirectory(path: string): Promise<ToolResult> {
     try {
-      const result = await this.executeCommand(`ls -la "${path}"`);
+      const safePath = path.replace(/'/g, `'\\''`);
+      const result = await this.executeCommand(`ls -la -- '${safePath}'`);
       if (result.success && result.output) {
         return { success: true, output: result.output };
       }
@@ -105,6 +114,12 @@ export class OracleVMSandboxHandle implements SandboxHandle {
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to list directory' };
     }
+  }
+
+  private isPathInWorkspace(path: string): boolean {
+    const normalizedPath = path.replace(/\\/g, '/');
+    const normalizedWorkspace = this.workspaceDir.replace(/\\/g, '/');
+    return normalizedPath.startsWith(normalizedWorkspace);
   }
 
   async destroySandbox(): Promise<void> {
@@ -174,6 +189,7 @@ export class OracleVMSandboxHandle implements SandboxHandle {
 
   /**
    * Execute command via SSH
+   * SECURITY: Validates cwd to prevent command injection
    */
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
     const startTime = Date.now();
@@ -184,11 +200,28 @@ export class OracleVMSandboxHandle implements SandboxHandle {
 
       return new Promise((resolve, reject) => {
         const timeoutMs = timeout || this.config.commandTimeout;
-        const workingDir = cwd || this.workspace;
-
-        // Build command with working directory
-        const fullCommand = `cd "${workingDir}" && ${command}`;
         
+        // SECURITY: Validate and sanitize working directory
+        // Reject paths with shell metacharacters or traversal patterns
+        const workingDir = cwd || this.workspace;
+        if (!this.isValidPath(workingDir)) {
+          resolve({
+            success: false,
+            output: 'Invalid working directory: contains unsafe characters',
+            exitCode: 1,
+            executionTime: Date.now() - startTime,
+          });
+          return;
+        }
+
+        // SECURITY: Use single quotes and escape any single quotes in the path
+        // This prevents shell injection via the cwd
+        const escapedCwd = workingDir.replace(/'/g, "'\\''");
+        const escapedCommand = command.replace(/'/g, "'\\''");
+        
+        // Build command with working directory using single quotes
+        const fullCommand = `cd '${escapedCwd}' && ${escapedCommand}`;
+
         conn.exec(fullCommand, (err: any, stream: any) => {
           if (err) {
             reject(err);
@@ -202,7 +235,7 @@ export class OracleVMSandboxHandle implements SandboxHandle {
           stream.on('close', (code: number) => {
             exitCode = code;
             const duration = Date.now() - startTime;
-            
+
             resolve({
               success: code === 0,
               output: stdout || stderr,
@@ -238,6 +271,25 @@ export class OracleVMSandboxHandle implements SandboxHandle {
         executionTime: Date.now() - startTime,
       };
     }
+  }
+
+  /**
+   * Validate path to prevent command injection
+   * SECURITY: Rejects paths with shell metacharacters
+   */
+  private isValidPath(path: string): boolean {
+    // Reject paths containing shell metacharacters
+    const dangerousChars = /[$`;|&<>(){}!\\]/;
+    if (dangerousChars.test(path)) {
+      return false;
+    }
+    
+    // Path should be reasonably sized
+    if (path.length > 1024) {
+      return false;
+    }
+    
+    return true;
   }
 
   /**

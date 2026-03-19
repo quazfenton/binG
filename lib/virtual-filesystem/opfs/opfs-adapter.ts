@@ -380,6 +380,41 @@ export class OPFSAdapter {
       }
 
       console.log('[OPFS] Syncing from server:', snapshot.files.length, 'files');
+
+      // Sync files from snapshot to OPFS
+      for (const file of snapshot.files) {
+        // Check for version conflicts
+        const versions = this.fileVersions.get(file.path);
+        if (versions && versions.opfs > (file.version || 1)) {
+          conflicts.push({
+            path: file.path,
+            serverVersion: file.version || 1,
+            opfsVersion: versions.opfs,
+            resolution: 'manual',
+          });
+          continue;
+        }
+
+        // Write to OPFS
+        await this.core.writeFile(file.path, file.content);
+        filesSynced++;
+        bytesTransferred += file.size || 0;
+
+        // Update version tracking
+        this.fileVersions.set(file.path, {
+          opfs: file.version || 1,
+          server: file.version || 1,
+        });
+      }
+
+      return {
+        success: true,
+        filesSynced,
+        bytesTransferred,
+        conflicts,
+        errors,
+        duration: Date.now() - startTime,
+      };
     } catch (error: any) {
       errors.push(error.message);
       console.error('[OPFS] Sync from server failed:', error);
@@ -388,7 +423,7 @@ export class OPFSAdapter {
         success: false,
         filesSynced: 0,
         bytesTransferred: 0,
-        conflicts: [],
+        conflicts,
         errors,
         duration: Date.now() - startTime,
       };

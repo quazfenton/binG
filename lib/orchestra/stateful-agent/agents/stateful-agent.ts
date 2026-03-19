@@ -766,18 +766,18 @@ Use 'createFile' for new files.`;
 
                 // Auto-write to Tool Memory Graph
                 await this.addMemoryNode('file', contentForState, (callArgs as any).path);
-              }
 
-              // Update execution graph if tracking
-              if (this.executionGraphId) {
-                const graph = executionGraphEngine.getGraph(this.executionGraphId);
-                if (graph) {
-                  const readyNodes = executionGraphEngine.getReadyNodes(graph);
-                  if (readyNodes.length > 0) {
-                    executionGraphEngine.markComplete(graph, readyNodes[0].id, {
-                      file: callArgs && 'path' in callArgs ? (callArgs as any).path : 'unknown',
-                      success: true,
-                    });
+                // Update execution graph if tracking (only on success)
+                if (this.executionGraphId) {
+                  const graph = executionGraphEngine.getGraph(this.executionGraphId);
+                  if (graph) {
+                    const readyNodes = executionGraphEngine.getReadyNodes(graph);
+                    if (readyNodes.length > 0) {
+                      executionGraphEngine.markComplete(graph, readyNodes[0].id, {
+                        file: (callArgs as any).path,
+                        success: true,
+                      });
+                    }
                   }
                 }
               }
