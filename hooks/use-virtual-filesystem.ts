@@ -277,17 +277,27 @@ export function useVirtualFilesystem(
   ): Promise<TData> => {
     const { includeJsonContentType = true, ...rest } = options;
     
-    // Debounce duplicate API calls - wait if same URL called too recently
-    const now = Date.now();
-    const lastCall = lastApiCallTime.get(url);
-    if (lastCall && (now - lastCall) < API_CALL_DEBOUNCE_MS) {
-      const waitTime = API_CALL_DEBOUNCE_MS - (now - lastCall);
-      log(`request: debouncing duplicate call to ${url} (waiting ${waitTime}ms)`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
+    // Debounce duplicate GET requests only - POST/PUT/DELETE should not be debounced
+    const method = (options.method || 'GET').toUpperCase();
+    if (method === 'GET') {
+      const now = Date.now();
+      const requestKey = `${method}:${url}`;
+      const lastCall = lastApiCallTime.get(requestKey);
+      if (lastCall && (now - lastCall) < API_CALL_DEBOUNCE_MS) {
+        const waitTime = API_CALL_DEBOUNCE_MS - (now - lastCall);
+        log(`request: debouncing duplicate call to ${url} (waiting ${waitTime}ms)`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+      const callTime = Date.now();
+      lastApiCallTime.set(requestKey, callTime);
+      setTimeout(() => {
+        if (lastApiCallTime.get(requestKey) === callTime) {
+          lastApiCallTime.delete(requestKey);
+        }
+      }, API_CALL_DEBOUNCE_MS);
     }
-    lastApiCallTime.set(url, Date.now());
     
-    log(`request: ${options.method || 'GET'} ${url}`);
+    log(`request: ${method} ${url}`);
 
     const response = await fetch(url, {
       ...rest,

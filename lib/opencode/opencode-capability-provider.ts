@@ -323,7 +323,7 @@ export class OpencodeCapabilityProvider {
           })
         } else if (part.type === 'tool' && part.tool?.name === 'delete_file') {
           fileChanges.push({
-            path: (part.tool.args as any)?.path || (part.tool.args as any)?.file,
+            path: (part.tool.args as any)?.path || (part.tool.args as any)?.file || (part.tool.args as any)?.target,
             operation: 'delete' as any,
           })
         }
@@ -350,7 +350,7 @@ export class OpencodeCapabilityProvider {
             logger.debug(`Synced file to VFS: ${change.path}`)
           }
         } else if (change.operation === 'delete') {
-          await (this.vfs as any).deleteFile(ownerId, change.path)
+          await this.vfs.deletePath(ownerId, change.path)
           logger.debug(`Deleted file from VFS: ${change.path}`)
         }
       }

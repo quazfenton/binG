@@ -1368,12 +1368,14 @@ export default function CodePreviewPanel({
 
   // Auto-load preview when panel opens
   // FIXED: Use refs to avoid dependency loop with handleManualPreview
+  // NOTE: VFS sync runs regardless of isOpen to support on-demand operations when closed
   const autoLoadPreviewRef = useRef(false);
   
   useEffect(() => {
+    // Keep ref reset for open/close cycles, but allow other effects to run when closed
     if (!isOpen) {
       autoLoadPreviewRef.current = false;
-      return;
+      // Don't return early - allow VFS sync to continue for on-demand commands
     }
     
     // Only run once when panel opens
@@ -1404,10 +1406,12 @@ export default function CodePreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]); // Only depend on isOpen - run once when panel opens
 
+  // Files explorer - run regardless of isOpen to keep VFS synced
   useEffect(() => {
-    if (!isOpen || selectedTab !== "files") {
+    if (selectedTab !== "files") {
       return;
     }
+    // Always sync VFS regardless of isOpen - needed for shell on-demand commands
     let cancelled = false;
     let isInitialized = false;
 
@@ -1457,10 +1461,8 @@ export default function CodePreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesystemScopePath, isOpen, selectedTab]); // Removed listFilesystemDirectory from deps
 
+  // Load scoped preview files - sync VFS regardless of isOpen state
   useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
     let cancelled = false;
     let isRunning = false;
     
@@ -1561,9 +1563,9 @@ export default function CodePreviewPanel({
     }
   }, [filesystemScopePath, log]);
 
+  // Bidirectional sync: Event-driven refresh from terminal/editor updates
+  // Always register listener regardless of isOpen - needed for on-demand shell commands
   useEffect(() => {
-    if (!isOpen) return;
-
     const refresh = async (detail?: any) => {
       log(`[filesystem-updated event] received`, detail);
 
@@ -5004,9 +5006,12 @@ root.render(<App />);` };
     }
   }, [isOpen]);
 
+  // NOTE: Keep component mounted even when closed to allow VFS sync for on-demand shell commands
+  // The component will render nothing when isOpen is false, but effects will still run
   return (
     <AnimatePresence>
-      {isOpen && (
+      {/* Always render the component but hide when isOpen is false - allows VFS sync effects to continue */}
+      {isOpen ? (
         <motion.div
           key={isOpen ? "visible" : "hidden"}
           initial={{ opacity: 0, x: "100%" }}
@@ -5823,6 +5828,9 @@ root.render(<App />);` };
             </CardContent>
           </Card>
         </motion.div>
+      ) : (
+        // Hidden but mounted - allows VFS sync effects to continue running for shell on-demand commands
+        <div data-code-preview-hidden style={{ display: 'none' }} />
       )}
       
       {/* Context Menu for File Operations */}

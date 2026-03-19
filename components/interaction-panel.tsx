@@ -434,7 +434,7 @@ export default function InteractionPanel({
     const validValues = availableProviders
       .filter((p: any) => p.isAvailable !== false)
       .flatMap((p: any) => p.models.map((m: string) => `${p.id}:${m}`));
-    return validValues.includes(currentValue) ? currentValue : (validValues[0] || "");
+    return validValues.includes(currentValue) ? currentValue : "";
   }, [currentProvider, currentModel, availableProviders]);
 
   // Memoized handler for ProviderSelector

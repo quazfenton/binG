@@ -431,6 +431,10 @@ export class MastraWorkflowIntegration extends EventEmitter {
         },
       });
 
+      if ((result as any)?.status && (result as any).status !== 'success') {
+        throw new Error((result as any).error || `Code agent workflow ended with status ${(result as any).status}`);
+      }
+
       return {
         workflowType: 'code-agent',
         result,
@@ -458,6 +462,10 @@ export class MastraWorkflowIntegration extends EventEmitter {
         },
       });
 
+      if ((result as any)?.status && (result as any).status !== 'success') {
+        throw new Error((result as any).error || `HITL workflow ended with status ${(result as any).status}`);
+      }
+
       return {
         workflowType: 'hitl',
         result,
@@ -483,6 +491,10 @@ export class MastraWorkflowIntegration extends EventEmitter {
           paths: data.paths,
         },
       });
+
+      if ((result as any)?.status && (result as any).status !== 'success') {
+        throw new Error((result as any).error || `Parallel workflow ended with status ${(result as any).status}`);
+      }
 
       return {
         workflowType: 'parallel',

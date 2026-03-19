@@ -1578,7 +1578,11 @@ export default function ConversationInterface() {
 
       {/* Interaction Controls - Positioned absolutely to avoid layout conflicts */}
       <InteractionPanel
-        onSubmit={handleChatSubmit}
+        onSubmit={(content) => {
+          setTimeout(() => {
+            void handleChatSubmit(content);
+          }, 0);
+        }}
         onNewChat={handleNewChat}
         isProcessing={isLoading}
         toggleAccessibility={toggleAccessibility}

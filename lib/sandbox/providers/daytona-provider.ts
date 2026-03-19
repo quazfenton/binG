@@ -277,8 +277,8 @@ class DaytonaSandboxHandle implements SandboxHandle {
   async startRecording(options?: ScreenRecordingRequest): Promise<{ recordingId: string }> {
     const service = (this.getComputerUseService() as any)
     if (!service) throw new Error('Computer Use Service not available')
-    const result = await (service as any).startRecording()
-    return { recordingId: result.output || '' }
+    const result = await (service as any).startRecording(options)
+    return { recordingId: result?.recordingId || result?.output || '' }
   }
 
   /**

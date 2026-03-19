@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
     // Resolve owner: authenticated users via JWT/session, anonymous via x-anonymous-session-id header
     authResult = await resolveRequestAuth(req, { allowAnonymous: true });
 
-    if (!authResult.success || !authResult.user) {
+    if (!authResult.success || !authResult.user?.id) {
       // Fallback: resolve via resolveFilesystemOwner (checks header + cookie)
       filesystemOwnerResolution = await resolveFilesystemOwnerWithFallback(req, {
         route: 'write',
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
       }
       ownerId = filesystemOwnerResolution.ownerId;
     } else {
-      ownerId = String(authResult.user?.id || authResult.user || '');
+      ownerId = String(authResult.user?.id);
     }
 
     // Parse JSON body with error handling

@@ -976,10 +976,10 @@ export class ResponseRouter {
       }
 
       // Fallback: Parse raw markdown code blocks with filenames
-      // Emit as request_files since these are full file contents, not patches
+      // Return as write_diffs to apply the file changes
       const rawFiles = this.parseRawCodeBlocks(content)
       if (rawFiles && rawFiles.length > 0) {
-        return { request_files: rawFiles.map(f => f.path) }
+        return { write_diffs: rawFiles }
       }
 
       return undefined

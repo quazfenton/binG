@@ -78,15 +78,33 @@ export class OracleVMSandboxHandle implements SandboxHandle {
   }
 
   async writeFile(path: string, content: string): Promise<ToolResult> {
-    return { success: false, error: 'Not implemented' };
+    try {
+      await this.uploadFile(path, content);
+      return { success: true, output: `File written: ${path}` };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to write file' };
+    }
   }
 
   async readFile(path: string): Promise<ToolResult> {
-    return { success: false, error: 'Not implemented' };
+    try {
+      const content = await this.downloadFile(path);
+      return { success: true, output: content };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to read file' };
+    }
   }
 
   async listDirectory(path: string): Promise<ToolResult> {
-    return { success: false, error: 'Not implemented' };
+    try {
+      const result = await this.executeCommand(`ls -la "${path}"`);
+      if (result.success && result.output) {
+        return { success: true, output: result.output };
+      }
+      return { success: false, error: 'Failed to list directory' };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to list directory' };
+    }
   }
 
   async destroySandbox(): Promise<void> {

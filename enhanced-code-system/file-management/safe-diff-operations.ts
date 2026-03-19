@@ -230,9 +230,9 @@ class SafeDiffOperations extends EventEmitter {
 
       // Step 5: Semantic impact analysis
       let semanticValidation: ValidationResult = { isValid: true, errors: [], warnings: [], confidence: 1 };
-      
+
       if (this.options.enableSyntaxValidation) {
-        semanticValidation = await this.analyzeSemanticImpact(
+        semanticValidation = await this.analyzeSemanticImpactForValidation(
           applyResult.updatedContent,
           fileState.language,
           diffs
@@ -1010,7 +1010,7 @@ class SafeDiffOperations extends EventEmitter {
   /**
    * Analyze semantic impact of code changes
    */
-  private async analyzeSemanticImpact(
+  private async analyzeSemanticImpactForValidation(
     content: string,
     language: string,
     diffs: DiffOperation[]
