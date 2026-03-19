@@ -121,7 +121,7 @@ export const FILE_CREATION_TEMPLATE: TemplateFlow = {
         {
           id: 'create-file',
           description: 'Create file with proper structure',
-          dependencies: ['analysis'],
+          dependencies: ['identify-patterns'],
           estimatedDuration: 60,
           required: true,
         },
@@ -260,7 +260,7 @@ export const REFACTORING_TEMPLATE: TemplateFlow = {
         {
           id: 'backup-original',
           description: 'Create backup of original code',
-          dependencies: ['analysis'],
+          dependencies: ['plan-refactor'],
           estimatedDuration: 10,
           required: true,
         },
@@ -391,7 +391,7 @@ export const BUG_FIX_TEMPLATE: TemplateFlow = {
         {
           id: 'implement-fix',
           description: 'Implement bug fix',
-          dependencies: ['diagnosis'],
+          dependencies: ['identify-root-cause'],
           estimatedDuration: 90,
           required: true,
         },

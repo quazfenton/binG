@@ -98,9 +98,8 @@ export async function getSyncStatus(
       success: status.status !== 'ERROR',
       status: status.status,
       lastSyncDate: status.lastSyncDate,
-      nextSyncDate: status.nextSyncDate,
       error: status.error,
-    };
+    } as SyncToolResult & { status: string; lastSyncDate?: number };
   } catch (error: any) {
     return {
       success: false,

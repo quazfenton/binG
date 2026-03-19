@@ -337,7 +337,7 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
     // FIX: Throw on failure to trigger fallback instead of returning unsuccessful result
     if (!result.success) {
       const error = result.errors?.[0] || 'StatefulAgent failed';
-      throw new Error(error);
+      throw new Error(typeof error === 'string' ? error : JSON.stringify(error));
     }
 
     return {

@@ -44,26 +44,9 @@
  * - NULLCLAW_POOL_SIZE: Number of containers in pool (default: 2, max: 4)
  * - NULLCLAW_IMAGE: Docker image (default: 'ghcr.io/nullclaw/nullclaw:latest')
  * - NULLCLAW_PORT: Base port (default: 3001)
- * - NULLCLAW_TIMEOUT: Request timeout in seconds (default: 300)
- * - NULLCLAW_ALLOWED_DOMAINS: Comma-separated allowed domains
+ * - NULLCLAW_TIMEOUT: Request timeout in milliseconds (default: 300000 = 5 minutes)
  */
-
-import { spawn } from 'child_process';
-import { createLogger } from '../utils/logger';
-import { v4 as uuidv4 } from 'uuid';
-
-const logger = createLogger('Agent:Nullclaw');
-
 export interface NullclawConfig {
-  // URL-based configuration (primary)
-  baseUrl?: string;           // e.g., 'http://nullclaw:3000' or 'http://localhost:3001'
-  apiKey?: string;            // Optional API key for authentication
-  
-  // Container-based configuration (fallback)
-  mode?: 'shared' | 'per-session';  // Container sharing mode
-  poolSize?: number;          // Number of containers in pool (shared mode)
-  image?: string;             // Docker image
-  basePort?: number;          // Base port for containers
   timeout?: number;           // Request timeout in milliseconds
   allowedDomains?: string[];  // Network egress rules
   healthCheckTimeout?: number; // Health check timeout in ms
@@ -121,7 +104,7 @@ class NullclawIntegration {
     poolSize: parseInt(process.env.NULLCLAW_POOL_SIZE || '2'),
     image: process.env.NULLCLAW_IMAGE || 'ghcr.io/nullclaw/nullclaw:latest',
     basePort: parseInt(process.env.NULLCLAW_PORT || '3001'),
-    timeout: parseInt(process.env.NULLCLAW_TIMEOUT || '300000'),
+    timeout: parseInt(process.env.NULLCLAW_TIMEOUT || '300000'), // milliseconds
     allowedDomains: (process.env.NULLCLAW_ALLOWED_DOMAINS || 'openrouter.ai,api.discord.com,api.telegram.org').split(','),
     healthCheckTimeout: parseInt(process.env.NULLCLAW_HEALTH_TIMEOUT || '30000'),
     dockerNetwork: process.env.NULLCLAW_NETWORK || 'bing-network',

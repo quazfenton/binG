@@ -563,6 +563,9 @@ export interface WorkspaceSession {
   createdAt: string;
   lastActive: string;
   status: 'creating' | 'ready' | 'active' | 'suspended' | 'closed';
+  // Extended properties for PTY support
+  sandboxHandle?: any;
+  workspacePath?: string;
 }
 
 /**

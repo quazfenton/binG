@@ -90,7 +90,7 @@ export const nangoGitHubTools = {
       page: z.number().optional().describe('Page number (default: 1)'),
       per_page: z.number().refine((val) => val <= 100, 'Items per page must be at most 100').optional().describe('Items per page (default: 30, max: 100)'),
     }),
-    execute: async ({ connectionId, page = 1, per_page = 30 }) => {
+    execute: async ({ connectionId, page = 1, per_page = 30 }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
       const result = await executeNangoProxy('github', {
         method: 'GET',
         endpoint: '/user/repos',
@@ -120,7 +120,7 @@ export const nangoGitHubTools = {
       body: z.string().optional().describe('Issue body/description'),
       labels: z.array(z.string()).optional().describe('Issue labels'),
     }),
-    execute: async ({ connectionId, owner, repo, title, body, labels }) => {
+    execute: async ({ connectionId, owner, repo, title, body, labels }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
       const result = await executeNangoProxy('github', {
         method: 'POST',
         endpoint: `/repos/${owner}/${repo}/issues`,
@@ -151,7 +151,7 @@ export const nangoGitHubTools = {
       base: z.string().describe('The name of the branch you want the changes pulled into'),
       body: z.string().optional().describe('PR description'),
     }),
-    execute: async ({ connectionId, owner, repo, title, head, base, body }) => {
+    execute: async ({ connectionId, owner, repo, title, head, base, body }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
       const result = await executeNangoProxy('github', {
         method: 'POST',
         endpoint: `/repos/${owner}/${repo}/pulls`,
@@ -180,7 +180,7 @@ export const nangoGitHubTools = {
       path: z.string().describe('Path to the file'),
       ref: z.string().optional().describe('Branch name or commit SHA (default: default branch)'),
     }),
-    execute: async ({ connectionId, owner, repo, path, ref }) => {
+    execute: async ({ connectionId, owner, repo, path, ref }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
       const endpoint = `/repos/${owner}/${repo}/contents/${path}${ref ? `?ref=${ref}` : ''}`;
       const result = await executeNangoProxy<any>('github', {
         method: 'GET',
@@ -222,7 +222,7 @@ export const nangoSlackTools = {
       text: z.string().describe('Message text'),
       thread_ts: z.string().optional().describe('Thread timestamp to reply in a thread'),
     }),
-    execute: async ({ connectionId, channel, text, thread_ts }) => {
+    execute: async ({ connectionId, channel, text, thread_ts }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
       const result = await executeNangoProxy('slack', {
         method: 'POST',
         endpoint: '/chat.postMessage',
@@ -246,7 +246,7 @@ export const nangoSlackTools = {
       connectionId: z.string().describe('Nango connection ID for Slack'),
       limit: z.number().refine((val) => val <= 100, 'Limit must be at most 100').optional().describe('Maximum number of channels (default: 100)'),
     }),
-    execute: async ({ connectionId, limit = 100 }) => {
+    execute: async ({ connectionId, limit = 100 }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
       const result = await executeNangoProxy('slack', {
         method: 'GET',
         endpoint: '/conversations.list',
@@ -276,7 +276,7 @@ export const nangoNotionTools = {
         property: z.literal('object'),
       }).optional().describe('Filter by object type'),
     }),
-    execute: async ({ connectionId, query, filter }) => {
+    execute: async ({ connectionId, query, filter }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
       const result = await executeNangoProxy('notion', {
         method: 'POST',
         endpoint: '/v1/search',
@@ -304,7 +304,7 @@ export const nangoNotionTools = {
       title: z.string().describe('Page title'),
       content: z.string().optional().describe('Page content (markdown)'),
     }),
-    execute: async ({ connectionId, parent_page_id, title, content }) => {
+    execute: async ({ connectionId, parent_page_id, title, content }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
       const result = await executeNangoProxy('notion', {
         method: 'POST',
         endpoint: '/v1/pages',
@@ -343,3 +343,5 @@ export const nangoTools = {
 };
 
 export type NangoToolName = keyof typeof nangoTools;
+
+

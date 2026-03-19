@@ -24,7 +24,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 
 # Install dependencies
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --prod
 
 # Copy all agent-related libraries
 COPY lib/agent ./lib/agent
@@ -41,9 +41,16 @@ COPY lib/previews ./lib/previews
 COPY lib/opencode ./lib/opencode
 
 # Copy worker service entry point
-COPY services/agent-worker ./services/agent-worker
+COPY lib/agent/services/agent-worker/package.json ./services/agent-worker/
+COPY lib/agent/services/agent-worker/tsconfig.json ./services/agent-worker/
+COPY lib/agent/services/agent-worker/src ./services/agent-worker/src
+
+# Build the worker service
+WORKDIR /app/services/agent-worker
+RUN pnpm install --frozen-lockfile --prod && pnpm build
 
 # Set environment variables
+WORKDIR /app
 ENV NODE_ENV=production
 ENV SERVICE_NAME=worker
 ENV PORT=3003
@@ -56,5 +63,11 @@ EXPOSE 3003
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD wget -q --spider http://localhost:${PORT}/health || exit 1
 
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+
+# Switch to non-root user
+USER nodejs
+
 # Start the worker service
-CMD ["node", "services/agent-worker/index.js"]
+CMD ["node", "services/agent-worker/dist/index.js"]

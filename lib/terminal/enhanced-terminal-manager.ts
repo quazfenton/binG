@@ -102,7 +102,7 @@ export class EnhancedTerminalManager {
     // Initialize MCP gateway if configured
     if (options?.mcpConfig && handle.getMcpGateway) {
       log.debug('Initializing MCP gateway...')
-      const mcpGateway = await handle.getMcpGateway(options.mcpConfig)
+      const mcpGateway = await handle.getMcpGateway({ serverId: typeof options.mcpConfig === 'string' ? options.mcpConfig : 'default' })
       this.mcpGateways.set(sessionId, mcpGateway)
       log.info(`MCP gateway initialized for ${sessionId}`)
 

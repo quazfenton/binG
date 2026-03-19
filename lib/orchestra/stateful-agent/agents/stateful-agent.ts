@@ -679,8 +679,9 @@ Respond with valid JSON matching this schema:
 
       this.taskGraph = {
         id: `taskgraph-${Date.now()}`,
-        tasks: result.object.tasks.map(t => ({
+        tasks: result.object.tasks.map((t: any, index: number) => ({
           ...t,
+          id: t.id || `task-${index}`,
           status: 'pending' as const,
         })),
         status: 'pending' as const,
@@ -734,12 +735,12 @@ Use 'createFile' for new files.`;
           createFile: allTools.createFile,
           execShell: allTools.execShell,
         },
-        maxToolCalls: 10,
         onStepFinish: async ({ toolCalls, toolResults }) => {
           // Execute tool calls via ToolExecutor
           for (const call of toolCalls) {
+            let callArgs: any;
             try {
-              const callArgs = (call as any).args || (call as any).input || {};
+              callArgs = (call as any).args || (call as any).input || {};
               const execResult = await this.toolExecutor.execute(call.toolName, call.toolCallId ? callArgs : {});
 
               // Record for loop detection
@@ -757,7 +758,6 @@ Use 'createFile' for new files.`;
               }
 
               // Update local state based on result
-              const callArgs = (call as any).args || (call as any).input || {};
               if (execResult.success && execResult.content && call.toolCallId && callArgs && 'path' in callArgs) {
                 this.vfs[(callArgs as any).path] = execResult.content;
 

@@ -78,6 +78,15 @@ export interface SandboxHandle {
   configureHttpService?(port: number): Promise<{ success: boolean; url: string; message?: string }>
   getCheckpointManager?(policy?: Partial<any>): any
 
+  // Desktop/VNC extensions
+  createDesktop?(config?: { resolution?: [number, number] }): Promise<{ id: string; streamUrl: string }>
+
+  // MCP Gateway extensions
+  getMcpGateway?(config: { serverId: string }): Promise<{ availableTools: any[] }>
+
+  // Status check
+  getStatus?(): Promise<{ status: string; uptime?: number }>
+
   // Provider-specific service accessors (optional, provider-dependent)
   getAmpService?(): { run(config: { prompt: string; workingDir?: string; streamJson?: boolean; model?: string }): Promise<{ output?: string; cost?: number; tokens?: number }> } | undefined
   getCodexService?(): { run(config: { prompt: string; workingDir?: string; fullAuto?: boolean; outputSchemaPath?: string }): Promise<{ output?: string; cost?: number; tokens?: number }> } | undefined

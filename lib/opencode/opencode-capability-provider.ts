@@ -324,7 +324,7 @@ export class OpencodeCapabilityProvider {
         } else if (part.type === 'tool' && part.tool?.name === 'delete_file') {
           fileChanges.push({
             path: (part.tool.args as any)?.path || (part.tool.args as any)?.file,
-            operation: 'delete' as 'write' | 'patch' | 'delete',
+            operation: ('delete'),
           })
         }
       }

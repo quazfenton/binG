@@ -521,7 +521,7 @@ export function ExperimentalWorkspacePanel() {
     };
 
     setChatMessages((prev) => [...prev, userMessage]);
-    setChatInput("");
+    if (!customPrompt) setChatInput("");
     setIsChatLoading(true);
 
     // Try to call the actual chat API

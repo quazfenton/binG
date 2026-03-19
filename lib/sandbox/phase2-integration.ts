@@ -284,7 +284,7 @@ export class Phase2Integration {
   /**
    * Get preview provider
    */
-  getPreviewProvider(): LivePreviewOffloading {
+  getPreviewProvider() {
     return livePreviewOffloading;
   }
 

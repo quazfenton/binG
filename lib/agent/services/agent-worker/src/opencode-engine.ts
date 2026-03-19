@@ -189,6 +189,9 @@ class OpenCodeEngine extends EventEmitter {
     return new Promise<OpenCodeEvent[]>((resolve, reject) => {
       const events: OpenCodeEvent[] = [];
 
+      // Register reject handler for error/exit recovery
+      this.pendingResolves.set(sessionId, reject);
+
       // Set up event listener
       const handleEvent = (event: OpenCodeEvent) => {
         // Filter events for this session
@@ -203,6 +206,7 @@ class OpenCodeEngine extends EventEmitter {
       // Set timeout
       const timeout = setTimeout(() => {
         this.off('event', handleEvent);
+        this.pendingResolves.delete(sessionId);
         resolve(events); // Resolve with partial events on timeout
       }, 120000);
 
@@ -226,6 +230,7 @@ class OpenCodeEngine extends EventEmitter {
           clearTimeout(timeout);
           this.off('event', handleEvent);
           this.off('event', doneHandler);
+          this.pendingResolves.delete(sessionId);
           resolve(events);
         }
       };
