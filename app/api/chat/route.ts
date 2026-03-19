@@ -1456,12 +1456,22 @@ async function handleGatewayStreaming(params: {
           const events = parser.parse(chunk);
           
           if (events.length > 0) {
-            // Successfully parsed NDJSON events
+            // Successfully parsed NDJSON events - normalize to chat SSE format
             for (const event of events) {
-              // Gateway sends NDJSON events, convert to SSE format
-              const eventType = event.type || 'message';
-              const sseEvent = `event: ${eventType}\ndata: ${JSON.stringify(event)}\n\n`;
-              controller.enqueue(encoder.encode(sseEvent));
+              // Convert gateway event to chat SSE format
+              // The chat client expects: data: {...}\n\n with choices[0].delta.content for streaming
+              if (event.type === 'message' || event.type === 'delta') {
+                const sseData = {
+                  choices: [{
+                    delta: {
+                      content: event.content || event.delta || ''
+                    }
+                  }]
+                };
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(sseData)}\n\n`));
+              } else if (event.type === 'done' || event.type === 'complete') {
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              }
             }
           } else {
             // No events parsed - NDJSON parser buffers incomplete lines

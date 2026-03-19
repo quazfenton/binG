@@ -277,7 +277,7 @@ const FRAMEWORK_ENTRY_POINTS: Record<AppFramework, string[]> = {
   // Vue-based
   nuxt: [
     '/app.vue', '/App.vue', '/src/app.vue',
-    '/src/main.ts', '/src/main.js', '/nuxt.config.ts',
+    '/src/main.ts', '/src/main.js',
     '/pages/index.vue', '/pages/index.ts', '/pages/index.js',
     '/pages/index.page.vue'
   ],
@@ -1404,10 +1404,16 @@ export class LivePreviewOffloading {
     for (const [path, content] of Object.entries(files)) {
       if (path.endsWith('.py')) {
         // Flask/FastAPI pattern: app.run(port=8000) or uvicorn.run(port=8000)
-        const portMatch = content.match(/run\(.*port\s*=\s*(\d+)|app\.run\(.*(\d+)|port=(\d+)/);
+        const portMatch =
+          content.match(/\b(?:app|uvicorn)\.run\([\s\S]*?\bport\s*=\s*(\d+)\b/) ??
+          content.match(/\bport\s*=\s*(\d+)\b/);
         if (portMatch) {
-          return parseInt(portMatch[1] || portMatch[2] || portMatch[3], 10);
+          return parseInt(portMatch[1], 10);
         }
+        // Framework defaults
+        if (content.includes('from flask import') || content.includes('Flask(')) return 5000;
+        if (content.includes('from fastapi import') || content.includes('FastAPI(') || content.includes('uvicorn.')) return 8000;
+        if (path.endsWith('manage.py') || content.includes('from django import')) return 8000;
         // Streamlit default
         if (content.includes('import streamlit') || content.includes('st.')) return 8501;
         // Gradio default

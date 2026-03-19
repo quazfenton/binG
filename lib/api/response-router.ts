@@ -76,7 +76,7 @@ const logger = createLogger('API:ResponseRouter')
 // Type Definitions
 // ============================================================================
 
-export type LLMMessageRole = 'user' | 'assistant' | 'system';
+export type LLMMessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
 export interface LLMMessage {
   role: LLMMessageRole

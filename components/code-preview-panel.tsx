@@ -591,6 +591,12 @@ export default function CodePreviewPanel({
     }
     
     async function performRename(sourcePath: string, targetPath: string) {
+      // Bail out when the target path equals the source path
+      if (sourcePath === targetPath) {
+        toast.info('Cannot rename file to itself');
+        return;
+      }
+
       try {
         const file = await readFilesystemFile(sourcePath);
         await writeFilesystemFile(targetPath, file.content);
@@ -603,6 +609,13 @@ export default function CodePreviewPanel({
           setSelectedFilesystemPath('');
           setSelectedFilesystemContent('');
         }
+        
+        emitFilesystemUpdated({
+          path: targetPath,
+          scopePath: normalizedFilesystemPath,
+          source: 'code-preview',
+          type: 'update',
+        });
       } catch (err: any) {
         toast.error('Failed to rename: ' + err.message);
       }
@@ -750,6 +763,12 @@ export default function CodePreviewPanel({
     }
     
     async function performPaste(sourcePath: string, destPath: string, targetDir: string) {
+      // Bail out when the target path equals the source path
+      if (sourcePath === destPath) {
+        toast.info('Cannot paste file into itself');
+        return;
+      }
+
       try {
         const file = await readFilesystemFile(sourcePath);
         await writeFilesystemFile(destPath, file.content);
@@ -838,6 +857,12 @@ export default function CodePreviewPanel({
       }
       
       async function performMove(source: string, dest: string) {
+        // Bail out when the target path equals the source path
+        if (source === dest) {
+          toast.info('Cannot move file into itself');
+          return;
+        }
+
         const file = await readFilesystemFile(source);
         await writeFilesystemFile(dest, file.content);
         await deleteFilesystemPath(source);

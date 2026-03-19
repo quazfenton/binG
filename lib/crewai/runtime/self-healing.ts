@@ -236,31 +236,33 @@ export class SelfHealingExecutor extends EventEmitter {
     while (retryBudget.canRetry()) {
       try {
         this.emit('execution:start', { agentId, attempt: retryBudget.getState().totalAttempts + 1 });
-        
-        const result = await crew.kickoff(input);
-        
+
+        const crewAny = crew as any;
+        const result = await crewAny.kickoff(input);
+
         retryBudget.recordSuccess();
         this.emit('execution:success', { agentId, result });
-        
+
         return result;
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
-        
+
         if (!retryBudget.isRetryableError(lastError)) {
           this.emit('execution:error', { agentId, error: lastError, retryable: false });
           throw lastError;
         }
 
         retryBudget.recordAttempt(lastError);
-        this.emit('execution:retry', { 
-          agentId, 
-          error: lastError, 
+        this.emit('execution:retry', {
+          agentId,
+          error: lastError,
           attempt: retryBudget.getState().totalAttempts,
-          delay: retryBudget.calculateDelay() 
+          delay: retryBudget.calculateDelay()
         });
 
-        if (retryBudget.onRetry) {
-          retryBudget.onRetry(retryBudget.getState().totalAttempts, lastError);
+        const retryBudgetAny = retryBudget as any;
+        if (retryBudgetAny.onRetry) {
+          retryBudgetAny.onRetry(retryBudgetAny.getState().totalAttempts, lastError);
         }
 
         // Try healing strategies

@@ -667,7 +667,13 @@ export default function ConversationInterface() {
               existingFilePaths = payload.data.nodes
                 .filter((node: any) => node.type === 'file')
                 .map((node: any) => node.path);
+            } else {
+              // Malformed payload - treat as error
+              throw new Error('Invalid filesystem list response');
             }
+          } else {
+            // Non-OK response - treat as error
+            throw new Error(`Filesystem list failed: ${listResponse.status}`);
           }
         } catch (listError) {
           console.warn('Failed to query filesystem for conflict detection:', listError);

@@ -10,7 +10,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { e2bDesktopProvider, type DesktopAction } from '@/lib/computer/e2b-desktop-provider-enhanced';
 import { verifyToken } from '@/lib/security/jwt-auth';
-import { activeDesktops } from '../route';
+import { activeDesktops } from '../../route';
 
 /**
  * Extract userId from request authorization header

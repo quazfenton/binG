@@ -35,8 +35,8 @@ class FastAgentInterceptor {
   async intercept(request: InterceptorRequest): Promise<InterceptorResponse> {
     try {
       const lastMessage = request.messages[request.messages.length - 1];
-      const content = lastMessage?.content || '';
-      
+      const content = typeof lastMessage?.content === 'string' ? lastMessage?.content : '';
+
       // Use unified ComplexityAnalyzer
       const metrics = ComplexityAnalyzer.analyze(content);
       
@@ -83,10 +83,9 @@ class FastAgentInterceptor {
         messages: fastAgentRequest.messages,
         temperature: optimizedParams.temperature,
         maxTokens: optimizedParams.maxTokens,
-        taskComplexity: metrics.complexity,
         enableReflection: optimizedParams.enableReflection,
         stepByStep: optimizedParams.stepByStep
-      };
+      } as any;
     } catch (error) {
       // ...
     }

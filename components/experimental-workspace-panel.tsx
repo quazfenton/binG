@@ -1006,7 +1006,7 @@ export function ExperimentalWorkspacePanel() {
         title: 'File Exists',
         message: `A file named "${renameValue.trim()}" already exists. Overwrite?`,
         onConfirm: async () => {
-          await performRename(newPath);
+          await performRename(newPath, renamingFile);
           setShowConfirmDialog(false);
           setConfirmDialogData(null);
         },
@@ -1015,7 +1015,7 @@ export function ExperimentalWorkspacePanel() {
       return;
     }
 
-    await performRename(newPath);
+    await performRename(newPath, renamingFile);
   }, [renamingFile, renameValue, vfsSnapshot?.files]);
 
   const performRename = async (newPath: string, oldPath: string) => {
@@ -1091,7 +1091,7 @@ export function ExperimentalWorkspacePanel() {
         title: 'File Exists',
         message: `A file named "${fileName}" already exists in this folder. Overwrite?`,
         onConfirm: async () => {
-          await performMove(targetPath);
+          await performMove(targetPath, draggedFile);
           setShowConfirmDialog(false);
           setConfirmDialogData(null);
         },
@@ -1101,7 +1101,7 @@ export function ExperimentalWorkspacePanel() {
       return;
     }
 
-    await performMove(targetPath);
+    await performMove(targetPath, draggedFile);
     setDraggedFile(null);
   }, [draggedFile, vfsSnapshot?.files]);
 

@@ -315,6 +315,10 @@ export class SandboxMetrics {
   public sandboxExecTotal: Counter;
   public sandboxExecDuration: Histogram;
   public sandboxCreationDuration: Histogram;
+  
+  // Command execution metrics
+  public commandExecutions: Counter;
+  public commandExecutionDuration: Histogram;
 
   // Snapshot metrics
   public snapshotCreatedTotal: Counter;
@@ -364,6 +368,14 @@ export class SandboxMetrics {
       'sandbox_creation_duration_seconds',
       'Sandbox creation duration in seconds',
       []
+    );
+    
+    // Command execution metrics
+    this.commandExecutions = new Counter('command_executions_total', 'Total command executions', ['status']);
+    this.commandExecutionDuration = new Histogram(
+      'command_execution_duration_seconds',
+      'Command execution duration in seconds',
+      ['status']
     );
 
     // Snapshot metrics

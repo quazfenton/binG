@@ -24,15 +24,12 @@ import { e2bDesktopProvider } from '@/lib/computer/e2b-desktop-provider-enhanced
 import { verifyToken } from '@/lib/security/jwt-auth';
 
 // Store active desktop sessions with user ownership (in production, use Redis)
-const activeDesktops = new Map<string, {
+export const activeDesktops = new Map<string, {
   desktop: any;
   userId: string;
   createdAt: number;
   lastUsed: number;
 }>();
-
-// Export for use in other routes
-export { activeDesktops };
 
 /**
  * Extract userId from request authorization header

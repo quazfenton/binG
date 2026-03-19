@@ -13,7 +13,7 @@
  * ```
  */
 
-import { getDatabase } from './database';
+import { getDatabase } from '../database/connection';
 
 const DB_FILE = process.env.SQLITE_DB_PATH || './data/bing.db';
 
@@ -30,8 +30,8 @@ const DEFAULT_FLAGS = {
  */
 async function getUserPreferences(userId: string): Promise<Record<string, boolean> | null> {
   try {
-    const db = await getDatabase(DB_FILE);
-    const row = await db.get(
+    const db = getDatabase();
+    const row = db.get(
       'SELECT preferences FROM user_preferences WHERE user_id = ?',
       [userId]
     );
