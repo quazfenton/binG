@@ -966,7 +966,7 @@ export class SandboxConnectionManager {
 
         this.writeLine(`\x1b[31m${msg.data}\x1b[0m`)
         
-        if (!this.state.status === 'connected') {
+        if (this.state.status !== 'connected') {
           this.updateTerminalState({
             sandboxInfo: {
               sessionId: this.state.sessionId,
@@ -1132,7 +1132,7 @@ export class SandboxConnectionManager {
   /**
    * Send input to sandbox
    */
-  sendInput(data: string): void {
+  sendToSandboxInput(data: string): void {
     if (this.state.status === 'connected' && this.state.sandboxId) {
       this.sendInput(this.state.sandboxId, data)
     } else {
@@ -1144,7 +1144,7 @@ export class SandboxConnectionManager {
   /**
    * Send resize to sandbox
    */
-  sendResize(cols: number, rows: number): void {
+  sendToSandboxResize(cols: number, rows: number): void {
     if (this.state.status === 'connected' && this.state.sandboxId) {
       this.sendResize(this.state.sandboxId, cols, rows)
     }

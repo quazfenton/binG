@@ -94,9 +94,10 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
       return false;
     }
 
-    // Check for the new File System Access API
+    // Check for the Origin Private File System API via navigator.storage
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return 'storage' in window && 'getDirectory' in (window as any).storage;
+    const nav = navigator as any;
+    return 'storage' in nav && nav.storage != null && 'getDirectory' in nav.storage;
   }
 
   /**
@@ -133,7 +134,7 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
     try {
       // Get root directory handle from OPFS
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      this.rootHandle = await (window as any).storage.getDirectory(
+      this.rootHandle = await (navigator as any).storage.getDirectory(
         `${this.options.rootName}/${workspaceId}`
       );
       

@@ -9,32 +9,45 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
-import { withAuth } from '@/lib/auth/with-auth';
-
-const DB_FILE = process.env.SQLITE_DB_PATH || './data/bing.db';
+import { getDatabase } from '@/lib/database/connection';
+import { withAuth } from '@/lib/auth/enhanced-middleware';
 
 /**
  * Get user preferences from database
  */
 async function getUserPreferences(userId: string): Promise<Record<string, boolean>> {
   try {
-    const db = await getDatabase(DB_FILE);
-    
-    // Check if user has preferences record
-    const existing = await db.get(
-      'SELECT preferences FROM user_preferences WHERE user_id = ?',
-      [userId]
-    );
-    
-    if (existing?.preferences) {
-      return JSON.parse(existing.preferences);
+    const db = getDatabase();
+
+    // Get all preferences as key-value pairs
+    const rows = db.prepare(
+      'SELECT preference_key, preference_value FROM user_preferences WHERE user_id = ?'
+    ).all([userId]) as any[];
+
+    if (!rows || rows.length === 0) {
+      // Return defaults
+      return {
+        OPENCODE_ENABLED: false,
+        NULLCLAW_ENABLED: false,
+      };
     }
-    
-    // Return defaults
+
+    // Convert rows to object
+    const preferences: Record<string, boolean> = {};
+    for (const row of rows) {
+      try {
+        preferences[row.preference_key] = JSON.parse(row.preference_value);
+      } catch {
+        // If parsing fails, try as string boolean
+        preferences[row.preference_key] = row.preference_value === 'true';
+      }
+    }
+
+    // Ensure defaults exist
     return {
       OPENCODE_ENABLED: false,
       NULLCLAW_ENABLED: false,
+      ...preferences,
     };
   } catch (error) {
     console.error('[UserPreferences] Failed to get preferences:', error);
@@ -47,45 +60,34 @@ async function getUserPreferences(userId: string): Promise<Record<string, boolea
 }
 
 /**
- * Save user preference to database
+ * Save user preferences to database (atomic batch update)
  */
-async function saveUserPreference(
+async function saveUserPreferences(
   userId: string,
-  key: string,
-  value: boolean
+  preferences: Record<string, boolean>
 ): Promise<void> {
   try {
-    const db = await getDatabase(DB_FILE);
-    
-    // Get existing preferences
-    const existing = await db.get(
-      'SELECT preferences FROM user_preferences WHERE user_id = ?',
-      [userId]
+    const db = getDatabase();
+
+    // Use transaction for atomic batch update
+    const transaction = db.transaction((updates: Array<[string, string]>) => {
+      for (const [key, value] of updates) {
+        db.prepare(
+          `INSERT OR REPLACE INTO user_preferences (user_id, preference_key, preference_value, updated_at)
+           VALUES (?, ?, ?, CURRENT_TIMESTAMP)`
+        ).run([userId, key, value]);
+      }
+    });
+
+    // Convert preferences to array for transaction
+    const updates: Array<[string, string]> = Object.entries(preferences).map(
+      ([key, value]) => [key, JSON.stringify(value)]
     );
-    
-    let preferences: Record<string, boolean> = {
-      OPENCODE_ENABLED: false,
-      NULLCLAW_ENABLED: false,
-    };
-    
-    if (existing?.preferences) {
-      preferences = JSON.parse(existing.preferences);
-    }
-    
-    // Update the specific key
-    preferences[key] = value;
-    
-    // Upsert preferences
-    await db.run(
-      `INSERT INTO user_preferences (user_id, preferences, updated_at) 
-       VALUES (?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(user_id) DO UPDATE SET 
-         preferences = excluded.preferences,
-         updated_at = CURRENT_TIMESTAMP`,
-      [userId, JSON.stringify(preferences)]
-    );
+
+    // Execute transaction
+    transaction(updates);
   } catch (error) {
-    console.error('[UserPreferences] Failed to save preference:', error);
+    console.error('[UserPreferences] Failed to save preferences:', error);
     throw error;
   }
 }
@@ -94,11 +96,11 @@ async function saveUserPreference(
  * GET /api/user/preferences
  * Get all user preferences
  */
-export async function GET(request: NextRequest) {
-  return withAuth(request, async (user) => {
+export const GET = withAuth(
+  async (request: NextRequest, auth) => {
     try {
-      const preferences = await getUserPreferences(user.id);
-      
+      const preferences = await getUserPreferences(auth.userId || 'anonymous');
+
       return NextResponse.json({
         success: true,
         preferences,
@@ -109,21 +111,21 @@ export async function GET(request: NextRequest) {
         { status: 500 }
       );
     }
-  });
-}
+  }
+);
 
 /**
  * POST /api/user/preferences
- * Save a user preference override
- * 
+ * Save user preference overrides (atomic batch update)
+ *
  * Body: { [key: string]: boolean }
  * Example: { "OPENCODE_ENABLED": true }
  */
-export async function POST(request: NextRequest) {
-  return withAuth(request, async (user) => {
+export const POST = withAuth(
+  async (request: NextRequest, auth) => {
     try {
       const body = await request.json();
-      
+
       // Validate body is an object
       if (!body || typeof body !== 'object') {
         return NextResponse.json(
@@ -131,11 +133,11 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      
-      // Validate and save each key-value pair
+
+      // Validate all keys and values first
       const allowedKeys = ['OPENCODE_ENABLED', 'NULLCLAW_ENABLED'];
-      const updates: Record<string, boolean> = {};
-      
+      const validatedUpdates: Record<string, boolean> = {};
+
       for (const [key, value] of Object.entries(body)) {
         // Only allow specific keys
         if (!allowedKeys.includes(key)) {
@@ -144,7 +146,7 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           );
         }
-        
+
         // Only allow boolean values
         if (typeof value !== 'boolean') {
           return NextResponse.json(
@@ -152,14 +154,16 @@ export async function POST(request: NextRequest) {
             { status: 400 }
           );
         }
-        
-        updates[key] = value;
-        await saveUserPreference(user.id, key, value);
+
+        validatedUpdates[key] = value;
       }
-      
+
+      // Save all preferences atomically in single transaction
+      await saveUserPreferences(auth.userId || 'anonymous', validatedUpdates);
+
       return NextResponse.json({
         success: true,
-        preferences: updates,
+        preferences: validatedUpdates,
         message: 'Preferences saved successfully',
       });
     } catch (error: any) {
@@ -169,5 +173,5 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
-  });
-}
+  }
+);

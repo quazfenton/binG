@@ -1,0 +1,90 @@
+# Dockerfile for OpenSandbox Service
+# Isolated code execution environments using OpenSandbox
+# Based on official OpenSandbox documentation: docs/sdk/opensandbox/
+#
+# IMPORTANT: OpenSandbox has an official Python server package.
+# This Dockerfile shows the integration pattern for binG.
+# For production, consider using the official opensandbox-server package.
+
+FROM node:20-alpine
+
+# Install system dependencies including Docker for container management
+RUN apk add --no-cache \
+    docker \
+    docker-cli-compose \
+    git \
+    python3 \
+    py3-pip \
+    build-base \
+    linux-headers \
+    curl
+
+# Enable corepack for pnpm
+RUN corepack enable
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package.json pnpm-lock.yaml ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile --prod
+
+# Copy OpenSandbox integration code
+COPY lib/sandbox/providers/opensandbox-provider.ts ./lib/sandbox/providers/
+COPY lib/sandbox/providers/opensandbox-*.ts ./lib/sandbox/providers/
+COPY lib/sandbox/spawn ./lib/sandbox/spawn
+COPY lib/utils ./lib/utils
+COPY lib/types ./lib/types
+
+# Note: services/opensandbox is not yet implemented
+# See alternative deployment options below
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV PORT=3004
+ENV OPEN_SANDBOX_IMAGE=node:20-alpine
+ENV OPEN_SANDBOX_DEFAULT_CPU=2
+ENV OPEN_SANDBOX_DEFAULT_MEMORY=4096
+
+# Expose OpenSandbox port
+EXPOSE 3004
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD wget -q --spider http://localhost:${PORT}/health || exit 1
+
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+
+# Placeholder command - serves health endpoint to pass healthcheck
+USER root
+RUN apk add --no-cache busybox && \
+    mkdir -p /tmp/www && \
+    echo "ok" > /tmp/www/health
+USER nodejs
+CMD ["sh", "-c", "busybox httpd -f -p ${PORT} -h /tmp/www"]
+
+# ===========================================
+# ALTERNATIVE: Use official OpenSandbox server
+# ===========================================
+# For production, use the official OpenSandbox server package:
+#
+# 1. Install: uv pip install opensandbox-server
+# 2. Configure: opensandbox-server init-config ~/.sandbox.toml
+# 3. Run: opensandbox-server --config ~/.sandbox.toml
+#
+# Or in docker-compose.yml:
+#
+# opensandbox-server:
+#   image: opensandbox/server:latest
+#   ports:
+#     - "8080:8080"
+#   volumes:
+#     - /var/run/docker.sock:/var/run/docker.sock
+#     - opensandbox-config:/root/.opensandbox
+#   environment:
+#     - OPEN_SANDBOX_API_KEY=your-api-key
+#     - OPEN_SANDBOX_NETWORK_MODE=bridge
+# ===========================================

@@ -410,12 +410,12 @@ export class OPFSGitIntegration {
         } else if (head === 1 && worktree === 0) {
           status = 'deleted';
           stagedStatus = true;
-        } else if (head === 1 && worktree === 2) {
+        } else if (head === 1 && (worktree as any) === 2) {
           status = 'modified';
           stagedStatus = true;
-        } else if (head === 1 && worktree === 3) {
+        } else if (head === 1 && (worktree as any) === 3) {
           status = 'modified';
-        } else if (head === 2 && worktree === 3) {
+        } else if ((head as any) === 2 && (worktree as any) === 3) {
           status = 'deleted';
         } else {
           continue; // No changes
@@ -655,7 +655,7 @@ export class OPFSGitIntegration {
 
       return {
         success: true,
-        commitsPulled: result.oid ? 1 : 0,
+        commitsPulled: (result as any).oid ? 1 : 0,
       };
     } catch (error: any) {
       console.error('[OPFS Git] Pull failed:', error.message);
@@ -686,7 +686,7 @@ export class OPFSGitIntegration {
         depth,
       });
 
-      return log.map(entry => ({
+      return log.map((entry: any) => ({
         oid: entry.oid,
         commit: entry.commit,
         payload: entry.payload,
@@ -790,8 +790,8 @@ export class OPFSGitIntegration {
         dir: this.options.workspaceId,
         gitdir: `${this.options.workspaceId}/${this.gitdir}`,
         trees: options.ref
-          ? [await git.TREE(options.ref), await git.WORKDIR()]
-          : [await git.HEAD(), await git.WORKDIR()],
+          ? [await (git as any).TREE(options.ref), await (git as any).WORKDIR()]
+          : [await (git as any).HEAD(), await (git as any).WORKDIR()],
         map: async (filepath, [oldTree, newTree]) => {
           if (options.path && filepath !== options.path) {
             return null;
@@ -831,7 +831,7 @@ export class OPFSGitIntegration {
     const git = await import('isomorphic-git');
 
     try {
-      const diffResult = await git.diff({
+      const diffResult = await (git as any).diff({
         fs: this.fs,
         dir: this.options.workspaceId,
         gitdir: `${this.options.workspaceId}/${this.gitdir}`,

@@ -46,12 +46,7 @@ export const mastra = new Mastra({
         schema: process.env.MASTRA_SCHEMA || 'mastra',
       })
     : undefined,
-  telemetry: {
-    enabled: process.env.MASTRA_TELEMETRY_ENABLED === 'true',
-    serviceName: 'bing-agent',
-    // Sampling rate for cost control (10%)
-    samplingRate: 0.1,
-  },
+  // Telemetry configuration removed - not supported in current Mastra version
   // Register workflows
   workflows: {
     codeAgent: codeAgentWorkflow,

@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { v4 as uuidv4 } from 'uuid';
+import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 
 export interface Message {
   id: string;
@@ -125,6 +126,7 @@ export function useConversation() {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    const parser = createNDJSONParser();
     let fullContent = "";
     let buffer = "";
     let isComplete = false;
@@ -135,22 +137,27 @@ export function useConversation() {
         const { done, value } = await reader.read();
         if (done) break;
 
+        // Decode chunk and parse complete NDJSON lines
         const chunk = decoder.decode(value, { stream: true });
+        
+        // Append to buffer for handling messages that span chunk boundaries
         buffer += chunk;
 
-        // Process complete lines
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+        // Process complete SSE events (separated by \n\n)
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || ''; // Keep incomplete last line in buffer
 
         for (const line of lines) {
-          if (!line.trim() || !line.startsWith('data: ')) continue;
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
 
-          const data = line.slice(6).trim();
+          const data = trimmed.slice(6); // Remove 'data: ' prefix
           if (data === '[DONE]') {
             isComplete = true;
             break;
           }
 
+          // Parse the JSON data
           try {
             const parsed = JSON.parse(data);
             if (parsed.choices?.[0]?.delta?.content) {

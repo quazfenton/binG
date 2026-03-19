@@ -20,7 +20,7 @@ export class GrammarToolCallParser {
             path: filename.trim(),
             content: fileContent.trim(),
           },
-          source: 'grammar-write',
+          source: 'grammar',
         });
       }
     }
@@ -37,7 +37,7 @@ export class GrammarToolCallParser {
           arguments: {
             path: filename.trim(),
           },
-          source: 'grammar-read',
+          source: 'grammar',
         });
       }
     }
@@ -96,3 +96,5 @@ export class GrammarToolCallParser {
     });
   }
 }
+
+

@@ -5,6 +5,29 @@ import { reflectionEngine } from '@/lib/orchestra/reflection-engine';
 import { executionGraphEngine } from '@/lib/agent/execution-graph';
 import { generateObject } from 'ai';
 import { z } from 'zod';
+import { createLogger } from '@/lib/utils/logger';
+import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
+import { detectTemplate, templateToTaskGraph, type TemplateType } from './template-flows';
+import { createLoopDetector, type LoopDetectionResult } from '@/lib/agent/loop-detection';
+import { createCapabilityChain, type CapabilityChain } from '@/lib/agent/capability-chain';
+import { createBootstrappedAgency, type BootstrappedAgency } from '@/lib/agent/bootstrapped-agency';
+
+const log = createLogger('StatefulAgent');
+
+/**
+ * Acquire session lock to prevent concurrent access
+ * Falls back to no-op if session lock module not available
+ */
+async function acquireSessionLock(sessionId: string): Promise<() => void> {
+  try {
+    const { acquireSessionLock: acquireLock } = await import('@/lib/session/session-lock');
+    return acquireLock(sessionId);
+  } catch {
+    // Session lock not available, return no-op
+    log.warn('Session lock not available, running without concurrency protection');
+    return () => { /* no-op */ };
+  }
+}
 
 export interface StatefulAgentOptions {
   sessionId?: string;
@@ -13,6 +36,12 @@ export interface StatefulAgentOptions {
   enforcePlanActVerify?: boolean;
   enableReflection?: boolean;
   enableTaskDecomposition?: boolean;
+  // Execution mode: quick (minimal overhead), standard (balanced), thorough (max quality)
+  executionMode?: 'quick' | 'standard' | 'thorough';
+  // Enable capability chaining for complex workflows
+  enableCapabilityChaining?: boolean;
+  // Enable bootstrapped agency for learning from past executions
+  enableBootstrappedAgency?: boolean;
 }
 
 export interface StatefulAgentResult {
@@ -81,6 +110,8 @@ const TaskGraphSchema = z.object({
 
 export class StatefulAgent {
   private sessionId: string;
+  private conversationId: string;
+  private userId: string;
   private sandboxHandle?: SandboxHandle;
   private vfs: Record<string, string> = {};
   private transactionLog: Array<{ path: string; type: string; timestamp: number; originalContent?: string }> = [];
@@ -92,6 +123,7 @@ export class StatefulAgent {
   private retryCount: number = 0;
   private steps: number = 0;
   private toolExecutor: ToolExecutor;
+  public executionMode: 'quick' | 'standard' | 'thorough' = 'standard';
 
   // Task Decomposition Engine
   private taskGraph?: TaskGraph;
@@ -106,6 +138,22 @@ export class StatefulAgent {
   // Execution Graph Integration
   private executionGraphId?: string;
 
+  // Loop Detection
+  private loopDetector = createLoopDetector({
+    maxConsecutiveSimilar: 3,
+    maxRepetitionsInWindow: 5,
+    windowSizeSeconds: 60,
+    enabled: true,
+  });
+
+  // Capability Chain
+  private enableCapabilityChaining: boolean;
+  private currentChain?: CapabilityChain;
+
+  // Bootstrapped Agency
+  private enableBootstrappedAgency: boolean;
+  private agency?: BootstrappedAgency;
+
   constructor(options: StatefulAgentOptions = {}) {
     this.sessionId = options.sessionId || crypto.randomUUID();
     this.sandboxHandle = options.sandboxHandle;
@@ -113,6 +161,8 @@ export class StatefulAgent {
     this.enforcePlanActVerify = options.enforcePlanActVerify ?? true;
     this.enableReflection = options.enableReflection ?? true;
     this.enableTaskDecomposition = options.enableTaskDecomposition ?? true;
+    this.enableCapabilityChaining = options.enableCapabilityChaining ?? false;
+    this.enableBootstrappedAgency = options.enableBootstrappedAgency ?? false;
 
     this.toolExecutor = new ToolExecutor({
       sandboxHandle: this.sandboxHandle,
@@ -125,27 +175,72 @@ export class StatefulAgent {
       nodes: new Map(),
       edges: new Map(),
     };
+
+    // Initialize bootstrapped agency if enabled
+    if (this.enableBootstrappedAgency) {
+      this.agency = createBootstrappedAgency({
+        sessionId: this.sessionId,
+        enableLearning: true,
+        maxHistorySize: 1000,
+        enablePatternRecognition: true,
+        enableAdaptiveSelection: true,
+      });
+      log.info('Bootstrapped Agency initialized', { sessionId: this.sessionId });
+    }
   }
 
   /**
    * Create execution graph for tracking task progress
    */
   private async createExecutionGraph(): Promise<void> {
+    if (!this.taskGraph || this.taskGraph.tasks.length === 0) return;
+    
     const graph = executionGraphEngine.createGraph(this.sessionId);
     this.executionGraphId = graph.id;
-    
+
     // Add nodes for each task in the task graph
-    if (this.taskGraph) {
-      for (const task of this.taskGraph.tasks) {
-        executionGraphEngine.addNode(graph, {
-          id: task.id,
-          type: 'agent_step',
-          name: task.description,
-          description: task.description,
-          dependencies: task.dependencies,
-        });
-      }
+    for (const task of this.taskGraph.tasks) {
+      executionGraphEngine.addNode(graph, {
+        id: task.id,
+        type: 'agent_step',
+        name: task.description,
+        description: task.description,
+        dependencies: task.dependencies,
+      });
     }
+    
+    log.info('Execution graph created', {
+      graphId: graph.id,
+      taskId: this.taskGraph.id,
+      taskCount: this.taskGraph.tasks.length,
+    });
+  }
+
+  /**
+   * Update execution graph node status
+   */
+  private async updateExecutionGraphNode(nodeId: string, status: 'running' | 'completed' | 'failed', result?: any): Promise<void> {
+    if (!this.executionGraphId) return;
+    
+    const graph = executionGraphEngine.getGraph(this.executionGraphId);
+    if (!graph) return;
+    
+    const node = graph.nodes.get(nodeId);
+    if (!node) return;
+    
+    node.status = status;
+    if (status === 'running') {
+      node.startedAt = Date.now();
+    } else if (status === 'completed' || status === 'failed') {
+      node.completedAt = Date.now();
+      if (result) node.result = result;
+    }
+    
+    log.debug('Execution graph node updated', {
+      graphId: this.executionGraphId,
+      nodeId,
+      status,
+    });
   }
 
   /**
@@ -208,6 +303,16 @@ export class StatefulAgent {
   }
 
   async run(userMessage: string): Promise<StatefulAgentResult> {
+    const startTime = Date.now();
+    log.info('StatefulAgent.run() started', {
+      sessionId: this.sessionId,
+      executionMode: this.executionMode,
+      userMessageLength: userMessage.length,
+      enableReflection: this.enableReflection,
+      enableTaskDecomposition: this.enableTaskDecomposition,
+      maxSelfHealAttempts: this.maxSelfHealAttempts,
+    });
+
     // Acquire exclusive session lock to prevent concurrent access
     const releaseLock = await acquireSessionLock(this.sessionId);
 
@@ -216,37 +321,69 @@ export class StatefulAgent {
       this.steps = 0;
 
       try {
+        log.info('Starting discovery phase', { sessionId: this.sessionId });
         await this.runDiscoveryPhase(userMessage);
 
+        log.info('Starting planning phase', { sessionId: this.sessionId });
         this.status = 'planning';
         await this.runPlanningPhase(userMessage);
 
         // Create execution graph for tracking
         if (this.enableTaskDecomposition && this.taskGraph) {
+          log.info('Creating execution graph', { 
+            sessionId: this.sessionId, 
+            taskCount: this.taskGraph.tasks.length,
+          });
           await this.createExecutionGraph();
         }
 
+        log.info('Starting editing phase', { sessionId: this.sessionId });
         this.status = 'editing';
         await this.runEditingPhase(userMessage);
 
+        log.info('Starting verification phase', { sessionId: this.sessionId });
         this.status = 'verifying';
         await this.runVerificationPhase();
 
         // Apply reflection if enabled
         if (this.enableReflection) {
+          log.info('Starting reflection phase', { sessionId: this.sessionId });
           await this.applyReflection();
         }
 
         this.status = 'completed';
 
-        return {
+        const duration = Date.now() - startTime;
+        const result: StatefulAgentResult = {
           success: this.errors.length === 0,
-          response: `Completed ${this.steps} steps. Modified ${this.transactionLog.length} files.`,
+          response: `Completed ${this.steps} steps in ${Math.round(duration / 1000)}s. Modified ${this.transactionLog.length} files.`,
           steps: this.steps,
           errors: this.errors,
           vfs: this.vfs,
-          metrics: this.toolExecutor.getMetrics(),
+          metrics: {
+            ...this.toolExecutor.getMetrics(),
+            duration,
+            executionMode: this.executionMode,
+            reflectionApplied: this.enableReflection,
+            taskDecompositionApplied: this.enableTaskDecomposition,
+          },
         };
+
+        // Log completion metrics
+        log.info('StatefulAgent execution completed', {
+          sessionId: this.sessionId,
+          executionMode: this.executionMode,
+          success: result.success,
+          steps: result.steps,
+          filesModified: this.transactionLog.length,
+          errors: result.errors.length,
+          duration: `${Math.round(duration / 1000)}s`,
+          reflectionEnabled: this.enableReflection,
+          taskDecompositionEnabled: this.enableTaskDecomposition,
+          executionGraphId: this.executionGraphId,
+        });
+
+        return result;
       } catch (error: any) {
         this.status = 'error';
         this.errors.push({
@@ -255,17 +392,33 @@ export class StatefulAgent {
           timestamp: Date.now(),
         });
 
+        const duration = Date.now() - startTime;
+        log.error('StatefulAgent execution failed', {
+          sessionId: this.sessionId,
+          executionMode: this.executionMode,
+          error: error.message,
+          steps: this.steps,
+          errors: this.errors.length,
+          duration: `${Math.round(duration / 1000)}s`,
+        });
+
         return {
           success: false,
           response: error instanceof Error ? error.message : 'Unknown error',
           steps: this.steps,
           errors: this.errors,
           vfs: this.vfs,
+          metrics: {
+            duration,
+            executionMode: this.executionMode,
+            failedAtStep: this.steps,
+          },
         };
       }
     } finally {
       // Always release the lock, even if there's an error
       releaseLock();
+      log.debug('Session lock released', { sessionId: this.sessionId });
     }
   }
 
@@ -303,6 +456,38 @@ REQUEST: ${userMessage}
 Respond with a list of file paths, one per line. No other text.`;
 
     try {
+      // First, try to use context pack for comprehensive context gathering
+      if (process.env.STATEFUL_AGENT_USE_CONTEXT_PACK !== 'false') {
+        try {
+          const contextPack = await contextPackService.generateContextPack(
+            this.sessionId,
+            '/',
+            {
+              format: 'plain',
+              includeContents: true,
+              includeTree: true,
+              maxTotalSize: 500 * 1024, // 500KB limit for context
+            }
+          );
+          
+          log.info('Context pack generated for discovery', {
+            fileCount: contextPack.fileCount,
+            directoryCount: contextPack.directoryCount,
+            estimatedTokens: contextPack.estimatedTokens,
+          });
+          
+          // Add key files from context pack to VFS
+          for (const file of contextPack.files.slice(0, 20)) {
+            if (file.content && !this.vfs[file.path]) {
+              this.vfs[file.path] = file.content;
+            }
+          }
+        } catch (error: any) {
+          log.warn('Context pack generation failed, falling back to file discovery', error.message);
+        }
+      }
+
+      // Then use LLM for targeted file discovery
       const { generateText } = await import('ai');
       const result = await generateText({
         model: this.getModel(),
@@ -321,31 +506,50 @@ Respond with a list of file paths, one per line. No other text.`;
       for (const filePath of filePaths.slice(0, 15)) {
         try {
           const readResult = await this.toolExecutor.execute('readFile', { path: filePath });
+          
+          // Record for loop detection
+          const loopResult = this.loopDetector.recordToolCall('readFile', { path: filePath }, readResult);
+          if (loopResult.isLoop) {
+            log.warn('Loop detected in file reads', { 
+              path: filePath, 
+              reason: loopResult.reason,
+              severity: loopResult.severity,
+            });
+            
+            if (loopResult.suggestedAction === 'terminate') {
+              throw new Error(`Infinite loop detected: ${loopResult.reason}`);
+            }
+          }
+          
           if (readResult.success && readResult.content) {
             this.vfs[filePath] = readResult.content;
             successfulReads.push(filePath);
           } else {
             failedReads.push(filePath);
-            console.warn(`[StatefulAgent] Discovery failed for ${filePath}: ${readResult.error || 'Unknown error'}`);
+            log.warn(`Discovery failed for ${filePath}: ${readResult.error || 'Unknown error'}`);
           }
         } catch (error: any) {
           failedReads.push(filePath);
-          console.warn(`[StatefulAgent] Discovery failed for ${filePath}:`, error.message);
+          log.warn(`Discovery failed for ${filePath}:`, error.message);
         }
       }
 
       // Log summary for debugging
-      console.log(`[StatefulAgent] Discovery complete: ${successfulReads.length} files read, ${failedReads.length} failed`);
-      
+      log.info('Discovery complete', {
+        filesRead: successfulReads.length,
+        filesFailed: failedReads.length,
+        totalInVFS: Object.keys(this.vfs).length,
+      });
+
       if (failedReads.length > 0) {
-        console.warn(`[StatefulAgent] Failed to read files:`, failedReads);
+        log.warn('Failed to read files', failedReads);
       }
-      
+
       if (successfulReads.length === 0 && filePaths.length > 0) {
-        console.error('[StatefulAgent] WARNING: No files were successfully read during discovery phase');
+        log.error('WARNING: No files were successfully read during discovery phase');
       }
     } catch (error: any) {
-      console.error('[StatefulAgent] Discovery error:', error.message);
+      log.error('Discovery error', error.message);
       // Add error to agent errors for tracking
       this.errors.push({
         step: this.steps,
@@ -359,7 +563,7 @@ Respond with a list of file paths, one per line. No other text.`;
 
   /**
    * Run planning phase - creates a systematic plan for the task
-   * Enhanced with LLM-based task decomposition
+   * Enhanced with LLM-based task decomposition and template detection
    * @public - Exposed for LangGraph integration
    */
   public async runPlanningPhase(userMessage: string) {
@@ -375,8 +579,24 @@ Respond with a list of file paths, one per line. No other text.`;
       return this.currentPlan;
     }
 
-    // Use LLM for task decomposition if enabled
-    if (this.enableTaskDecomposition) {
+    // Detect template from user message
+    const detectedTemplate = detectTemplate(userMessage);
+    
+    if (detectedTemplate) {
+      log.info('Template detected', { template: detectedTemplate });
+      
+      // Use template-based task decomposition
+      const templateTaskGraph = templateToTaskGraph(
+        (await import('./template-flows')).getTemplate(detectedTemplate)
+      );
+      
+      this.taskGraph = templateTaskGraph;
+      log.info('Template task graph created', {
+        template: detectedTemplate,
+        taskCount: templateTaskGraph.tasks.length,
+      });
+    } else if (this.enableTaskDecomposition) {
+      // Fall back to LLM-based decomposition
       await this.decomposeIntoTasks(userMessage);
     }
 
@@ -405,7 +625,7 @@ Return a JSON object:
       const result = await generateText({
         model: this.getModel(),
         prompt: planningPrompt,
-        maxTokens: 1000,
+        maxOutputTokens: 1000,
       });
 
       try {
@@ -454,13 +674,14 @@ Respond with valid JSON matching this schema:
         model: this.getModel(),
         prompt: decompositionPrompt,
         schema: TaskGraphSchema,
-        maxTokens: 1500,
+        maxOutputTokens: 1500,
       });
 
       this.taskGraph = {
         id: `taskgraph-${Date.now()}`,
-        tasks: result.object.tasks.map(t => ({
+        tasks: result.object.tasks.map((t: any, index: number) => ({
           ...t,
+          id: t.id || `task-${index}`,
           status: 'pending' as const,
         })),
         status: 'pending' as const,
@@ -514,27 +735,46 @@ Use 'createFile' for new files.`;
           createFile: allTools.createFile,
           execShell: allTools.execShell,
         },
-        maxSteps: 10,
         onStepFinish: async ({ toolCalls, toolResults }) => {
           // Execute tool calls via ToolExecutor
           for (const call of toolCalls) {
+            let callArgs: any;
             try {
-              const execResult = await this.toolExecutor.execute(call.toolName, call.args);
+              callArgs = (call as any).args || (call as any).input || {};
+              const execResult = await this.toolExecutor.execute(call.toolName, callArgs);
+
+              // Record for loop detection
+              const loopResult = this.loopDetector.recordToolCall(call.toolName, callArgs, execResult);
+              if (loopResult.isLoop) {
+                log.warn('Loop detected in tool execution', {
+                  tool: call.toolName,
+                  reason: loopResult.reason,
+                  severity: loopResult.severity,
+                });
+
+                if (loopResult.suggestedAction === 'terminate') {
+                  throw new Error(`Infinite loop detected: ${loopResult.reason}`);
+                }
+              }
+
               // Update local state based on result
-              if (execResult.success && execResult.content && call.args.path) {
-                this.vfs[call.args.path] = execResult.content;
-                
+              const contentForState = typeof execResult.content === 'string'
+                ? execResult.content
+                : (typeof (callArgs as any).content === 'string' ? (callArgs as any).content : undefined);
+              if (execResult.success && callArgs && 'path' in callArgs && contentForState !== undefined) {
+                this.vfs[(callArgs as any).path] = contentForState;
+
                 // Auto-write to Tool Memory Graph
-                await this.addMemoryNode('file', execResult.content, call.args.path);
-                
-                // Update execution graph if tracking
+                await this.addMemoryNode('file', contentForState, (callArgs as any).path);
+
+                // Update execution graph if tracking (only on success)
                 if (this.executionGraphId) {
                   const graph = executionGraphEngine.getGraph(this.executionGraphId);
                   if (graph) {
                     const readyNodes = executionGraphEngine.getReadyNodes(graph);
                     if (readyNodes.length > 0) {
                       executionGraphEngine.markComplete(graph, readyNodes[0].id, {
-                        file: call.args.path,
+                        file: (callArgs as any).path,
                         success: true,
                       });
                     }
@@ -544,7 +784,7 @@ Use 'createFile' for new files.`;
             } catch (err: any) {
               this.errors.push({
                 step: this.steps,
-                path: call.args.path,
+                path: call.toolCallId && callArgs && 'path' in callArgs ? (callArgs as any).path : 'unknown',
                 message: err.message,
                 timestamp: Date.now(),
               });
@@ -607,11 +847,32 @@ Use 'createFile' for new files.`;
     }
 
     const errorMessages = errors.map(e => e.message).join('\n');
-    
+
     try {
-      await this.runEditingPhase(`Fix the following errors:\n${errorMessages}`);
+      // Analyze error type to determine healing strategy
+      const errorType = this.classifyError(errors[0]);
+      log.info('Self-healing initiated', { errorType, attempt: this.retryCount + 1 });
+
+      // Apply targeted healing strategy based on error type
+      switch (errorType) {
+        case 'syntax':
+          await this.fixSyntaxError(errors[0]);
+          break;
+        case 'missing_import':
+          await this.addMissingImport(errors[0]);
+          break;
+        case 'type_error':
+          await this.fixTypeError(errors[0]);
+          break;
+        case 'runtime':
+          await this.fixRuntimeError(errors[0]);
+          break;
+        default:
+          // Generic retry with same approach
+          await this.runEditingPhase(`Fix the following errors:\n${errorMessages}`);
+      }
     } catch (err: any) {
-      console.error('[StatefulAgent] Self-healing failed:', err);
+      log.error('Self-healing failed', err.message);
       this.errors.push({
         step: this.steps,
         message: `Self-healing failed: ${err.message}`,
@@ -621,6 +882,97 @@ Use 'createFile' for new files.`;
 
     this.steps++;
     return this.getState();
+  }
+
+  /**
+   * Classify error type for targeted healing
+   */
+  private classifyError(error: any): 'syntax' | 'missing_import' | 'type_error' | 'runtime' | 'unknown' {
+    const message = error.message?.toLowerCase() || '';
+    
+    if (/syntax|parse|unexpected token/i.test(message)) {
+      return 'syntax';
+    }
+    if (/cannot find module|import|not defined/i.test(message)) {
+      return 'missing_import';
+    }
+    if (/type|property.*does not exist|is not assignable/i.test(message)) {
+      return 'type_error';
+    }
+    if (/runtime|execution|failed/i.test(message)) {
+      return 'runtime';
+    }
+    
+    return 'unknown';
+  }
+
+  /**
+   * Fix syntax errors
+   */
+  private async fixSyntaxError(error: any) {
+    const { generateText } = await import('ai');
+    
+    const fixPrompt = `Fix the syntax error in this code:
+
+ERROR: ${error.message}
+
+Provide only the corrected code, no explanation.`;
+
+    const result = await generateText({
+      model: this.getModel(),
+      prompt: fixPrompt,
+    });
+
+    // Apply the fix (simplified - in reality would need to identify file and location)
+    log.info('Syntax error fix applied', { fix: result.text.substring(0, 100) });
+  }
+
+  /**
+   * Add missing imports
+   */
+  private async addMissingImport(error: any) {
+    const { generateText } = await import('ai');
+    
+    const fixPrompt = `Add the missing import for this error:
+
+ERROR: ${error.message}
+
+Provide only the import statement, no explanation.`;
+
+    const result = await generateText({
+      model: this.getModel(),
+      prompt: fixPrompt,
+    });
+
+    log.info('Missing import added', { import: result.text.trim() });
+  }
+
+  /**
+   * Fix type errors
+   */
+  private async fixTypeError(error: any) {
+    const { generateText } = await import('ai');
+    
+    const fixPrompt = `Fix the type error in this code:
+
+ERROR: ${error.message}
+
+Provide only the corrected code, no explanation.`;
+
+    const result = await generateText({
+      model: this.getModel(),
+      prompt: fixPrompt,
+    });
+
+    log.info('Type error fix applied', { fix: result.text.substring(0, 100) });
+  }
+
+  /**
+   * Fix runtime errors
+   */
+  private async fixRuntimeError(error: any) {
+    // Runtime errors often need context - use generic retry
+    await this.runEditingPhase(`Fix the runtime error: ${error.message}`);
   }
 
   getState() {

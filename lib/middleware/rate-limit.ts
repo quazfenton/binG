@@ -167,14 +167,14 @@ function getClientIdentifier(req: NextRequest): string {
 
   // Try to get real IP from Next.js request (works in some environments)
   // This is safer as it's populated by the framework, not headers
-  // @ts-ignore - ip property may exist on extended NextRequest
-  const ip = req.ip;
+  const ip = (req as any).ip;
   if (ip && isValidIp(ip)) {
     return `ip:${ip}`;
   }
 
-  // Fallback to anonymous session ID
-  const anonId = req.headers.get('x-anonymous-session-id');
+  // Fallback to anonymous session ID from HttpOnly cookie only
+  // SECURITY: Never trust client-controlled headers for identity (IDOR vulnerability)
+  const anonId = req.cookies.get('anon-session-id')?.value;
   if (anonId) {
     return `anon:${anonId}`;
   }
@@ -350,13 +350,11 @@ export function checkRateLimitMiddleware(
     if (forwardedFor) {
       clientIp = forwardedFor.split(',')[0].trim();
     } else {
-      // @ts-ignore - ip property may exist on extended NextRequest
-      clientIp = request.ip || 'unknown';
+      clientIp = (request as any).ip || 'unknown';
     }
   } else {
     // Don't trust headers - use Next.js request.ip if available
-    // @ts-ignore - ip property may exist on extended NextRequest
-    clientIp = request.ip || 'unknown';
+    clientIp = (request as any).ip || 'unknown';
   }
 
   // Validate IP format

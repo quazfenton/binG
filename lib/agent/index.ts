@@ -1,38 +1,37 @@
 /**
  * Agent V2 Module
- * 
+ *
  * OpenCode V2 Engine with Nullclaw integration.
  * Provides containerized agentic capabilities with per-user isolation.
  */
 
 // Session Management
-export { 
-  agentSessionManager, 
+export {
+  agentSessionManager,
   AgentSessionManager,
   type AgentSession,
   type AgentSessionConfig,
 } from '../session/agent/agent-session-manager';
 
 // Filesystem Bridge
-export { 
-  agentFSBridge, 
+export {
+  agentFSBridge,
   AgentFSBridge,
   type SyncResult,
   type SyncOptions,
 } from './agent-fs-bridge';
 
 // Nullclaw Integration
-export { 
-  nullclawIntegration, 
-  NullclawIntegration,
+export {
+  nullclawIntegration,
   type NullclawConfig,
   type NullclawTask,
   type NullclawStatus,
 } from './nullclaw-integration';
 
 // Cloud Offload
-export { 
-  cloudAgentOffload, 
+export {
+  cloudAgentOffload,
   CloudAgentOffload,
   type CloudAgentConfig,
   type CloudAgentInstance,
@@ -48,7 +47,6 @@ export {
 
 // V2 Executor
 export {
-  executeV2Task,
   executeV2TaskStreaming,
   type V2ExecuteOptions,
 } from './v2-executor';
@@ -65,3 +63,72 @@ export {
   type WorkforceTask,
   type WorkforceState,
 } from './workforce-state';
+
+// Stateful Agent (from orchestra) - Comprehensive Plan-Act-Verify agent
+export {
+  StatefulAgent,
+  createStatefulAgent,
+  runStatefulAgent,
+  type StatefulAgentOptions,
+  type StatefulAgentResult,
+} from '@/lib/orchestra/stateful-agent';
+
+// Execution Graph - DAG-based task execution with parallel support
+export {
+  executionGraphEngine,
+  ExecutionGraphEngine,
+  type ExecutionGraph,
+  type ExecutionNode,
+  type ExecutionNodeType,
+  type NodeStatus,
+  type GraphExecutionResult,
+} from './execution-graph';
+
+// Unified Agent - Multi-capability agent abstraction
+export {
+  createAgent,
+  UnifiedAgent,
+  type UnifiedAgentConfig,
+  type AgentCapability,
+} from './unified-agent';
+
+// Loop Detection - Prevent infinite agent loops
+export {
+  createLoopDetector,
+  LoopDetector,
+  type LoopDetectionConfig,
+  type LoopDetectionResult,
+  type ToolCallRecord,
+} from './loop-detection';
+
+// Capability Chain - Chain multiple capabilities
+export {
+  createCapabilityChain,
+  chain,
+  CapabilityChain,
+  type ChainConfig,
+  type ChainStep,
+  type ChainExecutionResult,
+  type CapabilityExecutor,
+} from './capability-chain';
+
+// Bootstrapped Agency - Self-improving agency
+export {
+  createBootstrappedAgency,
+  BootstrappedAgency,
+  type AgencyConfig,
+  type AgencyMetrics,
+  type ExecutionRecord,
+} from './bootstrapped-agency';
+
+// Productive Scripts - Pre-defined script templates
+export {
+  runProductiveScript,
+  runCustomScript,
+  getAvailableScripts,
+  getScriptTemplate,
+  type ScriptType,
+  type ScriptConfig,
+  type ScriptStep,
+  type ScriptExecutionResult,
+} from './productive-scripts';

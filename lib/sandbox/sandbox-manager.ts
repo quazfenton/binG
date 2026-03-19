@@ -126,7 +126,7 @@ export class SandboxManager extends EventEmitter {
   async execCommand(sandboxId: string, command: string, args?: string[], timeout?: number): Promise<ExecResult> {
     // SECURITY: Validate sandboxId
     if (!isValidResourceId(sandboxId)) {
-      sandboxMetrics.commandExecutions.inc({ status: 'invalid_id' });
+      sandboxMetrics.commandExecutions.inc({ status: 'invalid_id' }, 1);
       throw new Error(`Invalid sandboxId format: ${sandboxId}`);
     }
 
@@ -134,7 +134,7 @@ export class SandboxManager extends EventEmitter {
     try {
       commandSchema.parse(command);
     } catch (error) {
-      sandboxMetrics.commandExecutions.inc({ status: 'blocked' });
+      sandboxMetrics.commandExecutions.inc({ status: 'blocked' }, 1);
       throw new Error(`Invalid command: ${error instanceof Error ? error.message : 'Blocked for security'}`);
     }
 
@@ -173,11 +173,9 @@ export class SandboxManager extends EventEmitter {
         };
         
         // METRICS: Record command execution
-        sandboxMetrics.commandExecutions.inc({ status: 'success' });
+        const status = exitCode === 0 ? 'success' : 'failed';
+        sandboxMetrics.commandExecutions.inc({ status }, 1);
         sandboxMetrics.commandExecutionDuration.observe(duration);
-        if (exitCode !== 0) {
-          sandboxMetrics.commandExecutions.inc({ status: 'failed' });
-        }
         
         this.emit('executed', { sandboxId, result });
         resolve(result);
@@ -185,14 +183,14 @@ export class SandboxManager extends EventEmitter {
 
       child.on('error', (error) => {
         this.runningProcesses.delete(sandboxId);
-        sandboxMetrics.commandExecutions.inc({ status: 'error' });
+        sandboxMetrics.commandExecutions.inc({ status: 'error' }, 1);
         reject(error);
       });
 
       child.on('timeout', () => {
         child.kill('SIGTERM');
         this.runningProcesses.delete(sandboxId);
-        sandboxMetrics.commandExecutions.inc({ status: 'timeout' });
+        sandboxMetrics.commandExecutions.inc({ status: 'timeout' }, 1);
         reject(new Error(`Command timed out after ${timeout}ms`));
       });
     });
@@ -396,3 +394,4 @@ export class SandboxManager extends EventEmitter {
 
 // Singleton instance
 export const sandboxManager = new SandboxManager();
+

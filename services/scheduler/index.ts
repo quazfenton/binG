@@ -24,7 +24,7 @@
  *   GET  /stats             – scheduler statistics
  */
 
-import { createServer, type IncomingMessage, type ServerResponse } from 'http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { Queue, Worker, type Job } from 'bullmq'
 import Redis from 'ioredis'
 
@@ -97,6 +97,7 @@ class SchedulerService {
   private queue: Queue
   private worker!: Worker
   private tasks: Map<string, ScheduledTask> = new Map()
+  public initialized = false
 
   constructor() {
     this.redis = new Redis(REDIS_URL)
@@ -154,6 +155,10 @@ class SchedulerService {
       {
         connection: new Redis(REDIS_URL),
         concurrency: 5,
+        limiter: {
+          max: 10,
+          duration: 60000, // 10 commands per minute
+        },
       },
     )
 
@@ -170,6 +175,7 @@ class SchedulerService {
     })
 
     console.log('[Scheduler] Worker started')
+    this.initialized = true
   }
 
   // -- task execution -------------------------------------------------------
@@ -721,4 +727,4 @@ async function main() {
 main()
 
 export { schedulerService, SchedulerService }
-export type { ScheduledTask, ScheduledTaskType, TaskExecutionResult }
+export type { TaskExecutionResult }

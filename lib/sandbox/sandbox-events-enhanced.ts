@@ -69,6 +69,8 @@ const EVENT_TTL_MS = parseInt(process.env.EVENT_TTL_MS || (4 * 60 * 60 * 1000).t
  * Enhanced sandbox event emitter with persistence and replay
  */
 export class EnhancedSandboxEventEmitter extends UniversalEventEmitter {
+  private listenerCounts = new Map<string, number>()
+  
   /**
    * Emit event with persistence
    * 
@@ -177,10 +179,17 @@ export class EnhancedSandboxEventEmitter extends UniversalEventEmitter {
     
     const targetChannel = sandboxId === '*' ? '*' : sandboxId
     this.on(targetChannel, listener)
+    this.listenerCounts.set(sandboxId, (this.listenerCounts.get(sandboxId) || 0) + 1)
     
     // Return unsubscribe function
     return () => {
       this.off(targetChannel, listener)
+      const nextCount = (this.listenerCounts.get(sandboxId) || 0) - 1
+      if (nextCount <= 0) {
+        this.listenerCounts.delete(sandboxId)
+      } else {
+        this.listenerCounts.set(sandboxId, nextCount)
+      }
     }
   }
 
@@ -383,7 +392,7 @@ export class EnhancedSandboxEventEmitter extends UniversalEventEmitter {
    * Get subscriber count for a sandbox
    */
   getSubscriberCount(sandboxId: string): number {
-    return this.listenerCount(sandboxId)
+    return this.listenerCounts.get(sandboxId) || 0;
   }
 
   /**

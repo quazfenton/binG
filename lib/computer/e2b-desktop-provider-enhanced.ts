@@ -61,6 +61,15 @@ export interface MCPConfig {
 export interface DesktopHandle {
   sessionId?: string
   sandboxId?: string
+  // Desktop control methods
+  screenshot(): Promise<Buffer>
+  moveMouse(x: number, y: number): Promise<ToolResult>
+  leftClick(x?: number, y?: number, button?: 'left' | 'right' | 'middle'): Promise<ToolResult>
+  rightClick(x?: number, y?: number): Promise<ToolResult>
+  middleClick?(x?: number, y?: number): Promise<ToolResult>
+  type(text: string): Promise<ToolResult>
+  write?(text: string): Promise<ToolResult> // Optional for compatibility adapters
+  press(key: string | string[]): Promise<ToolResult>
 }
 
 // ==================== Desktop Action Types ====================
@@ -612,12 +621,102 @@ export class DesktopSandboxHandle {
     return {
       id: this.id,
       uptime: Date.now() - (this.sandbox?.createdAt || Date.now()),
-      actionCount: 0, // Could be tracked internally if needed
+      actionCount: 0,
       lastActionAt: undefined,
       resolution: DESKTOP_DEFAULT_RESOLUTION,
       streamUrl: this.streamUrl,
       mcpConfigured: this.mcpConfigured,
       activeSessions: this.ampSessions.size,
+      actionsExecuted: 0,
+      screenshotsTaken: 0,
+      commandsRun: 0,
+    } as any;
+  }
+
+  /**
+   * Execute desktop action (mouse, keyboard, screenshot)
+   */
+  async executeAction(action: DesktopAction): Promise<ToolResult> {
+    switch (action.type) {
+      case 'mouse_move':
+        return this.moveMouse(action.x, action.y)
+      case 'left_click':
+        return this.leftClick(action.x, action.y)
+      case 'right_click':
+        return this.rightClick(action.x, action.y)
+      case 'double_click':
+        return this.doubleClick(action.x, action.y)
+      case 'drag':
+        return this.drag(action.startX, action.startY, action.endX, action.endY);
+      case 'scroll':
+        return this.scroll(action.scrollY > 0 ? 'down' : 'up', Math.abs(action.scrollY))
+      case 'type':
+        return this.type(action.text)
+      case 'keypress':
+        return this.press(action.keys);
+      case 'screenshot':
+        const base64 = await this.screenshotBase64()
+        return { success: true, output: `Screenshot taken (${base64.length} bytes)` }
+      case 'middle_click':
+        return this.leftClick(action.x, action.y, 'middle')
+      case 'wait':
+        await new Promise((resolve) => setTimeout(resolve, action.duration))
+        return { success: true, output: `Waited ${action.duration}ms` }
+      case 'terminal_command':
+        return this.runCommand(action.command, action.cwd, action.timeout)
+      default:
+        return { success: false, output: `Unknown action type: ${(action as any).type}` }
+    }
+  }
+
+  /**
+   * Execute terminal command in the desktop sandbox
+   */
+  async runCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
+    try {
+      const result = await this.sandbox.commands.run(command, {
+        cwd,
+        timeout,
+      })
+      return {
+        success: result.exitCode === 0,
+        output: result.stdout || result.stderr,
+        exitCode: result.exitCode,
+      }
+    } catch (error: any) {
+      console.error('[E2B Desktop] Command error:', error)
+      return {
+        success: false,
+        output: error.message,
+        exitCode: -1,
+      }
+    }
+  }
+
+  /**
+   * Run agent loop for desktop automation
+   * Currently returns a helpful message with workaround instructions
+   */
+  async *runAgentLoop(task: string, options?: { maxIterations?: number }): AsyncGenerator<any> {
+    // Placeholder implementation - yields task acknowledgment
+    yield {
+      type: 'agent_start',
+      task,
+      maxIterations: options?.maxIterations || 50,
+    }
+
+    // FIX: Provide actionable workaround instructions
+    yield {
+      type: 'agent_complete',
+      message: 'Desktop agent loop is under development. Use individual action commands for now.',
+      workaround: {
+        screenshot: 'Use /screenshot to capture screen',
+        click: 'Use /click x y to click at coordinates',
+        type: 'Use /type text to type text',
+        hotkey: 'Use /hotkey key1+key2 to press hotkeys',
+        scroll: 'Use /scroll x y dx dy to scroll',
+      },
+      status: 'partial_implementation',
     }
   }
 
@@ -696,9 +795,9 @@ export class E2BDesktopProvider {
 
     try {
       // Dynamic import to avoid requiring @e2b/desktop when not used
-      const { Sandbox } = await import('@e2b/desktop')
+      const { Sandbox }: any = await import('@e2b/desktop')
 
-      const sandbox = await Sandbox.create({
+      const sandbox: any = await Sandbox.create({
         template: config.template || 'desktop',
         timeoutMs: config.timeoutMs || DESKTOP_DEFAULT_TIMEOUT,
         resolution: config.resolution || DESKTOP_DEFAULT_RESOLUTION,
@@ -709,16 +808,16 @@ export class E2BDesktopProvider {
 
       // Start VNC streaming if requested
       if (config.startStreaming !== false) {
-        streamUrl = await sandbox.screen.getStreamUrl()
+        streamUrl = (await sandbox.screen?.getStreamUrl()) || (await (sandbox as any).display?.getStreamUrl());
         console.log(`[E2BDesktopProvider] VNC stream available at: ${streamUrl}`)
       }
 
       // Record usage
       quotaManager.recordUsage('e2b', 1)
 
-      console.log(`[E2BDesktopProvider] Created desktop sandbox ${sandbox.id}`)
+      console.log(`[E2BDesktopProvider] Created desktop sandbox ${sandbox.id || 'unknown'}`)
 
-      return new DesktopSandboxHandle(sandbox, streamUrl)
+      return new DesktopSandboxHandle(sandbox, streamUrl);
     } catch (error: any) {
       console.error('[E2BDesktopProvider] Failed to create desktop:', error)
       throw new Error(`Failed to create E2B Desktop: ${error.message}`)
@@ -788,10 +887,10 @@ export async function executeDesktopCommand(
   try {
     switch (action) {
       case 'screenshot': {
-        const screenshot = await desktop.screenshot()
+        const screenshot: any = await desktop.screenshot()
         return {
           success: true,
-          output: `Screenshot captured (${screenshot.length} bytes)`,
+          output: `Screenshot captured (${screenshot?.length || 0} bytes)`,
           binary: screenshot,
         }
       }

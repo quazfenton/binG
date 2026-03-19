@@ -139,9 +139,10 @@ export function createStreamingEvents(
   }
 
   // Content tokens (chunked for smooth streaming)
-  const content = response.content
-  if (content) {
-    const chunks = chunkContent(content, chunkSize)
+  // SECURITY: Explicitly check content is a non-empty string to prevent runtime errors
+  const content = response.content;
+  if (typeof content === 'string' && content.length > 0) {
+    const chunks = chunkText(content, chunkSize);
     chunks.forEach((chunk, index) => {
       events.push(sseEncode('token', {
         type: 'token',
@@ -149,49 +150,27 @@ export function createStreamingEvents(
         requestId,
         timestamp: Date.now(),
         offset: index * chunkSize,
-      }))
-    })
-  }
-
-  // Reflection results if available
-  if (response.data?.reflectionResults?.length) {
-    events.push(sseEncode('reflection', {
-      requestId,
-      reflections: response.data.reflectionResults,
-      qualityScore: response.data.qualityScore,
-    }))
-  }
-
-  // Multimodal content if available
-  if (response.data?.multiModalContent?.length) {
-    response.data.multiModalContent.forEach((item: any, index: number) => {
-      events.push(sseEncode('multimodal', {
-        requestId,
-        index,
-        ...item,
-      }))
-    })
-  }
-
-  // Sandbox output chunks (extracted from tool results)
-  const sandboxChunks = extractSandboxOutputChunks(response.data?.toolInvocations || [])
-  for (const chunk of sandboxChunks) {
-    events.push(sseEncode('sandbox_output', {
-      requestId,
-      ...chunk,
-      timestamp: Date.now(),
-    }))
+      }));
+    });
   }
 
   // Done event
+  // SECURITY: Use actual token count from LLM response, not character length
+  // Character count ≠ token count (1 token ≈ 4 characters for English text)
   events.push(sseEncode('done', {
     requestId,
     success: response.success,
-    totalTokens: response.data?.usage?.totalTokens || content?.length || 0,
+    totalTokens: response.data?.usage?.totalTokens ?? response.data?.usage?.completion_tokens ?? 0,
     qualityScore: response.data?.qualityScore,
     source: response.source,
     metadata: response.metadata,
     messageMetadata: response.data?.messageMetadata || response.metadata?.messageMetadata,
+    // Include usage breakdown if available
+    usage: response.data?.usage ? {
+      promptTokens: response.data.usage.promptTokens || response.data.usage.prompt_tokens || 0,
+      completionTokens: response.data.usage.completionTokens || response.data.usage.completion_tokens || 0,
+      totalTokens: response.data.usage.totalTokens || response.data.usage.total_tokens || 0,
+    } : undefined,
   }))
 
   return events

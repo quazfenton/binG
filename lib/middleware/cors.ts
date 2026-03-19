@@ -259,7 +259,6 @@ export function withCORS<T extends (...args: any[]) => Promise<NextResponse>>(
 ): T {
   const corsMiddleware = createCORS(config);
 
-  // @ts-ignore - Type cast for middleware wrapper
   return (async (...args: Parameters<T>) => {
     const request = args[0] as NextRequest;
     const corsResponse = corsMiddleware(request);
@@ -270,7 +269,7 @@ export function withCORS<T extends (...args: any[]) => Promise<NextResponse>>(
 
     const response = await handler(...args);
     return addCORSHeaders(response, config, request) as ReturnType<T>;
-  }) as T;
+  }) as unknown as T;
 }
 
 /**

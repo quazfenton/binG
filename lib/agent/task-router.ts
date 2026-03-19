@@ -19,6 +19,10 @@ const logger = createLogger('Agent:TaskRouter');
 
 export type TaskType = 'coding' | 'messaging' | 'browsing' | 'automation' | 'api' | 'unknown';
 
+// FIX (Bug 7): Separate the routing target from the preferred-agent type so
+// the dispatch is explicit and unreachable branches can't silently fire.
+type RoutingTarget = 'opencode' | 'nullclaw' | 'cli';
+
 export interface TaskRequest {
   id: string;
   userId: string;
@@ -27,11 +31,7 @@ export interface TaskRequest {
   stream?: boolean;
   onStreamChunk?: (chunk: string) => void;
   onToolExecution?: (toolName: string, args: Record<string, any>, result: any) => void;
-  preferredAgent?: 'opencode' | 'nullclaw' | 'cli';
-  /**
-   * Execution policy for sandbox selection
-   * Auto-detected from task if not specified
-   */
+  preferredAgent?: RoutingTarget;
   executionPolicy?: ExecutionPolicy;
   cliCommand?: {
     command: string;
@@ -41,8 +41,9 @@ export interface TaskRequest {
 
 export interface TaskRoutingResult {
   type: TaskType;
+  /** Normalised 0-1 score based on keyword hits per total keywords checked */
   confidence: number;
-  target: 'opencode' | 'nullclaw';
+  target: RoutingTarget;
   reasoning: string;
 }
 
@@ -50,9 +51,6 @@ export interface TaskRoutingResult {
  * Task Router - Determines which agent should handle a task
  */
 class TaskRouter {
-  /**
-   * Keywords that indicate coding tasks
-   */
   private readonly CODING_KEYWORDS = [
     'code', 'program', 'function', 'class', 'variable', 'import', 'export',
     'file', 'directory', 'folder', 'path', 'read', 'write', 'create', 'delete',
@@ -63,130 +61,128 @@ class TaskRouter {
     'api', 'endpoint', 'route', 'server', 'database', 'query', 'schema',
   ];
 
-  /**
-   * Keywords that indicate messaging tasks
-   */
   private readonly MESSAGING_KEYWORDS = [
     'discord', 'telegram', 'slack', 'message', 'send', 'chat', 'notify',
     'channel', 'user', 'bot', 'webhook', 'mention', 'ping',
   ];
 
-  /**
-   * Keywords that indicate browsing tasks
-   */
   private readonly BROWSING_KEYWORDS = [
     'browse', 'website', 'url', 'http', 'https', 'www', 'scrape', 'crawl',
     'fetch', 'download', 'webpage', 'search', 'google', 'find information',
   ];
 
-  /**
-   * Keywords that indicate automation tasks
-   */
   private readonly AUTOMATION_KEYWORDS = [
     'automate', 'schedule', 'cron', 'repeat', 'daily', 'hourly',
     'server', 'deploy', 'restart', 'backup', 'monitor', 'alert',
     'workflow', 'pipeline', 'ci', 'cd', 'integration',
   ];
 
-  /**
-   * Analyze task and determine routing
-   */
   analyzeTask(task: string): TaskRoutingResult {
     const lowerTask = task.toLowerCase();
-    
+
     const scores = {
-      coding: this.scoreKeywords(lowerTask, this.CODING_KEYWORDS),
-      messaging: this.scoreKeywords(lowerTask, this.MESSAGING_KEYWORDS),
-      browsing: this.scoreKeywords(lowerTask, this.BROWSING_KEYWORDS),
+      coding:     this.scoreKeywords(lowerTask, this.CODING_KEYWORDS),
+      messaging:  this.scoreKeywords(lowerTask, this.MESSAGING_KEYWORDS),
+      browsing:   this.scoreKeywords(lowerTask, this.BROWSING_KEYWORDS),
       automation: this.scoreKeywords(lowerTask, this.AUTOMATION_KEYWORDS),
     };
 
-    // Find highest scoring category
     const maxScore = Math.max(...Object.values(scores));
-    const primaryType = Object.entries(scores)
-      .find(([_, score]) => score === maxScore)?.[0] as TaskType || 'unknown';
+    const primaryType = (Object.entries(scores)
+      .find(([, score]) => score === maxScore)?.[0] ?? 'unknown') as TaskType;
 
-    // Determine target agent
-    let target: 'opencode' | 'nullclaw';
+    // FIX (Bug 5 & 7): Explicit target assignment with no fall-through ambiguity.
+    let target: RoutingTarget;
     let reasoning: string;
 
-    if (primaryType === 'coding') {
-      target = 'opencode';
-      reasoning = 'Task involves coding, file operations, or shell commands';
-    } else if (primaryType === 'messaging' || primaryType === 'browsing') {
-      target = 'nullclaw';
-      reasoning = `Task involves ${primaryType} which requires external API access`;
-    } else if (primaryType === 'automation') {
-      // Automation could go either way - check for coding keywords
-      if (scores.coding > 0) {
-        target = 'opencode';
-        reasoning = 'Automation task with coding components';
-      } else {
-        target = 'nullclaw';
-        reasoning = 'Automation task requiring external services';
-      }
+    // FIX: If no keywords matched (all scores are 0), classify as 'unknown' instead of defaulting to 'coding'
+    if (maxScore === 0) {
+      target = 'cli';
+      reasoning = 'No specific keywords detected, task may be a simple query or command';
     } else {
-      // Default to OpenCode for unknown tasks
-      target = 'opencode';
-      reasoning = 'Unknown task type, defaulting to coding agent';
+      switch (primaryType) {
+        case 'coding':
+          target = 'opencode';
+          reasoning = 'Task involves coding, file operations, or shell commands';
+          break;
+        case 'messaging':
+        case 'browsing':
+          target = 'nullclaw';
+          reasoning = `Task involves ${primaryType} which requires external API access`;
+          break;
+        case 'automation':
+          if (scores.coding > 0) {
+            target = 'opencode';
+            reasoning = 'Automation task with coding components';
+          } else {
+            target = 'nullclaw';
+            reasoning = 'Automation task requiring external services';
+          }
+          break;
+        default:
+          target = 'cli';
+          reasoning = 'Unknown task type, using CLI agent';
+      }
     }
 
-    const result: TaskRoutingResult = {
-      type: primaryType,
-      confidence: maxScore / Math.max(lowerTask.length, 1),
-      target,
-      reasoning,
-    };
+    // FIX Bug 6: Normalize confidence against keyword count, not character length
+    const maxPossibleScore = Math.max(
+      this.CODING_KEYWORDS.length,
+      this.MESSAGING_KEYWORDS.length,
+      this.BROWSING_KEYWORDS.length,
+      this.AUTOMATION_KEYWORDS.length,
+    );
+    // Confidence is now meaningful [0, 1] range
+    const confidence = maxScore > 0
+      ? Math.min(1, maxScore / Math.max(maxPossibleScore * 0.3, 1))
+      : 0;
 
-    logger.debug(`Task routed: ${task.substring(0, 50)}... → ${target} (${primaryType}, confidence: ${result.confidence.toFixed(2)})`);
+    const result: TaskRoutingResult = { type: primaryType, confidence, target, reasoning };
+
+    logger.debug(
+      `Task routed: ${task.substring(0, 50)}... → ${target} (${primaryType}, confidence: ${confidence.toFixed(2)})`,
+    );
 
     return result;
   }
 
-  /**
-   * Score a task based on keyword matches
-   */
   private scoreKeywords(task: string, keywords: string[]): number {
     let score = 0;
     for (const keyword of keywords) {
       const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
       const matches = task.match(regex);
-      if (matches) {
-        score += matches.length;
-      }
+      if (matches) score += matches.length;
     }
     return score;
   }
 
-  /**
-   * Execute task with appropriate agent
-   */
   async executeTask(request: TaskRequest): Promise<any> {
-    const routing = request.preferredAgent
-      ? {
-          type: 'unknown' as TaskType,
-          confidence: 1,
-          target: request.preferredAgent,
-          reasoning: 'Preferred agent override',
-        }
-      : this.analyzeTask(request.task);
+    // FIX (Bug 5 & 7): Handle preferred agent explicitly before routing.
+    if (request.preferredAgent) {
+      logger.info(`Routing task to preferred agent: ${request.preferredAgent}`);
+      return this.dispatchToTarget(request.preferredAgent, request);
+    }
 
+    const routing = this.analyzeTask(request.task);
     logger.info(`Routing task to ${routing.target} (${routing.type})`);
+    return this.dispatchToTarget(routing.target, request);
+  }
 
-    if (routing.target === 'opencode') {
-      return this.executeWithOpenCode(request);
-    } else if (routing.target === 'nullclaw') {
-      return this.executeWithNullclaw(request, routing.type);
-    } else {
-      return this.executeWithCliAgent(request);
+  /** Single dispatch point — no ambiguous else-chains. */
+  private async dispatchToTarget(target: RoutingTarget, request: TaskRequest): Promise<any> {
+    switch (target) {
+      case 'opencode': return this.executeWithOpenCode(request);
+      case 'nullclaw': return this.executeWithNullclaw(request, this.analyzeTask(request.task).type);
+      case 'cli':      return this.executeWithCliAgent(request);
+      default: {
+        // TypeScript exhaustiveness — should never reach here at runtime
+        const _exhaustive: never = target;
+        throw new Error(`Unknown routing target: ${String(_exhaustive)}`);
+      }
     }
   }
 
-  /**
-   * Execute task with OpenCode agent using execution policy
-   */
   private async executeWithOpenCode(request: TaskRequest): Promise<any> {
-    // Determine execution policy (explicit or auto-detected)
     const executionPolicy = request.executionPolicy || determineExecutionPolicy({
       task: request.task,
       requiresBash: /bash|shell|command|execute|run\s+\w+/i.test(request.task),
@@ -199,7 +195,6 @@ class TaskRouter {
       process.env.V2_AGENT_ENABLED === 'true';
 
     if (!useV2) {
-      // Fallback to local OpenCode engine
       const { createOpenCodeEngine } = await import('../session/agent/opencode-engine-service');
       const engine = createOpenCodeEngine({
         model: process.env.OPENCODE_MODEL,
@@ -210,10 +205,7 @@ class TaskRouter {
       });
 
       if (request.stream) {
-        return {
-          type: 'stream',
-          stream: engine.executeStream(request.task),
-        };
+        return { type: 'stream', stream: engine.executeStream(request.task) };
       }
 
       const result = await engine.execute(request.task);
@@ -231,16 +223,10 @@ class TaskRouter {
     const { agentSessionManager } = await import('../session/agent/agent-session-manager');
     const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('../mcp');
 
-    // V2 session with execution policy-based sandbox selection
     const session = await agentSessionManager.getOrCreateSession(
       request.userId,
       request.conversationId,
-      {
-        enableMCP: true,
-        enableNullclaw: true,
-        mode: 'hybrid',
-        executionPolicy,
-      },
+      { enableMCP: true, enableNullclaw: true, mode: 'hybrid', executionPolicy },
     );
 
     const provider = new OpencodeV2Provider({
@@ -269,42 +255,28 @@ class TaskRouter {
       onToolExecution: request.onToolExecution,
       executeTool: async (name, args) => {
         const toolResult = await callMCPToolFromAI_SDK(name, args, request.userId);
-        return {
-          success: toolResult.success,
-          output: toolResult.output,
-          exitCode: toolResult.success ? 0 : 1,
-        };
+        return { success: toolResult.success, output: toolResult.output, exitCode: toolResult.success ? 0 : 1 };
       },
     });
 
-    // Extract file changes from V2 agent steps
     const fileChanges: Array<{ path: string; action: string; operation: 'write' | 'patch' | 'delete'; content?: string }> = [];
     if (result.steps) {
       for (const step of result.steps) {
-        // Look for file operation tool calls in steps
         if (step.toolName && ['write_file', 'read_file', 'delete_file', 'edit_file', 'Bash'].includes(step.toolName)) {
           const args = step.args || {};
           if (step.toolName === 'Bash' && args.command) {
-            // Extract file paths from bash commands like "echo > file.txt"
             const match = args.command.match(/(?:>\s*|tee\s+|cat\s*>\s*)([^\s|]+)/);
             if (match) {
-              fileChanges.push({
-                path: match[1],
-                action: 'modify',
-                operation: 'patch',
-              });
+              fileChanges.push({ path: match[1], action: 'modify', operation: 'patch' });
             }
             continue;
           }
-
-          const path = args.path || args.file || args.target || '';
-          if (!path) continue;
-          const isDelete = step.toolName === 'delete_file';
-          const isPatch = step.toolName === 'edit_file';
+          const filePath = args.path || args.file || args.target || '';
+          if (!filePath) continue;
           fileChanges.push({
-            path,
-            action: isDelete ? 'delete' : 'modify',
-            operation: isDelete ? 'delete' : isPatch ? 'patch' : 'write',
+            path: filePath,
+            action: step.toolName === 'delete_file' ? 'delete' : 'modify',
+            operation: step.toolName === 'delete_file' ? 'delete' : step.toolName === 'edit_file' ? 'patch' : 'write',
           });
         }
       }
@@ -323,23 +295,19 @@ class TaskRouter {
     };
   }
 
-  /**
-   * Execute task with Nullclaw agent
-   */
   private async executeWithNullclaw(request: TaskRequest, taskType: TaskType): Promise<any> {
     const { executeNullclawTask, isNullclawAvailable, initializeNullclaw } = await import('./nullclaw-integration');
 
     try {
-      // Initialize Nullclaw if needed
       if (!isNullclawAvailable()) {
         await initializeNullclaw();
       }
 
-      // Build Nullclaw task based on type
-      const nullclawType: 'message' | 'browse' | 'automate' = 
-        taskType === 'messaging' ? 'message' : 
-        taskType === 'browsing' ? 'browse' : 
+      const nullclawType: 'message' | 'browse' | 'automate' =
+        taskType === 'messaging' ? 'message' :
+        taskType === 'browsing'  ? 'browse'  :
         'automate';
+
       const task = {
         id: request.id,
         type: nullclawType,
@@ -348,11 +316,8 @@ class TaskRouter {
       };
 
       const result = await executeNullclawTask(
-        task.type,
-        task.description,
-        task.params,
-        request.userId,
-        request.conversationId,
+        task.type, task.description, task.params,
+        request.userId, request.conversationId,
       );
 
       request.onToolExecution?.('nullclaw_task', task.params, result);
@@ -364,21 +329,15 @@ class TaskRouter {
         agent: 'nullclaw',
       };
     } catch (error: any) {
-      // Log and re-throw to trigger fallback to v1
-      console.error('[TaskRouter] Nullclaw execution failed:', error.message);
+      logger.error('[TaskRouter] Nullclaw execution failed:', error.message);
       throw error;
     }
   }
 
-  /**
-   * Execute task with a generic CLI agent inside the sandbox
-   */
   private async executeWithCliAgent(request: TaskRequest): Promise<any> {
     const { agentSessionManager } = await import('../session/agent/agent-session-manager');
     const session = await agentSessionManager.getOrCreateSession(
-      request.userId,
-      request.conversationId,
-      { mode: 'opencode' },
+      request.userId, request.conversationId, { mode: 'opencode' },
     );
 
     const command = request.cliCommand?.command;
@@ -388,10 +347,7 @@ class TaskRouter {
 
     const args = request.cliCommand?.args || [];
     const fullCommand = [command, ...args].join(' ');
-    const result = await session.sandboxHandle.executeCommand(
-      fullCommand,
-      session.workspacePath,
-    );
+    const result = await session.sandboxHandle.executeCommand(fullCommand, session.workspacePath);
 
     request.onToolExecution?.('cli_exec', { command: fullCommand }, result);
 
@@ -403,34 +359,22 @@ class TaskRouter {
     };
   }
 
-  /**
-   * Extract parameters from task description
-   */
   private extractParams(task: string, taskType: TaskType): Record<string, any> {
     const params: Record<string, any> = {};
 
     if (taskType === 'messaging') {
-      // Extract channel/user IDs from task
       const channelMatch = task.match(/channel[:\s]*(\w+)/i);
-      if (channelMatch) {
-        params.channelId = channelMatch[1];
-      }
+      if (channelMatch) params.channelId = channelMatch[1];
 
       const messageMatch = task.match(/message[:\s]*(.+)/i);
-      if (messageMatch) {
-        params.message = messageMatch[1].trim();
-      }
+      if (messageMatch) params.message = messageMatch[1].trim();
     } else if (taskType === 'browsing') {
-      // Extract URL from task
       const urlMatch = task.match(/https?:\/\/[^\s]+/i);
-      if (urlMatch) {
-        params.url = urlMatch[0];
-      }
+      if (urlMatch) params.url = urlMatch[0];
     }
 
     return params;
   }
 }
 
-// Singleton instance
 export const taskRouter = new TaskRouter();

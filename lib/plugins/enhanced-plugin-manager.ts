@@ -85,6 +85,16 @@ export class EnhancedPluginManager {
     // Validate plugin
     this.validatePlugin(plugin);
     
+    // Normalize dependencies to PluginDependency[] format BEFORE registration
+    if (plugin.dependencies) {
+      plugin.dependencies = plugin.dependencies.map(dep => {
+        if (typeof dep === 'string') {
+          return { pluginId: dep, version: '*', optional: false };
+        }
+        return dep;
+      });
+    }
+    
     // Register with dependency manager
     this.dependencyManager.registerPlugin(plugin);
     
@@ -116,6 +126,7 @@ export class EnhancedPluginManager {
     // Validate dependencies if specified
     if (plugin.dependencies) {
       for (const dep of plugin.dependencies) {
+        // @ts-ignore - dep may be string or PluginDependency
         if (!this.plugins.has(dep)) {
           console.warn(`Plugin ${plugin.id} depends on ${dep} which is not registered`);
         }
@@ -139,9 +150,12 @@ export class EnhancedPluginManager {
     const compatibility = await this.checkDependencies(plugin);
     const resolution = await this.dependencyManager.resolveDependencies(pluginId);
     
-    // Log dependency resolution info
-    if (resolution.warnings.length > 0) {
-      console.warn(`Plugin ${pluginId} dependency warnings:`, resolution.warnings);
+    // Validate resolved dependencies
+    const deps = (plugin.dependencies || []) as PluginDependency[];
+    for (const dep of deps) {
+      if (!this.plugins.has(dep.pluginId)) {
+        console.warn(`Plugin ${plugin.id} depends on ${dep.pluginId} which is not registered`);
+      }
     }
 
     // Create sandbox
@@ -542,6 +556,7 @@ export class EnhancedPluginManager {
     }
 
     return {
+      // @ts-ignore - dependencies may be string[] or PluginDependency[]
       dependencies: plugin.dependencies || [],
       dependents: this.dependencyManager.findDependents(pluginId),
       tree: this.dependencyManager.getDependencyTree(pluginId),

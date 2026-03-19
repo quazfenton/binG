@@ -212,20 +212,24 @@ export const validatePluginRegistry = (): {
   for (const plugin of enhancedPluginRegistry) {
     if (plugin.dependencies) {
       for (const dep of plugin.dependencies) {
-        const depPlugin = enhancedPluginRegistry.find(p => p.id === dep.pluginId);
+        const depId = typeof dep === 'string' ? dep : (dep as any).pluginId;
+        const depOptional = typeof dep === 'string' ? false : (dep as any).optional;
+        const depFallback = typeof dep === 'string' ? null : (dep as any).fallback;
+        
+        const depPlugin = enhancedPluginRegistry.find(p => p.id === depId);
         if (!depPlugin) {
-          if (dep.optional) {
-            warnings.push(`Optional dependency ${dep.pluginId} not found for plugin ${plugin.id}`);
+          if (depOptional) {
+            warnings.push(`Optional dependency ${depId} not found for plugin ${plugin.id}`);
           } else {
-            errors.push(`Required dependency ${dep.pluginId} not found for plugin ${plugin.id}`);
+            errors.push(`Required dependency ${depId} not found for plugin ${plugin.id}`);
           }
         }
 
         // Check fallback exists
-        if (dep.fallback) {
-          const fallbackPlugin = enhancedPluginRegistry.find(p => p.id === dep.fallback);
+        if (depFallback) {
+          const fallbackPlugin = enhancedPluginRegistry.find(p => p.id === depFallback);
           if (!fallbackPlugin) {
-            warnings.push(`Fallback plugin ${dep.fallback} not found for dependency ${dep.pluginId} in plugin ${plugin.id}`);
+            warnings.push(`Fallback plugin ${depFallback} not found for dependency ${depId} in plugin ${plugin.id}`);
           }
         }
       }

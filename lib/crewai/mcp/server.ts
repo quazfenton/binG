@@ -80,12 +80,12 @@ export class MCPServer extends EventEmitter {
       }),
       handler: async (params: any) => {
         try {
-          const result = await crew.kickoff(params.input);
+          const result: any = await crew.kickoff(params.input);
           this.emit('crew:completed', { name, result });
           return {
             success: true,
-            result: result.raw,
-            json: result.json,
+            result: result.raw ?? result,
+            json: result.json ?? JSON.stringify(result),
             pydantic: result.pydantic,
           };
         } catch (error) {

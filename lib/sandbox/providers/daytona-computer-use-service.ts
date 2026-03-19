@@ -410,13 +410,13 @@ export class ComputerUseService {
         throw new Error(`Region screenshot failed: ${response.statusText}`)
       }
 
-      const buffer = Buffer.from(await response.arrayBuffer())
+      const buffer = Buffer.from(await (response as any).arrayBuffer())
       const base64Image = buffer.toString('base64')
       return {
         success: true,
         output: `Region screenshot captured (${buffer.length} bytes)`,
         // Return image as base64 for compatibility with SandboxHandle interface
-        binary: buffer,
+        binary: base64Image,
       }
     } catch (error: any) {
       return {

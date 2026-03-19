@@ -28,6 +28,8 @@ export const SSE_EVENT_TYPES = {
   DIFFS: 'diffs',
   /** Reasoning / chain-of-thought */
   REASONING: 'reasoning',
+  /** Sandbox output (stdout/stderr) */
+  SANDBOX_OUTPUT: 'sandbox_output',
   /** Stream completed */
   DONE: 'done',
   /** Stream error */
@@ -99,6 +101,13 @@ export interface SSEReasoningPayload {
   reasoning: string;
 }
 
+export interface SSESandboxOutputPayload {
+  stream: 'stdout' | 'stderr';
+  chunk: string;
+  toolCallId?: string;
+  timestamp: number;
+}
+
 export interface SSEDonePayload {
   success: boolean;
   content: string;
@@ -123,6 +132,7 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.FILESYSTEM; data: SSEFilesystemPayload }
   | { type: typeof SSE_EVENT_TYPES.DIFFS; data: SSEDiffsPayload }
   | { type: typeof SSE_EVENT_TYPES.REASONING; data: SSEReasoningPayload }
+  | { type: typeof SSE_EVENT_TYPES.SANDBOX_OUTPUT; data: SSESandboxOutputPayload }
   | { type: typeof SSE_EVENT_TYPES.DONE; data: SSEDonePayload }
   | { type: typeof SSE_EVENT_TYPES.ERROR; data: SSEErrorPayload }
   | { type: typeof SSE_EVENT_TYPES.HEARTBEAT; data: Record<string, unknown> };

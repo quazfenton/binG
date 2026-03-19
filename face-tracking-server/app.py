@@ -1,6 +1,11 @@
 """
 Face Tracking Animation Flask Server
 Provides real-time face tracking via webcam with animated avatar output
+
+SECURITY: 
+- Binds to localhost by default to prevent remote access
+- Restricted CORS policy
+- Basic authentication for control endpoints
 """
 
 from flask import Flask, render_template, request, jsonify, Response
@@ -11,10 +16,30 @@ import mediapipe as mp
 import json
 import threading
 import time
+import os
 from datetime import datetime
 
 app = Flask(__name__)
-CORS(app)
+
+# SECURITY: Restrict CORS to specific origins instead of allowing all
+CORS(app, origins=[
+    "http://localhost:3000",
+    "http://localhost:5555", 
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5555",
+])
+
+# SECURITY: Simple API key authentication for control endpoints
+API_KEY = os.environ.get('FACE_TRACKING_API_KEY', None)
+
+def require_auth():
+    """SECURITY: Check API key for sensitive operations"""
+    if not API_KEY:
+        return True  # No auth required if no key configured (dev mode)
+    
+    auth_header = request.headers.get('X-API-Key')
+    auth_param = request.args.get('api_key')
+    return auth_header == API_KEY or auth_param == API_KEY
 
 # Initialize MediaPipe Face Mesh
 mp_face_mesh = mp.solutions.face_mesh
@@ -227,33 +252,45 @@ def get_status():
 @app.route('/api/start', methods=['POST'])
 def start_tracking():
     """Start face tracking"""
-    global is_tracking, camera
+    # SECURITY: Require authentication for control operations
+    if not require_auth():
+        return jsonify({"error": "Authentication required"}), 401
     
+    global is_tracking, camera
+
     if is_tracking:
         return jsonify({"status": "already_running"})
-    
+
     if not camera:
         if not init_camera():
             return jsonify({"error": "Camera not available"}), 500
-    
+
     is_tracking = True
     threading.Thread(target=track_faces, daemon=True).start()
-    
+
     return jsonify({"status": "started"})
 
 @app.route('/api/stop', methods=['POST'])
 def stop_tracking():
     """Stop face tracking"""
-    global is_tracking
+    # SECURITY: Require authentication for control operations
+    if not require_auth():
+        return jsonify({"error": "Authentication required"}), 401
     
+    global is_tracking
+
     is_tracking = False
     time.sleep(0.2)  # Allow thread to stop
-    
+
     return jsonify({"status": "stopped"})
 
 @app.route('/api/camera', methods=['POST'])
 def toggle_camera():
     """Toggle camera on/off"""
+    # SECURITY: Require authentication for control operations
+    if not require_auth():
+        return jsonify({"error": "Authentication required"}), 401
+    
     global camera
 
     # Guard against missing JSON - request.json can be None
@@ -302,10 +339,12 @@ def health():
 if __name__ == '__main__':
     print("🎭 Face Tracking Animation Server")
     print("Starting Flask server on http://localhost:5001")
+    print("SECURITY: Server binds to localhost only. Set FACE_TRACKING_API_KEY for authentication.")
     print("Press Ctrl+C to stop")
-    
+
     try:
-        app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
+        # SECURITY: Bind to localhost only to prevent remote access
+        app.run(host='127.0.0.1', port=5001, debug=False, threaded=True)
     except KeyboardInterrupt:
         print("\nShutting down...")
         is_tracking = False

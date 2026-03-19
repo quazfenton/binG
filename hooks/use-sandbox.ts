@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
+import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 
 interface SandboxSession {
   sessionId: string;
@@ -99,43 +100,46 @@ export function useSandbox(options: UseSandboxOptions) {
         if (!reader) throw new Error('No response stream');
 
         const decoder = new TextDecoder();
-        let finalResponse = '';
         let buffer = '';
+        let finalResponse = '';
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
+          // Decode chunk and parse SSE format (data: {...}\n\n)
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
+
+          // Process complete SSE events
+          const lines = buffer.split('\n\n');
           buffer = lines.pop() || '';
 
           for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const json = line.slice(6).trim();
-            if (!json) continue;
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith('data: ')) continue;
 
-            let event: any;
+            // Extract JSON from SSE format
+            const jsonStr = trimmed.slice(6); // Remove 'data: ' prefix
             try {
-              event = JSON.parse(json);
-            } catch {
-              // Skip malformed events
-              continue;
-            }
+              const event = JSON.parse(jsonStr);
 
-            if (event.type === 'tool_execution') {
-              const step: SandboxAgentStep = {
-                toolName: event.toolName,
-                args: event.args,
-                result: event.result,
-              };
-              setSteps(prev => [...prev, step]);
-              options.onStepExecuted?.(step);
-            } else if (event.type === 'complete') {
-              finalResponse = event.response;
-            } else if (event.type === 'error') {
-              // Let the outer try/catch handle server-sent errors
-              throw new Error(event.message);
+              if (event.type === 'tool_execution') {
+                const step: SandboxAgentStep = {
+                  toolName: event.toolName,
+                  args: event.args,
+                  result: event.result,
+                };
+                setSteps(prev => [...prev, step]);
+                options.onStepExecuted?.(step);
+              } else if (event.type === 'complete') {
+                finalResponse = event.response;
+              } else if (event.type === 'error') {
+                // Let the outer try/catch handle server-sent errors
+                throw new Error(event.message);
+              }
+            } catch (parseError: any) {
+              console.warn('Failed to parse SSE event:', parseError.message, jsonStr);
             }
           }
         }

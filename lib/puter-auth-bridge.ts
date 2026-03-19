@@ -4,8 +4,6 @@
  */
 
 export async function ensurePuterAuthenticated() {
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
   const puter = typeof window !== 'undefined' ? (window as any).puter : undefined
   if (!puter) throw new Error('Puter SDK not loaded')
   try {

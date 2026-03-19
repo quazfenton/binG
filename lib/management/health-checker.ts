@@ -56,6 +56,20 @@ export class ProviderHealthChecker extends EventEmitter {
   }
 
   /**
+   * Set configuration
+   */
+  setConfig(config: Partial<HealthCheckerConfig>): void {
+    this.config = { ...this.config, ...config }
+  }
+
+  /**
+   * Reset configuration to defaults
+   */
+  resetToDefaults(): void {
+    this.config = { ...DEFAULT_CONFIG }
+  }
+
+  /**
    * Start periodic health checking
    */
   start(): void {
@@ -185,14 +199,14 @@ export class ProviderHealthChecker extends EventEmitter {
 
     // Update metrics
     sandboxMetrics.providerHealthCheckTotal.inc({
-      provider,
+      provider: provider as any,
       status: healthy ? 'success' : 'failure',
     })
 
     if (latency) {
       sandboxMetrics.providerHealthCheckDuration.observe(
-        { provider },
-        latency / 1000
+        latency / 1000,
+        { provider: provider as any }
       )
     }
 
@@ -296,11 +310,13 @@ export async function startProviderHealthCheck(config?: Partial<HealthCheckerCon
   const { getEnabledProviders } = await import('../sandbox/providers/index');
   const enabledProviders = getEnabledProviders();
   providerHealthChecker.setEnabledProviders(enabledProviders);
-  
-  providerHealthChecker.start()
+
+  // Reset to defaults before applying overrides to avoid stale settings
+  (providerHealthChecker as any).resetToDefaults?.();
   if (config) {
-    providerHealthChecker.config = { ...DEFAULT_CONFIG, ...config }
+    providerHealthChecker.setConfig(config)
   }
+  providerHealthChecker.start()
   return providerHealthChecker
 }
 

@@ -140,9 +140,12 @@ class ContextPackService {
       );
     }
 
-    const estimatedTokens = Math.ceil(totalSize / 4); // Rough approximation: 1 token ≈ 4 bytes
+    // FIX Bug 25: Use JS string length (code points) for better token estimation
+    // UTF-8 byte length over-estimates tokens for Unicode-heavy content (CJK, emoji, etc.)
+    // 1 token ≈ 4 characters is more accurate for typical code
+    const estimatedTokens = Math.ceil(bundle.length / 4);
     const hasTruncation = files.some(f => f.truncated) || totalSize < originalSize;
-    
+
     return {
       tree,
       files,
@@ -159,6 +162,7 @@ class ContextPackService {
   
   /**
    * Build directory tree as a string (similar to `tree` command)
+   * FIX Bug 24: Use consistent path normalization
    */
   private async buildDirectoryTree(
     ownerId: string,
@@ -168,27 +172,34 @@ class ContextPackService {
     prefix: string = ''
   ): Promise<string> {
     let tree = '';
-    
+
     try {
       const listing = await virtualFilesystem.listDirectory(ownerId, rootPath);
       const entries = listing.nodes || [];
-      
+
       // Filter entries based on patterns
       const filtered = this.filterEntries(entries, rootPath, options);
-      
+
       for (let i = 0; i < filtered.length; i++) {
         const entry = filtered[i];
         const isLast = i === filtered.length - 1;
         const connector = isLast ? '└── ' : '├── ';
         const extension = isLast ? '    ' : '│   ';
-        
+
         tree += `${prefix}${connector}${entry.name}${entry.type === 'directory' ? '/' : ''}\n`;
-        
+
         // Recurse into directories (max depth 10)
         if (entry.type === 'directory' && depth < 10) {
-          const childPath = rootPath === '/' 
-            ? `/${entry.name}` 
-            : `${rootPath}/${entry.name}`;
+          // FIX Bug 24: Use consistent path construction matching VFS internal logic
+          // Since normalizePath is private, we replicate its logic here for consistency
+          const normalizePath = (p: string): string => {
+            const rawPath = (p || '').replace(/\\/g, '/').trim();
+            if (!rawPath || rawPath === '/') return '/';
+            return rawPath.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+          };
+          const childPath = normalizePath(
+            rootPath === '/' ? `/${entry.name}` : `${rootPath}/${entry.name}`
+          );
           tree += await this.buildDirectoryTree(
             ownerId,
             childPath,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner } from '@/lib/virtual-filesystem';
+import { withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { contextPackService, type ContextPackFormat } from '@/lib/virtual-filesystem/context-pack-service';
 import { absolutePathSchema, contextPackOptionsSchema } from '@/lib/validation/schemas';
 
@@ -70,7 +71,10 @@ export async function GET(req: NextRequest) {
     }
 
     // Resolve filesystem owner
-    const authResolution = await resolveFilesystemOwner(req);
+    const authResolution = await resolveFilesystemOwnerWithFallback(req, {
+      route: 'context-pack',
+      requestId: Math.random().toString(36).slice(2, 8),
+    });
     const ownerId = authResolution.ownerId;
     
     // Generate context pack
@@ -84,7 +88,7 @@ export async function GET(req: NextRequest) {
       plain: 'text/plain',
     }[options.format || 'markdown'];
     
-    return new NextResponse(result.bundle, {
+    const response = new NextResponse(result.bundle, {
       status: 200,
       headers: {
         'Content-Type': contentType!,
@@ -94,13 +98,18 @@ export async function GET(req: NextRequest) {
         'X-Context-Pack-Truncated': result.hasTruncation.toString(),
       },
     });
+    return withAnonSessionCookie(response, authResolution);
   } catch (error: unknown) {
     console.error('[Context Pack] Error:', error);
-    // Return generic error to client, log details server-side
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       { success: false, error: 'Failed to generate context pack.' },
       { status: 400 },
     );
+    return withAnonSessionCookie(errorResponse, {
+      ownerId: 'unknown',
+      source: 'anonymous',
+      isAuthenticated: false,
+    });
   }
 }
 
@@ -140,7 +149,10 @@ export async function POST(req: NextRequest) {
     }
 
     // Resolve filesystem owner
-    const authResolution = await resolveFilesystemOwner(req);
+    const authResolution = await resolveFilesystemOwnerWithFallback(req, {
+      route: 'context-pack-post',
+      requestId: Math.random().toString(36).slice(2, 8),
+    });
     const ownerId = authResolution.ownerId;
 
     // Generate context pack
@@ -154,7 +166,7 @@ export async function POST(req: NextRequest) {
       plain: 'text/plain',
     }[options.format || 'markdown'];
 
-    return new NextResponse(result.bundle, {
+    const response = new NextResponse(result.bundle, {
       status: 200,
       headers: {
         'Content-Type': contentType!,
@@ -164,12 +176,17 @@ export async function POST(req: NextRequest) {
         'X-Context-Pack-Truncated': result.hasTruncation.toString(),
       },
     });
+    return withAnonSessionCookie(response, authResolution);
   } catch (error: unknown) {
     console.error('[Context Pack] Error:', error);
-    // Return generic error to client, log details server-side
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       { success: false, error: 'Failed to generate context pack.' },
       { status: 400 },
     );
+    return withAnonSessionCookie(errorResponse, {
+      ownerId: 'unknown',
+      source: 'anonymous',
+      isAuthenticated: false,
+    });
   }
 }

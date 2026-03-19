@@ -171,7 +171,10 @@ export async function GET(req: NextRequest) {
         cleanup = () => {
           clearInterval(pingInterval);
           unsubscribeEvents();
-          terminalManager.disconnectTerminal(sessionId).catch(() => {});
+          // FIX: Log cleanup failures for debugging instead of silently ignoring
+          terminalManager.disconnectTerminal(sessionId).catch((err: any) => {
+            console.warn('Terminal disconnect cleanup failed:', err?.message);
+          });
         };
 
         const setupPty = async () => {

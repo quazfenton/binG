@@ -736,8 +736,8 @@ export class SpritesSandboxHandle implements SandboxHandle {
         cmd += ` --args "${config.args.join(' ')}"`
       }
 
-      if (config.workingDir) {
-        cmd += ` --workdir "${config.workingDir}"`
+      if ((config as any).workingDir) {
+        cmd += ` --workdir "${(config as any).workingDir}"`
       }
 
       if (config.autoStart !== false) {
@@ -745,8 +745,8 @@ export class SpritesSandboxHandle implements SandboxHandle {
       }
 
       // Add environment variables
-      if (config.env) {
-        for (const [key, value] of Object.entries(config.env)) {
+      if ((config as any).env) {
+        for (const [key, value] of Object.entries((config as any).env)) {
           cmd += ` --env ${key}=${value}`
         }
       }

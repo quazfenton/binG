@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem';
 import { pathSchema } from '@/lib/validation/schemas';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 
@@ -23,13 +23,20 @@ const readRequestSchema = z.object({
 export async function POST(req: NextRequest) {
   const requestId = Math.random().toString(36).slice(2, 8);
   
+  // Resolve auth upfront so it's available in catch block
+  const authResolution = await resolveFilesystemOwnerWithFallback(req, {
+    route: 'read',
+    requestId,
+  });
+  const ownerId = authResolution.ownerId;
+  
   try {
     const body = await req.json();
 
     // Validate request body
     const validation = readRequestSchema.safeParse(body);
     if (!validation.success) {
-      return NextResponse.json(
+      const errorResponse = NextResponse.json(
         {
           success: false,
           error: 'Invalid request',
@@ -40,20 +47,15 @@ export async function POST(req: NextRequest) {
         },
         { status: 400 },
       );
+      return withAnonSessionCookie(errorResponse, authResolution);
     }
 
     const { path: filePath } = validation.data;
 
     // SECURITY: Always derive ownerId from authenticated request context
     // Never trust user-supplied ownerId for read operations
-    const authResolution = await resolveFilesystemOwnerWithFallback(req, {
-      route: 'read',
-      requestId,
-    });
-    const ownerId = authResolution.ownerId;
-
     const file = await virtualFilesystem.readFile(ownerId, filePath);
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: {
         path: file.path,
@@ -64,6 +66,7 @@ export async function POST(req: NextRequest) {
         lastModified: file.lastModified,
       },
     });
+    return withAnonSessionCookie(response, authResolution);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Failed to read file';
     const status = message.toLowerCase().includes('not found') ? 404 : 400;
@@ -71,6 +74,7 @@ export async function POST(req: NextRequest) {
     const safeMessage = message.toLowerCase().includes('not found')
       ? 'File not found'
       : 'Failed to read file';
-    return NextResponse.json({ success: false, error: safeMessage }, { status });
+    const errorResponse = NextResponse.json({ success: false, error: safeMessage }, { status });
+    return withAnonSessionCookie(errorResponse, authResolution);
   }
 }

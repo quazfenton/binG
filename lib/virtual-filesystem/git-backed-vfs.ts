@@ -142,8 +142,8 @@ export class GitBackedVFS {
       throw new Error(`File not found: ${filePath}`);
     }
 
-    // Delete from VFS
-    await this.vfs.deleteFile(ownerId, filePath);
+    // Delete from VFS (use deletePath which is the correct method)
+    await this.vfs.deletePath(ownerId, filePath);
 
     // Track transaction
     this.trackTransaction(ownerId, {
@@ -186,7 +186,7 @@ export class GitBackedVFS {
         timestamp: Date.now(),
         originalContent: previousContent,
         newContent: file.content,
-      });
+      }, transactionId);
     }
 
     // Single commit for all changes
@@ -196,13 +196,14 @@ export class GitBackedVFS {
   }
 
   /**
-   * Track transaction entry
+   * Track transaction entry (public method for proxy access)
    */
-  private trackTransaction(ownerId: string, entry: TransactionEntry): void {
-    if (!this.transactionLog.has(ownerId)) {
-      this.transactionLog.set(ownerId, []);
+  trackTransaction(ownerId: string, entry: TransactionEntry, transactionId?: string): void {
+    const key = transactionId || ownerId;
+    if (!this.transactionLog.has(key)) {
+      this.transactionLog.set(key, []);
     }
-    this.transactionLog.get(ownerId)!.push(entry);
+    this.transactionLog.get(key)!.push(entry);
   }
 
   /**
@@ -213,24 +214,33 @@ export class GitBackedVFS {
     message?: string,
     transactionId?: string
   ): Promise<CommitResult> {
-    if (this.changeBuffer.length === 0 && !transactionId) {
-      return { success: true, committedFiles: 0 };
-    }
+    // Get transactions - use transactionId for batch operations, ownerId for single ops
+    const key = transactionId || ownerId;
+    const transactions = this.transactionLog.get(key) || [];
+    
+    // Also include any changes from changeBuffer that aren't in transactions
+    const bufferedChanges = this.changeBuffer.filter(change => 
+      !transactions.some(tx => tx.path === change.path)
+    );
 
-    const transactions = transactionId
-      ? this.transactionLog.get(transactionId) || []
-      : this.transactionLog.get(ownerId) || [];
-
-    if (transactions.length === 0 && this.changeBuffer.length === 0) {
+    if (transactions.length === 0 && bufferedChanges.length === 0) {
       return { success: true, committedFiles: 0 };
     }
 
     try {
+      // Build VFS state from transactions
+      const vfs: Record<string, string> = {};
+      for (const tx of transactions) {
+        if (tx.type !== 'DELETE' && tx.newContent) {
+          vfs[tx.path] = tx.newContent;
+        }
+      }
+
       // Create shadow commit with all changes
-      const result = await this.shadowCommitManager.createCommit({
+      const result = await this.shadowCommitManager.commit(vfs, transactions, {
         sessionId: this.options.sessionId,
         message: message || this.options.commitMessage,
-        autoApprove: true,
+        author: ownerId,
         source: 'git-vfs',
         integration: 'vfs-auto-commit',
       });
@@ -265,14 +275,13 @@ export class GitBackedVFS {
   ): Promise<GitVFSRollbackResult> {
     try {
       // Get shadow commit history
-      const history = await this.shadowCommitManager.getHistory(this.options.sessionId, 100);
-      
-      // Find commit at target version
-      const targetCommit = history.find(c => {
-        // Match by version or commit metadata
-        return c.filesChanged === targetVersion || 
-               c.message.includes(`v${targetVersion}`);
-      });
+      const history = await this.shadowCommitManager.getCommitHistory(this.options.sessionId, 100);
+
+      // Find commit at target version - match by workspaceVersion or fall back to commit message
+      const targetCommit = history.find(c => 
+        c.workspaceVersion === targetVersion ||
+        (c.workspaceVersion === null && new RegExp(`\\bv${targetVersion}\\b`).test(c.message ?? ''))
+      );
 
       if (!targetCommit) {
         return {
@@ -283,31 +292,21 @@ export class GitBackedVFS {
         };
       }
 
-      // Rollback to commit
-      const result = await this.shadowCommitManager.rollback(targetCommit.commitId);
-
-      if (result.success) {
-        // Restore files in VFS from shadow commit data
-        const commitData = await this.shadowCommitManager.getCommit(targetCommit.commitId);
-        
-        if (commitData && commitData.transactionLog) {
-          for (const entry of commitData.transactionLog) {
-            if (entry.originalContent && entry.type !== 'DELETE') {
-              // Restore original content
-              await this.vfs.writeFile(ownerId, entry.path, entry.originalContent);
-            } else if (entry.type === 'DELETE' && entry.originalContent) {
-              // Recreate deleted file
-              await this.vfs.writeFile(ownerId, entry.path, entry.originalContent);
-            }
-          }
-        }
+      // Rollback to commit (ShadowCommitManager.rollback takes sessionId and commitId)
+      const result = await this.shadowCommitManager.rollback(this.options.sessionId, targetCommit.commitId);
+      if (!result.success) {
+        logger.error(`[GitVFS] Rollback to version ${targetVersion} failed: ${result.error}`);
+        return {
+          success: false,
+          filesRestored: result.restoredFiles ?? 0,
+          version: targetVersion,
+          error: result.error,
+        };
       }
-
       logger.info(`[GitVFS] Rolled back to version ${targetVersion}`);
-
       return {
-        success: result.success,
-        filesRestored: result.restoredFiles,
+        success: true,
+        filesRestored: result.restoredFiles ?? 0,
         version: targetVersion,
       };
     } catch (error: any) {
@@ -325,13 +324,17 @@ export class GitBackedVFS {
    * Get current VFS state with git info
    */
   async getState(ownerId: string): Promise<GitVFSState> {
-    const history = await this.shadowCommitManager.getHistory(this.options.sessionId, 1);
+    const history = await this.shadowCommitManager.getCommitHistory(this.options.sessionId, 1);
     const lastCommit = history[0];
 
+    // Use workspaceVersion from last commit (reliable version tracking)
+    // NOT filesChanged which is just a count of changed files
     return {
-      version: this.changeBuffer.length > 0 
-        ? Math.max(...this.changeBuffer.map(c => c.version))
-        : 0,
+      version: lastCommit?.workspaceVersion ?? (
+        this.changeBuffer.length > 0
+          ? Math.max(...this.changeBuffer.map(c => c.version))
+          : 0
+      ),
       lastCommitId: lastCommit?.commitId,
       pendingChanges: this.changeBuffer.length,
       isClean: this.changeBuffer.length === 0,
@@ -348,7 +351,7 @@ export class GitBackedVFS {
 
     const diff = changes.map(change => {
       const header = `--- ${change.path} (v${change.version - 1})\n+++ ${change.path} (v${change.version})`;
-      
+
       if (change.type === 'delete') {
         return `${header}\n-${change.previousContent}`;
       } else if (change.type === 'create') {
@@ -357,14 +360,14 @@ export class GitBackedVFS {
         // Update - show unified diff
         const oldLines = (change.previousContent || '').split('\n');
         const newLines = (change.newContent || '').split('\n');
-        
+
         let diffContent = `${header}\n`;
         const maxLen = Math.max(oldLines.length, newLines.length);
-        
+
         for (let i = 0; i < maxLen; i++) {
           const oldLine = oldLines[i];
           const newLine = newLines[i];
-          
+
           if (oldLine === newLine) {
             diffContent += ` ${oldLine || ''}\n`;
           } else if (oldLine === undefined) {
@@ -375,7 +378,7 @@ export class GitBackedVFS {
             diffContent += `-${oldLine}\n+${newLine}\n`;
           }
         }
-        
+
         return diffContent;
       }
     }).join('\n');
@@ -387,11 +390,11 @@ export class GitBackedVFS {
    * List all versions/commits
    */
   async listVersions(limit: number = 20) {
-    const history = await this.shadowCommitManager.getHistory(this.options.sessionId, limit);
-    
+    const history = await this.shadowCommitManager.getCommitHistory(this.options.sessionId, limit);
+
     return history.map(commit => ({
       commitId: commit.commitId,
-      version: commit.filesChanged,
+      version: commit.workspaceVersion ?? commit.filesChanged, // Use workspaceVersion when available
       message: commit.message,
       author: commit.author,
       timestamp: commit.createdAt,
