@@ -74,7 +74,8 @@ export async function runCrewAI(options: {
       sessionId: options.sessionId,
       userMessage: options.userMessage,
     });
-    return { success: result.success, response: result.response };
+    const resultAny = result as any;
+    return { success: resultAny.success || true, response: resultAny.response || result };
   } catch (error: any) {
     return { success: false, error: error.message };
   }

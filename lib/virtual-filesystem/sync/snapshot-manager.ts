@@ -167,7 +167,7 @@ export class SnapshotManager extends EventEmitter {
 
     console.log(`Snapshot created: ${snapshotPath} (${result.sizeBytes} bytes)`);
     this.emit('snapshot_created', result);
-    sandboxMetrics.snapshotCreatedTotal.inc({ status: 'success' });
+    sandboxMetrics.snapshotCreatedTotal.inc({ status: 'success' }, 1);
     sandboxMetrics.snapshotSizeBytes.observe({ userId }, result.sizeBytes);
     sandboxMetrics.snapshotCreationDuration.observe({ userId }, duration);
 
@@ -253,7 +253,7 @@ export class SnapshotManager extends EventEmitter {
 
     console.log(`Snapshot restored: ${snapshotPath} -> ${workspace}`);
     this.emit('snapshot_restored', { userId, snapshotId });
-    sandboxMetrics.snapshotRestoredTotal.inc({ status: 'success' });
+    sandboxMetrics.snapshotRestoredTotal.inc({ status: 'success' }, 1);
     sandboxMetrics.snapshotRestorationDuration.observe({ userId }, duration);
 
     return true;

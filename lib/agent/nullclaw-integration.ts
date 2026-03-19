@@ -26,7 +26,7 @@
  *         │ (fallback)                    ▼
  *         │                        ┌─────────────────┐
  *         └───────────────────────►│  Nullclaw       │
- *           Docker Spawn           │  Container Pool │
+ *           Docker spawn           │  Container Pool │
  *                                  └────────┬────────┘
  *                                           │
  *                                           ▼
@@ -46,6 +46,13 @@
  * - NULLCLAW_PORT: Base port (default: 3001)
  * - NULLCLAW_TIMEOUT: Request timeout in milliseconds (default: 300000 = 5 minutes)
  */
+
+import { createLogger } from '../utils/logger';
+import { v4 as uuidv4 } from 'uuid';
+import { spawn } from 'child_process';
+
+const logger = createLogger('Nullclaw');
+
 export interface NullclawConfig {
   baseUrl?: string;
   apiKey?: string;
@@ -103,6 +110,7 @@ export interface NullclawStatus {
 }
 
 class NullclawIntegration {
+  private readonly logger = createLogger('Nullclaw');
   private readonly defaultConfig: NullclawConfig = {
     baseUrl: process.env.NULLCLAW_URL,
     apiKey: process.env.NULLCLAW_API_KEY,
@@ -303,7 +311,7 @@ class NullclawIntegration {
     this.initializationPromise = (async () => {
       try {
         if (this.isUrlMode()) {
-          logger.info(`Using Nullclaw URL: ${this.defaultConfig.baseUrl}`);
+          this.logger.info(`Using Nullclaw URL: ${this.defaultConfig.baseUrl}`);
           const container: NullclawContainer = {
             id: 'nullclaw-external',
             endpoint: this.defaultConfig.baseUrl!,
@@ -314,22 +322,22 @@ class NullclawIntegration {
             assignedSessions: [],
           };
           this.containers.set(container.id, container);
-          logger.info('Nullclaw external service registered');
+          this.logger.info('Nullclaw external service registered');
         } else {
           // Container mode: spawn pool based on NULLCLAW_MODE
           const mode = this.defaultConfig.mode || 'shared';
           const poolSize = mode === 'per-session' ? 1 : (this.defaultConfig.poolSize || 2);
 
-          logger.info(`Spawning Nullclaw container pool (mode: ${mode}, size: ${poolSize})`);
+          this.logger.info(`Spawning Nullclaw container pool (mode: ${mode}, size: ${poolSize})`);
 
-          // FIX (Bug 12): Spawn sequentially to prevent port collisions
+          // FIX (Bug 12): spawn sequentially to prevent port collisions
           // Parallel spawning can allocate the same port to multiple containers
           // because getNextAvailablePort() is called synchronously before any completes
           for (let i = 0; i < poolSize; i++) {
             await this.spawnContainer(`nullclaw-pool-${i}`);
           }
 
-          logger.info(`Nullclaw container pool ready (${poolSize} containers)`);
+          this.logger.info(`Nullclaw container pool ready (${poolSize} containers)`);
         }
       } catch (error) {
         // Clear promise so callers can retry after a failure
@@ -362,7 +370,7 @@ class NullclawIntegration {
       const container = await this.spawnContainer(containerId);
       
       this.sessionContainers.set(sessionKey, container.id);
-      logger.info(`Spawned dedicated Nullclaw container for session ${sessionKey}`);
+      this.logger.info(`Spawned dedicated Nullclaw container for session ${sessionKey}`);
       
       return container.endpoint;
     }
@@ -380,7 +388,7 @@ class NullclawIntegration {
   }
 
   /**
-   * Spawn a single Nullclaw container
+   * spawn a single Nullclaw container
    * 
    * FIX (Bug 13): Cleans up error-state containers from the pool so they
    * don't pollute container counts. Also avoids leaving 'starting' containers
@@ -404,7 +412,7 @@ class NullclawIntegration {
     this.containers.set(containerId, container);
 
     return new Promise((resolve, reject) => {
-      logger.debug(`Spawning Nullclaw container: docker run -d --name ${containerId} -p ${port}:3000`);
+      this.logger.debug(`Spawning Nullclaw container: docker run -d --name ${containerId} -p ${port}:3000`);
 
       const docker = spawn('docker', [
         'run', '-d',
@@ -419,12 +427,12 @@ class NullclawIntegration {
       docker.stdout.on('data', (data) => {
         const dockerContainerId = data.toString().trim();
         container.containerId = dockerContainerId;
-        logger.info(`Nullclaw container spawned: ${dockerContainerId} on port ${port}`);
+        this.logger.info(`Nullclaw container spawned: ${dockerContainerId} on port ${port}`);
       });
 
       docker.stderr.on('data', (data) => {
         // Log but don't fail — docker stderr can contain non-fatal warnings
-        logger.warn(`Nullclaw docker stderr: ${data.toString().trim()}`);
+        this.logger.warn(`Nullclaw docker stderr: ${data.toString().trim()}`);
       });
 
       docker.on('close', async (code) => {
@@ -443,7 +451,7 @@ class NullclawIntegration {
             this.containers.delete(containerId);
             // Cleanup the failed container
             await this.cleanupContainer(container).catch(err => {
-              logger.error('Failed to cleanup failed health check container:', err);
+              this.logger.error('Failed to cleanup failed health check container:', err);
             });
             reject(new Error(`Nullclaw container ${containerId} failed health check`));
           }
@@ -452,7 +460,7 @@ class NullclawIntegration {
           this.containers.delete(containerId); // FIX: clean up
           // Cleanup the failed container
           this.cleanupContainer(container).catch(err => {
-            logger.error('Failed to cleanup failed spawn container:', err);
+            this.logger.error('Failed to cleanup failed spawn container:', err);
           });
           reject(new Error(`Nullclaw spawn exited with code ${code}`));
         }
@@ -466,7 +474,7 @@ class NullclawIntegration {
         this.containers.delete(containerId); // FIX: clean up
         // Cleanup the failed container
         this.cleanupContainer(container).catch(err => {
-          logger.error('Failed to cleanup error container:', err);
+          this.logger.error('Failed to cleanup error container:', err);
         });
         reject(new Error(`Nullclaw spawn failed: ${error.message}`));
       });
@@ -489,7 +497,7 @@ class NullclawIntegration {
         const stopDocker = spawn('docker', ['stop', '-t', '5', container.containerId]);
         await new Promise<void>((resolve) => {
           stopDocker.on('close', () => {
-            logger.debug(`Stopped docker container ${container.containerId}`);
+            this.logger.debug(`Stopped docker container ${container.containerId}`);
             resolve();
           });
           stopDocker.on('error', () => resolve()); // Continue even if stop fails
@@ -498,10 +506,10 @@ class NullclawIntegration {
         // Then remove the container
         const rmDocker = spawn('docker', ['rm', '-f', container.containerId]);
         rmDocker.on('close', () => {
-          logger.debug(`Cleaned up docker container ${container.containerId}`);
+          this.logger.debug(`Cleaned up docker container ${container.containerId}`);
         });
       } catch (error) {
-        logger.error(`Failed to cleanup docker container:`, error);
+        this.logger.error(`Failed to cleanup docker container:`, error);
       }
     }
   }
@@ -594,7 +602,7 @@ class NullclawIntegration {
     this.tasks.set(fullTask.id, fullTask);
 
     try {
-      logger.debug(`Executing Nullclaw task: ${type} - ${description}`);
+      this.logger.debug(`Executing Nullclaw task: ${type} - ${description}`);
 
       // Send task to Nullclaw via HTTP API
       const result = await this.request<any>('/tasks/execute', container, {
@@ -610,11 +618,11 @@ class NullclawIntegration {
       fullTask.result = result;
       fullTask.completedAt = new Date();
 
-      logger.debug(`Nullclaw task completed: ${type}`);
+      this.logger.debug(`Nullclaw task completed: ${type}`);
     } catch (error: any) {
       fullTask.status = 'failed';
       fullTask.error = error.message;
-      logger.error(`Nullclaw task failed: ${type}`, error);
+      this.logger.error(`Nullclaw task failed: ${type}`, error);
     }
 
     this.tasks.set(fullTask.id, fullTask);
@@ -721,10 +729,10 @@ class NullclawIntegration {
           docker.on('close', () => resolve());
           docker.on('error', reject);
         });
-        logger.info(`Stopped Nullclaw container: ${containerId}`);
+        this.logger.info(`Stopped Nullclaw container: ${containerId}`);
         this.containers.delete(containerId);
       } catch (error) {
-        logger.error(`Failed to stop container ${containerId}:`, error);
+        this.logger.error(`Failed to stop container ${containerId}:`, error);
       }
     }
   }
@@ -733,7 +741,7 @@ class NullclawIntegration {
    * Shutdown and cleanup all containers (only for locally spawned)
    */
   async shutdown(): Promise<void> {
-    logger.info('Shutting down Nullclaw integration...');
+    this.logger.info('Shutting down Nullclaw integration...');
 
     // Only stop locally spawned containers
     for (const container of this.containers.values()) {
@@ -741,14 +749,14 @@ class NullclawIntegration {
         try {
           await this.stopContainer(container.id);
         } catch (error) {
-          logger.error(`Failed to stop container ${container.id}:`, error);
+          this.logger.error(`Failed to stop container ${container.id}:`, error);
         }
       }
     }
 
     this.containers.clear();
     this.sessionContainers.clear();
-    logger.info('Nullclaw shutdown complete');
+    this.logger.info('Nullclaw shutdown complete');
   }
 }
 
@@ -857,3 +865,5 @@ export async function automateNullclawTask(
 export async function shutdownNullclaw(): Promise<void> {
   return nullclawIntegration.shutdown();
 }
+
+
